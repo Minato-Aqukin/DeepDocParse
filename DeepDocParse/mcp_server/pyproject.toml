@@ -1,0 +1,14 @@
+[project]
+name = "deepdocparse-mcp"
+version = "0.1.0"
+description = "MCP 平面：单一复合工具 ask_document（视觉子代理入口）"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=2.0",
+    "httpx>=0.27",
+    "pydantic-settings>=2.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
