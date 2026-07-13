@@ -1,0 +1,123 @@
+openapi: 3.1.0
+info:
+  title: DeepDocParse API
+  version: 0.1.0
+  description: |
+    DeepDocParse 对外契约。DeepDocParse-Web/backend 只依赖本文件。
+    鉴权：所有请求携带 `Authorization: Bearer <SERVICE_TOKEN>`（内网 service token，非用户 key）。
+    v1.0 冻结前（M5）允许不兼容变更。
+
+servers:
+  - url: http://DeepDocParse:9000
+
+paths:
+  /v1/parse:
+    post:
+      summary: 提交文档解析任务（异步）
+      operationId: submitParse
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_url]
+              properties:
+                file_url:
+                  type: string
+                  description: 文件的预签名 URL（backend 侧 MinIO 生成），不传文件流
+                engine:
+                  type: string
+                  default: mineru
+                  description: 解析引擎，见 models.yaml parse_engines
+                options:
+                  type: object
+                  description: 引擎透传选项（如 mineru 的 backend=pipeline|vlm、语言等）
+                callback_url:
+                  type: string
+                  description: 可选。任务完成后 gateway 回调 backend
+      responses:
+        "202":
+          description: 已受理
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: { type: string }
+        "429":
+          description: 队列已满，backend 应限流重试
+
+  /v1/parse/{task_id}:
+    get:
+      summary: 查询任务状态
+      operationId: getParseStatus
+      parameters:
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: { type: string }
+                  status: { type: string, enum: [pending, running, succeeded, failed] }
+                  progress: { type: number, description: 0-1 }
+                  error: { type: string, nullable: true }
+
+  /v1/parse/{task_id}/result:
+    get:
+      summary: 获取解析结果（暂存 24h，backend 需及时取回归档）
+      operationId: getParseResult
+      parameters:
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  markdown: { type: string }
+                  layout_json:
+                    type: object
+                    description: 版面结构（块类型/页码/bbox），v2 分块索引的数据源
+                  images:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        url: { type: string, description: 图片下载地址 }
+
+  /v1/chat/completions:
+    post:
+      summary: VQA 平面（OpenAI Chat Completions 协议，支持流式）
+      description: |
+        完全遵循 OpenAI 协议：messages 支持 image_url content part。
+        model 字段路由到 models.yaml vqa_models；缺省用 default 模型。
+        gateway 透传到对应运行时（deepseek-ocr.rs / vLLM）。
+      operationId: chatCompletions
+      responses:
+        "200": { description: OpenAI 兼容响应（含 SSE 流式） }
+
+  /v1/models:
+    get:
+      summary: 列出可用模型（OpenAI 协议），来源 models.yaml
+      operationId: listModels
+      responses:
+        "200": { description: OpenAI 兼容模型列表 }
+
+  /healthz:
+    get:
+      summary: 存活探针
+      responses:
+        "200": { description: ok }
+
+  /readyz:
+    get:
+      summary: 就绪探针（检查 Redis 与各引擎连通性）
+      responses:
+        "200": { description: ready }
+        "503": { description: 依赖未就绪 }

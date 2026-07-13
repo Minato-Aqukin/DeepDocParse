@@ -1,0 +1,30 @@
+# 模型注册表 —— service 扩展模型的唯一入口
+# 原则：gateway 不 import 任何模型代码，只查此表转发。
+# 加模型 = 在 docker compose 加一个容器 + 在这里加一行。
+#
+# 内部只认两种标准协议：
+#   1. OpenAI 协议（vqa_models / embedding_models）
+#   2. mineru-api 任务协议（parse_engines）
+# endpoint 主机名 = docker compose 服务名。
+
+vqa_models:
+  deepseek-ocr:
+    endpoint: "http://vqa-dsocr:8000"
+    default: true
+  # 扩展示例（去注释 + compose 加容器即可）：
+  # qwen3-vl:
+  #   endpoint: "http://vqa-qwen:8000"
+  # paddleocr-vl:                       # deepseek-ocr.rs 多后端本身支持
+  #   endpoint: "http://vqa-paddle:8000"
+
+parse_engines:
+  mineru:
+    # dev: 直连单个 mineru-api worker；prod: 指向 mineru-router（接口完全兼容，只改 URL）
+    endpoint: "http://mineru:8000"
+    default: true
+
+# ---- v2 启用（M4）----
+# embedding_models:
+#   bge-m3:
+#     endpoint: "http://embed:8080"     # TEI (text-embeddings-inference) 容器
+#     default: true

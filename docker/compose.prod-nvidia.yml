@@ -1,0 +1,84 @@
+# prod profile —— RTX 6000 级（48GB+），单机多实例示例
+# 与 dev 的差异（gateway/mcp/redis 完全不变）：
+#   1. MinerU 换 vlm 后端（MinerU2.5-Pro on vLLM），mineru-router 统一入口
+#      -> models.yaml 里 parse_engines.mineru.endpoint 改指 router
+#   2. DeepSeek-OCR 换官方 vLLM 部署
+# 硬件再换（昇腾/AMD 等）= 复制本文件为 compose.prod-<hw>.yml 换镜像即可。
+
+services:
+  gateway:
+    build: ../gateway
+    ports: ["9000:9000"]
+    environment:
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      REDIS_URL: redis://redis:6379/0
+      MODELS_CONFIG: /app/models.yaml
+    volumes:
+      - ../models.yaml:/app/models.yaml:ro
+    depends_on: [redis]
+
+  arq-worker:
+    build: ../gateway
+    command: arq app.worker.tasks.WorkerSettings
+    environment:
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      REDIS_URL: redis://redis:6379/0
+      MODELS_CONFIG: /app/models.yaml
+    volumes:
+      - ../models.yaml:/app/models.yaml:ro
+    depends_on: [redis]
+
+  mcp-server:
+    build: ../mcp_server
+    environment:
+      GATEWAY_URL: http://gateway:9000
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+    depends_on: [gateway]
+
+  redis:
+    image: redis/redis-stack-server:latest
+    volumes: [redis-data:/data]
+
+  # ---- 解析平面：router + N 个 vlm worker ----
+  mineru-router:
+    image: mineru:PIN_VERSION
+    command: mineru-router --host 0.0.0.0 --port 8000   # TODO(M4): worker 发现参数按官方文档
+    # models.yaml: parse_engines.mineru.endpoint -> http://mineru-router:8000
+
+  mineru-worker-0:
+    image: mineru:PIN_VERSION
+    command: mineru-api --host 0.0.0.0 --port 8000      # vlm 后端（vllm-engine）
+    environment: { CUDA_VISIBLE_DEVICES: "0" }
+    deploy: &gpu
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # 加卡 = 复制一段
+  # mineru-worker-1:
+  #   image: mineru:PIN_VERSION
+  #   command: mineru-api --host 0.0.0.0 --port 8000
+  #   environment: { CUDA_VISIBLE_DEVICES: "1" }
+  #   deploy: *gpu
+
+  # ---- VQA 平面：官方 vLLM 部署 ----
+  vqa-dsocr:
+    image: vllm/vllm-openai:PIN_VERSION
+    command: >
+      --model deepseek-ai/DeepSeek-OCR
+      --trust-remote-code
+      --gpu-memory-utilization 0.25
+    environment: { CUDA_VISIBLE_DEVICES: "0" }
+    deploy: *gpu
+
+  # ---- v2 (M4)：embedding ----
+  # embed:
+  #   image: ghcr.io/huggingface/text-embeddings-inference:PIN_VERSION
+  #   command: --model-id BAAI/bge-m3
+  #   # models.yaml 启用 embedding_models 段
+
+volumes:
+  redis-data:

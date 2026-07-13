@@ -1,0 +1,75 @@
+# dev profile —— RTX 4060 Laptop 8GB
+# MinerU 走 pipeline 后端（4GB 够用）；DeepSeek-OCR 用 deepseek-ocr.rs 量化版。
+# 显存有限：两模型不必同时驻留，M1 阶段可先注释 vqa-dsocr。
+#
+# 启动: docker compose -f compose.dev.yml --env-file ../.env up --build
+
+services:
+  gateway:
+    build: ../gateway
+    ports: ["9000:9000"]
+    environment:
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      REDIS_URL: redis://redis:6379/0
+      MODELS_CONFIG: /app/models.yaml
+    volumes:
+      - ../models.yaml:/app/models.yaml:ro
+    depends_on: [redis]
+
+  arq-worker:
+    build: ../gateway
+    command: arq app.worker.tasks.WorkerSettings
+    environment:
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      REDIS_URL: redis://redis:6379/0
+      MODELS_CONFIG: /app/models.yaml
+    volumes:
+      - ../models.yaml:/app/models.yaml:ro
+    depends_on: [redis]
+
+  mcp-server:
+    build: ../mcp_server
+    ports: ["9100:9100"]   # 对外应由 backend 代理；dev 直开便于 Claude Desktop 实测
+    environment:
+      GATEWAY_URL: http://gateway:9000
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+    depends_on: [gateway]
+
+  redis:
+    # 用 redis-stack：v2 向量检索不换组件
+    image: redis/redis-stack-server:latest
+    ports: ["6379:6379"]
+    volumes: [redis-data:/data]
+
+  mineru:
+    # 官方组件，不重写。镜像构建/启动参数以官方 Docker 部署文档为准：
+    # https://opendatalab.github.io/MinerU/quick_start/docker_deployment/
+    # TODO(M1): 按官方文档构建镜像并锁定版本号（勿用 latest）
+    image: mineru:PIN_VERSION
+    command: mineru-api --host 0.0.0.0 --port 8000   # dev 单 worker，gateway 直连
+    environment:
+      MINERU_DEVICE_MODE: cuda   # pipeline 后端；纯 CPU 调试改 cpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  vqa-dsocr:
+    # deepseek-ocr.rs：OpenAI 兼容服务（/v1/chat/completions）
+    # https://github.com/TimmyOVO/deepseek-ocr.rs
+    # TODO(M2): 用 Releases 预编译二进制或自行构建镜像；选 Q4/Q8 量化适配 8GB
+    image: deepseek-ocr-rs:PIN_VERSION
+    ports: ["8001:8000"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  redis-data:
