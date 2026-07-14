@@ -61,19 +61,15 @@ services:
               count: 1
               capabilities: [gpu]
 
-  vqa-dsocr:
-    # deepseek-ocr.rs：OpenAI 兼容服务（/v1/chat/completions）
-    # https://github.com/TimmyOVO/deepseek-ocr.rs
-    # TODO(M2): 用 Releases 预编译二进制或自行构建镜像；选 Q4/Q8 量化适配 8GB
-    image: deepseek-ocr-rs:PIN_VERSION
-    ports: ["8001:8000"]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+  # vqa-dsocr（M2 决策）：deepseek-ocr.rs v0.6.0 无 Linux CUDA 预编译产物，
+  # dev 机不进容器——用官方 Windows 原生二进制跑在宿主机（ModelScope 自动下权重），
+  # gateway 侧注册表用 ../models.dev-host.yaml（endpoint 指宿主机 18001，
+  # 容器内访问写 host.docker.internal:18001）。prod 用 compose.prod-nvidia.yml 的 vLLM 容器。
+  # 若将来官方发布 Linux CUDA 产物，再恢复本服务并 pin 版本：
+  # vqa-dsocr:
+  #   image: deepseek-ocr-rs:<PIN>
+  #   ports: ["18001:8000"]   # 宿主端口避开 Windows 保留段 7964-8063
+  #   deploy: ...gpu...
 
 volumes:
   redis-data:
