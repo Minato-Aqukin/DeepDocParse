@@ -27,6 +27,9 @@ class Settings(BaseSettings):
 class ModelEntry(BaseModel):
     endpoint: str
     default: bool = False
+    # 引擎级默认透传选项（如 mineru 的 backend=pipeline|vlm），请求方 options 可覆盖。
+    # 放注册表而非代码：dev/prod 换后端 = 改一行配置（铁律 3）
+    options: dict = {}
 
 
 class Registry(BaseModel):

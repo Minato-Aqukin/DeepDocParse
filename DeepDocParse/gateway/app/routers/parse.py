@@ -55,9 +55,10 @@ async def submit_parse(req: ParseRequest, request: Request):
     if await state.task_store.queue_depth() >= settings.parse_queue_max:
         raise APIError(429, "parse queue is full, retry later", "rate_limit_error", "queue_full")
 
-    endpoint = engines[req.engine].endpoint
+    entry = engines[req.engine]
+    merged_options = {**entry.options, **req.options}  # 注册表默认 + 请求覆盖
     try:
-        mineru_task_id = await state.mineru_client.submit(endpoint, req.file_url, req.options)
+        mineru_task_id = await state.mineru_client.submit(entry.endpoint, req.file_url, merged_options)
     except httpx.HTTPError as exc:
         raise APIError(502, f"parse engine unreachable: {exc}", "upstream_error", "engine_error")
 
@@ -80,7 +81,9 @@ async def get_status(task_id: str, request: Request):
         endpoint = state.registry.parse_engines[task["engine"]].endpoint
         try:
             live = await state.mineru_client.status(endpoint, task["mineru_task_id"])
-            status = live["status"]
+            # 契约保证：status=succeeded ⇒ result 立即可取。mineru 已完成但 worker
+            # 还没归档时对外仍报 running，避免调用方拿到 succeeded 却取不到结果
+            status = "running" if live["status"] == "succeeded" else live["status"]
         except (httpx.HTTPError, MineruTaskNotFound):
             pass  # mineru 暂不可达/任务被清理时退回存储态，由 worker 兜底落终态
     progress = {"pending": 0.0, "running": 0.5, "succeeded": 1.0, "failed": 1.0}[status]

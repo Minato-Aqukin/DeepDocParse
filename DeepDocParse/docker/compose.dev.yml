@@ -32,7 +32,9 @@ services:
     depends_on: [redis]
 
   mcp-server:
-    build: ../mcp_server
+    build:
+      context: ../mcp_server
+      args: { PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple" }
     ports: ["9100:9100"]   # 对外应由 backend 代理；dev 直开便于 Claude Desktop 实测
     environment:
       GATEWAY_URL: http://gateway:9000
