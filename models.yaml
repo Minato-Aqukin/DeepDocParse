@@ -22,6 +22,10 @@ parse_engines:
     # dev: 直连单个 mineru-api worker；prod: 指向 mineru-router（接口完全兼容，只改 URL）
     endpoint: "http://mineru:8000"
     default: true
+    # 引擎默认选项（请求方 options 可覆盖）：
+    # dev 镜像只内置 pipeline 模型（8GB 卡）；prod vlm 后端时改 backend 并删本行注释
+    options:
+      backend: pipeline
 
 # ---- v2 启用（M4）----
 # embedding_models:

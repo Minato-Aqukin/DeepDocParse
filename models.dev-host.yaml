@@ -17,3 +17,6 @@ parse_engines:
   mineru:
     endpoint: "http://localhost:18000"   # docker run -p 18000:8000 mineru:3.4.4 时
     default: true
+    options:
+      backend: pipeline   # dev 镜像只内置 pipeline 模型
+
