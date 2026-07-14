@@ -15,7 +15,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21", "fakeredis>=2.26"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["../tests"]
 
 [build-system]
 requires = ["hatchling"]
