@@ -6,6 +6,7 @@
 3. 结果后处理：ARQ 链（取结果 -> 归档 -> 通知 backend）
 4. 可观测：Prometheus metrics、统一错误格式
 """
+import asyncio
 from contextlib import asynccontextmanager
 
 import httpx
@@ -26,6 +27,8 @@ async def lifespan(app: FastAPI):
     app.state.registry = load_registry(settings.models_config)
     # 下载 file_url / 转传 mineru 可能是大文件，读超时放宽
     app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
+    # VQA 同步通道的并发闸（满载 429，见 chat.py）
+    app.state.vqa_semaphore = asyncio.Semaphore(settings.vqa_max_concurrency)
     app.state.redis = redis.from_url(settings.redis_url)
     app.state.arq = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     app.state.task_store = TaskStore(app.state.redis, settings.result_ttl)

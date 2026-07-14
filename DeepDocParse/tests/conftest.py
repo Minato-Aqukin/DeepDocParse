@@ -33,9 +33,12 @@ class ArqStub:
 @pytest.fixture
 async def app_state():
     """把 lifespan 该做的注入手工做一遍（fakeredis 版），测试结束清理。"""
+    import asyncio
+
     app.state.registry = load_registry(Path(__file__).resolve().parent.parent / "models.yaml")
     # trust_env=False：测试不读本机代理环境变量（respx 拦截出网，无需真实网络）
     app.state.http = httpx.AsyncClient(timeout=5.0, trust_env=False)
+    app.state.vqa_semaphore = asyncio.Semaphore(settings.vqa_max_concurrency)
     app.state.redis = fakeredis.aioredis.FakeRedis()
     app.state.arq = ArqStub()
     app.state.task_store = TaskStore(app.state.redis, settings.result_ttl)

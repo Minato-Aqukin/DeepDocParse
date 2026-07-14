@@ -26,7 +26,7 @@ DeepDocParse/
 │       └── worker/         # ARQ 任务：结果归档链（v2 追加向量化步骤）
 ├── mcp_server/             # FastMCP：ask_document
 ├── docker/
-│   ├── compose.dev.yml     # RTX 4060 8GB：MinerU pipeline + deepseek-ocr.rs 量化
+│   ├── compose.dev.yml     # RTX 4060 8GB：MinerU pipeline（VQA 走宿主机原生二进制，见 models.dev-host.yaml）
 │   └── compose.prod-nvidia.yml  # RTX 6000 级：vLLM + mineru-router 多卡
 └── tests/                  # 契约测试（mineru 升级前必须通过）
 ```
@@ -44,7 +44,7 @@ docker compose -f compose.dev.yml up --build
 ## 开发里程碑
 
 - [x] M1 解析平面：gateway + MinerU pipeline + ARQ 归档链（mineru 3.4.4 实测契约见 docs/mineru-api-contract.md）
-- [ ] M2 VQA 平面：deepseek-ocr.rs 接入
+- [x] M2 VQA 平面：deepseek-ocr.rs 接入（dev 用 Windows 原生二进制 v0.6.0 + ModelScope 自动下权重，见 models.dev-host.yaml；prod 用 vLLM 容器）
 - [ ] M3 MCP：ask_document v1（BM25/关键词检索）
 - [ ] M4 prod profile + metrics + 压测；embedding v2（bge-m3 + Redis Stack 向量检索）
 - [ ] M5 契约冻结 v1.0，与 DeepDocParse-Web 联调
