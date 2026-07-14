@@ -6,19 +6,22 @@ from pathlib import Path
 
 import yaml
 from pydantic import BaseModel
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env")
+
     service_token: str = "change-me"
     redis_url: str = "redis://localhost:6379/0"
     models_config: str = "models.yaml"
     parse_queue_max: int = 200
     vqa_max_concurrency: int = 8
     result_ttl: int = 86400
-
-    class Config:
-        env_file = ".env"
+    # ARQ 轮询 mineru 的退避参数（秒）
+    poll_initial_delay: float = 1.0
+    poll_max_delay: float = 10.0
+    poll_timeout: float = 1800.0
 
 
 class ModelEntry(BaseModel):

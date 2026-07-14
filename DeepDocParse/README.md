@@ -43,7 +43,7 @@ docker compose -f compose.dev.yml up --build
 
 ## 开发里程碑
 
-- [ ] M1 解析平面：gateway + MinerU pipeline + ARQ 归档链
+- [x] M1 解析平面：gateway + MinerU pipeline + ARQ 归档链（mineru 3.4.4 实测契约见 docs/mineru-api-contract.md）
 - [ ] M2 VQA 平面：deepseek-ocr.rs 接入
 - [ ] M3 MCP：ask_document v1（BM25/关键词检索）
 - [ ] M4 prod profile + metrics + 压测；embedding v2（bge-m3 + Redis Stack 向量检索）

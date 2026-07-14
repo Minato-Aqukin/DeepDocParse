@@ -36,17 +36,17 @@ services:
     depends_on: [gateway]
 
   redis:
-    image: redis/redis-stack-server:latest
+    image: redis/redis-stack-server:7.4.0-v3
     volumes: [redis-data:/data]
 
   # ---- 解析平面：router + N 个 vlm worker ----
   mineru-router:
-    image: mineru:PIN_VERSION
+    image: mineru:3.4.4
     command: mineru-router --host 0.0.0.0 --port 8000   # TODO(M4): worker 发现参数按官方文档
     # models.yaml: parse_engines.mineru.endpoint -> http://mineru-router:8000
 
   mineru-worker-0:
-    image: mineru:PIN_VERSION
+    image: mineru:3.4.4
     command: mineru-api --host 0.0.0.0 --port 8000      # vlm 后端（vllm-engine）
     environment: { CUDA_VISIBLE_DEVICES: "0" }
     deploy: &gpu
