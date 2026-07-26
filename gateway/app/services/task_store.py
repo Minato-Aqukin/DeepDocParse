@@ -57,6 +57,15 @@ class TaskStore:
     async def set_status(self, task_id: str, status: str, error: str | None = None) -> None:
         await self._r.hset(f"task:{task_id}", mapping={"status": status, "error": error or ""})
 
+    async def link_alias(self, alias_hash: str, task_id: str) -> None:
+        """给同一任务再挂一个身份别名。
+
+        用途：调用方带 doc_id 提交时，任务身份是 sha256(doc_id)，而只拿得到裸 URL 的
+        调用方（mcp_server 的 ask_document）会按 sha256(file_url) 来找 —— 没有别名就
+        找不到，于是重复解析一遍。别名让两条路命中同一个任务。
+        """
+        await self._r.set(f"doc:{alias_hash}", task_id, ex=self._ttl)
+
     async def find_by_doc_hash(self, doc_hash: str) -> str | None:
         task_id = await self._r.get(f"doc:{doc_hash}")
         if task_id is None:

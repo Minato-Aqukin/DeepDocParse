@@ -8,12 +8,13 @@
 1. **不重写 mineru-api / mineru-router**——官方成品，配置启动；gateway 只做协议转换/鉴权/归档/metrics
 2. **不双重排队**——推理排队归 mineru 任务管理，ARQ 只管后处理编排（poll → 归档 → 回调）
 3. **注册表驱动**——gateway 不 import 模型代码，只查 models.yaml 转发；加模型=加容器+一行配置
-4. **契约优先**——改 `/v1/*` 接口必须先改 openapi.yaml；mineru/deepseek-ocr.rs 升级前必须先跑绿 tests/
+4. **契约优先**——改 `/v1/*` 接口必须先改 openapi.yaml；mineru/deepseek-ocr.rs 升级前必须先跑绿 tests/。
+   **openapi.yaml 已在 M5 冻结为 v1.0**：此后只许向后兼容的新增，不得删改既有字段语义
 5. **无状态**——结果暂存 TTL=24h；永久归档是 DeepDocParse-Web/backend 的事；向量索引是可重建缓存
 6. **MCP 只有一个工具** `ask_document`，签名永不变，检索升级只改内部实现
 
 ## 开发顺序（按 TODO(Mx) 标注走）
-M1 解析平面 → M2 VQA 平面 → M3 MCP ask_document v1(BM25) → M4 prod+embedding v2 → M5 契约冻结
+M1 解析平面 → M2 VQA 平面 → M3 MCP ask_document v1(BM25) → M4 prod+embedding v2 → M5 契约冻结（已完成）
 
 M1 第一步必须先拿到 mineru-api 的真实接口：启动官方容器后访问其 /docs，
 把 /tasks 相关参数记录到 `docs/mineru-api-contract.md`，再实现 mineru_client.py。

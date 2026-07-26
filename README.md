@@ -51,7 +51,8 @@ docker compose -f compose.dev.yml up --build
       bge-m3(TEI) 向量化、Redis Stack 向量检索（BM25 自动兜底）、Prometheus `/metrics`
       —— dev 全链路真机验证（`scripts/e2e_mcp.py`）
 - [ ] M4b 压测 + 多卡 mineru-router 验证（需服务器，dev 机 8GB 做不到）
-- [ ] M5 契约冻结 v1.0，与 DeepDocParse-Web 联调
+- [x] M5 契约冻结 v1.0：`/v1/parse` 增加可选 `doc_id`（稳定文档标识，ADR #11）后冻结 openapi.yaml；
+      与 DeepDocParse-Web 全链路联调通过（见 ../DeepDocParse-Web/scripts/e2e_web.py）
 
 ## 原则备忘
 
