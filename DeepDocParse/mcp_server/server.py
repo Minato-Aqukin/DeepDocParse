@@ -89,7 +89,12 @@ def _get_redis() -> redis.Redis | None:
 
 
 def _doc_hash(file_url: str) -> str:
-    # 必须与 gateway parse.py 的 _doc_hash 同算法（chunk 键按此哈希写入）
+    """本地兜底算法，与 gateway 的 _doc_hash 保持一致。
+
+    注意：提交方带了 doc_id 时（Web 后端就会带），真实身份是 sha256(doc_id)，
+    这里算不出来 —— 所以优先用 /v1/parse/{id} 返回的 doc_hash，本函数只在
+    老版本 gateway 不返回该字段时兜底。
+    """
     return hashlib.sha256(file_url.encode()).hexdigest()
 
 
@@ -256,7 +261,9 @@ async def ask_document(file_url: str, question: str) -> str:
                 f"出处：{file_url} 全文；完整结果（markdown/版面/图片）：GET {result_url}")
 
     # ---- 长文档：v2 向量检索优先（worker 建好的向量索引），失败回退 BM25 ----
-    hits = await _vector_retrieve(_doc_hash(file_url), question, k=TOP_K)
+    # 身份以 gateway 返回的 doc_hash 为准：提交方带 doc_id 时它不等于 sha256(file_url)
+    hits = await _vector_retrieve(status.get("doc_hash") or _doc_hash(file_url),
+                                  question, k=TOP_K)
     await _record_retrieval("vector" if hits is not None else "bm25")
     if hits is None:
         blocks = _layout_blocks(result.get("layout_json", {}))

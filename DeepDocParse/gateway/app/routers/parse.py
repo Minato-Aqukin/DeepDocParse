@@ -24,20 +24,21 @@ _TERMINAL = {"succeeded", "failed"}
 
 
 class ParseRequest(BaseModel):
-    file_url: str          # backend 侧 MinIO 预签名 URL，不传文件流
+    file_url: str          # 文件的可下载 URL（backend 侧生成），不传文件流
+    doc_id: str | None = None   # 稳定文档标识（建议文件内容 sha256），见 _doc_hash
     engine: str = "mineru"
     options: dict = {}     # 引擎透传选项（mineru: backend=pipeline|vlm 等）
     callback_url: str | None = None
 
 
-def _doc_hash(file_url: str) -> str:
-    """文档身份 = file_url 的 sha256（幂等复用任务 + v2 向量索引的键）。
+def _doc_hash(file_url: str, doc_id: str | None = None) -> str:
+    """文档身份（幂等复用任务 + v2 向量索引分块键）。
 
-    TODO(M5)：backend 的 MinIO 预签名 URL 每次生成的签名/过期参数都不同，
-    同一文档会算出不同 doc_hash —— 幂等失效、向量索引在生产环境永远命中不到。
-    契约冻结前需要一个稳定文档标识（如请求带 doc_id，或只哈希 URL 的 path 部分）。
+    优先用调用方给的 doc_id：URL 每次都变的场景（MinIO 预签名、临时下载链接）下，
+    只哈希 URL 会让同一文档每次算出不同身份 —— 幂等失效、向量索引永不命中。
+    缺省仍回退 sha256(file_url)，保持无 doc_id 调用方（如 mcp_server）的既有行为。
     """
-    return hashlib.sha256(file_url.encode()).hexdigest()
+    return hashlib.sha256((doc_id or file_url).encode()).hexdigest()
 
 
 @router.post("/parse", status_code=202)
@@ -49,12 +50,17 @@ async def submit_parse(req: ParseRequest, request: Request):
         raise APIError(404, f"unknown parse engine: {req.engine}", "invalid_request_error",
                        "unknown_engine")
 
-    # 幂等：同一 file_url 已有未失败任务则直接复用（ask_document 的重试模式依赖此行为）
-    doc_hash = _doc_hash(req.file_url)
+    # 幂等：同一文档已有未失败任务则直接复用（ask_document 的重试模式依赖此行为）
+    doc_hash = _doc_hash(req.file_url, req.doc_id)
+    url_hash = _doc_hash(req.file_url)
     existing_id = await state.task_store.find_by_doc_hash(doc_hash)
     if existing_id:
         existing = await state.task_store.get(existing_id)
         if existing and existing.get("status") != "failed":
+            # 复用路径也要补别名：文档可能是上一轮（还没带别名时）建的，
+            # 不补的话 URL-only 调用方仍会另起一个任务
+            if url_hash != doc_hash:
+                await state.task_store.link_alias(url_hash, existing_id)
             return {"task_id": existing_id}
 
     # 队列水位：ARQ 不做推理排队（那是 mineru 的事），这里只挡洪峰
@@ -70,6 +76,10 @@ async def submit_parse(req: ParseRequest, request: Request):
 
     task_id = uuid.uuid4().hex
     await state.task_store.create(task_id, mineru_task_id, req.engine, req.callback_url, doc_hash)
+    # 带 doc_id 时再按 URL 挂一个别名：只拿得到裸 URL 的调用方（ask_document）
+    # 否则会算出另一个身份、重复解析同一份文档
+    if url_hash != doc_hash:
+        await state.task_store.link_alias(url_hash, task_id)
     await state.arq.enqueue_job("poll_and_archive", task_id)
     return {"task_id": task_id}
 
@@ -98,6 +108,9 @@ async def get_status(task_id: str, request: Request):
         "status": status,
         "progress": progress,
         "error": task.get("error") or None,
+        # 文档身份：v2 的分块索引就按它建键。只拿得到裸 URL 的调用方
+        # （ask_document）必须用这里返回的值，自己哈希 URL 会算错（身份可能来自 doc_id）
+        "doc_hash": task.get("doc_hash") or None,
     }
 
 

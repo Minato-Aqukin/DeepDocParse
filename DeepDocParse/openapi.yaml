@@ -1,11 +1,13 @@
 openapi: 3.1.0
 info:
   title: DeepDocParse API
-  version: 0.1.0
+  version: 1.0.0
   description: |
     DeepDocParse 对外契约。DeepDocParse-Web/backend 只依赖本文件。
     鉴权：所有请求携带 `Authorization: Bearer <SERVICE_TOKEN>`（内网 service token，非用户 key）。
-    v1.0 冻结前（M5）允许不兼容变更。
+
+    **v1.0 已冻结（M5）**：此后只允许向后兼容的新增（新增可选字段/新增端点），
+    不得删改既有字段语义。最后一次不兼容变更是 `/v1/parse` 增加可选 `doc_id`（ADR #11）。
 
 servers:
   - url: http://DeepDocParse:9000
@@ -25,7 +27,15 @@ paths:
               properties:
                 file_url:
                   type: string
-                  description: 文件的预签名 URL（backend 侧 MinIO 生成），不传文件流
+                  description: 文件的可下载 URL（backend 侧生成），不传文件流
+                doc_id:
+                  type: string
+                  description: |
+                    稳定文档标识，**必须用文件内容 sha256 等高熵值**。缺省则回退为 sha256(file_url)。
+                    service 用它做任务幂等复用与向量索引分块键——URL 每次变化（预签名/临时链接）
+                    时必须传本字段，否则同一文档会被重复解析且检索缓存永不命中。
+                    注意：service 不感知用户，doc_id 的去重是**跨调用方全局生效**的；
+                    传低熵值（如 "doc1"）会让不同调用方读到彼此的解析结果。
                 engine:
                   type: string
                   default: mineru
@@ -65,6 +75,13 @@ paths:
                   status: { type: string, enum: [pending, running, succeeded, failed] }
                   progress: { type: number, description: 0-1 }
                   error: { type: string, nullable: true }
+                  doc_hash:
+                    type: string
+                    nullable: true
+                    description: |
+                      文档身份（v2 向量索引的分块键）。等于 sha256(doc_id) 或 sha256(file_url)，
+                      取决于提交时是否带了 doc_id。只拿得到裸 URL 的调用方必须用本字段，
+                      自己哈希 URL 会算出不同的键、检索永远零命中。
 
   /v1/parse/{task_id}/result:
     get:

@@ -6,6 +6,7 @@
 上游全部 respx mock（契约形态来自 docs/mineru-api-contract.md 的实测记录），
 不需要 GPU / 容器；真环境 e2e 用 dev compose。
 """
+import hashlib
 import json
 
 import pytest
@@ -126,6 +127,57 @@ async def test_parse_lifecycle(client, worker_ctx, app_state, monkeypatch):
     assert await app_state.task_store.queue_depth() == 0
     # v2：归档成功后追加分块索引链（models.yaml 注册了 embedding_models）
     assert ("chunk_and_index", task_id) in app_state.arq.jobs
+
+
+@respx.mock
+async def test_parse_doc_id_stabilizes_identity(client, app_state):
+    """M5 契约变更：URL 每次变（预签名签名不同）但 doc_id 相同 -> 复用任务、分块键稳定。
+
+    不修这个，backend 一上 MinIO 预签名 URL，幂等与 v2 向量索引在生产就永远失效。
+    """
+    routes = _mock_upstream()
+    url_a, url_b = f"{FILE_URL}?X-Amz-Signature=aaa", f"{FILE_URL}?X-Amz-Signature=bbb"
+    for url in (url_a, url_b):
+        respx.get(url).mock(return_value=Response(200, content=b"%PDF-1.4 fake"))
+
+    doc_id = "c0ffee" * 10
+    r1 = await client.post("/v1/parse", json={"file_url": url_a, "doc_id": doc_id})
+    r2 = await client.post("/v1/parse", json={"file_url": url_b, "doc_id": doc_id})
+    assert r1.status_code == 202 and r2.status_code == 202
+    assert r1.json()["task_id"] == r2.json()["task_id"], "同 doc_id 必须复用同一任务"
+    assert routes["submit"].call_count == 1, "复用命中时不得再打 mineru"
+
+    task_id = r1.json()["task_id"]
+    task = await app_state.task_store.get(task_id)
+    assert task["doc_hash"] == hashlib.sha256(doc_id.encode()).hexdigest(), \
+        "分块键必须由 doc_id 决定"
+
+    # 只拿得到裸 URL 的调用方（ask_document）必须命中同一任务，否则会重复解析
+    r3 = await client.post("/v1/parse", json={"file_url": url_a})
+    assert r3.json()["task_id"] == task_id, "URL 别名未生效：同一文档会被解析两次"
+    assert routes["submit"].call_count == 1
+
+    # 且必须能拿到真实身份：自己哈希 URL 算出来的键与索引键不一致
+    status = (await client.get(f"/v1/parse/{task_id}")).json()
+    assert status["doc_hash"] == task["doc_hash"], \
+        "状态响应必须暴露 doc_hash，否则 URL-only 调用方检索永远零命中"
+    assert status["doc_hash"] != hashlib.sha256(url_a.encode()).hexdigest()
+
+
+@respx.mock
+async def test_parse_without_doc_id_falls_back_to_url(client, app_state):
+    """回归：不传 doc_id 时身份仍是 sha256(file_url)，不同 URL 各自成任务（mcp_server 依赖此行为）。"""
+    routes = _mock_upstream()
+    url_b = f"{FILE_URL}?v=2"
+    respx.get(url_b).mock(return_value=Response(200, content=b"%PDF-1.4 fake"))
+
+    r1 = await client.post("/v1/parse", json={"file_url": FILE_URL})
+    r2 = await client.post("/v1/parse", json={"file_url": url_b})
+    assert r1.json()["task_id"] != r2.json()["task_id"]
+    assert routes["submit"].call_count == 2
+
+    task = await app_state.task_store.get(r1.json()["task_id"])
+    assert task["doc_hash"] == hashlib.sha256(FILE_URL.encode()).hexdigest()
 
 
 @respx.mock
