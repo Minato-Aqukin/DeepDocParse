@@ -20,6 +20,7 @@ import redis.asyncio as redis
 from arq.connections import RedisSettings
 
 from app.config import load_registry, settings
+from app.services.chunking import layout_to_chunks
 from app.services.mineru_client import MineruClient, MineruTaskNotFound
 from app.services.task_store import TaskStore
 
@@ -96,10 +97,58 @@ async def poll_and_archive(ctx: dict, task_id: str) -> None:
     await store.save_result(task_id, result)
     await _finish(ctx, task_id, task, "succeeded")
 
+    # v2：注册了 embedding 模型才追加分块索引链（注册表驱动开关）
+    if ctx["registry"].embedding_models:
+        await ctx["redis"].enqueue_job("chunk_and_index", task_id)
+
 
 async def chunk_and_index(ctx: dict, task_id: str) -> None:
-    """v2 (M4)：按 layout_json 结构分块（chunk 携带页码+bbox）-> embedding -> 写向量索引。"""
-    raise NotImplementedError  # TODO(M4)
+    """v2 (M4)：按 layout_json 结构分块（chunk 携带页码+bbox）-> embedding -> 写向量索引。
+
+    尽力而为：失败只记日志、不抛（否则 ARQ 默认重试 5 次，每次重跑全量 embedding）。
+    索引是可重建缓存，检索方（ask_document）缺索引时自动回退 BM25。
+    """
+    try:
+        await _chunk_and_index(ctx, task_id)
+    except Exception as exc:  # noqa: BLE001 - 索引失败不得影响任务终态
+        print(f"[worker] chunk_and_index failed for {task_id}: {type(exc).__name__}: {exc}")
+
+
+async def _chunk_and_index(ctx: dict, task_id: str) -> None:
+    store: TaskStore = ctx["task_store"]
+    registry = ctx["registry"]
+    if not registry.embedding_models:
+        return
+    task = await store.get(task_id)
+    if task is None or not task.get("doc_hash"):
+        return
+    result = await store.load_result(task_id)
+    if result is None:
+        return
+
+    chunks = layout_to_chunks(result.get("layout_json") or {})
+    if not chunks:
+        return
+
+    name, entry = registry.default_of(registry.embedding_models)
+    # 分批：embedding 运行时对单请求条数有上限（TEI 的 max-client-batch-size），
+    # 长文档一次性提交会被整批拒绝，故按 embedding_batch_size 切分后按序拼接
+    vectors: list[list[float]] = []
+    batch = settings.embedding_batch_size
+    for start in range(0, len(chunks), batch):
+        texts = [c["text"] for c in chunks[start:start + batch]]
+        resp = await ctx["http"].post(
+            f"{entry.endpoint}/v1/embeddings",
+            json={"model": name, "input": texts},
+        )
+        resp.raise_for_status()
+        data = sorted(resp.json()["data"], key=lambda d: d["index"])
+        if len(data) != len(texts):
+            raise RuntimeError(f"embedding runtime returned {len(data)} vectors for {len(texts)} inputs")
+        vectors.extend(d["embedding"] for d in data)
+
+    await store.ensure_chunk_index(dim=len(vectors[0]))
+    await store.save_chunks(task["doc_hash"], chunks, vectors)
 
 
 async def startup(ctx: dict) -> None:
@@ -116,7 +165,7 @@ async def shutdown(ctx: dict) -> None:
 
 
 class WorkerSettings:
-    functions = [poll_and_archive]  # M4: + chunk_and_index
+    functions = [poll_and_archive, chunk_and_index]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)

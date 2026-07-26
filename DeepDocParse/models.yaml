@@ -27,8 +27,8 @@ parse_engines:
     options:
       backend: pipeline
 
-# ---- v2 启用（M4）----
-# embedding_models:
-#   bge-m3:
-#     endpoint: "http://embed:8080"     # TEI (text-embeddings-inference) 容器
-#     default: true
+# ---- v2（M4）：注册即启用分块索引链与向量检索；删除本段则全链路回退 BM25 ----
+embedding_models:
+  bge-m3:
+    endpoint: "http://embed:8080"     # TEI (text-embeddings-inference) 容器
+    default: true

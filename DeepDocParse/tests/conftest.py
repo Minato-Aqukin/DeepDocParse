@@ -64,10 +64,12 @@ async def client(app_state):
 
 @pytest.fixture
 def worker_ctx(app_state):
-    """poll_and_archive 的 ctx —— 与 worker startup 注入的结构一致。"""
+    """poll_and_archive 的 ctx —— 与 worker startup 注入的结构一致。
+    'redis' 是 arq 自带的任务池（worker 里用它 enqueue 后续链），测试用 ArqStub。"""
     return {
         "http": app_state.http,
         "task_store": app_state.task_store,
         "mineru_client": app_state.mineru_client,
         "registry": app_state.registry,
+        "redis": app_state.arq,
     }

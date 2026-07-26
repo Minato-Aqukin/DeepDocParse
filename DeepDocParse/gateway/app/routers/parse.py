@@ -31,6 +31,12 @@ class ParseRequest(BaseModel):
 
 
 def _doc_hash(file_url: str) -> str:
+    """文档身份 = file_url 的 sha256（幂等复用任务 + v2 向量索引的键）。
+
+    TODO(M5)：backend 的 MinIO 预签名 URL 每次生成的签名/过期参数都不同，
+    同一文档会算出不同 doc_hash —— 幂等失效、向量索引在生产环境永远命中不到。
+    契约冻结前需要一个稳定文档标识（如请求带 doc_id，或只哈希 URL 的 path 部分）。
+    """
     return hashlib.sha256(file_url.encode()).hexdigest()
 
 

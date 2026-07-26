@@ -28,6 +28,7 @@ DeepDocParse/
 ├── docker/
 │   ├── compose.dev.yml     # RTX 4060 8GB：MinerU pipeline（VQA 走宿主机原生二进制，见 models.dev-host.yaml）
 │   └── compose.prod-nvidia.yml  # RTX 6000 级：vLLM + mineru-router 多卡
+├── scripts/                # make_fixtures（e2e 素材）/ prepare_bge_m3（权重转 safetensors）/ e2e_mcp（真机 e2e）
 └── tests/                  # 契约测试（mineru 升级前必须通过）
 ```
 
@@ -46,7 +47,10 @@ docker compose -f compose.dev.yml up --build
 - [x] M1 解析平面：gateway + MinerU pipeline + ARQ 归档链（mineru 3.4.4 实测契约见 docs/mineru-api-contract.md）
 - [x] M2 VQA 平面：deepseek-ocr.rs 接入（dev 用 Windows 原生二进制 v0.6.0 + ModelScope 自动下权重，见 models.dev-host.yaml；prod 用 vLLM 容器）
 - [x] M3 MCP：ask_document v1（BM25 检索 + bbox 裁剪 VQA 验证 + 带出处返回；解析中即返回重试模式）
-- [ ] M4 prod profile + metrics + 压测；embedding v2（bge-m3 + Redis Stack 向量检索）
+- [x] M4a embedding v2 + metrics + prod compose 锁版本：`/v1/embeddings` 透传、结构感知分块、
+      bge-m3(TEI) 向量化、Redis Stack 向量检索（BM25 自动兜底）、Prometheus `/metrics`
+      —— dev 全链路真机验证（`scripts/e2e_mcp.py`）
+- [ ] M4b 压测 + 多卡 mineru-router 验证（需服务器，dev 机 8GB 做不到）
 - [ ] M5 契约冻结 v1.0，与 DeepDocParse-Web 联调
 
 ## 原则备忘

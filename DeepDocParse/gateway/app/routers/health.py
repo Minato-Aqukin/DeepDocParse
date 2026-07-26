@@ -32,12 +32,14 @@ async def readyz(request: Request, response: Response):
         checks["redis"] = f"down ({type(exc).__name__})"
 
     # parse_engines 走 mineru 的 /health（实测契约，见 docs/mineru-api-contract.md）；
-    # vqa_models 走 OpenAI 的 /v1/models
+    # vqa_models 走 OpenAI 的 /v1/models；embedding_models 走 TEI 的 /health
     probes: dict[str, str] = {}
     for name, entry in state.registry.parse_engines.items():
         probes[f"engine:{name}"] = f"{entry.endpoint}/health"
     for name, entry in state.registry.vqa_models.items():
         probes[f"vqa:{name}"] = f"{entry.endpoint}/v1/models"
+    for name, entry in state.registry.embedding_models.items():
+        probes[f"embed:{name}"] = f"{entry.endpoint}/health"
     results = await asyncio.gather(*(_probe(state.http, url) for url in probes.values()))
     checks.update(dict(zip(probes.keys(), results)))
 

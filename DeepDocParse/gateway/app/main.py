@@ -17,7 +17,7 @@ from fastapi import FastAPI
 
 from app.config import load_registry, settings
 from app.errors import install_error_handlers
-from app.routers import chat, health, parse
+from app.routers import chat, embeddings, health, parse
 from app.services.mineru_client import MineruClient
 from app.services.task_store import TaskStore
 
@@ -50,7 +50,9 @@ install_error_handlers(app)
 app.include_router(health.router)
 app.include_router(parse.router, prefix="/v1")
 app.include_router(chat.router, prefix="/v1")
+app.include_router(embeddings.router, prefix="/v1")
 
-# TODO(M4): Prometheus instrumentator
-# from prometheus_fastapi_instrumentator import Instrumentator
-# Instrumentator().instrument(app).expose(app)
+# 可观测（M4）：/metrics 无鉴权（内网 Prometheus 抓取；对外由 backend 隔离）
+from prometheus_fastapi_instrumentator import Instrumentator  # noqa: E402
+
+Instrumentator().instrument(app).expose(app)

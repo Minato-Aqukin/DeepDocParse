@@ -20,3 +20,8 @@ parse_engines:
     options:
       backend: pipeline   # dev 镜像只内置 pipeline 模型
 
+embedding_models:
+  bge-m3:
+    endpoint: "http://localhost:18080"   # TEI CPU 容器映射 18080:8080（避开保留段）
+    default: true
+
