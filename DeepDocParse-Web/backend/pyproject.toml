@@ -12,12 +12,20 @@ dependencies = [
     "alembic>=1.13",
     "pydantic-settings>=2.4",
     "python-jose[cryptography]>=3.3",   # JWT
-    "passlib[bcrypt]>=1.7",
+    "bcrypt>=4.1",                      # 直接用官方库（passlib 已停更且与 bcrypt 4.x 冲突）
     "minio>=7.2",
+    "python-multipart>=0.0.9",          # FastAPI 接收 multipart 上传的前提
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+dev = [
+    "pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21", "aiosqlite>=0.20",
+    "redis>=5.0",   # 仅 scripts/e2e_web.py 用：核对 service 侧的检索路径计数
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
 
 [build-system]
 requires = ["hatchling"]

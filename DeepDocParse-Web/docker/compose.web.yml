@@ -1,0 +1,44 @@
+# 产品层依赖（dev）：PostgreSQL + MinIO。
+# backend / frontend 在宿主机直接起（改代码即时生效），这里只托管有状态组件。
+#
+# 启动: docker compose -f compose.web.yml --env-file ../.env up -d
+#
+# 端口选择的两条硬约束（见 ../../CLAUDE.md 陷阱 1）：
+#   - 9000 被 DeepDocParse gateway 占用 -> MinIO 用 19000/19001
+#   - Windows 保留段 7964-8063 不可用 -> 一律走 1xxxx 段
+# 镜像一律 pin 版本，禁止 latest。
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ddp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ddp}
+      POSTGRES_DB: ${POSTGRES_DB:-deepdocparse}
+    ports: ["15432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ddp}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "19000:9000"   # S3 API
+      - "19001:9001"   # 控制台
+    volumes: [miniodata:/data]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
+  miniodata:

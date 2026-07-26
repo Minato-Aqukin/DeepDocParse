@@ -1,50 +1,72 @@
 # DeepDocParse-Web
 
-前端 + 后端 monorepo。总体架构见 [../ARCHITECTURE.md](../ARCHITECTURE.md)。
+产品层：前端 + 后端 monorepo。总体架构见 [../ARCHITECTURE.md](../ARCHITECTURE.md)。
 
 ```
 DeepDocParse-Web/
-├── backend/    # FastAPI：用户、API key、额度限流、任务、永久归档、MCP 代理
-└── frontend/   # Vue 3：上传、任务列表、结果预览、key 管理
+├── backend/    # FastAPI：用户、API key、额度限流、任务、永久归档、对外 API 与 MCP 代理
+├── frontend/   # Vue 3 + TS + Element Plus：上传、任务列表、结果预览、key 管理、用量
+├── docker/     # compose.web.yml：PostgreSQL + MinIO（有状态组件）
+└── scripts/    # e2e_web.py 真环境全链路验证
 ```
 
-## backend 职责边界
+对 DeepDocParse 的调用**只依赖** [../DeepDocParse/openapi.yaml](../DeepDocParse/openapi.yaml) 契约。
 
-- **持有用户与 key**：注册/登录、API key 签发/吊销、额度与速率限制 —— service 不感知用户
-- **对外 API 入口**：第三方开发者的请求在此验 key，再以 SERVICE_TOKEN 转发 DeepDocParse
-- **永久存储**：MinIO 存原始文件与解析结果（service 只暂存 24h，本层负责取回归档），
-  支持历史记录与重新下载
-- **MCP 代理**（方案 A）：`/mcp` 路径验 key 后反代 DeepDocParse 的 mcp-server
+## 三类调用方，三套凭据
 
-## backend 模块规划（对应 app/ 目录）
+| 调用方 | 凭据 | 入口 |
+|---|---|---|
+| Web 用户 | JWT（登录换取） | `/api/*` |
+| 第三方开发者 | API key `sk-xxx`（哈希入库，明文只返回一次） | `/v1/*`、`/mcp` |
+| DeepDocParse（service） | 内网 `SERVICE_TOKEN` | `/internal/parse-callback` |
+| 谁都行（token 即凭证） | 一次性随机 token | `/files/{token}` 原件下载 |
 
-| 模块 | 内容 | 依赖 |
-|------|------|------|
-| auth | 用户注册/登录（JWT session） | users 表 |
-| apikeys | key 签发/吊销/额度（sk-xxx，哈希入库） | api_keys 表 |
-| tasks | 上传 -> MinIO -> 调 service /v1/parse -> 状态同步 -> 归档 | DeepDocParse 契约 |
-| proxy | 对外 API（验 key 版 /v1/*）与 /mcp 反代 | apikeys + DeepDocParse |
+service 永远看不到用户凭据：本层验完 key/JWT 后统一换成 `SERVICE_TOKEN` 转发。
 
-数据库：PostgreSQL（users / api_keys / tasks / usage_records）。
-对 DeepDocParse 的调用**只依赖** `../DeepDocParse/openapi.yaml` 契约。
+## 关键链路
 
-## frontend 初始化（建议用脚手架生成，不手写）
+**上传 → 归档**：算文件内容 sha256 作 `doc_id` → 存 MinIO → 生成稳定文件 URL →
+`POST service /v1/parse{file_url, doc_id, callback_url}` → 回调或对账触发归档 →
+结果里的 data URI 图片解码落盘、markdown 引用重写 → 按页计量。
+
+**为什么要对账**：gateway 的完成回调是尽力而为的（失败只记日志），backend 恰好在重启时
+就会永久丢结果（service 只暂存 24h）。`app/reconcile.py` 启动即跑一次、之后每 60s 扫一遍
+未落终态的任务，这是本层可靠性的底线。
+
+**为什么用稳定文件 URL 而不是预签名**：预签名会过期，签名还绑 host（给 service 的和给浏览器的
+签名不同）；更要命的是 MCP 平面的 `ask_document` 只拿得到一个裸 URL，URL 每次变化会让
+service 侧的向量索引永远命中不到。详见 ADR #12（文档身份本身见 ADR #11）。
+
+## 快速开始（dev）
 
 ```bash
-cd frontend
-npm create vue@latest .   # 选 TypeScript + Router + Pinia
-npm i axios
+cp .env.example .env          # SERVICE_TOKEN 必须与 DeepDocParse/.env 一致
+
+# 1. 有状态组件（PostgreSQL 15432 / MinIO 19000、控制台 19001）
+cd docker && docker compose -f compose.web.yml --env-file ../.env up -d
+
+# 2. backend（8080）
+cd backend && ../.venv/Scripts/alembic upgrade head
+../.venv/Scripts/python -m uvicorn app.main:app --port 8080 --reload
+
+# 3. frontend（5173，已配好到 8080 的代理）
+cd frontend && npm install && npm run dev
 ```
 
-页面规划：
-- `/login` 登录注册
-- `/dashboard` 任务列表 + 上传（拖拽，进度）
-- `/task/:id` 结果预览（Markdown 渲染 + 原文对照）、下载
-- `/keys` API key 管理（创建/吊销/用量）
+service 侧（gateway 9000 / mcp_server 9100）按 [../CLAUDE.md](../CLAUDE.md)「宿主机混合模式」启动。
 
-## 启动（M5 联调阶段完善）
+## 验证
 
 ```bash
-cd backend && uvicorn app.main:app --reload   # http://localhost:8080
-cd frontend && npm run dev                    # http://localhost:5173
+cd backend && ../.venv/Scripts/python -m pytest      # 单测：SQLite in-memory + respx，不需要 PG/MinIO
+cd frontend && npm run build                          # 含 vue-tsc 类型检查
+
+# 真环境全链路（需要 service 与本层都在跑）
+REDIS_URL=redis://localhost:6379/0 .venv/Scripts/python scripts/e2e_web.py
 ```
+
+## 里程碑
+
+- [x] M5 产品层全栈：用户/key/额度计量、上传归档链路、对账兜底、对外 `/v1/*` 与 `/mcp` 代理、五个前端页面
+- [ ] 多副本部署：限速计数换 Redis（现为进程内滑窗，见 `app/metering.py` 的 TODO(prod)）
+- [ ] 对象存储生命周期：删除任务后回收 MinIO 中的文件
