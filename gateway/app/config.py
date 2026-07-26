@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     poll_initial_delay: float = 1.0
     poll_max_delay: float = 10.0
     poll_timeout: float = 1800.0
+    # v2 分块索引：单次 embeddings 请求的最大 chunk 数。
+    # 必须留在运行时的 max-client-batch-size 之下（TEI 默认 32），否则长文档整批被拒 413
+    embedding_batch_size: int = 16
 
 
 class ModelEntry(BaseModel):

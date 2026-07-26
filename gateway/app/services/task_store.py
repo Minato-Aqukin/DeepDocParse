@@ -7,13 +7,26 @@
   doc:{doc_hash}          str: task_id（同一 file_url 幂等复用任务）TTL=RESULT_TTL
   queue_depth             计数器（受理+1，完成/失败-1），水位控制用
 
-v2 (M4) 追加：
-  chunks:{doc_hash}       结构感知分块（含页码+bbox）
-  向量索引               Redis Stack FT.CREATE ... VECTOR（可重建缓存，源数据在 backend）
+v2 (M4)：
+  chunk:{doc_hash}:{i}    hash: doc_hash(TAG) / text / page_idx / bbox / page_size / vec(FLOAT32)
+                          TTL=RESULT_TTL（可重建缓存，源数据在 backend）
+  chunks_idx_d{dim}       Redis Stack FT 向量索引（FLAT/COSINE，惰性建）
 """
 import json
+import struct
 
 import redis.asyncio as redis
+
+
+def chunk_index_name(dim: int) -> str:
+    """索引名带维度：换 embedding 模型（维度变化）会走新索引，而不是往旧索引里
+    写维度不符的向量被 RediSearch 静默丢弃、导致永久零命中（M4 验收发现）。
+    检索侧 mcp_server.chunk_index_name 必须与此保持同一命名规则。"""
+    return f"chunks_idx_d{dim}"
+
+
+def _pack_vector(vec: list[float]) -> bytes:
+    return struct.pack(f"<{len(vec)}f", *vec)
 
 
 class TaskStore:
@@ -66,3 +79,45 @@ class TaskStore:
         depth = await self._r.decr("queue_depth")
         if depth < 0:
             await self._r.set("queue_depth", 0)
+
+    # ---------- v2 (M4)：向量索引（Redis Stack RediSearch） ----------
+
+    async def ensure_chunk_index(self, dim: int) -> bool:
+        """惰性建 FT 索引；无 RediSearch 模块（如裸 redis/fakeredis）时返回 False，
+        分块数据照存（可重建缓存），检索方自行回退 BM25。"""
+        try:
+            await self._r.execute_command(
+                "FT.CREATE", chunk_index_name(dim), "ON", "HASH", "PREFIX", "1", "chunk:",
+                "SCHEMA",
+                "doc_hash", "TAG",
+                "page_idx", "NUMERIC",
+                "vec", "VECTOR", "FLAT", "6",
+                "TYPE", "FLOAT32", "DIM", str(dim), "DISTANCE_METRIC", "COSINE",
+            )
+            return True
+        except redis.ResponseError as exc:
+            return "already exists" in str(exc).lower()
+        except Exception:
+            return False
+
+    async def save_chunks(self, doc_hash: str, chunks: list[dict],
+                          vectors: list[list[float]]) -> None:
+        # 先清同文档旧分块：重解析后 chunk 数变少时，残留的高下标键仍会被检索命中。
+        # count 给大：默认 COUNT=10 会把整个键空间按 10 个一批扫完，24h TTL 下往返很可观
+        stale = [k async for k in self._r.scan_iter(match=f"chunk:{doc_hash}:*", count=1000)]
+        pipe = self._r.pipeline()
+        if stale:
+            pipe.delete(*stale)
+        for i, (chunk, vec) in enumerate(zip(chunks, vectors)):
+            key = f"chunk:{doc_hash}:{i}"
+            pipe.hset(key, mapping={
+                "doc_hash": doc_hash,
+                "text": chunk["text"],
+                "page_idx": chunk["page_idx"],
+                "bbox": json.dumps(chunk.get("bbox")),
+                # 裁剪出处区域要按 layout 的页尺寸换算，缺它遇到 CropBox 偏移/旋转页会裁错
+                "page_size": json.dumps(chunk.get("page_size")),
+                "vec": _pack_vector(vec),
+            })
+            pipe.expire(key, self._ttl)
+        await pipe.execute()

@@ -30,8 +30,9 @@ async def chat_completions(request: Request):
 
     try:
         body = await request.json()
-    except json.JSONDecodeError:
-        raise APIError(400, "request body is not valid JSON", "invalid_request_error", "invalid_json")
+    except ValueError:  # 同时覆盖 JSONDecodeError 与 UnicodeDecodeError（非 UTF-8 body）
+        raise APIError(400, "request body is not valid UTF-8 JSON", "invalid_request_error",
+                       "invalid_json")
     if not isinstance(body, dict):
         raise APIError(400, "request body must be a JSON object", "invalid_request_error", "invalid_json")
 

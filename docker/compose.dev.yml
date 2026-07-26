@@ -39,6 +39,7 @@ services:
     environment:
       GATEWAY_URL: http://gateway:9000
       SERVICE_TOKEN: ${SERVICE_TOKEN}
+      REDIS_URL: redis://redis:6379/0   # v2 向量检索（不配则纯 BM25）
     depends_on: [gateway]
 
   redis:
@@ -72,6 +73,23 @@ services:
   #   image: deepseek-ocr-rs:<PIN>
   #   ports: ["18001:8000"]   # 宿主端口避开 Windows 保留段 7964-8063
   #   deploy: ...gpu...
+
+  embed:
+    # v2（M4）：bge-m3 向量化，dev 用 CPU 版 TEI（无显存占用，可与 mineru 同跑）
+    #
+    # 前置（否则启动即失败，已实测）：
+    #   1. TEI 只认 safetensors，而 BAAI/bge-m3 官方只发 .bin ——
+    #      必须先跑 `python scripts/prepare_bge_m3.py` 把权重下好并转换到 ../../models/bge-m3
+    #   2. --pooling cls：本地权重缺 1_Pooling/config.json，须显式指定（bge 系用 CLS）
+    #   3. --max-batch-tokens：bge-m3 支持 8192 上下文，按最大长度预热会吃爆内存
+    #      （8GB 机器上实测 OOM 137），必须限住
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3
+    command: >
+      --model-id /data/bge-m3 --pooling cls --port 8080
+      --max-batch-tokens 4096 --max-client-batch-size 32
+    ports: ["18080:8080"]   # 宿主端口避开 Windows 保留段 7964-8063
+    volumes:
+      - ../../models/bge-m3:/data/bge-m3:ro
 
 volumes:
   redis-data:

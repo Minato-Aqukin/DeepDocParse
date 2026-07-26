@@ -33,6 +33,7 @@ services:
     environment:
       GATEWAY_URL: http://gateway:9000
       SERVICE_TOKEN: ${SERVICE_TOKEN}
+      REDIS_URL: redis://redis:6379/0   # v2 向量检索
     depends_on: [gateway]
 
   redis:
@@ -42,7 +43,7 @@ services:
   # ---- 解析平面：router + N 个 vlm worker ----
   mineru-router:
     image: mineru:3.4.4
-    command: mineru-router --host 0.0.0.0 --port 8000   # TODO(M4): worker 发现参数按官方文档
+    command: mineru-router --host 0.0.0.0 --port 8000   # TODO(M4b): worker 发现参数按官方文档，需服务器实测
     # models.yaml: parse_engines.mineru.endpoint -> http://mineru-router:8000
 
   mineru-worker-0:
@@ -59,14 +60,15 @@ services:
 
   # 加卡 = 复制一段
   # mineru-worker-1:
-  #   image: mineru:PIN_VERSION
+  #   image: mineru:3.4.4
   #   command: mineru-api --host 0.0.0.0 --port 8000
   #   environment: { CUDA_VISIBLE_DEVICES: "1" }
   #   deploy: *gpu
 
   # ---- VQA 平面：官方 vLLM 部署 ----
   vqa-dsocr:
-    image: vllm/vllm-openai:PIN_VERSION
+    # pin 与 mineru 基座一致的 v0.21.0（本项目已实测可用版本；升级前先跑绿 tests/）
+    image: vllm/vllm-openai:v0.21.0
     command: >
       --model deepseek-ai/DeepSeek-OCR
       --trust-remote-code
@@ -74,11 +76,18 @@ services:
     environment: { CUDA_VISIBLE_DEVICES: "0" }
     deploy: *gpu
 
-  # ---- v2 (M4)：embedding ----
-  # embed:
-  #   image: ghcr.io/huggingface/text-embeddings-inference:PIN_VERSION
-  #   command: --model-id BAAI/bge-m3
-  #   # models.yaml 启用 embedding_models 段
+  # ---- v2 (M4)：embedding（models.yaml embedding_models 已启用） ----
+  embed:
+    # 同 dev：权重需先用 scripts/prepare_bge_m3.py 转成 safetensors 并挂进来
+    # （TEI 不认 .bin；挂载而非每次 recreate 重下 2.2GB）。--pooling cls 见 dev 注释。
+    image: ghcr.io/huggingface/text-embeddings-inference:1.9.3
+    command: >
+      --model-id /data/bge-m3 --pooling cls --port 8080
+      --max-client-batch-size 32
+    volumes:
+      - ../../models/bge-m3:/data/bge-m3:ro
+    environment: { CUDA_VISIBLE_DEVICES: "0" }
+    deploy: *gpu
 
 volumes:
   redis-data:

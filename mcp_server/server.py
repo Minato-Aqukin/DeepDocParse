@@ -11,19 +11,26 @@
   只改内部实现，工具签名永不变（铁律 6）
 """
 import base64
+import hashlib
 import io
+import json
 import os
 import re
+import struct
+import sys
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
 import httpx
 import pypdfium2 as pdfium
+import redis.asyncio as redis
 from fastmcp import FastMCP
 from rank_bm25 import BM25Okapi
 
 GATEWAY = os.environ.get("GATEWAY_URL", "http://localhost:9000")
 SERVICE_TOKEN = os.environ.get("SERVICE_TOKEN", "change-me")
+# v2：配置 REDIS_URL 即启用向量检索（读 worker 建好的 chunks_idx）；缺省纯 BM25
+REDIS_URL = os.environ.get("REDIS_URL", "")
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 SHORT_DOC_CHARS = 3000   # 短于此的文档直接全文作证据
@@ -67,6 +74,93 @@ def _layout_blocks(layout_json: dict) -> list[dict]:
                     "page_size": page.get("page_size"),
                 })
     return blocks
+
+
+_redis: redis.Redis | None = None
+
+
+def _get_redis() -> redis.Redis | None:
+    global _redis
+    if not REDIS_URL:
+        return None
+    if _redis is None:
+        _redis = redis.from_url(REDIS_URL)
+    return _redis
+
+
+def _doc_hash(file_url: str) -> str:
+    # 必须与 gateway parse.py 的 _doc_hash 同算法（chunk 键按此哈希写入）
+    return hashlib.sha256(file_url.encode()).hexdigest()
+
+
+def chunk_index_name(dim: int) -> str:
+    """索引名带维度：换 embedding 模型（维度变化）会走新索引，
+    而不是往旧索引里写维度不符的向量被 RediSearch 静默丢弃（M4 验收发现）。
+    同维度换模型仍无法区分——那种情况需手动 FT.DROPINDEX。"""
+    return f"chunks_idx_d{dim}"
+
+
+async def _record_retrieval(mode: str) -> None:
+    """记录本次走的检索路径（vector / bm25），供运维与 e2e 判别是否真的用上了向量检索。
+    静默降级最怕的就是没人知道它降级了。"""
+    r = _get_redis_safe()
+    print(f"[ask_document] retrieval={mode}", file=sys.stderr)
+    if r is not None:
+        try:
+            await r.incr(f"metrics:retrieval:{mode}")
+        except Exception:
+            pass
+
+
+def _get_redis_safe() -> "redis.Redis | None":
+    """连 REDIS_URL 写错（非法 scheme 等）也不能抛——否则整个工具挂掉而非退回 BM25。"""
+    try:
+        return _get_redis()
+    except Exception:
+        return None
+
+
+async def _vector_retrieve(doc_hash: str, question: str, k: int = 3) -> list[dict] | None:
+    """v2 检索：问题向量化（gateway /v1/embeddings）+ Redis FT KNN。
+    任何一环不可用（未配/配错 REDIS_URL、未注册 embedding 模型、TEI 不可达、
+    Redis 无 RediSearch、索引未建、零命中）都返回 None，调用方回退 BM25 ——
+    工具签名与返回形态不变（铁律 6）。"""
+    r = _get_redis_safe()
+    if r is None:
+        return None
+    try:
+        resp = await _http.post(f"{GATEWAY}/v1/embeddings", headers=_headers(),
+                                json={"input": question})
+        if resp.status_code != 200:
+            return None
+        vec = resp.json()["data"][0]["embedding"]
+        blob = struct.pack(f"<{len(vec)}f", *vec)
+        reply = await r.execute_command(
+            "FT.SEARCH", chunk_index_name(len(vec)),
+            f"(@doc_hash:{{{doc_hash}}})=>[KNN {k} @vec $BLOB AS score]",
+            "PARAMS", "2", "BLOB", blob,
+            "SORTBY", "score",
+            "RETURN", "4", "text", "page_idx", "bbox", "page_size",
+            "DIALECT", "2",
+        )
+        hits = []
+        for item in reply[2::2]:
+            fields = {}
+            for name, value in zip(item[::2], item[1::2]):
+                name = name.decode() if isinstance(name, bytes) else name
+                value = value.decode() if isinstance(value, bytes) else value
+                fields[name] = value
+            hits.append({
+                "text": fields.get("text", ""),
+                "page_idx": int(fields.get("page_idx", 0)),
+                "bbox": json.loads(fields["bbox"]) if fields.get("bbox") else None,
+                # page_size 随 chunk 存下：缺它时裁剪要退回 pdfium 页尺寸，
+                # 遇到 CropBox 偏移/旋转页会裁错区域（v1 路径本来是对的）
+                "page_size": json.loads(fields["page_size"]) if fields.get("page_size") else None,
+            })
+        return hits or None
+    except Exception:
+        return None  # 检索增强失败绝不阻断 v1 路径
 
 
 async def _vqa(image_data_uri: str, question: str) -> str:
@@ -161,20 +255,23 @@ async def ask_document(file_url: str, question: str) -> str:
         return (f"文档全文（较短，直接给出）：\n\n{markdown}\n\n---\n"
                 f"出处：{file_url} 全文；完整结果（markdown/版面/图片）：GET {result_url}")
 
-    # ---- 长文档：BM25 检索版面块（自带页码+bbox）----
-    blocks = _layout_blocks(result.get("layout_json", {}))
-    # 空 token 块不入索引：_tokenize 只认英数+CJK，其他文种/全符号块会为空，
-    # 全空语料会让 BM25Okapi 除零崩溃（M3 验收回归项）
-    indexed = [(tokens, b) for b in blocks if (tokens := _tokenize(b["text"]))]
-    if not indexed:
-        return (f"文档已解析但无可检索文本块，返回开头片段：\n\n{markdown[:SHORT_DOC_CHARS]}\n\n---\n"
-                f"完整结果：GET {result_url}")
+    # ---- 长文档：v2 向量检索优先（worker 建好的向量索引），失败回退 BM25 ----
+    hits = await _vector_retrieve(_doc_hash(file_url), question, k=TOP_K)
+    await _record_retrieval("vector" if hits is not None else "bm25")
+    if hits is None:
+        blocks = _layout_blocks(result.get("layout_json", {}))
+        # 空 token 块不入索引：_tokenize 只认英数+CJK，其他文种/全符号块会为空，
+        # 全空语料会让 BM25Okapi 除零崩溃（M3 验收回归项）
+        indexed = [(tokens, b) for b in blocks if (tokens := _tokenize(b["text"]))]
+        if not indexed:
+            return (f"文档已解析但无可检索文本块，返回开头片段：\n\n{markdown[:SHORT_DOC_CHARS]}\n\n---\n"
+                    f"完整结果：GET {result_url}")
 
-    bm25 = BM25Okapi([tokens for tokens, _ in indexed])
-    candidates = [b for _, b in indexed]
-    scores = bm25.get_scores(_tokenize(question))
-    top = sorted(range(len(candidates)), key=lambda i: scores[i], reverse=True)[:TOP_K]
-    hits = [candidates[i] for i in top if scores[i] > 0] or [candidates[top[0]]]
+        bm25 = BM25Okapi([tokens for tokens, _ in indexed])
+        candidates = [b for _, b in indexed]
+        scores = bm25.get_scores(_tokenize(question))
+        top = sorted(range(len(candidates)), key=lambda i: scores[i], reverse=True)[:TOP_K]
+        hits = [candidates[i] for i in top if scores[i] > 0] or [candidates[top[0]]]
 
     # ---- 首个命中块：裁剪原图区域 -> VQA 针对性验证（仅 PDF 支持裁剪）----
     answer = None

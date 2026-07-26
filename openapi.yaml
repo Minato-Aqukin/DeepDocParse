@@ -109,6 +109,32 @@ paths:
       responses:
         "200": { description: OpenAI 兼容模型列表 }
 
+  /v1/embeddings:
+    post:
+      summary: 向量化（OpenAI Embeddings 协议，v2/M4 启用）
+      description: |
+        完全遵循 OpenAI 协议：input 为 string 或 string[]。
+        model 字段路由到 models.yaml embedding_models；缺省用 default 模型。
+        gateway 透传到对应运行时（TEI）。内部消费方：worker 分块索引、ask_document 检索。
+      operationId: createEmbeddings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input]
+              properties:
+                input:
+                  oneOf:
+                    - { type: string }
+                    - { type: array, items: { type: string } }
+                model: { type: string, description: 缺省用注册表 default }
+      responses:
+        "200": { description: OpenAI 兼容 embeddings 响应（data[].embedding） }
+        "404": { description: 未注册的 model }
+        "502": { description: embedding 运行时不可达 }
+
   /healthz:
     get:
       summary: 存活探针
