@@ -10,7 +10,7 @@ import respx
 from sqlalchemy import select
 
 from app.config import settings
-from app.models import ApiKey, Task, UsageRecord, utcnow
+from app.models import ApiKey, Document, ParseJob, UsageRecord, utcnow
 from tests.conftest import MCP, SERVICE
 
 LAYOUT = {"pdf_info": [{"page_idx": i} for i in range(3)]}
@@ -72,9 +72,10 @@ async def test_parse_submit_creates_task_and_result_meters_pages(client, api_key
                                json={"file_url": "https://third-party.example/a.pdf"})
     assert submit.status_code == 202 and submit.json()["task_id"] == "s-9"
 
-    task = (await session.execute(select(Task))).scalars().one()
-    assert task.object_key == "" and task.service_task_id == "s-9", "外部任务不归档，仅留记录"
-    assert task.filename == "a.pdf"
+    document = (await session.execute(select(Document))).scalars().one()
+    job = (await session.execute(select(ParseJob))).scalars().one()
+    assert document.object_key == "" and document.origin == "external", "外部任务不归档，仅留记录"
+    assert job.service_task_id == "s-9" and document.filename == "a.pdf"
 
     # 取结果：按页计量一次
     for _ in range(2):
@@ -92,7 +93,7 @@ async def test_parse_submit_creates_task_and_result_meters_pages(client, api_key
 
 @respx.mock
 async def test_result_metering_with_shared_service_task(client, auth_client, api_key, session):
-    """同一用户既从 Web 传过、又用 key 提交过同一份文档时，本层会有两行指向同一个
+    """同一用户既从 Web 传过、又用 key 提交过同一份文档时，本层会有两个 job 指向同一个
     service 任务。取结果必须照常计量，而不是撞上"查出多行"直接 500（真机 e2e 抓到过）。"""
     respx.post(f"{SERVICE}/v1/parse").mock(
         return_value=httpx.Response(202, json={"task_id": "s-shared"}))
@@ -101,11 +102,13 @@ async def test_result_metering_with_shared_service_task(client, auth_client, api
                                                "images": []}))
     key_row = await session.get(ApiKey, api_key["id"])
 
-    # 先造一行"Web 上传"的任务，再用 key 提交一次 —— 两行同 service_task_id
-    web_task = Task(user_id=key_row.user_id, doc_id="web-doc", filename="a.pdf",
-                    object_key="sources/x/a.pdf", service_task_id="s-shared",
-                    status="succeeded", page_count=3)
-    session.add(web_task)
+    # 先造一份"Web 上传"的文档与 job，再用 key 提交一次 —— 两个 job 同 service_task_id
+    web_doc = Document(user_id=key_row.user_id, doc_id="web-doc", origin="web", filename="a.pdf",
+                       object_key="sources/x/a.pdf", page_count=3)
+    session.add(web_doc)
+    await session.commit()
+    session.add(ParseJob(document_id=web_doc.id, options_hash="web", service_task_id="s-shared",
+                         status="succeeded", page_count=3))
     await session.commit()
 
     submit = await client.post("/v1/parse", headers=_auth(api_key),

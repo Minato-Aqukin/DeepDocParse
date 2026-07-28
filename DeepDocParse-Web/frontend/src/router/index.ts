@@ -5,12 +5,25 @@ import { TOKEN_KEY } from '@/api/client'
 const router = createRouter({
   history: createWebHashHistory(import.meta.env.BASE_URL),
   routes: [
-    { path: '/', redirect: '/dashboard' },
+    { path: '/', redirect: '/documents' },
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue') },
-    { path: '/dashboard', name: 'dashboard', component: () => import('@/views/DashboardView.vue') },
-    { path: '/task/:id', name: 'task', component: () => import('@/views/TaskDetailView.vue') },
+    { path: '/documents', name: 'documents', component: () => import('@/views/DocumentsView.vue') },
+    {
+      path: '/documents/:id',
+      name: 'workbench',
+      component: () => import('@/views/WorkbenchView.vue'),
+    },
+    {
+      path: '/documents/:id/versions',
+      name: 'versions',
+      component: () => import('@/views/VersionsView.vue'),
+    },
+    { path: '/search', name: 'search', component: () => import('@/views/SearchView.vue') },
     { path: '/keys', name: 'keys', component: () => import('@/views/KeysView.vue') },
     { path: '/usage', name: 'usage', component: () => import('@/views/UsageView.vue') },
+    // M5 的旧路径：收藏夹里的链接还能用
+    { path: '/dashboard', redirect: '/documents' },
+    { path: '/task/:id', redirect: (to) => `/documents/${to.params.id}` },
   ],
 })
 

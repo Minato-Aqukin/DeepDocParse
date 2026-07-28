@@ -10,7 +10,13 @@
 
 services:
   postgres:
-    image: postgres:15-alpine
+    # pgvector 镜像：问答的向量索引要 CREATE EXTENSION vector（迁移 0002 会建）。
+    #
+    # 从 M5 的 postgres:15-alpine 升上来的注意：PG 大版本不能直接读旧数据目录，
+    # 容器会启动失败。要么 pg_dump/restore，要么（dev）删卷重来：
+    #   docker compose down && docker volume rm docker_pgdata && docker compose up -d
+    #   然后 alembic upgrade head 重建
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-ddp}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ddp}
@@ -38,6 +44,12 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  redis:
+    # 只有多副本部署才需要：限速令牌桶与对账选主。单实例可以不起（REDIS_URL 留空）
+    image: redis:7.4-alpine
+    command: redis-server --save "" --appendonly no
+    ports: ["16379:6379"]
 
 volumes:
   pgdata:

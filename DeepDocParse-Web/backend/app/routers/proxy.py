@@ -31,7 +31,8 @@ from app.db import get_session
 from app.deps import require_api_key
 from app.errors import APIError
 from app.metering import check_quota, record_usage
-from app.models import ApiKey, Task, utcnow
+from app.models import ApiKey, Document, ParseJob, utcnow
+from app.routers.documents import options_hash
 
 router = APIRouter()
 
@@ -88,7 +89,7 @@ def _kind_of(path: str) -> str:
 @router.api_route("/v1/{path:path}", methods=["GET", "POST"])
 async def api_proxy(path: str, request: Request, key: ApiKey = Depends(require_api_key),
                     session: AsyncSession = Depends(get_session)):
-    request.app.state.rate_limiter.check(key.id, key.rate_limit_per_min)
+    await request.app.state.rate_limiter.check(key.id, key.rate_limit_per_min)
     check_quota(key)
     key.last_used_at = utcnow()
 
@@ -127,24 +128,37 @@ async def _proxy_parse_submit(request: Request, session: AsyncSession, key: ApiK
             payload = {}
         file_url = str(payload.get("file_url") or "")
         doc_id = str(payload.get("doc_id") or hashlib.sha256(file_url.encode()).hexdigest())
+        engine = str(payload.get("engine") or "mineru")
+        options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
         service_task_id = upstream.json().get("task_id")
 
-        # 只认外部平面的行：Web 上传的行有 object_key 与已归档结果，
+        # 只认外部平面的行：Web 上传的 Document 有 object_key 与已归档结果，
         # 复用它会把状态打回 pending -> 对账重新归档 -> 同一批页数被重复计费
-        task = (await session.execute(
-            select(Task).where(Task.user_id == key.user_id, Task.doc_id == doc_id,
-                               Task.origin == "external")
+        document = (await session.execute(
+            select(Document).where(Document.user_id == key.user_id, Document.doc_id == doc_id,
+                                   Document.origin == "external")
         )).scalar_one_or_none()
-        if task is None:
-            task = Task(user_id=key.user_id, doc_id=doc_id, origin="external",
-                        filename=PurePosixPath(urlparse(file_url).path).name or "remote-document",
-                        object_key="")     # 外部任务：文件不在本层
-            session.add(task)
-        task.api_key_id = key.id
-        task.service_task_id = service_task_id
-        task.status = "pending"
-        task.error = None
-        task.engine = str(payload.get("engine") or "mineru")
+        if document is None:
+            document = Document(
+                user_id=key.user_id, doc_id=doc_id, origin="external",
+                filename=PurePosixPath(urlparse(file_url).path).name or "remote-document",
+                object_key="")     # 外部任务：文件在调用方那儿，本层不下载不归档
+            session.add(document)
+            await session.commit()
+
+        digest = options_hash(engine, options)
+        job = (await session.execute(
+            select(ParseJob).where(ParseJob.document_id == document.id,
+                                   ParseJob.options_hash == digest)
+        )).scalar_one_or_none()
+        if job is None:
+            job = ParseJob(document_id=document.id, engine=engine, options=options,
+                           options_hash=digest)
+            session.add(job)
+        job.api_key_id = key.id
+        job.service_task_id = service_task_id
+        job.status = "pending"
+        job.error = None
         await session.commit()
 
     return Response(content=upstream.content, status_code=upstream.status_code,
@@ -165,23 +179,27 @@ async def _proxy_parse_result(request: Request, session: AsyncSession, key: ApiK
         raise APIError(502, f"upstream unreachable: {exc}", "upstream_error", "upstream_unreachable")
 
     if upstream.status_code == 200:
-        # 同一个 service 任务可能对应本层多行（service 按 doc_id 去重，
-        # 同一用户既从 Web 传过、又用 key 提交过）—— 优先记在这把 key 自己的任务上
+        # 同一个 service 任务可能对应本层多个 job（service 按 doc_id 去重，
+        # 同一用户既从 Web 传过、又用 key 提交过）—— 优先记在这把 key 自己的 job 上
+        # 只认外部平面的 job：Web 上传的 job 复用它会被置成 succeeded，
+        # 而 succeeded 不满足 claimable_condition —— 那份文档从此永不归档、永不索引
         rows = (await session.execute(
-            select(Task).where(Task.service_task_id == service_task_id,
-                               Task.user_id == key.user_id).order_by(Task.created_at)
+            select(ParseJob).join(Document, Document.id == ParseJob.document_id)
+            .where(ParseJob.service_task_id == service_task_id,
+                   Document.user_id == key.user_id,
+                   Document.origin == "external").order_by(ParseJob.created_at)
         )).scalars().all()
-        task = next((t for t in rows if t.api_key_id == key.id), rows[0] if rows else None)
-        if task is not None and task.page_count == 0:
+        job = next((j for j in rows if j.api_key_id == key.id), rows[0] if rows else None)
+        if job is not None and job.page_count == 0:
             try:
                 layout = upstream.json().get("layout_json") or {}
                 pages = len(layout.get("pdf_info") or []) or 1
             except ValueError:
                 pages = 1
-            task.page_count = pages
-            task.status = "succeeded"
+            job.page_count = pages
+            job.status = "succeeded"
             await record_usage(session, user_id=key.user_id, api_key_id=key.id,
-                               task_id=task.id, kind="parse", pages=pages, requests=0)
+                               parse_job_id=job.id, kind="parse", pages=pages, requests=0)
             await session.commit()
 
     return Response(content=upstream.content, status_code=upstream.status_code,
@@ -197,7 +215,7 @@ async def mcp_proxy(path: str, request: Request, key: ApiKey = Depends(require_a
     响应头由 _response_headers 带回来），否则客户端建不起会话；
     GET 是服务端推流通道（SSE），DELETE 是关会话。
     """
-    request.app.state.rate_limiter.check(key.id, key.rate_limit_per_min)
+    await request.app.state.rate_limiter.check(key.id, key.rate_limit_per_min)
     check_quota(key)
     key.last_used_at = utcnow()
     await record_usage(session, user_id=key.user_id, api_key_id=key.id, kind="mcp")

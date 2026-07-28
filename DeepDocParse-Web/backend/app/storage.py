@@ -23,6 +23,7 @@ class Storage(Protocol):
     async def put(self, key: str, data: bytes, content_type: str) -> None: ...
     async def get(self, key: str) -> bytes: ...
     async def exists(self, key: str) -> bool: ...
+    async def delete(self, key: str) -> None: ...
     async def list_prefix(self, prefix: str) -> list[str]: ...
     async def presigned_get(self, key: str, expires_seconds: int = 3600) -> str: ...
 
@@ -79,6 +80,9 @@ class MinioStorage:
 
         return await asyncio.to_thread(_stat)
 
+    async def delete(self, key: str) -> None:
+        await asyncio.to_thread(self._client.remove_object, self._bucket, key)
+
     async def list_prefix(self, prefix: str) -> list[str]:
         def _list() -> list[str]:
             return [obj.object_name
@@ -113,6 +117,9 @@ class MemoryStorage:
     async def exists(self, key: str) -> bool:
         return key in self.objects
 
+    async def delete(self, key: str) -> None:
+        self.objects.pop(key, None)
+
     async def list_prefix(self, prefix: str) -> list[str]:
         return sorted(k for k in self.objects if k.startswith(prefix))
 
@@ -120,9 +127,25 @@ class MemoryStorage:
         return f"memory://{key}"
 
 
-def source_key(task_id: str, filename: str) -> str:
-    return f"sources/{task_id}/{filename}"
+def source_key(document_id: str, filename: str) -> str:
+    return f"sources/{document_id}/{filename}"
 
 
-def result_prefix(task_id: str) -> str:
-    return f"results/{task_id}/"
+def job_result_prefix(job_id: str) -> str:
+    """新 job 的归档前缀。归档产物按 job 隔离：换参数重解析要能与旧版本并存。
+
+    **读取时不要用这个函数**，用 `prefix_of(job)`：M5→M6 迁移过来的 job 是新 uuid，
+    但它的产物还在 `results/{原 task_id}/` 下（迁移刻意不搬对象），
+    真实位置只有 `job.result_prefix` 知道。
+    """
+    return f"results/{job_id}/"
+
+
+def prefix_of(job) -> str:
+    """读归档产物时的唯一正确入口。"""
+    return job.result_prefix or job_result_prefix(job.id)
+
+
+def crop_key(job_id: str, page_idx: int, bbox_digest: str) -> str:
+    """问答出处的区域截图。裁剪很贵（渲染整页再切），算过一次就存下来。"""
+    return f"results/{job_id}/crops/{page_idx}_{bbox_digest}.png"

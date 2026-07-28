@@ -4,18 +4,25 @@
 - Web 用户：JWT session
 - 第三方开发者：API key（sk-xxx）
 - 对 DeepDocParse：统一以 SERVICE_TOKEN 转发，service 不感知用户
+
+对 service 的耦合面只有两处：解析契约（openapi.yaml）与 OpenAI 兼容的 embedding/chat
+端点（后者可配置成任意兼容服务，见 ADR #17）。检索索引、分块、问答编排全在本层。
 """
 import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.db import get_sessionmaker
+from app.config import settings
+from app.db import get_engine, get_sessionmaker
 from app.errors import install_error_handlers
-from app.metering import RateLimiter
+from app.metering import MemoryRateLimiter, RedisRateLimiter
 from app.reconcile import reconcile_loop
-from app.routers import apikeys, auth, files, internal, proxy, tasks, usage
+from app.routers import apikeys, auth, conversations, documents, files, internal, proxy, search, usage
+from app.search import PgVectorIndex
 from app.service_client import ServiceClient, new_http_client
 from app.storage import MinioStorage
 
@@ -25,11 +32,22 @@ async def lifespan(app: FastAPI):
     app.state.http = new_http_client()
     app.state.service_client = ServiceClient(app.state.http)
     app.state.storage = MinioStorage()
-    app.state.rate_limiter = RateLimiter()
+    app.state.search_index = PgVectorIndex()
+
+    # 多副本：限速计数与对账选主都要跨进程共享，否则每个副本各限各的（等于限速×副本数）
+    app.state.redis = None
+    if settings.redis_url:
+        import redis.asyncio as aioredis
+        app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        app.state.rate_limiter = RedisRateLimiter(app.state.redis)
+    else:
+        app.state.rate_limiter = MemoryRateLimiter()
+
     await app.state.storage.ensure_bucket()
-    # 对账：启动即跑一次，补上停机期间丢掉的完成回调
+    # 对账：启动即跑一次，补上停机期间丢掉的完成回调与索引投递
     app.state.reconciler = asyncio.create_task(
-        reconcile_loop(get_sessionmaker(), app.state.storage, app.state.service_client)
+        reconcile_loop(get_sessionmaker(), app.state.storage, app.state.service_client,
+                       app.state.http, app.state.redis)
     )
     yield
     app.state.reconciler.cancel()
@@ -38,9 +56,11 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     await app.state.http.aclose()
+    if app.state.redis is not None:
+        await app.state.redis.aclose()
 
 
-app = FastAPI(title="DeepDocParse-Web backend", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="DeepDocParse-Web backend", version="0.2.0", lifespan=lifespan)
 
 install_error_handlers(app)
 
@@ -55,13 +75,53 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(apikeys.router, prefix="/api/keys", tags=["apikeys"])
-app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
+app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
+app.include_router(conversations.router, prefix="/api", tags=["qa"])
+app.include_router(search.router, prefix="/api", tags=["search"])
 app.include_router(usage.router, prefix="/api/usage", tags=["usage"])
 app.include_router(files.router, tags=["files"])       # /files/{token} 稳定文件 URL（token 即凭证）
 app.include_router(internal.router, tags=["internal"]) # /internal/* service 回调
 app.include_router(proxy.router, tags=["proxy"])       # /v1/* 对外 API + /mcp 反代
 
 
+Instrumentator().instrument(app).expose(app)   # /metrics，与 service 侧口径一致
+
+
 @app.get("/healthz")
 async def healthz():
+    """存活探针：进程还在就算活着，不查依赖（依赖挂了不该被重启）。"""
     return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readyz():
+    """就绪探针：依赖不通就别往这个副本上导流量。"""
+    from sqlalchemy import text
+
+    checks: dict[str, str] = {}
+    try:
+        async with get_engine().connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        checks["postgres"] = "ok"
+    except Exception as exc:
+        checks["postgres"] = f"error: {type(exc).__name__}"
+    try:
+        await app.state.storage.exists("readyz-probe")
+        checks["minio"] = "ok"
+    except Exception as exc:
+        checks["minio"] = f"error: {type(exc).__name__}"
+    try:
+        resp = await app.state.http.get(f"{settings.service_url}/healthz")
+        checks["service"] = "ok" if resp.status_code == 200 else f"status {resp.status_code}"
+    except Exception as exc:
+        checks["service"] = f"error: {type(exc).__name__}"
+    if app.state.redis is not None:
+        try:
+            await app.state.redis.ping()
+            checks["redis"] = "ok"
+        except Exception as exc:
+            checks["redis"] = f"error: {type(exc).__name__}"
+
+    ready = all(v == "ok" for v in checks.values())
+    return JSONResponse(status_code=200 if ready else 503,
+                        content={"ready": ready, "checks": checks})

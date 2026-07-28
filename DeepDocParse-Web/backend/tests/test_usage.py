@@ -1,26 +1,20 @@
 """用量聚合：前端图表的数据形态。"""
-import httpx
 import respx
-from sqlalchemy import select
 
-from app.config import settings
-from app.models import User
-from tests.test_tasks import PDF, _mock_service, _upload
+from tests.test_documents import _callback, _mock_service, _upload
 
 
 @respx.mock
-async def test_usage_aggregates_by_day_and_kind(auth_client, session):
+async def test_usage_aggregates_by_day_and_kind(auth_client):
     _mock_service(status="succeeded")
     await _upload(auth_client)
-    await auth_client.post("/internal/parse-callback",
-                           json={"task_id": "s-1", "status": "succeeded"},
-                           headers={"Authorization": f"Bearer {settings.service_token}"})
+    await _callback(auth_client)
 
-    resp = await auth_client.get("/api/usage")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["total_pages"] == 2 and body["total_requests"] == 1
-    assert body["by_kind"] == [{"kind": "parse", "pages": 2, "requests": 1}]
+    body = (await auth_client.get("/api/usage")).json()
+    assert body["total_pages"] == 2
+    kinds = {row["kind"]: row for row in body["by_kind"]}
+    assert kinds["parse"]["pages"] == 2
+    assert "embed" in kinds, "向量化也要计量（它是真实成本）"
     assert len(body["daily"]) == 1 and body["daily"][0]["pages"] == 2
 
 

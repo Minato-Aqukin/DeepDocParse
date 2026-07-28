@@ -1,0 +1,270 @@
+<script setup lang="ts">
+import { ElMessage } from 'element-plus'
+import { computed, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+
+import { api, http, type Block, type Citation, type DocumentInfo, type PageBlocks } from '@/api/client'
+import AskPanel from '@/components/AskPanel.vue'
+import PdfCanvas from '@/components/PdfCanvas.vue'
+import ResultPane from '@/components/ResultPane.vue'
+import type { Highlight } from '@/types/workbench'
+
+/**
+ * 三栏工作台：原文 / 解析结果 / 问答。
+ * 三者共享 activePage 与 highlights —— 点问答出处、点结果段落，左栏都要跟着定位。
+ */
+const route = useRoute()
+const router = useRouter()
+
+const document = ref<DocumentInfo>()
+const pages = ref<PageBlocks[]>([])
+const markdown = ref('')
+const sourcePath = ref('')
+const activePage = ref(0)
+const highlights = ref<Highlight[]>([])
+const selectedChunkId = ref<string | null>(null)
+const loading = ref(true)
+let poller: number | undefined
+
+const pageSize = computed(
+  () => pages.value.find((p) => p.page_idx === activePage.value)?.page_size ?? null,
+)
+const isPdf = computed(() => (document.value?.mime || '').includes('pdf'))
+
+async function load() {
+  const id = String(route.params.id)
+  loading.value = true
+  try {
+    document.value = (await api.getDocument(id)).data
+    if (document.value.status !== 'succeeded') return
+    const [result, pageData, source] = await Promise.all([
+      api.getResult(id),
+      api.getPages(id),
+      api.getSourceUrl(id).catch(() => null),
+    ])
+    markdown.value = result.data.markdown
+    pages.value = pageData.data.pages
+    sourcePath.value = source?.data.path ?? ''
+  } finally {
+    loading.value = false
+  }
+}
+
+/** 解析或索引还在跑时轮询，两者都落定就停 —— 别做无意义的定时请求。 */
+function startPolling() {
+  stopPolling()
+  poller = window.setInterval(async () => {
+    if (!document.value) return
+    const done =
+      document.value.status === 'succeeded' &&
+      ['ready', 'failed', 'none'].includes(document.value.index_status)
+    if (done || document.value.status === 'failed') return stopPolling()
+    await load()
+  }, 3000)
+}
+function stopPolling() {
+  if (poller) window.clearInterval(poller)
+  poller = undefined
+}
+
+function locate(citation: Citation) {
+  activePage.value = citation.page_idx
+  selectedChunkId.value = citation.chunk_id
+  highlights.value = [{
+    pageIdx: citation.page_idx,
+    bbox: citation.bbox,
+    pageSize: pages.value.find((p) => p.page_idx === citation.page_idx)?.page_size ?? null,
+    kind: 'citation',
+    label: citation.snippet,
+  }]
+}
+
+function selectBlock(block: Block) {
+  activePage.value = block.page_idx
+  selectedChunkId.value = block.chunk_id
+  highlights.value = [{
+    pageIdx: block.page_idx,
+    bbox: block.bbox,
+    pageSize: block.page_size,
+    kind: 'selected',
+    label: block.text.slice(0, 40),
+  }]
+}
+
+async function download(format: 'md' | 'json' | 'zip' | 'source') {
+  const { data, headers } = await http.get(api.downloadUrl(String(route.params.id), format), {
+    responseType: 'blob',
+  })
+  const url = URL.createObjectURL(data as Blob)
+  const a = window.document.createElement('a')
+  a.href = url
+  a.download =
+    /filename="([^"]+)"/.exec(String(headers['content-disposition'] || ''))?.[1] || 'download'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+async function reindex() {
+  await api.reindex(String(route.params.id))
+  ElMessage.success('已重新排队建立索引')
+  await load()
+  startPolling()
+}
+
+watch(
+  () => route.params.id,
+  async () => {
+    await load()
+    startPolling()
+  },
+  { immediate: true },
+)
+onUnmounted(stopPolling)
+</script>
+
+<template>
+  <div class="workbench" v-loading="loading">
+    <div class="head">
+      <div class="title">
+        <el-button link @click="router.push('/documents')">← 文档库</el-button>
+        <span class="name">{{ document?.filename }}</span>
+        <el-tag size="small" type="info">{{ document?.page_count }} 页</el-tag>
+        <el-tag v-if="document && document.index_status !== 'ready'" size="small" type="warning">
+          索引：{{ document.index_status }}
+        </el-tag>
+      </div>
+      <div class="actions">
+        <el-button size="small" @click="router.push(`/documents/${document?.id}/versions`)">
+          解析版本
+        </el-button>
+        <el-button size="small" @click="reindex">重建索引</el-button>
+        <el-dropdown @command="download">
+          <el-button size="small">下载<el-icon class="el-icon--right">▾</el-icon></el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="md">Markdown</el-dropdown-item>
+              <el-dropdown-item command="json">版面 JSON</el-dropdown-item>
+              <el-dropdown-item command="zip">打包（含图片）</el-dropdown-item>
+              <el-dropdown-item command="source">原件</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
+    </div>
+
+    <el-alert v-if="document?.status === 'failed'" type="error" :closable="false"
+              :title="`解析失败：${document.error}`" />
+    <el-alert v-else-if="document?.status !== 'succeeded'" type="info" :closable="false"
+              title="解析中，完成后自动刷新" />
+
+    <div v-else class="panes">
+      <section class="pane source">
+        <div class="pane-head">
+          <span>原文</span>
+          <el-pagination
+            v-model:current-page="activePage"
+            :page-count="document.page_count"
+            :pager-count="5"
+            layout="prev, pager, next"
+            small
+            @update:current-page="highlights = []"
+          />
+        </div>
+        <div class="pane-body">
+          <PdfCanvas
+            v-if="isPdf && sourcePath"
+            :src="sourcePath"
+            :page-idx="activePage"
+            :page-size="pageSize"
+            :highlights="highlights"
+          />
+          <img v-else-if="sourcePath" :src="sourcePath" class="image-source" alt="原件" />
+          <el-empty v-else description="原件不可预览" />
+        </div>
+      </section>
+
+      <section class="pane result">
+        <ResultPane
+          :pages="pages"
+          :markdown="markdown"
+          :active-page="activePage"
+          :selected-chunk-id="selectedChunkId"
+          @block-click="selectBlock"
+          @page-change="activePage = $event"
+        />
+      </section>
+
+      <section class="pane ask">
+        <AskPanel v-if="document" :document="document" @locate="locate" />
+      </section>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.workbench {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 100px);
+  gap: 10px;
+}
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.name {
+  font-size: 16px;
+  font-weight: 600;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+}
+.panes {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr 380px;
+  gap: 10px;
+  min-height: 0;
+}
+.pane {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  padding-bottom: 6px;
+}
+.pane-body {
+  flex: 1;
+  overflow: auto;
+}
+.image-source {
+  max-width: 100%;
+}
+@media (max-width: 1400px) {
+  .panes {
+    grid-template-columns: 1fr 1fr;
+  }
+  .pane.ask {
+    grid-column: span 2;
+    height: 420px;
+  }
+}
+</style>

@@ -15,6 +15,11 @@ dependencies = [
     "bcrypt>=4.1",                      # 直接用官方库（passlib 已停更且与 bcrypt 4.x 冲突）
     "minio>=7.2",
     "python-multipart>=0.0.9",          # FastAPI 接收 multipart 上传的前提
+    "pgvector>=0.3",                    # 向量列与 <=> 检索（仅 PostgreSQL 生效）
+    "pypdfium2>=4.30",                  # 出处区域裁剪（service 侧 mcp_server 同款）
+    "pillow>=10.0",                     # 同上：裁剪后的位图处理
+    "redis>=5.0",                       # 多副本：限速令牌桶与对账选主
+    "prometheus-fastapi-instrumentator>=7.0",
 ]
 
 [project.optional-dependencies]

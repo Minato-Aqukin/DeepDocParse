@@ -1,28 +1,44 @@
-"""测试装配：SQLite in-memory + 内存对象存储 + respx mock service。
+"""测试装配：SQLite in-memory + 内存对象存储 + 内存检索 + respx mock service。
 
-不跑 lifespan（那会连真 MinIO），手工注入 app.state —— 与 DeepDocParse/tests/conftest.py 同一套路。
+不跑 lifespan（那会连真 MinIO/PG），手工注入 app.state —— 与 DeepDocParse/tests/conftest.py 同套路。
 SQLite 用 StaticPool：`:memory:` 每条连接都是独立库，不共享连接就看不到建好的表。
+
+向量检索在 SQLite 上做不了（pgvector 是 PG 扩展），所以注入 MemoryIndex：
+真实 pgvector 路径由 scripts/e2e_web.py 覆盖。这样单测仍然不需要任何外部依赖。
 """
 import httpx
 import pytest
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 import app.db as db
 from app.main import app
-from app.metering import RateLimiter
+from app.metering import MemoryRateLimiter
 from app.models import Base
+from app.search import MemoryIndex
 from app.service_client import ServiceClient
 from app.storage import MemoryStorage
 
 SERVICE = "http://127.0.0.1:9000"       # 与 settings.service_url 默认值一致
 MCP = "http://127.0.0.1:9100"
+EMBEDDINGS = f"{SERVICE}/v1/embeddings"
+CHAT = f"{SERVICE}/v1/chat/completions"
 
 
 @pytest.fixture
 async def engine():
     eng = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool,
                               connect_args={"check_same_thread": False})
+
+    # SQLite 默认**不强制外键**，而生产是 PG。不开这个 pragma，
+    # "删父行时子行还挂着"这类 bug 单测全都放行，只有真机 e2e 才炸（已经被咬过一次）
+    @event.listens_for(eng.sync_engine, "connect")
+    def _enforce_fk(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     # 直接替换 db 模块的缓存，让 get_session 依赖走测试库
@@ -37,7 +53,9 @@ async def app_state(engine):
     app.state.http = httpx.AsyncClient(timeout=5.0, trust_env=False)
     app.state.service_client = ServiceClient(app.state.http)
     app.state.storage = MemoryStorage()
-    app.state.rate_limiter = RateLimiter()      # 每个用例一个，计数不互相污染
+    app.state.rate_limiter = MemoryRateLimiter()   # 每个用例一个，计数不互相污染
+    app.state.search_index = MemoryIndex()
+    app.state.redis = None                          # 单实例模式（多副本路径由 e2e 覆盖）
     yield app.state
     await app.state.http.aclose()
 

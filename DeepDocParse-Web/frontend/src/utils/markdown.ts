@@ -57,11 +57,27 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * 把归档 markdown 里的图片引用（/api/tasks/{id}/images/{name}）换成 blob URL。
+ * 把归档 markdown 里的图片引用（/api/documents/{doc}/jobs/{job}/images/{name}）换成 blob URL。
  *
  * 这些端点受 JWT 保护，而 <img src> 发不出 Authorization 头 ——
  * 所以渲染完再把图片按需取回来。好处是归档产物里不用埋任何凭证。
  */
+/**
+ * 单张受保护图片 -> blob URL。出处缩略图用它。
+ *
+ * 和 resolveAuthedImages 同一个道理：`<img src>` 发不出 Authorization 头，
+ * 而 crop 端点是 JWT 保护的，直接绑 src 必然 401。
+ * 调用方要在卸载时 revoke 返回的 URL。
+ */
+export async function fetchAuthedImage(url: string): Promise<string | null> {
+  try {
+    const { data } = await http.get<Blob>(url, { responseType: 'blob' })
+    return URL.createObjectURL(data)
+  } catch {
+    return null
+  }
+}
+
 export async function resolveAuthedImages(container: HTMLElement): Promise<() => void> {
   const urls: string[] = []
   const images = Array.from(container.querySelectorAll<HTMLImageElement>('img'))

@@ -22,7 +22,8 @@ function logout() {
     <el-header v-if="showChrome" class="topbar">
       <div class="brand">DeepDocParse</div>
       <el-menu :default-active="activeMenu" mode="horizontal" router :ellipsis="false" class="nav">
-        <el-menu-item index="/dashboard">文档</el-menu-item>
+        <el-menu-item index="/documents">文档</el-menu-item>
+        <el-menu-item index="/search">检索</el-menu-item>
         <el-menu-item index="/keys">API Key</el-menu-item>
         <el-menu-item index="/usage">用量</el-menu-item>
       </el-menu>

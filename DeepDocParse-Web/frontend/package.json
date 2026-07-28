@@ -11,11 +11,13 @@
     "type-check": "vue-tsc --build"
   },
   "dependencies": {
+    "@vueuse/core": "^14.3.0",
     "axios": "^1.7.9",
     "dompurify": "^3.2.4",
     "element-plus": "^2.9.4",
     "katex": "^0.16.21",
     "markdown-it": "^14.1.0",
+    "pdfjs-dist": "^6.1.200",
     "pinia": "^4.0.2",
     "vue": "^3.5.40",
     "vue-router": "^5.2.0"
