@@ -1,38 +1,26 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 
-import { TOKEN_KEY } from '@/api/client'
+import { useAuthStore } from '@/stores/auth'
+
+import { routes } from './routes'
 
 const router = createRouter({
   history: createWebHashHistory(import.meta.env.BASE_URL),
-  routes: [
-    { path: '/', redirect: '/documents' },
-    { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue') },
-    { path: '/documents', name: 'documents', component: () => import('@/views/DocumentsView.vue') },
-    {
-      path: '/documents/:id',
-      name: 'workbench',
-      component: () => import('@/views/WorkbenchView.vue'),
-    },
-    {
-      path: '/documents/:id/versions',
-      name: 'versions',
-      component: () => import('@/views/VersionsView.vue'),
-    },
-    { path: '/search', name: 'search', component: () => import('@/views/SearchView.vue') },
-    { path: '/keys', name: 'keys', component: () => import('@/views/KeysView.vue') },
-    { path: '/usage', name: 'usage', component: () => import('@/views/UsageView.vue') },
-    // M5 的旧路径：收藏夹里的链接还能用
-    { path: '/dashboard', redirect: '/documents' },
-    { path: '/task/:id', redirect: (to) => `/documents/${to.params.id}` },
-  ],
+  routes,
 })
 
-// 未登录一律回登录页（token 只在 localStorage，刷新后仍然有效）
 router.beforeEach((to) => {
-  if (to.name !== 'login' && !localStorage.getItem(TOKEN_KEY)) {
+  // 走 store 而不是直读 localStorage：登出/过期时状态只有一个来源
+  const auth = useAuthStore()
+  if (!to.meta.public && !auth.isAuthenticated) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
+  if (to.name === 'login' && auth.isAuthenticated) return { name: 'documents' }
   return true
+})
+
+router.afterEach((to) => {
+  document.title = to.meta.title ? `${to.meta.title} · DeepDocParse` : 'DeepDocParse'
 })
 
 export default router

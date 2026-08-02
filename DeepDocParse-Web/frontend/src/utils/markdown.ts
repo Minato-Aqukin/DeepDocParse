@@ -2,7 +2,7 @@ import DOMPurify from 'dompurify'
 import katex from 'katex'
 import MarkdownIt from 'markdown-it'
 
-import { http } from '@/api/client'
+import { http } from '@/api/http'
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false })
 

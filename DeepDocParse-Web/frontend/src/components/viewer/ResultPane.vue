@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 
-import type { Block, PageBlocks } from '@/api/client'
+import type { Block, PageBlocks } from '@/types/api'
 import { renderMarkdown, resolveAuthedImages } from '@/utils/markdown'
 
 /**

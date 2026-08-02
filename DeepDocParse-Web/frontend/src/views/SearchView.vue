@@ -2,14 +2,15 @@
 import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { api } from '@/api/client'
+import { searchApi } from '@/api'
+import type { SearchResult } from '@/types/api'
 
 /** 跨文档检索：命中带页码，点击直达工作台对应页。 */
 const route = useRoute()
 const router = useRouter()
 
 const keyword = ref(String(route.query.q || ''))
-const groups = ref<Awaited<ReturnType<typeof api.search>>['data']['groups']>([])
+const groups = ref<SearchResult['groups']>([])
 const degraded = ref<string | null>(null)
 const loading = ref(false)
 
@@ -17,7 +18,7 @@ async function run() {
   if (!keyword.value.trim()) return
   loading.value = true
   try {
-    const { data } = await api.search(keyword.value)
+    const { data } = await searchApi.query(keyword.value)
     groups.value = data.groups
     degraded.value = data.degraded ?? null
     router.replace({ name: 'search', query: { q: keyword.value } })

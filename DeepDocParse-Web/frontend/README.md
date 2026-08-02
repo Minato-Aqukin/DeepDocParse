@@ -13,10 +13,24 @@ npm run build        # 含 vue-tsc 类型检查
 | 路由 | 内容 |
 |---|---|
 | `/login` | 登录 / 注册（开放注册，无邮箱验证） |
-| `/dashboard` | 拖拽上传（多文件、进度）+ 任务表格（未落终态时才轮询） |
-| `/task/:id` | 左原文 iframe（`/files/{token}`）／右 Markdown 渲染，可切源码，下载 .md / 版面 JSON / 原件 |
-| `/keys` | API key 签发（明文只显示一次）、额度与限速、吊销 |
-| `/usage` | 用量：两张单序列小倍数柱状图 + 按平面汇总 + 按天表格 |
+| `/documents` | 概览卡片 + 筛选（文件名/解析状态/问答状态）+ 分页 + 批量选择；行内可下载/重解析/重建索引/删除 |
+| `/documents/:id` | 三栏工作台：pdf.js 原文 + bbox 高亮 ／ 按页结果 ／ 问答面板 |
+| `/documents/:id/versions` | 解析版本对比、换参数重解析、设为当前 |
+| `/search` | 跨文档检索，命中带页码可直达 |
+| `/keys` | API key 签发（明文只显示一次）、额度/限速/有效期、吊销 |
+| `/usage` | 用量卡片网格：统计卡 + 每日趋势图 + 按平面汇总 + 按天明细 |
+| `/settings` | 账号信息（`/api/auth/me`）+ 本机默认解析参数 |
+
+## 架构约定（加功能前先看这里）
+
+- **加页面**：只在 `router/routes.ts` 加一条并写 `meta`（`title/icon/group/nav`），
+  侧边栏会自动出现该项 —— `layouts/AppShell.vue` 从路由派生菜单，不要去改导航代码
+- **加接口**：在 `api/` 下按域加模块并挂到 `api/index.ts`；类型放 `types/api.ts`
+- **加状态值**：解析/索引状态、问答降级说明统一在 `constants/status.ts`，
+  改一处全站生效（标签、筛选下拉、气泡文案都由它派生）
+- **加解析引擎或参数**：只改 `constants/engines.ts` 的 schema，
+  上传对话框与重解析共用 `components/engine/EngineOptionsForm.vue`，两处同时生效
+- **轮询**：用 `composables/usePolling.ts`，不要再手写 `setInterval` + 清理
 
 ## 两个必须知道的约束
 

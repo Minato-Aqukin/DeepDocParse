@@ -1,177 +1,158 @@
 <script setup lang="ts">
-import { ElMessage, ElMessageBox, type UploadRequestOptions } from 'element-plus'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { TOKEN_KEY, api, http, type DocumentInfo } from '@/api/client'
+import { documentsApi, downloadAs } from '@/api'
+import StatCard from '@/components/common/StatCard.vue'
+import DocumentFilters from '@/components/document/DocumentFilters.vue'
+import DocumentTable from '@/components/document/DocumentTable.vue'
+import UploadDialog from '@/components/document/UploadDialog.vue'
+import { usePolling } from '@/composables/usePolling'
+import { useDocumentsStore } from '@/stores/documents'
+import type { DocumentInfo, DownloadFormat } from '@/types/api'
+import type { DocumentFilters as Filters } from '@/stores/documents'
 
 const router = useRouter()
-const documents = ref<DocumentInfo[]>([])
-const keyword = ref('')
-const loading = ref(false)
-let timer: number | undefined
+const store = useDocumentsStore()
 
-const PARSE_STATUS = {
-  pending: { label: '排队中', type: 'info' },
-  running: { label: '解析中', type: 'warning' },
-  archiving: { label: '归档中', type: 'warning' },
-  succeeded: { label: '已完成', type: 'success' },
-  failed: { label: '失败', type: 'danger' },
-} as const
+const uploadVisible = ref(false)
+const selected = ref<DocumentInfo[]>([])
 
-const INDEX_STATUS = {
-  none: { label: '未索引', type: 'info' },
-  pending: { label: '待索引', type: 'info' },
-  indexing: { label: '索引中', type: 'warning' },
-  ready: { label: '可问答', type: 'success' },
-  failed: { label: '索引失败', type: 'danger' },
-} as const
+// 有任务在动才轮询，全落定就停（判断依据在 constants/status.ts 的 active 标记）
+const polling = usePolling(() => store.refresh(), () => store.hasActive)
 
-// 有任务没落定才轮询，全完成就停下来
-const hasActive = computed(() =>
-  documents.value.some(
-    (d) => !['succeeded', 'failed'].includes(d.status) ||
-      ['pending', 'indexing'].includes(d.index_status),
-  ),
-)
-
-async function refresh() {
-  loading.value = true
-  try {
-    documents.value = (await api.listDocuments({ q: keyword.value })).data
-  } finally {
-    loading.value = false
-  }
+async function reload() {
+  await store.refresh()
+  polling.start()
 }
 
-/** 批量上传：并发 3，单个失败不影响整批。 */
-async function upload(options: UploadRequestOptions) {
-  const form = new FormData()
-  form.append('file', options.file)
-  try {
-    await http.post('/api/documents', form, {
-      headers: { Authorization: `Bearer ${localStorage.getItem(TOKEN_KEY)}` },
-      onUploadProgress: (e) => {
-        if (e.total) options.onProgress({ percent: Math.round((e.loaded / e.total) * 100) } as never)
-      },
-    })
-    ElMessage.success(`${options.file.name} 已提交解析`)
-    await refresh()
-  } catch (error) {
-    options.onError(error as never)
-  }
+function open(doc: DocumentInfo) {
+  if (doc.status !== 'succeeded') return ElMessage.info('解析尚未完成')
+  router.push({ name: 'workbench', params: { id: doc.id } })
 }
 
-async function remove(document: DocumentInfo) {
-  await ElMessageBox.confirm(`删除「${document.filename}」及其解析结果？`, '确认', {
+async function download(doc: DocumentInfo, format: DownloadFormat) {
+  await downloadAs(documentsApi.downloadUrl(doc.id, format), doc.filename)
+}
+
+async function reindex(doc: DocumentInfo) {
+  await documentsApi.reindex(doc.id)
+  ElMessage.success('已排队重建索引')
+  await reload()
+}
+
+async function remove(doc: DocumentInfo) {
+  await ElMessageBox.confirm(`删除「${doc.filename}」及其解析结果？`, '确认', { type: 'warning' })
+  await documentsApi.remove(doc.id)
+  await reload()
+}
+
+async function removeSelected() {
+  await ElMessageBox.confirm(`删除选中的 ${selected.value.length} 份文档？`, '确认', {
     type: 'warning',
   })
-  await api.deleteDocument(document.id)
-  await refresh()
+  for (const doc of selected.value) await documentsApi.remove(doc.id)
+  selected.value = []
+  await reload()
 }
 
-function open(document: DocumentInfo) {
-  if (document.status !== 'succeeded') {
-    ElMessage.info('解析尚未完成')
-    return
-  }
-  router.push({ name: 'workbench', params: { id: document.id } })
+async function onFilterChange(patch: Partial<Filters>) {
+  await store.applyFilters(patch)
 }
 
-function search() {
-  if (keyword.value.trim()) router.push({ name: 'search', query: { q: keyword.value } })
-}
-
-onMounted(async () => {
-  await refresh()
-  timer = window.setInterval(() => hasActive.value && refresh(), 3000)
-})
-onUnmounted(() => window.clearInterval(timer))
+onMounted(reload)
 </script>
 
 <template>
-  <el-upload
-    drag
-    multiple
-    :limit="0"
-    :show-file-list="false"
-    :http-request="upload"
-    accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.pptx,.xlsx"
-  >
-    <div class="tip">把文件拖到这里，或<em>点击上传</em></div>
-    <template #tip>
-      <div class="hint">支持 PDF / 图片 / Office 文档；同一文件重复上传会直接复用已有结果</div>
-    </template>
-  </el-upload>
+  <div class="page">
+    <el-row :gutter="12" class="stats">
+      <el-col :span="8">
+        <StatCard label="文档" :value="store.stats.documents" icon="Files" />
+      </el-col>
+      <el-col :span="8">
+        <StatCard label="已解析页数" :value="store.stats.pages" icon="Document" />
+      </el-col>
+      <el-col :span="8">
+        <StatCard label="可问答" :value="store.stats.askable" hint="索引已就绪的文档"
+                  icon="ChatDotRound" />
+      </el-col>
+    </el-row>
 
-  <div class="bar">
-    <el-input
-      v-model="keyword"
-      placeholder="按文件名筛选，回车进入全文检索"
-      clearable
-      class="search"
-      @input="refresh"
-      @keyup.enter="search"
-    />
-    <el-button :loading="loading" @click="refresh">刷新</el-button>
-  </div>
-
-  <el-table :data="documents" v-loading="loading" @row-dblclick="open">
-    <el-table-column prop="filename" label="文件" min-width="220" show-overflow-tooltip />
-    <el-table-column label="解析" width="100">
-      <template #default="{ row }">
-        <el-tooltip :content="row.error" :disabled="!row.error">
-          <el-tag :type="PARSE_STATUS[row.status as keyof typeof PARSE_STATUS].type" size="small">
-            {{ PARSE_STATUS[row.status as keyof typeof PARSE_STATUS].label }}
-          </el-tag>
-        </el-tooltip>
-      </template>
-    </el-table-column>
-    <el-table-column label="问答" width="110">
-      <template #default="{ row }">
-        <el-tooltip :content="row.index_error" :disabled="!row.index_error">
-          <el-tag :type="INDEX_STATUS[row.index_status as keyof typeof INDEX_STATUS].type"
-                  size="small">
-            {{ INDEX_STATUS[row.index_status as keyof typeof INDEX_STATUS].label }}
-          </el-tag>
-        </el-tooltip>
-      </template>
-    </el-table-column>
-    <el-table-column prop="page_count" label="页数" width="80" />
-    <el-table-column label="大小" width="100">
-      <template #default="{ row }">{{ (row.size_bytes / 1024).toFixed(0) }} KB</template>
-    </el-table-column>
-    <el-table-column label="提交时间" width="170">
-      <template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template>
-    </el-table-column>
-    <el-table-column label="操作" width="150">
-      <template #default="{ row }">
-        <el-button link type="primary" :disabled="row.status !== 'succeeded'" @click="open(row)">
-          打开
+    <div class="bar">
+      <DocumentFilters
+        :model-value="store.filters"
+        @change="onFilterChange"
+        @search="router.push({ name: 'search', query: { q: store.filters.q } })"
+      />
+      <div class="actions">
+        <el-button :loading="store.loading" @click="reload">刷新</el-button>
+        <el-button type="primary" @click="uploadVisible = true">
+          <el-icon><component is="Upload" /></el-icon> 上传
         </el-button>
-        <el-button link type="danger" @click="remove(row)">删除</el-button>
+      </div>
+    </div>
+
+    <DocumentTable
+      :items="store.items"
+      :loading="store.loading"
+      selectable
+      @open="open"
+      @download="download"
+      @reparse="router.push({ name: 'versions', params: { id: $event.id } })"
+      @reindex="reindex"
+      @remove="remove"
+      @selection="selected = $event"
+    >
+      <template v-if="selected.length" #toolbar>
+        <span class="picked">已选 {{ selected.length }} 份</span>
+        <el-button link type="danger" @click="removeSelected">批量删除</el-button>
       </template>
-    </el-table-column>
-  </el-table>
+    </DocumentTable>
+
+    <div class="pager">
+      <el-button :disabled="store.page === 1 || store.loading" @click="store.goPage(store.page - 1)">
+        上一页
+      </el-button>
+      <span class="page-no">第 {{ store.page }} 页</span>
+      <el-button :disabled="!store.hasMore || store.loading" @click="store.goPage(store.page + 1)">
+        下一页
+      </el-button>
+    </div>
+
+    <UploadDialog v-model="uploadVisible" @uploaded="reload" />
+  </div>
 </template>
 
 <style scoped>
-.tip {
-  padding: 28px 0;
-  color: var(--el-text-color-regular);
-}
-.hint {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  margin-top: 6px;
+.stats {
+  margin-bottom: 12px;
 }
 .bar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  margin: 16px 0 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
 }
-.search {
-  max-width: 420px;
+.actions {
+  display: flex;
+  gap: 8px;
+}
+.picked {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 12px;
+}
+.page-no {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 </style>

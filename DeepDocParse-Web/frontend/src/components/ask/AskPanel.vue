@@ -2,7 +2,9 @@
 import { ElMessage } from 'element-plus'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
-import { api, askStream, type ChatMessage, type Citation, type DocumentInfo } from '@/api/client'
+import { askStream, conversationsApi } from '@/api'
+import { degradedLabelOf } from '@/constants/status'
+import type { ChatMessage, Citation, DocumentInfo } from '@/types/api'
 import { fetchAuthedImage } from '@/utils/markdown'
 
 /**
@@ -24,16 +26,6 @@ const scroller = ref<HTMLElement>()
 const cropUrls = ref<Record<string, string>>({})   // crop_url -> blob URL
 let abort: (() => void) | undefined
 
-const DEGRADED_LABEL: Record<string, string> = {
-  vision_unavailable: '未做视觉验证（视觉模型不可用）',
-  crop_unsupported: '未做视觉验证（该文件不支持区域截图）',
-  crop_failed: '未做视觉验证（区域截图失败）',
-  embedding_unavailable: '仅关键词检索（向量化服务不可用）',
-  no_hits: '未在本文档中检索到相关内容',
-  client_aborted: '回答被中断',
-  upstream_error: '问答服务异常',
-}
-
 const askable = computed(() => props.document.index_status === 'ready')
 const indexHint = computed(() =>
   ({
@@ -46,7 +38,7 @@ const indexHint = computed(() =>
 )
 
 async function loadConversations() {
-  conversations.value = (await api.listConversations(props.document.id)).data
+  conversations.value = (await conversationsApi.list(props.document.id)).data
   if (!conversations.value.length) return
   activeId.value = conversations.value[0]!.id
   await loadMessages()
@@ -54,7 +46,7 @@ async function loadConversations() {
 
 async function loadMessages() {
   if (!activeId.value) return
-  messages.value = (await api.listMessages(activeId.value)).data
+  messages.value = (await conversationsApi.messages(activeId.value)).data
   await loadCrops()
   await scrollToEnd()
 }
@@ -78,14 +70,14 @@ function revokeCrops() {
 }
 
 async function newConversation() {
-  const { data } = await api.createConversation(props.document.id)
+  const { data } = await conversationsApi.create(props.document.id)
   conversations.value.unshift({ id: data.id, title: data.title })
   activeId.value = data.id
   messages.value = []
 }
 
 async function removeConversation(cid: string) {
-  await api.deleteConversation(cid)
+  await conversationsApi.remove(cid)
   conversations.value = conversations.value.filter((c) => c.id !== cid)
   if (activeId.value === cid) {
     activeId.value = conversations.value[0]?.id ?? ''
@@ -166,7 +158,7 @@ onBeforeUnmount(() => {
         <div v-if="message.role === 'assistant'" class="meta">
           <el-tag v-if="message.verified" size="small" type="success">已做视觉验证</el-tag>
           <el-tag v-else-if="message.degraded" size="small" type="warning">
-            {{ DEGRADED_LABEL[message.degraded] || message.degraded }}
+            {{ degradedLabelOf(message.degraded) }}
           </el-tag>
         </div>
         <div v-if="message.citations?.length" class="citations">

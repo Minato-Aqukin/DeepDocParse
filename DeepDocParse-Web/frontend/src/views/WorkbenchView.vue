@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { api, http, type Block, type Citation, type DocumentInfo, type PageBlocks } from '@/api/client'
-import AskPanel from '@/components/AskPanel.vue'
-import PdfCanvas from '@/components/PdfCanvas.vue'
-import ResultPane from '@/components/ResultPane.vue'
+import { documentsApi, downloadAs } from '@/api'
+import AskPanel from '@/components/ask/AskPanel.vue'
+import PdfCanvas from '@/components/viewer/PdfCanvas.vue'
+import ResultPane from '@/components/viewer/ResultPane.vue'
+import { usePolling } from '@/composables/usePolling'
+import { indexStatusOf, parseStatusOf } from '@/constants/status'
+import type { Block, Citation, DocumentInfo, DownloadFormat, PageBlocks } from '@/types/api'
 import type { Highlight } from '@/types/workbench'
 
 /**
@@ -35,12 +38,12 @@ async function load() {
   const id = String(route.params.id)
   loading.value = true
   try {
-    document.value = (await api.getDocument(id)).data
+    document.value = (await documentsApi.get(id)).data
     if (document.value.status !== 'succeeded') return
     const [result, pageData, source] = await Promise.all([
-      api.getResult(id),
-      api.getPages(id),
-      api.getSourceUrl(id).catch(() => null),
+      documentsApi.result(id),
+      documentsApi.pages(id),
+      documentsApi.sourceUrl(id).catch(() => null),
     ])
     markdown.value = result.data.markdown
     pages.value = pageData.data.pages
@@ -50,22 +53,12 @@ async function load() {
   }
 }
 
-/** 解析或索引还在跑时轮询，两者都落定就停 —— 别做无意义的定时请求。 */
-function startPolling() {
-  stopPolling()
-  poller = window.setInterval(async () => {
-    if (!document.value) return
-    const done =
-      document.value.status === 'succeeded' &&
-      ['ready', 'failed', 'none'].includes(document.value.index_status)
-    if (done || document.value.status === 'failed') return stopPolling()
-    await load()
-  }, 3000)
-}
-function stopPolling() {
-  if (poller) window.clearInterval(poller)
-  poller = undefined
-}
+/** 解析或索引还在跑时轮询，两者都落定就停 —— 判断依据统一在 constants/status.ts 的 active 标记。 */
+const polling = usePolling(load, () => {
+  const doc = document.value
+  if (!doc) return false
+  return Boolean(parseStatusOf(doc.status).active || indexStatusOf(doc.index_status).active)
+})
 
 function locate(citation: Citation) {
   activePage.value = citation.page_idx
@@ -91,35 +84,26 @@ function selectBlock(block: Block) {
   }]
 }
 
-async function download(format: 'md' | 'json' | 'zip' | 'source') {
-  const { data, headers } = await http.get(api.downloadUrl(String(route.params.id), format), {
-    responseType: 'blob',
-  })
-  const url = URL.createObjectURL(data as Blob)
-  const a = window.document.createElement('a')
-  a.href = url
-  a.download =
-    /filename="([^"]+)"/.exec(String(headers['content-disposition'] || ''))?.[1] || 'download'
-  a.click()
-  URL.revokeObjectURL(url)
+async function download(format: DownloadFormat) {
+  const id = String(route.params.id)
+  await downloadAs(documentsApi.downloadUrl(id, format), document.value?.filename)
 }
 
 async function reindex() {
-  await api.reindex(String(route.params.id))
+  await documentsApi.reindex(String(route.params.id))
   ElMessage.success('已重新排队建立索引')
   await load()
-  startPolling()
+  polling.start()
 }
 
 watch(
   () => route.params.id,
   async () => {
     await load()
-    startPolling()
+    polling.start()
   },
   { immediate: true },
 )
-onUnmounted(stopPolling)
 </script>
 
 <template>
@@ -129,9 +113,12 @@ onUnmounted(stopPolling)
         <el-button link @click="router.push('/documents')">← 文档库</el-button>
         <span class="name">{{ document?.filename }}</span>
         <el-tag size="small" type="info">{{ document?.page_count }} 页</el-tag>
-        <el-tag v-if="document && document.index_status !== 'ready'" size="small" type="warning">
-          索引：{{ document.index_status }}
-        </el-tag>
+        <el-tooltip :content="document?.index_error" :disabled="!document?.index_error">
+          <el-tag v-if="document && document.index_status !== 'ready'" size="small"
+                  :type="indexStatusOf(document.index_status).type">
+            {{ indexStatusOf(document.index_status).label }}
+          </el-tag>
+        </el-tooltip>
       </div>
       <div class="actions">
         <el-button size="small" @click="router.push(`/documents/${document?.id}/versions`)">
