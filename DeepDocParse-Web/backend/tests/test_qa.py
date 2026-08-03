@@ -206,6 +206,65 @@ async def test_ask_reports_no_hits_for_unrelated_question(auth_client, session):
 
 
 @respx.mock
+async def test_keyword_only_match_below_floor_is_not_a_citation(auth_client, session):
+    """回归：相似度下限必须同时管住关键词路。
+
+    RRF 是并集融合。下限只加在向量路上时，向量路已判定"全都不相关"的问题，
+    仍会靠共现词捞出 chunk 当出处；而 verified 只看有没有裁剪图，
+    于是假出处还会被打上"已做视觉验证" —— 比不给出处更糟。
+
+    这里的问题与第 1 页仅共享一个高频字"的"，字符袋余弦远低于 qa_min_similarity，
+    但词面确实命中 —— 正是旧实现会漏过去的那一类。
+    """
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(CHAT).mock(return_value=_chat_sse("文档中未找到"))
+
+    chunks = (await session.execute(select(Chunk).order_by(Chunk.seq))).scalars().all()
+    texts = [c.text for c in chunks]
+
+    from app.config import settings as cfg
+    from app.search import MemoryIndex, _cosine
+
+    question = "的"
+    qvec = _embed_response(
+        httpx.Request("POST", EMBEDDINGS, json={"input": [question]})).json()["data"][0]["embedding"]
+    sims = [_cosine(qvec, c.embedding) for c in chunks]
+    assert all(s <= cfg.qa_min_similarity for s in sims), \
+        f"前提不成立：问题与 {texts} 的相似度 {sims} 未全部低于下限"
+    assert any(question in t for t in texts), "前提不成立：词面应当命中"
+
+    hits = await MemoryIndex().search(session, vector=qvec, query=question,
+                                      document_id=document["id"], user_id=None,
+                                      limit=cfg.qa_top_k, candidates=cfg.qa_candidates)
+    assert hits == [], f"低于相似度下限的词面命中不得成为出处，实际返回 {hits}"
+
+    events = await _ask(auth_client, cid, question=question)
+    done = dict(events)["done"]
+    assert done["degraded"] == "no_hits" and done["verified"] is False
+    assert dict(events)["citations"]["citations"] == []
+
+
+@respx.mock
+async def test_keyword_path_still_works_when_embedding_is_down(auth_client, session):
+    """但向量化挂掉时不能连带把关键词路也关掉 —— 那时无从测量，只能放行。
+
+    降级本身已经由 degraded=embedding_unavailable 标出来了。
+    """
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(EMBEDDINGS).mock(return_value=httpx.Response(503))
+    respx.post(CHAT).mock(return_value=_chat_sse("表格在第二页"))
+
+    events = await _ask(auth_client, cid, question="表格")
+    done = dict(events)["done"]
+    assert done["degraded"] == "embedding_unavailable"
+    citations = dict(events)["citations"]["citations"]
+    assert citations, "向量化不可用时关键词路必须还能给出出处"
+    assert citations[0]["page_idx"] == 1
+
+
+@respx.mock
 async def test_ask_marks_embedding_outage_instead_of_faking_it(auth_client, session):
     """向量化挂掉时只能走关键词路，并且必须打标。
 
@@ -262,7 +321,10 @@ async def test_ask_persists_partial_answer_when_client_disconnects(auth_client, 
 
     async def slow():
         yield f'data: {json.dumps({"choices": [{"delta": {"content": "开头"}}]})}\n\n'.encode()
-        await asyncio.sleep(30)     # 客户端会在这中间断开
+        # 客户端读到第一帧就立刻掉头，所以这里只要"还没结束"即可。
+        # 别写成几十秒：进程内 ASGI 传输会等这个生成器跑完，那个时长会原样计到
+        # 套件总时间上（曾经是 30s，占掉整个 backend 单测的一半以上）
+        await asyncio.sleep(1)
 
     respx.post(CHAT).mock(return_value=httpx.Response(
         200, headers={"content-type": "text/event-stream"}, content=slow()))

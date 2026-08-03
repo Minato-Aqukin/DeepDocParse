@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://ddp:ddp@127.0.0.1:15432/deepdocparse"
     jwt_secret: str = "change-me"
     jwt_ttl_minutes: int = 60 * 24 * 7
+    # bcrypt 成本因子。**生产不要调低** —— 它就是抗离线爆破的全部本钱。
+    # 单测把它降到 4：默认 12 时一次 hash+verify 要 0.37s，而几乎每个用例都要注册一个
+    # 用户，光这一项就占掉整个套件大半时间（见 tests/conftest.py）
+    bcrypt_rounds: int = 12
 
     # MinIO：service 与浏览器走不同 endpoint —— 预签名 URL 的签名覆盖 host，
     # 两边 host 不同则签名不同，必须分开生成（见 CLAUDE.md 部署陷阱）。
@@ -45,10 +49,21 @@ class Settings(BaseSettings):
     # 多副本部署必须配：限速计数与对账选主都靠它。留空 = 单实例模式（进程内计数）
     redis_url: str = ""
 
+    # 单次上传的字节上限。**必须有**：上传体要整个进内存（算内容 sha256 当 doc_id，
+    # 再原样 put 进 MinIO），没有上限时任意登录用户传个大文件就能把进程打爆
+    # ——dev 机 WSL 只有 ~7.7GB，门槛极低。超限返回 413。
+    max_upload_bytes: int = 200 * 1024 * 1024
+    # 分片读取的粒度：边读边累计，超限立刻中断，不等整个文件落地
+    upload_chunk_bytes: int = 1024 * 1024
+
     # ---- 归档与对账 ----
     # 必须 <= service 的 RESULT_TTL(24h)：超过这个窗口结果就被 service 清了，补取不回来
     result_ttl: int = 86400
     reconcile_interval: int = 60
+    # 软删除后多久才允许真正回收对象。删对象不可逆，而"删了又重新上传"会复活同一行
+    # （documents.upload 的复活分支）—— 宽限期把"回收与复活撞车"从一个真实的竞态
+    # 变成实际不可达，剩下的由 gc 里的 claim 兜住
+    gc_grace_seconds: int = 3600
 
     # ---- 检索与问答 ----
     # bge-m3 是 1024 维。换模型维度变了必须整体 reindex（关系库不能像 Redis 那样按维度分索引名）
@@ -78,6 +93,17 @@ class Settings(BaseSettings):
     default_quota_pages: int | None = 1000   # None = 不限
     default_rate_limit_per_min: int = 60
 
+    # 只有明确知道自己在做什么才打开（一次性容器、CI）。生产打开等于没有鉴权
+    allow_insecure_defaults: bool = False
+
+    # 允许跨源访问的前端地址，逗号分隔。默认是 dev 的 Vite（5173）——
+    # 换部署形态时必须能改配置而不是改代码
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
     @property
     def embeddings_endpoint(self) -> str:
         return self.embedding_url or f"{self.service_url}/v1/embeddings"
@@ -88,3 +114,30 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# 占位值集合。`.env.example` 里写的是 change-me / change-me-please，
+# 复制过去忘了改是最常见的部署事故
+_PLACEHOLDER_SECRETS = {"", "change-me", "change-me-please", "changeme", "secret"}
+
+
+def assert_secrets_configured() -> None:
+    """启动即失败，而不是带着占位密钥安静地跑起来。
+
+    - jwt_secret 是占位值 = 任何人都能给任意 user_id 伪造一个有效会话
+    - service_token 是占位值 = 内网回调端点（/internal/*）对全世界敞开
+
+    这两条都不会在运行时报任何错，只会安静地把整套鉴权变成摆设 —— 正是
+    必须在启动时拦下来的那类问题。
+    """
+    if settings.allow_insecure_defaults:
+        print("[config] WARNING: ALLOW_INSECURE_DEFAULTS 已开启，占位密钥检查被跳过")
+        return
+    bad = [name for name in ("jwt_secret", "service_token")
+           if getattr(settings, name).strip().lower() in _PLACEHOLDER_SECRETS]
+    if bad:
+        raise RuntimeError(
+            f"拒绝启动：{', '.join(n.upper() for n in bad)} 还是占位值。"
+            " 请在 .env 里设置真实随机值（例如 python -c \"import secrets;"
+            " print(secrets.token_urlsafe(32))\"）。"
+            " 确实需要用占位值启动请显式设置 ALLOW_INSECURE_DEFAULTS=true。"
+        )

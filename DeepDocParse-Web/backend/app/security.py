@@ -27,7 +27,9 @@ def _password_bytes(password: str) -> bytes:
 
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt()).decode()
+    # 成本因子可配只为了让单测跑得动（见 settings.bcrypt_rounds），生产用默认 12
+    return bcrypt.hashpw(_password_bytes(password),
+                         bcrypt.gensalt(rounds=settings.bcrypt_rounds)).decode()
 
 
 def verify_password(password: str, password_hash: str) -> bool:

@@ -57,6 +57,49 @@ def test_tolerates_missing_fields():
     assert chunks[0]["bbox"] is None and chunks[0]["page_size"] is None
 
 
+def test_single_oversized_block_is_split():
+    """回归：单块超过 max_chars 必须切开。
+
+    不切的话它会被原样送进 embedding 运行时，由后者按模型最大长度静默截断——
+    块尾内容从此检索不到，而且没有任何报错。
+    """
+    body = "这是一段很长的正文。" * 200          # 2000 字，远超 max_chars
+    layout = {"pdf_info": [{"page_idx": 0, "page_size": [612, 792], "para_blocks": [
+        {"bbox": [10, 10, 100, 500], "lines": [{"spans": [{"content": body}]}]}]}]}
+
+    chunks = layout_to_chunks(layout, max_chars=300)
+
+    assert len(chunks) > 1, "超长块没有被切开"
+    assert all(c["char_len"] <= 300 for c in chunks), \
+        f"切完仍有超限块：{[c['char_len'] for c in chunks]}"
+    # 内容不能丢：拼回去要覆盖原文的全部字符
+    assert "".join(c["text"] for c in chunks).replace("\n", "") == body
+    # 出处三件套要跟着每一段走，否则切出来的块无法定位
+    assert all(c["page_idx"] == 0 and c["bbox"] == [10, 10, 100, 500]
+               and c["page_size"] == [612, 792] for c in chunks)
+    assert [c["seq"] for c in chunks] == list(range(len(chunks)))
+
+
+def test_oversized_block_prefers_sentence_boundaries():
+    """能在句读处断就别硬切 —— 硬切会把一句话劈成两半，检索与出处都变难看。"""
+    body = "。".join(f"第{i}句话内容" for i in range(60)) + "。"
+    chunks = layout_to_chunks(
+        {"pdf_info": [{"page_idx": 0, "page_size": [612, 792], "para_blocks": [
+            {"bbox": [0, 0, 1, 1], "lines": [{"spans": [{"content": body}]}]}]}]},
+        max_chars=120)
+
+    assert len(chunks) > 1
+    assert all(c["text"].endswith("。") for c in chunks), \
+        f"应当在句号处断开：{[c['text'][-12:] for c in chunks]}"
+
+
+def test_no_split_when_block_fits():
+    """回归护栏：没超限的块不许被切 —— 否则出处粒度会平白变碎。"""
+    layout = {"pdf_info": [{"page_idx": 0, "page_size": [612, 792], "para_blocks": [
+        {"bbox": [0, 0, 1, 1], "lines": [{"spans": [{"content": "短短一句话。"}]}]}]}]}
+    assert [c["text"] for c in layout_to_chunks(layout, max_chars=300)] == ["短短一句话。"]
+
+
 def test_empty_layout_is_not_an_error():
     assert layout_to_chunks({}) == []
     assert page_count_of({}) == 0

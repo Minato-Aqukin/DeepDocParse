@@ -27,6 +27,15 @@
    service 的幂等与向量索引全部失效。另注意 `/files` 要按 MIME 白名单决定 inline/attachment，
    否则上传 text/html 就是本站同源 XSS
 7. **httpx 一律 `trust_env=False`**，本机 SOCKS 代理会污染 localhost 调用
+8. **相似度下限对向量路与关键词路都生效**。RRF 是并集融合，只卡向量路的话，
+   语义上完全不相关的问题仍会靠共现词捞出"出处"，而 `verified` 只看有没有裁剪图 ——
+   假出处还会被打上"已做视觉验证"。唯一豁免是向量化本身挂了（那时无从测量，
+   且已标 `degraded=embedding_unavailable`）
+9. **删对象前必须 claim**。`gc.py` 是全项目唯一会不可逆毁数据的地方：
+   宽限期（`GC_GRACE_SECONDS`）+ 条件 UPDATE 两道防护，缺一就会把
+   "删了又传回来"的文档原件删掉
+10. **占位密钥拒绝启动**（`config.assert_secrets_configured`）：`JWT_SECRET`
+    是 change-me 等于任何人可伪造任意用户的会话。CI 可用 `ALLOW_INSECURE_DEFAULTS=true`
 
 ## 技术约定
 - backend：FastAPI + SQLAlchemy 2.0(async) + asyncpg + Alembic；JWT 用 jose，密码 bcrypt，
@@ -62,7 +71,7 @@
 
 ## 验证
 ```bash
-cd backend && ../.venv/Scripts/python -m pytest        # 62 例，纯进程内
+cd backend && ../.venv/Scripts/python -m pytest        # 85 例，纯进程内，~18s
 cd frontend && npm run build                            # 含类型检查
 REDIS_URL=redis://localhost:6379/0 .venv/Scripts/python scripts/e2e_web.py   # 真环境全链路
 ```

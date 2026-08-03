@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.config import settings
+from app.config import assert_secrets_configured, settings
 from app.db import get_engine, get_sessionmaker
 from app.errors import install_error_handlers
 from app.metering import MemoryRateLimiter, RedisRateLimiter
@@ -29,6 +29,9 @@ from app.storage import MinioStorage
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 第一件事：占位密钥直接拒绝启动。带着 change-me 跑起来的话，
+    # 鉴权是形同虚设的，而且运行时不会有任何报错
+    assert_secrets_configured()
     app.state.http = new_http_client()
     app.state.service_client = ServiceClient(app.state.http)
     app.state.storage = MinioStorage()
@@ -64,10 +67,12 @@ app = FastAPI(title="DeepDocParse-Web backend", version="0.2.0", lifespan=lifesp
 
 install_error_handlers(app)
 
-# dev：Vite 跑在 5173，前后端不同源
+# dev：Vite 跑在 5173，前后端不同源。生产换域名只改 CORS_ORIGINS，不动代码。
+# 不用 allow_origins=["*"]：配合 allow_credentials=True 时浏览器会直接拒绝，
+# 而且那等于放弃同源保护
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

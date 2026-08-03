@@ -116,6 +116,150 @@ async def test_upload_passes_content_hash_as_doc_id(auth_client, session):
 
 
 @respx.mock
+async def test_list_filters_before_paginating(auth_client, session):
+    """回归：status 过滤必须在 SQL 里做，不能先分页再用 Python 丢行。
+
+    旧实现下 `?status=succeeded&limit=1` 只看第一行，恰好是 pending 就返回空，
+    而后面明明还有成功的文档 —— 分页语义是坏的。
+    """
+    _mock_service()
+    for i in range(3):
+        await _upload(auth_client, content=b"%PDF-1.4 doc " + str(i).encode(),
+                      filename=f"doc{i}.pdf")
+
+    # 只把最早那份（列表里排最后）置成 succeeded
+    jobs = (await session.execute(select(ParseJob).order_by(ParseJob.created_at))).scalars().all()
+    jobs[0].status = "succeeded"
+    await session.commit()
+
+    listed = (await auth_client.get("/api/documents", params={"status": "succeeded"})).json()
+    assert len(listed) == 1, f"过滤应命中唯一一条 succeeded，实际 {[d['status'] for d in listed]}"
+
+    # 关键点：limit 小于"需要跳过的 pending 数"时仍须返回它
+    paged = (await auth_client.get(
+        "/api/documents", params={"status": "succeeded", "limit": 1})).json()
+    assert len(paged) == 1, "先分页后过滤会在这里返回空"
+    assert paged[0]["id"] == listed[0]["id"]
+
+    pending = (await auth_client.get("/api/documents", params={"status": "pending"})).json()
+    assert len(pending) == 2 and all(d["status"] == "pending" for d in pending)
+
+
+@respx.mock
+async def test_list_does_not_duplicate_documents_with_tied_job_timestamps(auth_client, session):
+    """回归：把 job join 进来时不能让一个文档变成两行。
+
+    按 `GROUP BY document_id HAVING max(created_at)` 再 join 回去的写法，
+    在两条 job 的 created_at 撞上（同一微秒）时会 join 出两行，列表页出现重复文档。
+    """
+    _mock_service()
+    document = await _upload(auth_client)
+    await auth_client.post(f"/api/documents/{document['id']}/reparse",
+                           json={"engine": "mineru", "options": {"backend": "vlm"}})
+
+    jobs = (await session.execute(
+        select(ParseJob).where(ParseJob.document_id == document["id"]))).scalars().all()
+    assert len(jobs) == 2
+    tied = utcnow()
+    for job in jobs:                       # 制造完全相同的 created_at
+        job.created_at = tied
+    await session.commit()
+
+    listed = (await auth_client.get("/api/documents")).json()
+    assert [d["id"] for d in listed] == [document["id"]], f"文档被 join 成了多行：{listed}"
+
+
+@respx.mock
+async def test_list_documents_does_not_scale_queries_with_rows(auth_client):
+    """回归：列表页曾对每个文档单独查一次 job（一页 200 个文档 = 200+ 次往返）。
+
+    断"查询次数不随行数增长"，而不是断一个具体数字 —— 后者会因为无关重构而脆断。
+    """
+    _mock_service()
+    counts: list[int] = []
+
+    from sqlalchemy import event
+
+    import app.db as db
+
+    for rows in (1, 6):
+        while len((await auth_client.get("/api/documents")).json()) < rows:
+            n = len((await auth_client.get("/api/documents")).json())
+            await _upload(auth_client, content=b"%PDF-1.4 n" + str(n).encode(),
+                          filename=f"n{n}.pdf")
+
+        seen = 0
+
+        def _count(*_args, **_kwargs):
+            nonlocal seen
+            seen += 1
+
+        engine = db.get_engine().sync_engine
+        event.listen(engine, "before_cursor_execute", _count)
+        try:
+            assert len((await auth_client.get("/api/documents")).json()) == rows
+        finally:
+            event.remove(engine, "before_cursor_execute", _count)
+        counts.append(seen)
+
+    assert counts[0] == counts[1], \
+        f"查询次数随行数增长（1 行 {counts[0]} 次 / 6 行 {counts[1]} 次）—— N+1 回来了"
+
+
+@respx.mock
+async def test_upload_rejects_oversized_file(auth_client, monkeypatch):
+    """上传必须有字节上限。
+
+    上传体要整个进内存（算 sha256 当 doc_id，再原样 put 进 MinIO），没有上限时
+    任意登录用户传个大文件就能把进程打爆。超限要 413，且不得建出任何 Document。
+    """
+    monkeypatch.setattr(settings, "max_upload_bytes", 4096)
+    monkeypatch.setattr(settings, "upload_chunk_bytes", 512)
+    submit = respx.post(f"{SERVICE}/v1/parse")
+
+    resp = await auth_client.post(
+        "/api/documents", files={"file": ("big.pdf", b"x" * 8192, "application/pdf")})
+    assert resp.status_code == 413, resp.text
+    assert resp.json()["error"] == {
+        "message": "file exceeds the 4096 bytes upload limit",
+        "type": "invalid_request_error", "code": "file_too_large",
+    }, "错误体要说清上限，别给用户一个 '0 MiB'"
+    assert not submit.called, "超限的上传不得转发给 service"
+    assert (await auth_client.get("/api/documents")).json() == []
+
+    # 边界：正好卡在上限内的必须放行
+    _mock_service()
+    ok = await auth_client.post(
+        "/api/documents", files={"file": ("ok.pdf", b"y" * 4096, "application/pdf")})
+    assert ok.status_code == 202, ok.text
+
+
+@respx.mock
+async def test_upload_cap_holds_on_a_hand_rolled_multipart_body(auth_client, monkeypatch):
+    """上限不依赖客户端声明的长度。
+
+    这里手工拼 multipart 体、不给出可信的长度声明，超限仍须 413 —— 判断依据是
+    解析器累计的实际字节，不是请求头。
+    """
+    monkeypatch.setattr(settings, "max_upload_bytes", 4096)
+    monkeypatch.setattr(settings, "upload_chunk_bytes", 512)
+
+    payload = b"z" * 20000
+    boundary = "----ddptest"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="lie.pdf"\r\n'
+        "Content-Type: application/pdf\r\n\r\n"
+    ).encode() + payload + f"\r\n--{boundary}--\r\n".encode()
+
+    resp = await auth_client.post(
+        "/api/documents", content=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    assert resp.status_code == 413, resp.text
+    assert resp.json()["error"]["code"] == "file_too_large"
+
+
+@respx.mock
 async def test_callback_archives_indexes_and_rewrites_images(auth_client, session, app_state):
     routes = _mock_service()
     document = await _upload(auth_client)

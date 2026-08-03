@@ -43,6 +43,13 @@ class PgVectorIndex:
     `vector=None` 表示问题向量化失败：**只走关键词路**。
     绝不能拿零向量顶上——`<=>` 对零向量给不出有意义的名次，
     等于把任意 N 条 chunk 以满权重灌进 RRF，比丢掉语义检索更糟。
+
+    **相似度下限对两路都生效**（曾经只加在向量路上）：RRF 是并集融合，
+    关键词路没有下限的话，向量路已经判定"全都不相关"的问题，仍会靠共现词
+    捞出几条 chunk 当出处——而 qa.py 的 verified 只看有没有裁剪图，
+    于是假出处还会被打上"已做视觉验证"。正是 config.qa_min_similarity 要防的事。
+    唯一豁免是向量化本身挂了（vector=None）：那时无从测量，只能放行，
+    但调用方已经标了 degraded=embedding_unavailable，降级是可见的。
     """
 
     async def search(self, session: AsyncSession, *, vector: list[float] | None, query: str,
@@ -61,12 +68,20 @@ class PgVectorIndex:
               AND c.embedding <=> CAST(:qvec AS vector) < :max_dist
             ORDER BY c.embedding <=> CAST(:qvec AS vector) LIMIT :n
         """)
+        # 同一把尺子也量关键词路。拼进 SQL 而不是用 `:qvec IS NULL OR ...`：
+        # vector=None 时 CAST(NULL AS vector) 的参数类型推断在不同驱动上行为不一，
+        # 干脆不让这段出现在语句里
+        kw_floor = ("""
+              AND (c.embedding IS NULL
+                   OR c.embedding <=> CAST(:qvec AS vector) < :max_dist)
+        """ if vector else "")
         # websearch_to_tsquery 容忍自然语言输入（不会因为标点直接抛错）
         kw_sql = text(f"""
             SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id,
                  websearch_to_tsquery('simple', :q) tsq
             WHERE {scope} AND d.deleted_at IS NULL
               AND to_tsvector('simple', c.text) @@ tsq
+              {kw_floor}
             ORDER BY ts_rank_cd(to_tsvector('simple', c.text), tsq) DESC LIMIT :n
         """)
 
@@ -132,16 +147,20 @@ class MemoryIndex:
         rows = (await session.execute(stmt)).all()
 
         vec_ids: list[str] = []
+        # 相似度下限对两路都生效，语义与 PgVectorIndex 对齐。
+        # 用 > 而不是 >=，与 PgVectorIndex 的 `dist < max_dist` 边界严格对齐
+        similar_enough: dict[str, bool] = {}
         if vector:      # None = 向量化失败，只走关键词路（与 PgVectorIndex 语义一致）
             scored_vec = [(c.id, _cosine(vector, c.embedding)) for c, _ in rows if c.embedding]
-            # 同样的相似度下限，语义与 PgVectorIndex 对齐
-            # 用 > 而不是 >=，与 PgVectorIndex 的 `dist < max_dist` 边界严格对齐
-            scored_vec = [p for p in scored_vec if p[1] > settings.qa_min_similarity]
-            vec_ids = [cid for cid, _ in
-                       sorted(scored_vec, key=lambda p: p[1], reverse=True)[:candidates]]
+            similar_enough = {cid: s > settings.qa_min_similarity for cid, s in scored_vec}
+            vec_ids = [cid for cid, s in
+                       sorted(scored_vec, key=lambda p: p[1], reverse=True)[:candidates]
+                       if s > settings.qa_min_similarity]
 
         terms = [t for t in re.split(r"\W+", query.lower()) if t]
-        scored_kw = [(c.id, sum(c.text.lower().count(t) for t in terms)) for c, _ in rows]
+        scored_kw = [(c.id, sum(c.text.lower().count(t) for t in terms)) for c, _ in rows
+                     # 测得出相似度就必须过线；测不出（无向量/向量化挂了）才放行
+                     if similar_enough.get(c.id, True)]
         kw_ids = [cid for cid, n in sorted(scored_kw, key=lambda p: p[1], reverse=True)[:candidates]
                   if n > 0]
 

@@ -17,6 +17,14 @@ export interface AskHandlers {
   onCitations?: (citations: Citation[]) => void
   onDone?: (data: { message_id: string; verified: boolean; degraded: string | null }) => void
   onError?: (data: { message: string; code: string }) => void
+  /**
+   * 流以任何方式结束时都会调用一次（正常完成、请求失败、网络中断、abort）。
+   *
+   * 存在的理由：`onDone` 只在后端真的发出 done 帧时才触发，而请求根本没建立起来的
+   * 情况（429 限速、409 索引未就绪、断网）压根到不了那一步。调用方若只在 onDone 里
+   * 复位 streaming 标志，就会永久卡在"回答中"。收尾动作一律挂这里。
+   */
+  onSettled?: () => void
 }
 
 /**
@@ -65,6 +73,8 @@ export function askStream(cid: string, question: string, handlers: AskHandlers):
       if ((error as Error).name !== 'AbortError') {
         handlers.onError?.({ message: String(error), code: 'network_error' })
       }
+    } finally {
+      handlers.onSettled?.()
     }
   })()
 

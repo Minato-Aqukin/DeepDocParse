@@ -15,9 +15,10 @@ from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.archive import fail_job, image_base_url
 from app.chunking import layout_to_chunks
@@ -26,7 +27,9 @@ from app.db import get_session
 from app.deps import current_user, get_service_client, get_storage
 from app.errors import APIError
 from app.indexing import index_document
-from app.models import Chunk, Conversation, Document, FileToken, Message, ParseJob, User, utcnow
+from app.models import (
+    Chunk, Conversation, Document, FileToken, Message, ParseJob, User, new_id, utcnow,
+)
 from app.service_client import ServiceClient, ServiceError
 from app.storage import Storage, prefix_of, source_key
 
@@ -78,6 +81,39 @@ def _doc_info(document: Document, job: ParseJob | None) -> DocumentInfo:
         index_status=document.index_status, index_error=document.index_error,
         current_job_id=document.current_job_id, created_at=document.created_at,
     )
+
+
+def _too_large() -> APIError:
+    limit = settings.max_upload_bytes
+    mib = limit / (1024 * 1024)
+    shown = f"{mib:.0f} MiB" if mib >= 1 else f"{limit} bytes"
+    return APIError(413, f"file exceeds the {shown} upload limit",
+                    "invalid_request_error", "file_too_large")
+
+
+async def _read_capped(file: UploadFile) -> bytes:
+    """分片读取并卡上限。
+
+    **不能用 `await file.read()`**：那会把整个上传体一次性拉进内存，而后续还要
+    再持有一份（sha256 + put 到 MinIO）。没有上限时一个大文件就能 OOM 掉进程。
+
+    两道判断：
+    1. `file.size` 由 multipart 解析器按**实际落盘字节**累计，不是客户端的
+       content-length —— 伪造请求头绕不过去，所以可以放心当快速失败用。
+    2. 逐片累计是兜底：解析器没设 size 时（自定义 UploadFile / 别的解析路径）
+       仍然卡得住，且超限当场中断，不把剩下的字节读完。
+    """
+    if file.size is not None and file.size > settings.max_upload_bytes:
+        raise _too_large()
+
+    parts: list[bytes] = []
+    total = 0
+    while chunk := await file.read(settings.upload_chunk_bytes):
+        total += len(chunk)
+        if total > settings.max_upload_bytes:
+            raise _too_large()
+        parts.append(chunk)
+    return b"".join(parts)
 
 
 async def _owned(document_id: str, user: User, session: AsyncSession) -> Document:
@@ -167,7 +203,7 @@ async def upload(
     storage: Storage = Depends(get_storage),
     service: ServiceClient = Depends(get_service_client),
 ):
-    data = await file.read()
+    data = await _read_capped(file)
     if not data:
         raise APIError(400, "uploaded file is empty", "invalid_request_error", "empty_file")
     try:
@@ -190,24 +226,35 @@ async def upload(
     )).scalar_one_or_none()
 
     if document is None:
-        document = Document(user_id=user.id, doc_id=doc_id, origin="web", filename=filename,
-                            mime=mime, size_bytes=len(data))
+        # id 显式生成而不是等 INSERT 的默认值：object_key 要在**第一次 commit 之前**
+        # 就填好。先落一行 object_key 为空的 Document、再补写的话，中途崩溃就会留下
+        # 一行"看着像外部提交"的 web 文档（空 object_key 是外部任务的标记），
+        # reparse 会拒绝它且无从恢复。
+        document = Document(id=new_id(), user_id=user.id, doc_id=doc_id, origin="web",
+                            filename=filename, mime=mime, size_bytes=len(data))
+        # 键里带 document.id 而不是内容哈希：按内容哈希拼的话，两个用户传同一份文件
+        # 会共用一个对象，其中一方删除就会把另一方的原件也删掉
+        document.object_key = source_key(document.id, filename)
+        # 对象先落：行提交成功时它指向的对象一定已经存在
+        await storage.put(document.object_key, data, mime)
         session.add(document)
         try:
             await session.commit()
         except IntegrityError:
             # 并发上传同一文件：另一边先插入了，回退到复用分支
             await session.rollback()
+            orphan = document.object_key      # 这一行没落库，它指向的对象无人引用
             document = (await session.execute(
                 select(Document).where(Document.user_id == user.id, Document.doc_id == doc_id,
                                        Document.origin == "web")
             )).scalar_one_or_none()
             if document is None:
                 raise
-        else:
-            document.object_key = source_key(document.id, filename)
-            await storage.put(document.object_key, data, mime)
-            await session.commit()
+            # GC 只扫库里的行，扫不到这个孤儿对象，只能就地清掉
+            try:
+                await storage.delete(orphan)
+            except Exception:       # noqa: BLE001 - 清不掉只是留个孤儿，不该让上传失败
+                pass
     elif document.deleted_at is not None:       # 删过又传回来：复活这一行
         document.deleted_at = None
         document.object_key = document.object_key or source_key(document.id, filename)
@@ -244,24 +291,56 @@ async def upload(
     return _doc_info(document, job)
 
 
+def _latest_job_id():
+    """每个 document 最新一条 job 的 id（相关子查询，每行恰好一个值）。
+
+    **不要写成 `GROUP BY document_id HAVING max(created_at)` 再 join 回去**：
+    两条 job 的 created_at 撞上（同一微秒）时那种写法会 join 出两行，
+    列表页就会出现重复文档。这里 `LIMIT 1` 天然不会。
+    排序补一个 id 兜底，保证撞车时的取值也是确定的。
+    """
+    return (
+        select(ParseJob.id)
+        .where(ParseJob.document_id == Document.id)
+        .order_by(ParseJob.created_at.desc(), ParseJob.id.desc())
+        .limit(1)
+        .correlate(Document)
+        .scalar_subquery()
+    )
+
+
 @router.get("", response_model=list[DocumentInfo])
 async def list_documents(user: User = Depends(current_user),
                          session: AsyncSession = Depends(get_session),
                          q: str = "", status: str = "", limit: int = 50, offset: int = 0):
-    stmt = select(Document).where(Document.user_id == user.id, Document.deleted_at.is_(None))
+    """列表页。
+
+    过滤与分页**都在 SQL 里做**：先分页再用 Python 丢行的话，
+    `?status=succeeded&limit=50` 返回的是"前 50 行里恰好成功的那些"，
+    可能一条不返回而后面几页全是 —— 分页语义是坏的。
+    同理 job 也要 join 出来，不能每行再查一次（一页 200 个文档 = 200+ 次往返）。
+    """
+    current = aliased(ParseJob)
+    fallback = aliased(ParseJob)
+    # 生效 job = current_job_id 指向的那条，没有就退回最新一条（与 _latest_job 一致）
+    job_status = func.coalesce(current.status, fallback.status)
+
+    stmt = (
+        select(Document, current, fallback)
+        .outerjoin(current, current.id == Document.current_job_id)
+        .outerjoin(fallback, fallback.id == _latest_job_id())
+        .where(Document.user_id == user.id, Document.deleted_at.is_(None))
+    )
     if q:
         stmt = stmt.where(Document.filename.ilike(f"%{q}%"))
+    if status:
+        # 没有任何 job 的文档对外报 "pending"（见 _doc_info），过滤要跟着这个口径
+        stmt = (stmt.where(job_status == status) if status != "pending"
+                else stmt.where(or_(job_status == "pending", job_status.is_(None))))
     stmt = stmt.order_by(Document.created_at.desc()).limit(min(limit, 200)).offset(offset)
-    documents = (await session.execute(stmt)).scalars().all()
 
-    infos = []
-    for document in documents:
-        job = await _latest_job(session, document)
-        info = _doc_info(document, job)
-        if status and info.status != status:
-            continue
-        infos.append(info)
-    return infos
+    return [_doc_info(document, current_job or fallback_job)
+            for document, current_job, fallback_job in (await session.execute(stmt)).all()]
 
 
 @router.get("/{document_id}", response_model=DocumentInfo)
@@ -309,9 +388,15 @@ async def reparse(document_id: str, req: ReparseRequest, user: User = Depends(cu
                   service: ServiceClient = Depends(get_service_client)):
     """换引擎/参数重新解析。同参数命中已有 job 直接返回（幂等）。"""
     document = await _owned(document_id, user, session)
-    if not document.object_key:
+    # 按 origin 判，不要按 object_key 是否为空判：空 object_key 有两个含义
+    # （外部提交 / 原件已被 GC 回收），混在一起会把"原件没了"报成"这是外部文档"，
+    # 用户完全无从判断该怎么办
+    if document.origin == "external":
         raise APIError(400, "external documents cannot be re-parsed here",
                        "invalid_request_error", "external_document")
+    if not document.object_key:
+        raise APIError(409, "original file is no longer available, please re-upload it",
+                       "invalid_request_error", "source_missing")
 
     digest = options_hash(req.engine, req.options)
     job = (await session.execute(

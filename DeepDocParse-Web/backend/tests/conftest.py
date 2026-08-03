@@ -13,7 +13,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 import app.db as db
-from app.main import app
+from app.config import settings
+
+# bcrypt 成本因子降到最低：默认 12 时一次 hash+verify 要 0.37s，而几乎每个用例都要
+# 过 auth_client 注册一个用户 —— 光这一项就占掉整个套件大半时间。
+# 必须在 import app.main 之前设好（模块级代码可能已经开始建密码哈希）。
+# 生产值在 app/config.py，这里只影响测试进程。
+settings.bcrypt_rounds = 4
+
+from app.main import app  # noqa: E402
 from app.metering import MemoryRateLimiter
 from app.models import Base
 from app.search import MemoryIndex

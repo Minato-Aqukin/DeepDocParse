@@ -11,10 +11,39 @@ mineru 升级导致这些字段变化时，tests/test_chunking.py 里的真实�
 规则（与出处定位强相关，改动前想清楚）：
 - 只在页内合并，chunk **永不跨页** —— 出处必须能落到唯一页码
 - 相邻块合并至 max_chars 上限；bbox 取合并块的外接矩形
+- **单块超过 max_chars 要切开**：不切的话它会被原样送进 embedding 运行时，
+  由后者按模型最大长度静默截断（bge-m3 是 8192 token）——块尾内容从此检索不到，
+  且全程没有任何报错。静默降级是这个项目吃过大亏的地方
 - 每块带 page_size：裁剪时按它换算坐标，缺它遇到 CropBox 偏移/旋转页会裁错区域
 - 空文本块跳过；缺 bbox 仍出块（只是不能裁剪）
 """
 from typing import Any
+
+# 优先在这些字符后断句；中日文没有空白，必须带上句读
+_BREAK_AFTER = "\n。！？；…!?;. "
+
+
+def _split_oversized(text: str, max_chars: int) -> list[str]:
+    """把超过 max_chars 的整块切成若干段。
+
+    优先在句读/空白处断；断点太靠前（会切出一堆碎片）就退回硬切。
+    切出来的每段都 <= max_chars，因此后续合并逻辑无需再关心超限块。
+    """
+    if len(text) <= max_chars:
+        return [text]
+
+    pieces: list[str] = []
+    rest = text
+    while len(rest) > max_chars:
+        window = rest[:max_chars]
+        cut = max(window.rfind(ch) for ch in _BREAK_AFTER)
+        if cut < max_chars // 2:        # 没有像样的断点：硬切
+            cut = max_chars - 1
+        pieces.append(rest[:cut + 1].strip())
+        rest = rest[cut + 1:].lstrip()
+    if rest:
+        pieces.append(rest)
+    return [p for p in pieces if p]
 
 
 def _block_text(block: dict) -> str:
@@ -64,11 +93,14 @@ def layout_to_chunks(layout_json: dict[str, Any], max_chars: int = 800) -> list[
             text = _block_text(block)
             if not text:
                 continue
-            if length and length + len(text) > max_chars:
-                flush()
-            buf.append(text)
-            bbox = _union_bbox(bbox, block.get("bbox"))
-            length += len(text)
+            # 先把超长块切开再进合并循环：合并只在"块前"判断是否 flush，
+            # 一个超限块直接 append 就会原样出块（见模块 docstring）
+            for piece in _split_oversized(text, max_chars):
+                if length and length + len(piece) > max_chars:
+                    flush()
+                buf.append(piece)
+                bbox = _union_bbox(bbox, block.get("bbox"))
+                length += len(piece)
         flush()
 
     return chunks

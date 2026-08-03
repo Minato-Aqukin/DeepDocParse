@@ -110,10 +110,15 @@ async function send() {
     },
     onError: ({ message }) => ElMessage.error(message),
     onDone: async () => {
-      streaming.value = false
-      streamText.value = ''
       await loadMessages()
       if (conversations.value.length) await loadConversations()
+    },
+    // 复位必须挂 onSettled 而不是 onDone：限速 429、索引未就绪 409、断网等
+    // 请求都建立不起来的情况根本走不到 done 帧，只在 onDone 里复位会让面板
+    // 永久卡在"回答中"，用户只能手动点停止
+    onSettled: () => {
+      streaming.value = false
+      streamText.value = ''
     },
   })
 }
@@ -121,6 +126,7 @@ async function send() {
 function stop() {
   abort?.()
   streaming.value = false
+  streamText.value = ''
 }
 
 async function scrollToEnd() {
