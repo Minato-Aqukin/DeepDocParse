@@ -10,6 +10,7 @@
 - v1 检索 = BM25（中文按二元组、英文按词切分）；v2 换向量检索 ——
   只改内部实现，工具签名永不变（铁律 6）
 """
+import asyncio
 import base64
 import hashlib
 import io
@@ -185,9 +186,9 @@ async def _vqa(image_data_uri: str, question: str) -> str:
     return resp.json()["choices"][0]["message"]["content"]
 
 
-async def _crop_page_region(pdf_bytes: bytes, page_idx: int, bbox: list,
-                            page_size: list) -> str | None:
-    """按 layout bbox 裁剪 PDF 页面区域，返回 PNG data URI；失败返回 None。"""
+def _render_crop(pdf_bytes: bytes, page_idx: int, bbox: list,
+                 page_size: list) -> str | None:
+    """同步渲染（调用方必须丢线程池，见 _crop_page_region）。失败返回 None。"""
     try:
         doc = pdfium.PdfDocument(pdf_bytes)
         try:
@@ -209,6 +210,17 @@ async def _crop_page_region(pdf_bytes: bytes, page_idx: int, bbox: list,
             doc.close()
     except Exception:
         return None  # 裁剪属增强路径，失败不阻断文本证据返回
+
+
+async def _crop_page_region(pdf_bytes: bytes, page_idx: int, bbox: list,
+                            page_size: list) -> str | None:
+    """按 layout bbox 裁剪 PDF 页面区域，返回 PNG data URI；失败返回 None。
+
+    **必须丢线程池**：整页渲染(2x)+PIL 裁剪+PNG 编码是纯 CPU，动辄几百毫秒到数秒。
+    直接在协程里跑会把整个 MCP server 的事件循环卡住 —— 所有并发 ask_document 一起停摆。
+    （Web 层的同款逻辑 DeepDocParse-Web/backend/app/crops.py 一直是这么做的。）
+    """
+    return await asyncio.to_thread(_render_crop, pdf_bytes, page_idx, bbox, page_size)
 
 
 @mcp.tool()

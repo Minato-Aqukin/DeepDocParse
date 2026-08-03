@@ -92,11 +92,13 @@ async def get_status(task_id: str, request: Request):
         raise APIError(404, f"task not found: {task_id}", "invalid_request_error", "task_not_found")
 
     status = task.get("status", "pending")
-    if status not in _TERMINAL:
-        # 非终态实时透传 mineru（worker 归档前 hash 里只有受理时的状态）
-        endpoint = state.registry.parse_engines[task["engine"]].endpoint
+    engine = state.registry.parse_engines.get(task.get("engine", ""))
+    if status not in _TERMINAL and engine is not None:
+        # 非终态实时透传 mineru（worker 归档前 hash 里只有受理时的状态）。
+        # 引擎可能已经从 models.yaml 里摘掉，而它受理的任务还在 24h 窗口内 ——
+        # 那时查不了实时状态，退回存储态即可，不该让状态查询 500
         try:
-            live = await state.mineru_client.status(endpoint, task["mineru_task_id"])
+            live = await state.mineru_client.status(engine.endpoint, task["mineru_task_id"])
             # 契约保证：status=succeeded ⇒ result 立即可取。mineru 已完成但 worker
             # 还没归档时对外仍报 running，避免调用方拿到 succeeded 却取不到结果
             status = "running" if live["status"] == "succeeded" else live["status"]

@@ -182,12 +182,87 @@ async def test_parse_without_doc_id_falls_back_to_url(client, app_state):
 
 @respx.mock
 async def test_parse_queue_backpressure(client, app_state):
-    """queue_depth 达到 PARSE_QUEUE_MAX 时返回 429（OpenAI 风格错误体）。"""
-    await app_state.redis.set("queue_depth", settings.parse_queue_max)
+    """在途任务数达到 PARSE_QUEUE_MAX 时返回 429（OpenAI 风格错误体）。"""
+    import time as _time
+
+    from app.services.task_store import QUEUE_INFLIGHT_KEY
+
+    await app_state.redis.zadd(
+        QUEUE_INFLIGHT_KEY,
+        {f"stuck-{i}": _time.time() for i in range(settings.parse_queue_max)})
     resp = await client.post("/v1/parse", json={"file_url": "https://files.example.com/other.pdf"})
     assert resp.status_code == 429
     err = resp.json()["error"]
     assert err["type"] == "rate_limit_error" and err["code"] == "queue_full"
+
+
+@respx.mock
+async def test_queue_depth_self_heals_from_lost_releases(client, app_state, monkeypatch):
+    """回归：worker 被杀导致释放丢失时，水位必须自己恢复，不能把解析平面永久锁死。
+
+    旧实现是裸 INCR/DECR 计数器 —— 漏一次 DECR 就永久多算一个，涨到 PARSE_QUEUE_MAX
+    之后 /v1/parse 恒定 429 且只能手工 DEL 键。这里模拟 200 个"受理了但从没释放"的任务。
+    """
+    import time as _time
+
+    from app.services.task_store import QUEUE_INFLIGHT_KEY
+
+    store = app_state.task_store
+    stale = _time.time() - settings.queue_inflight_ttl - 1
+    await app_state.redis.zadd(
+        QUEUE_INFLIGHT_KEY, {f"abandoned-{i}": stale for i in range(settings.parse_queue_max)})
+
+    assert await store.queue_depth() == 0, "超过 inflight_ttl 的在途成员必须被淘汰"
+    _mock_upstream()
+    resp = await client.post("/v1/parse", json={"file_url": FILE_URL})
+    assert resp.status_code == 202, "水位自愈后必须能重新受理"
+
+
+async def test_release_slot_is_idempotent(app_state):
+    """回归：ARQ 重试同一任务会重复释放；按 id 记名必须让重复释放变成空操作。
+
+    旧实现的 DECR 会把水位越减越低（要靠钳零兜底），并发下会放行超额任务。
+    """
+    store = app_state.task_store
+    await store.create("t-1", "m-1", "mineru", None, "h-1")
+    await store.create("t-2", "m-2", "mineru", None, "h-2")
+    assert await store.queue_depth() == 2
+
+    for _ in range(3):
+        await store.release_slot("t-1")
+    assert await store.queue_depth() == 1, "重复释放不得影响其它在途任务"
+
+
+@respx.mock
+async def test_removed_engine_does_not_500(client, worker_ctx, app_state):
+    """回归：引擎在任务受理后被从 models.yaml 摘掉（任务还在 24h 窗口内）。
+
+    旧实现直接 `parse_engines[task["engine"]]`，查状态 500、worker 抛 KeyError
+    被 ARQ 重试 5 次后放弃 —— 任务永远停在 pending，水位也不归还。
+    """
+    _mock_upstream()
+    task_id = (await client.post("/v1/parse", json={"file_url": FILE_URL})).json()["task_id"]
+    assert await app_state.task_store.queue_depth() == 1
+
+    app_state.registry.parse_engines.pop("mineru")
+
+    resp = await client.get(f"/v1/parse/{task_id}")
+    assert resp.status_code == 200, f"引擎摘掉后查状态不该 500：{resp.text}"
+    assert resp.json()["status"] == "pending", "查不到实时状态就退回存储态"
+
+    await poll_and_archive(worker_ctx, task_id)
+    assert (await client.get(f"/v1/parse/{task_id}")).json()["status"] == "failed"
+    assert await app_state.task_store.queue_depth() == 0, "落终态必须归还水位"
+
+
+@respx.mock
+async def test_empty_vqa_registry_is_404_not_500(client, app_state):
+    """回归：vqa_models 为空时不指定 model 会走 default_of，
+    旧实现在协程里抛 StopIteration —— 变成一个语焉不详的 500。"""
+    app_state.registry.vqa_models.clear()
+    resp = await client.post("/v1/chat/completions", json={"messages": []})
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["error"]["code"] == "model_not_found"
 
 
 async def test_auth_required(app_state):
@@ -368,6 +443,44 @@ def test_layout_chunking():
     assert chunks[0]["text"] == "a" * 500
     assert chunks[1]["text"] == "b" * 500 + "\n" + "c" * 100, "页内应合并至上限"
     assert chunks[1]["bbox"] == [5, 5, 40, 40], "bbox 取外接矩形"
+
+
+@pytest.mark.parametrize("placeholder", ["change-me", "", "  CHANGE-ME  "])
+def test_placeholder_service_token_refuses_to_start(monkeypatch, placeholder):
+    """占位 SERVICE_TOKEN 必须启动即失败。
+
+    它是 gateway 唯一的鉴权凭据，是占位值就意味着所有 /v1/* 对任何能连上这个
+    端口的人开放 —— 而运行时不会有任何异常，只是安静地没有鉴权。
+    """
+    from app.config import assert_secrets_configured
+
+    monkeypatch.setattr(settings, "service_token", placeholder)
+    with pytest.raises(RuntimeError, match="SERVICE_TOKEN"):
+        assert_secrets_configured()
+
+    monkeypatch.setattr(settings, "allow_insecure_defaults", True)
+    assert_secrets_configured()      # 有逃生口，但必须显式打开
+
+
+def test_single_oversized_block_is_split():
+    """回归：单块超过 max_chars 必须切开（与 Web 层 app/chunking.py 同规则）。
+
+    不切的话它会被原样送进 embedding 运行时，由后者按模型最大长度静默截断——
+    块尾内容从此检索不到，且全程没有报错。
+    """
+    from app.services.chunking import layout_to_chunks
+
+    body = "这是一段很长的正文。" * 200      # 2000 字
+    layout = {"pdf_info": [{"page_idx": 0, "page_size": [612, 792], "para_blocks": [
+        {"bbox": [10, 10, 100, 500], "lines": [{"spans": [{"content": body}]}]}]}]}
+
+    chunks = layout_to_chunks(layout, max_chars=300)
+    assert len(chunks) > 1, "超长块没有被切开"
+    assert all(len(c["text"]) <= 300 for c in chunks), \
+        f"切完仍有超限块：{[len(c['text']) for c in chunks]}"
+    assert "".join(c["text"] for c in chunks).replace("\n", "") == body, "切分不得丢内容"
+    assert all(c["page_idx"] == 0 and c["bbox"] == [10, 10, 100, 500]
+               and c["page_size"] == [612, 792] for c in chunks), "出处三件套要跟着每一段"
 
 
 @respx.mock
@@ -602,6 +715,37 @@ async def test_ask_document_bm25_crop_verify(mcp_gateway):
     sent = json.loads(vqa.calls.last.request.content)
     image_part = sent["messages"][0]["content"][0]["image_url"]["url"]
     assert image_part.startswith("data:image/png;base64,")
+
+
+async def test_crop_runs_off_the_event_loop(mcp_gateway):
+    """回归：裁剪必须丢线程池。
+
+    整页渲染(2x)+PIL 裁剪+PNG 编码是纯 CPU，几百毫秒起步。跑在协程里会卡住整个
+    MCP server 的事件循环，所有并发 ask_document 一起停摆。
+    Web 层同款逻辑（backend/app/crops.py）一直是 to_thread，这边曾经漏了。
+    """
+    import threading
+    from pathlib import Path
+
+    pdf_bytes = (Path(__file__).parent / "fixtures" / "sample.pdf").read_bytes()
+    loop_thread = threading.current_thread()
+    seen: list[threading.Thread] = []
+
+    original = mcp_gateway._render_crop
+
+    def spy(*args, **kwargs):
+        seen.append(threading.current_thread())
+        return original(*args, **kwargs)
+
+    mcp_gateway._render_crop = spy
+    try:
+        data_uri = await mcp_gateway._crop_page_region(pdf_bytes, 0, [69, 71, 375, 98], [612, 792])
+    finally:
+        mcp_gateway._render_crop = original
+
+    assert data_uri and data_uri.startswith("data:image/png;base64,")
+    assert seen and seen[0] is not loop_thread, \
+        "渲染跑在了事件循环线程上——并发 ask_document 会被它整个卡住"
 
 
 @respx.mock

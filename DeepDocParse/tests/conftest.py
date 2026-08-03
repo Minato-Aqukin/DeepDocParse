@@ -42,7 +42,8 @@ async def app_state():
     app.state.vqa_semaphore = asyncio.Semaphore(settings.vqa_max_concurrency)
     app.state.redis = fakeredis.aioredis.FakeRedis()
     app.state.arq = ArqStub()
-    app.state.task_store = TaskStore(app.state.redis, settings.result_ttl)
+    app.state.task_store = TaskStore(app.state.redis, settings.result_ttl,
+                                     settings.queue_inflight_ttl)
     app.state.mineru_client = MineruClient(app.state.http)
     yield app.state
     await app.state.http.aclose()
