@@ -39,6 +39,9 @@ async def chat_completions(request: Request):
     registry = state.registry
     model = body.get("model")
     if not model:
+        if not registry.vqa_models:
+            raise APIError(404, "no VQA model registered (check models.yaml vqa_models)",
+                           "invalid_request_error", "model_not_found")
         model, _ = registry.default_of(registry.vqa_models)
         body["model"] = model
     entry = registry.vqa_models.get(model)

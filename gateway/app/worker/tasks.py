@@ -7,7 +7,7 @@ ARQ 只负责推理完成后的编排：
     1. 轮询 mineru status 直到 succeeded/failed（指数退避，上限 POLL_TIMEOUT）
     2. fetch_result -> task_store.save_result（暂存 24h）
     3. callback_url 存在则 POST 通知 backend 取件（带 service token）
-    4. queue_depth -1
+    4. 从在途集合里摘掉自己（归还队列水位，按 task_id 记名、幂等）
     v2(M4) 追加: 5. chunk_and_index(task_id)  # 结构感知分块 -> bge-m3 向量化 -> Redis 索引
 
 启动：arq app.worker.tasks.WorkerSettings
@@ -43,7 +43,7 @@ async def _notify_callback(http: httpx.AsyncClient, task: dict, task_id: str, st
 async def _finish(ctx: dict, task_id: str, task: dict, status: str, error: str | None = None) -> None:
     store: TaskStore = ctx["task_store"]
     await store.set_status(task_id, status, error)
-    await store.dec_queue_depth()
+    await store.release_slot(task_id)
     await _notify_callback(ctx["http"], task, task_id, status)
 
 
@@ -54,7 +54,15 @@ async def poll_and_archive(ctx: dict, task_id: str) -> None:
     task = await store.get(task_id)
     if task is None:  # TTL 过期或被清理
         return
-    endpoint = ctx["registry"].parse_engines[task["engine"]].endpoint
+    entry = ctx["registry"].parse_engines.get(task.get("engine", ""))
+    if entry is None:
+        # 引擎在任务受理后被从 models.yaml 摘掉了。落终态并归还水位，
+        # 否则这个任务会一直挂在在途集合里（直接 KeyError 会让 ARQ 重试 5 次后放弃，
+        # 任务永远停在 pending，水位也不还）
+        await _finish(ctx, task_id, task, "failed",
+                      f"parse engine no longer registered: {task.get('engine')}")
+        return
+    endpoint = entry.endpoint
 
     delay = settings.poll_initial_delay
     deadline = time.monotonic() + settings.poll_timeout
@@ -154,7 +162,8 @@ async def _chunk_and_index(ctx: dict, task_id: str) -> None:
 async def startup(ctx: dict) -> None:
     ctx["http"] = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
     ctx["redis_store"] = redis.from_url(settings.redis_url)
-    ctx["task_store"] = TaskStore(ctx["redis_store"], settings.result_ttl)
+    ctx["task_store"] = TaskStore(ctx["redis_store"], settings.result_ttl,
+                                  settings.queue_inflight_ttl)
     ctx["mineru_client"] = MineruClient(ctx["http"])
     ctx["registry"] = load_registry(settings.models_config)
 

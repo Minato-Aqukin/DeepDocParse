@@ -15,7 +15,7 @@ from arq import create_pool
 from arq.connections import RedisSettings
 from fastapi import FastAPI
 
-from app.config import load_registry, settings
+from app.config import assert_secrets_configured, load_registry, settings
 from app.errors import install_error_handlers
 from app.routers import chat, embeddings, health, parse
 from app.services.mineru_client import MineruClient
@@ -24,6 +24,9 @@ from app.services.task_store import TaskStore
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 第一件事：占位 token 直接拒绝启动。带着 change-me 跑起来的话
+    # 所有 /v1/* 等于无鉴权开放，且运行时不会有任何报错
+    assert_secrets_configured()
     app.state.registry = load_registry(settings.models_config)
     # 下载 file_url / 转传 mineru 可能是大文件，读超时放宽
     app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
@@ -31,7 +34,8 @@ async def lifespan(app: FastAPI):
     app.state.vqa_semaphore = asyncio.Semaphore(settings.vqa_max_concurrency)
     app.state.redis = redis.from_url(settings.redis_url)
     app.state.arq = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-    app.state.task_store = TaskStore(app.state.redis, settings.result_ttl)
+    app.state.task_store = TaskStore(app.state.redis, settings.result_ttl,
+                                     settings.queue_inflight_ttl)
     app.state.mineru_client = MineruClient(app.state.http)
     yield
     await app.state.http.aclose()

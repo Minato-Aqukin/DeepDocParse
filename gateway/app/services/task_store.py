@@ -5,7 +5,7 @@
                                 created_at / doc_hash        TTL=RESULT_TTL
   result:{task_id}        json: markdown / layout_json / images   TTL=RESULT_TTL(24h)
   doc:{doc_hash}          str: task_id（同一 file_url 幂等复用任务）TTL=RESULT_TTL
-  queue_depth             计数器（受理+1，完成/失败-1），水位控制用
+  queue:inflight          zset: task_id -> 受理时刻，水位控制用（见 QUEUE_INFLIGHT_KEY）
 
 v2 (M4)：
   chunk:{doc_hash}:{i}    hash: doc_hash(TAG) / text / page_idx / bbox / page_size / vec(FLOAT32)
@@ -14,8 +14,17 @@ v2 (M4)：
 """
 import json
 import struct
+import time
 
 import redis.asyncio as redis
+
+# 在途任务集合。**刻意不用裸计数器**：INCR/DECR 只能靠"每个任务都恰好走到 _finish"
+# 维持正确，而 worker 被杀、Redis 重启、poll_and_archive 中途异常都会让计数只增不减。
+# 计数漂到 PARSE_QUEUE_MAX 之后 /v1/parse 会永久 429 且无法自愈（只能手工 DEL）。
+# 改成按 task_id 记名的 zset（score=受理时刻）后：
+#   - 释放是幂等的（ZREM 重复调用无副作用），受理也是（ZADD 同 id 只更新 score）
+#   - 读水位时先按时间淘汰陈旧成员，漏掉的释放会自己过期，不再需要人工干预
+QUEUE_INFLIGHT_KEY = "queue:inflight"
 
 
 def chunk_index_name(dim: int) -> str:
@@ -30,9 +39,12 @@ def _pack_vector(vec: list[float]) -> bytes:
 
 
 class TaskStore:
-    def __init__(self, r: redis.Redis, result_ttl: int):
+    def __init__(self, r: redis.Redis, result_ttl: int, inflight_ttl: float | None = None):
         self._r = r
         self._ttl = result_ttl
+        # 在途成员的存活上限：超过它一定已经落终态（worker 最迟在 poll_timeout 判超时），
+        # 没被释放就说明那一路挂了 —— 直接淘汰，这就是水位的自愈机制
+        self._inflight_ttl = inflight_ttl if inflight_ttl is not None else float(result_ttl)
 
     async def create(self, task_id: str, mineru_task_id: str, engine: str,
                      callback_url: str | None, doc_hash: str) -> None:
@@ -46,7 +58,7 @@ class TaskStore:
         })
         await self._r.expire(f"task:{task_id}", self._ttl)
         await self._r.set(f"doc:{doc_hash}", task_id, ex=self._ttl)
-        await self._r.incr("queue_depth")
+        await self._r.zadd(QUEUE_INFLIGHT_KEY, {task_id: time.time()})
 
     async def get(self, task_id: str) -> dict | None:
         data = await self._r.hgetall(f"task:{task_id}")
@@ -80,14 +92,17 @@ class TaskStore:
         return json.loads(raw) if raw is not None else None
 
     async def queue_depth(self) -> int:
-        depth = await self._r.get("queue_depth")
-        return int(depth) if depth is not None else 0
+        """当前在途任务数。读之前先淘汰陈旧成员 —— 这是水位的自愈点：
+        worker 被杀/Redis 重启导致漏掉的释放，会在 inflight_ttl 之后自动消失，
+        而不是把水位永久顶在 PARSE_QUEUE_MAX 上把整个解析平面锁死。"""
+        await self._r.zremrangebyscore(
+            QUEUE_INFLIGHT_KEY, "-inf", time.time() - self._inflight_ttl)
+        return int(await self._r.zcard(QUEUE_INFLIGHT_KEY))
 
-    async def dec_queue_depth(self) -> None:
-        # 完成/失败各调一次；DECR 到负数说明计数漂移，钳回 0
-        depth = await self._r.decr("queue_depth")
-        if depth < 0:
-            await self._r.set("queue_depth", 0)
+    async def release_slot(self, task_id: str) -> None:
+        """任务落终态时归还水位。按 id 记名 ⇒ 幂等：重复调用（ARQ 重试同一任务）
+        不会像 DECR 那样把水位越减越低。"""
+        await self._r.zrem(QUEUE_INFLIGHT_KEY, task_id)
 
     # ---------- v2 (M4)：向量索引（Redis Stack RediSearch） ----------
 

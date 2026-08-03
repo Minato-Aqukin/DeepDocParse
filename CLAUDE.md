@@ -23,8 +23,16 @@ M1 第一步必须先拿到 mineru-api 的真实接口：启动官方容器后�
 - Python 3.11+，全 async，类型标注；FastAPI + httpx(复用 AsyncClient) + redis.asyncio + ARQ
 - 错误格式统一 OpenAI 风格 `{"error": {"message", "type", "code"}}`
 - 镜像版本一律 pin，禁止 latest（compose 里的 PIN_VERSION 占位需替换为具体版本）
+- **SERVICE_TOKEN 是占位值时 gateway 拒绝启动**（`config.assert_secrets_configured`）。
+  它是本服务唯一的鉴权凭据，留着 change-me 等于 /v1/* 无鉴权开放。
+  一次性容器/CI 可用 `ALLOW_INSECURE_DEFAULTS=true` 显式跳过
+- **队列水位是记名的在途集合**（`queue:inflight` zset），不是计数器。
+  释放按 task_id 幂等，超过 `QUEUE_INFLIGHT_TTL` 的成员自动淘汰 ——
+  worker 被杀导致的漏释放会自愈，不会把 /v1/parse 永久顶在 429 上
+- **裁剪/渲染这类 CPU 活一律 `asyncio.to_thread`**：mcp_server 是单进程事件循环，
+  同步跑整页渲染会让所有并发 ask_document 一起停摆
 
 ## 验证
-- 单测/契约测试：`pytest tests/`（respx mock 上游，或 dev compose 起真环境）
+- 单测/契约测试：`pytest tests/`（29 例，respx mock 上游 + fakeredis，~4s；真环境走 dev compose）
 - 本地起服务：`cd docker && docker compose -f compose.dev.yml --env-file ../.env up --build`
 - 显存注意：dev 机只有 8GB，mineru(pipeline) 与 vqa-dsocr 不要同时启动
