@@ -1,8 +1,11 @@
 """任务映射与结果暂存（Redis）。
 
 键设计：
-  task:{task_id}          hash: mineru_task_id / engine / status / error / callback_url /
+  task:{task_id}          hash: native_task_id / engine / status / error / callback_url /
                                 created_at / doc_hash        TTL=RESULT_TTL
+                          （native_task_id = 引擎侧的任务标识；mineru 是它的 task_id，
+                            borndigital 没有远端任务，存的是 file_url。旧键名
+                            mineru_task_id 仍可读，在途任务跨版本部署不会断）
   result:{task_id}        json: markdown / layout_json / images   TTL=RESULT_TTL(24h)
   doc:{doc_hash}          str: task_id（同一 file_url 幂等复用任务）TTL=RESULT_TTL
   queue:inflight          zset: task_id -> 受理时刻，水位控制用（见 QUEUE_INFLIGHT_KEY）
@@ -46,10 +49,10 @@ class TaskStore:
         # 没被释放就说明那一路挂了 —— 直接淘汰，这就是水位的自愈机制
         self._inflight_ttl = inflight_ttl if inflight_ttl is not None else float(result_ttl)
 
-    async def create(self, task_id: str, mineru_task_id: str, engine: str,
+    async def create(self, task_id: str, native_task_id: str, engine: str,
                      callback_url: str | None, doc_hash: str) -> None:
         await self._r.hset(f"task:{task_id}", mapping={
-            "mineru_task_id": mineru_task_id,
+            "native_task_id": native_task_id,
             "engine": engine,
             "status": "pending",
             "error": "",
@@ -59,6 +62,11 @@ class TaskStore:
         await self._r.expire(f"task:{task_id}", self._ttl)
         await self._r.set(f"doc:{doc_hash}", task_id, ex=self._ttl)
         await self._r.zadd(QUEUE_INFLIGHT_KEY, {task_id: time.time()})
+
+    @staticmethod
+    def native_id_of(task: dict) -> str:
+        """引擎侧任务标识。兼容改名之前落库的任务（TTL 24h，跨版本部署时还在）。"""
+        return task.get("native_task_id") or task.get("mineru_task_id") or ""
 
     async def get(self, task_id: str) -> dict | None:
         data = await self._r.hgetall(f"task:{task_id}")

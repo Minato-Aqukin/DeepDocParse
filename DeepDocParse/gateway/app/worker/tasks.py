@@ -21,6 +21,7 @@ from arq.connections import RedisSettings
 
 from app.config import load_registry, settings
 from app.services.chunking import layout_to_chunks
+from app.services.engines import resolve as resolve_engine
 from app.services.mineru_client import MineruClient, MineruTaskNotFound
 from app.services.task_store import TaskStore
 
@@ -49,7 +50,6 @@ async def _finish(ctx: dict, task_id: str, task: dict, status: str, error: str |
 
 async def poll_and_archive(ctx: dict, task_id: str) -> None:
     store: TaskStore = ctx["task_store"]
-    client: MineruClient = ctx["mineru_client"]
 
     task = await store.get(task_id)
     if task is None:  # TTL 过期或被清理
@@ -62,13 +62,19 @@ async def poll_and_archive(ctx: dict, task_id: str) -> None:
         await _finish(ctx, task_id, task, "failed",
                       f"parse engine no longer registered: {task.get('engine')}")
         return
+    try:
+        client = resolve_engine(entry, mineru_client=ctx["mineru_client"], http=ctx["http"])
+    except LookupError as exc:
+        await _finish(ctx, task_id, task, "failed", str(exc))
+        return
     endpoint = entry.endpoint
+    native_id = store.native_id_of(task)
 
     delay = settings.poll_initial_delay
     deadline = time.monotonic() + settings.poll_timeout
     while True:
         try:
-            live = await client.status(endpoint, task["mineru_task_id"])
+            live = await client.status(endpoint, native_id)
         except MineruTaskNotFound:
             await _finish(ctx, task_id, task, "failed", "mineru task disappeared")
             return
@@ -91,13 +97,13 @@ async def poll_and_archive(ctx: dict, task_id: str) -> None:
         delay = min(delay * 2, settings.poll_max_delay)
 
     try:
-        result = await client.fetch_result(endpoint, task["mineru_task_id"])
+        result = await client.fetch_result(endpoint, native_id)
     except (RuntimeError, MineruTaskNotFound, httpx.HTTPError) as exc:
         await _finish(ctx, task_id, task, "failed", str(exc))
         return
     if result is None:  # completed 但结果尚未落地：给 mineru 一次喘息后重取
         await asyncio.sleep(settings.poll_initial_delay)
-        result = await client.fetch_result(endpoint, task["mineru_task_id"])
+        result = await client.fetch_result(endpoint, native_id)
         if result is None:
             await _finish(ctx, task_id, task, "failed", "mineru reported success but no result")
             return

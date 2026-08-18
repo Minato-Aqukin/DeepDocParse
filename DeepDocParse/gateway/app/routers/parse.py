@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from app.auth import require_service_token
 from app.config import settings
 from app.errors import APIError
+from app.services.engines import resolve as resolve_engine
 from app.services.mineru_client import MineruTaskNotFound
 
 router = APIRouter(tags=["parse"], dependencies=[Depends(require_service_token)])
@@ -69,13 +70,20 @@ async def submit_parse(req: ParseRequest, request: Request):
 
     entry = engines[req.engine]
     merged_options = {**entry.options, **req.options}  # 注册表默认 + 请求覆盖
+    # 用哪个适配器由注册表的 runtime 决定，路由层不认识任何具体引擎（铁律 3）
     try:
-        mineru_task_id = await state.mineru_client.submit(entry.endpoint, req.file_url, merged_options)
+        engine = resolve_engine(entry, mineru_client=state.mineru_client, http=state.http)
+    except LookupError as exc:
+        # 注册表把 runtime 写成了没人认识的值 —— 这是部署配置错，不是调用方的错，
+        # 所以是 5xx 且归到 upstream_error（invalid_request_error 会让调用方去改自己的请求）
+        raise APIError(500, str(exc), "upstream_error", "unknown_runtime")
+    try:
+        native_task_id = await engine.submit(entry.endpoint, req.file_url, merged_options)
     except httpx.HTTPError as exc:
         raise APIError(502, f"parse engine unreachable: {exc}", "upstream_error", "engine_error")
 
     task_id = uuid.uuid4().hex
-    await state.task_store.create(task_id, mineru_task_id, req.engine, req.callback_url, doc_hash)
+    await state.task_store.create(task_id, native_task_id, req.engine, req.callback_url, doc_hash)
     # 带 doc_id 时再按 URL 挂一个别名：只拿得到裸 URL 的调用方（ask_document）
     # 否则会算出另一个身份、重复解析同一份文档
     if url_hash != doc_hash:
@@ -92,18 +100,20 @@ async def get_status(task_id: str, request: Request):
         raise APIError(404, f"task not found: {task_id}", "invalid_request_error", "task_not_found")
 
     status = task.get("status", "pending")
-    engine = state.registry.parse_engines.get(task.get("engine", ""))
-    if status not in _TERMINAL and engine is not None:
+    entry = state.registry.parse_engines.get(task.get("engine", ""))
+    if status not in _TERMINAL and entry is not None:
         # 非终态实时透传 mineru（worker 归档前 hash 里只有受理时的状态）。
         # 引擎可能已经从 models.yaml 里摘掉，而它受理的任务还在 24h 窗口内 ——
         # 那时查不了实时状态，退回存储态即可，不该让状态查询 500
         try:
-            live = await state.mineru_client.status(engine.endpoint, task["mineru_task_id"])
+            engine = resolve_engine(entry, mineru_client=state.mineru_client, http=state.http)
+            live = await engine.status(entry.endpoint,
+                                       state.task_store.native_id_of(task))
             # 契约保证：status=succeeded ⇒ result 立即可取。mineru 已完成但 worker
             # 还没归档时对外仍报 running，避免调用方拿到 succeeded 却取不到结果
             status = "running" if live["status"] == "succeeded" else live["status"]
-        except (httpx.HTTPError, MineruTaskNotFound):
-            pass  # mineru 暂不可达/任务被清理时退回存储态，由 worker 兜底落终态
+        except (httpx.HTTPError, MineruTaskNotFound, LookupError):
+            pass  # 引擎暂不可达/任务被清理时退回存储态，由 worker 兜底落终态
     progress = {"pending": 0.0, "running": 0.5, "succeeded": 1.0, "failed": 1.0}[status]
     return {
         "task_id": task_id,

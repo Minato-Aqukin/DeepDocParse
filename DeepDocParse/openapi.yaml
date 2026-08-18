@@ -99,7 +99,11 @@ paths:
                   markdown: { type: string }
                   layout_json:
                     type: object
-                    description: 版面结构（块类型/页码/bbox），v2 分块索引的数据源
+                    description: >
+                      版面结构（DDP-Layout v1）：页码 + bbox + 块文本，出处定位与
+                      v2 分块索引的数据源。字段清单与坐标系见 docs/layout-format.md ——
+                      **只有那份文档里列出的字段才在契约内**，引擎附带的其它字段
+                      （type/index/angle 等）不保证跨引擎存在。
                   images:
                     type: array
                     items:
@@ -148,7 +152,7 @@ paths:
                     - { type: array, items: { type: string } }
                 model: { type: string, description: 缺省用注册表 default }
       responses:
-        "200": { description: OpenAI 兼容 embeddings 响应（data[].embedding） }
+        "200": { description: "OpenAI 兼容 embeddings 响应（data[].embedding）" }
         "404": { description: 未注册的 model }
         "502": { description: embedding 运行时不可达 }
 

@@ -22,13 +22,24 @@ parse_engines:
     # dev: 直连单个 mineru-api worker；prod: 指向 mineru-router（接口完全兼容，只改 URL）
     endpoint: "http://mineru:8000"
     default: true
+    runtime: mineru-api          # 用哪个适配器说话（见 gateway/app/services/engines.py）
     # 引擎默认选项（请求方 options 可覆盖）：
     # dev 镜像只内置 pipeline 模型（8GB 卡）；prod vlm 后端时改 backend 并删本行注释
     options:
       backend: pipeline
+
+  # 无 GPU 兜底：有文字层的 PDF 直接用 pypdfium2 抽文字层 + 坐标，进程内跑，
+  # 不需要容器也不需要下模型。**不覆盖**扫描件/表格结构/公式/分栏顺序 —— 那是 mineru 的活。
+  # 它同时是"加引擎 = 加容器 + 一行配置"的第一个真实验证（在此之前只有 mineru 一个引擎）。
+  borndigital:
+    endpoint: "inproc://borndigital"    # 进程内引擎，没有远端地址
+    runtime: borndigital
+    capabilities: [parse]
 
 # ---- v2（M4）：注册即启用分块索引链与向量检索；删除本段则全链路回退 BM25 ----
 embedding_models:
   bge-m3:
     endpoint: "http://embed:8080"     # TEI (text-embeddings-inference) 容器
     default: true
+    runtime: tei                      # 决定取得到哪些头：TEI 只给 dense
+    capabilities: [dense]             # bge-m3 本身还有 sparse/colbert 头，但 TEI 取不到
