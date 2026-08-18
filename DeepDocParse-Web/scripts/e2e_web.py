@@ -192,10 +192,29 @@ async def scenario_qa(http: httpx.AsyncClient, headers: dict, document: dict) ->
 
     # 降级必须可见：VQA 没起时 verified=false 且给出原因
     if done.get("verified"):
-        check("已做视觉验证", True)
+        # 曾经这里写的是 check("已做视觉验证", True) —— 一条恒真断言，什么都没验。
+        # "已做视觉验证"这句话的**证据**是：真有一张裁剪图取得回来，且它是张真 PNG。
+        # 说得出口的东西必须验得出来，否则这个标记就是装饰
+        crop_url = citations[0].get("crop_url") if citations else None
+        evidence = b""
+        if crop_url:
+            evidence = (await http.get(f"{WEB}{crop_url}", headers=headers)).content
+        check("声称已验证时确有出处截图作证",
+              bool(crop_url) and evidence.startswith(b"\x89PNG"),
+              f"crop_url={crop_url} bytes={len(evidence)}")
+        check("声称已验证时不得同时带降级标记", not done.get("degraded"), f"done={done}")
     else:
         check("未验证时给出降级原因（不许静默）", bool(done.get("degraded")),
               f"done={done}")
+
+    # 出处必须带可量纲的相关度（RRF 名次分表达不了"有多相关"，见 app/search.py）
+    if citations:
+        confidence = done.get("confidence") or {}
+        check("回答带检索可信度", confidence.get("level") in ("high", "low", "unknown"),
+              f"confidence={confidence}")
+        check("出处带稳定定位键（reindex 后还接得回原文）",
+              all(c.get("parse_job_id") and c.get("seq") is not None for c in citations),
+              json.dumps(citations[0], ensure_ascii=False)[:160])
 
     history = (await http.get(f"{WEB}/api/conversations/{cid}/messages", headers=headers)).json()
     check("问答落库", [m["role"] for m in history] == ["user", "assistant"],

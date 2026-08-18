@@ -151,6 +151,11 @@ class Chunk(Base):
     - page_idx  出处落到唯一页（chunk 永不跨页）
     - bbox      高亮与裁剪的区域
     - page_size 坐标换算的基准，缺它遇到 CropBox 偏移/旋转页会裁错区域
+
+    **id 不是出处的定位键**：它是随机 UUID，每次 reindex 都会重铸
+    （indexing.py 先 DELETE 再 add_all）。稳定定位键是
+    `(document_id, parse_job_id, seq)` —— 同一份解析重建索引时它保持不变，
+    历史 citations 靠它接回原文。唯一约束把这条不变式钉死在库上。
     """
 
     __tablename__ = "chunks"
@@ -169,6 +174,7 @@ class Chunk(Base):
 
     __table_args__ = (
         Index("ix_chunks_doc_page_seq", "document_id", "page_idx", "seq"),
+        UniqueConstraint("document_id", "parse_job_id", "seq", name="uq_chunks_doc_job_seq"),
     )
 
 
@@ -191,6 +197,10 @@ class Message(Base):
 
     verified / degraded 是**降级可见性**的落点：静默降级是这个项目吃过大亏的地方
     （M4a 的向量检索静默退回 BM25），回答没做视觉验证必须让用户看得见。
+
+    model_meta 是**可比较性**的落点：不记下这一轮用了哪个 chat / embedding 模型、
+    哪套检索参数，换模型之后历史数据就无法分组对比——而那正是判断
+    "新配置有没有变好"的唯一依据。见 app/qa.py::answer_model_meta。
     """
 
     __tablename__ = "messages"
@@ -200,12 +210,15 @@ class Message(Base):
                                                   index=True)
     role: Mapped[str] = mapped_column(String(16))                  # user | assistant
     content: Mapped[str] = mapped_column(Text, default="")
-    # [{chunk_id, page_idx, bbox, crop_key, snippet, score}]
+    # [{chunk_id, parse_job_id, seq, page_idx, bbox, crop_key, snippet, score}]
+    # chunk_id 会随 reindex 失效，(parse_job_id, seq) 才是能一直接回原文的定位键
     citations: Mapped[list] = mapped_column(JSON, default=list)
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     # no_hits | embedding_unavailable | vision_unavailable | crop_unsupported | crop_failed
-    # | client_aborted | upstream_error | upstream_interrupted
+    # | parse_mismatch | client_aborted | upstream_error | upstream_interrupted
     degraded: Mapped[str | None] = mapped_column(String(32), default=None)
+    # {chat_model, embedding_model, embedding_dim, retrieval:{...}}，见 qa.answer_model_meta
+    model_meta: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 

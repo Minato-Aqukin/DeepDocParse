@@ -62,6 +62,8 @@ async def search(request: Request, q: str = "", doc: str = "", limit: int = 20,
         })
         group["hits"].append({
             "chunk_id": hit["chunk_id"], "page_idx": hit["page_idx"], "bbox": hit.get("bbox"),
-            "score": hit.get("score"), "snippet": " ".join(hit["text"].split())[:200],
+            # score 是 RRF 名次分（只排序用），similarity 才是"有多相关"
+            "score": hit.get("score"), "similarity": hit.get("similarity"),
+            "snippet": " ".join(hit["text"].split())[:200],
         })
     return {"query": q, "degraded": degraded, "groups": list(groups.values())}

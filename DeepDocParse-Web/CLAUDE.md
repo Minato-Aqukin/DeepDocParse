@@ -71,7 +71,11 @@
 
 ## 验证
 ```bash
-cd backend && ../.venv/Scripts/python -m pytest        # 85 例，纯进程内，~18s
-cd frontend && npm run build                            # 含类型检查
-REDIS_URL=redis://localhost:6379/0 .venv/Scripts/python scripts/e2e_web.py   # 真环境全链路
+cd backend && ../.venv/bin/python -m pytest            # 107 例，纯进程内，~5s（Windows 用 .venv/Scripts/）
+cd frontend && npm run build                            # 含 vue-tsc 类型检查
+python scripts/gen_config_docs.py --check               # 配置文档有没有过期
+python scripts/eval_citations.py --mode offline         # 出处评测（不需要模型/服务）
+env REDIS_URL=redis://localhost:6379/0 .venv/bin/python scripts/e2e_web.py   # 真环境全链路
 ```
+- **pytest 必须在 `backend/` 下跑**：传 rootdir 之外的路径参数会让 `asyncio_mode` 退回 strict
+- 出处评测的指标定义见 `docs/EVAL.md`；**offline 模式的数字不能代表产品表现**（没有向量路）

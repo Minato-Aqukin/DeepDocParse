@@ -1,0 +1,66 @@
+{
+  "$schema": "见 docs/EVAL.md 的「数据集格式」一节",
+  "note": "种子数据集。样本必须可公开：本地样本用仓库自带 fixture，外部样本只记 URL 不入库（避免再分发）。注意 kind=local 的相对路径以本仓库根为基准；指向 ../DeepDocParse/ 的样本要求两个仓库并排 clone，单独 clone 本仓库时 --mode live 会 FileNotFoundError（--mode offline 不受影响，它读的是 backend/tests/fixtures/ 里的版面产物）。",
+  "samples": [
+    {
+      "id": "long-doc/zephyr-code",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/long-doc.pdf"},
+      "question": "What is the launch code of project Zephyr?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 2,
+        "answer_contains": ["8712"],
+        "text_anchor": "launch code of project Zephyr"
+      },
+      "attributes": ["英文单栏", "born-digital", "短事实"]
+    },
+    {
+      "id": "long-doc/acme-revenue",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/long-doc.pdf"},
+      "question": "What was the annual revenue of Acme Corp in 2025?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 4,
+        "answer_contains": ["42"],
+        "text_anchor": "annual revenue of Acme Corp"
+      },
+      "attributes": ["英文单栏", "born-digital", "短事实"]
+    },
+    {
+      "id": "long-doc/heading-page-1",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/long-doc.pdf"},
+      "question": "Page 1 section heading",
+      "expect": {
+        "answerable": true,
+        "page_idx": 0,
+        "text_anchor": "Page 1 section heading"
+      },
+      "attributes": ["英文单栏", "born-digital", "标题"]
+    },
+    {
+      "id": "long-doc/heading-page-4",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/long-doc.pdf"},
+      "question": "Page 4 section heading",
+      "expect": {
+        "answerable": true,
+        "page_idx": 3,
+        "text_anchor": "Page 4 section heading"
+      },
+      "attributes": ["英文单栏", "born-digital", "标题"]
+    },
+    {
+      "id": "long-doc/unanswerable-quantum",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/long-doc.pdf"},
+      "question": "量子纠缠的退相干时间是多少？",
+      "expect": {"answerable": false},
+      "attributes": ["中文", "拒答", "born-digital"]
+    },
+    {
+      "id": "long-doc/unanswerable-ceo",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/long-doc.pdf"},
+      "question": "Who is the chief executive officer of Acme Corp?",
+      "expect": {"answerable": false},
+      "attributes": ["英文单栏", "拒答", "born-digital"]
+    }
+  ]
+}

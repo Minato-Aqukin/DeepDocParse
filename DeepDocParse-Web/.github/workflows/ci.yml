@@ -1,0 +1,81 @@
+# 后端单测（SQLite in-memory + respx，不需要 PG/MinIO）+ 前端类型检查与构建。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "backend[dev]"
+
+      - name: 单测
+        working-directory: backend
+        env:
+          # CI 是一次性容器，没有 .env。不开这个开关，任何走 lifespan 的用例
+          # 都会被 assert_secrets_configured 拦下（那正是它该做的事）
+          ALLOW_INSECURE_DEFAULTS: "true"
+        run: pytest -q
+
+      - name: 配置参考文档与 config.py 同步
+        env:
+          ALLOW_INSECURE_DEFAULTS: "true"
+        run: python scripts/gen_config_docs.py --check
+
+      # 单测跑 SQLite，迁移的真实目标是 PG（pgvector / HNSW / GIN 都只在那儿生效），
+      # 所以这一步必须连真库。downgrade 到 base 再上来，回滚路径才算验过
+      - name: 迁移双向可跑
+        working-directory: backend
+        env:
+          ALLOW_INSECURE_DEFAULTS: "true"
+          DATABASE_URL: postgresql+asyncpg://ddp:ddp@127.0.0.1:5432/deepdocparse
+        run: |
+          python -m alembic upgrade head
+          python -m alembic downgrade base
+          python -m alembic upgrade head
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ddp
+          POSTGRES_PASSWORD: ddp
+          POSTGRES_DB: deepdocparse
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ddp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # package-lock.json 的 resolved 全部指向 registry.npmmirror.com（仓库文件，不重生成）。
+      # npm 会把跨 host 的 tarball 当成 "remote" 类型直接拒掉（EALLOWREMOTE），
+      # 所以这里必须显式带上原 registry —— 与本机安装是同一条命令。
+      - name: 安装依赖
+        run: npm ci --registry=https://registry.npmmirror.com
+
+      - name: 类型检查 + 构建
+        run: npm run build

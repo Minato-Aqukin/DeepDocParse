@@ -80,6 +80,19 @@ function logout() {
       <el-main class="main">
         <RouterView />
       </el-main>
+
+      <!--
+        MinerU 归属声明。**不要删。**
+        MinerU 在 Apache-2.0 之上有附加条款：§2 要求基于它提供在线服务的产品，
+        必须在产品界面或公开文档里清晰显著地标明使用了 MinerU；§3 规定违反即
+        自动终止许可，无需通知。本项目正是 §2 说的那种在线服务。
+        另一处在 README 顶部，法律文本在 NOTICE。
+      -->
+      <el-footer class="attribution" height="auto">
+        文档解析由
+        <a href="https://github.com/opendatalab/MinerU" target="_blank" rel="noopener">MinerU</a>
+        提供支持
+      </el-footer>
     </el-container>
   </el-container>
 </template>
@@ -145,5 +158,20 @@ function logout() {
 .main {
   background: var(--el-bg-color-page);
   padding: 16px;
+}
+.attribution {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-bg-color-page);
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+.attribution a {
+  color: var(--el-color-primary);
+  text-decoration: none;
 }
 </style>

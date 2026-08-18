@@ -115,15 +115,17 @@ async def test_ask_degrades_visibly_when_vision_runtime_is_down(auth_client, ses
     document = await _ready_document(auth_client)
     cid = await _conversation(auth_client, document["id"])
 
-    calls = {"n": 0}
+    # 分开数两种调用：回答用的，与出处一致性核对用的（A4 的抄写请求）。
+    # 只数总数的话，加一个并发的核对请求就会让这条用例莫名其妙变红
+    calls = {"answer": 0, "verify": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        calls["n"] += 1
         body = json.loads(request.content)
-        has_image = any(part.get("type") == "image_url"
-                        for message in body["messages"]
-                        if isinstance(message["content"], list)
-                        for part in message["content"])
+        parts = [part for message in body["messages"]
+                 if isinstance(message["content"], list) for part in message["content"]]
+        has_image = any(part.get("type") == "image_url" for part in parts)
+        is_verify = any("原样" in (part.get("text") or "") for part in parts)
+        calls["verify" if is_verify else "answer"] += 1
         if has_image:
             return httpx.Response(502, json={"error": {"message": "vqa unreachable"}})
         return _chat_sse("纯文本回答")
@@ -134,7 +136,10 @@ async def test_ask_degrades_visibly_when_vision_runtime_is_down(auth_client, ses
     done = dict(events)["done"]
     assert done["verified"] is False
     assert done["degraded"] == "vision_unavailable", "降级必须可见"
-    assert calls["n"] == 2, "带图失败后要退回纯文本再试一次"
+    assert calls["answer"] == 2, "带图失败后要退回纯文本再试一次"
+    # 核对也打不通（同一个视觉运行时），此时必须判"没测出来"而不是"对不上"：
+    # 把"不知道"说成"有问题"会毁掉这个标记的可信度
+    assert done["degraded"] != "parse_mismatch"
 
     message = (await session.execute(
         select(Message).where(Message.role == "assistant"))).scalars().one()
@@ -480,3 +485,235 @@ async def test_deleted_document_is_not_searchable(auth_client, session):
     row = await session.get(Document, document["id"])
     await session.refresh(row)
     assert row.deleted_at is not None
+
+
+@respx.mock
+async def test_citations_survive_reindex(auth_client, session):
+    """P0 回归：重建索引会重铸全部 chunk_id，历史出处必须还接得回原文。
+
+    `Chunk.id` 是随机 UUID，而 indexing.py 先 DELETE 再 add_all —— 只存 chunk_id 的话，
+    一次 reindex 之后"这个回答当时基于哪段原文"就永久还原不回来（citations 里
+    只剩 160 字 snippet）。稳定定位键是 `(parse_job_id, seq)`。
+    """
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(CHAT).mock(return_value=_chat_sse("答案"))
+    await _ask(auth_client, cid)
+
+    before = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    cited = before[1]["citations"][0]
+    assert cited["parse_job_id"] and cited["seq"] is not None, "落库时就要带上定位键"
+    old_ids = {c.id for c in (await session.execute(select(Chunk))).scalars().all()}
+    assert cited["chunk_id"] in old_ids
+
+    resp = await auth_client.post(f"/api/documents/{document['id']}/reindex")
+    assert resp.status_code == 202, resp.text
+    session.expire_all()
+    new_ids = {c.id for c in (await session.execute(select(Chunk))).scalars().all()}
+    assert new_ids and new_ids.isdisjoint(old_ids), "前提不成立：reindex 应当重铸 chunk_id"
+
+    after = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    refreshed = after[1]["citations"][0]
+    assert refreshed["resolved"] is True, "重建索引后出处必须还能接回当前 chunk"
+    assert refreshed["chunk_id"] in new_ids, "chunk_id 要刷新成当前值，否则前端点不开"
+    # 但"当时拿哪块区域作证"是审计事实，不许被后来的重新分块改写 ——
+    # crop_url 指向的截图也是按当时的 bbox 存的，跟着改会让高亮框和截图对不上
+    assert refreshed["page_idx"] == cited["page_idx"]
+    assert refreshed["bbox"] == cited["bbox"]
+    assert refreshed["snippet"] == cited["snippet"]
+
+
+@respx.mock
+async def test_unresolvable_citation_is_marked_not_silently_dropped(auth_client, session):
+    """接不回来的出处（换引擎重解析 / 0003 之前的老记录）必须显式标 resolved=False。
+
+    静默把它当成好的，用户会点开一个空高亮；静默丢掉，回答就成了无出处的断言。
+    两种都不行——降级必须可见。
+    """
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(CHAT).mock(return_value=_chat_sse("答案"))
+    await _ask(auth_client, cid)
+
+    message = (await session.execute(
+        select(Message).where(Message.role == "assistant"))).scalars().one()
+    # 模拟"这条出处属于另一次解析"：定位键指向一个已经不存在的 parse_job
+    message.citations = [{**message.citations[0], "parse_job_id": "gone", "chunk_id": "gone"}]
+    await session.commit()
+
+    after = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    assert after[1]["citations"][0]["resolved"] is False
+
+
+@respx.mock
+async def test_answer_records_model_and_retrieval_snapshot(auth_client, session):
+    """回答要带模型戳：不记下用了哪个模型/哪套检索参数，换模型后历史无法分组对比。"""
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(CHAT).mock(return_value=_chat_sse("答案"))
+    await _ask(auth_client, cid)
+
+    from app.config import settings as cfg
+
+    message = (await session.execute(
+        select(Message).where(Message.role == "assistant"))).scalars().one()
+    meta = message.model_meta
+    assert meta["embedding_dim"] == cfg.embedding_dim
+    assert meta["chat_endpoint"] == cfg.chat_endpoint
+    assert meta["retrieval"]["min_similarity"] == cfg.qa_min_similarity
+    assert meta["retrieval"]["top_k"] == cfg.qa_top_k
+    # 历史接口也要吐出来，否则前端/评测脚本拿不到分组依据
+    listed = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    assert listed[1]["model_meta"]["retrieval"]["candidates"] == cfg.qa_candidates
+
+
+@respx.mock
+async def test_confidence_is_reported_and_separates_strong_from_marginal(auth_client):
+    """A2：出处要带"有多相关"，而且勉强及格的必须和绝佳命中区分开。
+
+    不能用 citation 里的 score —— 那是 RRF 名次分，两路都排第一就恒为 0.0328，
+    两种情况长得一模一样。要看的是有校准量纲的余弦相似度。
+    """
+    from app.config import settings as cfg
+
+    document = await _ready_document(auth_client)
+    # side_effect 而不是 return_value：一个 httpx 流式响应只能被消费一次，
+    # 这个用例要问两轮
+    respx.post(CHAT).mock(side_effect=lambda _request: _chat_sse("答案"))
+
+    strong = await _conversation(auth_client, document["id"])
+    done = dict(await _ask(auth_client, strong, question="表格数据"))["done"]
+    assert done["confidence"]["level"] == "high"
+    assert done["confidence"]["top_similarity"] >= cfg.qa_low_similarity
+
+    marginal = await _conversation(auth_client, document["id"])
+    done = dict(await _ask(auth_client, marginal, question="表格"))["done"]
+    assert done["confidence"]["level"] == "low", done["confidence"]
+    top = done["confidence"]["top_similarity"]
+    assert cfg.qa_min_similarity < top < cfg.qa_low_similarity, top
+
+
+@respx.mock
+async def test_confidence_is_unknown_not_high_when_similarity_cannot_be_measured(auth_client):
+    """向量化挂了 -> 只有关键词路 -> 相似度无从测量。
+
+    这时必须说"不知道"，不能默认成 high —— 那就是又一次静默降级：
+    用户会以为这条出处经过了语义确认。
+    """
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(EMBEDDINGS).mock(return_value=httpx.Response(503))
+    respx.post(CHAT).mock(return_value=_chat_sse("关键词回答"))
+
+    done = dict(await _ask(auth_client, cid, question="表格"))["done"]
+    assert done["degraded"] == "embedding_unavailable"
+    assert done["confidence"]["level"] == "unknown"
+    assert done["confidence"]["top_similarity"] is None
+
+
+@respx.mock
+async def test_history_carries_similarity_and_confidence(auth_client):
+    """历史消息也要带可信度，否则翻回去看旧回答时这个信息就丢了。"""
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(CHAT).mock(return_value=_chat_sse("答案"))
+    await _ask(auth_client, cid, question="表格数据")
+
+    listed = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    answer = listed[1]
+    assert answer["confidence"]["level"] == "high"
+    assert answer["citations"][0]["similarity"] > 0.5
+    # RRF 分同时保留（排序用），但它不是"相关度"
+    assert answer["citations"][0]["score"] < 0.05
+
+
+def _verify_aware_chat(transcript: str | None, answer: str = "回答"):
+    """按请求类型分流：抄写请求返回 transcript，回答请求返回 SSE 流。
+
+    transcript=None 表示视觉模型对抄写请求也失败（核对做不了）。
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        parts = [part for message in body["messages"]
+                 if isinstance(message["content"], list) for part in message["content"]]
+        if any("原样" in (part.get("text") or "") for part in parts):
+            if transcript is None:
+                return httpx.Response(503, text="vqa down")
+            return httpx.Response(200, json={
+                "choices": [{"message": {"role": "assistant", "content": transcript}}]})
+        return _chat_sse(answer)
+
+    return handler
+
+
+@respx.mock
+async def test_parse_mismatch_when_image_text_contradicts_chunk(auth_client, session):
+    """A4：图上的字与 chunk 文本严重不符 -> 标 parse_mismatch，且不许再说"已验证"。
+
+    这是七种降级里唯一没被覆盖的洞。解析错了的时候 chunk 文本是错的，
+    但语义相似度照样过阈值、照样裁图、照样标 verified —— 产出这个类别最恶劣的
+    错误：**带着"已做视觉验证"标记的假出处**。
+    """
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(CHAT).mock(side_effect=_verify_aware_chat("完全无关的另一段文字与库存报表"))
+
+    done = dict(await _ask(auth_client, cid))["done"]
+    assert done["degraded"] == "parse_mismatch", done
+    assert done["verified"] is False, "对不上就不能再声称做过视觉验证"
+
+    message = (await session.execute(
+        select(Message).where(Message.role == "assistant"))).scalars().one()
+    assert message.degraded == "parse_mismatch" and message.verified is False
+
+
+@respx.mock
+async def test_no_mismatch_when_image_text_matches_chunk(auth_client):
+    """抄写结果与 chunk 文本一致时不许打标 —— 误报比不报更伤信任。"""
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(CHAT).mock(side_effect=_verify_aware_chat("第二页的表格数据"))
+
+    done = dict(await _ask(auth_client, cid))["done"]
+    assert done["degraded"] is None, done
+    assert done["verified"] is True
+
+
+@respx.mock
+async def test_unverifiable_parse_is_not_reported_as_mismatch(auth_client):
+    """核对本身做不了（视觉模型抄写失败）时判"没测出来"，不是"对不上"。
+
+    把"不知道"说成"有问题"是另一种撒谎，而且会让用户不再相信这个标记。
+    """
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(CHAT).mock(side_effect=_verify_aware_chat(None))
+
+    done = dict(await _ask(auth_client, cid))["done"]
+    assert done["degraded"] is None and done["verified"] is True
+
+
+@respx.mock
+async def test_refusal_style_short_transcript_does_not_trigger_mismatch(auth_client):
+    """模型答"我看不清这张图"这种短回复不能被当成分歧证据。"""
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(CHAT).mock(side_effect=_verify_aware_chat("看不清"))
+
+    done = dict(await _ask(auth_client, cid))["done"]
+    assert done["degraded"] is None, done
+
+
+@respx.mock
+async def test_parse_verification_can_be_switched_off(auth_client, monkeypatch):
+    """核对多打一次视觉模型。不想付这个成本的部署要能关掉，且关掉后不打标。"""
+    from app.config import settings as cfg
+
+    monkeypatch.setattr(cfg, "qa_verify_parse", False)
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    route = respx.post(CHAT).mock(side_effect=_verify_aware_chat("完全无关的另一段文字"))
+
+    done = dict(await _ask(auth_client, cid))["done"]
+    assert done["degraded"] is None and done["verified"] is True
+    assert route.call_count == 1, "关掉之后不该再有抄写请求"

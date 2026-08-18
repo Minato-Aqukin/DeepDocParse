@@ -41,6 +41,7 @@ export const INDEX_STATUS: Record<IndexStatus, StatusMeta> = {
  */
 export const DEGRADED_LABEL: Record<string, string> = {
   no_hits: '未在本文档中检索到相关内容',
+  parse_mismatch: '出处存疑（图上内容与解析文本对不上）',
   embedding_unavailable: '仅关键词检索（向量化服务不可用）',
   vision_unavailable: '未做视觉验证（视觉模型不可用）',
   crop_unsupported: '未做视觉验证（该文件不支持区域截图）',
@@ -48,6 +49,38 @@ export const DEGRADED_LABEL: Record<string, string> = {
   client_aborted: '回答被中断',
   upstream_error: '问答服务异常',
   upstream_interrupted: '回答生成中途断流',
+}
+
+/**
+ * 检索可信度的文案。
+ *
+ * 设计取向（借自 kotaemon）：**把"我有多确信"交给用户判断，而不是替用户决定**。
+ * 所以低相关时不拦着不给答案，只是把话说明白。
+ *
+ * 判定线在后端（`backend/app/config.py::qa_low_similarity`，那里写着实测分布），
+ * 前端只负责显示 —— 校准值放两处一定会漂。
+ */
+export const CONFIDENCE_META: Record<string, StatusMeta & { hint: string }> = {
+  high: { label: '相关度高', type: 'success', hint: '' },
+  low: {
+    label: '相关度偏低',
+    type: 'warning',
+    hint: '检索到的出处只是勉强过线，回答可能不准确 —— 请点开出处自行核对。',
+  },
+  unknown: {
+    label: '相关度未知',
+    type: 'info',
+    hint: '本次只走了关键词检索（向量化服务不可用），无法判断语义相关度。',
+  },
+}
+
+export function confidenceOf(level: string | undefined) {
+  return level ? CONFIDENCE_META[level] : undefined
+}
+
+/** 相似度转成给人看的百分比。null = 没量到，不要显示成 0%（那是"完全不相关"的意思）。 */
+export function similarityText(value: number | null | undefined): string | null {
+  return value === null || value === undefined ? null : `${Math.round(value * 100)}%`
 }
 
 export function parseStatusOf(status: ParseStatus): StatusMeta {

@@ -155,6 +155,17 @@ canvas {
   border-radius: 2px;
   transition: background-color 0.15s;
 }
+/* 分块边界：只读叠加层，虚线细框、无填充，且 pointer-events: none ——
+   它铺满整页，一旦可点就会把出处高亮的点击全部吃掉 */
+.box.chunk {
+  outline: 1px dashed rgba(120, 120, 120, 0.75);
+  background: transparent;
+  pointer-events: none;
+  cursor: default;
+}
+.box.chunk:hover {
+  background: transparent;
+}
 /* 出处：明确的强调色；选中：轻量提示。两者都不能挡住底下的字 */
 .box.citation {
   background: rgba(42, 120, 214, 0.22);

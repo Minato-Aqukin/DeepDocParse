@@ -1,9 +1,18 @@
 """分块规则：出处定位的地基，改动前先看这里为什么这么切。
 
-分块逻辑在本层（ADR #16，与 service 解耦），所以 mineru 版面格式的假设必须由测试固化：
-mineru 升级后如果 middle_json 结构变了，这个文件先红。
+分块逻辑在本层（ADR #16，与 service 解耦），所以版面格式的假设必须由测试固化。
+
+**下面大部分用例用的是 `_page()` 合成的样本**——合成样本测得了分块规则，
+但测不出上游格式漂移（它永远长成我们以为的样子）。真实格式由
+`tests/fixtures/layout-*.json` 里的**真机产物**固化，见本文件末尾那组用例。
+格式本身的契约写在 ../DeepDocParse/docs/layout-format.md。
 """
+import json
+from pathlib import Path
+
 from app.chunking import layout_to_chunks, page_count_of
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def _page(page_idx: int, blocks: list[tuple[str, list]]) -> dict:
@@ -111,3 +120,59 @@ def test_seq_is_document_wide():
                            _page(1, [("b" * 100, [0, 0, 1, 1])])]}
     chunks = layout_to_chunks(layout, max_chars=50)
     assert [c["seq"] for c in chunks] == list(range(len(chunks)))
+
+
+# ---------------------------------------------------------------------------
+# 真实版面样本：合成样本测不出上游格式漂移，这组用例才是"格式变了先红"的那一道
+# ---------------------------------------------------------------------------
+
+REAL_LAYOUT = json.loads((FIXTURES / "layout-long-doc.json").read_text(encoding="utf-8"))
+# 样本来源：DeepDocParse/tests/fixtures/long-doc.pdf（make_fixtures.py 生成的 5 页文本 PDF），
+# 由 **born-digital** 引擎真实解析产出。埋点事实在第 3 页（page_idx=2）。
+#
+# **它盯得住 born-digital 的格式漂移，盯不住 mineru 的**：那需要一份真实 mineru
+# middle_json 样本，而 mineru 要 GPU，本机产不出来。有 GPU 的机器上补一份
+# `layout-<name>.json`（`"engine": "mineru"`）放进这个目录，下面的用例参数化一下即可。
+# 在那之前，别把这组用例当成"mineru 升级会先红"的保证。
+FACT_ANCHOR = "The launch code of project Zephyr"
+
+
+def test_real_layout_still_has_every_promised_field():
+    """契约承诺的字段在真机产物里一个不少。
+
+    这些字段任何一个消失，出处定位就会以某种安静的方式坏掉：
+    没有 page_idx 就落不到页，没有 page_size 就裁错区域，没有 spans[].content
+    就没有可检索的文本。所以这里逐个盯死，而不是只看"能不能跑通"。
+    """
+    assert REAL_LAYOUT["pdf_info"], "版面里一页都没有"
+    for page in REAL_LAYOUT["pdf_info"]:
+        assert isinstance(page["page_idx"], int)
+        assert len(page["page_size"]) == 2 and all(v > 0 for v in page["page_size"])
+        for block in page["para_blocks"]:
+            assert len(block["bbox"]) == 4
+            assert any(span.get("content")
+                       for line in block["lines"] for span in line["spans"])
+
+
+def test_real_layout_chunks_keep_facts_on_the_right_page():
+    """真实版面切出来的块，埋点事实必须落在它真正所在的那一页。
+
+    页码错了整套"可验证出处"就是假的 —— 而这种错误不会抛任何异常。
+    """
+    chunks = layout_to_chunks(REAL_LAYOUT, max_chars=800)
+    assert page_count_of(REAL_LAYOUT) == 5
+    hits = [c["page_idx"] for c in chunks if FACT_ANCHOR in c["text"]]
+    assert hits == [2], f"事实应只出现在第 3 页，实际 {hits}"
+
+
+def test_real_layout_chunks_are_croppable():
+    """每个块都要带得出 bbox 与 page_size，否则"出处截图"这条路走不通。"""
+    chunks = layout_to_chunks(REAL_LAYOUT, max_chars=800)
+    assert chunks
+    assert all(c["bbox"] and len(c["bbox"]) == 4 for c in chunks)
+    assert all(c["page_size"] for c in chunks)
+    # bbox 必须落在页内（左上原点、y 向下）
+    for chunk in chunks:
+        width, height = chunk["page_size"]
+        x0, y0, x1, y1 = chunk["bbox"]
+        assert 0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height, chunk["bbox"]

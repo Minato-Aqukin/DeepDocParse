@@ -1,4 +1,9 @@
-import type { ChatMessage, Citation, ConversationInfo } from '@/types/api'
+import type {
+  ChatMessage,
+  Citation,
+  ConversationInfo,
+  RetrievalConfidence,
+} from '@/types/api'
 
 import { TOKEN_KEY, http } from './http'
 
@@ -15,7 +20,12 @@ export interface AskHandlers {
   onMeta?: (data: { retrieval: { chunk_ids: string[] } }) => void
   onDelta: (text: string) => void
   onCitations?: (citations: Citation[]) => void
-  onDone?: (data: { message_id: string; verified: boolean; degraded: string | null }) => void
+  onDone?: (data: {
+    message_id: string
+    verified: boolean
+    degraded: string | null
+    confidence: RetrievalConfidence
+  }) => void
   onError?: (data: { message: string; code: string }) => void
   /**
    * 流以任何方式结束时都会调用一次（正常完成、请求失败、网络中断、abort）。

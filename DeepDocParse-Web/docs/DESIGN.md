@@ -55,7 +55,10 @@ User ─┬─ Document (一份文件，内容 sha256 唯一)
 代价是 mineru `middle_json` 的解析规则在本层也有一份。缓解措施：
 - 只依赖契约承诺的字段（`pdf_info[].page_idx / page_size / para_blocks[].bbox / lines[].spans[].content`）
 - `chunking.py` 对缺字段全部容错（缺 bbox 仍出块，只是不能裁剪；缺 page_size 记 None）
-- 单测用真实 `layout.json` 样本固化格式
+- 单测用真实 `layout.json` 样本固化格式（`backend/tests/fixtures/layout-*.json`）。
+  **2026-08-18 更正**：这条曾经只是说法 —— `test_chunking.py` 全是 `_page()` 合成的样本，
+  而合成样本永远长成我们以为的样子，检测不到上游格式漂移。真机产物与对应用例已补上，
+  格式本身也升格成了显式契约（`../DeepDocParse/docs/layout-format.md`）
 
 **上游可替换（ADR #17）**：embedding 与 chat 端点走独立配置项，缺省指向 service，
 但可直连 TEI / vLLM / 任何 OpenAI 兼容服务。本层因此不绑定 DeepDocParse 的部署形态。

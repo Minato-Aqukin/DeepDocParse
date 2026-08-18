@@ -77,11 +77,26 @@ export interface DocumentStats {
 
 export interface Citation {
   chunk_id: string
+  /** 稳定定位键：chunk_id 每次 reindex 都会重铸，(parse_job_id, seq) 不会 */
+  parse_job_id: string | null
+  seq: number | null
   page_idx: number
   bbox: [number, number, number, number] | null
   crop_url: string | null
   snippet: string
+  /** RRF 融合分：只用来排序，**不是**相关度（上限约 0.033，由名次决定） */
   score: number
+  /** 余弦相似度：有校准量纲，这才是"有多相关"。关键词路命中/向量化挂了时为 null */
+  similarity: number | null
+  /** 这条出处还能不能接回当前索引里的原文（reindex/换引擎重解析后可能接不回） */
+  resolved: boolean
+}
+
+/** 这一组出处有多可信。后端算好给前端，校准值只在 backend/app/config.py 一处。 */
+export interface RetrievalConfidence {
+  level: 'high' | 'low' | 'unknown'
+  top_similarity: number | null
+  warn_below: number
 }
 
 export interface ChatMessage {
@@ -91,6 +106,9 @@ export interface ChatMessage {
   citations: Citation[]
   verified: boolean
   degraded: string | null
+  /** 这一轮用的模型与检索参数快照，换模型后靠它分组对比历史 */
+  model_meta?: Record<string, unknown>
+  confidence?: RetrievalConfidence
   created_at: string
 }
 
@@ -106,7 +124,10 @@ export interface SearchHit {
   chunk_id: string
   page_idx: number
   bbox: [number, number, number, number] | null
+  /** RRF 名次分，排序用 */
   score: number
+  /** 余弦相似度，"有多相关"看它 */
+  similarity: number | null
   snippet: string
 }
 

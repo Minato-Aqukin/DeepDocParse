@@ -26,6 +26,7 @@ const sourcePath = ref('')
 const activePage = ref(0)
 const highlights = ref<Highlight[]>([])
 const selectedChunkId = ref<string | null>(null)
+const showChunks = ref(false)
 const loading = ref(true)
 let poller: number | undefined
 
@@ -33,6 +34,33 @@ const pageSize = computed(
   () => pages.value.find((p) => p.page_idx === activePage.value)?.page_size ?? null,
 )
 const isPdf = computed(() => (document.value?.mime || '').includes('pdf'))
+
+/**
+ * 分块边界的只读叠加层（A3）。
+ *
+ * 两个用处：给要标注评测集的人一眼看清"这段答案落在哪个块里"，
+ * 以及让新用户看见检索粒度、对出处建立信任。
+ * **只读** —— 不做 RAGFlow 那样的人工编辑，理由见 types/workbench.ts。
+ *
+ * 只铺当前页：PdfCanvas 一次只渲一页，200 页文档也就是这一页的几十个框。
+ */
+const chunkBoundaries = computed<Highlight[]>(() => {
+  if (!showChunks.value) return []
+  const page = pages.value.find((p) => p.page_idx === activePage.value)
+  if (!page) return []
+  return page.blocks
+    .filter((block) => block.bbox)
+    .map((block) => ({
+      pageIdx: block.page_idx,
+      bbox: block.bbox,
+      pageSize: block.page_size ?? page.page_size,
+      kind: 'chunk' as const,
+      label: `#${block.seq} ${block.text.slice(0, 40)}`,
+    }))
+})
+
+// 边界层垫在底下，出处/选中框画在上面（后画的在上）
+const overlays = computed<Highlight[]>(() => [...chunkBoundaries.value, ...highlights.value])
 
 async function load() {
   const id = String(route.params.id)
@@ -148,6 +176,9 @@ watch(
       <section class="pane source">
         <div class="pane-head">
           <span>原文</span>
+          <el-checkbox v-if="isPdf" v-model="showChunks" size="small" class="chunk-toggle">
+            分块边界
+          </el-checkbox>
           <el-pagination
             v-model:current-page="activePage"
             :page-count="document.page_count"
@@ -163,7 +194,7 @@ watch(
             :src="sourcePath"
             :page-idx="activePage"
             :page-size="pageSize"
-            :highlights="highlights"
+            :highlights="overlays"
           />
           <img v-else-if="sourcePath" :src="sourcePath" class="image-source" alt="原件" />
           <el-empty v-else description="原件不可预览" />
@@ -244,6 +275,10 @@ watch(
 }
 .image-source {
   max-width: 100%;
+}
+.chunk-toggle {
+  margin-left: auto;
+  margin-right: 8px;
 }
 @media (max-width: 1400px) {
   .panes {

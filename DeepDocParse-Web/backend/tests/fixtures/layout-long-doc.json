@@ -1,0 +1,1797 @@
+{
+ "layout_version": "ddp-layout/1",
+ "engine": "borndigital",
+ "pdf_info": [
+  {
+   "page_idx": 0,
+   "page_size": [
+    612.0,
+    792.0
+   ],
+   "para_blocks": [
+    {
+     "type": "text",
+     "bbox": [
+      61.03200149536133,
+      43.38397216796875,
+      184.72796630859375,
+      54.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "Page 1 section heading"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.92399978637695,
+      77.38397216796875,
+      440.4359436035156,
+      88.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "result data page system index vector system index system vector line 0."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.38399887084961,
+      111.38397216796875,
+      451.1278991699219,
+      122.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "system system vector layout data engine chunk parse chunk vector line 1."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      145.38397216796875,
+      413.1239013671875,
+      156.5560302734375
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "parse system layout result data data result block data chunk line 2."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      179.38397216796875,
+      448.46392822265625,
+      190.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "page vector chunk system system engine page vector result chunk line 3."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.09600067138672,
+      213.38397216796875,
+      427.1279296875,
+      224.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "vector result block page engine chunk index layout block result line 4."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      247.38397216796875,
+      415.1279296875,
+      258.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "parse data vector block data index system page block chunk line 5."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      281.3840026855469,
+      422.48388671875,
+      292.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "layout result page chunk chunk index layout parse index page line 6."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.38399887084961,
+      315.3840026855469,
+      433.1279296875,
+      326.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "system page page parse layout result vector page system index line 7."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.41999816894531,
+      349.3840026855469,
+      431.7959289550781,
+      360.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "data data system block data engine vector layout system vector line 8."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      383.3840026855469,
+      429.1319274902344,
+      394.5559997558594
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "chunk layout layout layout result vector result layout parse data line 9."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.41999816894531,
+      417.3840026855469,
+      458.49591064453125,
+      428.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "data engine engine index chunk engine system vector vector chunk line 10."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      451.3840026855469,
+      433.1399230957031,
+      462.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "parse page index chunk page system layout block layout block line 11."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.09600067138672,
+      485.3840026855469,
+      454.451904296875,
+      496.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "vector vector data chunk system system engine data result system line 12."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.38399887084961,
+      519.3840026855469,
+      435.80389404296875,
+      530.6279907226562
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "system data data result system layout chunk data engine result line 13."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.09600067138672,
+      553.3840026855469,
+      433.1399230957031,
+      564.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "vector data layout parse index index system data result engine line 14."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      587.3840026855469,
+      431.7958984375,
+      598.5559997558594
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "layout data system parse index data index system index parse line 15."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      621.3840026855469,
+      431.8199157714844,
+      632.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "layout page engine vector data block index block result engine line 16."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      655.3840026855469,
+      441.11993408203125,
+      666.6279983520508
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "block parse layout block layout block engine index result system line 17."
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "page_idx": 1,
+   "page_size": [
+    612.0,
+    792.0
+   ],
+   "para_blocks": [
+    {
+     "type": "text",
+     "bbox": [
+      61.03200149536133,
+      43.38397216796875,
+      184.72796630859375,
+      54.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "Page 2 section heading"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.38399887084961,
+      77.38397216796875,
+      439.78790283203125,
+      88.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "system result engine page parse vector parse parse parse vector line 0."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      111.38397216796875,
+      447.8518981933594,
+      122.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "engine engine engine engine chunk layout layout index page block line 1."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.38399887084961,
+      145.38397216796875,
+      412.43994140625,
+      156.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "system page parse block block index data block result block line 2."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      179.38397216796875,
+      406.4759216308594,
+      190.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "parse vector vector parse page data data data layout block line 3."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.41999816894531,
+      213.38397216796875,
+      415.8118896484375,
+      224.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "data layout parse page result chunk data system parse page line 4."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      247.38397216796875,
+      449.159912109375,
+      258.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "index parse vector layout layout engine engine result engine chunk line 5."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      281.3840026855469,
+      431.13592529296875,
+      292.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "engine vector data parse result index chunk layout vector parse line 6."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      315.3840026855469,
+      435.11993408203125,
+      326.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "index index index system vector engine system block data index line 7."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      349.3840026855469,
+      421.8119201660156,
+      360.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "page chunk result index chunk block data chunk engine result line 8."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      383.3840026855469,
+      419.7959289550781,
+      394.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "block index chunk block parse vector chunk index index page line 9."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.09600067138672,
+      417.3840026855469,
+      437.8199157714844,
+      428.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "vector index index parse page layout parse engine chunk parse line 10."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      451.3840026855469,
+      441.1439208984375,
+      462.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "layout data data vector system engine system page block layout line 11."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.41999816894531,
+      485.3840026855469,
+      420.50390625,
+      496.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "data page page data layout parse engine parse vector index line 12."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      519.3840026855469,
+      437.13592529296875,
+      530.6279907226562
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "parse layout data vector index result engine result page system line 13."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      553.3840026855469,
+      449.7719421386719,
+      564.5559997558594
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "chunk vector system result chunk index system parse block parse line 14."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.41999816894531,
+      587.3840026855469,
+      446.49591064453125,
+      598.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "data engine system block engine data vector parse layout engine line 15."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.41999816894531,
+      621.3840026855469,
+      446.4599304199219,
+      632.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "data parse chunk page system system page vector system parse line 16."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      655.3840026855469,
+      455.1119384765625,
+      666.5559997558594
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "chunk block system layout system layout vector result chunk parse line 17."
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "page_idx": 2,
+   "page_size": [
+    612.0,
+    792.0
+   ],
+   "para_blocks": [
+    {
+     "type": "text",
+     "bbox": [
+      61.03200149536133,
+      43.38397216796875,
+      184.72796630859375,
+      54.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "Page 3 section heading"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      77.38397216796875,
+      427.82391357421875,
+      88.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "engine data index engine data data system engine result result line 0."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      111.38397216796875,
+      435.1079406738281,
+      122.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "block result index data result system engine system block chunk line 1."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      145.38397216796875,
+      429.1439208984375,
+      156.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "engine index parse data layout vector index layout vector index line 2."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      179.38397216796875,
+      424.46392822265625,
+      190.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "page parse result layout page chunk vector result system data line 3."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.38399887084961,
+      213.38397216796875,
+      443.80792236328125,
+      224.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "system block engine data system layout layout page result engine line 4."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.92399978637695,
+      247.38397216796875,
+      432.47991943359375,
+      258.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "result index data vector engine parse parse chunk engine parse line 5."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.92399978637695,
+      281.3840026855469,
+      449.783935546875,
+      292.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "result result system vector index index engine index system engine line 6."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.38399887084961,
+      315.3840026855469,
+      451.7759094238281,
+      326.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "system vector system system result engine chunk index block page line 7."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.167999267578125,
+      349.2640075683594,
+      286.4039611816406,
+      360.5559997558594
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "The launch code of project Zephyr is 8712."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      383.3840026855469,
+      421.8119201660156,
+      394.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "page layout vector result parse data page page system layout line 8."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      417.3840026855469,
+      417.1319274902344,
+      428.5559997558594
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "layout chunk block block data index index layout block layout line 9."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      451.3840026855469,
+      430.4999084472656,
+      462.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "chunk layout page page engine system data result data layout line 10."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      485.3840026855469,
+      433.7999267578125,
+      496.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "chunk chunk chunk page index system block block index index line 11."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      519.3840026855469,
+      455.80792236328125,
+      530.6279907226562
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "page system block engine system engine block engine block parse line 12."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      553.3840026855469,
+      431.81988525390625,
+      564.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "index vector index page block chunk page system data engine line 13."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      587.3840026855469,
+      441.8039245605469,
+      598.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "block result chunk system system engine page page page result line 14."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      621.3840026855469,
+      435.1439208984375,
+      632.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "index index index data layout engine parse parse system index line 15."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      655.3840026855469,
+      447.83990478515625,
+      666.6279983520508
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "layout parse vector engine engine parse engine chunk data index line 16."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      689.3840026855469,
+      438.4919128417969,
+      700.6279983520508
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "parse data layout index layout page engine layout index system line 17."
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "page_idx": 3,
+   "page_size": [
+    612.0,
+    792.0
+   ],
+   "para_blocks": [
+    {
+     "type": "text",
+     "bbox": [
+      61.03200149536133,
+      43.38397216796875,
+      184.72796630859375,
+      54.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "Page 4 section heading"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.38399887084961,
+      77.38397216796875,
+      433.0919494628906,
+      88.5560302734375
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "system index vector result data result result layout system block line 0."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      111.38397216796875,
+      425.13592529296875,
+      122.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "layout data parse page layout result vector vector parse chunk line 1."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.92399978637695,
+      145.38397216796875,
+      440.45989990234375,
+      156.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "result vector result system data layout result parse engine engine line 2."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      179.38397216796875,
+      435.8039245605469,
+      190.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "index engine vector parse layout block chunk parse parse chunk line 3."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      213.38397216796875,
+      425.1119384765625,
+      224.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "page system block vector block page result system parse data line 4."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      247.38397216796875,
+      426.4559020996094,
+      258.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "index result result block parse engine page result chunk vector line 5."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.41999816894531,
+      281.3840026855469,
+      421.8359069824219,
+      292.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "data data engine layout index engine layout parse vector data line 6."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      315.3840026855469,
+      447.8158874511719,
+      326.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "engine system result data engine engine chunk layout block vector line 7."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.09600067138672,
+      349.3840026855469,
+      429.1079406738281,
+      360.5559997558594
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "vector index vector result system result parse data index chunk line 8."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      383.3840026855469,
+      461.8199157714844,
+      394.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "layout engine engine engine vector vector parse layout layout system line 9."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.38399887084961,
+      417.3840026855469,
+      453.1319274902344,
+      428.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "system page layout index chunk system vector parse layout layout line 10."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      451.3840026855469,
+      410.5079040527344,
+      462.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "parse engine data data index page parse page page block line 11."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      485.3840026855469,
+      439.15191650390625,
+      496.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "index chunk system block engine parse page result data engine line 12."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      519.3840026855469,
+      450.47991943359375,
+      530.6279907226562
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "chunk page data system index chunk vector engine chunk system line 13."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.92399978637695,
+      553.3840026855469,
+      435.1678771972656,
+      564.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "result index parse page layout index engine engine parse page line 14."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.92399978637695,
+      587.3840026855469,
+      453.1438903808594,
+      598.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "result system index page vector engine page parse engine system line 15."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.92399978637695,
+      621.3840026855469,
+      435.8039245605469,
+      632.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "result vector page engine block block index engine parse result line 16."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      655.3840026855469,
+      455.8319091796875,
+      666.6279983520508
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "layout engine engine block result parse index engine engine vector line 17."
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "page_idx": 4,
+   "page_size": [
+    612.0,
+    792.0
+   ],
+   "para_blocks": [
+    {
+     "type": "text",
+     "bbox": [
+      61.03200149536133,
+      43.38397216796875,
+      184.72796630859375,
+      54.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "Page 5 section heading"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      77.38397216796875,
+      435.1319274902344,
+      88.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "page parse data vector engine parse data system system vector line 0."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      111.38397216796875,
+      437.7839050292969,
+      122.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "layout layout block parse parse result engine parse block system line 1."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      145.38397216796875,
+      419.1119384765625,
+      156.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "page vector vector result data system result result parse data line 2."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      179.38397216796875,
+      445.7879333496094,
+      190.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "parse engine result layout layout vector system index vector parse line 3."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      213.38397216796875,
+      465.7559509277344,
+      224.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "engine vector layout system vector block block system system system line 4."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      247.38397216796875,
+      440.49591064453125,
+      258.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "parse engine block layout result engine parse chunk engine page line 5."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.92399978637695,
+      281.3840026855469,
+      443.77191162109375,
+      292.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "result result system block parse chunk parse system engine index line 6."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      315.3840026855469,
+      436.46392822265625,
+      326.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "parse parse vector engine vector index parse engine block block line 7."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.167999267578125,
+      349.156005859375,
+      427.7879333496094,
+      360.47198486328125
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "The annual revenue of Acme Corp reached 42 million dollars in 2025."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.80400085449219,
+      383.3840026855469,
+      434.4359436035156,
+      394.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "layout block chunk result result result block system engine block line 8."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      417.3840026855469,
+      463.7879333496094,
+      428.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "engine system system chunk result parse layout parse engine system line 9."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.41999816894531,
+      451.3840026855469,
+      429.8279113769531,
+      462.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "data index page vector engine vector chunk page block layout line 10."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      485.3840026855469,
+      443.1719055175781,
+      496.62799072265625
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "page data layout result chunk vector block engine engine engine line 11."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.41999816894531,
+      519.3840026855469,
+      429.81591796875,
+      530.6279907226562
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "data layout chunk result vector parse index engine block page line 12."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      553.3840026855469,
+      433.8119201660156,
+      564.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "parse data index layout layout parse system result data engine line 13."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.69599914550781,
+      587.3840026855469,
+      437.8078918457031,
+      598.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "parse chunk parse vector layout vector engine block parse data line 14."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.47999954223633,
+      621.3840026855469,
+      453.8638916015625,
+      632.6280059814453
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "chunk chunk engine vector data engine engine chunk page engine line 15."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.38399887084961,
+      655.3840026855469,
+      447.80389404296875,
+      666.6279983520508
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "system result page engine result engine block chunk system data line 16."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "text",
+     "bbox": [
+      60.09600067138672,
+      689.3840026855469,
+      417.1438903808594,
+      700.6279983520508
+     ],
+     "lines": [
+      {
+       "spans": [
+        {
+         "content": "vector chunk page data data page vector result result parse line 17."
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

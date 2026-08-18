@@ -3,7 +3,8 @@ import { ElMessage } from 'element-plus'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import { askStream, conversationsApi } from '@/api'
-import { degradedLabelOf } from '@/constants/status'
+import CitationChip from '@/components/ask/CitationChip.vue'
+import { confidenceOf, degradedLabelOf } from '@/constants/status'
 import type { ChatMessage, Citation, DocumentInfo } from '@/types/api'
 import { fetchAuthedImage } from '@/utils/markdown'
 
@@ -166,17 +167,35 @@ onBeforeUnmount(() => {
           <el-tag v-else-if="message.degraded" size="small" type="warning">
             {{ degradedLabelOf(message.degraded) }}
           </el-tag>
+          <el-tag v-if="confidenceOf(message.confidence?.level)" size="small"
+                  :type="confidenceOf(message.confidence?.level)!.type" effect="plain">
+            {{ confidenceOf(message.confidence?.level)!.label }}
+          </el-tag>
         </div>
+
+        <!--
+          低相关时主动提醒（借自 kotaemon）。**不拦着不给答案** ——
+          把"我有多确信"交给用户判断，而不是替用户决定。
+        -->
+        <el-alert
+          v-if="message.citations?.length && confidenceOf(message.confidence?.level)?.hint"
+          class="confidence-hint"
+          :title="confidenceOf(message.confidence?.level)!.hint"
+          :type="message.confidence?.level === 'low' ? 'warning' : 'info'"
+          :closable="false"
+          show-icon
+        />
+
         <div v-if="message.citations?.length" class="citations">
-          <div v-for="(citation, i) in message.citations" :key="i" class="citation"
-               @click="emit('locate', citation)">
-            <img v-if="citation.crop_url && cropUrls[citation.crop_url]"
-                 :src="cropUrls[citation.crop_url]" alt="出处截图" />
-            <div class="cite-text">
-              <b>[{{ i + 1 }}] 第 {{ citation.page_idx + 1 }} 页</b>
-              <span>{{ citation.snippet }}</span>
-            </div>
-          </div>
+          <CitationChip
+            v-for="(citation, i) in message.citations"
+            :key="i"
+            :citation="citation"
+            :index="i + 1"
+            :crop-url="citation.crop_url ? cropUrls[citation.crop_url] : undefined"
+            :warn-below="message.confidence?.warn_below"
+            @locate="emit('locate', citation)"
+          />
         </div>
       </div>
 
@@ -240,29 +259,9 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 6px;
 }
-.citation {
-  display: flex;
-  gap: 8px;
-  padding: 6px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-}
-.citation:hover {
-  border-color: var(--el-color-primary);
-}
-.citation img {
-  width: 88px;
-  max-height: 60px;
-  object-fit: cover;
-  border-radius: 2px;
-}
-.cite-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  color: var(--el-text-color-regular);
+.confidence-hint {
+  margin-top: 8px;
+  padding: 6px 10px;
 }
 .composer {
   display: flex;

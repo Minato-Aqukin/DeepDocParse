@@ -5,7 +5,7 @@
   event: meta       {"message_id","retrieval":{"chunk_ids":[...]}}
   event: delta      {"text":"…"}                （多帧）
   event: citations  {"citations":[{…}]}
-  event: done       {"message_id","verified","degraded"}
+  event: done       {"message_id","verified","degraded","confidence"}
   event: error      {"message","code"}
 
 **落库在生成器里另开 session**：请求作用域的 session 在响应体开始流之前就已经关了，
@@ -27,7 +27,10 @@ from app.deps import current_user, get_storage
 from app.errors import APIError
 from app.metering import record_usage
 from app.models import Conversation, Document, Message, ParseJob, User, utcnow
-from app.qa import Retrieval, attach_crops, build_messages, retrieve
+from app.qa import (
+    Retrieval, answer_model_meta, attach_crops, attach_resolution, build_messages,
+    load_citation_targets, retrieval_confidence, retrieve, verify_parse_consistency,
+)
 from app.storage import Storage, crop_key as build_crop_key
 from app.upstream import chat_request
 
@@ -52,6 +55,7 @@ def _sse(event: str, payload: dict) -> bytes:
 def _citation_out(document_id: str, citation: dict) -> dict:
     """把对象键换成前端能直接取的 URL。"""
     out = dict(citation)
+    out.setdefault("resolved", True)     # 流式返回的这一轮必然指向刚检索到的 chunk
     key = out.pop("crop_key", None)
     if key:
         job_id, name = key.split("/")[1], key.rsplit("/", 1)[-1]
@@ -105,9 +109,19 @@ async def list_messages(cid: str, user: User = Depends(current_user),
     rows = (await session.execute(
         select(Message).where(Message.conversation_id == cid).order_by(Message.created_at)
     )).scalars().all()
+    # 出处要接回**当前**索引：chunk_id 每次 reindex 都重铸，直接回放旧值全是悬空指针。
+    # 全会话的定位键合起来查**一次**（每条 message 查一次的话，长会话就是 N+1）
+    lookup = await load_citation_targets(
+        session, conversation.document_id,
+        [c for m in rows for c in (m.citations or [])])
+    resolved = {m.id: [attach_resolution(c, lookup) for c in (m.citations or [])]
+                for m in rows if m.citations}
     return [{"id": m.id, "role": m.role, "content": m.content,
-             "citations": [_citation_out(conversation.document_id, c) for c in (m.citations or [])],
-             "verified": m.verified, "degraded": m.degraded, "created_at": m.created_at}
+             "citations": [_citation_out(conversation.document_id, c)
+                           for c in resolved.get(m.id, [])],
+             "verified": m.verified, "degraded": m.degraded, "model_meta": m.model_meta or {},
+             "confidence": retrieval_confidence(resolved.get(m.id, [])),
+             "created_at": m.created_at}
             for m in rows]
 
 
@@ -181,26 +195,36 @@ async def ask(cid: str, req: AskRequest, request: Request, user: User = Depends(
 
     retrieval = await retrieve(session, index, http, question=req.question,
                                document=document, user_id=user.id)
-    image_uris = await attach_crops(retrieval, storage, document, job) if retrieval.hits else []
+    crops = await attach_crops(retrieval, storage, document, job) if retrieval.hits else []
+    image_uris = [uri for uri, _ in crops]
     messages = build_messages(req.question, retrieval,
                               [{"role": m.role, "content": m.content} for m in history],
                               image_uris)
 
     return StreamingResponse(
         _stream_answer(http, messages, retrieval, conversation_id=cid,
-                       document_id=document.id, user_id=user.id, has_image=bool(image_uris)),
+                       document_id=document.id, user_id=user.id, has_image=bool(image_uris),
+                       # 图与文本必须成对取，不能一个取 image_uris[0] 一个取 hits[0]
+                       verify_pair=(crops[0][0], crops[0][1]["text"]) if crops else None),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
 async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieval: Retrieval, *,
-                         conversation_id: str, document_id: str, user_id: str, has_image: bool):
+                         conversation_id: str, document_id: str, user_id: str, has_image: bool,
+                         verify_pair: tuple[str, str] | None = None):
     message_id = None
     chunks: list[str] = []
     degraded = retrieval.degraded
     verified = has_image
     error: dict | None = None
+
+    # 出处一致性核对（A4）与回答**并发**跑：核对要多打一次视觉模型，
+    # 串行做会把首字延迟顶上去，而它的结论只在最后的 done 帧里才用得上
+    verify_task: asyncio.Task | None = None
+    if settings.qa_verify_parse and verify_pair:
+        verify_task = asyncio.create_task(verify_parse_consistency(http, *verify_pair))
 
     yield _sse("meta", {"retrieval": {"chunk_ids": [h["chunk_id"] for h in retrieval.hits]}})
 
@@ -233,6 +257,13 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
         if error:
             degraded, verified = "upstream_error", False
             yield _sse("error", error)
+        elif verify_task is not None and await _verdict(verify_task) is False:
+            # 图上的字和 chunk 文本对不上 -> 解析很可能错了。此时既不能说"已验证"，
+            # 也不能装作没事：这正是七种降级留下的唯一的洞（A4）。
+            # 这里会覆盖已有的 degraded，但唯一可能被覆盖的 vision_unavailable
+            # 实际不会发生 —— 视觉运行时挂了的话核对也打不通，_verdict 返回 None。
+            # 而 embedding_unavailable + 解析出错是真实组合，此时"出处存疑"更该说出口
+            degraded, verified = "parse_mismatch", False
     except BaseException:
         # 客户端断开：uvicorn 下 Starlette 会取消流任务，GeneratorExit/CancelledError 到这里。
         # （httpx 的进程内 ASGI 传输不会，流是"正常结束"——所以这个标记由
@@ -241,20 +272,47 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
         degraded = "client_aborted"
         raise
     finally:
+        # 客户端断开时核对已经没有意义，别把它留在后台空跑一次视觉推理
+        if verify_task is not None and not verify_task.done():
+            verify_task.cancel()
         # shield：客户端断开时这个 finally 跑在已取消的作用域里，
         # 不屏蔽的话第一个 await 就被打断，client_aborted 的回答根本落不了库
         message_id = await asyncio.shield(_persist(
             conversation_id=conversation_id, user_id=user_id, content="".join(chunks),
-            citations=retrieval.citations, verified=verified and not error, degraded=degraded))
+            citations=retrieval.citations, verified=verified and not error, degraded=degraded,
+            model_meta=answer_model_meta()))
 
     yield _sse("citations", {"citations": [_citation_out(document_id, c)
                                            for c in retrieval.citations]})
     yield _sse("done", {"message_id": message_id, "verified": verified and not error,
-                        "degraded": degraded})
+                        "degraded": degraded,
+                        # 出处够不够可信要跟着回答一起给：只给出处不给可信度，
+                        # 用户没法判断该不该采信（kotaemon 的做法，A2）
+                        "confidence": retrieval_confidence(retrieval.citations)})
+
+
+async def _verdict(task: asyncio.Task) -> bool | None:
+    """等出处核对的结论，但**最多等 qa_verify_timeout**。
+
+    核对与回答并发跑，正常情况下回答先结束、这里几乎不等。但视觉模型在 CPU 上
+    抄一段文字可能要几分钟，没有上限的话 done 帧会被硬生生拖后 —— 用户看着答案
+    已经出完却迟迟不落定。超时就当"没测出来"：宁可不打标，也不能让核对拖垮体验。
+    """
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), settings.qa_verify_timeout)
+    except TimeoutError:
+        task.cancel()
+        return None
+    except asyncio.CancelledError:
+        # **不能吞**：这是外层流任务被取消（客户端断开），要让它继续往上传，
+        # 否则 `except BaseException` 里的 degraded="client_aborted" 就不会触发，
+        # 用户回来只看到一条没有任何说明的半截回答
+        task.cancel()
+        raise
 
 
 async def _persist(*, conversation_id: str, user_id: str, content: str, citations: list,
-                   verified: bool, degraded: str | None) -> str:
+                   verified: bool, degraded: str | None, model_meta: dict | None = None) -> str:
     """把回答落库。
 
     **必须新开 session**：请求作用域的那个在响应体开始流之前就关了，
@@ -262,7 +320,8 @@ async def _persist(*, conversation_id: str, user_id: str, content: str, citation
     """
     async with get_sessionmaker()() as db:
         message = Message(conversation_id=conversation_id, role="assistant", content=content,
-                          citations=citations, verified=verified, degraded=degraded)
+                          citations=citations, verified=verified, degraded=degraded,
+                          model_meta=model_meta or {})
         db.add(message)
         await record_usage(db, user_id=user_id, kind="qa", requests=1)
         await db.commit()

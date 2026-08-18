@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { searchApi } from '@/api'
+import { similarityText } from '@/constants/status'
 import type { SearchResult } from '@/types/api'
 
 /** 跨文档检索：命中带页码，点击直达工作台对应页。 */
@@ -58,6 +59,11 @@ watch(() => route.query.q, run, { immediate: true })
     <div v-for="(hit, i) in group.hits" :key="i" class="hit"
          @click="router.push(`/documents/${group.document_id}`)">
       <el-tag size="small" type="info">第 {{ hit.page_idx + 1 }} 页</el-tag>
+      <!-- 相关度用 similarity（有校准量纲），不用 score（RRF 名次分，表达不了相关度） -->
+      <el-tag v-if="similarityText(hit.similarity)" size="small" effect="plain"
+              :type="(hit.similarity ?? 0) >= 0.6 ? 'success' : 'warning'">
+        {{ similarityText(hit.similarity) }}
+      </el-tag>
       <span class="snippet">{{ hit.snippet }}</span>
     </div>
   </el-card>
