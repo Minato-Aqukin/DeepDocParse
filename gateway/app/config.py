@@ -12,15 +12,26 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
 
+    # 唯一鉴权凭据：所有 /v1/* 都验它，且必须与 DeepDocParse-Web 的 SERVICE_TOKEN 一致。
+    # 用户 API key 在 Web 层校验，service 完全不感知用户
     service_token: str = "change-me"
+    # ARQ 队列 + 任务暂存 + 向量索引都用它。**不是缓存**：结果丢了就得重新解析
     redis_url: str = "redis://localhost:6379/0"
+    # 模型注册表路径。加模型 = 加容器 + 在这个文件里加一行（铁律 3）
     models_config: str = "models.yaml"
+    # 在途解析任务的水位上限，超了 /v1/parse 直接 429，让调用方退避而不是把 mineru 压垮
     parse_queue_max: int = 200
+    # VQA 同步通道的并发闸。视觉模型显存吃紧，超了返回 429 而不是排队等到超时
     vqa_max_concurrency: int = 8
+    # 解析结果在 service 侧的暂存时长（秒）。永久归档是 Web 层的事，
+    # 这个窗口只保证"backend 有足够时间来取"。调小会让对账补取不回来
     result_ttl: int = 86400
-    # ARQ 轮询 mineru 的退避参数（秒）
+    # ARQ 轮询 mineru 的退避起点（秒）
     poll_initial_delay: float = 1.0
+    # 轮询退避上限（秒）：指数退避到这里就不再变长
     poll_max_delay: float = 10.0
+    # 单个解析任务的轮询总时限（秒），超时判失败并释放水位。
+    # 必须 < QUEUE_INFLIGHT_TTL，否则水位先被淘汰、任务还在跑
     poll_timeout: float = 1800.0
     # 在途任务在水位集合里的存活上限。worker 最迟在 poll_timeout 把任务判失败并释放，
     # 所以超过 poll_timeout + 余量还挂着的一定是"释放丢了"（worker 被杀/Redis 重启），
@@ -34,11 +45,36 @@ class Settings(BaseSettings):
 
 
 class ModelEntry(BaseModel):
+    """注册表里的一行。
+
+    **能力曾经是靠段名隐含的**（vqa_models / parse_engines / embedding_models），
+    这卡住两类未来：一个模型多种能力（bge-m3 的 dense/sparse/colbert 三个头）、
+    一个 endpoint 承载多个逻辑模型（LoRA adapter）。runtime / capabilities / adapter
+    把这些显式化 —— 全部可选，不填就按段名推断，老 models.yaml 一字不改照跑。
+    """
+
     endpoint: str
     default: bool = False
     # 引擎级默认透传选项（如 mineru 的 backend=pipeline|vlm），请求方 options 可覆盖。
     # 放注册表而非代码：dev/prod 换后端 = 改一行配置（铁律 3）
     options: dict = {}
+    # 用哪个适配器/协议说话。解析引擎见 services/engines.py（mineru-api | borndigital）；
+    # 留空则按所在段推断，这就是"加引擎 = 加容器 + 一行配置"真正兑现的地方
+    runtime: str = ""
+    # 显式声明能力。留空按段名推断（parse / vision / dense）。
+    # 例：不支持流式的 VQA 写 [vision, no_stream]，取得到稀疏头的 embedding 写 [dense, sparse]
+    capabilities: list[str] = []
+    # 预留接缝：LoRA / 缝合模型在同一个 endpoint 上靠这个字段区分，
+    # 请求时作为 model 字段传给运行时。**只是接缝，本轮不实现**
+    adapter: str | None = None
+
+
+# 段名 -> 该段条目缺省具备的能力。**只是缺省值**：条目自己写了 capabilities 就以它为准
+SECTION_CAPABILITIES = {
+    "vqa_models": ["vision"],
+    "parse_engines": ["parse"],
+    "embedding_models": ["dense"],
+}
 
 
 class Registry(BaseModel):
@@ -47,6 +83,13 @@ class Registry(BaseModel):
     vqa_models: dict[str, ModelEntry] = {}
     parse_engines: dict[str, ModelEntry] = {}
     embedding_models: dict[str, ModelEntry] = {}  # v2 (M4) 启用
+
+    def model_post_init(self, _context) -> None:
+        """把段名隐含的能力补进条目，让下游只读 capabilities 一个地方。"""
+        for section, defaults in SECTION_CAPABILITIES.items():
+            for entry in getattr(self, section).values():
+                if not entry.capabilities:
+                    entry.capabilities = list(defaults)
 
     def default_of(self, section: dict[str, ModelEntry]) -> tuple[str, ModelEntry]:
         """取该类目的默认模型。空类目抛 LookupError 由调用方转成 404 ——

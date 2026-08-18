@@ -57,7 +57,13 @@ def _tokenize(text: str) -> list[str]:
 
 
 def _layout_blocks(layout_json: dict) -> list[dict]:
-    """middle_json -> [{text, page_idx, bbox, page_size}]，检索与出处的统一数据源。"""
+    """layout_json -> [{text, page_idx, bbox, page_size}]，检索与出处的统一数据源。
+
+    输入是 DDP-Layout v1（字段清单与坐标系见 ../docs/layout-format.md）。
+    **只读承诺字段**：`pdf_info[].page_idx / page_size / para_blocks[].bbox /
+    lines[].spans[].content`。引擎附带的其它字段（type/index/angle…）不保证跨引擎存在，
+    依赖它们会在换解析引擎时安静地失效。
+    """
     blocks = []
     for page in layout_json.get("pdf_info", []):
         for blk in page.get("para_blocks", []):

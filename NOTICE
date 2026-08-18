@@ -1,0 +1,40 @@
+DeepDocParse
+Copyright 2026 The DeepDocParse Authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+MinerU attribution (required -- do not remove)
+--------------------------------------------------------------------------------
+
+Document parsing in DeepDocParse is powered by MinerU
+(https://github.com/opendatalab/MinerU).
+
+MinerU adds terms on top of Apache-2.0. Section 2 requires that any product
+providing an online service built on MinerU state clearly and prominently, in
+the product UI or in public documentation, that it uses MinerU; section 3
+terminates the license automatically -- without notice -- on violation.
+DeepDocParse is exactly such a service, so this attribution appears in:
+
+  - this NOTICE file
+  - README.md, at the top of the page
+  - the DeepDocParse-Web product UI, in a footer shown on every page
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+This repository is a thin orchestration layer. It talks to every engine over
+HTTP and vendors or links none of their code (see CLAUDE.md, rules 1 and 3), so
+the engines below are dependencies of a deployment, not derivative works of it.
+
+  MinerU (OpenDataLab)         Apache-2.0 + additional terms
+                               https://github.com/opendatalab/MinerU
+  DeepSeek-OCR                 MIT
+                               https://github.com/deepseek-ai/DeepSeek-OCR
+  deepseek-ocr.rs              Apache-2.0
+                               https://github.com/TimmyOVO/deepseek-ocr.rs
+  Text Embeddings Inference    Apache-2.0
+                               https://github.com/huggingface/text-embeddings-inference
+  BAAI/bge-m3 (FlagEmbedding)  MIT
+                               https://huggingface.co/BAAI/bge-m3

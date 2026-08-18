@@ -12,6 +12,9 @@ dependencies = [
     "pydantic-settings>=2.4",
     "pyyaml>=6.0",
     "prometheus-fastapi-instrumentator>=7.0",
+    # born-digital 兜底解析引擎（无 GPU 时抽 PDF 文字层 + 坐标）。
+    # 不是模型，是 PDF 库 —— 铁律 3 禁的是 import 模型代码，不是禁止解析 PDF 结构
+    "pypdfium2>=4.30",
 ]
 
 [project.optional-dependencies]

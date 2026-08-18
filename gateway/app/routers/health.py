@@ -4,6 +4,8 @@ import asyncio
 import httpx
 from fastapi import APIRouter, Request, Response
 
+from app.services.engines import is_inprocess
+
 router = APIRouter(tags=["health"])
 
 
@@ -31,15 +33,21 @@ async def readyz(request: Request, response: Response):
     except Exception as exc:  # redis.exceptions 体系庞杂，探针一律兜住
         checks["redis"] = f"down ({type(exc).__name__})"
 
-    # parse_engines 走 mineru 的 /health（实测契约，见 docs/mineru-api-contract.md）；
-    # vqa_models 走 OpenAI 的 /v1/models；embedding_models 走 TEI 的 /health
+    # 进程内条目没有远端可探：它的就绪性就等于本进程的就绪性。不特判的话
+    # httpx 会对 inproc:// 抛 UnsupportedProtocol（HTTPError 子类），这一项永远 down、
+    # /readyz 恒 503 —— 而 models.cpu.yaml 里 born-digital 是唯一的解析引擎，
+    # 无 GPU 路径的就绪探针会永远红。三段都走同一判据，别只修用到的那一段
     probes: dict[str, str] = {}
-    for name, entry in state.registry.parse_engines.items():
-        probes[f"engine:{name}"] = f"{entry.endpoint}/health"
-    for name, entry in state.registry.vqa_models.items():
-        probes[f"vqa:{name}"] = f"{entry.endpoint}/v1/models"
-    for name, entry in state.registry.embedding_models.items():
-        probes[f"embed:{name}"] = f"{entry.endpoint}/health"
+    for prefix, section, path in (
+        ("engine", state.registry.parse_engines, "/health"),      # mineru 的实测契约
+        ("vqa", state.registry.vqa_models, "/v1/models"),          # OpenAI 协议
+        ("embed", state.registry.embedding_models, "/health"),     # TEI
+    ):
+        for name, entry in section.items():
+            if is_inprocess(entry):
+                checks[f"{prefix}:{name}"] = "up"
+            else:
+                probes[f"{prefix}:{name}"] = f"{entry.endpoint}{path}"
     results = await asyncio.gather(*(_probe(state.http, url) for url in probes.values()))
     checks.update(dict(zip(probes.keys(), results)))
 

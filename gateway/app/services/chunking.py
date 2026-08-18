@@ -1,5 +1,8 @@
 """结构感知分块（v2/M4）：layout_json -> 携带页码+bbox 的 chunk 列表。
 
+输入格式是 DDP-Layout v1，字段清单见 docs/layout-format.md ——
+**只读承诺字段**，引擎塞进来的其它字段一律不碰（换引擎它们可能不存在）。
+
 规则：
 - 只在页内合并（chunk 永不跨页——出处必须能落到唯一页码）
 - 相邻块合并至 max_chars 上限；bbox 取合并块的外接矩形
@@ -7,6 +10,8 @@
   由后者按模型最大长度静默截断——块尾内容从此检索不到，且全程没有报错
 - 空文本块跳过
 """
+# 块文本的规范实现在 normalizer 层，别在这里再抄一遍（这个循环历史上被抄过四遍）
+from app.services.layout import block_text as _block_text
 
 # 优先在这些字符后断句；中日文没有空白，必须带上句读
 _BREAK_AFTER = "\n。！？；…!?;. "
@@ -32,15 +37,6 @@ def _split_oversized(text: str, max_chars: int) -> list[str]:
     if rest:
         pieces.append(rest)
     return [p for p in pieces if p]
-
-
-def _block_text(block: dict) -> str:
-    parts = []
-    for line in block.get("lines", []):
-        for span in line.get("spans", []):
-            if span.get("content"):
-                parts.append(span["content"])
-    return " ".join(parts).strip()
 
 
 def _union_bbox(a: list | None, b: list | None) -> list | None:
