@@ -152,22 +152,38 @@ async def main(skip_image: bool) -> int:
         r = redis.from_url(REDIS_URL)
         try:
             keys = await r.keys(f"chunk:{doc_hash}:*")
-            if keys:
+            if not keys:
+                # 上面"分块索引已就绪"已经报过 FAIL，这里不重复计分，但要说一声
+                # 这两条没验过 —— 静默跳过跟静默降级是一回事
+                print("  SKIP  chunk 的 TTL 与 page_size（一个 chunk 都没有，无从验证）")
+            else:
                 ttl = await r.ttl(keys[0])
                 ok &= check("chunk 带 TTL（可重建缓存，铁律 5）", ttl > 0, f"TTL={ttl}s")
                 fields = await r.hgetall(keys[0])
                 fields = {(k.decode() if isinstance(k, bytes) else k) for k in fields}
                 ok &= check("chunk 存了裁剪所需的 page_size", "page_size" in fields,
                             str(sorted(fields)))
-            names = await r.execute_command("FT._LIST")
-            names = [n.decode() if isinstance(n, bytes) else n for n in names]
-            hit = [n for n in names if n.startswith("chunks_idx_d")]
-            ok &= check("FT 向量索引已建立（名字带维度）", bool(hit), str(names))
-            if hit:
-                info = await r.execute_command("FT.INFO", hit[0])
-                meta = {(k.decode() if isinstance(k, bytes) else k): v
-                        for k, v in zip(info[::2], info[1::2])}
-                print(f"        {hit[0]} num_docs={meta.get('num_docs')}")
+
+            # 普通 redis 没有 RediSearch 模块（compose.web.yml 起的就是那个）。
+            # 那是合法配置——检索会退回 BM25——但**这一条无论如何都要报出来**：
+            # 直接抛 ResponseError 会把整个 e2e 连同后面的结论一起打断，
+            # 而"没建索引就不打印"等于静默降级，正是本项目吃过大亏的那种
+            try:
+                names = [n.decode() if isinstance(n, bytes) else n
+                         for n in await r.execute_command("FT._LIST")]
+            except redis.ResponseError as exc:
+                ok &= check("FT 向量索引已建立（名字带维度）", False,
+                            f"这个 Redis 没有 RediSearch 模块（{exc}）——"
+                            "需要 redis-stack-server，见 docker/compose.cpu.yml")
+            else:
+                hit = [n for n in names if n.startswith("chunks_idx_d")]
+                ok &= check("FT 向量索引已建立（名字带维度）", bool(hit),
+                            str(names) if names else "一个 FT 索引都没有")
+                if hit:
+                    info = await r.execute_command("FT.INFO", hit[0])
+                    meta = {(k.decode() if isinstance(k, bytes) else k): v
+                            for k, v in zip(info[::2], info[1::2])}
+                    print(f"        {hit[0]} num_docs={meta.get('num_docs')}")
         finally:
             await r.aclose()
     else:

@@ -65,6 +65,14 @@ docker compose -f compose.cpu.yml --env-file ../.env up -d --build
 # gateway:  http://localhost:9000   契约文档: http://localhost:9000/docs
 ```
 
+> **从 2026-08 之前的版本升上来的注意：compose 项目名变了**（缺省的 `docker` → 固定的
+> `ddp-service`）。两个仓库的 compose 目录都叫 `docker`，缺省项目名会撞车，
+> 起 service 的 `redis` 会把 DeepDocParse-Web 那个 redis 容器直接顶掉。
+> 本仓库的卷只有 `redis-data`（解析结果 24h 暂存 + 可重建的向量索引缓存），
+> 丢了重新解析即可，不需要搬；要保留就用 `-p docker` 保持旧项目名。
+> 三份 compose（dev / cpu / prod-nvidia）共用 `ddp-service`：它们绑同一批端口，
+> 本来就是互斥的部署形态，切换时加 `--remove-orphans` 清掉上一套的残留容器。
+
 > 不想下权重（约 2GB）：把 `compose.cpu.yml` 的 `embed` 服务和 `models.cpu.yaml` 的
 > `embedding_models` 一起注释掉即可 —— 注册表里没有 embedding 段时，
 > service 的检索链自动退回 BM25（注册表驱动的开关，不用改代码）。
@@ -112,7 +120,10 @@ python scripts/gen_config_docs.py
 - [x] M7 可发布度（plan.md 的 B/C/E 组）：
   - [x] B1 版面中间表示升格为契约（[docs/layout-format.md](docs/layout-format.md)）+ 显式 normalizer 层
   - [x] B2 born-digital 兜底引擎 + `compose.cpu.yml`：**无 GPU 全链路可跑**，
-        顺带把"加引擎 = 加容器 + 一行配置"用第二个引擎验证了一遍
+        顺带把"加引擎 = 加容器 + 一行配置"用第二个引擎验证了一遍。
+        **这条当初打勾打早了**：引擎能跑，但缺省引擎名在路由层写死成 mineru，
+        `default: true` 被架空，缺省请求在这套注册表上必然 404 —— 直到第一次
+        真跑才发现。现已改成由注册表决定（见 git log）
   - [x] B3 配置参考文档自动生成（[docs/CONFIG.md](docs/CONFIG.md)），CI 检查是否过期
   - [x] C1/C2 Apache-2.0 + MinerU 归属（README / NOTICE / 产品界面页脚三处）
   - [x] C3/C4 GitHub Actions + **契约守卫**：`openapi.yaml` 与 gateway 端点不一致即红

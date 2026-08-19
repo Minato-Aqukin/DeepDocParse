@@ -38,8 +38,10 @@ paths:
                     传低熵值（如 "doc1"）会让不同调用方读到彼此的解析结果。
                 engine:
                   type: string
-                  default: mineru
-                  description: 解析引擎，见 models.yaml parse_engines
+                  description: |
+                    解析引擎，见 models.yaml parse_engines。**缺省取注册表里标了 default 的那条**，
+                    而不是固定的 "mineru" —— 无 GPU 部署（models.cpu.yaml）注册的是 borndigital。
+                    这是向后兼容的放宽：注册了 mineru 为 default 的部署行为不变。
                 options:
                   type: object
                   description: 引擎透传选项（如 mineru 的 backend=pipeline|vlm、语言等）

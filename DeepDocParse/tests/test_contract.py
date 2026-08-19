@@ -800,3 +800,45 @@ async def test_ask_document_vector_retrieval(mcp_gateway, monkeypatch):
 
     out = await ask("http://files.example.com/big.docx", "zeta 值是多少？")
     assert "zeta-42" in out and "第 5 页" in out and "开头片段" not in out
+
+
+async def test_parse_engine_defaults_to_registry_default(client, app_state):
+    """不传 engine 时取注册表里标了 default 的那条，而不是写死的 "mineru"。
+
+    这条防的是无 GPU 路径整条断掉：models.cpu.yaml 只注册 borndigital，
+    路由层一旦把 "mineru" 写成请求模型的默认值，所有缺省请求都会 404 unknown_engine，
+    而 default: true 标记形同虚设 —— M7 的 CPU quickstart 因此从来没真正通过过。
+    """
+    from app.config import ModelEntry, Registry
+
+    app_state.registry = Registry(parse_engines={
+        "borndigital": ModelEntry(endpoint="inproc://borndigital",
+                                  runtime="borndigital", default=True),
+    })
+    resp = await client.post("/v1/parse", json={"file_url": FILE_URL})
+    assert resp.status_code == 202, resp.text
+    task = await app_state.task_store.get(resp.json()["task_id"])
+    assert task["engine"] == "borndigital", "落库的引擎名必须是注册表选出来的那个"
+
+
+async def test_parse_explicit_unknown_engine_still_404(client, app_state):
+    """显式点名一个没注册的引擎仍然是调用方的错，不能被"缺省回落"悄悄吞掉。"""
+    from app.config import ModelEntry, Registry
+
+    app_state.registry = Registry(parse_engines={
+        "borndigital": ModelEntry(endpoint="inproc://borndigital",
+                                  runtime="borndigital", default=True),
+    })
+    resp = await client.post("/v1/parse", json={"file_url": FILE_URL, "engine": "mineru"})
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "unknown_engine"
+
+
+async def test_parse_empty_registry_reports_unknown_engine(client, app_state):
+    """一个引擎都没注册时给明确错误，而不是 500（default_of 会抛 LookupError）。"""
+    from app.config import Registry
+
+    app_state.registry = Registry(parse_engines={})
+    resp = await client.post("/v1/parse", json={"file_url": FILE_URL})
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "unknown_engine"
