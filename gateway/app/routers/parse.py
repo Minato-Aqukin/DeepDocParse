@@ -27,7 +27,10 @@ _TERMINAL = {"succeeded", "failed"}
 class ParseRequest(BaseModel):
     file_url: str          # 文件的可下载 URL（backend 侧生成），不传文件流
     doc_id: str | None = None   # 稳定文档标识（建议文件内容 sha256），见 _doc_hash
-    engine: str = "mineru"
+    # 留空取注册表里标了 default 的那条。**不要写死引擎名**：写死等于让路由层
+    # 认识具体引擎（违反铁律 3），且会架空 models.yaml 的 default 标记 ——
+    # models.cpu.yaml 只注册 borndigital 时，写死的 "mineru" 会让缺省请求 404
+    engine: str = ""
     options: dict = {}     # 引擎透传选项（mineru: backend=pipeline|vlm 等）
     callback_url: str | None = None
 
@@ -47,9 +50,17 @@ async def submit_parse(req: ParseRequest, request: Request):
     state = request.app.state
 
     engines = state.registry.parse_engines
-    if req.engine not in engines:
-        raise APIError(404, f"unknown parse engine: {req.engine}", "invalid_request_error",
-                       "unknown_engine")
+    if req.engine:
+        if req.engine not in engines:
+            raise APIError(404, f"unknown parse engine: {req.engine}", "invalid_request_error",
+                           "unknown_engine")
+        engine_name, entry = req.engine, engines[req.engine]
+    else:
+        try:
+            engine_name, entry = state.registry.default_of(engines)
+        except LookupError:
+            raise APIError(404, "no parse engine registered (check models.yaml parse_engines)",
+                           "invalid_request_error", "unknown_engine")
 
     # 幂等：同一文档已有未失败任务则直接复用（ask_document 的重试模式依赖此行为）
     doc_hash = _doc_hash(req.file_url, req.doc_id)
@@ -68,7 +79,6 @@ async def submit_parse(req: ParseRequest, request: Request):
     if await state.task_store.queue_depth() >= settings.parse_queue_max:
         raise APIError(429, "parse queue is full, retry later", "rate_limit_error", "queue_full")
 
-    entry = engines[req.engine]
     merged_options = {**entry.options, **req.options}  # 注册表默认 + 请求覆盖
     # 用哪个适配器由注册表的 runtime 决定，路由层不认识任何具体引擎（铁律 3）
     try:
@@ -83,7 +93,7 @@ async def submit_parse(req: ParseRequest, request: Request):
         raise APIError(502, f"parse engine unreachable: {exc}", "upstream_error", "engine_error")
 
     task_id = uuid.uuid4().hex
-    await state.task_store.create(task_id, native_task_id, req.engine, req.callback_url, doc_hash)
+    await state.task_store.create(task_id, native_task_id, engine_name, req.callback_url, doc_hash)
     # 带 doc_id 时再按 URL 挂一个别名：只拿得到裸 URL 的调用方（ask_document）
     # 否则会算出另一个身份、重复解析同一份文档
     if url_hash != doc_hash:

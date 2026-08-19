@@ -5,6 +5,11 @@
 #   2. DeepSeek-OCR 换官方 vLLM 部署
 # 硬件再换（昇腾/AMD 等）= 复制本文件为 compose.prod-<hw>.yml 换镜像即可。
 
+# 固定 compose 项目名。**不能省**：项目名缺省取 compose 文件所在目录名，
+# 而两个仓库的这个目录都叫 docker —— 于是两边算出同一个项目名 "docker"，
+# 同名服务（redis）会互相顶掉：起 service 的 redis 会把 Web 的 redis 容器直接换掉。
+name: ddp-service
+
 services:
   gateway:
     build: ../gateway

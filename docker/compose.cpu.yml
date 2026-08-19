@@ -17,6 +17,11 @@
 # 覆盖范围要说在前面：born-digital 只处理**有文字层的 PDF**。
 # 扫描件、表格结构、公式需要 mineru —— 见文件末尾被注释的 mineru 服务（CPU 上很慢）。
 
+# 固定 compose 项目名。**不能省**：项目名缺省取 compose 文件所在目录名，
+# 而两个仓库的这个目录都叫 docker —— 于是两边算出同一个项目名 "docker"，
+# 同名服务（redis）会互相顶掉：起 service 的 redis 会把 Web 的 redis 容器直接换掉。
+name: ddp-service
+
 services:
   gateway:
     build:
