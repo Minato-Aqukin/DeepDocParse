@@ -196,13 +196,14 @@ async def upload(
     request: Request,
     tasks: BackgroundTasks,
     file: UploadFile,
-    engine: str = Form("mineru"),
+    engine: str = Form(""),      # 留空取 settings.default_parse_engine（下方兜底）
     options: str = Form("{}"),
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
     storage: Storage = Depends(get_storage),
     service: ServiceClient = Depends(get_service_client),
 ):
+    engine = engine or settings.default_parse_engine
     data = await _read_capped(file)
     if not data:
         raise APIError(400, "uploaded file is empty", "invalid_request_error", "empty_file")
@@ -378,7 +379,7 @@ async def list_jobs(document_id: str, user: User = Depends(current_user),
 
 
 class ReparseRequest(BaseModel):
-    engine: str = "mineru"
+    engine: str = ""      # 留空取 settings.default_parse_engine（与 upload 对称）
     options: dict = {}
 
 
@@ -398,7 +399,8 @@ async def reparse(document_id: str, req: ReparseRequest, user: User = Depends(cu
         raise APIError(409, "original file is no longer available, please re-upload it",
                        "invalid_request_error", "source_missing")
 
-    digest = options_hash(req.engine, req.options)
+    engine = req.engine or settings.default_parse_engine
+    digest = options_hash(engine, req.options)
     job = (await session.execute(
         select(ParseJob).where(ParseJob.document_id == document.id,
                                ParseJob.options_hash == digest)
@@ -410,7 +412,7 @@ async def reparse(document_id: str, req: ReparseRequest, user: User = Depends(cu
                        created_at=job.created_at, archived_at=job.archived_at)
 
     if job is None:
-        job = ParseJob(document_id=document.id, engine=req.engine, options=req.options,
+        job = ParseJob(document_id=document.id, engine=engine, options=req.options,
                        options_hash=digest)
         session.add(job)
     else:

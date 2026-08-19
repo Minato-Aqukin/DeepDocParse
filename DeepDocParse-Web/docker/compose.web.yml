@@ -8,6 +8,11 @@
 #   - Windows 保留段 7964-8063 不可用 -> 一律走 1xxxx 段
 # 镜像一律 pin 版本，禁止 latest。
 
+# 固定 compose 项目名。**不能省**：项目名缺省取 compose 文件所在目录名，
+# 而两个仓库的这个目录都叫 docker —— 于是两边算出同一个项目名 "docker"，
+# 同名服务（redis）会互相顶掉：起 service 的 redis 会把 Web 的 redis 容器直接换掉。
+name: ddp-web
+
 services:
   postgres:
     # pgvector 镜像：问答的向量索引要 CREATE EXTENSION vector（迁移 0002 会建）。

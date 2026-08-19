@@ -6,10 +6,13 @@
 环境变量名 = 字段名大写（pydantic-settings 默认规则，未设前缀）。
 配置来源优先级：环境变量 > `backend/.env` > 仓库根 `.env` > 下表默认值。
 
-前端另有两个构建期变量（`frontend/.env*`，不在下表）：
-`VITE_API_TARGET`（dev server 代理到的后端地址）与 `VITE_API_BASE`（打包后请求的前缀）。
+前端另有三个构建期变量（`frontend/.env*`，不在下表）：
+`VITE_API_TARGET`（dev server 代理到的后端地址）、`VITE_API_BASE`（打包后请求的前缀），
+以及 `VITE_DEFAULT_ENGINE`（上传对话框预选的解析引擎，留空取 `ENGINES` 第一条）。
+**`VITE_DEFAULT_ENGINE` 要与后端 `DEFAULT_PARSE_ENGINE`、service 的 `models.yaml` 三者对齐**——
+任一处对不上，上传会在 service 侧收 404 unknown_engine。
 
-共 **45** 项。
+共 **46** 项。
 
 ## 本层资源
 
@@ -33,6 +36,7 @@
 | `SERVICE_URL` | `str` | `'http://127.0.0.1:9000'` | DeepDocParse gateway 的地址。解析平面必须走它，embedding/chat 缺省也回落到它 |
 | `MCP_URL` | `str` | `'http://127.0.0.1:9100'` | service 的 MCP 平面，/mcp 反代的上游 |
 | `SERVICE_TOKEN` | `str` | `'change-me'` | 与 service 之间的内网令牌，**必须与 DeepDocParse/.env 的 SERVICE_TOKEN 一致**。 它同时也是 /internal/* 回调端点的凭据 —— 占位值会被拒绝启动 |
+| `DEFAULT_PARSE_ENGINE` | `str` | `'mineru'` | 上传/重解析没有显式指定引擎时用哪个。**名字必须在 service 的 models.yaml 里存在**， 否则 service 返回 404 unknown_engine —— 这正是无 GPU 环境踩到的： models.cpu.yaml 只注册了 borndigital，本层却按名字写死 mineru，第一步就断。 与注册表驱动一致：换引擎 = 改这一行配置，不改代码 |
 | `EMBEDDING_URL` | `str` | `''` | 解析平面必须走 service（那是它的本职）；但 embedding 与 chat 只要求 OpenAI 兼容， 留独立配置以免把本层绑死在 DeepDocParse 的部署形态上（ADR #17）。 留空则回落到 {service_url}/v1/...，dev 下什么都不用配。 如直连 TEI：http://127.0.0.1:18080/v1/embeddings |
 | `EMBEDDING_TOKEN` | `str` | `''` | 留空用 service_token |
 | `EMBEDDING_MODEL` | `str` | `''` | 留空由上游注册表选 default |

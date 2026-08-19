@@ -34,8 +34,11 @@ INTRO = """\
 环境变量名 = 字段名大写（pydantic-settings 默认规则，未设前缀）。
 配置来源优先级：环境变量 > `backend/.env` > 仓库根 `.env` > 下表默认值。
 
-前端另有两个构建期变量（`frontend/.env*`，不在下表）：
-`VITE_API_TARGET`（dev server 代理到的后端地址）与 `VITE_API_BASE`（打包后请求的前缀）。
+前端另有三个构建期变量（`frontend/.env*`，不在下表）：
+`VITE_API_TARGET`（dev server 代理到的后端地址）、`VITE_API_BASE`（打包后请求的前缀），
+以及 `VITE_DEFAULT_ENGINE`（上传对话框预选的解析引擎，留空取 `ENGINES` 第一条）。
+**`VITE_DEFAULT_ENGINE` 要与后端 `DEFAULT_PARSE_ENGINE`、service 的 `models.yaml` 三者对齐**——
+任一处对不上，上传会在 service 侧收 404 unknown_engine。
 """
 
 SECTION_RE = re.compile(r"^\s*#\s*-+\s*(.+?)\s*-+\s*$")

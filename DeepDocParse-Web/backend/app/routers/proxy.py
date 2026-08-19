@@ -128,7 +128,12 @@ async def _proxy_parse_submit(request: Request, session: AsyncSession, key: ApiK
             payload = {}
         file_url = str(payload.get("file_url") or "")
         doc_id = str(payload.get("doc_id") or hashlib.sha256(file_url.encode()).hexdigest())
-        engine = str(payload.get("engine") or "mineru")
+        # 已知不精确：body 是**原样转发**的，调用方没传 engine 时真正决定用哪个引擎的是
+        # service 的注册表 default，而这里只能拿本层的配置去猜。两者配歪了，这行记的
+        # engine 就与实际用的不一致（只影响本层的展示与 options_hash，不影响解析本身）。
+        # 根治要靠契约把「这个任务用了哪个引擎」回给调用方 —— 那是向后兼容的新增，
+        # 但 openapi.yaml 目前没有，先记在这里而不是假装它准
+        engine = str(payload.get("engine") or settings.default_parse_engine)
         options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
         service_task_id = upstream.json().get("task_id")
 

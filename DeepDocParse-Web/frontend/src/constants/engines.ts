@@ -2,7 +2,12 @@
  * 解析引擎与其可调参数的 schema。
  *
  * **加一个引擎 = 在这里加一条配置**，上传对话框与重解析表单会自动长出对应的字段——
- * 它们共用 EngineOptionsForm，按 schema 渲染，没有任何一处写死 mineru。
+ * 它们共用 EngineOptionsForm，按 schema 渲染，表单本身不认识任何具体引擎。
+ *
+ * 但**这张表自己就是一处硬编码**：它是手工维护的，与后端 DEFAULT_PARSE_ENGINE、
+ * service 的 models.yaml 三处必须人工对齐，对不上就是上传时的 404 unknown_engine。
+ * 真正的解法是让 service 的 /v1/models 把 parse_engines 也列出来、由前端动态生成，
+ * 那是向后兼容的新增，但契约目前没有这个能力（见 openapi.yaml）。
  *
  * 参数名要与 service 侧 models.yaml 的引擎透传选项对齐：后端只是原样转发 options。
  */
@@ -52,9 +57,22 @@ export const ENGINES: EngineSchema[] = [
       },
     ],
   },
+  {
+    engine: 'borndigital',
+    label: 'Born-digital（无 GPU）',
+    description: '直接抽 PDF 文字层与坐标，出处三件套一样齐全；不处理扫描件、表格结构与公式',
+    // 没有可调参数：抽的是文字层本身，没有后端/语言可选
+    fields: [],
+  },
 ]
 
-export const DEFAULT_ENGINE = ENGINES[0]!.engine
+/**
+ * 缺省引擎。**必须与后端 DEFAULT_PARSE_ENGINE、service 的 models.yaml 三者对齐**——
+ * 任一处对不上，上传会在 service 侧收 404 unknown_engine。
+ * 无 GPU 部署（models.cpu.yaml）把它设成 borndigital。
+ */
+export const DEFAULT_ENGINE =
+  (import.meta.env.VITE_DEFAULT_ENGINE as string | undefined) || ENGINES[0]!.engine
 
 export function schemaOf(engine: string): EngineSchema | undefined {
   return ENGINES.find((e) => e.engine === engine)

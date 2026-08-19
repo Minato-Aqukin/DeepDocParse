@@ -27,9 +27,10 @@ class ServiceClient:
         return {"Authorization": f"Bearer {settings.service_token}"}
 
     async def submit_parse(self, file_url: str, doc_id: str, callback_url: str | None = None,
-                           engine: str = "mineru", options: dict | None = None) -> str:
+                           engine: str = "", options: dict | None = None) -> str:
         """POST /v1/parse -> task_id。队列满时 service 返回 429，原样抛给调用方处理。"""
-        payload: dict = {"file_url": file_url, "doc_id": doc_id, "engine": engine}
+        payload: dict = {"file_url": file_url, "doc_id": doc_id,
+                         "engine": engine or settings.default_parse_engine}
         if options:
             payload["options"] = options
         if callback_url:

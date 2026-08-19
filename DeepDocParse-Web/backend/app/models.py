@@ -127,7 +127,11 @@ class ParseJob(Base):
     document_id: Mapped[str] = mapped_column(String(32), ForeignKey("documents.id"), index=True)
     api_key_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("api_keys.id"),
                                                    default=None)
-    engine: Mapped[str] = mapped_column(String(32), default="mineru")
+    # 不给默认值：漏传就该在插入时炸，而不是悄悄记成 mineru —— 无 GPU 部署上
+    # 那个名字在 service 注册表里根本不存在（三处构造点都显式传 engine）。
+    # **光去掉这里的 default= 只在 SQLite 上生效**：PG 上 SQLAlchemy 会把整列从
+    # INSERT 里省掉，0002 建表时写的 server_default 照样兜底 —— 迁移 0004 把它摘了
+    engine: Mapped[str] = mapped_column(String(32))
     options: Mapped[dict] = mapped_column(JSON, default=dict)
     options_hash: Mapped[str] = mapped_column(String(64))
     service_task_id: Mapped[str | None] = mapped_column(String(64), index=True, default=None)

@@ -578,3 +578,64 @@ async def test_download_formats(auth_client, fmt, expected):
     await _callback(auth_client)
     resp = await auth_client.get(f"/api/documents/{document['id']}/download?format={fmt}")
     assert resp.status_code == expected
+
+
+@respx.mock
+async def test_upload_engine_follows_setting(auth_client, monkeypatch):
+    """上传不指定引擎时，用 DEFAULT_PARSE_ENGINE 而不是写死的 "mineru"。
+
+    引擎名必须在 service 的 models.yaml 里存在，否则 service 返回 404 unknown_engine。
+    无 GPU 部署（models.cpu.yaml）注册的是 borndigital —— 本层把 "mineru" 写死，
+    产品层第一步（上传）就断，M7 的 CPU 路径因此走不通。
+    """
+    monkeypatch.setattr(settings, "default_parse_engine", "borndigital")
+    routes = _mock_service()
+    await _upload(auth_client)
+
+    body = json.loads(routes["submit"].calls.last.request.content)
+    assert body["engine"] == "borndigital"
+
+
+@respx.mock
+async def test_upload_explicit_engine_wins_over_setting(auth_client, monkeypatch):
+    """显式传 engine 仍然优先——配置只是缺省值，不能覆盖调用方的明确选择。"""
+    monkeypatch.setattr(settings, "default_parse_engine", "borndigital")
+    routes = _mock_service()
+    resp = await auth_client.post("/api/documents",
+                                  files={"file": ("sample.pdf", PDF, "application/pdf")},
+                                  data={"engine": "mineru"})
+    assert resp.status_code == 202, resp.text
+    assert json.loads(routes["submit"].calls.last.request.content)["engine"] == "mineru"
+
+
+@respx.mock
+async def test_reparse_engine_follows_setting(auth_client, monkeypatch):
+    """重解析不指定引擎时同样走 DEFAULT_PARSE_ENGINE。
+
+    upload 改了而 reparse 没改，是第一版漏掉的那一处：e2e 的重解析场景显式传了
+    engine，正好把它遮住，无 GPU 部署上任何不带 engine 的重解析都会 502。
+    """
+    monkeypatch.setattr(settings, "default_parse_engine", "borndigital")
+    routes = _mock_service()
+    document = await _upload(auth_client)
+    await _callback(auth_client)
+
+    again = await auth_client.post(f"/api/documents/{document['id']}/reparse",
+                                   json={"options": {"lang": "ch"}})
+    assert again.status_code == 202, again.text
+    assert again.json()["engine"] == "borndigital"
+    assert json.loads(routes["submit"].calls.last.request.content)["engine"] == "borndigital"
+
+
+@respx.mock
+async def test_reparse_explicit_engine_wins_over_setting(auth_client, monkeypatch):
+    """显式传 engine 仍然优先（与 upload 同一语义）。"""
+    monkeypatch.setattr(settings, "default_parse_engine", "borndigital")
+    routes = _mock_service()
+    document = await _upload(auth_client)
+    await _callback(auth_client)
+
+    again = await auth_client.post(f"/api/documents/{document['id']}/reparse",
+                                   json={"engine": "mineru", "options": {"lang": "ch"}})
+    assert again.status_code == 202, again.text
+    assert json.loads(routes["submit"].calls.last.request.content)["engine"] == "mineru"

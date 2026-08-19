@@ -23,7 +23,10 @@
 用法：
   python scripts/e2e_web.py                 # 全部
   python scripts/e2e_web.py --skip-mcp      # mcp_server 没起时
-环境变量：WEB_URL / FIXTURE / DATABASE_URL（核对 chunks 表）
+  # 无 GPU（models.cpu.yaml，只注册 borndigital；没有 TEI 时向量索引那几项会红）：
+  E2E_ENGINE=borndigital E2E_ENGINE_OPTIONS='{"lang": "ch"}' python scripts/e2e_web.py --phase parse
+环境变量：WEB_URL / FIXTURE / DATABASE_URL（核对 chunks 表）/
+          E2E_ENGINE / E2E_ENGINE_OPTIONS（重解析场景用哪个引擎与参数）
 """
 import argparse
 import asyncio
@@ -42,6 +45,12 @@ FIXTURE = os.environ.get(
 )
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql+asyncpg://ddp:ddp@127.0.0.1:15432/deepdocparse")
+# 重解析场景要"换一组参数"，参数是引擎相关的。缺省是 mineru（有 GPU 的机器不受影响）；
+# 无 GPU 环境用 E2E_ENGINE=borndigital E2E_ENGINE_OPTIONS='{"lang": "ch"}' ——
+# borndigital 不认任何 option，但 options_hash 照样变，版本机制本身仍被验到
+ENGINE = os.environ.get("E2E_ENGINE", "mineru")
+ENGINE_OPTIONS = json.loads(
+    os.environ.get("E2E_ENGINE_OPTIONS", '{"backend": "pipeline", "lang": "ch"}'))
 
 POLL_LIMIT, POLL_INTERVAL = 90, 5
 failures: list[str] = []
@@ -228,8 +237,7 @@ async def scenario_search_and_versions(http: httpx.AsyncClient, headers: dict,
     check("跨文档检索有命中", bool(hits["groups"]), json.dumps(hits)[:120])
 
     again = await http.post(f"{WEB}/api/documents/{document['id']}/reparse", headers=headers,
-                            json={"engine": "mineru", "options": {"backend": "pipeline",
-                                                                  "lang": "ch"}})
+                            json={"engine": ENGINE, "options": ENGINE_OPTIONS})
     if check("换参数重解析被受理", again.status_code == 202, again.text[:200]):
         jobs = (await http.get(f"{WEB}/api/documents/{document['id']}/jobs",
                                headers=headers)).json()

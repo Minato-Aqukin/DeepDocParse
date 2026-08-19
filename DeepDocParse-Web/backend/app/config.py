@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     # 与 service 之间的内网令牌，**必须与 DeepDocParse/.env 的 SERVICE_TOKEN 一致**。
     # 它同时也是 /internal/* 回调端点的凭据 —— 占位值会被拒绝启动
     service_token: str = "change-me"
+    # 上传/重解析没有显式指定引擎时用哪个。**名字必须在 service 的 models.yaml 里存在**，
+    # 否则 service 返回 404 unknown_engine —— 这正是无 GPU 环境踩到的：
+    # models.cpu.yaml 只注册了 borndigital，本层却按名字写死 mineru，第一步就断。
+    # 与注册表驱动一致：换引擎 = 改这一行配置，不改代码
+    default_parse_engine: str = "mineru"
     # 解析平面必须走 service（那是它的本职）；但 embedding 与 chat 只要求 OpenAI 兼容，
     # 留独立配置以免把本层绑死在 DeepDocParse 的部署形态上（ADR #17）。
     # 留空则回落到 {service_url}/v1/...，dev 下什么都不用配。
@@ -129,6 +134,20 @@ class Settings(BaseSettings):
     # 允许跨源访问的前端地址，逗号分隔。默认是 dev 的 Vite（5173）——
     # 换部署形态时必须能改配置而不是改代码
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    @model_validator(mode="after")
+    def _check_default_parse_engine(self):
+        """缺省引擎不能是空串。
+
+        空串现在是"走 service 注册表缺省"的约定值，解析本身会成功，但本层会把
+        ParseJob.engine 存成空串、options_hash 也按空串算 —— 历史版本从此对不上号。
+        要用注册表缺省就让 service 去决定，不要把空串配进本层。
+        """
+        if not self.default_parse_engine.strip():
+            raise ValueError(
+                "DEFAULT_PARSE_ENGINE 不能为空：它要与 service 的 models.yaml 里的"
+                " 引擎名一致（无 GPU 部署填 borndigital）")
+        return self
 
     @model_validator(mode="after")
     def _check_similarity_thresholds(self):

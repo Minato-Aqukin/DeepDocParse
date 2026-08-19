@@ -59,9 +59,25 @@ service 侧的向量索引永远命中不到。详见 ADR #12（文档身份本�
 
 ## 快速开始（无 GPU 也能跑）
 
+service 侧用 [../DeepDocParse/README.md](../DeepDocParse/README.md) 的
+**CPU 快速开始**（`compose.cpu.yml`）即可，不需要显卡：解析走 born-digital 引擎，
+问答会带 `degraded="vision_unavailable"` 标记 —— 那是设计好的降级路径，不是故障。
+
+**走 CPU 那套时，先把引擎名对齐再往下走**，否则上传第一步就会收到
+`404 unknown parse engine: mineru`（`compose.cpu.yml` 的注册表里只有 borndigital）：
+
 ```bash
 cp .env.example .env          # SERVICE_TOKEN 必须与 DeepDocParse/.env 一致
 
+# 无 GPU 时这两处都要改成 borndigital，与 service models.yaml 里的引擎名三者一致
+#   .env                  DEFAULT_PARSE_ENGINE=borndigital
+#   frontend/.env.local   VITE_DEFAULT_ENGINE=borndigital
+```
+
+> 浏览器里用过旧配置的话，上传对话框会继续沿用 `localStorage` 里的引擎偏好
+> （`ddp.pref.engine`），盖过上面的缺省值 —— 在设置页重选一次，或清掉该项。
+
+```bash
 # 1. 有状态组件（PostgreSQL 15432 / MinIO 19000、控制台 19001）
 cd docker && docker compose -f compose.web.yml --env-file ../.env up -d
 
@@ -73,9 +89,28 @@ cd backend && ../.venv/bin/alembic upgrade head
 cd frontend && npm install && npm run dev
 ```
 
-service 侧用 [../DeepDocParse/README.md](../DeepDocParse/README.md) 的
-**CPU 快速开始**（`compose.cpu.yml`）即可，不需要显卡：解析走 born-digital 引擎，
-问答会带 `degraded="vision_unavailable"` 标记 —— 那是设计好的降级路径，不是故障。
+> **从 2026-08 之前的版本升上来的注意：compose 项目名变了。**
+> 以前项目名缺省取目录名 `docker`，现在固定成 `ddp-web`（service 侧是 `ddp-service`）——
+> 因为两个仓库的 compose 目录都叫 `docker`，缺省项目名会撞车，同名的 `redis`
+> 服务会互相顶掉。**项目名变了卷名也跟着变**（`docker_pgdata` → `ddp-web_pgdata`），
+> 直接 `up` 会挂到一个空库上，老数据看起来就像消失了（其实还在旧卷里）。二选一：
+>
+> ```bash
+> # A. 继续用旧项目名，什么都不用搬
+> docker compose -p docker -f compose.web.yml --env-file ../.env up -d
+>
+> # B. 把数据搬到新卷（先停掉旧项目，避免两边同时写）
+> docker compose -p docker -f compose.web.yml --env-file ../.env down
+> docker run --rm -v docker_pgdata:/from -v ddp-web_pgdata:/to alpine sh -c 'cp -a /from/. /to/'
+> docker run --rm -v docker_miniodata:/from -v ddp-web_miniodata:/to alpine sh -c 'cp -a /from/. /to/'
+> docker compose -f compose.web.yml --env-file ../.env up -d
+> ```
+>
+> 方案 B 之后 compose 会对这两个卷各打一条
+> `volume ... already exists but was not created by Docker Compose` 警告 —— 卷照常挂载、
+> 数据完好，忽略即可。（这里刻意不写 shell 的 for 循环：本项目的交互 shell 常是
+> fish/zsh，bash 的 `for ... do ... done` 在 fish 里是语法错。）
+
 
 **唯一还需要你自己准备的是一个 OpenAI 兼容的 chat 端点**（本层只要求协议兼容，
 不绑定 DeepDocParse 的部署形态，见 ADR #17）。本地 llama.cpp / Ollama / 任意托管 API 都行：
@@ -90,7 +125,7 @@ CHAT_MODEL=qwen3:8b
 
 ## 配置
 
-全部 45 项配置见 [docs/CONFIG.md](docs/CONFIG.md)（由 `scripts/gen_config_docs.py`
+全部 46 项配置见 [docs/CONFIG.md](docs/CONFIG.md)（由 `scripts/gen_config_docs.py`
 从 `backend/app/config.py` 生成，CI 会检查它有没有过期）。
 
 ## 验证

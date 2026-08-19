@@ -107,8 +107,8 @@ async def test_result_metering_with_shared_service_task(client, auth_client, api
                        object_key="sources/x/a.pdf", page_count=3)
     session.add(web_doc)
     await session.commit()
-    session.add(ParseJob(document_id=web_doc.id, options_hash="web", service_task_id="s-shared",
-                         status="succeeded", page_count=3))
+    session.add(ParseJob(document_id=web_doc.id, engine="mineru", options_hash="web",
+                         service_task_id="s-shared", status="succeeded", page_count=3))
     await session.commit()
 
     submit = await client.post("/v1/parse", headers=_auth(api_key),
