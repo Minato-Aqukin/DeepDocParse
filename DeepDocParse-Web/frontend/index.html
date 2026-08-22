@@ -1,10 +1,31 @@
 <!DOCTYPE html>
-<html lang="">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8">
     <link rel="icon" href="/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vite App</title>
+    <title>DeepDocParse</title>
+    <!-- 视觉规范用两族字：Inter 排界面，IBM Plex Mono 排数据（哈希/时间戳/编号）。
+         Noto Sans SC 兜中文 —— 前两族都没有汉字，缺了它中文会掉到系统字体。 -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+    <script>
+      // 防白闪：在首帧之前定好主题，否则深色用户会先看到一帧白底。
+      // 键名与取值必须和 @vueuse/core 的 useDark 对齐（见 src/composables/useTheme.ts）：
+      // 存 'dark' / 'light' / 'auto'，浅色也要显式打 light 类 —— ddp-tokens.css 的
+      // 媒体查询守卫是 :not(.light)，没有这个类的话手动选浅色会被系统深色打回去。
+      (function () {
+        try {
+          var saved = localStorage.getItem('vueuse-color-scheme') || 'auto'
+          var dark = saved === 'dark' ||
+            (saved === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.classList.add(dark ? 'dark' : 'light')
+        } catch (e) {
+          /* 隐私模式下 localStorage 会抛异常，此时交给 CSS 的媒体查询兜底 */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

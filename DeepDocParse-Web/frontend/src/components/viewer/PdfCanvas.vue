@@ -143,7 +143,10 @@ canvas {
   width: 100%;
   height: auto;
   display: block;
-  box-shadow: 0 0 0 1px var(--el-border-color-light);
+  /* 零模糊零偏移的描边，不是投影 —— 准则五禁的是表示高度的投影。
+     canvas 用真 border 会把 1px 算进盒模型、和 pdf.js 的位图尺寸对不齐，
+     所以这道线只能用 box-shadow 画。审计到这条不用改。 */
+  box-shadow: 0 0 0 1px var(--ddp-line);
 }
 .overlay {
   position: absolute;
@@ -158,7 +161,7 @@ canvas {
 /* 分块边界：只读叠加层，虚线细框、无填充，且 pointer-events: none ——
    它铺满整页，一旦可点就会把出处高亮的点击全部吃掉 */
 .box.chunk {
-  outline: 1px dashed rgba(120, 120, 120, 0.75);
+  outline: 1px dashed var(--ddp-line-2);
   background: transparent;
   pointer-events: none;
   cursor: default;
@@ -166,16 +169,18 @@ canvas {
 .box.chunk:hover {
   background: transparent;
 }
-/* 出处：明确的强调色；选中：轻量提示。两者都不能挡住底下的字 */
+/* 出处：全站唯一允许用红的地方（准则一）。选中只是"我点了这一块"，
+   不是出处，所以走墨色 —— 让红始终只意味着"这是从原件上取下来的"。
+   两者都不能挡住底下的字。 */
 .box.citation {
-  background: rgba(42, 120, 214, 0.22);
-  outline: 2px solid rgba(42, 120, 214, 0.85);
+  background: color-mix(in srgb, var(--ddp-cite) 18%, transparent);
+  outline: 2px solid var(--ddp-cite);
 }
 .box.selected {
-  background: rgba(235, 104, 52, 0.18);
-  outline: 1px solid rgba(235, 104, 52, 0.7);
+  background: color-mix(in srgb, var(--ddp-ink) 10%, transparent);
+  outline: 1px solid var(--ddp-ink-3);
 }
 .box:hover {
-  background: rgba(42, 120, 214, 0.32);
+  background: color-mix(in srgb, var(--ddp-cite) 28%, transparent);
 }
 </style>

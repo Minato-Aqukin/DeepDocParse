@@ -2,6 +2,7 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, ref } from 'vue'
 
+import StatusTag from '@/components/common/StatusTag.vue'
 import { keysApi, type CreateKeyPayload } from '@/api'
 import type { KeyInfo } from '@/types/api'
 
@@ -50,7 +51,7 @@ async function copy(text: string) {
 function expiryText(key: KeyInfo) {
   if (!key.expires_at) return '永不过期'
   const at = new Date(key.expires_at)
-  return `${at.toLocaleDateString()}${at < new Date() ? '（已过期）' : ''}`
+  return `${at.toLocaleDateString('zh-CN')}${at < new Date() ? '（已过期）' : ''}`
 }
 
 onMounted(refresh)
@@ -90,16 +91,17 @@ onMounted(refresh)
       <el-table-column label="过期" width="150">
         <template #default="{ row }">{{ expiryText(row) }}</template>
       </el-table-column>
-      <el-table-column label="最近使用" width="170">
+      <el-table-column label="最近使用" width="196">
         <template #default="{ row }">
-          {{ row.last_used_at ? new Date(row.last_used_at).toLocaleString() : '—' }}
+          <span class="ddp-num">{{ row.last_used_at ? new Date(row.last_used_at).toLocaleString('zh-CN') : '—' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="状态" width="94">
         <template #default="{ row }">
-          <el-tag size="small" :type="row.revoked_at ? 'danger' : 'success'">
-            {{ row.revoked_at ? '已吊销' : '可用' }}
-          </el-tag>
+          <StatusTag
+            :label="row.revoked_at ? '已吊销' : '可用'"
+            :type="row.revoked_at ? 'danger' : 'success'"
+          />
         </template>
       </el-table-column>
       <el-table-column label="操作" width="90" fixed="right">

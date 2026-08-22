@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-import { similarityText } from '@/constants/status'
+import StatusTag from '@/components/common/StatusTag.vue'
+import { DEFAULT_WARN_BELOW, similarityText } from '@/constants/status'
 import type { Citation } from '@/types/api'
 
 /**
@@ -20,7 +21,7 @@ import type { Citation } from '@/types/api'
  */
 const props = withDefaults(
   defineProps<{ citation: Citation; index: number; cropUrl?: string; warnBelow?: number }>(),
-  { warnBelow: 0.6 },   // 后端没给时的兜底，与 qa_low_similarity 的默认值一致
+  { warnBelow: DEFAULT_WARN_BELOW },   // 后端没给时的兜底，与 qa_low_similarity 的默认值一致
 )
 defineEmits<{ (e: 'locate'): void }>()
 
@@ -42,13 +43,13 @@ const tooltip = computed(() =>
     <img v-if="cropUrl" :src="cropUrl" alt="出处截图" />
     <div class="cite-text">
       <div class="line">
-        <b>[{{ index }}] 第 {{ citation.page_idx + 1 }} 页</b>
+        <b class="ddp-cite-page">[{{ index }}] 第 {{ citation.page_idx + 1 }} 页</b>
         <el-tooltip :content="tooltip">
-          <el-tag size="small" :type="tagType" effect="plain">相关度 {{ percent ?? '—' }}</el-tag>
+          <StatusTag :label="`相关度 ${percent ?? '—'}`" :type="tagType" />
         </el-tooltip>
         <el-tooltip v-if="citation.resolved === false"
                     content="这条出处指向的分块已随重建索引失效，无法再定位到原文">
-          <el-tag size="small" type="danger" effect="plain">出处已失效</el-tag>
+          <StatusTag label="出处已失效" type="danger" />
         </el-tooltip>
       </div>
       <span class="snippet">{{ citation.snippet }}</span>

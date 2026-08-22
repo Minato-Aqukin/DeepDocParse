@@ -35,7 +35,7 @@ async function submit() {
 </script>
 
 <template>
-  <el-card class="box">
+  <el-card class="box" shadow="never">
     <template #header>
       <div class="head">
         <span class="title">DeepDocParse</span>

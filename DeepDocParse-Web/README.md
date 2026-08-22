@@ -189,3 +189,32 @@ README 顶部与**每个页面的页脚**（`frontend/src/layouts/AppShell.vue`�
   - [x] C1/C2 Apache-2.0 + MinerU 归属（README / NOTICE / 每个页面的页脚）
   - [x] C3 GitHub Actions：后端单测 + 迁移双向跑（真 PG）+ 前端类型检查
   - [x] C5 英文 README（[README.en.md](README.en.md)）
+- [x] M8 视觉规范落地（**DDP-VD-001 REV.04**，规范正文与可点原型在工作区的 `design-previews/`，未版本化）：
+  - [x] 设计令牌与 Element Plus 映射进 `frontend/src/assets/ddp/`（四个 CSS，无构建步骤）。
+        主色定义成**墨色**而不是品牌色 —— 骨架里 29 处 `--el-color-primary` 因此一次性收敛，
+        红另立 `--ddp-cite`，只留给出处与出错
+  - [x] **深色模式从零建立**：导入 `element-plus/theme-chalk/dark/css-vars.css`，
+        `useDark({ valueLight: 'light' })` + `index.html` 防闪脚本。
+        `valueLight` 不能省 —— 少了 `.light` 类，"系统深色 + 手动选浅色"会被媒体查询打回深色
+  - [x] `StatusTag.vue`：14 处 `el-tag` 彩色药丸换成"实心点＝终态 / 空心圈＝进行中 + 一行字"，
+        **黑白打印与色觉障碍下仍可读**。`constants/status.ts` 一个字未改，仍是文案唯一来源
+  - [x] 13 处硬编码色收敛为令牌：**出处高亮从蓝色改成红色**（准则一：红只属于出处与出错），
+        选中态从橙色改成墨色，柱图两个野生品牌色改成墨色深浅两档
+  - [x] 独立验收抓到 **5 个阻塞项**，均已修并用构建产物实测复核：
+        `--el-box-shadow-light: none` 把**所有浮层**的影一起干掉（它不是"卡片的影"，
+        EP 拿它给 select/dropdown/menu-popup/message 画影）；主按钮只治了静息态，
+        hover 被 EP 的 `(0,2,0)` 反压成白字白底（深色档对比度 2.56:1）；
+        漏了 `--el-color-primary-dark-2`，按下主按钮闪 EP 原生蓝；
+        两种聊天气泡撞成同色，分不出谁在说话；`.ddp-num` 定义了却零使用
+  - [x] 自查：`letter-spacing` 0 处、硬编码色 0 处、`el-tag` 0 处、静态容器投影 0 处；
+        八个页面 × 深浅两档逐屏截图核对
+  - [x] **前端没有任何自动化测试**（无 vitest/eslint），唯一门禁是 `npm run build` 里的 `vue-tsc`，
+        所以视觉部分全靠人工截图核对 —— 这是这条里程碑最大的验证缺口
+  - [x] 二次验收通过，另修掉它指出的 4 项：`toLocaleString()` 跟的是**浏览器**语言而不是
+        `<html lang>`，en-US 下时间戳变 `12/22/2026, 10:49:20 PM`（217px）会被三个时间列
+        静默截断 —— 已钉 `'zh-CN'`；`大小` 列 100px 到 1GB 溢出，加宽到 112px；
+        主按钮 hover 与 active 撞成同色（没有按压反馈）；禁用态文字色被 EP 的
+        `html.dark .el-button` (0,2,1) 压掉，那行声明一直是空转
+  - [x] **已知代价**：字体走 Google Fonts CDN，断网或校园网受限时中文会回退到系统字体；
+        规范建议改本地打包 woff2，本轮未做。`Noto Sans SC` 只请求了 400/500/700，
+        而标题字重是 600 —— 中文标题靠浏览器合成

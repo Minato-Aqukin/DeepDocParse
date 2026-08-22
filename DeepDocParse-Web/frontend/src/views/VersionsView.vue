@@ -4,6 +4,7 @@ import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { documentsApi } from '@/api'
+import StatusTag from '@/components/common/StatusTag.vue'
 import EngineOptionsForm from '@/components/engine/EngineOptionsForm.vue'
 import { pruneOptions } from '@/constants/engines'
 import { parseStatusOf } from '@/constants/status'
@@ -67,7 +68,7 @@ onMounted(load)
       <el-table-column label="版本" width="200">
         <template #default="{ row }">
           <code>{{ row.id.slice(0, 8) }}</code>
-          <el-tag v-if="row.is_current" size="small" type="success" class="tag">当前</el-tag>
+          <StatusTag v-if="row.is_current" label="当前" type="success" class="tag" />
         </template>
       </el-table-column>
       <el-table-column prop="engine" label="引擎" width="100" />
@@ -78,15 +79,13 @@ onMounted(load)
       </el-table-column>
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
-          <el-tag :type="parseStatusOf(row.status).type" size="small">
-            {{ parseStatusOf(row.status).label }}
-          </el-tag>
+          <StatusTag :meta="parseStatusOf(row.status)" />
         </template>
       </el-table-column>
-      <el-table-column prop="page_count" label="页数" width="80" />
-      <el-table-column label="完成时间" width="180">
+      <el-table-column prop="page_count" label="页数" width="80" align="right" class-name="ddp-num" />
+      <el-table-column label="完成时间" width="206">
         <template #default="{ row }">
-          {{ row.archived_at ? new Date(row.archived_at).toLocaleString() : '—' }}
+          <span class="ddp-num">{{ row.archived_at ? new Date(row.archived_at).toLocaleString('zh-CN') : '—' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="120" fixed="right">

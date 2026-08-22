@@ -1,0 +1,115 @@
+/* ==========================================================================
+   DDP 设计令牌  ·  DDP-VD-001 REV.04
+   直接引入即可，不需要任何构建步骤。规则说明见 DESIGN-GUIDE.md。
+
+   三档主题写法（缺一不可）：
+     :root                      → 完整浅色（任何颜色都必须在这里有定义）
+     @media (prefers-color-scheme: dark)
+       + :not([data-theme="light"]):not(.light)
+                                → 跟随系统深色，但手动选了浅色就不生效。
+                                  **两个 :not 缺一不可**：useDark 用的是 class，
+                                  漏掉 :not(.light) 会让"系统深色 + 手动选浅色"被打回深色
+     :root.dark / [data-theme="dark"]
+                                → 手动切深色，两个方向都赢
+   `.dark` 是给 Element Plus / VueUse useDark() 用的，它切的就是 html.dark。
+   ========================================================================== */
+
+:root {
+  /* ---- 面：近中性暖灰。留一点点暖是为了长时间读文档不刺眼，不是为了模仿纸 ---- */
+  --ddp-ground:   #f7f7f5;   /* 页底 */
+  --ddp-ground-2: #f2f2ef;   /* 侧栏 */
+  --ddp-panel:    #ffffff;   /* 面板 / 卡片 */
+  --ddp-panel-2:  #f5f5f3;   /* 次级面、行悬停 */
+  --ddp-panel-3:  #ebebe8;   /* 进度条槽 */
+
+  /* ---- 字 ---- */
+  --ddp-ink:   #1a1a18;      /* 正文、主按钮底 */
+  --ddp-ink-2: #61605b;      /* 次级文字 */
+  --ddp-ink-3: #94938d;      /* 三级文字、占位符、表头 */
+
+  /* ---- 线 ---- */
+  --ddp-line:   #e6e5e1;     /* 容器描边、表格行线 */
+  --ddp-line-2: #d8d7d2;     /* 输入框、次按钮描边 */
+
+  /* ---- 重音 ----
+     准则一：一个界面只有一种红。通用重音是墨色，红另立门户。
+     --ddp-cite 只许出现在：bbox、命中高亮、引用条目的页码。 */
+  --ddp-accent:      var(--ddp-ink);
+  --ddp-accent-ink:  #ffffff;
+  --ddp-accent-soft: #eeedea;
+  --ddp-cite:        #9c3626;
+
+  /* ---- 语义色：只出现在状态点与 alert 上，绝不做大面积底色 ---- */
+  --ddp-ok:     #3f7a52;  --ddp-ok-soft:     #edf3ef;
+  --ddp-warn:   #8a6a1e;  --ddp-warn-soft:   #f6f0e2;
+  --ddp-danger: #a3372a;  --ddp-danger-soft: #f7ebe8;   /* 失败 + 破坏性操作 */
+  --ddp-info:   #3f6d8a;  --ddp-info-soft:   #edf1f4;
+
+  /* ---- 形状 ---- */
+  --ddp-r-sm: 4px;  --ddp-r: 6px;  --ddp-r-lg: 10px;  --ddp-r-pill: 999px;
+  --ddp-bw: 1px;
+
+  /* ---- 字体：两族，够了 ----
+     等宽栈里必须紧跟一族有汉字的无衬线：等宽族没有汉字，掉到通用 monospace
+     会被排成全角，"设计令牌"就变成"设 计 令 牌"。 */
+  --ddp-font:      'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  --ddp-font-mono: 'IBM Plex Mono', 'Noto Sans SC', ui-monospace, SFMono-Regular, monospace;
+
+  --ddp-fs: 15px;          /* 正文 */
+  --ddp-lh: 1.7;
+  --ddp-weight-title: 600;
+  --ddp-tracking: 0;       /* 准则六：钉死 0，中文永不加字距 */
+
+  /* ---- 间距 ---- */
+  --ddp-pad: 20px;         /* 容器内边距 */
+  --ddp-gap: 14px;         /* 元素间距 */
+  --ddp-row-h: 44px;       /* 表格行高 */
+  --ddp-nav-w: 240px;
+
+  /* ---- 高度：准则五，静态容器无影 ---- */
+  --ddp-shadow-flat: none;
+  --ddp-shadow-pop:  0 1px 2px rgba(24, 24, 22, .05),
+                     0 12px 32px -14px rgba(24, 24, 22, .22);
+
+  /* ---- 动效：短、不弹 ---- */
+  --ddp-dur: .16s;  --ddp-dur-2: .24s;
+  --ddp-ease: cubic-bezier(.2, .6, .3, 1);
+
+  /* ---- 滚动条 ---- */
+  --ddp-sb: #d5d4cf;  --ddp-sb-hover: #b4b3ad;
+}
+
+/* 跟随系统深色（用户没有手动选浅色时） */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not(.light) {
+    --ddp-ground: #0f0f0e; --ddp-ground-2: #0b0b0a; --ddp-panel: #171716;
+    --ddp-panel-2: #1e1e1c; --ddp-panel-3: #272724;
+    --ddp-ink: #ececea; --ddp-ink-2: #a3a29c; --ddp-ink-3: #77766f;
+    --ddp-line: #262523; --ddp-line-2: #34332f;
+    --ddp-accent-ink: #17110f; --ddp-accent-soft: #24231f;
+    --ddp-cite: #e0715c;
+    --ddp-ok: #6fae7f;     --ddp-ok-soft: #17231a;
+    --ddp-warn: #cfa752;   --ddp-warn-soft: #262013;
+    --ddp-danger: #e0715c; --ddp-danger-soft: #2b1613;
+    --ddp-info: #7fa9c4;   --ddp-info-soft: #16222a;
+    --ddp-shadow-pop: 0 1px 2px rgba(0, 0, 0, .5), 0 16px 40px -16px rgba(0, 0, 0, .75);
+    --ddp-sb: #33322e; --ddp-sb-hover: #4b4a45;
+  }
+}
+
+/* 手动切深色。.dark 是 Element Plus / VueUse useDark() 用的类名 */
+:root.dark,
+:root[data-theme="dark"] {
+  --ddp-ground: #0f0f0e; --ddp-ground-2: #0b0b0a; --ddp-panel: #171716;
+  --ddp-panel-2: #1e1e1c; --ddp-panel-3: #272724;
+  --ddp-ink: #ececea; --ddp-ink-2: #a3a29c; --ddp-ink-3: #77766f;
+  --ddp-line: #262523; --ddp-line-2: #34332f;
+  --ddp-accent-ink: #17110f; --ddp-accent-soft: #24231f;
+  --ddp-cite: #e0715c;
+  --ddp-ok: #6fae7f;     --ddp-ok-soft: #17231a;
+  --ddp-warn: #cfa752;   --ddp-warn-soft: #262013;
+  --ddp-danger: #e0715c; --ddp-danger-soft: #2b1613;
+  --ddp-info: #7fa9c4;   --ddp-info-soft: #16222a;
+  --ddp-shadow-pop: 0 1px 2px rgba(0, 0, 0, .5), 0 16px 40px -16px rgba(0, 0, 0, .75);
+  --ddp-sb: #33322e; --ddp-sb-hover: #4b4a45;
+}

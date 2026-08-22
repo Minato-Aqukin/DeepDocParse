@@ -39,7 +39,7 @@ onMounted(loadProfile)
         </el-descriptions-item>
         <el-descriptions-item label="邮箱">{{ auth.profile?.email || '未绑定' }}</el-descriptions-item>
         <el-descriptions-item label="注册时间">
-          {{ auth.profile ? new Date(auth.profile.created_at).toLocaleString() : '—' }}
+          <span class="ddp-num">{{ auth.profile ? new Date(auth.profile.created_at).toLocaleString('zh-CN') : '—' }}</span>
         </el-descriptions-item>
         <el-descriptions-item label="用户 ID">
           <code>{{ auth.profile?.user_id ?? '—' }}</code>

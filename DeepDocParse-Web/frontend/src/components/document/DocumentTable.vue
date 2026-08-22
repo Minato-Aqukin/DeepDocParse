@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import StatusTag from '@/components/common/StatusTag.vue'
 import type { DocumentInfo, DownloadFormat } from '@/types/api'
 import { indexStatusOf, parseStatusOf } from '@/constants/status'
 
@@ -53,9 +54,7 @@ function onCommand(command: string, doc: DocumentInfo) {
       <el-table-column label="解析" width="100">
         <template #default="{ row }">
           <el-tooltip :content="row.error" :disabled="!row.error">
-            <el-tag :type="parseStatusOf(row.status).type" size="small">
-              {{ parseStatusOf(row.status).label }}
-            </el-tag>
+            <StatusTag :meta="parseStatusOf(row.status)" />
           </el-tooltip>
         </template>
       </el-table-column>
@@ -63,21 +62,23 @@ function onCommand(command: string, doc: DocumentInfo) {
       <el-table-column label="问答" width="110">
         <template #default="{ row }">
           <el-tooltip :content="row.index_error" :disabled="!row.index_error">
-            <el-tag :type="indexStatusOf(row.index_status).type" size="small">
-              {{ indexStatusOf(row.index_status).label }}
-            </el-tag>
+            <StatusTag :meta="indexStatusOf(row.index_status)" />
           </el-tooltip>
         </template>
       </el-table-column>
 
-      <el-table-column prop="page_count" label="页数" width="76" />
+      <el-table-column prop="page_count" label="页数" width="76" align="right" class-name="ddp-num" />
 
-      <el-table-column label="大小" width="96">
+      <!-- 等宽下 100px 只够到 100MB；1048576 KB 会溢出，留到 112px -->
+      <el-table-column label="大小" width="112" align="right" class-name="ddp-num">
         <template #default="{ row }">{{ (row.size_bytes / 1024).toFixed(0) }} KB</template>
       </el-table-column>
 
-      <el-table-column label="提交时间" width="170">
-        <template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template>
+      <!-- 等宽比比例字宽，170px 装不下"2026/8/22 20:49:20"，会被截成 20:49… -->
+      <el-table-column label="提交时间" width="196">
+        <template #default="{ row }">
+          <span class="ddp-num">{{ new Date(row.created_at).toLocaleString('zh-CN') }}</span>
+        </template>
       </el-table-column>
 
       <el-table-column label="操作" width="150" fixed="right">

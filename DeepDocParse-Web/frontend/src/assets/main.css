@@ -11,12 +11,7 @@ body,
   height: 100%;
 }
 
-body {
-  font-family:
-    'Inter', 'Helvetica Neue', Helvetica, 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif;
-  color: var(--el-text-color-primary);
-  background: var(--el-bg-color-page);
-}
+/* 字体、字色、底色由 assets/ddp/ddp-base.css 接管，这里不再定义第二份。 */
 
 .markdown-body {
   line-height: 1.7;

@@ -3,7 +3,8 @@ import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { searchApi } from '@/api'
-import { similarityText } from '@/constants/status'
+import StatusTag from '@/components/common/StatusTag.vue'
+import { DEFAULT_WARN_BELOW, similarityText } from '@/constants/status'
 import type { SearchResult } from '@/types/api'
 
 /** 跨文档检索：命中带页码，点击直达工作台对应页。 */
@@ -58,12 +59,15 @@ watch(() => route.query.q, run, { immediate: true })
     </template>
     <div v-for="(hit, i) in group.hits" :key="i" class="hit"
          @click="router.push(`/documents/${group.document_id}`)">
-      <el-tag size="small" type="info">第 {{ hit.page_idx + 1 }} 页</el-tag>
-      <!-- 相关度用 similarity（有校准量纲），不用 score（RRF 名次分，表达不了相关度） -->
-      <el-tag v-if="similarityText(hit.similarity)" size="small" effect="plain"
-              :type="(hit.similarity ?? 0) >= 0.6 ? 'success' : 'warning'">
-        {{ similarityText(hit.similarity) }}
-      </el-tag>
+      <!-- 页码是元信息不是状态，按准则二排成普通文字，不做成标签 -->
+      <span class="page ddp-cite-page">第 {{ hit.page_idx + 1 }} 页</span>
+      <!-- 相关度用 similarity（有校准量纲），不用 score（RRF 名次分，表达不了相关度）。
+           阈值收在 constants/status.ts，不再在这里写第二个字面量 -->
+      <StatusTag
+        v-if="similarityText(hit.similarity)"
+        :label="similarityText(hit.similarity)!"
+        :type="(hit.similarity ?? 0) >= DEFAULT_WARN_BELOW ? 'success' : 'warning'"
+      />
       <span class="snippet">{{ hit.snippet }}</span>
     </div>
   </el-card>
@@ -92,10 +96,18 @@ watch(() => route.query.q, run, { immediate: true })
   color: var(--el-text-color-secondary);
   font-size: 12px;
 }
+/* 页码：等宽 + 不换行。**颜色交给 .ddp-cite-page** —— 页码属于"出处"，
+   按准则一该是红的；这里再写 color 会以 (0,2,0) 压过全局那条 (0,1,0)。 */
+.page {
+  font-family: var(--ddp-font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  flex: none;
+}
 .hit {
   display: flex;
-  gap: 8px;
-  align-items: flex-start;
+  gap: 10px;
+  align-items: baseline;
   padding: 6px 0;
   cursor: pointer;
   border-bottom: 1px solid var(--el-border-color-lighter);

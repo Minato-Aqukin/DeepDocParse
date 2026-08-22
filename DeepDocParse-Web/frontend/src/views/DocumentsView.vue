@@ -128,6 +128,14 @@ onMounted(reload)
 .stats {
   margin-bottom: 12px;
 }
+/* 三张卡等高：只有第三张带 hint，行内不拉伸的话高度会差一截。
+   以前有投影盖着看不出来，改成 1px 描边的平面之后一眼就能看到参差。 */
+.stats :deep(.el-col) {
+  display: flex;
+}
+.stats :deep(.el-card) {
+  width: 100%;
+}
 .bar {
   display: flex;
   align-items: center;

@@ -78,6 +78,16 @@ export function confidenceOf(level: string | undefined) {
   return level ? CONFIDENCE_META[level] : undefined
 }
 
+/**
+ * 相似度"偏低"的兜底阈值。
+ *
+ * 校准值的唯一来源是后端 `qa_low_similarity`，接口带 `confidence.warn_below`
+ * 时一律以后端为准。只有拿不到时才用这个 —— 目前 `/search` 的响应里没有这个
+ * 字段（见 types/api.ts::SearchResult），所以跨文档检索页只能退到兜底值。
+ * 两处各写一个 0.6 字面量迟早会漂，所以收在这里。
+ */
+export const DEFAULT_WARN_BELOW = 0.6
+
 /** 相似度转成给人看的百分比。null = 没量到，不要显示成 0%（那是"完全不相关"的意思）。 */
 export function similarityText(value: number | null | undefined): string | null {
   return value === null || value === undefined ? null : `${Math.round(value * 100)}%`

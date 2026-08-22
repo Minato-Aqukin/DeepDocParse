@@ -121,8 +121,9 @@ watch([html, view], async () => {
 .block:hover {
   background: var(--el-fill-color-light);
 }
+/* 与 PdfCanvas 的 .box.selected 保持同一套语义：选中是墨色，红只给出处 */
 .block.selected {
-  background: rgba(235, 104, 52, 0.14);
-  outline: 1px solid rgba(235, 104, 52, 0.5);
+  background: color-mix(in srgb, var(--ddp-ink) 8%, transparent);
+  outline: 1px solid var(--ddp-ink-3);
 }
 </style>

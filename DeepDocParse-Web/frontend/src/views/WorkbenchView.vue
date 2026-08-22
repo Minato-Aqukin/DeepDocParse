@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { documentsApi, downloadAs } from '@/api'
 import AskPanel from '@/components/ask/AskPanel.vue'
+import StatusTag from '@/components/common/StatusTag.vue'
 import PdfCanvas from '@/components/viewer/PdfCanvas.vue'
 import ResultPane from '@/components/viewer/ResultPane.vue'
 import { usePolling } from '@/composables/usePolling'
@@ -140,12 +141,12 @@ watch(
       <div class="title">
         <el-button link @click="router.push('/documents')">← 文档库</el-button>
         <span class="name">{{ document?.filename }}</span>
-        <el-tag size="small" type="info">{{ document?.page_count }} 页</el-tag>
+        <span class="pages">{{ document?.page_count }} 页</span>
         <el-tooltip :content="document?.index_error" :disabled="!document?.index_error">
-          <el-tag v-if="document && document.index_status !== 'ready'" size="small"
-                  :type="indexStatusOf(document.index_status).type">
-            {{ indexStatusOf(document.index_status).label }}
-          </el-tag>
+          <StatusTag
+            v-if="document && document.index_status !== 'ready'"
+            :meta="indexStatusOf(document.index_status)"
+          />
         </el-tooltip>
       </div>
       <div class="actions">
@@ -241,6 +242,12 @@ watch(
 .name {
   font-size: 16px;
   font-weight: 600;
+}
+/* 页数是元信息不是状态，按准则二排成普通文字 */
+.pages {
+  font-family: var(--ddp-font-mono);
+  font-size: 12px;
+  color: var(--ddp-ink-3);
 }
 .actions {
   display: flex;

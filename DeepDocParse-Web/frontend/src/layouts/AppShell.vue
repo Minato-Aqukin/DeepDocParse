@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 
+import { isDark, toggleTheme } from '@/composables/useTheme'
 import { NAV_GROUPS, type NavGroup } from '@/constants/nav'
 import { useAuthStore } from '@/stores/auth'
 
@@ -63,6 +64,11 @@ function logout() {
         </el-button>
         <span class="page-title">{{ route.meta.title }}</span>
         <div class="spacer" />
+        <el-tooltip :content="isDark ? '切到浅色' : '切到深色'" placement="bottom">
+          <el-button link :aria-label="isDark ? '切到浅色' : '切到深色'" @click="toggleTheme()">
+            <el-icon><component :is="isDark ? 'Sunny' : 'Moon'" /></el-icon>
+          </el-button>
+        </el-tooltip>
         <el-dropdown>
           <span class="user">
             <el-icon><component is="User" /></el-icon>
@@ -120,20 +126,36 @@ function logout() {
   justify-content: center;
   padding: 0;
 }
+/* 品牌位是墨色方块，不是主题色圆点 —— 准则一：彩色只留给出处与出错 */
 .dot {
   width: 10px;
   height: 10px;
-  border-radius: 50%;
-  background: var(--el-color-primary);
+  border-radius: 3px;
+  background: var(--ddp-ink);
   flex: none;
 }
 .menu {
   border-right: none;
+  /* el-menu 自带 --el-bg-color（= panel），而侧栏本身继承页底（ground），
+     不抹掉的话导航区中间会出现一道色差缝 */
+  background: transparent;
+}
+/* 选中态：浅底 + 左侧 2px 墨色竖条。Element Plus 默认是蓝字蓝底，
+   那是第二种"重音色"，会和出处的红抢注意力（准则一、准则二）。 */
+.menu :deep(.el-menu-item.is-active) {
+  background: color-mix(in srgb, var(--ddp-ink) 7%, transparent);
+  color: var(--ddp-ink);
+  font-weight: 500;
+  border-left: 2px solid var(--ddp-ink);
+  padding-left: calc(var(--el-menu-base-level-padding, 20px) - 2px);
+}
+.menu :deep(.el-menu-item:not(.is-active):hover) {
+  background: color-mix(in srgb, var(--ddp-ink) 5%, transparent);
 }
 .group-label {
   padding: 12px 16px 4px;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--ddp-ink-3);
 }
 .topbar {
   display: flex;

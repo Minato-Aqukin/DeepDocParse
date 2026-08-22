@@ -125,12 +125,9 @@ const hovered = computed(() => (hover.value === null ? undefined : props.data[ho
 
 <style scoped>
 .viz-root {
-  --grid: #e1e0d9;
-  --muted: #898781;
+  --grid: var(--ddp-line);
+  --muted: var(--ddp-ink-3);
   margin: 0;
-}
-:global(html.dark) .viz-root {
-  --grid: #2c2c2a;
 }
 .title {
   font-size: 13px;

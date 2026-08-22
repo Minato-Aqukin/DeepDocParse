@@ -4,6 +4,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import { askStream, conversationsApi } from '@/api'
 import CitationChip from '@/components/ask/CitationChip.vue'
+import StatusTag from '@/components/common/StatusTag.vue'
 import { confidenceOf, degradedLabelOf } from '@/constants/status'
 import type { ChatMessage, Citation, DocumentInfo } from '@/types/api'
 import { fetchAuthedImage } from '@/utils/markdown'
@@ -163,14 +164,16 @@ onBeforeUnmount(() => {
       <div v-for="message in messages" :key="message.id" class="bubble" :class="message.role">
         <div class="text">{{ message.content }}</div>
         <div v-if="message.role === 'assistant'" class="meta">
-          <el-tag v-if="message.verified" size="small" type="success">已做视觉验证</el-tag>
-          <el-tag v-else-if="message.degraded" size="small" type="warning">
-            {{ degradedLabelOf(message.degraded) }}
-          </el-tag>
-          <el-tag v-if="confidenceOf(message.confidence?.level)" size="small"
-                  :type="confidenceOf(message.confidence?.level)!.type" effect="plain">
-            {{ confidenceOf(message.confidence?.level)!.label }}
-          </el-tag>
+          <StatusTag v-if="message.verified" label="已做视觉验证" type="success" />
+          <StatusTag
+            v-else-if="message.degraded"
+            :label="degradedLabelOf(message.degraded)!"
+            type="warning"
+          />
+          <StatusTag
+            v-if="confidenceOf(message.confidence?.level)"
+            :meta="confidenceOf(message.confidence?.level)!"
+          />
         </div>
 
         <!--
@@ -233,19 +236,32 @@ onBeforeUnmount(() => {
 .notice {
   padding: 6px 10px;
 }
+/* 索引失败的原因是一长串不带空格的 JSON，不强制折行会被横向截掉。
+   降级/失败原因必须完整可见（铁律 3），截断等于没显示。 */
+.notice :deep(.el-alert__title) {
+  word-break: break-word;
+  line-height: 1.6;
+}
 .stream {
   flex: 1;
   overflow: auto;
   padding-right: 4px;
 }
+/* 两种气泡必须一眼分得出谁在说话。
+   原来一个用 --el-fill-color-light、一个用 --el-color-primary-light-9，
+   而这两个 EP 变量在本规范里被映射到了同一个令牌 —— 实测撞成同色，
+   分不出谁在说话。直接用 ddp 令牌钉死，不再依赖 EP 的调色板层级。 */
 .bubble {
   margin-bottom: 12px;
   padding: 8px 10px;
   border-radius: 6px;
-  background: var(--el-fill-color-light);
+  background: var(--ddp-panel-2);
 }
+/* 两种气泡不做左右分栏，所以只靠底色区分太弱（两档都只差 10 个色阶）。
+   再加一道 2px 左边线：形状比色差可靠，和准则三是同一个道理。 */
 .bubble.user {
-  background: var(--el-color-primary-light-9);
+  background: var(--ddp-panel-3);
+  border-left: 2px solid var(--ddp-line-2);
 }
 .text {
   white-space: pre-wrap;

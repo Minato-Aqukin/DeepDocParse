@@ -59,8 +59,8 @@ onMounted(load)
         <template #header>每日趋势</template>
         <el-empty v-if="!summary.daily.length" description="还没有用量记录" />
         <template v-else>
-          <BarChart title="每日解析页数" unit="页" :data="pagesSeries" color="#2a78d6" />
-          <BarChart title="每日请求数" unit="次" :data="requestSeries" color="#eb6834" />
+          <BarChart title="每日解析页数" unit="页" :data="pagesSeries" color="color-mix(in srgb, var(--ddp-ink) 62%, transparent)" />
+          <BarChart title="每日请求数" unit="次" :data="requestSeries" color="color-mix(in srgb, var(--ddp-ink) 22%, transparent)" />
         </template>
       </el-card>
 
@@ -70,7 +70,7 @@ onMounted(load)
           <el-table-column label="平面">
             <template #default="{ row }">{{ KIND_LABEL[row.kind] ?? row.kind }}</template>
           </el-table-column>
-          <el-table-column prop="pages" label="页数" width="120" />
+          <el-table-column prop="pages" label="页数" width="120" align="right" class-name="ddp-num" />
           <el-table-column prop="requests" label="请求数" width="120" />
         </el-table>
       </el-card>
@@ -79,7 +79,7 @@ onMounted(load)
         <el-collapse-item title="按天明细（表格视图）" name="daily">
           <el-table :data="summary.daily" size="small">
             <el-table-column prop="date" label="日期" />
-            <el-table-column prop="pages" label="页数" width="120" />
+            <el-table-column prop="pages" label="页数" width="120" align="right" class-name="ddp-num" />
             <el-table-column prop="requests" label="请求数" width="120" />
           </el-table>
         </el-collapse-item>

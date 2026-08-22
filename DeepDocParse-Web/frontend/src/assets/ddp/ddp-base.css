@@ -1,0 +1,124 @@
+/* ==========================================================================
+   DDP 全局基线 + 规范里 Element Plus 没有的几个组件
+   依赖 ddp-tokens.css。规则说明见 DESIGN-GUIDE.md。
+   ========================================================================== */
+
+/* ---------- 全局 ---------- */
+body {
+  background: var(--ddp-ground);
+  color: var(--ddp-ink);
+  font-family: var(--ddp-font);
+  font-size: var(--ddp-fs);
+  line-height: var(--ddp-lh);
+  letter-spacing: var(--ddp-tracking);   /* 0，见准则六 */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 负字距只给大字号。中文在 21px 以下会被负字距挤糊 */
+h1, h2 { letter-spacing: -.02em; font-weight: var(--ddp-weight-title); }
+h3, h4 { letter-spacing: 0; font-weight: var(--ddp-weight-title); }
+
+::selection { background: var(--ddp-ink); color: var(--ddp-panel); }
+:focus-visible { outline: 2px solid var(--ddp-ink-3); outline-offset: 2px; }
+
+/* ---------- 滚动条：页面与界面内每一处必须长得一样 ---------- */
+html { scrollbar-width: thin; scrollbar-color: var(--ddp-sb) transparent; }
+*    { scrollbar-width: thin; scrollbar-color: var(--ddp-sb) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--ddp-sb);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--ddp-sb-hover); background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* <code>/<pre> 必须走本规范的等宽栈，不能用浏览器默认的 monospace ——
+   默认族没有汉字，中文会掉到全角宽体排成"默 认"（准则六的第二个陷阱）。
+   --ddp-font-mono 里紧跟着中文兜底族，拉丁走 Plex Mono、汉字走思源黑体。 */
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--ddp-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 准则四：数据用等宽 + 表格数字 ----------
+   给哈希、编号、时间戳、数量加 .ddp-num（数字类还要右对齐） */
+.ddp-mono { font-family: var(--ddp-font-mono); font-variant-numeric: tabular-nums; }
+.ddp-num  { font-family: var(--ddp-font-mono); font-variant-numeric: tabular-nums;
+            text-align: right; white-space: nowrap; }
+
+/* ---------- 准则三：状态先靠形状 ----------
+   <span class="ddp-status is-ok">已完成</span>          实心点＝终态
+   <span class="ddp-status is-warn is-live">解析中</span> 空心圈＝进行中 */
+.ddp-status {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12.5px; color: var(--ddp-ink-2); white-space: nowrap;
+}
+.ddp-status::before {
+  content: ""; flex: none; box-sizing: border-box;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ddp-dot, var(--ddp-ink-3));
+}
+.ddp-status.is-ok     { --ddp-dot: var(--ddp-ok); }
+.ddp-status.is-warn   { --ddp-dot: var(--ddp-warn); }
+.ddp-status.is-danger { --ddp-dot: var(--ddp-danger); }
+.ddp-status.is-info   { --ddp-dot: var(--ddp-info); }
+.ddp-status.is-plain  { --ddp-dot: var(--ddp-ink-3); }
+/* 进行中：空心圈。形状是第一通道，颜色只是加速扫读 —— 打印成黑白仍读得出 */
+.ddp-status.is-live::before {
+  width: 8px; height: 8px;
+  background: transparent;
+  border: 2px solid var(--ddp-dot, var(--ddp-ink-3));
+}
+
+/* ---------- 出处：全站唯一允许用红的地方 ---------- */
+/* 原页上圈出来的那一框。父级需要 position: relative */
+.ddp-bbox {
+  position: absolute;
+  border: 2px solid var(--ddp-cite);
+  background: color-mix(in srgb, var(--ddp-cite) 12%, transparent);
+  border-radius: 2px;
+  pointer-events: none;
+}
+/* 引用条目里的页码 */
+.ddp-cite-page { color: var(--ddp-cite); font-weight: 500; }
+/* 全文检索的命中高亮 */
+.ddp-hit mark, mark.ddp-hit {
+  background: color-mix(in srgb, var(--ddp-cite) 20%, transparent);
+  color: inherit; border-radius: 2px; padding: 0 2px;
+}
+
+/* ---------- 降级提示：安静的界面里一条竖条就足够刺眼，不需要闪烁 ---------- */
+.ddp-degraded {
+  border-left: 2px solid var(--ddp-warn);
+  background: var(--ddp-warn-soft);
+  padding: 9px 13px;
+  border-radius: 0 var(--ddp-r) var(--ddp-r) 0;
+  font-size: 13px; line-height: 1.7; color: var(--ddp-ink-2);
+}
+.ddp-degraded.is-danger { border-left-color: var(--ddp-danger); background: var(--ddp-danger-soft); }
+
+/* ---------- 准则五：静态容器无影，1px 描边 ---------- */
+.ddp-card {
+  background: var(--ddp-panel);
+  border: var(--ddp-bw) solid var(--ddp-line);
+  border-radius: var(--ddp-r-lg);
+  box-shadow: var(--ddp-shadow-flat);   /* none */
+}
+
+/* ---------- 额度 / 进度条：实色，越过阈值才转红 ---------- */
+.ddp-meter { height: 6px; border-radius: var(--ddp-r-pill); background: var(--ddp-panel-3); overflow: hidden; }
+.ddp-meter > i { display: block; height: 100%; background: var(--ddp-ink); border-radius: inherit; }
+.ddp-meter.is-over > i { background: var(--ddp-danger); }
+
+/* 移动端点击区：7px 的点太小，但**只有可点的状态**才需要撑到 44px。
+   无差别加 min-height 会把表格里纯展示的状态标签也撑高一倍，行高翻倍却换不来
+   任何点击收益。所以给可点的那种单独留一个类，由使用方按需加。 */
+@media (pointer: coarse) {
+  .ddp-status.is-clickable { min-height: 44px; display: inline-flex; align-items: center; }
+}
