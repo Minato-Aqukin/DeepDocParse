@@ -1,0 +1,20 @@
+{
+  "attributes": [
+    "英文单栏",
+    "born-digital",
+    "合同"
+  ],
+  "pages": [
+    {
+      "page_idx": 0,
+      "text": "PURCHASE AGREEMENT\nContract No.: NW-2026-0817\nDate of signature: 2026-03-14\nBuyer: Northwind Trading Company Limited\nRegistered address: 88 Harbour Road, Wellington\nSeller: Contoso Manufacturing Group\nRegistered address: 21 Foundry Street, Sheffield\nArticle 1 - Price\nThe total contract price is USD 486,200.50,\ninclusive of all taxes and delivery charges.\nArticle 2 - Payment\nThe Buyer shall pay the full amount within 45 days\nafter receipt of the goods and a valid invoice.\nArticle 3 - Delivery\nDelivery shall be made to the Buyer's warehouse in Wellington."
+    },
+    {
+      "page_idx": 1,
+      "text": "Schedule A - Goods\nItem                       Quantity   Unit price\nIndustrial bearing 6204        1200       18.50\nHydraulic seal kit HS-9         340       62.00\nPrecision shaft PS-220           75      410.40\nEnd of Schedule A.",
+      "tables": [
+        "<table><tr><td>Item</td><td>Quantity</td><td>Unit price</td></tr><tr><td>Industrial bearing 6204</td><td>1200</td><td>18.50</td></tr><tr><td>Hydraulic seal kit HS-9</td><td>340</td><td>62.00</td></tr><tr><td>Precision shaft PS-220</td><td>75</td><td>410.40</td></tr></table>"
+      ]
+    }
+  ]
+}

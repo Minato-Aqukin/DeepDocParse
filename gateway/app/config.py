@@ -40,6 +40,34 @@ class Settings(BaseSettings):
     # v2 分块索引：单次 embeddings 请求的最大 chunk 数。
     # 必须留在运行时的 max-client-batch-size 之下（TEI 默认 32），否则长文档整批被拒 413
     embedding_batch_size: int = 16
+    # ---- 抽取平面（v1.1）----
+    # 每个字段进模型的候选块数。抽取是"一个字段一次定位"，候选给多了纯属烧钱：
+    # 模型要在 N 个块里挑一个，块越多挑错的机会越大
+    extract_candidates: int = 4
+    # 余弦相似度下限。**与问答平面同一把尺子**：Web 层实测无关问题 0.246~0.381、
+    # 真实命中 0.725~0.786。没有它的话每个"文档里其实没有"的字段都会被硬塞一个
+    # 最相似的噪声块当出处 —— 而带着出处的假值比空值危险得多
+    extract_min_similarity: float = 0.45
+    # 低相关提示线：过了下限但没到这里的，界面要提醒"这条依据不牢"。**必须 > 下限**
+    extract_low_similarity: float = 0.60
+    # 模型输出不合 schema 时的重试次数。用尽仍不合规打 schema_violation，
+    # **绝不静默把该字段当成"文档里没有"** —— 那会让系统故障伪装成事实
+    extract_max_retries: int = 2
+    # 一次抽取最多处理多少字段。schema 是调用方给的，没有上限时一个 200 字段的
+    # schema 就是 200 次检索 + 200 次模型调用
+    extract_max_fields: int = 64
+    # 多记录（表格）抽取时最多看多少个候选块
+    extract_max_record_blocks: int = 8
+    # 一次抽取里并发跑多少个字段。字段之间互不依赖，串行跑一个 30 字段的 schema
+    # 要等半分钟；但也不能敞开 —— 上游是同一个模型运行时，打满只会一起变慢
+    extract_concurrency: int = 4
+    # 出处一致性核对：裁出区域图让视觉模型原样抄一遍，与块文本比对（沿用问答平面 A4）。
+    # 请求方可用 options.verify 覆盖。没有 file_url 或未注册 VQA 模型时打 vision_unavailable
+    extract_verify: bool = False
+    # 抄写相似度低于它判定解析与原图对不上。**没在真视觉模型上标定过**（本机无 GPU），
+    # 与 Web 层 qa_parse_mismatch_threshold 同源，拿到 GPU 后一起重定
+    extract_mismatch_threshold: float = 0.35
+
     # 只有明确知道自己在做什么才打开（一次性容器、CI）。生产打开等于没有鉴权
     allow_insecure_defaults: bool = False
 
@@ -74,6 +102,7 @@ SECTION_CAPABILITIES = {
     "vqa_models": ["vision"],
     "parse_engines": ["parse"],
     "embedding_models": ["dense"],
+    "rerank_models": ["rerank"],
 }
 
 
@@ -83,6 +112,9 @@ class Registry(BaseModel):
     vqa_models: dict[str, ModelEntry] = {}
     parse_engines: dict[str, ModelEntry] = {}
     embedding_models: dict[str, ModelEntry] = {}  # v2 (M4) 启用
+    # v1.1：交叉编码器重排。**未注册时 /v1/rerank 返回 404，调用方退回不重排** ——
+    # 注册表驱动的开关，与 embedding 段的处理方式一致（不改代码，只改一行配置）
+    rerank_models: dict[str, ModelEntry] = {}
 
     def model_post_init(self, _context) -> None:
         """把段名隐含的能力补进条目，让下游只读 capabilities 一个地方。"""
@@ -101,6 +133,20 @@ class Registry(BaseModel):
         for name, entry in section.items():
             return name, entry
         raise LookupError("no model registered in this section")
+
+
+def assert_thresholds_sane() -> None:
+    """低相关提示线必须高于相似度下限。
+
+    配反了不会报任何错，只会让「相关度偏低」这个提示**永远不出现** ——
+    Web 层为同一件事已经加过一次校验（config._check_similarity_thresholds），
+    抽取平面复用了同一套阈值语义，就得复用同一道拦截。
+    """
+    if settings.extract_low_similarity <= settings.extract_min_similarity:
+        raise RuntimeError(
+            f"拒绝启动：EXTRACT_LOW_SIMILARITY({settings.extract_low_similarity}) 必须大于 "
+            f"EXTRACT_MIN_SIMILARITY({settings.extract_min_similarity})，"
+            f"否则抽取结果的低相关提示永远不会触发")
 
 
 def load_registry(path: str | Path) -> Registry:

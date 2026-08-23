@@ -77,6 +77,19 @@ services:
     volumes:
       - ../../models/bge-m3:/data/bge-m3:ro
 
+  # v1.1 rerank（交叉编码器精排）。要用就打开这里 + models.cpu.yaml 的 rerank_models 段。
+  # 与 embed 是同一类容器换个 model —— 几乎零新增运维面（这正是 D1 选 TEI 的理由）。
+  # CPU 上每个候选一次前向，比双塔慢得多；候选控制在 20~30 条时实测可接受。
+  # 权重：modelscope download --model BAAI/bge-reranker-v2-m3 --local_dir ../../models/bge-reranker-v2-m3
+  # rerank:
+  #   image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3
+  #   command: >
+  #     --model-id /data/bge-reranker-v2-m3 --port 8080
+  #     --max-batch-tokens 4096 --max-client-batch-size 32
+  #   ports: ["18082:8080"]
+  #   volumes:
+  #     - ../../models/bge-reranker-v2-m3:/data/bge-reranker-v2-m3:ro
+
   # 需要 OCR / 表格 / 公式时再打开（同时去掉 models.cpu.yaml 里 mineru 那几行的注释）。
   # CPU 上比 GPU 慢一到两个数量级，适合小批量试用，不适合日常迭代。
   # mineru:
@@ -89,6 +102,11 @@ services:
   # 没有 vqa 服务 —— 见文件头。问答会照常工作并标 degraded="vision_unavailable"。
   # 文本回答本身需要一个 OpenAI 兼容的 chat 端点：在 DeepDocParse-Web 的 .env 里
   # 把 CHAT_URL 指到任意兼容服务（本地 llama.cpp / Ollama / 托管 API 都行，ADR #17）。
+  #
+  # **抽取平面（/v1/extract）也需要那个 chat 端点**，而且它读的是 service 侧的
+  # models.yaml vqa_models 段（不是 Web 的 CHAT_URL）。纯 CPU 部署要用 /v1/extract 的话，
+  # 在 models.cpu.yaml 里注册一个本地 chat endpoint 到 vqa_models 即可 ——
+  # 抽值只用文本，它不必真是视觉模型（视觉核对是可选项 EXTRACT_VERIFY）。
 
 volumes:
   redis-data:
