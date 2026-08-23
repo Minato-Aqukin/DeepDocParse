@@ -24,8 +24,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.crops import get_or_create_crop
 from app.models import Chunk, Document, ParseJob
+from app.rerank import rerank_hits
 from app.search import Hit, SearchIndex
 from app.storage import Storage
+from app.tokenize import backend as tokenize_backend
 from app.upstream import chat_request, embed_one
 
 SYSTEM_PROMPT = (
@@ -67,6 +69,11 @@ def answer_model_meta() -> dict:
             "min_similarity": settings.qa_min_similarity,
             "context_chars": settings.qa_context_chars,
             "crop_count": settings.qa_crop_count,
+            # v1.1：这两项直接决定关键词路与精排的行为，不记下来就没法解释
+            # "换了配置之后指标为什么变了"（model_meta 存在的全部理由）
+            "rerank_enabled": settings.rerank_enabled,
+            "rerank_model": settings.rerank_model,
+            "tokenizer": tokenize_backend(),
         },
     }
 
@@ -113,32 +120,64 @@ async def resolve_citations(session: AsyncSession, document_id: str,
 
 
 async def load_citation_targets(session: AsyncSession, document_id: str,
-                                citations: list[dict]) -> dict[tuple[str, int], str]:
-    """批量查出 `(parse_job_id, seq) -> 当前 chunk_id`。
+                                citations: list[dict]) -> dict[tuple[str, int], tuple[str, str]]:
+    """批量查出 `(parse_job_id, seq) -> (当前 chunk_id, 当前 chunk 文本)`。
 
     单独抽出来是为了让调用方能把**多条 message 的 citations 合并成一次查询**
     （`list_messages` 会这么用）—— 每条 message 查一次的话，一个长会话就是 N+1。
+
+    **文本也要取回来**：`seq` 存在不等于它还指着同一段原文，见 attach_resolution。
     """
     job_ids = {c.get("parse_job_id") for c in citations if c.get("parse_job_id")}
     seqs = {c.get("seq") for c in citations if c.get("seq") is not None}
     if not job_ids or not seqs:
         return {}
     rows = (await session.execute(
-        select(Chunk.id, Chunk.parse_job_id, Chunk.seq).where(
+        select(Chunk.id, Chunk.parse_job_id, Chunk.seq, Chunk.text).where(
             Chunk.document_id == document_id,
             Chunk.parse_job_id.in_(job_ids), Chunk.seq.in_(seqs))
     )).all()
-    return {(job_id, seq): chunk_id for chunk_id, job_id, seq in rows}
+    return {(job_id, seq): (chunk_id, text) for chunk_id, job_id, seq, text in rows}
 
 
-def attach_resolution(citation: dict, lookup: dict[tuple[str, int], str]) -> dict:
-    """按查好的 lookup 给一条 citation 贴上 resolved 标记并刷新 chunk_id。"""
+def _same_content(snippet: str, chunk_text: str) -> bool:
+    """这条出处存下来的片段，还在当前这个块里吗？
+
+    片段是当时截断过的（160 字 + 省略号），所以用**包含**而不是相等；
+    归一化掉空白，因为分块规则变化会改换行与前缀（标题现在会并进块首）。
+    """
+    want = " ".join((snippet or "").rstrip("…").split())
+    if not want:
+        return True          # 老记录没存 snippet：无从判断，不冤枉它
+    return want in " ".join((chunk_text or "").split())
+
+
+def attach_resolution(citation: dict,
+                      lookup: dict[tuple[str, int], tuple[str, str]]) -> dict:
+    """按查好的 lookup 给一条 citation 贴上 resolved 标记并刷新 chunk_id。
+
+    **只查 `seq` 存不存在是不够的。** `seq` 是块在文档里的序号，而分块规则一变
+    （M9 让表格/公式/图片独立成块、标题作前缀），同一份归档重建索引就会切出
+    **不同数量、不同 seq** 的块 —— 于是老 citation 的 seq 照样查得到，
+    指的却是另一段原文。而 UI 只看 `resolved`：用户会看到一条"可点开"的出处，
+    snippet 是旧文本、高亮框指向别处。**这正是这个项目定义的最恶劣错误：
+    带着已验证标记的假出处。**
+
+    所以这里加一道内容比对：对不上就 `resolved=False`，前端照旧显示"出处已失效"。
+    宁可说"接不回去"，也绝不指错地方。
+    """
     item = dict(citation)
-    chunk_id = lookup.get((citation.get("parse_job_id"), citation.get("seq")))
-    if chunk_id is None:
+    target = lookup.get((citation.get("parse_job_id"), citation.get("seq")))
+    if target is None:
         item["resolved"] = False
-    else:
-        item.update(chunk_id=chunk_id, resolved=True)
+        return item
+    chunk_id, text = target
+    if not _same_content(citation.get("snippet", ""), text):
+        # seq 还在，但那个位置上已经不是当初那段话了（多半是重建索引时
+        # 分块规则变了）。**不刷新 chunk_id** —— 刷了就等于把高亮指到错块
+        item["resolved"] = False
+        return item
+    item.update(chunk_id=chunk_id, resolved=True)
     return item
 
 
@@ -154,12 +193,22 @@ async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncC
         # 实际是一堆噪声——正是铁律 3 要杜绝的静默降级
         vector, degraded = None, "embedding_unavailable"
 
+    # 开了精排就多要候选：rerank 的价值全在"从更大的候选池里挑"，
+    # 候选 == top_k 时它只是把已经选定的几条重新排了个序（config 有启动期校验）
+    if settings.rerank_enabled:
+        limit, candidates = settings.rerank_candidates, settings.rerank_candidates
+    else:
+        limit, candidates = settings.qa_top_k, settings.qa_candidates
+
     hits = await index.search(session, vector=vector, query=question,
                               document_id=document.id, user_id=user_id,
-                              limit=settings.qa_top_k, candidates=settings.qa_candidates)
+                              limit=limit, candidates=candidates)
     if not hits:
         return Retrieval(degraded=degraded or "no_hits")
-    return Retrieval(hits=hits, degraded=degraded)
+
+    hits, rerank_degraded = await rerank_hits(http, question, hits, top_k=settings.qa_top_k)
+    # 向量化不可用比"没重排"严重得多，不能被后者盖掉 —— 前者意味着整条语义路都没跑
+    return Retrieval(hits=hits, degraded=degraded or rerank_degraded)
 
 
 async def attach_crops(retrieval: Retrieval, storage: Storage, document: Document,

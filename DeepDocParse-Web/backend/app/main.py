@@ -21,8 +21,12 @@ from app.db import get_engine, get_sessionmaker
 from app.errors import install_error_handlers
 from app.metering import MemoryRateLimiter, RedisRateLimiter
 from app.reconcile import reconcile_loop
-from app.routers import apikeys, auth, conversations, documents, files, internal, proxy, search, usage
+from app.routers import (
+    apikeys, auth, conversations, documents, extractions, files, internal, proxy,
+    search, usage,
+)
 from app.search import PgVectorIndex
+from app.tokenize import backend as tokenize_backend
 from app.service_client import ServiceClient, new_http_client
 from app.storage import MinioStorage
 
@@ -46,7 +50,17 @@ async def lifespan(app: FastAPI):
     else:
         app.state.rate_limiter = MemoryRateLimiter()
 
+    # 分词器实现进启动日志。**换 tokenizer 会静默毁掉关键词路**：
+    # text_tokenized 是索引时用当时的 backend 切好存的，查询用现在的 backend 切；
+    # jieba 从"装着"变成"没装"（或反过来）之后两边词面零交集 -> 关键词召回归零，
+    # 而 index_status 不会变、没有任何报错。至少让它在日志里留一行
+    print(f"[startup] tokenizer backend = {tokenize_backend()}"
+          f"（换实现后必须 reindex，否则关键词检索会静默失效）")
+
     await app.state.storage.ensure_bucket()
+    # 抽取的后台任务活在进程内存里，重启就没了 —— 把卡住的 run 如实标成失败，
+    # 否则界面上会永远转圈（抽取没有远端可对账，只能这样兜）
+    await extractions.reset_orphaned_runs()
     # 对账：启动即跑一次，补上停机期间丢掉的完成回调与索引投递
     app.state.reconciler = asyncio.create_task(
         reconcile_loop(get_sessionmaker(), app.state.storage, app.state.service_client,
@@ -83,6 +97,7 @@ app.include_router(apikeys.router, prefix="/api/keys", tags=["apikeys"])
 app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
 app.include_router(conversations.router, prefix="/api", tags=["qa"])
 app.include_router(search.router, prefix="/api", tags=["search"])
+app.include_router(extractions.router, prefix="/api", tags=["extractions"])
 app.include_router(usage.router, prefix="/api/usage", tags=["usage"])
 app.include_router(files.router, tags=["files"])       # /files/{token} 稳定文件 URL（token 即凭证）
 app.include_router(internal.router, tags=["internal"]) # /internal/* service 回调

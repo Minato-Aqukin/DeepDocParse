@@ -4,21 +4,24 @@
 
 产品层：前端 + 后端 monorepo。总体架构见 [../ARCHITECTURE.md](../ARCHITECTURE.md)。
 
-本层是「可验证出处」这个定位真正落到用户眼前的地方：回答的每条依据都带页码 + bbox +
-原件裁出来的区域截图，并且**任何降级都必须打标**（检索零命中 / 向量化不可用 / 视觉模型不可用 /
-不能裁剪 / 解析可疑）。定位与「明确不做」清单见 [../DeepDocParse/README.md](../DeepDocParse/README.md)。
+本层是「可验证出处」这个定位真正落到用户眼前的地方：回答的每条依据、**抽取的每一个字段**
+都带页码 + bbox + 原件裁出来的区域截图，并且**任何降级都必须打标**（检索零命中 / 向量化不可用 /
+视觉模型不可用 / 不能裁剪 / 解析可疑 / 模型输出不合 schema / 未精排）。
+定位与「明确不做」清单见 [../DeepDocParse/README.md](../DeepDocParse/README.md)。
 
 ```
 DeepDocParse-Web/
-├── backend/    # FastAPI：用户、key、额度、归档、分块索引、文档问答、对外 API 与 MCP 代理
-├── frontend/   # Vue 3 + TS + Element Plus：文档库、三栏工作台（原文/结果/问答）、检索、用量
+├── backend/    # FastAPI：用户、key、额度、归档、分块索引、文档问答、**结构化抽取**、对外 API 与 MCP 代理
+├── frontend/   # Vue 3 + TS + Element Plus：文档库、三栏工作台（原文/结果/问答）、**抽取**、检索、用量
 ├── docker/     # compose.web.yml：PostgreSQL(pgvector) + MinIO + Redis（多副本才需要）
 ├── docs/       # DESIGN.md：M6 设计（问答、Document/ParseJob 拆分、多副本）
 └── scripts/    # e2e_web.py 真环境全链路验证
 ```
 
-后端模块速览：`chunking` 分块 · `indexing` 索引管线 · `search` 混合检索（pgvector/内存两实现）
-· `qa` 问答编排 · `crops` 出处裁剪 · `archive` 归档 · `reconcile` 对账 · `gc` 对象回收。
+后端模块速览：`chunking` 分块（块类型感知）· `tokenize` 中文分词 · `indexing` 索引管线 ·
+`search` 混合检索（pgvector/内存两实现）· `rerank` 交叉编码器精排 · `qa` 问答编排 ·
+`extraction` 抽取编排 · `extract_schema` 受限 JSON Schema · `crops` 出处裁剪 ·
+`archive` 归档 · `reconcile` 对账 · `gc` 对象回收。
 
 对 DeepDocParse 的调用**只依赖** [../DeepDocParse/openapi.yaml](../DeepDocParse/openapi.yaml) 契约。
 下一轮的设计已定稿在 [docs/DESIGN.md](docs/DESIGN.md)——改动本层结构前先读它。
@@ -52,6 +55,14 @@ service 侧的向量索引永远命中不到。详见 ADR #12（文档身份本�
 存进 Postgres+pgvector。提问时混合检索（向量 + 关键词，RRF 融合）→ 按 bbox 裁出原文区域 →
 多模态问答 → SSE 流式返回，答案带页码/bbox/截图三件套的出处。
 **降级一律可见**：没检索到、视觉模型不可用、非 PDF 不能裁剪，都会在回答上打标。
+
+**结构化抽取（M9）**：模板（受限 JSON Schema）→ 选一批文档 → 逐字段「检索定位 → 抽值」→
+按 bbox 裁图核对 → 结果表格（行=文档×记录，列=字段）→ 导出 CSV。
+**每个单元格都点得开它的出处**，这是抽取平面存在的全部理由。
+字段三态 `已抽取` / `文档中未提及` / `抽取失败` **必须分开显示** ——
+"这份合同没写违约金"和"我们没能抽出来"在一张表里长得一模一样，而空值看起来像结论。
+schema 边界（不支持嵌套/oneOf/$ref，叶子必须带 description）见
+[../DeepDocParse/docs/extract-format.md](../DeepDocParse/docs/extract-format.md)。
 
 **与 service 的耦合面**只有两处：解析契约（`openapi.yaml`）与 OpenAI 兼容的 embedding/chat
 端点——后者可以配成任意兼容服务（`EMBEDDING_URL` / `CHAT_URL`），本层不绑定 DeepDocParse
@@ -156,6 +167,17 @@ python scripts/eval_citations.py --mode live         # 全链路，四个指标�
 定义、数据集格式与当前结论见 [docs/EVAL.md](docs/EVAL.md)。
 **不报综合分**：综合分只告诉你「变好了 3%」，切片才告诉你「双栏页的命中率只有 40%」。
 
+抽取有自己的四个指标（字段准确率 / 字段出处命中率 / **空值正确率** / schema 合规率），
+同一套方法论，见 [docs/EVAL-extraction.md](docs/EVAL-extraction.md)：
+
+```bash
+python scripts/eval_extraction.py --mode offline      # 量 schema 层与定位链路，无外部依赖
+python scripts/eval_extraction.py --mode live         # 四个指标全量
+```
+
+**空值正确率是核心不是凑数**：把"我们的检索挂了"报成"文档里没有"，
+用户会直接拿去用 —— 抽取里最危险的输出是看起来像结论的空值。
+
 ## 许可
 
 [Apache-2.0](LICENSE)。第三方组件与归属声明见 [NOTICE](NOTICE)。
@@ -189,6 +211,30 @@ README 顶部与**每个页面的页脚**（`frontend/src/layouts/AppShell.vue`�
   - [x] C1/C2 Apache-2.0 + MinerU 归属（README / NOTICE / 每个页面的页脚）
   - [x] C3 GitHub Actions：后端单测 + 迁移双向跑（真 PG）+ 前端类型检查
   - [x] C5 英文 README（[README.en.md](README.en.md)）
+- [x] M9 结构化抽取（plan-v2.md 全组）：
+  - [x] **抽取平面**：模板 / 批量 run / 结果表格 / CSV 导出（`extraction_templates`
+        `extraction_runs` `extraction_items` 三张表，迁移 `0005` 已在真 PG 上双向验过）
+  - [x] **字段级出处**：每个字段带 `(parse_job_id, seq)` + bbox + 裁图，
+        前端点单元格即可看到。出处形状与问答平面完全一致，`CitationChip` 直接复用
+  - [x] **三态分开**：`found` / `not_found` / `error`。
+        模型输出反复不合 schema → `schema_violation`（第八种降级），
+        **绝不静默当成"文档里没有"** —— 那会让系统故障伪装成事实
+  - [x] **块类型感知分块**：表格独立成块并保住 `table_html`（行列关系只在 HTML 里），
+        标题作上下文前缀。顺带堵掉「mineru 表格块的文字被静默丢弃」那个洞
+  - [x] **D2 中文分词**（`app/tokenize.py`，jieba 软依赖 + 二元组兜底，降级可见）：
+        `to_tsvector('simple', text)` 把整段中文当成一个 token，
+        混合检索在中文文档上此前实际只有向量一条腿
+  - [x] **D1 rerank**（`app/rerank.py`）：上游没注册 rerank 模型时返回 404，
+        本层打 `rerank_unavailable` 并照常返回融合名次 —— 可见降级，不是静默跳过
+  - [x] **抽取评测**（[docs/EVAL-extraction.md](docs/EVAL-extraction.md)）：
+        offline 已跑出数字并抓到一个真问题（关键词路跨不了语种）
+  - [x] CSV 导出防公式注入（抽取结果来自文档内容，是不可信输入）
+  - [ ] **live 模式的真实数字待 GPU 服务器**：「字段准确率」这一列到现在还是空的
+  - ⚠️ **已知限制（升级到 M9 后）**：分块规则变了（表格/公式/图片独立成块、标题作前缀），
+        对**老文档**重建索引会切出不同的 `seq`。历史出处不会指错地方——
+        `attach_resolution` 会比对内容，对不上就标"出处已失效"——
+        但那些出处确实**接不回去了**。要保住历史问答/抽取的可追溯性，
+        升级后不要对老文档点重建索引；确需重建的，先导出一份结果
 - [x] M8 视觉规范落地（**DDP-VD-001 REV.04**，规范正文与可点原型在工作区的 `design-previews/`，未版本化）：
   - [x] 设计令牌与 Element Plus 映射进 `frontend/src/assets/ddp/`（四个 CSS，无构建步骤）。
         主色定义成**墨色**而不是品牌色 —— 骨架里 29 处 `--el-color-primary` 因此一次性收敛，

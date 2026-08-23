@@ -12,7 +12,7 @@
 **`VITE_DEFAULT_ENGINE` 要与后端 `DEFAULT_PARSE_ENGINE`、service 的 `models.yaml` 三者对齐**——
 任一处对不上，上传会在 service 侧收 404 unknown_engine。
 
-共 **46** 项。
+共 **62** 项。
 
 ## 本层资源
 
@@ -74,6 +74,32 @@
 | `QA_PARSE_MISMATCH_THRESHOLD` | `float` | `0.35` | 相似度低于它就判定解析与原图对不上（difflib 比值，0~1）。 **这个默认值还没有在真视觉模型上标定过**（本机无 GPU），拿到 GPU 机器后 按实测分布重定 —— 与 qa_min_similarity 当年的定法一样。宁可漏报不要误报： 误报会把好出处打成"存疑"，比不报更伤信任 |
 | `QA_VERIFY_TIMEOUT` | `float` | `20.0` | 等核对结果的上限（秒）。核对与回答并发跑，正常情况下回答先结束、这里几乎不等； 但视觉模型在 CPU 上抄一段文字可能要几分钟（read 超时是 900s）， **没有上限的话 done 帧会被硬生生拖后几分钟**，用户看着答案已经出完却迟迟不落定。 超时就当"没测出来"——宁可不打标，也不能让核对拖垮体验 |
 | `QA_RATE_PER_MIN` | `int` | `20` | 每用户问答限速 |
+
+## 重排序（D1）
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `RERANK_URL` | `str` | `''` | 交叉编码器精排。留空 = 回落到 {service_url}/v1/rerank； **service 侧没注册 rerank_models 时那个端点返回 404**，本层据此打 degraded="rerank_unavailable" 并照常返回融合名次 —— 可见降级，不是静默跳过 |
+| `RERANK_TOKEN` | `str` | `''` | 留空用 service_token |
+| `RERANK_MODEL` | `str` | `''` | 留空由上游注册表选 default |
+| `RERANK_ENABLED` | `bool` | `False` | 关掉就完全不调 rerank。默认关：没部署 rerank 容器的人不该每次问答都吃一个 404 往返 |
+| `RERANK_CANDIDATES` | `int` | `24` | 送进重排的候选数。**必须显著大于 qa_top_k**，否则无米下锅 —— 精排的价值全在"从更大的候选池里挑"，候选=top_k 时它只是把 4 条重新排了个序 |
+| `RERANK_TIMEOUT` | `float` | `20.0` | 等重排结果的上限（秒）。交叉编码器每个候选一次前向，CPU 上 24 条要几秒； 超时就当"没重排"并打 rerank_unavailable —— 宁可不精排也不能把问答拖死 |
+
+## 结构化抽取（v1.1）
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `EXTRACT_CANDIDATES` | `int` | `4` | 每个字段进模型的候选块数。抽取是"一个字段一次定位"，候选给多了纯属烧钱： 模型要在 N 个块里挑一个，块越多挑错的机会越大 |
+| `EXTRACT_MAX_FIELDS` | `int` | `64` | 一次抽取最多处理多少字段。schema 由用户给，没有上限时一个 200 字段的 schema 就是 200 次检索 + 200 次模型调用 |
+| `EXTRACT_MAX_RECORD_BLOCKS` | `int` | `8` | 多记录（表格）抽取时最多看多少个候选块 |
+| `EXTRACT_MAX_RETRIES` | `int` | `2` | 模型输出不合 schema 时的重试次数。用尽仍不合规打 schema_violation， **绝不静默把该字段当成"文档里没有"** —— 那会让系统故障伪装成事实 |
+| `EXTRACT_CONCURRENCY` | `int` | `4` | 一次抽取里并发跑多少个字段。字段互不依赖，串行跑 30 个字段要等半分钟； 但也不能敞开 —— 上游是同一个 chat 端点，打满只会一起变慢 |
+| `EXTRACT_DOC_CONCURRENCY` | `int` | `2` | 批量抽取里同时处理多少份文档。乘以 extract_concurrency 才是真实并发， 两个都调大很容易把上游打挂 |
+| `EXTRACT_MAX_DOCUMENTS` | `int` | `200` | 一次批量最多多少份文档。没有上限时"全选"就能提交几千份 |
+| `EXTRACT_VERIFY` | `bool` | `True` | 出处一致性核对：裁出区域图让视觉模型原样抄一遍（沿用问答平面 A4 的做法）。 抽取默认**开**（与 service 侧默认关相反）：产品层有原件、有裁剪管线， 而抽取结果是要被当数据用的，核对的价值比问答那边更高 |
+| `EXTRACT_VERIFY_FIELDS` | `int` | `3` | 核对的字段数上限。每个字段核对一次 = 一次渲染 + 一次视觉模型调用， 全量核对会让一次 30 字段的抽取变成 60 次模型调用 |
+| `EXTRACT_RATE_PER_MIN` | `int` | `6` | 每用户批量抽取限速（次/分钟） |
 | `CHAT_READ_TIMEOUT` | `float` | `900.0` | 视觉模型在 CPU 上出第一个 token 可能要几分钟（dev 机常态），读超时要留够 |
 
 ## 额度默认值（新建 key 时的初值）

@@ -6,7 +6,7 @@
  *
  * 这里同时是将来上 i18n 的收口：换成 t('status.parse.running') 只动本文件。
  */
-import type { IndexStatus, ParseStatus } from '@/types/api'
+import type { FieldStatus, IndexStatus, ParseStatus, RunStatus } from '@/types/api'
 
 export type TagType = 'success' | 'info' | 'warning' | 'danger' | 'primary'
 
@@ -49,6 +49,9 @@ export const DEGRADED_LABEL: Record<string, string> = {
   client_aborted: '回答被中断',
   upstream_error: '问答服务异常',
   upstream_interrupted: '回答生成中途断流',
+  // v1.1 新增两种
+  schema_violation: '模型输出不符合 schema（已重试仍失败）',
+  rerank_unavailable: '未做精排（重排序服务不可用）',
 }
 
 /**
@@ -117,3 +120,58 @@ export const INDEX_STATUS_OPTIONS = (Object.keys(INDEX_STATUS) as IndexStatus[])
   value,
   label: INDEX_STATUS[value].label,
 }))
+
+
+/* ---------- 结构化抽取 ---------- */
+
+/**
+ * 抽取任务的状态。
+ *
+ * `partial` 不是"有点问题"的委婉说法：它明确表示**必填字段没抽全，或个别文档失败**。
+ * 与 succeeded 分开是刻意的 —— 一批 200 份文档里有 3 份失败，
+ * 报成"成功"会让人直接拿去用。
+ */
+export const RUN_STATUS: Record<RunStatus, StatusMeta> = {
+  pending: { label: '排队中', type: 'info', active: true },
+  running: { label: '抽取中', type: 'warning', active: true },
+  succeeded: { label: '已完成', type: 'success' },
+  partial: { label: '部分完成', type: 'warning' },
+  failed: { label: '失败', type: 'danger' },
+}
+
+export function runStatusOf(status: RunStatus): StatusMeta {
+  return RUN_STATUS[status] ?? { label: status, type: 'info' }
+}
+
+/**
+ * 字段三态的文案。
+ *
+ * **"文档中未提及"绝不能写成"—"或空白**：空白让人以为是界面没渲染出来，
+ * 而这里表达的是一个确定的结论（我们看过了，文档里没有）。
+ * 反过来 error 也不能显示成"未提及"—— 那是把系统故障伪装成事实。
+ */
+export const FIELD_STATUS: Record<FieldStatus, StatusMeta> = {
+  found: { label: '已抽取', type: 'success' },
+  not_found: { label: '文档中未提及', type: 'info' },
+  error: { label: '抽取失败', type: 'danger' },
+}
+
+export function fieldStatusOf(status: FieldStatus): StatusMeta {
+  return FIELD_STATUS[status] ?? { label: status, type: 'info' }
+}
+
+/** schema 叶子类型的中文名，编辑器下拉用。 */
+export const LEAF_TYPE_OPTIONS = [
+  { value: 'string', label: '文本' },
+  { value: 'number', label: '数字' },
+  { value: 'integer', label: '整数' },
+  { value: 'boolean', label: '是/否' },
+] as const
+
+export const FORMAT_OPTIONS = [
+  { value: '', label: '不限' },
+  { value: 'date', label: '日期 (YYYY-MM-DD)' },
+  { value: 'date-time', label: '日期时间 (ISO 8601)' },
+  { value: 'email', label: '邮箱' },
+  { value: 'uri', label: 'URL' },
+] as const

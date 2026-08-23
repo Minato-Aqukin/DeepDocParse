@@ -6,6 +6,19 @@
 
 融合用 Reciprocal Rank Fusion 而不是加权分数相加：向量距离与 ts_rank 量纲完全不同，
 加权要调两个超参且换 embedding 模型就失效；RRF 只看名次，无量纲、无需调参。
+
+v1.1 两处改动：
+
+1. **关键词路查 `text_tokenized` 而不是 `text`**（D2）。`to_tsvector('simple', text)`
+   把整段中文当成**一个 token**，于是"混合检索"在中文文档上实际只有向量一条腿 ——
+   A1 评测量到关键词路单独工作时页码命中率只有 25%，正是这条腿瘸着的样子。
+   查询侧必须用**同一个 tokenizer**（app/tokenize），两边切法不同 = 永远匹配不上。
+   **匹配语义是 OR**（`to_tsquery` 用 `|` 连接），不是 `websearch_to_tsquery` 的 AND ——
+   分词之后 AND 等于要求一个块同时含四五个词，实测几乎恒不命中，
+   而单测的 MemoryIndex 是 OR，于是单测绿、生产红。两处必须同时改。
+2. **可选的 rerank 精排**（D1）。融合后的候选交给交叉编码器重排，
+   取不到 rerank 服务时**如实返回降级标记**，不静默跳过 —— 悄悄不重排会让
+   "上了 rerank 之后没变好"变成查不出原因的悬案。
 """
 import math
 import re
@@ -15,13 +28,32 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.tokenize import query_string as _query_tokens
 
 RRF_K = 60          # 业界惯用值：名次靠后的贡献平滑衰减
+
+# tsquery 里有特殊含义的字符。切完词还可能残留它们（英文缩写里的 & 、路径里的 : 等），
+# 不剥掉的话 to_tsquery 会直接抛语法错，整条关键词路被 except 吞成零命中
+_TSQUERY_UNSAFE = re.compile(r"[&|!()<>:*\\'\"]+")
+
+
+def _or_tsquery(query: str) -> str:
+    """query -> OR 形式的 tsquery 串。
+
+    与索引侧同一个 tokenizer 切词（`app.tokenize`），再用 `|` 连起来。
+    空串会让 `to_tsquery` 抛错，所以兜一个不可能命中的占位符 ——
+    **不能返回空**，那会让整条关键词路以异常的形式静默消失。
+    """
+    terms = [t for t in (_TSQUERY_UNSAFE.sub(" ", _query_tokens(query)) or "").split() if t]
+    return " | ".join(terms) if terms else "zzzz_no_match_zzzz"
 
 
 class Hit(dict):
     """命中：{chunk_id, document_id, parse_job_id, seq, page_idx, bbox, page_size, text,
-              score, similarity}
+              block_type, table_html, score, similarity}
+
+    `block_type` / `table_html` 是 v1.1 加的：抽取平面按块类型优先看表格块，
+    并靠 table_html 把表格映射成记录数组（拼出来的单元格文字已经丢了行列关系）。
 
     **score 与 similarity 是两回事，别混用**：
     - `score` 是 RRF 融合分，只由名次决定，上限 2/(60+1)≈0.0328。它能排序，
@@ -70,7 +102,10 @@ class PgVectorIndex:
                      candidates: int) -> list[Hit]:
         scope = "c.document_id = :document_id" if document_id else "d.user_id = :user_id"
         params = {"user_id": user_id, "document_id": document_id,
-                  "qvec": str(list(vector)) if vector else None, "q": query, "n": candidates,
+                  "qvec": str(list(vector)) if vector else None,
+                  # 查询侧切词必须与索引侧同一个 tokenizer（见模块 docstring 第 1 条），
+                  # 再拼成 OR 形式的 tsquery（见下面 kw_sql 的长注释）
+                  "q": _or_tsquery(query), "n": candidates,
                   # <=> 是余弦距离 = 1 - 相似度
                   "max_dist": 1.0 - settings.qa_min_similarity}
 
@@ -90,15 +125,26 @@ class PgVectorIndex:
               AND (c.embedding IS NULL
                    OR c.embedding <=> CAST(:qvec AS vector) < :max_dist)
         """ if vector else "")
-        # websearch_to_tsquery 容忍自然语言输入（不会因为标点直接抛错）
+        # **OR 而不是 AND。** 这一条曾经是 `websearch_to_tsquery`，它把多个词拼成
+        # AND —— 块里必须**同时**含全部词才命中。分词上线之后这变成了致命的：
+        # 抽取的字段 query 是 "字段名 + description"，jieba 切出四五个词，
+        # 要求一个块同时含这四五个词几乎不可能。真 PG 实测：
+        #     websearch_to_tsquery('simple','buyer 买方 单位 全称')
+        #       = 'buyer' & '买方' & '单位' & '全称'
+        #     对 "买方 北极星 科技 有限公司 注册 地址 …" -> false
+        #     换成 OR                                  -> true
+        # 而单测的 MemoryIndex 用的是 `任一词命中`（OR）—— 于是**单测绿、生产红**，
+        # 正好落在下面那条注释自己警告的坑里。相关度由 ts_rank_cd 排序把关，
+        # 召回由相似度下限（kw_floor）把关，OR 不会把噪声灌进来。
         kw_sql = text(f"""
             SELECT c.id, {"c.embedding <=> CAST(:qvec AS vector)" if vector else "NULL"} AS dist
             FROM chunks c JOIN documents d ON d.id = c.document_id,
-                 websearch_to_tsquery('simple', :q) tsq
+                 to_tsquery('simple', :q) tsq
             WHERE {scope} AND d.deleted_at IS NULL
-              AND to_tsvector('simple', c.text) @@ tsq
+              AND to_tsvector('simple', c.text_tokenized) @@ tsq
               {kw_floor}
-            ORDER BY ts_rank_cd(to_tsvector('simple', c.text), tsq) DESC LIMIT :n
+            ORDER BY ts_rank_cd(to_tsvector('simple', c.text_tokenized), tsq)
+                     DESC LIMIT :n
         """)
 
         similarity: dict[str, float] = {}
@@ -127,7 +173,8 @@ class PgVectorIndex:
 async def _load_hits(session: AsyncSession, chunk_ids: list[str], scores: dict[str, float],
                      similarity: dict[str, float] | None = None) -> list[Hit]:
     rows = (await session.execute(
-        text("""SELECT id, document_id, parse_job_id, seq, page_idx, bbox, page_size, text
+        text("""SELECT id, document_id, parse_job_id, seq, page_idx, bbox, page_size,
+                       text, block_type, table_html
                 FROM chunks WHERE id IN :ids""").bindparams(
             bindparam("ids", expanding=True)),
         {"ids": chunk_ids},
@@ -142,6 +189,8 @@ async def _load_hits(session: AsyncSession, chunk_ids: list[str], scores: dict[s
                         parse_job_id=row["parse_job_id"], seq=row["seq"],
                         page_idx=row["page_idx"], bbox=_as_list(row["bbox"]),
                         page_size=_as_list(row["page_size"]), text=row["text"],
+                        block_type=row["block_type"] or "text",
+                        table_html=row["table_html"],
                         score=round(scores[cid], 6),
                         similarity=_round_or_none((similarity or {}).get(cid))))
     return hits
@@ -190,8 +239,12 @@ class MemoryIndex:
                        sorted(scored_vec, key=lambda p: p[1], reverse=True)[:candidates]
                        if s > settings.qa_min_similarity]
 
-        terms = [t for t in re.split(r"\W+", query.lower()) if t]
-        scored_kw = [(c.id, sum(c.text.lower().count(t) for t in terms)) for c, _ in rows
+        # 与 PgVectorIndex **同一个 tokenizer、同一种匹配语义（OR）**。
+        # 对齐 tokenizer 还不够 —— 曾经这边是 OR、那边是 websearch_to_tsquery 的 AND，
+        # 于是单测绿而生产红，正是这一层存在的意义所要防的事
+        terms = [t for t in _query_tokens(query).split() if t]
+        scored_kw = [(c.id, sum((getattr(c, "text_tokenized", "") or c.text).lower().count(t)
+                                for t in terms)) for c, _ in rows
                      # 测得出相似度就必须过线；测不出（无向量/向量化挂了）才放行
                      if similar_enough.get(c.id, True)]
         kw_ids = [cid for cid, n in sorted(scored_kw, key=lambda p: p[1], reverse=True)[:candidates]
@@ -206,6 +259,8 @@ class MemoryIndex:
                     parse_job_id=by_id[cid].parse_job_id, seq=by_id[cid].seq,
                     page_idx=by_id[cid].page_idx, bbox=by_id[cid].bbox,
                     page_size=by_id[cid].page_size, text=by_id[cid].text,
+                    block_type=getattr(by_id[cid], "block_type", "text") or "text",
+                    table_html=getattr(by_id[cid], "table_html", None),
                     score=round(scores[cid], 6),
                     similarity=_round_or_none(similarity.get(cid)))
                 for cid in top_ids if cid in by_id]

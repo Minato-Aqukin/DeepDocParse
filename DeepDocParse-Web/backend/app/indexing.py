@@ -72,6 +72,10 @@ async def index_document(session: AsyncSession, storage: Storage, http: httpx.As
     session.add_all([
         Chunk(document_id=document.id, parse_job_id=job.id, seq=c["seq"], page_idx=c["page_idx"],
               bbox=c["bbox"], page_size=c["page_size"], text=c["text"], char_len=c["char_len"],
+              # v1.1：块类型 + 表格结构 + 分词列。三者都在分块阶段算好，
+              # 不在这里现算 —— 分块是唯一知道版面上下文的地方
+              block_type=c.get("block_type", "text"), table_html=c.get("table_html"),
+              text_tokenized=c.get("text_tokenized", ""),
               embedding=vec)
         for c, vec in zip(chunks, vectors)
     ])

@@ -52,6 +52,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { title: '解析版本', group: 'workspace', nav: false, activeMenu: '/documents' },
   },
   {
+    path: '/extractions',
+    name: 'extractions',
+    component: () => import('@/views/ExtractionsView.vue'),
+    meta: { title: '结构化抽取', icon: 'Grid', group: 'workspace', nav: true },
+  },
+  {
     path: '/search',
     name: 'search',
     component: () => import('@/views/SearchView.vue'),

@@ -1,0 +1,128 @@
+{
+  "$schema": "见 docs/EVAL-extraction.md 的「数据集格式」一节",
+  "note": "抽取评测的种子数据集。真值来自 ../DeepDocParse/scripts/make_fixtures.py 的 CONTRACT_FIELDS —— 改了那里的合同内容就要同步改这里，否则表现会是「抽取准确率突然掉了」，而实际上是评测集过期了。样本必须可公开：仓库自带 fixture，或 arXiv / 政府公开文件这类可自由引用的来源。source 的相对路径以本仓库根为基准，指向 ../DeepDocParse/ 的样本要求两个仓库并排 clone。",
+  "samples": [
+    {
+      "id": "contract/header-fields",
+      "source": "../DeepDocParse/tests/fixtures/contract.pdf",
+      "layout": "backend/tests/fixtures/layout-contract.json",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "buyer_name": { "type": "string", "description": "买方（Buyer）单位全称" },
+          "seller_name": { "type": "string", "description": "卖方（Seller）单位全称" },
+          "contract_no": { "type": "string", "description": "合同编号 Contract No." },
+          "signed_at": { "type": "string", "format": "date", "description": "合同签订日期" }
+        },
+        "required": ["buyer_name", "contract_no"]
+      },
+      "expect": {
+        "fields": {
+          "buyer_name": { "status": "found", "value": "Northwind Trading Company Limited", "page": 0 },
+          "seller_name": { "status": "found", "value": "Contoso Manufacturing Group", "page": 0 },
+          "contract_no": { "status": "found", "value": "NW-2026-0817", "page": 0 },
+          "signed_at": { "status": "found", "value": "2026-03-14", "page": 0 }
+        }
+      },
+      "attributes": ["英文单栏", "born-digital", "短事实", "封面字段"]
+    },
+    {
+      "id": "contract/numeric-fields",
+      "source": "../DeepDocParse/tests/fixtures/contract.pdf",
+      "layout": "backend/tests/fixtures/layout-contract.json",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "total_amount": { "type": "number", "description": "合同总价（价税合计），只要数字" },
+          "currency": { "type": "string", "description": "合同币种代码，如 USD / CNY" },
+          "payment_days": { "type": "integer", "description": "收货并取得发票后的付款天数" }
+        },
+        "required": ["total_amount"]
+      },
+      "expect": {
+        "fields": {
+          "total_amount": { "status": "found", "value": 486200.5, "page": 0 },
+          "currency": { "status": "found", "value": "USD", "page": 0 },
+          "payment_days": { "status": "found", "value": 45, "page": 0 }
+        }
+      },
+      "attributes": ["英文单栏", "born-digital", "数值字段"]
+    },
+    {
+      "id": "contract/absent-clause",
+      "source": "../DeepDocParse/tests/fixtures/contract.pdf",
+      "layout": "backend/tests/fixtures/layout-contract.json",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "penalty_rate": { "type": "number", "description": "逾期付款的违约金比率（每日百分比）" },
+          "warranty_months": { "type": "integer", "description": "质保期月数" },
+          "governing_law": { "type": "string", "description": "合同适用法律与管辖地" }
+        }
+      },
+      "expect": {
+        "fields": {
+          "penalty_rate": { "status": "not_found" },
+          "warranty_months": { "status": "not_found" },
+          "governing_law": { "status": "not_found" }
+        }
+      },
+      "attributes": ["英文单栏", "born-digital", "空值样本"]
+    },
+    {
+      "id": "contract/schedule-rows",
+      "source": "../DeepDocParse/tests/fixtures/contract.pdf",
+      "layout": "backend/tests/fixtures/layout-contract.json",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "item": { "type": "string", "description": "货品名称与型号" },
+            "quantity": { "type": "integer", "description": "订购数量" },
+            "unit_price": { "type": "number", "description": "单价" }
+          }
+        }
+      },
+      "expect": {
+        "records": [
+          { "item": "Industrial bearing 6204", "quantity": 1200, "unit_price": 18.5 },
+          { "item": "Hydraulic seal kit HS-9", "quantity": 340, "unit_price": 62.0 },
+          { "item": "Precision shaft PS-220", "quantity": 75, "unit_price": 410.4 }
+        ],
+        "page": 1
+      },
+      "attributes": ["英文单栏", "born-digital", "多记录", "表格"]
+    },
+    {
+      "id": "contract/bad-schema-no-description",
+      "source": "../DeepDocParse/tests/fixtures/contract.pdf",
+      "layout": "backend/tests/fixtures/layout-contract.json",
+      "schema": {
+        "type": "object",
+        "properties": { "amt": { "type": "number" } }
+      },
+      "expect": { "schema_valid": false, "fields": {} },
+      "attributes": ["契约守卫"]
+    },
+    {
+      "id": "long-doc/embedded-facts",
+      "source": "../DeepDocParse/tests/fixtures/long-doc.pdf",
+      "layout": "backend/tests/fixtures/layout-long-doc.json",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "launch_code": { "type": "string", "description": "project Zephyr 的发射代码 launch code" },
+          "annual_revenue": { "type": "number", "description": "Acme Corp 2025 年的年营收，单位百万美元" }
+        }
+      },
+      "expect": {
+        "fields": {
+          "launch_code": { "status": "found", "value": "8712", "page": 2 },
+          "annual_revenue": { "status": "found", "value": 42, "page": 4 }
+        }
+      },
+      "attributes": ["英文单栏", "born-digital", "长文档", "短事实"]
+    }
+  ]
+}

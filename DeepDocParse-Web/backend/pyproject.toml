@@ -20,6 +20,9 @@ dependencies = [
     "pillow>=10.0",                     # 同上：裁剪后的位图处理
     "redis>=5.0",                       # 多副本：限速令牌桶与对账选主
     "prometheus-fastapi-instrumentator>=7.0",
+    # D2 中文分词。**软依赖**：装不上时 app/tokenize.py 退回 CJK 二元组并
+    # 在启动日志与 model_meta 里说明，不静默用一个更差的分词器
+    "jieba>=0.42",
 ]
 
 [project.optional-dependencies]

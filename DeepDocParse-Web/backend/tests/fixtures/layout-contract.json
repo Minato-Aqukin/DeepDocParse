@@ -1,0 +1,281 @@
+{
+  "layout_version": "ddp-layout/1",
+  "engine": "borndigital",
+  "pdf_info": [
+    {
+      "page_idx": 0,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.03200149536133,
+            43.156005859375,
+            205.84799194335938,
+            52.21600341796875
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "PURCHASE AGREEMENT"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.52799987792969,
+            95.156005859375,
+            219.0239715576172,
+            132.62799072265625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "Contract No.: NW-2026-0817"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "Date of signature: 2026-03-14"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.88800048828125,
+            173.156005859375,
+            324.65997314453125,
+            210.62799072265625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "Buyer: Northwind Trading Company Limited"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "Registered address: 88 Harbour Road, Wellington"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.5880012512207,
+            251.156005859375,
+            319.43994140625,
+            288.62799072265625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "Seller: Contoso Manufacturing Group"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "Registered address: 21 Foundry Street, Sheffield"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.167999267578125,
+            329.3840026855469,
+            288.38397216796875,
+            392.62799072265625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "Article 1 - Price"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "The total contract price is USD 486,200.50,"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "inclusive of all taxes and delivery charges."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.167999267578125,
+            433.3840026855469,
+            327.02392578125,
+            496.62799072265625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "Article 2 - Payment"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "The Buyer shall pay the full amount within 45 days"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "after receipt of the goods and a valid invoice."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.167999267578125,
+            537.3840026855469,
+            394.4159240722656,
+            574.6280059814453
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "Article 3 - Delivery"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "Delivery shall be made to the Buyer’s warehouse in Wellington."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 1,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            60.5880012512207,
+            43.156005859375,
+            166.95599365234375,
+            52.21600341796875
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "Schedule A - Goods"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.92399978637695,
+            95.156005859375,
+            288.35992431640625,
+            182.21600341796875
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "Item Quantity Unit price"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "Industrial bearing 6204 1200 18.50"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "Hydraulic seal kit HS-9 340 62.00"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "Precision shaft PS-220 75 410.40"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            61.03200149536133,
+            225.156005859375,
+            161.68798828125,
+            234.21600341796875
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "End of Schedule A."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -182,3 +182,82 @@ export interface EngineChoice {
   engine: string
   options: Record<string, unknown>
 }
+
+
+/* ---------- 结构化抽取（DDP-Extract v1） ---------- */
+
+export type FieldStatus = 'found' | 'not_found' | 'error'
+export type RunStatus = 'pending' | 'running' | 'succeeded' | 'partial' | 'failed'
+export type SchemaKind = 'object' | 'array'
+export type LeafType = 'string' | 'number' | 'integer' | 'boolean'
+
+/** schema 里的一个叶子字段。**description 是必填的** —— 它同时是这个字段的检索 query。 */
+export interface SchemaField {
+  name: string
+  type: LeafType
+  description: string
+  format?: string
+  enum?: string[]
+  required?: boolean
+}
+
+/**
+ * 一个字段的抽取结果。
+ *
+ * **三态必须分开显示**：not_found 是"文档里确实没有"（一个正确答案），
+ * error 是"我们没能可靠地抽出来"。混在一起的话，空值看起来都像结论 ——
+ * 那是抽取里最危险的输出。
+ */
+export interface FieldResult {
+  status: FieldStatus
+  value: string | number | boolean | null
+  citations: Citation[]
+  verified: boolean
+  degraded: string | null
+  confidence: RetrievalConfidence
+}
+
+/** 结果表格的一行：一份文档的一条记录（顶层 object 时每份文档只有一行）。 */
+export interface ExtractionItem {
+  id: string
+  document_id: string
+  filename: string
+  parse_job_id: string | null
+  record_index: number
+  status: 'ok' | 'partial' | 'failed'
+  degraded: string | null
+  error: string | null
+  fields: Record<string, FieldResult>
+}
+
+export interface ExtractionTemplate {
+  id: string
+  name: string
+  description: string
+  schema_json: Record<string, unknown>
+  field_count: number
+  kind: SchemaKind
+  created_at: string
+  updated_at: string
+}
+
+export interface ExtractionRun {
+  id: string
+  name: string
+  template_id: string | null
+  kind: SchemaKind
+  status: RunStatus
+  document_count: number
+  done_count: number
+  error: string | null
+  /** 结果表格的列顺序，来自 run 落库时的 schema **快照** */
+  field_names: string[]
+  schema_json: Record<string, unknown>
+  model_meta: Record<string, unknown>
+  created_at: string
+}
+
+export interface ExtractionRunDetail {
+  run: ExtractionRun
+  items: ExtractionItem[]
+}

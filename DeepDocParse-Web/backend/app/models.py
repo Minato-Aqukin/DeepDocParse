@@ -173,6 +173,16 @@ class Chunk(Base):
     page_size: Mapped[list | None] = mapped_column(JSON, default=None)
     text: Mapped[str] = mapped_column(Text)
     char_len: Mapped[int] = mapped_column(Integer, default=0)      # prompt 预算用
+    # DDP-Layout v1.1 的块类型（text/title/table/figure/equation/list/other）。
+    # 表格块靠它被检索侧优先看到 —— 在它之前，表格与正文在索引里完全无法区分
+    block_type: Mapped[str] = mapped_column(String(16), default="text", index=True)
+    # 表格结构的唯一载体。block_text 拼出来的是拍平的单元格文字，行列关系已经没了；
+    # 抽取平面把表格映射成记录数组靠的就是它。非表格块为 None
+    table_html: Mapped[str | None] = mapped_column(Text, default=None)
+    # D2：jieba 切好的文本，空格分隔。**关键词检索路直接查这一列**——
+    # `to_tsvector('simple', text)` 会把整段中文当成一个 token，
+    # 于是"混合检索"在中文文档上实际只有向量一条腿（A1 量到关键词路命中率 25%）
+    text_tokenized: Mapped[str] = mapped_column(Text, default="")
     embedding: Mapped[list[float] | None] = mapped_column(Vector(settings.embedding_dim),
                                                           default=None)
 
@@ -220,10 +230,105 @@ class Message(Base):
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     # no_hits | embedding_unavailable | vision_unavailable | crop_unsupported | crop_failed
     # | parse_mismatch | client_aborted | upstream_error | upstream_interrupted
+    # | schema_violation（抽取平面）| rerank_unavailable（配了精排但上游没注册）
     degraded: Mapped[str | None] = mapped_column(String(32), default=None)
     # {chat_model, embedding_model, embedding_dim, retrieval:{...}}，见 qa.answer_model_meta
     model_meta: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class ExtractionTemplate(Base):
+    """抽取模板：一份可复用的受限 JSON Schema。
+
+    存在的理由是**批量**：抽取的真实用法是"一批同类文档 -> 一张表"，
+    而 schema 写起来有成本（每个字段都要写 description，那是它的检索 query）。
+    写一次、跑很多批，模板才让这件事成立。
+
+    schema 只做**受限子集**（顶层 object 或 array，叶子必须带 description，
+    不支持嵌套/oneOf/$ref）—— 边界与理由见 ../DeepDocParse/docs/extract-format.md。
+    """
+
+    __tablename__ = "extraction_templates"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str] = mapped_column(Text, default="")
+    schema_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 onupdate=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_extraction_templates_user_name"),
+    )
+
+
+class ExtractionRun(Base):
+    """一次抽取执行。一个 run 可以横跨多个文档（批量），这是与问答最大的结构差别。
+
+    **schema_json 是快照，不是外键取值。** 模板改了之后，历史 run 的结果必须还能
+    解释得通 —— 用模板当前的 schema 去渲染一份三个月前的结果，列会对不上号。
+    同一条教训在 Message.model_meta 上已经吃过一次（换模型后历史问答无法分组对比）。
+    """
+
+    __tablename__ = "extraction_runs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
+    # 模板可以被删，run 不该跟着消失 —— 所以是可空的弱引用，真正的依据是 schema_json
+    template_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    schema_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    kind: Mapped[str] = mapped_column(String(8), default="object")   # object | array
+    # pending | running | succeeded | partial | failed
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    document_count: Mapped[int] = mapped_column(Integer, default=0)
+    done_count: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    # 与 Message.model_meta 同一个作用：不记下这一轮用了什么模型与检索参数，
+    # 换配置后就无法判断"新配置有没有变好"
+    model_meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 onupdate=utcnow)
+
+
+class ExtractionItem(Base):
+    """抽取结果的一行。**行 = (文档, 记录序号)**，这一个形状同时覆盖两种 schema：
+
+      顶层 object -> 一份文档一行（record_index 恒为 0）
+      顶层 array  -> 一份文档 N 行（表格的 N 条记录）
+
+    前端的结果表格就是它：行是 item，列是 schema 字段，点单元格跳原件 bbox。
+
+    fields 的形状是 DDP-Extract v1 的字段表：
+      {"字段名": {status, value, citations, verified, degraded, confidence}}
+    **citations 里存的是稳定定位键 (parse_job_id, seq)**，不是 chunk_id ——
+    chunk_id 每次 reindex 都会重铸，只存它等于历史抽取结果一次重建就永久失去依据（P0）。
+    """
+
+    __tablename__ = "extraction_items"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(String(32), ForeignKey("extraction_runs.id"), index=True)
+    document_id: Mapped[str] = mapped_column(String(32), ForeignKey("documents.id"), index=True)
+    parse_job_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    record_index: Mapped[int] = mapped_column(Integer, default=0)
+    # ok | partial | failed —— 与 DDP-Extract 的整体 status 同义
+    status: Mapped[str] = mapped_column(String(16), default="ok")
+    degraded: Mapped[str | None] = mapped_column(String(32), default=None)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    fields: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "document_id", "record_index",
+                         name="uq_extraction_items_run_doc_record"),
+        Index("ix_extraction_items_run_created", "run_id", "created_at"),
+    )
 
 
 class FileToken(Base):
@@ -255,7 +360,10 @@ class UsageRecord(Base):
                                                     default=None)
     parse_job_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("parse_jobs.id"),
                                                       default=None)
-    kind: Mapped[str] = mapped_column(String(16))   # parse | chat | embeddings | mcp | qa | embed
+    # parse | chat | embeddings | mcp | qa | embed | extract
+    # extract 按**字段数**计 requests：一次抽取 = N 次检索 + N 次模型调用，
+    # 按"一次请求"计费会让 60 字段的 schema 和 1 字段的一样便宜
+    kind: Mapped[str] = mapped_column(String(16))
     pages: Mapped[int] = mapped_column(Integer, default=0)
     requests: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

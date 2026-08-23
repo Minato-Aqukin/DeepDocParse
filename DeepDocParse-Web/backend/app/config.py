@@ -121,6 +121,51 @@ class Settings(BaseSettings):
     # 超时就当"没测出来"——宁可不打标，也不能让核对拖垮体验
     qa_verify_timeout: float = 20.0
     qa_rate_per_min: int = 20           # 每用户问答限速
+
+    # ---- 重排序（D1）----
+    # 交叉编码器精排。留空 = 回落到 {service_url}/v1/rerank；
+    # **service 侧没注册 rerank_models 时那个端点返回 404**，本层据此打
+    # degraded="rerank_unavailable" 并照常返回融合名次 —— 可见降级，不是静默跳过
+    rerank_url: str = ""
+    rerank_token: str = ""              # 留空用 service_token
+    rerank_model: str = ""              # 留空由上游注册表选 default
+    # 关掉就完全不调 rerank。默认关：没部署 rerank 容器的人不该每次问答都吃一个 404 往返
+    rerank_enabled: bool = False
+    # 送进重排的候选数。**必须显著大于 qa_top_k**，否则无米下锅 ——
+    # 精排的价值全在"从更大的候选池里挑"，候选=top_k 时它只是把 4 条重新排了个序
+    rerank_candidates: int = 24
+    # 等重排结果的上限（秒）。交叉编码器每个候选一次前向，CPU 上 24 条要几秒；
+    # 超时就当"没重排"并打 rerank_unavailable —— 宁可不精排也不能把问答拖死
+    rerank_timeout: float = 20.0
+
+    # ---- 结构化抽取（v1.1）----
+    # 每个字段进模型的候选块数。抽取是"一个字段一次定位"，候选给多了纯属烧钱：
+    # 模型要在 N 个块里挑一个，块越多挑错的机会越大
+    extract_candidates: int = 4
+    # 一次抽取最多处理多少字段。schema 由用户给，没有上限时一个 200 字段的 schema
+    # 就是 200 次检索 + 200 次模型调用
+    extract_max_fields: int = 64
+    # 多记录（表格）抽取时最多看多少个候选块
+    extract_max_record_blocks: int = 8
+    # 模型输出不合 schema 时的重试次数。用尽仍不合规打 schema_violation，
+    # **绝不静默把该字段当成"文档里没有"** —— 那会让系统故障伪装成事实
+    extract_max_retries: int = 2
+    # 一次抽取里并发跑多少个字段。字段互不依赖，串行跑 30 个字段要等半分钟；
+    # 但也不能敞开 —— 上游是同一个 chat 端点，打满只会一起变慢
+    extract_concurrency: int = 4
+    # 批量抽取里同时处理多少份文档。乘以 extract_concurrency 才是真实并发，
+    # 两个都调大很容易把上游打挂
+    extract_doc_concurrency: int = 2
+    # 一次批量最多多少份文档。没有上限时"全选"就能提交几千份
+    extract_max_documents: int = 200
+    # 出处一致性核对：裁出区域图让视觉模型原样抄一遍（沿用问答平面 A4 的做法）。
+    # 抽取默认**开**（与 service 侧默认关相反）：产品层有原件、有裁剪管线，
+    # 而抽取结果是要被当数据用的，核对的价值比问答那边更高
+    extract_verify: bool = True
+    # 核对的字段数上限。每个字段核对一次 = 一次渲染 + 一次视觉模型调用，
+    # 全量核对会让一次 30 字段的抽取变成 60 次模型调用
+    extract_verify_fields: int = 3
+    extract_rate_per_min: int = 6       # 每用户批量抽取限速（次/分钟）
     # 视觉模型在 CPU 上出第一个 token 可能要几分钟（dev 机常态），读超时要留够
     chat_read_timeout: float = 900.0
 
@@ -150,6 +195,20 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _check_rerank_candidates(self):
+        """送进重排的候选必须显著多于最终 top_k，否则精排无米下锅。
+
+        候选 == top_k 时 rerank 只是把已经选定的那几条重新排了个序，
+        召回一点没变 —— 但它照常消耗一次模型调用，还会让人以为"上了精排"。
+        这正是这个项目最讨厌的那种：**功能在，效果不在，且看不出来**。
+        """
+        if self.rerank_enabled and self.rerank_candidates <= self.qa_top_k:
+            raise ValueError(
+                f"RERANK_CANDIDATES({self.rerank_candidates}) 必须大于 "
+                f"QA_TOP_K({self.qa_top_k})，否则重排没有可挑的候选（见 config 注释）")
+        return self
+
+    @model_validator(mode="after")
     def _check_similarity_thresholds(self):
         """低相关提示线必须高于相似度下限。
 
@@ -173,6 +232,10 @@ class Settings(BaseSettings):
     @property
     def chat_endpoint(self) -> str:
         return self.chat_url or f"{self.service_url}/v1/chat/completions"
+
+    @property
+    def rerank_endpoint(self) -> str:
+        return self.rerank_url or f"{self.service_url}/v1/rerank"
 
 
 settings = Settings()
