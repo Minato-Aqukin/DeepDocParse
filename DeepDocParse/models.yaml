@@ -36,6 +36,20 @@ parse_engines:
     runtime: borndigital
     capabilities: [parse]
 
+  # v1.1：用视觉语言模型做整页识别（「基于大语言模型的文字识别」这条线）。
+  # endpoint **就是 vqa_models 那个容器** —— 同一个 endpoint 可以同时出现在两个段里，
+  # 不需要为解析再起一个。加这个引擎没有改动 engines.py 的任何既有代码。
+  # 定位：扫描件兜底 + LLM 识别路线的对照组，不是 mineru 的替代
+  #   （一页一次模型调用，长文档很贵；bbox 靠模型自报，精度不如版面模型）
+  vlm-ocr:
+    endpoint: "http://vqa-dsocr:8000"
+    runtime: vlm-ocr
+    capabilities: [parse, vision]
+    options:
+      model: deepseek-ocr     # **必填**：缺它时运行时会自己挑一个，识别质量无从复现
+      scale: 2.0              # 页面渲染倍率（72dpi 基准）
+      concurrency: 2          # 同时打几页，受显存约束
+
 # ---- v2（M4）：注册即启用分块索引链与向量检索；删除本段则全链路回退 BM25 ----
 embedding_models:
   bge-m3:
@@ -43,3 +57,16 @@ embedding_models:
     default: true
     runtime: tei                      # 决定取得到哪些头：TEI 只给 dense
     capabilities: [dense]             # bge-m3 本身还有 sparse/colbert 头，但 TEI 取不到
+
+# ---- v1.1：交叉编码器重排（/v1/rerank）。**删掉本段 = 不重排**，
+# 调用方会拿到 404 并打一个可见的降级标记（不是静默跳过）。
+# TEI 原生支持 /rerank，与上面的 embed 是同一类容器换个 model —— 几乎零新增运维面。
+# **缺省注释掉**：/readyz 是 all(up)，注册了却没起对应容器会让探针恒 503，
+# 而 compose.dev.yml 里没有 rerank 服务（只有 compose.prod-nvidia.yml 有）。
+# 上精排时把这段和 compose 里的 rerank 服务一起打开。
+# rerank_models:
+#   bge-reranker-v2-m3:
+#     endpoint: "http://rerank:8080"    # TEI 容器，--model-id BAAI/bge-reranker-v2-m3
+#     default: true
+#     runtime: tei
+#     capabilities: [rerank]

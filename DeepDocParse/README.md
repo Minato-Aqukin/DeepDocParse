@@ -2,12 +2,14 @@
 
 [English](README.en.md) · Apache-2.0 · **文档解析由 [MinerU](https://github.com/opendatalab/MinerU) 提供支持**
 
-多模态文档理解服务层。无状态、GPU 部署，对外三平面：
+基于大语言模型的多模态文字识别与结构化信息提取服务层。无状态、GPU 部署，对外四平面：
 
 | 平面 | 接口 | 引擎 |
 |------|------|------|
-| 解析 | `POST /v1/parse`（异步任务） | MinerU（官方 mineru-api / mineru-router，不重写） |
+| 识别 | `POST /v1/parse`（异步任务） | MinerU / born-digital / **vlm-ocr**（注册表驱动，见 models.yaml） |
 | VQA | `POST /v1/chat/completions`（OpenAI 协议） | DeepSeek-OCR |
+| 向量 | `POST /v1/embeddings`、`POST /v1/rerank` | bge-m3 / bge-reranker-v2-m3（TEI） |
+| **抽取** | **`POST /v1/extract`（异步任务）** | 编排层（检索定位 → 抽值 → bbox 裁剪 → 视觉核对） |
 | MCP | `ask_document` 单一复合工具 | 编排层（解析缓存 → 检索 → bbox 裁剪 + VQA） |
 
 架构决策见根目录 [../ARCHITECTURE.md](../ARCHITECTURE.md)。
@@ -20,10 +22,16 @@
 于是"支持"这件事从来没被证明过。本项目把赌注全押在这一件事上：
 
 - **出处三件套**：每个回答的每条依据都带页码 + bbox + 从原件裁出来的区域截图，点得开、对得上
+- **字段级出处**（M9）：结构化抽取的**每一个字段**都点得开它的出处。
+  市面上的抽取产品（Azure DI / Textract / LlamaExtract）返回字段最多带一个置信度，
+  指不回原文的哪一块 —— 这是出处能力的更强形态，不是新品类
 - **视觉验证**：裁出来的图会再喂给视觉模型核对一遍，而不是只信文本相似度
 - **降级必须可见**（架构级铁律）：检索零命中、向量化挂了、视觉模型不可用、裁不出图、
-  解析本身可疑——每一种都在回答上打标，绝不静默退化。这个项目吃过静默降级的大亏
-  （M4a 的向量检索悄悄退回 BM25，很久没人发现）
+  解析本身可疑、模型输出不合 schema——每一种都在结果上打标，绝不静默退化。
+  这个项目吃过静默降级的大亏（M4a 的向量检索悄悄退回 BM25，很久没人发现）
+
+> **定位表述从「可验证出处的问答」扩为「可验证出处的文档信息提取」。**
+> 定位本身没变——不这么框的话，下面那份「明确不做」会失去否决力。
 
 功能数量上追 RAGFlow / Docling / WeKnora 是必输的，追上了也不会有人因此选择本项目。
 所以有一份同样重要的[**明确不做**](#明确不做)清单。
@@ -117,6 +125,27 @@ python scripts/gen_config_docs.py
 - [ ] M4b 压测 + 多卡 mineru-router 验证（需服务器，dev 机 8GB 做不到）
 - [x] M5 契约冻结 v1.0：`/v1/parse` 增加可选 `doc_id`（稳定文档标识，ADR #11）后冻结 openapi.yaml；
       与 DeepDocParse-Web 全链路联调通过（见 ../DeepDocParse-Web/scripts/e2e_web.py）
+- [x] M9 结构化抽取平面（plan-v2.md 全组）：
+  - [x] **DDP-Extract v1 契约**（[docs/extract-format.md](docs/extract-format.md)）：字段三态
+        found / not_found / error 必须分开，`schema_violation` 是第八种降级
+  - [x] `/v1/extract` 抽取平面 + `/v1/rerank` 精排（openapi.yaml v1.1，纯新增端点）
+  - [x] **块类型进版面契约**（DDP-Layout v1.1）：`para_blocks[].type` + 可选 `table_html`。
+        顺带堵掉一个静默丢数据的洞 —— `block_text` 以前只读 `lines`，
+        **mineru 表格块的内容全在嵌套 `blocks` 里，整张表的文字在分块阶段被丢弃**，
+        表格解析出来了、索引里却没有，全程无报错
+  - [x] **vlm-ocr 引擎**：视觉语言模型整页识别，「基于大语言模型的识别」这条线的落点。
+        没有改动 engines.py 的任何既有代码——第三个引擎复验了"加引擎 = 加容器 + 一行配置"
+  - [x] **识别质量评测**（[docs/EVAL-ocr.md](docs/EVAL-ocr.md) / `scripts/eval_ocr.py`）：
+        文本编辑距离 + 表格单元格 F1，可接 OmniDocBench。
+        **真值来自生成 PDF 的源文本**，不是解析器输出（否则纯属自我印证）
+  - [x] 就绪探针按 `runtime` 而不是段名推断路径 —— vlm-ocr 挂在 parse_engines 段却说
+        OpenAI 协议，按段名推断会去打不存在的 `/health`，把健康容器报成 down
+  - [ ] **真机 e2e 待 GPU 服务器**：本机无 GPU，mineru / vlm-ocr / VQA 一次都没跑过
+  - ⚠️ **已知限制（升级到 M9 后）**：分块规则变了（表格/公式/图片独立成块、标题作前缀），
+        对**老文档**重建索引会切出不同的 `seq`。历史出处不会指错地方——
+        `attach_resolution` 会比对内容，对不上就标"出处已失效"——
+        但那些出处确实**接不回去了**。要保住历史问答/抽取的可追溯性，
+        升级后不要对老文档点重建索引；确需重建的，先导出一份结果
 - [x] M7 可发布度（plan.md 的 B/C/E 组）：
   - [x] B1 版面中间表示升格为契约（[docs/layout-format.md](docs/layout-format.md)）+ 显式 normalizer 层
   - [x] B2 born-digital 兜底引擎 + `compose.cpu.yml`：**无 GPU 全链路可跑**，
@@ -148,6 +177,10 @@ python scripts/gen_config_docs.py
 | LoRA 训练 / 参数化记忆 | — | 违反下面那条贯穿性准则 |
 | 重写 MinerU | — | 永不。保留成本 = 一行署名；替代成本 = 训 5 个模型。不成比例 |
 | 泛格式支持（音视频/邮件） | Docling | 泛格式 ≠ 版面理解，是两件事 |
+| 端到端「文档 → JSON」黑箱抽取 | 多数抽取产品 | **永不**——出处链断裂，撞下面那条贯穿性准则（ADR #19） |
+| 抽取工作流编排（多步/条件分支） | Dify | 永不——那是另一个品类。`/v1/extract` 只做单一操作的批量化 |
+| 抽取结果的人工编辑 | 多数抽取产品 | 永不——与"分块的人工编辑"同理由：该调的是抽取器 |
+| 通用实体关系抽取 / 知识图谱 | RAGFlow | 「GraphRAG」那条的变体，触发条件相同 |
 
 > **贯穿性准则：凡是把信息压进权重或潜空间的方案，都与"可验证出处"冲突。**
 > 它们只能用在出处已经确定之后的终端环节（例如"读这张区域图并回答"），不得进入定位链路——

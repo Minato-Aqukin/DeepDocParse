@@ -11,8 +11,14 @@
   queue:inflight          zset: task_id -> 受理时刻，水位控制用（见 QUEUE_INFLIGHT_KEY）
 
 v2 (M4)：
-  chunk:{doc_hash}:{i}    hash: doc_hash(TAG) / text / page_idx / bbox / page_size / vec(FLOAT32)
+  chunk:{doc_hash}:{i}    hash: doc_hash(TAG) / text / page_idx / bbox / page_size /
+                                block_type / table_html / vec(FLOAT32)
                           TTL=RESULT_TTL（可重建缓存，源数据在 backend）
+                          **键名里的 i 就是 seq**：(doc_hash, seq) 是出处的稳定定位键，
+                          检索时必须连键名一起取回来（见 search_chunks）
+  extract:{task_id}       hash: doc_hash / status / error / callback_url / progress
+                          TTL=RESULT_TTL —— 抽取平面的任务态（v1.1）
+  extract_result:{task_id} json: DDP-Extract v1 结果   TTL=RESULT_TTL
   chunks_idx_d{dim}       Redis Stack FT 向量索引（FLAT/COSINE，惰性建）
 """
 import json
@@ -112,6 +118,50 @@ class TaskStore:
         不会像 DECR 那样把水位越减越低。"""
         await self._r.zrem(QUEUE_INFLIGHT_KEY, task_id)
 
+    # ---------- v1.1：抽取平面的任务态 ----------
+
+    async def create_extract(self, task_id: str, *, doc_hash: str, payload: dict,
+                             callback_url: str | None) -> None:
+        """抽取任务与解析任务**分开存**（extract:* 而不是 task:*）。
+
+        合在一张 hash 里会让 /v1/parse/{id} 和 /v1/extract/{id} 互相查得到对方的任务，
+        进而返回一个字段对不上的状态体 —— 两个平面的状态机不一样（抽取有 progress，
+        解析没有），共用一个键迟早出岔子。
+        """
+        await self._r.hset(f"extract:{task_id}", mapping={
+            "doc_hash": doc_hash,
+            "status": "pending",
+            "error": "",
+            "progress": "0",
+            "callback_url": callback_url or "",
+            "payload": json.dumps(payload, ensure_ascii=False),
+        })
+        await self._r.expire(f"extract:{task_id}", self._ttl)
+        await self._r.zadd(QUEUE_INFLIGHT_KEY, {task_id: time.time()})
+
+    async def get_extract(self, task_id: str) -> dict | None:
+        data = await self._r.hgetall(f"extract:{task_id}")
+        if not data:
+            return None
+        return {k.decode() if isinstance(k, bytes) else k:
+                v.decode() if isinstance(v, bytes) else v for k, v in data.items()}
+
+    async def set_extract_status(self, task_id: str, status: str, *,
+                                 error: str | None = None,
+                                 progress: float | None = None) -> None:
+        mapping: dict = {"status": status, "error": error or ""}
+        if progress is not None:
+            mapping["progress"] = str(round(progress, 3))
+        await self._r.hset(f"extract:{task_id}", mapping=mapping)
+
+    async def save_extract_result(self, task_id: str, result: dict) -> None:
+        await self._r.set(f"extract_result:{task_id}",
+                          json.dumps(result, ensure_ascii=False), ex=self._ttl)
+
+    async def load_extract_result(self, task_id: str) -> dict | None:
+        raw = await self._r.get(f"extract_result:{task_id}")
+        return json.loads(raw) if raw is not None else None
+
     # ---------- v2 (M4)：向量索引（Redis Stack RediSearch） ----------
 
     async def ensure_chunk_index(self, dim: int) -> bool:
@@ -147,9 +197,117 @@ class TaskStore:
                 "text": chunk["text"],
                 "page_idx": chunk["page_idx"],
                 "bbox": json.dumps(chunk.get("bbox")),
+                # v1.1：块类型进了版面契约，索引里也带上 —— 抽取平面按它优先看表格块，
+                # 没有它就只能把整份文档一视同仁，表格里的记录抽不准
+                "block_type": chunk.get("block_type") or "text",
+                # 表格结构的唯一载体。不存的话 service 侧的多记录抽取拿到的
+                # 只是拍平的单元格文字，行列关系早没了 —— 而"抽取平面靠它把表格
+                # 映射成记录数组"正是块类型进契约的核心论据
+                "table_html": chunk.get("table_html") or "",
                 # 裁剪出处区域要按 layout 的页尺寸换算，缺它遇到 CropBox 偏移/旋转页会裁错
                 "page_size": json.dumps(chunk.get("page_size")),
                 "vec": _pack_vector(vec),
             })
             pipe.expire(key, self._ttl)
         await pipe.execute()
+
+    async def search_chunks(self, doc_hash: str, vector: list[float],
+                            k: int) -> list[dict] | None:
+        """向量检索（FT KNN）。任何一环不可用都返回 None，让调用方回退关键词路。
+
+        **必须把距离带回来**（`AS dist`）。mcp_server 那份老实现只 RETURN 了文本与坐标，
+        于是检索结果没有量纲：无关问题照样返回 top-k，调用方无从判断该不该信。
+        问答平面为此专门有一条 `qa_min_similarity` 下限（实测无关问题相似度
+        0.246~0.381、真实命中 0.725~0.786），抽取平面必须用同一把尺子 ——
+        否则每个抽不到的字段都会被硬塞一个最相似的噪声块当"出处"。
+        """
+        try:
+            blob = _pack_vector(vector)
+            reply = await self._r.execute_command(
+                "FT.SEARCH", chunk_index_name(len(vector)),
+                f"(@doc_hash:{{{doc_hash}}})=>[KNN {k} @vec $BLOB AS dist]",
+                "PARAMS", "2", "BLOB", blob,
+                "SORTBY", "dist",
+                "RETURN", "7", "text", "page_idx", "bbox", "page_size", "dist",
+                "block_type", "table_html",
+                "DIALECT", "2",
+            )
+        except Exception:
+            return None
+
+        hits: list[dict] = []
+        # FT.SEARCH 的回复是 [总数, key1, [字段...], key2, [字段...], ...]
+        # **key 必须一起取**：seq 只存在于键名里（chunk:{doc_hash}:{seq}），
+        # 而 (doc_hash, seq) 是出处的稳定定位键 —— 丢了它，抽取结果一过 24h
+        # 就再也接不回原文，正是 P0 那条教训的抽取版
+        for key, item in zip(reply[1::2], reply[2::2]):
+            raw_key = key.decode() if isinstance(key, bytes) else key
+            try:
+                seq = int(str(raw_key).rsplit(":", 1)[1])
+            except (IndexError, ValueError):
+                seq = 0
+            fields = {}
+            for name, value in zip(item[::2], item[1::2]):
+                name = name.decode() if isinstance(name, bytes) else name
+                value = value.decode() if isinstance(value, bytes) else value
+                fields[name] = value
+            try:
+                # FT 的 KNN 距离字段就是余弦距离；相似度 = 1 - 距离
+                distance = float(fields.get("dist", 1.0))
+            except ValueError:
+                distance = 1.0
+            hits.append({
+                "seq": seq,
+                "text": fields.get("text", ""),
+                "page_idx": int(fields.get("page_idx", 0)),
+                "bbox": json.loads(fields["bbox"]) if fields.get("bbox") else None,
+                "page_size": (json.loads(fields["page_size"])
+                              if fields.get("page_size") else None),
+                "similarity": round(1.0 - distance, 4),
+                "block_type": fields.get("block_type") or "text",
+                "table_html": fields.get("table_html") or None,
+            })
+        return hits or None
+
+    async def load_chunks(self, doc_hash: str) -> list[dict]:
+        """取一份文档的全部分块（关键词路兜底用，按 seq 排序）。
+
+        走 scan 而不是 FT.SEARCH：这条路存在的意义就是"没有 RediSearch 时也能用"，
+        用 FT 去取会让兜底路径和主路径一起挂掉。
+        """
+        keys = [k async for k in self._r.scan_iter(match=f"chunk:{doc_hash}:*", count=1000)]
+        if not keys:
+            return []
+
+        def seq_of(key) -> int:
+            raw = key.decode() if isinstance(key, bytes) else key
+            try:
+                return int(raw.rsplit(":", 1)[1])
+            except (IndexError, ValueError):
+                return 0
+
+        keys.sort(key=seq_of)
+        pipe = self._r.pipeline()
+        for key in keys:
+            # 不取 vec：它是二进制且体积大，关键词路一个字节都用不上
+            pipe.hmget(key, "text", "page_idx", "bbox", "page_size", "block_type",
+                       "table_html")
+        rows = await pipe.execute()
+
+        chunks: list[dict] = []
+        for key, row in zip(keys, rows):
+            text, page_idx, bbox, page_size, block_type, table_html = (
+                v.decode() if isinstance(v, bytes) else v for v in row)
+            if not text:
+                continue
+            chunks.append({
+                "seq": seq_of(key),
+                "text": text,
+                "page_idx": int(page_idx or 0),
+                "bbox": json.loads(bbox) if bbox else None,
+                "page_size": json.loads(page_size) if page_size else None,
+                "block_type": block_type or "text",
+                "table_html": table_html or None,
+                "similarity": None,     # 关键词路量不出相似度 —— 如实留空，不许伪造
+            })
+        return chunks

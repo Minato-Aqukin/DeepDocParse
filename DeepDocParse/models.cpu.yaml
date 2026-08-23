@@ -26,6 +26,14 @@ parse_engines:
   #   options:
   #     backend: pipeline
 
+  # v1.1：视觉语言模型整页识别。**这套无 GPU 环境里跑不动**
+  # （VLM 在 CPU 上一页要几分钟），注册了也只会让人等到超时。
+  # 有 GPU 时连同 compose 的 vqa 服务一起打开：
+  # vlm-ocr:
+  #   endpoint: "http://vqa-dsocr:8000"
+  #   runtime: vlm-ocr
+  #   options: { model: deepseek-ocr }
+
 embedding_models:
   bge-m3:
     endpoint: "http://embed:8080"
@@ -33,4 +41,16 @@ embedding_models:
     runtime: tei
     capabilities: [dense]
 
+# v1.1 rerank：CPU 上交叉编码器比双塔慢得多（每个候选一次前向），
+# 但候选只有 20~30 条，实测可接受。要用就把 compose.cpu.yml 里的 rerank 服务一起打开。
+# rerank_models:
+#   bge-reranker-v2-m3:
+#     endpoint: "http://rerank:8080"
+#     default: true
+#     runtime: tei
+
 # vqa_models: 故意留空 —— 见文件头。
+# 影响抽取平面：没有 vqa_models 时 /v1/extract 的字段抽值无处可调，会整体判 error。
+# 抽取平面**必须**有一个 OpenAI 兼容的 chat 端点；纯 CPU 部署请注册一个本地
+# llama.cpp / Ollama 的 endpoint 到 vqa_models（它不必真是视觉模型 ——
+# 抽值只用文本，视觉核对是可选的 extract_verify）。

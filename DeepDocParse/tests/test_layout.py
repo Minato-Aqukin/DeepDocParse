@@ -297,13 +297,22 @@ async def test_readyz_is_not_permanently_red_with_an_inprocess_engine(client, ap
     """
     # 其它引擎全部探通，把变量收敛到"进程内引擎会不会被误判为 down"这一件事上
     respx.get("http://mineru:8000/health").mock(return_value=Response(200))
-    respx.get("http://vqa-dsocr:8000/v1/models").mock(return_value=Response(200))
+    vqa = respx.get("http://vqa-dsocr:8000/v1/models").mock(return_value=Response(200))
     respx.get("http://embed:8080/health").mock(return_value=Response(200))
+    respx.get("http://rerank:8080/health").mock(return_value=Response(200))
 
     resp = await client.get("/readyz")
     body = resp.json()
     assert body["checks"]["engine:borndigital"] == "up", body
     assert resp.status_code == 200, body
+
+    # v1.1 两条回归：
+    # 1. vlm-ocr 挂在 parse_engines 段，但它的 endpoint 是 OpenAI 运行时。
+    #    探针路径按 runtime 而不是段名推断，否则会去打不存在的 /health，
+    #    把一个健康的模型容器报成 down —— 而 readyz 恒 503 = 这个副本永不接流量
+    assert body["checks"]["engine:vlm-ocr"] == "up", body
+    # 2. vlm-ocr 与 vqa 指向同一个容器，**只该探一次**
+    assert vqa.call_count == 1, f"同一个 endpoint 被探了 {vqa.call_count} 次"
 
 
 def test_merge_lines_never_loses_or_duplicates_a_line():
@@ -338,3 +347,131 @@ def test_merge_lines_never_loses_or_duplicates_a_line():
                 max(lines[i]["bbox"][2] for i in members),
                 max(lines[i]["bbox"][3] for i in members),
             ], "bbox 不是成员行的外接矩形"
+
+
+# --------------------------------------------------------------------- v1.1：块类型进契约
+
+def test_block_type_is_normalized_into_the_vocabulary():
+    """引擎原生类型五花八门，归一化后只能是七个值之一。认不出来归 other，**不许丢块**。"""
+    raw = {"pdf_info": [{"page_idx": 0, "page_size": [612, 792], "para_blocks": [
+        {"type": "plain text", "bbox": [0, 0, 10, 10], "lines": []},
+        {"type": "table_body", "bbox": [0, 0, 10, 10], "lines": []},
+        {"type": "interline_equation", "bbox": [0, 0, 10, 10], "lines": []},
+        {"type": "某个没见过的类型", "bbox": [0, 0, 10, 10], "lines": []},
+        {"bbox": [0, 0, 10, 10], "lines": []},          # 压根没有 type 的老版面
+    ]}]}
+    out = layout.from_mineru(raw)
+    types = [b["type"] for b in out["pdf_info"][0]["para_blocks"]]
+    # 有 type 但不认识 -> other；压根没有 type -> text（两种"不认识"是不同的事）
+    assert types == ["text", "table", "equation", "other", "text"]
+    assert len(types) == 5, "归一化不许丢块"
+    # 原生值留着排查用（不进契约，但删掉会让"下载版面 JSON"这个手段变差）
+    assert out["pdf_info"][0]["para_blocks"][0]["type_native"] == "plain text"
+    assert layout.validate(out) == []
+
+
+def test_validate_rejects_unnormalized_type():
+    """type 进了契约，就必须是词汇表里的值 —— 出现别的值只可能是 normalizer 漏跑。"""
+    bad = {"pdf_info": [{"page_idx": 0, "page_size": [612, 792],
+                         "para_blocks": [{"type": "plain text", "bbox": None, "lines": []}]}]}
+    problems = layout.validate(bad)
+    assert any("type" in p for p in problems), problems
+
+
+def test_block_text_descends_into_nested_blocks():
+    """回归：mineru 的表格块把内容放在 blocks 子结构里，自身没有 lines。
+
+    v1.1 之前 block_text 只读 lines —— **整张表格的文字在分块阶段被静默丢弃**：
+    表格解析出来了、索引里却没有，问表格里的数永远检索不到，全程没有报错。
+    """
+    table_block = {"type": "table", "bbox": [0, 0, 10, 10], "blocks": [
+        {"type": "table_caption", "lines": [{"spans": [{"content": "表 1 价格表"}]}]},
+        {"type": "table_body", "lines": [{"spans": [
+            {"content": "项目 金额", "html": "<table><tr><td>项目</td></tr></table>"}]}]},
+    ]}
+    assert "表 1 价格表" in layout.block_text(table_block)
+    assert "项目 金额" in layout.block_text(table_block)
+    assert layout.table_html(table_block) == "<table><tr><td>项目</td></tr></table>"
+    # 非表格块没有 html —— 消费方必须能处理 None
+    assert layout.table_html({"lines": [{"spans": [{"content": "正文"}]}]}) is None
+
+
+def test_table_never_merges_with_surrounding_text():
+    """表格独立成块。合并进正文的话，出处 bbox 会横跨整片版心、行列关系也拍平没了。"""
+    from app.services.chunking import layout_to_chunks
+
+    lay = layout.from_mineru({"pdf_info": [{"page_idx": 0, "page_size": [612, 792],
+                                            "para_blocks": [
+        {"type": "title", "bbox": [0, 0, 100, 20],
+         "lines": [{"spans": [{"content": "第三章 价款"}]}]},
+        {"type": "text", "bbox": [0, 30, 100, 60],
+         "lines": [{"spans": [{"content": "以下为价款明细。"}]}]},
+        {"type": "table", "bbox": [0, 70, 100, 200], "blocks": [
+            {"type": "table_body", "lines": [{"spans": [
+                {"content": "项目 金额", "html": "<table></table>"}]}]}]},
+        {"type": "text", "bbox": [0, 210, 100, 240],
+         "lines": [{"spans": [{"content": "以上为附表。"}]}]},
+    ]}]})
+    chunks = layout_to_chunks(lay)
+    kinds = [c["block_type"] for c in chunks]
+    assert kinds == ["text", "table", "text"], kinds
+    table = chunks[1]
+    assert table["bbox"] == [0, 70, 100, 200], "表格块的 bbox 必须是它自己的，不含邻居"
+    assert table["table_html"] == "<table></table>"
+    # 标题不单独成块，而是作为后续块的上下文前缀（标题太短，单独成块检索不到）
+    assert all("第三章 价款" in c["text"] for c in chunks)
+
+
+# --------------------------------------------------------------------- v1.1：vlm-ocr
+
+@pytest.mark.parametrize("raw, expected", [
+    ([100, 200, 900, 300], [61.2, 158.4, 550.8, 237.6]),      # 0~1000 归一化
+    ([0.1, 0.2, 0.9, 0.3], [61.2, 158.4, 550.8, 237.6]),      # 0~1 归一化
+])
+def test_vlm_bbox_denormalization(raw, expected):
+    from app.services import vlm_ocr
+
+    assert vlm_ocr.denormalize_bbox(raw, 612, 792) == expected
+
+
+@pytest.mark.parametrize("raw", [None, [900, 200, 100, 300], [0, 0, 2000, 100], "左上角", [1, 2]])
+def test_vlm_bad_bbox_becomes_none_not_a_guess(raw):
+    """**宁可 None 也不要一个凑合的框**。
+
+    契约里 bbox=None 是"不能裁剪"，下游会如实打降级标记；
+    而一个错的框会裁出不相干的图，还带着"已验证"标记 —— 这个项目定义的最恶劣错误。
+    """
+    from app.services import vlm_ocr
+
+    assert vlm_ocr.denormalize_bbox(raw, 612, 792) is None
+
+
+def test_vlm_plain_text_fallback_leaves_bbox_empty():
+    """模型没吐 JSON 时整页当一个文本块，**bbox 留空而不是编一个整页框**。
+
+    编一个整页框会让每条出处都"命中"整页：指标上好看、实际毫无定位价值，
+    用户点开还会看到一整页图。
+    """
+    from app.services import vlm_ocr
+
+    page = vlm_ocr.plain_text_page("一段没有结构的识别结果", 0, 612, 792)
+    assert page["para_blocks"][0]["bbox"] is None
+    assert layout.block_text(page["para_blocks"][0]) == "一段没有结构的识别结果"
+
+
+def test_vlm_blocks_normalize_through_the_contract():
+    from app.services import vlm_ocr
+
+    page = vlm_ocr.blocks_to_page([
+        {"type": "标题", "bbox": [0, 0, 1000, 50], "text": "合同"},
+        {"type": "table", "bbox": [0, 60, 1000, 400], "text": "项目 金额",
+         "html": "<table><tr><td>项目</td></tr></table>"},
+        {"type": "text", "bbox": None, "text": "定不出位置的一段"},
+        {"type": "text", "bbox": [0, 0, 10, 10], "text": ""},      # 空块要被跳过
+    ], 0, 612, 792)
+    built = layout.build_pages([page], engine="vlm-ocr")
+    assert layout.validate(built) == []
+    blocks = built["pdf_info"][0]["para_blocks"]
+    assert [b["type"] for b in blocks] == ["other", "table", "text"]
+    assert layout.table_html(blocks[1]) == "<table><tr><td>项目</td></tr></table>"
+    assert blocks[2]["bbox"] is None

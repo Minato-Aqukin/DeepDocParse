@@ -94,5 +94,22 @@ services:
     environment: { CUDA_VISIBLE_DEVICES: "0" }
     deploy: *gpu
 
+  rerank:
+    # v1.1：交叉编码器精排（/v1/rerank）。与 embed 同一类容器换个 model。
+    # 权重同样要先落到本地：
+    #   modelscope download --model BAAI/bge-reranker-v2-m3 \
+    #     --local_dir ../../models/bge-reranker-v2-m3
+    # **注册表里没有 rerank_models 时这个容器白跑**，反过来注册了却不起这个容器
+    # 会让 /readyz 恒 503（探针是 all(up)）—— models.yaml 里那段缺省是注释掉的，
+    # 用这份 compose 时要把它一起打开。
+    image: ghcr.io/huggingface/text-embeddings-inference:1.9.3
+    command: >
+      --model-id /data/bge-reranker-v2-m3 --port 8080
+      --max-client-batch-size 32
+    volumes:
+      - ../../models/bge-reranker-v2-m3:/data/bge-reranker-v2-m3:ro
+    environment: { CUDA_VISIBLE_DEVICES: "0" }
+    deploy: *gpu
+
 volumes:
   redis-data:
