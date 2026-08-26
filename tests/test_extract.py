@@ -13,7 +13,7 @@ import pytest
 import respx
 from httpx import Response
 
-from app.services import extract_format as fmt
+from ddp_core import extract_format as fmt
 from app.services import extraction
 from app.services.task_store import TaskStore
 from app.worker.tasks import run_extraction

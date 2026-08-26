@@ -23,8 +23,9 @@ import re
 import httpx
 
 from app.config import settings
-from app.services import crops, extract_format as fmt
-from app.services.extract_format import CoerceError, FieldSpec, SchemaSpec, coerce_value
+from ddp_core import extract_format as fmt
+from ddp_core import crops
+from ddp_core.extract_format import CoerceError, FieldSpec, SchemaSpec, coerce_value
 from app.services.retrieval import retrieve
 
 _SYSTEM = (

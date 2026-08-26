@@ -18,6 +18,18 @@
    **openapi.yaml 已在 M5 冻结为 v1.0**：此后只许向后兼容的新增，不得删改既有字段语义
 5. **无状态**——结果暂存 TTL=24h；永久归档是 DeepDocParse-Web/backend 的事；向量索引是可重建缓存
 6. **MCP 只有一个工具** `ask_document`，签名永不变，检索升级只改内部实现
+7. **`ddp_core` 是对外共享包，只准单向依赖**（2026-08-26 新增）。
+   分块 / 裁图 / 分词 / 抽取 schema 的**唯一一份**实现住在 `gateway/ddp_core/`，
+   DeepDocParse-Web 通过安装本仓库的 gateway 包来 import 它。因此：
+   - **`ddp_core` 不得 import 任何 `app.*`** —— 它是叶子，反向依赖会把 gateway
+     的应用层（config / task_store / FastAPI）拖进 Web 的进程
+   - 块类型 / `block_text` / `table_html` 的规范实现在 `ddp_core/blocks.py`，
+     `app/services/layout.py` 只是再导出。**别在任何地方重新实现它们** ——
+     `block_text` 那个循环历史上被抄过四遍，而抄错的后果是出处指错块、
+     或整张表格的文字在分块阶段被静默丢弃
+   - 改 `ddp_core` 等于同时改两个仓库的行为，跑 `scripts/check_blocktype_parity.py`
+     与 `scripts/check_chunk_regression.py` 两把尺子
+   - **Dockerfile 要 `COPY ddp_core`** —— 漏了镜像起来直接 ModuleNotFoundError
 
 ## 开发顺序（按 TODO(Mx) 标注走）
 M1 解析平面 → M2 VQA 平面 → M3 MCP ask_document v1(BM25) → M4 prod+embedding v2 → M5 契约冻结（已完成）

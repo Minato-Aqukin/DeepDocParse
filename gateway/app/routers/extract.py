@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from app.auth import require_service_token
 from app.config import settings
 from app.errors import APIError
-from app.services import extract_format as fmt
+from ddp_core import extract_format as fmt
 
 router = APIRouter(tags=["extract"], dependencies=[Depends(require_service_token)])
 
