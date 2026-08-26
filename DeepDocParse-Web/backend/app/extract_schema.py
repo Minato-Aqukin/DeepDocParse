@@ -35,6 +35,12 @@ DEGRADED_VALUES = (
     # 产品层会真的产出它，不收录的话 validate_result 会把一份合法结果判成不合规
     # （service 侧的 run_extraction 因此会直接把任务标 failed）
     "rerank_unavailable",
+    # 第十种：上游没有会遵循指令的模型（只有 OCR 专用模型，或压根没注册）。
+    # **两边词汇表必须同步**：service 的 /v1/extract 会真的产出它，
+    # 这里不收录的话，一份合法结果会在产品层被判成不合规。
+    # 产品层自己抽取时用的是 CHAT_MODEL 配置项，不走注册表 ——
+    # 但**别把 CHAT_MODEL 指向 OCR 专用模型**，那会抽出一堆假的 not_found。
+    "no_instruct_model",
 )
 
 # 不支持的 JSON Schema 构造。**不是没来得及做**：每一条都会让"一个字段一次定位"

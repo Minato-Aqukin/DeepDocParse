@@ -1,0 +1,25 @@
+# 边缘层：nginx 静态托管前端构建产物 + 反代 backend。
+# 由 quickstart.sh 起停，配置文件 ../.quickstart/nginx.conf 也由它生成。
+#
+# 为什么用 network_mode: host：
+#   backend 只监听 127.0.0.1:8080（不对公网暴露），端口映射模式下容器访问不到它；
+#   host 模式让 nginx 直接用 127.0.0.1 连 backend，同时自己占住宿主的对外端口。
+#   代价是 ports: 段失效 —— 监听端口写在 nginx.conf 里（quickstart.sh --port 控制）。
+#
+# 项目名独立于 ddp-web：两者用不同的 compose 文件，同名会让对方的服务被当成孤儿容器。
+name: ddp-web-edge
+
+services:
+  edge:
+    image: nginx:1.27-alpine
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ../frontend/dist:/usr/share/nginx/html:ro
+      - ../.quickstart/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      # 端口由 nginx.conf 决定，这里只确认进程能应答自己的配置
+      test: ["CMD-SHELL", "nginx -t >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

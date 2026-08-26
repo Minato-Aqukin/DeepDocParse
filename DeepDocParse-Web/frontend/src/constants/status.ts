@@ -52,6 +52,7 @@ export const DEGRADED_LABEL: Record<string, string> = {
   // v1.1 新增两种
   schema_violation: '模型输出不符合 schema（已重试仍失败）',
   rerank_unavailable: '未做精排（重排序服务不可用）',
+  no_instruct_model: '未抽取（后端没有可用的指令模型）',
 }
 
 /**

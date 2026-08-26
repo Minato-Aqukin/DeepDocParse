@@ -231,6 +231,7 @@ class Message(Base):
     # no_hits | embedding_unavailable | vision_unavailable | crop_unsupported | crop_failed
     # | parse_mismatch | client_aborted | upstream_error | upstream_interrupted
     # | schema_violation（抽取平面）| rerank_unavailable（配了精排但上游没注册）
+    # | no_instruct_model（上游只有 OCR 专用模型，抽值无处可调）
     degraded: Mapped[str | None] = mapped_column(String(32), default=None)
     # {chat_model, embedding_model, embedding_dim, retrieval:{...}}，见 qa.answer_model_meta
     model_meta: Mapped[dict] = mapped_column(JSON, default=dict)

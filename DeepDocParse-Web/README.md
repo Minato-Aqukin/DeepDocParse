@@ -11,10 +11,12 @@
 
 ```
 DeepDocParse-Web/
+├── quickstart.sh  # 一键部署：环境配置 -> 按硬件调参 -> 下权重 -> 起服务（见 docs/DEPLOY.md）
 ├── backend/    # FastAPI：用户、key、额度、归档、分块索引、文档问答、**结构化抽取**、对外 API 与 MCP 代理
 ├── frontend/   # Vue 3 + TS + Element Plus：文档库、三栏工作台（原文/结果/问答）、**抽取**、检索、用量
 ├── docker/     # compose.web.yml：PostgreSQL(pgvector) + MinIO + Redis（多副本才需要）
-├── docs/       # DESIGN.md：M6 设计（问答、Document/ParseJob 拆分、多副本）
+├── deploy/     # compose.edge.yml：nginx 边缘层（静态托管前端 + 反代 backend）
+├── docs/       # DEPLOY.md 部署 · DESIGN.md M6 设计（问答、Document/ParseJob 拆分、多副本）
 └── scripts/    # e2e_web.py 真环境全链路验证
 ```
 
@@ -67,6 +69,34 @@ schema 边界（不支持嵌套/oneOf/$ref，叶子必须带 description）见
 **与 service 的耦合面**只有两处：解析契约（`openapi.yaml`）与 OpenAI 兼容的 embedding/chat
 端点——后者可以配成任意兼容服务（`EMBEDDING_URL` / `CHAT_URL`），本层不绑定 DeepDocParse
 的部署形态。检索索引、分块、问答编排全部在本层。
+
+## 部署到服务器（一键）
+
+ssh 上一台干净的 Linux 服务器，三条命令：
+
+```bash
+git clone https://github.com/Minato-Aqukin/DeepDocParse-Web.git
+cd DeepDocParse-Web
+./quickstart.sh --host <服务器IP或域名> --chat-url http://127.0.0.1:11434/v1 --chat-model qwen3:8b -y
+```
+
+跑完打开 `http://<你的IP>` 注册第一个账号即可。`quickstart.sh` 从零装依赖、
+clone service 仓库、生成两份 `.env`（随机密钥）、按 CPU/内存/GPU 调参、下模型权重、
+构建前端、起全套服务，最后自检一遍。四步也能单独跑：
+
+```bash
+./quickstart.sh configure   # 环境配置：两份 .env + 前端 + 注册表 + nginx
+./quickstart.sh tune        # 优化配置：按硬件定并发/批量/上传上限
+./quickstart.sh models      # 模型权重：bge-m3（TEI 只认 safetensors，会自动转）
+./quickstart.sh start       # 服务启动：容器 -> 迁移 -> backend -> nginx
+./quickstart.sh doctor      # 自检：密钥、引擎名一致性、容器回访、探针
+```
+
+对外只开一个端口：nginx 静态托管前端并反代 backend，backend 只监听 127.0.0.1。
+**`--host` 不能写 127.0.0.1** —— service 跑在容器里，要靠这个地址回访本层。
+完整说明（硬件调参表、权重下载、排查清单、升级与卸载）见 [docs/DEPLOY.md](docs/DEPLOY.md)。
+
+下面是本机开发用的手工流程。
 
 ## 快速开始（无 GPU 也能跑）
 
