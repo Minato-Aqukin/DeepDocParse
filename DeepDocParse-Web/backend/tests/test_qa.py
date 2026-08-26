@@ -240,7 +240,7 @@ async def test_keyword_only_match_below_floor_is_not_a_citation(auth_client, ses
     assert any(question in t for t in texts), "前提不成立：词面应当命中"
 
     hits = await MemoryIndex().search(session, vector=qvec, query=question,
-                                      document_id=document["id"], user_id=None,
+                                      document_id=document["id"],
                                       limit=cfg.qa_top_k, candidates=cfg.qa_candidates)
     assert hits == [], f"低于相似度下限的词面命中不得成为出处，实际返回 {hits}"
 
@@ -368,7 +368,7 @@ async def test_generator_close_marks_client_aborted_and_persists(auth_client, se
     respx.post(CHAT).mock(return_value=httpx.Response(
         200, headers={"content-type": "text/event-stream"}, content=never_ends()))
 
-    user_id = (await session.get(Document, document["id"])).user_id
+    user_id = (await session.get(Document, document["id"])).uploaded_by
     gen = _stream_answer(auth_client._transport.app.state.http,  # type: ignore[attr-defined]
                          [{"role": "user", "content": "问题"}], Retrieval(),
                          conversation_id=cid, document_id=document["id"], user_id=user_id,

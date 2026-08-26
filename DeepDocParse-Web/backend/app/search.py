@@ -70,7 +70,7 @@ class Hit(dict):
 
 class SearchIndex(Protocol):
     async def search(self, session: AsyncSession, *, vector: list[float] | None, query: str,
-                     document_id: str | None, user_id: str, limit: int,
+                     document_id: str | None, limit: int,
                      candidates: int) -> list[Hit]: ...
 
 
@@ -98,10 +98,13 @@ class PgVectorIndex:
     """
 
     async def search(self, session: AsyncSession, *, vector: list[float] | None, query: str,
-                     document_id: str | None, user_id: str, limit: int,
+                     document_id: str | None, limit: int,
                      candidates: int) -> list[Hit]:
-        scope = "c.document_id = :document_id" if document_id else "d.user_id = :user_id"
-        params = {"user_id": user_id, "document_id": document_id,
+        # **不再按用户收作用域**（1b）：一次部署 = 一份语料，检索天然跨全语料。
+        # 不指定 document_id 就是"在整份语料里搜"，`TRUE` 是有意写成常量的 ——
+        # 让 SQL 结构与指定文档时保持一致，免得两条分支各长一个样
+        scope = "c.document_id = :document_id" if document_id else "TRUE"
+        params = {"document_id": document_id,
                   "qvec": str(list(vector)) if vector else None,
                   # 查询侧切词必须与索引侧同一个 tokenizer（见模块 docstring 第 1 条），
                   # 再拼成 OR 形式的 tsquery（见下面 kw_sql 的长注释）
@@ -214,7 +217,7 @@ class MemoryIndex:
     """单测用：纯 Python 余弦 + 词面匹配，语义与 PgVectorIndex 对齐（同样走 RRF）。"""
 
     async def search(self, session: AsyncSession, *, vector: list[float] | None, query: str,
-                     document_id: str | None, user_id: str, limit: int,
+                     document_id: str | None, limit: int,
                      candidates: int) -> list[Hit]:
         from sqlalchemy import select
 
@@ -222,8 +225,9 @@ class MemoryIndex:
 
         stmt = select(Chunk, Document).join(Document, Document.id == Chunk.document_id).where(
             Document.deleted_at.is_(None))
-        stmt = stmt.where(Chunk.document_id == document_id) if document_id \
-            else stmt.where(Document.user_id == user_id)
+        # 不指定文档就搜全语料 —— 与 PgVectorIndex 的 scope 语义保持一致
+        if document_id:
+            stmt = stmt.where(Chunk.document_id == document_id)
         rows = (await session.execute(stmt)).all()
 
         vec_ids: list[str] = []

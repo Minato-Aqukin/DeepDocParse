@@ -141,7 +141,7 @@ async def _retrieve(ctx: ExtractContext, query: str, *, k: int,
 
     candidates = max(settings.rerank_candidates if settings.rerank_enabled else k * 3, k)
     hits = await ctx.index.search(ctx.session, vector=vector, query=query,
-                                  document_id=ctx.document.id, user_id=ctx.user_id,
+                                  document_id=ctx.document.id,
                                   limit=candidates, candidates=candidates)
     if not hits:
         return [], degraded or "no_hits"

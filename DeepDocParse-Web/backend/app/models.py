@@ -51,6 +51,11 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(String(255), unique=True, default=None)
     password_hash: Mapped[str] = mapped_column(String(128))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 语料不隔离之后，**全站只剩一处授权判断**：谁能删文档（上传者或管理员）。
+    # 除此之外账号层只管认证、计量、限速，不管授权（plan.md §2 已定 2）。
+    # 目前没有提升管理员的界面 —— 需要时直接改库。这是有意的：
+    # 加一套权限管理 UI 远超本阶段范围，而唯一用途只有"删别人传的文档"。
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -78,19 +83,30 @@ class ApiKey(Base):
 
 
 class Document(Base):
-    """用户的一份文件。
+    """语料里的一份文件。**不属于任何用户。**
 
-    doc_id = 文件内容 sha256：本层去重键，也作为契约的 doc_id 传给 service，
+    doc_id = 文件内容 sha256：去重键，也作为契约的 doc_id 传给 service，
     使 service 的幂等复用与向量索引分块键稳定（预签名/临时 URL 每次都变）。
 
     origin 参与去重键：同一份文档从 Web 与对外 API 两个平面提交是两件独立的事，
     混用会重复计费并覆写归档结果（M5 真机 e2e 抓到过）。
+
+    **1b 起：一次部署 = 一份语料 = 一个知识库**（plan.md §2 已定 2）。
+    `uploaded_by` 只是**归属署名**，不再是可见性边界 —— 谁都看得见全部语料，
+    检索天然跨全语料。全部上传者记在 `document_uploads` 里：同一份文件被
+    好几个人先后传过，那仍是**同一份语料**，不是几份。
+
+    **去重因此变成全局的**：唯一约束从 (user_id, doc_id, origin) 收成
+    (doc_id, origin)。收益是实打实的钱 —— 以前两个人传同一份手册 =
+    两次解析 + 两次索引 + 两套 embedding，而 GPU 按小时租。
     """
 
     __tablename__ = "documents"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
-    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
+    # 首个上传者，**仅归属署名** —— 不是可见性边界，也不是授权依据。
+    # 全部上传者见 DocumentUpload；删除权限判的是"在不在那张表里，或是不是管理员"
+    uploaded_by: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
     doc_id: Mapped[str] = mapped_column(String(64), index=True)
     origin: Mapped[str] = mapped_column(String(8), default="web")   # web | external
     filename: Mapped[str] = mapped_column(String(255))
@@ -110,8 +126,30 @@ class Document(Base):
                                                  onupdate=utcnow)
 
     __table_args__ = (
-        UniqueConstraint("user_id", "doc_id", "origin", name="uq_documents_user_doc_origin"),
-        Index("ix_documents_user_deleted_created", "user_id", "deleted_at", "created_at"),
+        # **全局去重**：同一份文件在同一个 origin 下，整个部署只存一份
+        UniqueConstraint("doc_id", "origin", name="uq_documents_doc_origin"),
+        # 列表页按 (未删, 时间倒序) 翻页，不再有 user 维
+        Index("ix_documents_deleted_created", "deleted_at", "created_at"),
+    )
+
+
+class DocumentUpload(Base):
+    """谁传过这份文件 —— **一份文档可以有多个上传者**。
+
+    全局去重之后，第二个人传同一份文件不会产生第二个 Document，
+    但"他也传过"这件事不能丢：删除权限判它，界面上也要说得清这份语料从哪来。
+    §11 已定 6「合并并保留全部归属」说的就是这张表。
+    """
+
+    __tablename__ = "document_uploads"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    document_id: Mapped[str] = mapped_column(String(32), ForeignKey("documents.id"), index=True)
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "user_id", name="uq_document_uploads_doc_user"),
     )
 
 
@@ -134,6 +172,11 @@ class ParseJob(Base):
     engine: Mapped[str] = mapped_column(String(32))
     options: Mapped[dict] = mapped_column(JSON, default=dict)
     options_hash: Mapped[str] = mapped_column(String(64))
+    # **谁发起的这次解析**，用来记账。语料共享之后（1b）任何人都能对任一文档点
+    # 重新解析 / 重建索引，而那是要花钱的（GPU 按小时租）——
+    # 按 `documents.uploaded_by` 记账等于"谁传的谁买单"，别人能随意花掉他的额度。
+    # 可空：迁移过来的老 job 没有这个信息，那时退回按上传者记（见 archive.py）。
+    initiated_by: Mapped[str | None] = mapped_column(String(32), default=None)
     service_task_id: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     error: Mapped[str | None] = mapped_column(Text, default=None)

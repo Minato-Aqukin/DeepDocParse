@@ -24,10 +24,10 @@ async def search(request: Request, q: str = "", doc: str = "", limit: int = 20,
         return {"query": q, "groups": []}
 
     if doc:
-        # 只允许在自己的文档里搜。检索层虽然也按 user_id 兜了一道，
-        # 但传了 document_id 时那道过滤就被换掉了，这里前置校验才稳
+        # 指定文档时前置校验它存在且未删。**不再判归属**（1b）——
+        # 语料是整个部署共享的，"只能搜自己的文档"这条限制随之消失
         target = await session.get(Document, doc)
-        if target is None or target.user_id != user.id or target.deleted_at is not None:
+        if target is None or target.deleted_at is not None:
             raise APIError(404, "document not found", "invalid_request_error",
                            "document_not_found")
 
@@ -41,7 +41,7 @@ async def search(request: Request, q: str = "", doc: str = "", limit: int = 20,
         vector, degraded = None, "embedding_unavailable"
 
     hits = await index.search(session, vector=vector, query=q, document_id=doc or None,
-                              user_id=user.id, limit=min(limit, 50),
+                              limit=min(limit, 50),
                               candidates=max(limit, settings.qa_candidates))
     if not hits:
         return {"query": q, "degraded": degraded, "groups": []}
@@ -55,8 +55,8 @@ async def search(request: Request, q: str = "", doc: str = "", limit: int = 20,
     groups: dict[str, dict] = {}
     for hit in hits:
         document = documents.get(hit["document_id"])
-        if document is None or document.user_id != user.id or document.deleted_at is not None:
-            continue        # 检索层已过滤，这里是纵深防御
+        if document is None or document.deleted_at is not None:
+            continue        # 检索层已过滤，这里是纵深防御（软删除是唯一剩下的可见性条件）
         group = groups.setdefault(document.id, {
             "document_id": document.id, "filename": document.filename, "hits": [],
         })

@@ -82,7 +82,9 @@ async def index_document(session: AsyncSession, storage: Storage, http: httpx.As
     document.index_status = "ready"
     document.index_error = None
     document.updated_at = utcnow()
-    await record_usage(session, user_id=document.user_id, kind="embed",
+    # 记在发起这次索引的人头上；老 job 没这个信息时退回上传者
+    await record_usage(session, user_id=(job.initiated_by if job else None)
+                       or document.uploaded_by, kind="embed",
                        requests=_batch_count(len(chunks)))
     await session.commit()
     return len(chunks)

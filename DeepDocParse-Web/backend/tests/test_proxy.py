@@ -103,7 +103,7 @@ async def test_result_metering_with_shared_service_task(client, auth_client, api
     key_row = await session.get(ApiKey, api_key["id"])
 
     # 先造一份"Web 上传"的文档与 job，再用 key 提交一次 —— 两个 job 同 service_task_id
-    web_doc = Document(user_id=key_row.user_id, doc_id="web-doc", origin="web", filename="a.pdf",
+    web_doc = Document(uploaded_by=key_row.user_id, doc_id="web-doc", origin="web", filename="a.pdf",
                        object_key="sources/x/a.pdf", page_count=3)
     session.add(web_doc)
     await session.commit()
@@ -198,3 +198,154 @@ async def test_mcp_proxy_passes_session_header_both_ways(client, api_key, sessio
 
     usage = (await session.execute(select(UsageRecord))).scalars().all()
     assert [u.kind for u in usage] == ["mcp"]
+
+
+# ---- 1b 语料共享化引入的三个计量回归（验收抓到，各钉一条）----
+#
+# 共同根因：全局去重之后一个 ParseJob 被多个用户共享，而原来的计量锚点
+# （`job.page_count == 0` = "这次任务还没记过账"）是**按任务**的。
+# 任务一共享，那个锚点就从"每人各记一次"退化成"整个部署只记一次"。
+
+async def _second_key(session, username: str = "second") -> dict:
+    """再造一个用户 + 一把 key。"""
+    import hashlib
+    import secrets
+
+    from app.models import User, new_id
+
+    user = User(id=new_id(), username=username, password_hash="x")
+    session.add(user)
+    await session.flush()
+    raw = f"sk-{secrets.token_hex(16)}"
+    key = ApiKey(id=new_id(), user_id=user.id, name="k",
+                 key_hash=hashlib.sha256(raw.encode()).hexdigest(), key_prefix=raw[:10])
+    session.add(key)
+    await session.commit()
+    return {"id": key.id, "key": raw, "user_id": user.id}
+
+
+@respx.mock
+async def test_second_user_of_a_shared_parse_is_still_billed(client, api_key, session):
+    """**第二个用户不能白嫖。**
+
+    全局去重让 B 提交一个 A 已经解析过的 file_url 时命中同一个 job，
+    而那个 job 的 `page_count` 早就非 0 —— 于是 B **完全不计费**，
+    可以无限白嫖解析并绕过 `quota_pages`（验收实测 B used_pages=0）。
+    改成按 (用户, job) 判重之后，**恰好还原 1b 之前的计费行为**：
+    那时每人各有一份 job，本来就是每人各记一次。
+    """
+    respx.post(f"{SERVICE}/v1/parse").mock(
+        return_value=httpx.Response(202, json={"task_id": "s-share"}))
+    respx.get(f"{SERVICE}/v1/parse/s-share/result").mock(
+        return_value=httpx.Response(200, json={"markdown": "# x", "layout_json": LAYOUT,
+                                               "images": []}))
+    url = {"file_url": "https://third-party.example/shared.pdf"}
+
+    await client.post("/v1/parse", headers=_auth(api_key), json=url)
+    await client.get("/v1/parse/s-share/result", headers=_auth(api_key))
+
+    other = await _second_key(session, "freeloader")
+    await client.post("/v1/parse", headers=_auth(other), json=url)
+    await client.get("/v1/parse/s-share/result", headers=_auth(other))
+
+    billed = {
+        u.user_id: u.pages
+        for u in (await session.execute(
+            select(UsageRecord).where(UsageRecord.pages > 0))).scalars().all()
+    }
+    assert billed.get(other["user_id"]) == 3, f"第二个用户没被计费：{billed}"
+    # 而且各自只记一次 —— 重复取结果仍然不得重复计费
+    assert len(billed) == 2, billed
+
+
+@respx.mock
+async def test_polling_someone_elses_task_does_not_bill_the_wrong_person(
+        client, api_key, session):
+    """**跨用户取结果不能把账记到错的人头上。**
+
+    去掉 `Document.user_id == key.user_id` 之后，`rows[0]` 兜底会选中**别人**的
+    job，而 usage 写的是当前 key 的 user —— A 的解析算在 B 头上，
+    A 永远不被计费（验收实测 A=0 / B=3）。
+    """
+    respx.post(f"{SERVICE}/v1/parse").mock(
+        return_value=httpx.Response(202, json={"task_id": "s-cross"}))
+    respx.get(f"{SERVICE}/v1/parse/s-cross/result").mock(
+        return_value=httpx.Response(200, json={"markdown": "# x", "layout_json": LAYOUT,
+                                               "images": []}))
+
+    # A 提交，但**不取结果**
+    await client.post("/v1/parse", headers=_auth(api_key), json={
+        "file_url": "https://third-party.example/cross.pdf"})
+
+    # B 从没提交过，直接拿着同一个 task_id 取结果
+    other = await _second_key(session, "eavesdropper")
+    await client.get("/v1/parse/s-cross/result", headers=_auth(other))
+
+    billed = [(u.user_id, u.pages) for u in (await session.execute(
+        select(UsageRecord).where(UsageRecord.pages > 0))).scalars().all()]
+    assert billed == [], f"没有人该被计费（B 没有自己的 job），实际 {billed}"
+
+
+@respx.mock
+async def test_external_submitter_can_delete_their_own_document(client, api_key, session):
+    """**对外平面提交者要能删掉自己提交的文档。**
+
+    `_may_delete` 只查 `document_uploads`，而对外平面建 Document 时曾经漏了
+    记归属 —— 于是提交者删自己的东西得到 403，永久。更别扭的是迁移 0006
+    给包括 external 在内的全部**存量**文档都补了归属，变成
+    "老的删得掉、新的删不掉"。
+    """
+    from app.models import DocumentUpload
+
+    respx.post(f"{SERVICE}/v1/parse").mock(
+        return_value=httpx.Response(202, json={"task_id": "s-own"}))
+    await client.post("/v1/parse", headers=_auth(api_key), json={
+        "file_url": "https://third-party.example/mine.pdf"})
+
+    document = (await session.execute(select(Document))).scalars().one()
+    uploads = (await session.execute(
+        select(DocumentUpload).where(DocumentUpload.document_id == document.id))
+    ).scalars().all()
+    key_row = await session.get(ApiKey, api_key["id"])
+    assert [u.user_id for u in uploads] == [key_row.user_id], \
+        "对外平面提交也要记归属，否则提交者自己删不掉"
+
+
+@respx.mock
+async def test_middle_submitter_of_a_three_way_share_is_still_billed(
+        client, api_key, session):
+    """**三人以上共享同一份外部文档时，中间那些人也要计费。**
+
+    验收（1b 二次）抓到：`job.api_key_id` 每次提交都被覆盖成**最后一个**提交者，
+    而 `initiated_by` 只在建 job 时写入 = **第一个**发起人。三个人依次提交同一个
+    URL 时，中间那位两层兜底全对不上 —— 一分钱不记，且绕过 `quota_pages`。
+    人一多，中间的用户全部免费。
+
+    第三层兜底查 `document_uploads`（"他提交过吗"）补上这个洞，
+    而没提交过的人不在那张表里，所以不会重新打开"拿别人的 task_id 白嫖"那个口子
+    —— 那条由 `test_polling_someone_elses_task_does_not_bill_the_wrong_person` 钉着。
+    """
+    respx.post(f"{SERVICE}/v1/parse").mock(
+        return_value=httpx.Response(202, json={"task_id": "s-three"}))
+    respx.get(f"{SERVICE}/v1/parse/s-three/result").mock(
+        return_value=httpx.Response(200, json={"markdown": "# x", "layout_json": LAYOUT,
+                                               "images": []}))
+    url = {"file_url": "https://third-party.example/three.pdf"}
+
+    middle = await _second_key(session, "middle")
+    last = await _second_key(session, "last")
+
+    # 依次提交：first（api_key）→ middle → last
+    for who in (api_key, middle, last):
+        await client.post("/v1/parse", headers=_auth(who), json=url)
+
+    # 中间那位取结果 —— 他既不是 initiated_by 也不是最后的 api_key_id
+    await client.get("/v1/parse/s-three/result", headers=_auth(middle))
+
+    billed = {
+        u.user_id: u.pages
+        for u in (await session.execute(
+            select(UsageRecord).where(UsageRecord.pages > 0))).scalars().all()
+    }
+    assert billed.get(middle["user_id"]) == 3, \
+        f"中间的提交者没被计费（两层兜底都对不上他）：{billed}"

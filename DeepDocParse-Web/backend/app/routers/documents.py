@@ -28,7 +28,8 @@ from app.deps import current_user, get_service_client, get_storage
 from app.errors import APIError
 from app.indexing import index_document
 from app.models import (
-    Chunk, Conversation, Document, FileToken, Message, ParseJob, User, new_id, utcnow,
+    Chunk, Conversation, Document, DocumentUpload, FileToken, Message, ParseJob, User,
+    new_id, utcnow,
 )
 from app.service_client import ServiceClient, ServiceError
 from app.storage import Storage, prefix_of, source_key
@@ -70,9 +71,15 @@ class DocumentInfo(BaseModel):
     index_error: str | None
     current_job_id: str | None
     created_at: datetime
+    # 语料共享之后（1b）文档库里会有别人传的东西，界面得说得清**这份是谁传的**、
+    # 以及**当前用户能不能删** —— 否则用户只能全选、点删、然后吃一把 403。
+    # `uploaders` 是全部上传者的用户名（同一份文件可能好几个人先后传过）
+    uploaders: list[str] = []
+    can_delete: bool = False
 
 
-def _doc_info(document: Document, job: ParseJob | None) -> DocumentInfo:
+def _doc_info(document: Document, job: ParseJob | None, *,
+              uploaders: list[str] | None = None, can_delete: bool = False) -> DocumentInfo:
     return DocumentInfo(
         id=document.id, filename=document.filename, doc_id=document.doc_id,
         origin=document.origin, mime=document.mime, size_bytes=document.size_bytes,
@@ -80,7 +87,24 @@ def _doc_info(document: Document, job: ParseJob | None) -> DocumentInfo:
         status=job.status if job else "pending", error=job.error if job else None,
         index_status=document.index_status, index_error=document.index_error,
         current_job_id=document.current_job_id, created_at=document.created_at,
+        uploaders=uploaders or [], can_delete=can_delete,
     )
+
+
+async def _uploaders_of(session: AsyncSession, document_ids: list[str]) -> dict[str, list[str]]:
+    """document_id -> 上传者用户名列表。**一次查完，别在循环里查**。"""
+    if not document_ids:
+        return {}
+    rows = (await session.execute(
+        select(DocumentUpload.document_id, User.username)
+        .join(User, User.id == DocumentUpload.user_id)
+        .where(DocumentUpload.document_id.in_(document_ids))
+        .order_by(DocumentUpload.created_at)
+    )).all()
+    out: dict[str, list[str]] = {}
+    for doc_id, username in rows:
+        out.setdefault(doc_id, []).append(username)
+    return out
 
 
 def _too_large() -> APIError:
@@ -116,13 +140,34 @@ async def _read_capped(file: UploadFile) -> bytes:
     return b"".join(parts)
 
 
-async def _owned(document_id: str, user: User, session: AsyncSession) -> Document:
+async def _visible(document_id: str, session: AsyncSession) -> Document:
+    """取一份语料里的文档。**不按用户过滤** —— 语料是整个部署共享的。
+
+    从 `_owned` 改名而来（1b，plan.md §2 已定 2）：一次部署 = 一份语料 =
+    一个知识库，账号层只管认证 / 计量 / 限速，**不管授权**。
+    全站唯一残留的授权判断是删除权限，见 `_may_delete`。
+
+    只剩软删除这一个可见性条件 —— 删掉的东西谁都不该再看见。
+    """
     document = await session.get(Document, document_id)
-    # 别人的文档同样报 404，不泄露存在性
-    if document is None or document.user_id != user.id or document.deleted_at is not None:
+    if document is None or document.deleted_at is not None:
         raise APIError(404, f"document not found: {document_id}", "invalid_request_error",
                        "document_not_found")
     return document
+
+
+async def _may_delete(document: Document, user: User, session: AsyncSession) -> bool:
+    """**全站唯一一处授权判断**：谁能删这份文档。
+
+    判据是"传过它的人，或管理员"。注意判的是 `document_uploads` 整张表而不是
+    `uploaded_by` 那一个字段 —— 全局去重之后，第二个传同一份文件的人不会产生
+    新的 Document，但他确实也传过，凭什么不让他删。
+    """
+    if user.is_admin:
+        return True
+    return bool(await session.scalar(
+        select(DocumentUpload.id).where(DocumentUpload.document_id == document.id,
+                                        DocumentUpload.user_id == user.id).limit(1)))
 
 
 async def _latest_job(session: AsyncSession, document: Document) -> ParseJob | None:
@@ -222,8 +267,7 @@ async def upload(
     mime = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
     document = (await session.execute(
-        select(Document).where(Document.user_id == user.id, Document.doc_id == doc_id,
-                               Document.origin == "web")
+        select(Document).where(Document.doc_id == doc_id, Document.origin == "web")
     )).scalar_one_or_none()
 
     if document is None:
@@ -231,7 +275,7 @@ async def upload(
         # 就填好。先落一行 object_key 为空的 Document、再补写的话，中途崩溃就会留下
         # 一行"看着像外部提交"的 web 文档（空 object_key 是外部任务的标记），
         # reparse 会拒绝它且无从恢复。
-        document = Document(id=new_id(), user_id=user.id, doc_id=doc_id, origin="web",
+        document = Document(id=new_id(), uploaded_by=user.id, doc_id=doc_id, origin="web",
                             filename=filename, mime=mime, size_bytes=len(data))
         # 键里带 document.id 而不是内容哈希：按内容哈希拼的话，两个用户传同一份文件
         # 会共用一个对象，其中一方删除就会把另一方的原件也删掉
@@ -246,7 +290,7 @@ async def upload(
             await session.rollback()
             orphan = document.object_key      # 这一行没落库，它指向的对象无人引用
             document = (await session.execute(
-                select(Document).where(Document.user_id == user.id, Document.doc_id == doc_id,
+                select(Document).where(Document.doc_id == doc_id,
                                        Document.origin == "web")
             )).scalar_one_or_none()
             if document is None:
@@ -268,6 +312,21 @@ async def upload(
             document.index_error = None
         await session.commit()
 
+    # **归属：谁传过都记一笔。** 全局去重之后第二个人传同一份文件不会产生新的
+    # Document，但"他也传过"这件事不能丢 —— 删除权限判它，界面上也要说得清
+    # 这份语料从哪来（§11 已定 6「合并并保留全部归属」）。
+    # 用 SAVEPOINT + 唯一约束兜并发：同一个人重复传不该报错，也不该多记一行。
+    if not await session.scalar(
+            select(DocumentUpload.id).where(DocumentUpload.document_id == document.id,
+                                            DocumentUpload.user_id == user.id).limit(1)):
+        try:
+            async with session.begin_nested():
+                session.add(DocumentUpload(id=new_id(), document_id=document.id,
+                                           user_id=user.id))
+        except IntegrityError:
+            pass        # 并发下另一边先记上了，正是想要的结果
+        await session.commit()
+
     digest = options_hash(engine, parsed_options)
     job = (await session.execute(
         select(ParseJob).where(ParseJob.document_id == document.id,
@@ -282,6 +341,7 @@ async def upload(
 
     if job is None:
         job = ParseJob(document_id=document.id, engine=engine, options=parsed_options,
+                       initiated_by=user.id,
                        options_hash=digest)
         session.add(job)
     else:
@@ -330,7 +390,7 @@ async def list_documents(user: User = Depends(current_user),
         select(Document, current, fallback)
         .outerjoin(current, current.id == Document.current_job_id)
         .outerjoin(fallback, fallback.id == _latest_job_id())
-        .where(Document.user_id == user.id, Document.deleted_at.is_(None))
+        .where(Document.deleted_at.is_(None))
     )
     if q:
         stmt = stmt.where(Document.filename.ilike(f"%{q}%"))
@@ -340,8 +400,13 @@ async def list_documents(user: User = Depends(current_user),
                 else stmt.where(or_(job_status == "pending", job_status.is_(None))))
     stmt = stmt.order_by(Document.created_at.desc()).limit(min(limit, 200)).offset(offset)
 
-    return [_doc_info(document, current_job or fallback_job)
-            for document, current_job, fallback_job in (await session.execute(stmt)).all()]
+    rows = (await session.execute(stmt)).all()
+    uploaders = await _uploaders_of(session, [d.id for d, _, _ in rows])
+    mine = {d.id for d, _, _ in rows if user.is_admin or user.username in uploaders.get(d.id, [])}
+    return [_doc_info(document, current_job or fallback_job,
+                      uploaders=uploaders.get(document.id, []),
+                      can_delete=document.id in mine)
+            for document, current_job, fallback_job in rows]
 
 
 @router.get("/{document_id}", response_model=DocumentInfo)
@@ -349,7 +414,7 @@ async def get_document(document_id: str, user: User = Depends(current_user),
                        session: AsyncSession = Depends(get_session),
                        service: ServiceClient = Depends(get_service_client)):
     """非终态时实时问一次 service，避免"库里还 pending 但 service 早跑完了"。"""
-    document = await _owned(document_id, user, session)
+    document = await _visible(document_id, session)
     job = await _latest_job(session, document)
     if job is not None and job.status not in TERMINAL and job.service_task_id:
         try:
@@ -362,13 +427,15 @@ async def get_document(document_id: str, user: User = Depends(current_user),
             job.status = "running"
             await session.commit()
         # succeeded 不在这里改：必须等归档完成才对外称 succeeded（结果要能立刻取）
-    return _doc_info(document, job)
+    return _doc_info(document, job,
+                     uploaders=(await _uploaders_of(session, [document.id])).get(document.id, []),
+                     can_delete=await _may_delete(document, user, session))
 
 
 @router.get("/{document_id}/jobs", response_model=list[JobInfo])
 async def list_jobs(document_id: str, user: User = Depends(current_user),
                     session: AsyncSession = Depends(get_session)):
-    document = await _owned(document_id, user, session)
+    document = await _visible(document_id, session)
     jobs = (await session.execute(
         select(ParseJob).where(ParseJob.document_id == document.id)
         .order_by(ParseJob.created_at.desc())
@@ -388,7 +455,7 @@ async def reparse(document_id: str, req: ReparseRequest, user: User = Depends(cu
                   session: AsyncSession = Depends(get_session),
                   service: ServiceClient = Depends(get_service_client)):
     """换引擎/参数重新解析。同参数命中已有 job 直接返回（幂等）。"""
-    document = await _owned(document_id, user, session)
+    document = await _visible(document_id, session)
     # 按 origin 判，不要按 object_key 是否为空判：空 object_key 有两个含义
     # （外部提交 / 原件已被 GC 回收），混在一起会把"原件没了"报成"这是外部文档"，
     # 用户完全无从判断该怎么办
@@ -413,6 +480,7 @@ async def reparse(document_id: str, req: ReparseRequest, user: User = Depends(cu
 
     if job is None:
         job = ParseJob(document_id=document.id, engine=engine, options=req.options,
+                       initiated_by=user.id,
                        options_hash=digest)
         session.add(job)
     else:
@@ -434,7 +502,7 @@ async def set_current_job(document_id: str, req: CurrentJobRequest, tasks: Backg
                           user: User = Depends(current_user),
                           session: AsyncSession = Depends(get_session)):
     """切换生效的解析版本。索引跟着换版本重建——否则问答会引用到旧版本的块。"""
-    document = await _owned(document_id, user, session)
+    document = await _visible(document_id, session)
     job = await session.get(ParseJob, req.job_id)
     if job is None or job.document_id != document.id:
         raise APIError(404, "parse job not found", "invalid_request_error", "job_not_found")
@@ -456,7 +524,7 @@ async def set_current_job(document_id: str, req: CurrentJobRequest, tasks: Backg
 async def reindex(document_id: str, tasks: BackgroundTasks, request: Request,
                   user: User = Depends(current_user),
                   session: AsyncSession = Depends(get_session)):
-    document = await _owned(document_id, user, session)
+    document = await _visible(document_id, session)
     job = await _latest_job(session, document)
     if job is None or job.status != "succeeded":
         raise APIError(409, "document has no archived result to index",
@@ -490,7 +558,7 @@ def _schedule_index(tasks: BackgroundTasks, request: Request, document_id: str) 
 async def get_result(document_id: str, job: str = "", user: User = Depends(current_user),
                      session: AsyncSession = Depends(get_session),
                      storage: Storage = Depends(get_storage)):
-    document = await _owned(document_id, user, session)
+    document = await _visible(document_id, session)
     parse_job = await _archived_job(session, document, job or None)
     markdown = (await storage.get(f"{parse_job.result_prefix}document.md")).decode()
     images = [k.rsplit("/", 1)[-1]
@@ -507,7 +575,7 @@ async def get_pages(document_id: str, job: str = "", user: User = Depends(curren
 
     优先读库里的 chunks（已索引），没有就现场从 layout.json 算，保证索引没跑完也能看。
     """
-    document = await _owned(document_id, user, session)
+    document = await _visible(document_id, session)
     parse_job = await _archived_job(session, document, job or None)
 
     rows = (await session.execute(
@@ -538,7 +606,7 @@ async def get_pages(document_id: str, job: str = "", user: User = Depends(curren
 async def get_layout(document_id: str, job: str = "", user: User = Depends(current_user),
                      session: AsyncSession = Depends(get_session),
                      storage: Storage = Depends(get_storage)):
-    document = await _owned(document_id, user, session)
+    document = await _visible(document_id, session)
     parse_job = await _archived_job(session, document, job or None)
     return Response(content=await storage.get(f"{parse_job.result_prefix}layout.json"),
                     media_type="application/json")
@@ -552,7 +620,7 @@ async def source_url(document_id: str, user: User = Depends(current_user),
     前端 iframe/PDF 渲染与 MCP 调用方都拿它 —— <img>/<iframe>/fetch(no-auth) 发不出
     Authorization 头，而这个 URL 的凭证就是 token 本身（可撤销、不过期、每次都一样）。
     """
-    document = await _owned(document_id, user, session)
+    document = await _visible(document_id, session)
     token = (await session.execute(
         select(FileToken).where(FileToken.document_id == document.id,
                                 FileToken.scope == "source",
@@ -571,7 +639,7 @@ async def get_image(document_id: str, job_id: str, name: str,
                     session: AsyncSession = Depends(get_session),
                     storage: Storage = Depends(get_storage)):
     """归档后的 markdown 里的图片引用指向这里（受 JWT 保护，不用预签名，不会过期）。"""
-    document = await _owned(document_id, user, session)
+    document = await _visible(document_id, session)
     if "/" in name or ".." in name:
         raise APIError(400, "invalid image name", "invalid_request_error", "invalid_name")
     job = await session.get(ParseJob, job_id)
@@ -590,7 +658,7 @@ async def download(document_id: str, format: str = "md", job: str = "",
                    user: User = Depends(current_user),
                    session: AsyncSession = Depends(get_session),
                    storage: Storage = Depends(get_storage)):
-    document = await _owned(document_id, user, session)
+    document = await _visible(document_id, session)
     stem = document.filename.rsplit(".", 1)[0]
 
     if format == "source":
@@ -646,8 +714,17 @@ async def delete_document(document_id: str, user: User = Depends(current_user),
     """软删除：对象由 GC 任务回收。
 
     计量流水不跟着删——账单不能因为用户删了文档就消失。
+
+    **这是全站唯一一处授权判断**（plan.md §2 已定 2）：语料共享之后
+    "看得见"不再需要判谁，但"能不能删"必须判 —— 否则任何人都能删掉
+    别人传进来的语料。
     """
-    document = await _owned(document_id, user, session)
+    document = await _visible(document_id, session)
+    if not await _may_delete(document, user, session):
+        # 403 而不是 404：文档本来就是全员可见的，装作不存在没有任何意义，
+        # 只会让人以为自己找错了 id
+        raise APIError(403, "只有上传过这份文档的人或管理员能删除它",
+                       "invalid_request_error", "not_uploader")
     document.deleted_at = utcnow()
     await session.execute(update(FileToken).where(FileToken.document_id == document.id)
                           .values(revoked=True))
@@ -665,11 +742,10 @@ async def summary(user: User = Depends(current_user),
                   session: AsyncSession = Depends(get_session)):
     total, pages = (await session.execute(
         select(func.count(Document.id), func.coalesce(func.sum(Document.page_count), 0))
-        .where(Document.user_id == user.id, Document.deleted_at.is_(None))
+        .where(Document.deleted_at.is_(None))
     )).one()
     ready = (await session.execute(
-        select(func.count(Document.id)).where(Document.user_id == user.id,
-                                              Document.deleted_at.is_(None),
+        select(func.count(Document.id)).where(Document.deleted_at.is_(None),
                                               Document.index_status == "ready")
     )).scalar_one()
     return {"documents": total, "pages": pages, "askable": ready}

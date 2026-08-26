@@ -51,6 +51,16 @@ function onCommand(command: string, doc: DocumentInfo) {
 
       <el-table-column prop="filename" label="文件" min-width="220" show-overflow-tooltip />
 
+      <!-- 语料是整个部署共享的（1b），文档库里会有别人传的东西 ——
+           不显示上传者的话，用户根本分不清哪份是自己的。
+           同一份文件可能被好几个人先后传过，那仍是同一份语料 -->
+      <el-table-column label="上传者" width="140" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span v-if="row.uploaders?.length">{{ row.uploaders.join('、') }}</span>
+          <span v-else class="muted">—</span>
+        </template>
+      </el-table-column>
+
       <el-table-column label="解析" width="100">
         <template #default="{ row }">
           <el-tooltip :content="row.error" :disabled="!row.error">
@@ -103,7 +113,11 @@ function onCommand(command: string, doc: DocumentInfo) {
                 <el-dropdown-item command="reindex" :disabled="row.status !== 'succeeded'">
                   重建索引
                 </el-dropdown-item>
-                <el-dropdown-item command="remove" divided>删除</el-dropdown-item>
+                <!-- 语料共享后文档库里会有别人传的东西，而删除是全站唯一还判权限的
+                     动作。禁用而不是让它 403：用户点之前就该知道自己删不了 -->
+                <el-dropdown-item command="remove" divided :disabled="!row.can_delete">
+                  {{ row.can_delete ? '删除' : '删除（只有上传者能删）' }}
+                </el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -124,4 +138,5 @@ function onCommand(command: string, doc: DocumentInfo) {
   gap: 8px;
   padding: 8px 0;
 }
+.muted { color: var(--el-text-color-placeholder); }
 </style>

@@ -31,7 +31,11 @@ from app.db import get_session
 from app.deps import require_api_key
 from app.errors import APIError
 from app.metering import check_quota, record_usage
-from app.models import ApiKey, Document, ParseJob, utcnow
+from sqlalchemy.exc import IntegrityError
+
+from app.models import (
+    ApiKey, Document, DocumentUpload, ParseJob, UsageRecord, utcnow,
+)
 from app.routers.documents import options_hash
 
 router = APIRouter()
@@ -140,15 +144,29 @@ async def _proxy_parse_submit(request: Request, session: AsyncSession, key: ApiK
         # 只认外部平面的行：Web 上传的 Document 有 object_key 与已归档结果，
         # 复用它会把状态打回 pending -> 对账重新归档 -> 同一批页数被重复计费
         document = (await session.execute(
-            select(Document).where(Document.user_id == key.user_id, Document.doc_id == doc_id,
+            select(Document).where(Document.doc_id == doc_id,
                                    Document.origin == "external")
         )).scalar_one_or_none()
         if document is None:
             document = Document(
-                user_id=key.user_id, doc_id=doc_id, origin="external",
+                uploaded_by=key.user_id, doc_id=doc_id, origin="external",
                 filename=PurePosixPath(urlparse(file_url).path).name or "remote-document",
                 object_key="")     # 外部任务：文件在调用方那儿，本层不下载不归档
             session.add(document)
+            await session.commit()
+
+        # **外部平面也要记归属。** 漏了这一行的后果很别扭：`_may_delete` 只查
+        # `document_uploads`，于是**提交者自己删不掉自己提交的文档**（403），
+        # 而迁移 0006 给全部存量文档（含 external）都补了归属 ——
+        # 变成"老的删得掉、新的删不掉"。
+        if not await session.scalar(
+                select(DocumentUpload.id).where(DocumentUpload.document_id == document.id,
+                                                DocumentUpload.user_id == key.user_id).limit(1)):
+            try:
+                async with session.begin_nested():
+                    session.add(DocumentUpload(document_id=document.id, user_id=key.user_id))
+            except IntegrityError:
+                pass        # 并发下另一边先记上了，正是想要的结果
             await session.commit()
 
         digest = options_hash(engine, options)
@@ -158,6 +176,7 @@ async def _proxy_parse_submit(request: Request, session: AsyncSession, key: ApiK
         )).scalar_one_or_none()
         if job is None:
             job = ParseJob(document_id=document.id, engine=engine, options=options,
+                           initiated_by=key.user_id,
                            options_hash=digest)
             session.add(job)
         job.api_key_id = key.id
@@ -191,17 +210,30 @@ async def _proxy_parse_result(request: Request, session: AsyncSession, key: ApiK
         rows = (await session.execute(
             select(ParseJob).join(Document, Document.id == ParseJob.document_id)
             .where(ParseJob.service_task_id == service_task_id,
-                   Document.user_id == key.user_id,
                    Document.origin == "external").order_by(ParseJob.created_at)
         )).scalars().all()
-        job = next((j for j in rows if j.api_key_id == key.id), rows[0] if rows else None)
-        if job is not None and job.page_count == 0:
+        # **只认这把 key 自己的 job，没有就不记账。**
+        # 语料共享（1b）之后 documents 不再按用户分行，于是同一个 service 任务
+        # 会对上**别人**的 job —— 原来的 `rows[0]` 兜底会把 A 的解析算到 B 头上，
+        # 而 A 从此永不被计费（实测：A used_pages=0、B used_pages=3）。
+        # 兜底退成 `initiated_by` 相同的那条：同一个人换了把 key 仍算他的。
+        job = (next((j for j in rows if j.api_key_id == key.id), None)
+               or next((j for j in rows if j.initiated_by == key.user_id), None)
+               # **第三层兜底：他提交过吗？** 前两层只认得"最后一个提交者"
+               # （`job.api_key_id` 每次提交都被覆盖）和"第一个发起人"
+               # （`initiated_by` 只在建 job 时写）—— 三个人以上共享同一份外部文档时，
+               # **中间那些人两层都对不上，一分钱不记且绕过 quota**。
+               # `document_uploads` 记的是"谁提交过"，正好补上这个洞；
+               # 而没提交过的人不在那张表里，所以这一层不会重新打开
+               # "拿别人的 task_id 白嫖结果"那个口子。
+               or await _submitted_it(session, key.user_id, rows))
+        if job is not None and not await _already_billed(session, key.user_id, job.id):
             try:
                 layout = upstream.json().get("layout_json") or {}
                 pages = len(layout.get("pdf_info") or []) or 1
             except ValueError:
                 pages = 1
-            job.page_count = pages
+            job.page_count = job.page_count or pages
             job.status = "succeeded"
             await record_usage(session, user_id=key.user_id, api_key_id=key.id,
                                parse_job_id=job.id, kind="parse", pages=pages, requests=0)
@@ -209,6 +241,51 @@ async def _proxy_parse_result(request: Request, session: AsyncSession, key: ApiK
 
     return Response(content=upstream.content, status_code=upstream.status_code,
                     headers=_response_headers(upstream))
+
+
+async def _submitted_it(session: AsyncSession, user_id: str, rows: list) -> "ParseJob | None":
+    """这些 job 里，有没有一个的文档是这个人提交过的。
+
+    见调用点的注释：`api_key_id` 只留得住最后一个提交者、`initiated_by` 只留得住
+    第一个，中间的人要靠 `document_uploads` 才认得出来。
+    """
+    if not rows:
+        return None
+    doc_ids = {j.document_id for j in rows}
+    mine = set((await session.execute(
+        select(DocumentUpload.document_id).where(
+            DocumentUpload.user_id == user_id,
+            DocumentUpload.document_id.in_(doc_ids)))).scalars().all())
+    return next((j for j in rows if j.document_id in mine), None)
+
+
+async def _already_billed(session: AsyncSession, user_id: str, job_id: str) -> bool:
+    """这个用户是不是已经为这个 job 付过费了。
+
+    **1b 之前**每个用户有自己的 Document 与 ParseJob，`job.page_count == 0`
+    就是"这次任务还没记过账"的锚点。全局去重之后一个 job 被多个用户共享 ——
+    那个锚点从**按任务**变成了**按语料**：第二个用户拿到的 job 早就
+    `page_count != 0`，于是**完全不计费**，可以无限白嫖解析并绕过 quota_pages
+    （实测：B used_pages=0）。
+
+    改成按 (用户, job) 判重，**恰好还原 1b 之前的计费行为** ——
+    那时每人各有一份 job，本来就是每人各记一次。不是新政策，是在新数据模型下
+    把老语义保住。
+
+    **为什么不是"算力只花了一次所以第二个人免费"**，三条理由，第二条最硬：
+
+    1. 这里的计量是**产品配额**不是成本核算。`ApiKey.quota_pages` 是对单个客户的
+       授权额度；去重让页数免费的话，客户的额度就取决于**别的客户碰巧传没传过
+       同一份文件** —— 不可预测、不可对账。
+    2. **它会变成一条侧信道。** "这次收费了没有"直接泄露"这份文档在本部署里
+       是不是已经有人传过"。拿一批候选文件挨个提交、看哪些不扣费，
+       就能反推出别人的语料构成 —— 等于把计费口径做成了探测接口。
+    3. 省下来的算力钱本来就归运营方（GPU 只跑一次，边际成本真降了，
+       那正是 plan.md §2 说的"白捡的收益"）。这份收益不必靠给用户打折来兑现。
+    """
+    return bool(await session.scalar(
+        select(UsageRecord.id).where(UsageRecord.user_id == user_id,
+                                     UsageRecord.parse_job_id == job_id).limit(1)))
 
 
 @router.api_route("/mcp{path:path}", methods=["GET", "POST", "DELETE"])

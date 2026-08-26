@@ -175,7 +175,9 @@ async def archive_job(session: AsyncSession, storage: Storage, service: ServiceC
         document.index_error = None
     document.updated_at = utcnow()
 
-    await record_usage(session, user_id=document.user_id, api_key_id=job.api_key_id,
+    # 记在发起这次解析的人头上；老 job 没这个信息时退回上传者
+    await record_usage(session, user_id=job.initiated_by or document.uploaded_by,
+                       api_key_id=job.api_key_id,
                        parse_job_id=job.id, kind="parse", pages=page_count)
     await session.commit()
     return True

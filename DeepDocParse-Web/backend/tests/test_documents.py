@@ -81,8 +81,9 @@ def _embed_response(request: httpx.Request) -> httpx.Response:
 
 
 async def _upload(client, content: bytes = PDF, filename: str = "sample.pdf",
-                  mime: str = "application/pdf") -> dict:
-    resp = await client.post("/api/documents", files={"file": (filename, content, mime)})
+                  mime: str = "application/pdf", headers: dict | None = None) -> dict:
+    resp = await client.post("/api/documents", files={"file": (filename, content, mime)},
+                             headers=headers or {})
     assert resp.status_code == 202, resp.text
     return resp.json()
 
@@ -415,10 +416,10 @@ async def test_web_and_external_planes_do_not_share_rows(auth_client, session, a
     job = (await session.execute(select(ParseJob))).scalars().one()
     await archive_job(session, app_state.storage, app_state.service_client, job.id)
 
-    user_id = (await session.get(Document, document["id"])).user_id
-    session.add(Document(user_id=user_id, doc_id=DOC_ID, origin="external",
+    uploader = (await session.get(Document, document["id"])).uploaded_by
+    session.add(Document(uploaded_by=uploader, doc_id=DOC_ID, origin="external",
                          filename="a.pdf", object_key=""))
-    await session.commit()          # 同 (user_id, doc_id) 不同 origin：唯一约束必须放行
+    await session.commit()          # 同 doc_id 不同 origin：唯一约束必须放行
 
     rows = (await session.execute(
         select(Document).where(Document.doc_id == DOC_ID))).scalars().all()
@@ -523,14 +524,98 @@ async def test_file_token_must_be_valid(client):
 
 
 @respx.mock
-async def test_document_isolation_between_users(auth_client, client):
+async def test_corpus_is_shared_between_users(auth_client, client):
+    """**语料是整个部署共享的** —— 这条用例在 1b 里被整个反转过来。
+
+    改之前它断言的是"别人的文档看不见（404）"。plan.md §2 已定 2 之后，
+    一次部署 = 一份语料 = 一个知识库：账号层只管认证 / 计量 / 限速，**不管授权**。
+    所以另一个账号必须能看见、能读、能问。
+
+    留着这条反转记录是有意的：谁哪天把可见性过滤加回去，这里立刻会红，
+    而红的时候能从这段说明看到"这不是 bug，是产品决定"。
+    """
     _mock_service()
     document_id = (await _upload(auth_client))["id"]
 
     other = await register(client, username="bob")
     headers = {"Authorization": f"Bearer {other['access_token']}"}
+
     resp = await client.get(f"/api/documents/{document_id}", headers=headers)
-    assert resp.status_code == 404 and resp.json()["error"]["code"] == "document_not_found"
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["id"] == document_id
+
+    # 列表里也要有 —— 不是"知道 id 就能访问"，是真的在他的文档库里
+    listed = await client.get("/api/documents", headers=headers)
+    assert listed.status_code == 200
+    assert document_id in [d["id"] for d in listed.json()]
+
+
+@respx.mock
+async def test_second_uploader_reuses_the_parse_and_is_recorded(auth_client, client, session):
+    """同一份文件第二个人再传：**命中已有解析，不产生第二个 parse_job**；
+    但"他也传过"要记下来。
+
+    这是全局去重的核心收益 —— 以前两个人传同一份手册 = 两次解析 + 两次索引 +
+    两套 embedding，而 GPU 是按小时租的。
+    """
+    from sqlalchemy import func, select as sa_select
+
+    from app.models import Document, DocumentUpload, ParseJob
+
+    _mock_service()
+    document_id = (await _upload(auth_client))["id"]
+    jobs_before = await session.scalar(
+        sa_select(func.count(ParseJob.id)).where(ParseJob.document_id == document_id))
+    docs_before = await session.scalar(sa_select(func.count(Document.id)))
+
+    other = await register(client, username="carol")
+    headers = {"Authorization": f"Bearer {other['access_token']}"}
+    again = await _upload(client, headers=headers)
+
+    assert again["id"] == document_id, "同一份文件应当复用同一个 Document，而不是新建"
+    assert await session.scalar(
+        sa_select(func.count(Document.id))) == docs_before, "不该多出一份文档"
+    assert await session.scalar(
+        sa_select(func.count(ParseJob.id)).where(
+            ParseJob.document_id == document_id)) == jobs_before, "不该多出一次解析"
+
+    uploaders = (await session.execute(
+        sa_select(DocumentUpload.user_id).where(
+            DocumentUpload.document_id == document_id))).scalars().all()
+    assert len(set(uploaders)) == 2, f"两个上传者都要记下来，实际 {uploaders}"
+
+
+@respx.mock
+async def test_only_uploader_or_admin_can_delete(auth_client, client, session):
+    """**全站唯一残留的授权**：删除权限。
+
+    非上传者删不掉（403，不是 404 —— 文档本来就是全员可见的，
+    装作不存在只会让人以为自己找错了 id）。管理员可以。
+    """
+    from app.models import User
+
+    _mock_service()
+    document_id = (await _upload(auth_client))["id"]
+
+    other = await register(client, username="dave")
+    headers = {"Authorization": f"Bearer {other['access_token']}"}
+
+    resp = await client.delete(f"/api/documents/{document_id}", headers=headers)
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["error"]["code"] == "not_uploader"
+
+    # 看得见但删不掉 —— 两件事要分开
+    assert (await client.get(f"/api/documents/{document_id}", headers=headers)).status_code == 200
+
+    # 提成管理员之后可以删
+    dave = await session.get(User, other["user_id"]) if "user_id" in other else None
+    if dave is None:
+        from sqlalchemy import select as sa_select
+        dave = await session.scalar(sa_select(User).where(User.username == "dave"))
+    dave.is_admin = True
+    await session.commit()
+    assert (await client.delete(f"/api/documents/{document_id}",
+                                headers=headers)).status_code == 204
 
 
 @respx.mock
@@ -639,3 +724,122 @@ async def test_reparse_explicit_engine_wins_over_setting(auth_client, monkeypatc
                                    json={"engine": "mineru", "options": {"lang": "ch"}})
     assert again.status_code == 202, again.text
     assert json.loads(routes["submit"].calls.last.request.content)["engine"] == "mineru"
+
+
+@respx.mock
+async def test_second_uploader_can_also_delete(auth_client, client, session):
+    """**第二个上传者也能删。**
+
+    `_may_delete` 判的是 `document_uploads` 整张表而不是 `uploaded_by` 那一个
+    字段 —— 全局去重之后第二个传同一份文件的人不会产生新的 Document，
+    但他确实也传过。这条正是那段设计的守卫：验收变异实测把 `_may_delete`
+    改成只判 `uploaded_by`，**143 个用例一个都没红**。
+    """
+    _mock_service()
+    document_id = (await _upload(auth_client))["id"]
+
+    second = await register(client, username="alsome")
+    headers = {"Authorization": f"Bearer {second['access_token']}"}
+    again = await _upload(client, headers=headers)
+    assert again["id"] == document_id, "前提：第二次上传复用同一份文档"
+
+    # 他不是 uploaded_by，但他传过 —— 必须删得掉
+    assert (await client.delete(f"/api/documents/{document_id}",
+                                headers=headers)).status_code == 204
+
+
+@respx.mock
+async def test_search_within_a_specific_document_is_not_user_scoped(auth_client, client):
+    """指定文档检索也不按用户收作用域。
+
+    验收变异实测：把 `routers/search.py` 里"指定文档"那条分支的归属判定加回去，
+    **没有任何用例变红** —— `test_corpus_is_shared_between_users` 只覆盖了
+    列表与详情。这条补上检索那一半。
+    """
+    _mock_service()
+    document_id = (await _upload(auth_client))["id"]
+
+    other = await register(client, username="searcher")
+    headers = {"Authorization": f"Bearer {other['access_token']}"}
+    resp = await client.get(f"/api/search?q=test&doc={document_id}", headers=headers)
+    # 有没有命中不重要（索引可能还没建），**不能是 404 document_not_found**
+    assert resp.status_code == 200, resp.text
+
+
+@respx.mock
+async def test_conversations_can_be_started_on_anyone_s_document(auth_client, client):
+    """对别人传的文档也能发起问答 —— 语料共享的直接含义。
+
+    同样是验收变异存活的一处：把 `conversations.py` 的归属判定加回去无人报警。
+    （会话**本身**仍然是个人产物，只有创建者看得见自己的会话，那条不变。）
+    """
+    _mock_service()
+    document_id = (await _upload(auth_client))["id"]
+
+    other = await register(client, username="asker")
+    headers = {"Authorization": f"Bearer {other['access_token']}"}
+    resp = await client.post(f"/api/documents/{document_id}/conversations", headers=headers)
+    assert resp.status_code in (200, 201), resp.text
+
+
+@respx.mock
+async def test_reparse_bills_the_person_who_asked_not_the_uploader(
+        auth_client, client, session, app_state):
+    """**别人重新解析我的文档，页数不能记在我头上。**
+
+    语料共享之后（1b）任何人都能对任一文档点"换参数重解析"/"重建索引"，
+    而那是要花钱的（GPU 按小时租，页数是贵的那一项）。按 `uploaded_by` 记账
+    等于"谁传的谁买单" —— B 可以任意消耗 A 的额度，而 `/api/*` 这条路
+    **没有任何按发起人的限速**（限速中间件只覆盖 `/v1/*`）。
+
+    验收（1b 二次）指出这半虽然代码改对了却**零守卫**：把 `archive.py` 的
+    `job.initiated_by or document.uploaded_by` 退回成 `document.uploaded_by`，
+    150 个用例一个都没红。抽取那半有守卫，**页数这半没有**。
+    """
+    _mock_service(status="succeeded")
+    document = await _upload(auth_client)
+    uploader_job = (await session.execute(select(ParseJob))).scalars().one()
+    uploader_id = (await session.get(Document, document["id"])).uploaded_by
+
+    # 换个账号，对**别人的**文档换参数重解析
+    other = await register(client, username="reparser")
+    headers = {"Authorization": f"Bearer {other['access_token']}"}
+    resp = await client.post(f"/api/documents/{document['id']}/reparse",
+                             json={"engine": "borndigital", "options": {"scale": 3.0}},
+                             headers=headers)
+    assert resp.status_code in (200, 202), resp.text
+
+    new_job = (await session.execute(
+        select(ParseJob).where(ParseJob.id != uploader_job.id))).scalars().one()
+    assert new_job.initiated_by is not None, "新 job 要记下发起人"
+    assert new_job.initiated_by != uploader_id, "发起人应当是操作者，不是上传者"
+
+    await archive_job(session, app_state.storage, app_state.service_client, new_job.id)
+
+    billed = {
+        u.user_id: u.pages for u in (await session.execute(
+            select(UsageRecord).where(UsageRecord.kind == "parse",
+                                      UsageRecord.parse_job_id == new_job.id))
+        ).scalars().all()
+    }
+    assert uploader_id not in billed, \
+        f"重解析的页数记到了上传者头上（{uploader_id}），别人能随意花掉他的额度：{billed}"
+    assert billed.get(new_job.initiated_by), f"应当记在发起人头上，实际 {billed}"
+
+    # **embed 那半同样要钉住。** 建索引也是花钱的，而它走的是另一处
+    # record_usage（indexing.py），退回按上传者记账时上面那些断言一条都不会红
+    from app.indexing import index_document
+
+    document_row = await session.get(Document, document["id"])
+    document_row.current_job_id = new_job.id
+    await session.commit()
+    await index_document(session, app_state.storage, app_state.http, document["id"])
+
+    embed_billed = {
+        u.user_id for u in (await session.execute(
+            select(UsageRecord).where(UsageRecord.kind == "embed"))).scalars().all()
+    }
+    assert uploader_id not in embed_billed, \
+        f"建索引的费用记到了上传者头上：{embed_billed}"
+    assert new_job.initiated_by in embed_billed, \
+        f"embed 应当记在发起人头上，实际 {embed_billed}"

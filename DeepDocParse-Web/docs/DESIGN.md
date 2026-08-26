@@ -1,5 +1,12 @@
 # DeepDocParse-Web 深化设计（M6）
 
+> ⚠️ **本文写于 M6，其中的租户模型已被 `plan.md` §2 已定 2 推翻**（2026-08-26，阶段 1b）：
+> 一次部署 = 一份语料 = 一个知识库，文档**不属于任何用户**，`user_id` 已改名
+> `uploaded_by`（仅归属署名），去重变全局，全站唯一残留的授权是删除权限。
+> 下面凡是提到"按 user 过滤""文档属于用户"的地方都以此为准；
+> 已就地标注的三处见 §数据模型与 §检索。
+
+
 > 状态：**已实现并通过真机 e2e**（单测 67 例、前端类型检查、parse/qa 两段 e2e 全绿）。
 > 本文档随实现同步维护；与代码不符时以代码为准并回来改这里。
 > 上位文档：[../../ARCHITECTURE.md](../../ARCHITECTURE.md)（ADR #14–#16 是本文档的结论）
@@ -72,7 +79,7 @@ User ─┬─ Document (一份文件，内容 sha256 唯一)
 | 列 | 类型 | 说明 |
 |---|---|---|
 | id | String(32) PK | |
-| user_id | FK users.id, idx | |
+| uploaded_by | FK users.id, idx | **1b 起：仅归属署名**，不是可见性边界。全部上传者见 `document_uploads` |
 | doc_id | String(64), idx | 文件内容 sha256（同时作为契约 `doc_id` 传给 service） |
 | origin | String(8) | `web` \| `external`，沿用 M5 语义 |
 | filename / mime / size_bytes | | |
@@ -84,7 +91,7 @@ User ─┬─ Document (一份文件，内容 sha256 唯一)
 | deleted_at | timestamptz null | 软删除；对象由 GC 任务回收 |
 | created_at / updated_at | | |
 
-约束：`UNIQUE(user_id, doc_id, origin)`（沿用 M5 已验证的三元键）、`INDEX(user_id, deleted_at, created_at)`。
+约束：~~`UNIQUE(user_id, doc_id, origin)`~~ → **1b 起 `UNIQUE(doc_id, origin)`**（全局去重：一次部署 = 一份语料）、~~`INDEX(user_id, deleted_at, created_at)`~~ → `INDEX(deleted_at, created_at)`。
 
 ### 2.2 parse_jobs
 
@@ -238,7 +245,7 @@ RRF 只看名次，无量纲、无需调参。
 ① 「混合检索」在 QA 场景名不副实；② `embedding_unavailable` 降级时中文提问其实检索不到内容——
 但降级标记是如实打的（`qa.py` 里 `embedding_unavailable` 优先于 `no_hits`），不属于静默降级。
 
-跨文档搜索（`/api/search`）用同一套 SQL，去掉 `document_id` 过滤、加 `user_id` 过滤，按文档分组。
+跨文档搜索（`/api/search`）用同一套 SQL，去掉 `document_id` 过滤，按文档分组。**1b 起不再加 `user_id` 过滤** —— 语料是整个部署共享的，检索天然跨全语料。
 
 **验收**：归档后 60s 内 `index_status='ready'` 且 chunks 行数 == 契约返回块数、embedding 非空；
 重解析后不会跨版本混检；索引失败在 UI 上可见且带原因。

@@ -43,16 +43,40 @@ async function reindex(doc: DocumentInfo) {
 }
 
 async function remove(doc: DocumentInfo) {
-  await ElMessageBox.confirm(`删除「${doc.filename}」及其解析结果？`, '确认', { type: 'warning' })
+  // 说清楚这是从**整个服务器的语料**里移除，不是"删掉我的那份副本" ——
+  // 语料共享之后这两件事已经不是一回事了
+  await ElMessageBox.confirm(
+    `从本服务器语料中移除「${doc.filename}」及其解析结果？其他人也将不再看得到它。`,
+    '确认', { type: 'warning' })
   await documentsApi.remove(doc.id)
   await reload()
 }
 
 async function removeSelected() {
-  await ElMessageBox.confirm(`删除选中的 ${selected.value.length} 份文档？`, '确认', {
-    type: 'warning',
-  })
-  for (const doc of selected.value) await documentsApi.remove(doc.id)
+  await ElMessageBox.confirm(
+    `从本服务器语料中移除选中的 ${selected.value.length} 份文档？其他人也将不再看得到它们。`,
+    '确认', { type: 'warning' })
+  // **一份删不掉不能拖垮其余的。** 语料共享之后（plan.md §2 已定 2）文档库里
+  // 会有别人传的东西，而删除是全站唯一还判权限的动作 —— 批量选中里混进一份
+  // 别人的会 403。以前那种 `for ... await` 一抛就整个中断，表现是
+  // "点了批量删除，删了一半，只弹一句看不懂的错" —— 剩下哪些没删、为什么，
+  // 用户完全不知道。现在逐个记结果，最后一次性说清。
+  const failed: string[] = []
+  for (const doc of selected.value) {
+    try {
+      await documentsApi.remove(doc.id)
+    } catch {
+      // http 拦截器已经弹过每条的具体原因，这里只统计
+      failed.push(doc.filename)
+    }
+  }
+  if (failed.length) {
+    ElMessage.warning(
+      `${selected.value.length - failed.length} 份已删除；${failed.length} 份没能删除` +
+      `（只有上传者或管理员能删）：${failed.slice(0, 3).join('、')}` +
+      (failed.length > 3 ? ` 等 ${failed.length} 份` : ''),
+    )
+  }
   selected.value = []
   await reload()
 }

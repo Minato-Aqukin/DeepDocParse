@@ -91,7 +91,7 @@ def test_chunks_carry_tokenized_text():
 # --------------------------------------------------------------------- 抽取编排
 
 async def _seed_document(session, user_id: str) -> tuple[Document, ParseJob]:
-    document = Document(user_id=user_id, doc_id="d" * 64, filename="contract.pdf",
+    document = Document(uploaded_by=user_id, doc_id="d" * 64, filename="contract.pdf",
                         mime="application/pdf", object_key="", index_status="ready")
     session.add(document)
     await session.flush()
@@ -138,7 +138,7 @@ async def test_found_and_not_found_are_distinguished(session, app_state):
 
     ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
-                         user_id=document.user_id, verify=False)
+                         user_id=document.uploaded_by, verify=False)
     outcome = await run_extraction(ctx, parse_schema(SCHEMA))
 
     assert outcome.fields["buyer"]["status"] == "found"
@@ -163,7 +163,7 @@ async def test_garbage_model_output_is_schema_violation_not_not_found(session, a
 
     ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
-                         user_id=document.user_id, verify=False)
+                         user_id=document.uploaded_by, verify=False)
     outcome = await run_extraction(ctx, parse_schema(SCHEMA))
     assert outcome.fields["buyer"]["status"] == "error"
     assert outcome.fields["buyer"]["degraded"] == "schema_violation"
@@ -180,16 +180,16 @@ async def test_embedding_down_is_visible_on_the_field(session, app_state):
 
     ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
-                         user_id=document.user_id, verify=False)
+                         user_id=document.uploaded_by, verify=False)
     outcome = await run_extraction(ctx, parse_schema(SCHEMA))
     degraded = [f.get("degraded") for f in outcome.fields.values()]
     assert "embedding_unavailable" in degraded, degraded
 
 
-async def _a_user(session) -> str:
+async def _a_user(session, username: str = "ex") -> str:
     from app.models import User
 
-    user = User(username="ex", password_hash="x")
+    user = User(username=username, password_hash="x")
     session.add(user)
     await session.flush()
     return user.id
@@ -242,7 +242,7 @@ async def test_run_rejects_documents_without_index(auth_client, session):
     from app.models import User
 
     user = (await session.execute(__import__("sqlalchemy").select(User))).scalars().first()
-    document = Document(user_id=user.id, doc_id="z" * 64, filename="未索引.pdf",
+    document = Document(uploaded_by=user.id, doc_id="z" * 64, filename="未索引.pdf",
                         mime="application/pdf", index_status="none")
     session.add(document)
     await session.commit()
@@ -335,7 +335,7 @@ async def test_memory_index_keyword_path_is_or_by_behaviour(session, app_state):
     # AND 语义下应当零命中，OR 语义下应当命中
     hits = await MemoryIndex().search(
         session, vector=None, query="买方 完全不存在的词 另一个不存在的词",
-        document_id=document.id, user_id=document.user_id, limit=4, candidates=8)
+        document_id=document.id, limit=4, candidates=8)
     assert hits, "关键词路变成 AND 了 —— 与 PgVectorIndex 的 OR 语义对不上"
 
 
@@ -416,7 +416,7 @@ async def test_vision_model_down_is_visible_not_just_unverified(session, app_sta
 
     ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
-                         user_id=document.user_id, verify=True)
+                         user_id=document.uploaded_by, verify=True)
     schema = {"type": "object", "properties": {
         "buyer": {"type": "string", "description": "买方单位全称"}}}
 
@@ -455,7 +455,7 @@ async def test_one_field_blowing_up_does_not_lose_the_others(session, app_state)
 
     ctx = ExtractContext(session=session, index=ExplodingIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
-                         user_id=document.user_id, verify=False)
+                         user_id=document.uploaded_by, verify=False)
     schema = {"type": "object", "properties": {
         "buyer": {"type": "string", "description": "买方单位全称"},
         "boom": {"type": "string", "description": "boom 会炸的字段"},
@@ -535,3 +535,50 @@ async def test_hard_deleted_document_does_not_break_the_whole_run(session, app_s
     assert "被删除" in (error or ""), "原因要记下来"
     items = (await session.execute(sa_select(ExtractionItem))).scalars().all()
     assert not items, "不能给已删除的文档插 item（外键会炸）"
+
+
+async def test_extract_one_runs_against_a_real_document(session, app_state):
+    """**抽取平面对真实文档必须真的跑得起来。**
+
+    验收（1b）抓到：`_extract_one` 里还留着 `document.user_id`，而语料共享化把
+    那一列改名成了 `uploaded_by` —— 于是**任何一次对真实文档的抽取都必然
+    AttributeError**，被外层 `except Exception` 接住、整批 run 打成 failed。
+
+    143 个用例全绿是因为唯一碰 `_extract_one` 的那条喂的是**不存在的
+    document_id**，在 `if document is None` 就 return 了，走不到出事那行。
+    这条补上"真文档"这一半。
+
+    顺带钉住计量归属：抽取记在**发起 run 的人**头上，不是上传者头上 ——
+    语料共享后任何人都能对任一文档发起抽取，按上传者计费等于别人能随意
+    花掉他的额度。
+    """
+    from sqlalchemy import select as sa_select
+
+    from ddp_core.extract_format import parse_schema as ps
+    from app.models import ExtractionItem, ExtractionRun, UsageRecord
+    from app.routers.extractions import _extract_one
+
+    document, _job = await _seed_document(session, await _a_user(session))
+    initiator = await _a_user(session, username="initiator")
+    assert initiator != document.uploaded_by, "发起人要与上传者不同才测得出归属"
+
+    run = ExtractionRun(user_id=initiator, name="t", schema_json=SCHEMA, kind="object",
+                        status="running", document_count=1)
+    session.add(run)
+    await session.commit()
+
+    await _extract_one(session, run.id, document.id, ps(SCHEMA),
+                       storage=app_state.storage, http=app_state.http,
+                       index=MemoryIndex(), verify=False)
+
+    error = await session.scalar(
+        sa_select(ExtractionRun.error).where(ExtractionRun.id == run.id))
+    assert not error, f"抽取不该报错，实际：{error}"
+    items = (await session.execute(
+        sa_select(ExtractionItem).where(ExtractionItem.run_id == run.id))).scalars().all()
+    assert items, "至少要落一条结果（哪怕是 not_found）"
+
+    billed = (await session.execute(
+        sa_select(UsageRecord.user_id).where(UsageRecord.kind == "extract"))).scalars().all()
+    assert billed == [initiator], \
+        f"抽取要记在发起人头上，不是上传者（{document.uploaded_by}）头上，实际 {billed}"

@@ -15,6 +15,7 @@ const BASE = {
   id: 'doc-1', filename: '技术手册.pdf', doc_id: 'h'.repeat(64), origin: 'upload',
   mime: 'application/pdf', size_bytes: 1024, page_count: 0,
   error: null, index_error: null, current_job_id: 'job-1',
+  uploaders: ['e2e'], can_delete: true,
   created_at: new Date().toISOString(),
 }
 

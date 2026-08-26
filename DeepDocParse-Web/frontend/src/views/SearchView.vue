@@ -34,7 +34,7 @@ watch(() => route.query.q, run, { immediate: true })
 
 <template>
   <div class="bar">
-    <el-input v-model="keyword" placeholder="在你的全部文档里检索" clearable class="search"
+    <el-input v-model="keyword" placeholder="在本服务器的全部语料里检索" clearable class="search"
               @keyup.enter="run" />
     <el-button type="primary" :loading="loading" @click="run">搜索</el-button>
   </div>

@@ -230,11 +230,10 @@ async def create_run(body: RunIn, request: Request, user: User = Depends(current
 
     documents = (await session.execute(
         select(Document).where(Document.id.in_(body.document_ids),
-                               Document.user_id == user.id,
                                Document.deleted_at.is_(None))
     )).scalars().all()
     if not documents:
-        raise APIError(404, "没有可抽取的文档（不存在、已删除或不属于你）",
+        raise APIError(404, "没有可抽取的文档（不存在或已删除）",
                        "invalid_request_error", "no_documents")
 
     # 未建索引的文档抽不了。**当场说清楚是哪几份**，不要让它们跑完变成一堆
@@ -355,8 +354,15 @@ async def _extract_one(session: AsyncSession, run_id: str, document_id: str, spe
         return
     job = await session.get(ParseJob, document.current_job_id) if document.current_job_id else None
 
+    # **记在发起这次抽取的人头上，不是上传者头上。**
+    # 语料共享之后（plan.md §2 已定 2）任何人都能对任一文档发起抽取，
+    # 而抽取是 N 次检索 + N 次模型调用 —— 按上传者计费等于"谁传的谁买单"，
+    # 别人可以随意花掉他的额度。run 的发起人就在 ExtractionRun.user_id 上。
+    initiator = await session.scalar(
+        select(ExtractionRun.user_id).where(ExtractionRun.id == run_id))
+
     ctx = ExtractContext(session=session, index=index, http=http, storage=storage,
-                         document=document, job=job, user_id=document.user_id, verify=verify)
+                         document=document, job=job, user_id=initiator, verify=verify)
     outcome = await run_extraction(ctx, spec)
 
     if outcome.records:
@@ -373,7 +379,7 @@ async def _extract_one(session: AsyncSession, run_id: str, document_id: str, spe
 
     # 按**字段数**计量：一次抽取 = N 次检索 + N 次模型调用，
     # 按"一次请求"计费会让 60 字段的 schema 和 1 字段的一样便宜
-    await record_usage(session, user_id=document.user_id, kind="extract",
+    await record_usage(session, user_id=initiator, kind="extract",
                        requests=max(outcome.usage.get("fields", 0), 1))
     await _bump_done(session, run_id)
     await session.commit()

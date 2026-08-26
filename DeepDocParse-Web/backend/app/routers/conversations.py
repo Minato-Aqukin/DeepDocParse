@@ -66,8 +66,12 @@ def _citation_out(document_id: str, citation: dict) -> dict:
 
 
 async def _owned_document(document_id: str, user: User, session: AsyncSession) -> Document:
+    """取文档。**不判归属**（1b）—— 语料整个部署共享，谁都能对任一文档发起问答。
+
+    名字保留是为了少改调用点；判据只剩"存在且未删"。
+    """
     document = await session.get(Document, document_id)
-    if document is None or document.user_id != user.id or document.deleted_at is not None:
+    if document is None or document.deleted_at is not None:
         raise APIError(404, "document not found", "invalid_request_error", "document_not_found")
     return document
 
@@ -194,7 +198,7 @@ async def ask(cid: str, req: AskRequest, request: Request, user: User = Depends(
     index = request.app.state.search_index
 
     retrieval = await retrieve(session, index, http, question=req.question,
-                               document=document, user_id=user.id)
+                               document=document)
     crops = await attach_crops(retrieval, storage, document, job) if retrieval.hits else []
     image_uris = [uri for uri, _ in crops]
     messages = build_messages(req.question, retrieval,

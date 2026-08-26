@@ -18,6 +18,10 @@ export interface DocumentInfo {
   index_error: string | null
   current_job_id: string | null
   created_at: string
+  /** 全部上传者的用户名。语料共享后同一份文件可能好几个人先后传过 */
+  uploaders: string[]
+  /** 当前用户能不能删这份文档（上传者或管理员）—— 删除是全站唯一还判权限的动作 */
+  can_delete: boolean
 }
 
 export interface JobInfo {

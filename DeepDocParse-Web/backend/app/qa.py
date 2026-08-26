@@ -182,7 +182,7 @@ def attach_resolution(citation: dict,
 
 
 async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncClient, *,
-                   question: str, document: Document, user_id: str) -> Retrieval:
+                   question: str, document: Document) -> Retrieval:
     """混合检索 + 出处裁剪。任何一步不可用都降级——但降级要**说出来**。"""
     degraded: str | None = None
     try:
@@ -201,7 +201,7 @@ async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncC
         limit, candidates = settings.qa_top_k, settings.qa_candidates
 
     hits = await index.search(session, vector=vector, query=question,
-                              document_id=document.id, user_id=user_id,
+                              document_id=document.id,
                               limit=limit, candidates=candidates)
     if not hits:
         return Retrieval(degraded=degraded or "no_hits")
