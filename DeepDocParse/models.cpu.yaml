@@ -32,7 +32,7 @@ parse_engines:
   # vlm-ocr:
   #   endpoint: "http://vqa-dsocr:8000"
   #   runtime: vlm-ocr
-  #   options: { model: deepseek-ocr }
+  #   options: { model: deepseek-ocr-2, dialect: deepseek-ocr2 }
 
 embedding_models:
   bge-m3:

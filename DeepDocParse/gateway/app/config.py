@@ -64,9 +64,23 @@ class Settings(BaseSettings):
     # 出处一致性核对：裁出区域图让视觉模型原样抄一遍，与块文本比对（沿用问答平面 A4）。
     # 请求方可用 options.verify 覆盖。没有 file_url 或未注册 VQA 模型时打 vision_unavailable
     extract_verify: bool = False
-    # 抄写相似度低于它判定解析与原图对不上。**没在真视觉模型上标定过**（本机无 GPU），
-    # 与 Web 层 qa_parse_mismatch_threshold 同源，拿到 GPU 后一起重定
-    extract_mismatch_threshold: float = 0.35
+    # 抄写相似度低于它判定解析与原图对不上。与 Web 层 qa_parse_mismatch_threshold 同源。
+    #
+    # **2026-08-25 在 4090D + DeepSeek-OCR-2 上标定过**（此前是没有依据的 0.35）：
+    #   一致组（块图 vs 自己的文本）  n=10，全部 1.000
+    #   不一致组（块图 vs 别人的文本）n=90，p95=0.382，max=0.643
+    # 用旧的 0.35 会放过 5/90 个**该报的不一致**；脚本建议取两组中点 0.69。
+    #
+    # 这里取 **0.55** 而不是 0.69：标定用的是 tests/fixtures/contract.pdf ——
+    # born-digital、英文、单栏，是最容易的一类，一致组才会齐刷刷 1.000。
+    # 扫描件/中文/多栏上抄写保真度一定往下掉，阈值定太高会把好出处打成"存疑"，
+    # 而这两处的既定取向是**宁可漏报不要误报**（误报比不报更伤信任）。
+    #
+    # 换文档类型前重标一次：
+    #   python scripts/calibrate_verify_threshold.py --pdf <你的文档> \
+    #       --endpoint http://127.0.0.1:18001 --model deepseek-ocr-2 \
+    #       --models-config models.autodl.yaml
+    extract_mismatch_threshold: float = 0.55
 
     # 只有明确知道自己在做什么才打开（一次性容器、CI）。生产打开等于没有鉴权
     allow_insecure_defaults: bool = False
@@ -90,7 +104,11 @@ class ModelEntry(BaseModel):
     # 留空则按所在段推断，这就是"加引擎 = 加容器 + 一行配置"真正兑现的地方
     runtime: str = ""
     # 显式声明能力。留空按段名推断（parse / vision / dense）。
-    # 例：不支持流式的 VQA 写 [vision, no_stream]，取得到稀疏头的 embedding 写 [dense, sparse]
+    # 例：不支持流式的 VQA 写 [vision, no_stream]，取得到稀疏头的 embedding 写 [dense, sparse]。
+    # **`no_instruct`**：OCR 专用模型（DeepSeek-OCR 系）只会把图上的字抄出来，
+    # 不会遵循抽取指令。抽取平面挑模型时会跳过带这个词的条目，
+    # 一个都挑不到就报 no_instruct_model —— 而不是拿它硬抽出一堆假的 not_found。
+    # 视觉核对（原样抄写）不受影响，那正是它们的本行。见 services/extraction.py。
     capabilities: list[str] = []
     # 预留接缝：LoRA / 缝合模型在同一个 endpoint 上靠这个字段区分，
     # 请求时作为 model 字段传给运行时。**只是接缝，本轮不实现**

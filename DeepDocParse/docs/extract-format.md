@@ -116,7 +116,7 @@
 
 ### 降级标记
 
-字段级 `degraded` 与整体 `degraded` 取值同一张表。前七种沿用问答平面，后两种是新增的：
+字段级 `degraded` 与整体 `degraded` 取值同一张表。前七种沿用问答平面，后三种是新增的：
 
 | 值 | 含义 |
 |---|---|
@@ -129,6 +129,14 @@
 | `upstream_error` | 上游模型报错 |
 | **`schema_violation`** | **新增**：模型输出反复不合 schema，重试用尽 |
 | **`rerank_unavailable`** | **新增**：配了精排但上游没注册 rerank 模型。照常返回融合名次，但如实说明没精排 |
+| **`no_instruct_model`** | **新增**：注册表里没有会遵循指令的模型（只有 OCR 专用模型，或 `vqa_models` 为空），抽值无处可调 |
+
+`no_instruct_model` 堵的是「抽取平面复用 VQA 平面的模型」这个设计的一个塌陷点：
+VQA 位上放的若是 **OCR 专用模型**（DeepSeek-OCR 系），它只会把看到的字抄出来 ——
+给它抽取指令，最好的结果是 `schema_violation`，最坏的结果是它吐出一个
+能解析、但 `found=false` 的东西，于是**系统能力缺失伪装成了「文档里没有」**。
+判据是注册表里的能力词：OCR 专用模型写 `capabilities: [vision, no_instruct]`，
+抽值时跳过它们，视觉核对（原样抄写）照常用它们 —— 那正是它们的本行。
 
 `schema_violation` 是抽取平面独有的洞：模型可以流利地输出一段**不是合法 JSON**、
 或者字段名对不上、或者类型不对的东西。重试 `EXTRACT_MAX_RETRIES` 次仍不合规就打这个标，

@@ -271,7 +271,8 @@ paths:
                     nullable: true
                     enum: [no_hits, embedding_unavailable, vision_unavailable,
                            crop_unsupported, crop_failed, parse_mismatch,
-                           upstream_error, schema_violation, rerank_unavailable]
+                           upstream_error, schema_violation, rerank_unavailable,
+                           no_instruct_model]
                   fields:
                     type: object
                     description: 顶层 schema 是 object 时的字段表

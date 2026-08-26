@@ -12,6 +12,22 @@ vqa_models:
   deepseek-ocr:
     endpoint: "http://127.0.0.1:18001"
     default: true
+    # 与 models.yaml / models.autodl.yaml 的 OCR 条目**必须打一样的标**。
+    # 这份注册表漏标过一轮，后果是两个 bug 在这条路上原封不动地活着：
+    #   no_instruct 缺失      -> 抽值挑中 OCR 专用模型，抽出**假的 not_found**
+    #                            （系统能力缺失伪装成"文档里没有"）
+    #   transcribe_prompt 缺失 -> 视觉核对拿中文指令去问它，它回应指令而不是抄写，
+    #                            于是**每条出处都被误判 parse_mismatch**
+    # 两者都不报错。tests/test_layout.py 现在有一条形状守卫覆盖全部随仓库
+    # 发布的注册表，漏标会红。
+    capabilities: [vision, no_instruct]
+    options:
+      transcribe_prompt: "Free OCR."
+
+  # **这份注册表里没有指令模型**，所以 /v1/extract 会逐字段报 no_instruct_model。
+  # 那是对的（如实报错，而不是拿 OCR 模型硬抽出一堆假的 not_found），
+  # 但也意味着这套 dev 部署的抽取平面等于没有。要用就照 models.yaml 的
+  # qwen3-4b-instruct 补一个纯文本条目（capabilities: [instruct]）。
 
 parse_engines:
   mineru:

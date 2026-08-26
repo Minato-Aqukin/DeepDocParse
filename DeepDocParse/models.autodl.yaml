@@ -1,0 +1,113 @@
+# AutoDL 裸进程部署的注册表 —— 配合 deploy/autodl/ 使用。
+#
+#   MODELS_CONFIG=models.autodl.yaml uvicorn app.main:app --port 9000
+#
+# 与另外三份注册表的关系：
+#   models.yaml          compose 编排，endpoint 是容器服务名（vqa-dsocr 等）
+#   models.cpu.yaml      无 GPU quickstart，没有 vqa_models
+#   models.dev-host.yaml 旧 dev 机（Windows 原生二进制）
+#   **本文件**            有 GPU、但**跑不了 docker** 的机器：所有 endpoint 都是回环地址
+#
+# 为什么需要单独一份：AutoDL 的实例本身就是非特权容器
+# （无 CAP_SYS_ADMIN、mount 被拒、cgroup 只读、unshare userns 返回 EPERM，
+# 2026-08-25 在 4090D 上实测），dind / rootless docker / podman 全部跑不起来。
+# 于是模型不是容器而是进程，服务名换成 127.0.0.1:端口。
+# **架构本身没变**：gateway 从不 import 模型代码，只按注册表访问 HTTP 端点 ——
+# 模型跑在容器里还是进程里，对它是透明的。
+
+vqa_models:
+  # DeepSeek-OCR-2（2026-01 发布，3B，DeepEncoder V2 + DeepSeek-V2 MoE）。
+  # 由 deploy/autodl/serve-vllm.sh 起的 vLLM 提供，OpenAI 兼容。
+  # 名字必须与 serve-vllm.sh 的 --served-model-name 一致，否则 model 字段对不上（404）。
+  deepseek-ocr-2:
+    endpoint: "http://127.0.0.1:18001"
+    default: true
+    # **no_instruct 不能省**：OCR 专用模型只会抄字，不会遵循抽取指令。
+    # 少了它，/v1/extract 会拿它硬抽 —— 最好的结果是 schema_violation，
+    # 最坏的结果是一个假的 not_found（系统能力缺失伪装成"文档里没有"）。
+    # 有这个词，抽值路径会如实报 no_instruct_model；视觉核对照常用它。
+    capabilities: [vision, no_instruct]
+    options:
+      # **该怎么问它"把图上的字抄出来"。** OCR 专用模型只认自己的官方 prompt：
+      # 拿一句中文指令去问，它会**回应那句指令**而不是抄写
+      # （真机实测：原文 "PURCHASE AGREEMENT" -> 抄写 "例如，如果问题涉及…"）。
+      # 后果是每条出处都被误判成 parse_mismatch —— 核对功能变成纯噪声。
+      # 通用视觉模型不用填这一项。见 services/extraction.py 的 _transcribe_prompt。
+      transcribe_prompt: "Free OCR."
+
+  # ---- 抽取平面用的通用指令模型 ----
+  # **不是可选项**：抽取平面「复用 VQA 平面的模型」这个设计，在 VQA 位上是
+  # OCR 专用模型时会塌掉 —— OCR-2 只会抄字，给它抽取指令抽不出东西，
+  # 而抽不出来会被记成 not_found（"文档里没有"），一个看起来像结论的空值。
+  # 没有这一条时 /v1/extract 会如实报 no_instruct_model 而不是硬抽（这是好事，
+  # 但抽取平面等于没有）。
+  #
+  # 选 4B 是因为它要和 OCR-2 挤同一张卡：两者权重合计约 15G，24G 卡放得下
+  # （显存怎么分见 deploy/autodl/README.md）。这个活是"从给定的几个块里挑出字段值"，
+  # 上下文已经由检索限定住了，不需要大模型。
+  qwen3-4b-instruct:
+    endpoint: "http://127.0.0.1:18002"
+    # **纯文本模型，没有 vision** —— 抽值只用文字（检索已经把上下文限定住了），
+    # 视觉核对那条路仍然走 OCR-2。没有 no_instruct 就是这里的关键：
+    # 抽取平面挑模型时只会挑中它。
+    capabilities: [instruct]
+
+parse_engines:
+  # ---- 「基于大语言模型的文字识别」这条线的落点 ----
+  # endpoint 与上面的 vqa 条目**是同一个进程**：一个 vLLM 同时服务
+  # VQA 平面、抽取平面和这个解析引擎，不用起第二份（显存也不允许）。
+  #
+  # **它是缺省引擎**，因为这套部署存在的目的就是验证 LLM 识别这条线。
+  # 代价要清楚：一页一次模型调用，长文档又慢又贵。日常跑有文字层的 PDF
+  # 请显式指定 engine=borndigital（零模型、零显存）。
+  vlm-ocr:
+    endpoint: "http://127.0.0.1:18001"
+    runtime: vlm-ocr
+    default: true
+    capabilities: [parse, vision]
+    options:
+      # **必填**，缺它运行时会自己挑一个模型，识别质量无从复现
+      model: deepseek-ocr-2
+
+      # v1.2：方言。deepseek-ocr2 = 走官方 prompt + grounding 标签解析。
+      # **不写的话缺省是 generic-json**（让模型按我们的 schema 吐 JSON），
+      # 对这个 OCR 专用模型是错的用法 —— 它只在两个官方 prompt 上训练过，
+      # 换 prompt 会掉识别质量，bbox 也会从"原生输出"退化成"模型现编"。
+      # 细节见 gateway/app/services/dsocr2.py 的模块注释。
+      dialect: deepseek-ocr2
+
+      # 页面渲染倍率。2.0 = 144dpi，与官方 PDF 脚本的 dpi=144 一致。
+      # 调高不会更准（模型内部会缩到 1024/768），只会更慢更占显存。
+      scale: 2.0
+
+      # 同时打几页。受显存约束；serve-vllm.sh 的 --max-num-seqs 是另一半闸门，
+      # 两者取小。24G 卡上 4 是稳的，要压吞吐先动这里。
+      concurrency: 4
+
+      # 下面三个都有内置缺省值（20 / 50 / [128821, 128822]），照抄自官方脚本，
+      # 一般不用写。列在这里是为了让"这些参数存在且可调"这件事是可发现的：
+      # ngram_size: 20          # 防复读窗口。OCR 模型在表格/页眉上会陷进循环
+      # window_size: 50
+      # table_token_ids: [128821, 128822]   # <td> / </td>，表格里本就该重复出现，要放行
+
+  # ---- 无模型兜底 ----
+  # 有文字层的 PDF 走这条：pypdfium2 抽文字层 + 坐标，进程内跑、不占显存。
+  # 出处三件套（页码/bbox/截图）一样齐全，而且比 vlm-ocr 的 bbox 更准
+  # （那是真坐标，不是模型报的）。不覆盖扫描件/表格结构/公式。
+  borndigital:
+    endpoint: "inproc://borndigital"
+    runtime: borndigital
+    capabilities: [parse]
+
+# ---- 没有 embedding_models：这台机器上没起 TEI ----
+# 后果是**可见的既有降级**，不是坏了：
+#   - DeepDocParse-Web 的文档索引会失败并显式写 index_error
+#   - 检索退回 BM25，并标 degraded=embedding_unavailable
+# 要补齐就另起一个 TEI 进程（同样不能用 docker，得下 TEI 的裸二进制或用
+# sentence-transformers 包一个 /v1/embeddings），再把这段打开：
+# embedding_models:
+#   bge-m3:
+#     endpoint: "http://127.0.0.1:18080"
+#     default: true
+#     runtime: tei
+#     capabilities: [dense]
