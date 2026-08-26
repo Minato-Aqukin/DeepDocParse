@@ -422,7 +422,7 @@ def test_block_text_descends_into_nested_blocks():
 
 def test_table_never_merges_with_surrounding_text():
     """表格独立成块。合并进正文的话，出处 bbox 会横跨整片版心、行列关系也拍平没了。"""
-    from app.services.chunking import layout_to_chunks
+    from ddp_core.chunking import layout_to_chunks
 
     lay = layout.from_mineru({"pdf_info": [{"page_idx": 0, "page_size": [612, 792],
                                             "para_blocks": [

@@ -9,13 +9,13 @@
 静默退回关键词路是 M4a 吃过的大亏。
 """
 import math
-import re
 from dataclasses import dataclass, field as dc_field
 
 import httpx
 
 from app.config import settings
 from app.services.task_store import TaskStore
+from ddp_core.tokenize import whole_text_bigrams
 
 
 @dataclass
@@ -25,17 +25,10 @@ class Retrieved:
     mode: str = "none"          # vector | keyword | none —— 排查用，别当分支条件
 
 
-def tokenize(text: str) -> list[str]:
-    """中英混排的轻量切分：英文/数字按词，CJK 按二元组。
-
-    **service 侧刻意不引 jieba**：gateway 是无状态薄适配层，
-    多一个 7MB 词典依赖不划算。真正需要中文分词质量的是产品层的持久索引
-    （见 DeepDocParse-Web 的 app/tokenize.py），那里才值得付这个成本。
-    """
-    tokens = re.findall(r"[a-zA-Z0-9]+", text.lower())
-    cjk = re.findall(r"[一-鿿]", text)
-    tokens += ["".join(p) for p in zip(cjk, cjk[1:])] or cjk[:1]
-    return tokens
+# 分词搬到了 ddp_core（两侧共用同一份）。这里保留 `tokenize` 这个名字是因为
+# 本模块的 keyword_rank 与测试都在用它 —— 换的是实现位置，不是行为：
+# `whole_text_bigrams` 与原来这段逐字等价（含"二元组跨段"那个已知粗糙处）。
+tokenize = whole_text_bigrams
 
 
 def keyword_rank(chunks: list[dict], query: str, k: int) -> list[dict]:

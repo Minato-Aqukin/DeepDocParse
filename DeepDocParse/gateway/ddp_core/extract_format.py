@@ -1,6 +1,17 @@
-"""DDP-Extract v1 —— 抽取契约的解析与校验层。
+"""DDP-Extract v1 —— 抽取契约的解析与校验层。**两侧共用的唯一一份。**
 
 格式写在 docs/extract-format.md，改字段先改那份文档。
+
+## 合并说明（阶段 1）
+
+搬进来之前这份逻辑有**两份**（`gateway/app/services/extract_format.py` 与
+`DeepDocParse-Web/backend/app/extract_schema.py`，各 305/306 行），
+按当时的铁律「各写一份」维护。合并时逐语句比对确认过：
+**剥掉注释与 docstring 之后两份完全相同**，26 行差异全是措辞。
+
+但"碰巧还没漂"不等于安全 —— `DEGRADED_VALUES` 这张表就漂过：
+`rerank_unavailable` 曾经只加在一边，于是一份合法结果在另一边被判成不合规。
+现在物理上只剩一份，那类事不可能再发生。
 
 这一层只做**纯函数**：schema 解析、值强制转换、结果自检。
 真正的编排（检索 -> 抽值 -> 裁剪 -> 核对）在 extraction.py，

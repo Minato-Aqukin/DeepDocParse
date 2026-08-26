@@ -27,8 +27,9 @@ import redis.asyncio as redis
 from arq.connections import RedisSettings
 
 from app.config import load_registry, settings
-from app.services import extract_format, extraction
-from app.services.chunking import layout_to_chunks
+from app.services import extraction
+from ddp_core import extract_format
+from ddp_core.chunking import layout_to_chunks
 from app.services.engines import resolve as resolve_engine
 from app.services.mineru_client import MineruClient, MineruTaskNotFound
 from app.services.task_store import TaskStore

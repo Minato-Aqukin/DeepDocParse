@@ -424,7 +424,7 @@ async def test_embeddings_passthrough(client, app_state):
 
 def test_layout_chunking():
     """结构感知分块：页内合并至上限、不跨页、bbox 外接、空块跳过。"""
-    from app.services.chunking import layout_to_chunks
+    from ddp_core.chunking import layout_to_chunks
 
     def block(text, bbox):
         return {"bbox": bbox, "lines": [{"spans": [{"content": text}]}]}
@@ -468,7 +468,7 @@ def test_single_oversized_block_is_split():
     不切的话它会被原样送进 embedding 运行时，由后者按模型最大长度静默截断——
     块尾内容从此检索不到，且全程没有报错。
     """
-    from app.services.chunking import layout_to_chunks
+    from ddp_core.chunking import layout_to_chunks
 
     body = "这是一段很长的正文。" * 200      # 2000 字
     layout = {"pdf_info": [{"page_idx": 0, "page_size": [612, 792], "para_blocks": [
