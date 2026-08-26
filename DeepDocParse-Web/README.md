@@ -98,6 +98,44 @@ clone service 仓库、生成两份 `.env`（随机密钥）、按 CPU/内存/GP
 
 下面是本机开发用的手工流程。
 
+## 前端测试
+
+```bash
+cd frontend
+npm run test          # 类型检查 + 组件单测（Vitest）—— commit 前必跑，无外部依赖
+npm run test:unit     # 只跑单测
+npm run test:e2e      # E2E（Playwright），需要能起前端；会自己拉一个 dev server
+```
+
+**`npm run test` 里不含 e2e**：e2e 要真实浏览器，而 commit 前的一条龙自验
+必须在没有任何外部依赖的机器上也能跑绿。
+
+两层各管各的：
+
+| 层 | 管什么 | 为什么需要 |
+|---|---|---|
+| **Vitest** + `@vue/test-utils` | 组件卸载清理（定时器、blob URL）、状态机、降级文案、路由守卫 | 本项目前端已知的真 bug —— 轮询活过组件卸载、卸载后新建的 blob URL 永不回收 —— **全是 `vue-tsc` 抓不到的那一类** |
+| **Playwright** | 13 条路径逐条首屏渲染 + **零 console error**、三态可见、降级必须给出原因 | 唯一能抓「按钮点了没反应」「路由白屏」的东西 |
+
+**跑不动 e2e 时先看这两条**（都踩过）：
+
+- `npx playwright install chromium` 在国内经常拉不下来（`cdn.playwright.dev` 中途断连）。
+  走镜像 `PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright`，
+  或者直接用机器上已装的 Chrome：**`E2E_CHANNEL=chrome npm run test:e2e`**
+- 打桩拦 API 时**必须用谓词而不是 `'**/api/**'` 这种 glob**：dev server 是 vite，
+  它按源码路径提供模块，而本项目的 API 客户端就住在 `/src/api/*.ts` ——
+  被 glob 一并拦下的话模块图直接断，表现是**每一页都白屏**，
+  看起来像应用坏了，实际只是打桩打太宽（见 `e2e/stub-api.ts`）
+- **验稳定性必须冷跑，而且别去掉 `workers: 4`。** 两半都要记：
+  ① `reuseExistingServer` 会复用你自己开着的热 dev server ——
+  那样根本测不到冷启动，**连跑三次「全绿」可能全是假的**（本项目真发生过：
+  自测三次全绿，验收冷跑三次全红）。跑之前确认 5173 没人占。
+  ② 默认 worker 数按 CPU 核开（16 线程 → 8 个 Chrome），会压垮**单线程的**
+  vite dev server，报出来是 `ERR_CONNECTION_CLOSED` / `ERR_TIMED_OUT` /
+  `goto` 超时三种 —— 看着像前端 bug，其实是把自己压垮了，
+  而且**加宽 console 允许列表挡不住它**（goto 超时根本不是 console 事件）。
+  配置里因此钉死了 `workers: 4`
+
 ## 快速开始（无 GPU 也能跑）
 
 service 侧用 [../DeepDocParse/README.md](../DeepDocParse/README.md) 的

@@ -27,6 +27,12 @@ const streamText = ref('')
 const scroller = ref<HTMLElement>()
 const cropUrls = ref<Record<string, string>>({})   // crop_url -> blob URL
 let abort: (() => void) | undefined
+// 组件是否还活着。**光靠 onBeforeUnmount 里 revokeCrops 是不够的**：
+// 取图请求还在飞的时候组件被卸载，revoke 已经跑过了，而请求返回后
+// 又往 cropUrls 里塞一个新的 blob —— 那一个**再也没有人回收**。
+// 用户点开一条出处又立刻切走就会触发，是日常操作。
+// ExtractionsView 的 loadCrops 早就用同一个标志修过这个竞态（见那边的注释）。
+let alive = true
 
 const askable = computed(() => props.document.index_status === 'ready')
 const indexHint = computed(() =>
@@ -61,7 +67,10 @@ async function loadCrops() {
   await Promise.all(
     pending.map(async (c) => {
       const objectUrl = await fetchAuthedImage(c.crop_url!)
-      if (objectUrl) cropUrls.value[c.crop_url!] = objectUrl
+      if (!objectUrl) return
+      // 卸载后到手的 blob 当场回收：存进 cropUrls 的话 revokeCrops 已经跑过了
+      if (!alive) URL.revokeObjectURL(objectUrl)
+      else cropUrls.value[c.crop_url!] = objectUrl
     }),
   )
 }
@@ -142,6 +151,7 @@ watch(() => props.document.id, async () => {
 }, { immediate: true })
 watch(activeId, loadMessages)
 onBeforeUnmount(() => {
+  alive = false
   abort?.()
   revokeCrops()
 })

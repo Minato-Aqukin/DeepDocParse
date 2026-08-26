@@ -9,3 +9,10 @@ node_modules/
 dist/
 *.egg-info/
 .quickstart/
+
+# 前端测试产物（Playwright）。**必须忽略**：失败用例的 trace 里带着
+# 完整页面快照与网络记录，体积大且可能含本机路径
+test-results/
+playwright-report/
+blob-report/
+.playwright/

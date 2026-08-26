@@ -1,7 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 
-import { useAuthStore } from '@/stores/auth'
-
+import { authGuard } from './guard'
 import { routes } from './routes'
 
 const router = createRouter({
@@ -9,15 +8,9 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to) => {
-  // 走 store 而不是直读 localStorage：登出/过期时状态只有一个来源
-  const auth = useAuthStore()
-  if (!to.meta.public && !auth.isAuthenticated) {
-    return { name: 'login', query: { redirect: to.fullPath } }
-  }
-  if (to.name === 'login' && auth.isAuthenticated) return { name: 'documents' }
-  return true
-})
+// 守卫本身在 ./guard.ts —— 抽出来是为了让单测引用**同一份**代码
+// 而不是复制一份去测（那样改了真守卫测试也不会红，详见那个文件的注释）
+router.beforeEach(authGuard)
 
 router.afterEach((to) => {
   document.title = to.meta.title ? `${to.meta.title} · DeepDocParse` : 'DeepDocParse'
