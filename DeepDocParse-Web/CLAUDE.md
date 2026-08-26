@@ -12,9 +12,23 @@
 - `/v1/*` 对外 API 与 `/mcp` 反代：验 key → 限速 → 额度 → 转发 → 记 usage
 
 ## 铁律
-1. **不 import service 的代码，也尽量不给 service 加东西**。需要同样行为的地方（OpenAI 错误体、
-   SSE 逐跳头过滤、结构感知分块）在本仓库各写一份。耦合面只有两处：解析契约 openapi.yaml，
-   以及 OpenAI 兼容的 embedding/chat 端点（可配成任意兼容服务）
+1. **共享的是同一份实现，不是复制品**（2026-08-26 修订，原文是「不 import service 的代码」）。
+   原铁律的本意是防止两层耦合，实践下来换到的却是**两份逐字复制品靠注释同步**，
+   已经静默出错三次（`plan.md` §1）：关键词路 AND/OR 语义、重建索引指错块、
+   抽取平面从不打 `vision_unavailable`。分块判据两边漂一点点，同一份版面就切出
+   不同的块，而出处的稳定定位键 `seq` 按块序算 —— **历史出处会指到错误的块**。
+
+   现在的划法（`plan.md` §2）：**语料核心逻辑住在 service 仓库的 `ddp_core` 顶层包**，
+   两侧 import 同一份。本层已迁出的有 `chunking` / `crops`（渲染部分）/ `tokenize` /
+   `extract_format`。**仍然不 import service 的 `app.*`** —— 那是 gateway 自己的应用层，
+   只有 `ddp_core` 是对外共享面。
+
+   耦合面因此是三处：解析契约 `openapi.yaml`、OpenAI 兼容的 embedding/chat 端点、
+   以及 `ddp_core` 包。**装的时候要先装 gateway 再装 backend**，
+   理由与替代方案写在 `backend/pyproject.toml` 末尾。
+
+   仍然各写一份的：OpenAI 错误体、SSE 逐跳头过滤 —— 那些是**协议层适配**，
+   不是承重逻辑，各写一份的成本低于耦合成本。
 2. **数据留在本层**。分块、向量索引、问答会话全在 Postgres；分块的输入是本层归档的
    `layout.json`，不依赖 service 的 24h 暂存窗口
 3. **降级必须可见**。检索零命中/视觉模型不可用/不能裁剪，都要落到 `messages.degraded`
@@ -49,6 +63,38 @@
   （文档内容是不可信输入）
 
 ## 本机陷阱
+
+0. **两个仓库的顶层包都叫 `app`，装到一个 venv 里会互相遮蔽**（2026-08-26 起）。
+   本层装了 service 的 gateway 包（为了 `ddp_core`），而**两个发行包都声明
+   `packages = ["app"]`**。editable 安装的 `.pth` 按字母序加载，
+   `_editable_impl_deepdocparse_gateway.pth` 排在 backend 那个前面，于是：
+
+   | cwd | `import app` 解析到 |
+   |---|---|
+   | `backend/` | ✅ 本层的 `backend/app/` |
+   | 其它任何目录 | ⚠️ **gateway 的** `DeepDocParse/gateway/app/` |
+
+   本层的一切本来就都在 `backend/` 下跑（pytest、alembic、uvicorn、两个 eval
+   脚本、`dev.sh`），所以今天不出事。
+
+   **别指望它会拦你。** 从 `backend/` 以外的目录 import，本机会当场报
+   pydantic `extra_forbidden`（因为本机 `.env` 里有 Web 专属键，而 gateway 的
+   `Settings` 是 `extra="forbid"`）—— **但那是本机才有的运气**。
+   在**没有那些环境变量的地方（容器 / CI / 干净 checkout / systemd 不带 .env）**，
+   gateway 的 `Settings` 会**完全正常地加载成功**，你拿到一个错的 settings 对象，
+   直到第一次访问 `database_url` 才以 `AttributeError` 爆掉 ——
+   报错位置离病根十万八千里。实测（`env -i` 清空环境变量后从 `/tmp` 跑）：
+
+       app.config -> DeepDocParse/gateway/app/config.py
+       LOADED SILENTLY.  service_token=True  database_url=False
+
+   也就是说这是个**静默**陷阱，而且静默恰恰发生在最可能有人从别的 cwd
+   起进程的地方。所以：**一切都必须在 `backend/` 下跑。**
+
+   根治要给本层的包改名（`app` → `ddp_web`），那会动 alembic / dev.sh /
+   eval 脚本 / pytest 路径，是独立的一次改名，**留给阶段 2**。
+   在那之前：**别在仓库根目录直接 `python -c "import app..."`**。
+
 1. **端口**：MinIO 用 19000/19001（9000 被 gateway 占），PG 15432，Redis 16379，前端 5173。
    **Windows 保留段会漂移**——重启 WSL 后重新分配，实测出现过 8079–8178 覆盖 8080，
    uvicorn 直接 `WinError 10013`。先查 `netsh interface ipv4 show excludedportrange protocol=tcp`，

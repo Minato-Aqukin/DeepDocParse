@@ -25,7 +25,7 @@ from app.config import settings
 from app.db import get_session, get_sessionmaker
 from app.deps import current_user, get_storage
 from app.errors import APIError
-from app.extract_schema import SchemaError, parse_schema, validate_schema
+from ddp_core.extract_format import SchemaError, parse_schema, validate_schema
 from app.extraction import ExtractContext, extraction_model_meta, run as run_extraction
 from app.metering import record_usage
 from app.qa import attach_resolution, load_citation_targets

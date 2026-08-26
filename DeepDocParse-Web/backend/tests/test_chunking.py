@@ -10,7 +10,7 @@
 import json
 from pathlib import Path
 
-from app.chunking import layout_to_chunks, page_count_of
+from ddp_core.chunking import layout_to_chunks, page_count_of
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 

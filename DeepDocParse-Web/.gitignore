@@ -16,3 +16,6 @@ test-results/
 playwright-report/
 blob-report/
 .playwright/
+
+# CI 把 service 仓库 checkout 到这里（本地复现 CI 步骤时也会出现）
+.service-repo/

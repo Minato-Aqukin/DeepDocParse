@@ -16,7 +16,7 @@ import httpx
 from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.chunking import layout_to_chunks
+from ddp_core.chunking import layout_to_chunks
 from app.config import settings
 from app.metering import record_usage
 from app.models import Chunk, Document, ParseJob, utcnow

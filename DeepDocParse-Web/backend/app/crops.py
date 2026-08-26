@@ -1,54 +1,26 @@
-"""出处区域截图：按 bbox 从原件里裁一块图，供 VQA 验证与前端展示。
+"""出处区域截图的**对象存储缓存层**。
 
-坐标换算沿用 service 侧 mcp_server 的同一套规则：bbox 基于 layout 的 page_size，
-渲染出来的位图是像素，比例 = 像素宽 / page_size 宽。**不能**图省事用 pdfium 的页尺寸——
-遇到 CropBox 偏移或旋转页会裁到错误区域（service 侧为此专门把 page_size 存进了 chunk）。
+真正的坐标换算与渲染在 `ddp_core.crops` —— 那套规则曾经有三份复制品
+（gateway / 本层 / mcp_server），靠注释互相叮嘱"只有一个正确写法"，
+而写错的后果是裁出一张与文本无关的图并带着"已验证"标记。现在只剩一份。
 
-裁剪很贵（渲染整页再切），所以算过一次就存进对象存储，键里带 bbox 摘要。
+本模块只管这里独有的那件事：**裁剪很贵**（渲染整页再切），
+所以算过一次就存进对象存储，键里带 bbox 摘要。
 """
 import asyncio
 import hashlib
-import io
 import json
 
 from app.storage import Storage, crop_key
+from ddp_core.crops import CROP_MARGIN, RENDER_SCALE, render_crop  # noqa: F401
 
-CROP_MARGIN = 12        # bbox 外扩，避免把边缘文字切掉
-RENDER_SCALE = 2.0      # 72dpi 基准 x2 = 144dpi，够 VQA 看清小字
+__all__ = ["CROP_MARGIN", "RENDER_SCALE", "bbox_digest", "get_or_create_crop", "render_crop"]
 
 
 def bbox_digest(bbox: list) -> str:
     return hashlib.sha1(json.dumps(bbox, sort_keys=True).encode()).hexdigest()[:12]
 
 
-def render_crop(pdf_bytes: bytes, page_idx: int, bbox: list,
-                page_size: list | None) -> bytes | None:
-    """同步渲染（调用方丢线程池）。失败返回 None —— 裁剪是增强路径，不阻断问答。"""
-    try:
-        import pypdfium2 as pdfium
-
-        doc = pdfium.PdfDocument(pdf_bytes)
-        try:
-            if page_idx >= len(doc):
-                return None
-            page = doc[page_idx]
-            bitmap = page.render(scale=RENDER_SCALE)
-            img = bitmap.to_pil()
-            sx = img.width / (page_size[0] if page_size else page.get_width())
-            sy = img.height / (page_size[1] if page_size else page.get_height())
-            x0, y0, x1, y1 = bbox
-            box = (max(0, int((x0 - CROP_MARGIN) * sx)), max(0, int((y0 - CROP_MARGIN) * sy)),
-                   min(img.width, int((x1 + CROP_MARGIN) * sx)),
-                   min(img.height, int((y1 + CROP_MARGIN) * sy)))
-            if box[2] <= box[0] or box[3] <= box[1]:
-                return None
-            buf = io.BytesIO()
-            img.crop(box).save(buf, format="PNG")
-            return buf.getvalue()
-        finally:
-            doc.close()
-    except Exception:
-        return None
 
 
 async def get_or_create_crop(storage: Storage, *, job_id: str, source_key: str, mime: str,

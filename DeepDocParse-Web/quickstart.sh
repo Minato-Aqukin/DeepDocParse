@@ -971,9 +971,23 @@ cmd_build() {
   info "backend venv：$WEB_DIR/.venv"
   [ -x "$WEB_DIR/.venv/bin/python" ] || "$PYTHON" -m venv "$WEB_DIR/.venv"
   "$WEB_DIR/.venv/bin/pip" install -q --upgrade pip ${PIP_INDEX:+--index-url "$PIP_INDEX"}
+  # **顺序不能反。** backend 会 import service 仓库的 `ddp_core` 包
+  # （分块 / 裁图 / 分词 / 抽取 schema 的唯一一份实现）。
+  # 它没写在 backend 的 dependencies 里 —— 路径依赖没有可移植的写法，
+  # `[tool.uv.sources]` 只有 uv 读、pip 从不读（写上去 pip 会直接装不上）。
+  # 所以在这里显式先装 gateway。理由与替代方案写在 backend/pyproject.toml 末尾。
+  [ -d "$SERVICE_DIR/gateway" ] \
+    || die "找不到 $SERVICE_DIR/gateway —— 两个仓库必须同级（先跑 ./quickstart.sh configure）"
+  ( cd "$WEB_DIR" && ./.venv/bin/pip install ${PIP_INDEX:+--index-url "$PIP_INDEX"} \
+      -e "$SERVICE_DIR/gateway" ) \
+    || die "ddp_core（service 仓库的 gateway 包）安装失败"
   ( cd "$WEB_DIR" && ./.venv/bin/pip install ${PIP_INDEX:+--index-url "$PIP_INDEX"} -e "backend[dev]" ) \
     || die "backend 依赖安装失败"
-  ok "backend 依赖就绪"
+  # 装完当场验一次：漏了 ddp_core 的话后面每个功能都会在 import 期炸，
+  # 而那时人已经在排查别的东西了
+  "$WEB_DIR/.venv/bin/python" -c "import ddp_core.chunking" 2>/dev/null \
+    || die "ddp_core 装上了却 import 不了 —— 检查 $SERVICE_DIR/gateway 是否完整"
+  ok "backend 依赖就绪（含 ddp_core）"
 
   info "前端依赖（registry=$NPM_REGISTRY）"
   # lockfile 的 resolved 全指向 npmmirror，换 registry 会被 npm 当成跨 host 的 remote

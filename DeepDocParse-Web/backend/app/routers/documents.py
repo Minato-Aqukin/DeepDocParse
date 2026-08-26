@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.archive import fail_job, image_base_url
-from app.chunking import layout_to_chunks
+from ddp_core.chunking import layout_to_chunks
 from app.config import settings
 from app.db import get_session
 from app.deps import current_user, get_service_client, get_storage

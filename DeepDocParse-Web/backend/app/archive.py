@@ -21,7 +21,7 @@ from pathlib import PurePosixPath
 from sqlalchemy import and_, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.chunking import page_count_of
+from ddp_core.chunking import page_count_of
 from app.metering import record_usage
 from app.models import Document, ParseJob, utcnow
 from app.service_client import ServiceClient

@@ -12,7 +12,7 @@ v1.1 两处改动：
 1. **关键词路查 `text_tokenized` 而不是 `text`**（D2）。`to_tsvector('simple', text)`
    把整段中文当成**一个 token**，于是"混合检索"在中文文档上实际只有向量一条腿 ——
    A1 评测量到关键词路单独工作时页码命中率只有 25%，正是这条腿瘸着的样子。
-   查询侧必须用**同一个 tokenizer**（app/tokenize），两边切法不同 = 永远匹配不上。
+   查询侧必须用**同一个 tokenizer**（`ddp_core.tokenize`），两边切法不同 = 永远匹配不上。
    **匹配语义是 OR**（`to_tsquery` 用 `|` 连接），不是 `websearch_to_tsquery` 的 AND ——
    分词之后 AND 等于要求一个块同时含四五个词，实测几乎恒不命中，
    而单测的 MemoryIndex 是 OR，于是单测绿、生产红。两处必须同时改。
@@ -28,7 +28,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.tokenize import query_string as _query_tokens
+from ddp_core.tokenize import query_string as _query_tokens
 
 RRF_K = 60          # 业界惯用值：名次靠后的贡献平滑衰减
 
@@ -40,7 +40,7 @@ _TSQUERY_UNSAFE = re.compile(r"[&|!()<>:*\\'\"]+")
 def _or_tsquery(query: str) -> str:
     """query -> OR 形式的 tsquery 串。
 
-    与索引侧同一个 tokenizer 切词（`app.tokenize`），再用 `|` 连起来。
+    与索引侧同一个 tokenizer 切词（`ddp_core.tokenize`），再用 `|` 连起来。
     空串会让 `to_tsquery` 抛错，所以兜一个不可能命中的占位符 ——
     **不能返回空**，那会让整条关键词路以异常的形式静默消失。
     """

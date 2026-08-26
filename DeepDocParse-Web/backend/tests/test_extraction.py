@@ -14,13 +14,13 @@ import pytest
 import respx
 from httpx import Response
 
-from app.chunking import layout_to_chunks
-from app.extract_schema import parse_schema, validate_schema
+from ddp_core.chunking import layout_to_chunks
+from ddp_core.extract_format import parse_schema, validate_schema
 from app.extraction import ExtractContext, run as run_extraction
 from app.models import Chunk, Document, ParseJob
 from app.routers.extractions import _csv_safe
 from app.search import MemoryIndex
-from app.tokenize import tokenized
+from ddp_core.tokenize import tokenized
 
 from tests.conftest import CHAT, EMBEDDINGS
 
@@ -362,7 +362,7 @@ def test_rerank_unavailable_is_in_the_contract_vocabulary():
     不在词汇表里的话，一份完全合法的抽取结果会被自己的 `validate_result` 判成不合规
     （service 侧据此会把任务直接标 failed）。
     """
-    from app.extract_schema import DEGRADED_VALUES, EXTRACT_VERSION, validate_result
+    from ddp_core.extract_format import DEGRADED_VALUES, EXTRACT_VERSION, validate_result
 
     assert "rerank_unavailable" in DEGRADED_VALUES
     result = {
@@ -381,7 +381,7 @@ def test_block_type_matches_the_service_side_vocabulary():
     不一致 ⇒ 同一份版面切出不同的块 ⇒ 出处的稳定定位键 seq 对不上 ⇒
     **历史出处指到错误的块，且完全静默**。
     """
-    from app.chunking import _block_type
+    from ddp_core.blocks import normalize_type
 
     expected = {
         "text": "text", "plain text": "text", "Table": "table", "table_body": "table",
@@ -392,9 +392,9 @@ def test_block_type_matches_the_service_side_vocabulary():
         "footnote": "other", "某个没见过的": "other",
     }
     for raw, want in expected.items():
-        assert _block_type({"type": raw}) == want, f"{raw!r} 应归成 {want}"
-    assert _block_type({}) == "text"
-    assert _block_type({"type": None}) == "text"
+        assert normalize_type(raw) == want, f"{raw!r} 应归成 {want}"
+    assert normalize_type(None) == "text"
+    assert normalize_type("") == "text"
 
 
 @respx.mock
@@ -511,7 +511,7 @@ async def test_hard_deleted_document_does_not_break_the_whole_run(session, app_s
     """
     from sqlalchemy import select as sa_select
 
-    from app.extract_schema import parse_schema as ps
+    from ddp_core.extract_format import parse_schema as ps
     from app.models import ExtractionItem, ExtractionRun
     from app.routers.extractions import _extract_one
 

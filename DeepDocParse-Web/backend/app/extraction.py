@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.crops import get_or_create_crop
-from app.extract_schema import (
+from ddp_core.extract_format import (
     CoerceError, FieldSpec, SchemaSpec, coerce_value, field_result, overall_status,
     parse_json_object,
 )
@@ -455,7 +455,7 @@ def extraction_model_meta() -> dict:
     与 Message.model_meta 同一个作用：不记下用了哪个模型、哪套检索参数，
     换配置之后历史结果就无法分组对比 —— 而那是判断"新配置有没有变好"的唯一依据。
     """
-    from app.tokenize import backend as tokenize_backend
+    from ddp_core.tokenize import backend as tokenize_backend
 
     return {
         "chat_model": settings.chat_model,

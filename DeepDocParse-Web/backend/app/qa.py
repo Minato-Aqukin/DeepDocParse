@@ -27,7 +27,7 @@ from app.models import Chunk, Document, ParseJob
 from app.rerank import rerank_hits
 from app.search import Hit, SearchIndex
 from app.storage import Storage
-from app.tokenize import backend as tokenize_backend
+from ddp_core.tokenize import backend as tokenize_backend
 from app.upstream import chat_request, embed_one
 
 SYSTEM_PROMPT = (
