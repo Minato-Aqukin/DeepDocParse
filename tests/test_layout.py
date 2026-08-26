@@ -3,8 +3,10 @@
 这两件事一起测：normalizer 层存在的全部意义，就是让**第二个引擎**产出同样的格式。
 只有一个引擎时，"格式是契约"这句话是没法证伪的。
 """
+import json
 from pathlib import Path
 
+import httpx
 import pytest
 import respx
 from httpx import Response
@@ -44,6 +46,26 @@ def test_normalization_keeps_unpromised_engine_fields():
     result = layout.from_mineru(middle)
     assert result["pdf_info"][0]["para_blocks"][0]["type"] == "table"
     assert result["pdf_info"][0]["para_blocks"][0]["index"] == 7
+
+
+def test_validate_checks_the_v12_engine_notes_shape():
+    """v1.2 顶层承诺 `engine_notes` 的形状要真的被检查。
+
+    这条是 DDP-Layout 升 v1.2 之后**新承诺字段的唯一执行点** ——
+    没有它，契约文档里写了一行、代码里加了个常量，却没有任何东西保证
+    产出方按那个形状写。二次验收把 `validate()` 里那段整个删掉，
+    144 条用例一条不红（与本轮刚修掉的两条假守卫是同一类问题）。
+    """
+    # 类型不对：字符串不是字符串列表
+    assert any("engine_notes" in p
+               for p in layout.validate({"pdf_info": [], "engine_notes": "oops"}))
+    # 元素类型不对
+    assert any("engine_notes" in p
+               for p in layout.validate({"pdf_info": [], "engine_notes": [1]}))
+    # 合规的形状与"根本没给"都必须干净通过（缺省才是常态）
+    assert layout.validate({"pdf_info": [], "engine_notes": ["code: 人话"]}) == []
+    assert layout.validate({"pdf_info": []}) == []
+    assert layout.validate({"pdf_info": [], "engine_notes": None}) == []
 
 
 def test_validate_catches_missing_page_size():
@@ -298,6 +320,8 @@ async def test_readyz_is_not_permanently_red_with_an_inprocess_engine(client, ap
     # 其它引擎全部探通，把变量收敛到"进程内引擎会不会被误判为 down"这一件事上
     respx.get("http://mineru:8000/health").mock(return_value=Response(200))
     vqa = respx.get("http://vqa-dsocr:8000/v1/models").mock(return_value=Response(200))
+    # 抽取平面的指令模型是 vqa_models 的第二个条目，探针照样会去连它
+    respx.get("http://chat-instruct:8000/v1/models").mock(return_value=Response(200))
     respx.get("http://embed:8080/health").mock(return_value=Response(200))
     respx.get("http://rerank:8080/health").mock(return_value=Response(200))
 
@@ -475,3 +499,610 @@ def test_vlm_blocks_normalize_through_the_contract():
     assert [b["type"] for b in blocks] == ["other", "table", "text"]
     assert layout.table_html(blocks[1]) == "<table><tr><td>项目</td></tr></table>"
     assert blocks[2]["bbox"] is None
+
+
+# ------------------------------------------------- v1.2：deepseek-ocr2 方言
+#
+# 判据全部来自官方 vLLM 脚本（DeepSeek-OCR2-vllm/run_dpsk_ocr2_pdf.py）：
+# 正则、坐标分母 999、采样参数，都不是猜的。改这一节前先去核对那份脚本。
+
+# 一页典型的 grounding 输出。标签在内容之前，一个标签管到下一个标签为止。
+DSOCR2_PAGE = """<|ref|>title<|/ref|><|det|>[[139, 45, 861, 78]]<|/det|>
+# 2024 年度采购合同
+
+<|ref|>text<|/ref|><|det|>[[100, 120, 890, 300]]<|/det|>
+甲方：北京某某科技有限公司
+乙方：上海某某贸易有限公司
+
+<|ref|>table<|/ref|><|det|>[[100, 320, 890, 520]]<|/det|>
+<table><tr><td>项目</td><td>金额</td></tr><tr><td>服务费</td><td>120000</td></tr></table>
+
+<|ref|>image<|/ref|><|det|>[[100, 540, 400, 700]]<|/det|>
+
+<|ref|>formula<|/ref|><|det|>[[100, 720, 500, 760]]<|/det|>
+$E = mc^2$"""
+
+
+def test_dsocr2_full_page_maps_through_the_contract():
+    """一页真实形状的 grounding 输出 -> 合规的 DDP-Layout。"""
+    from app.services import dsocr2
+
+    page = dsocr2.page_from_output(DSOCR2_PAGE, 0, 612, 792)
+    built = layout.build_pages([page], engine="vlm-ocr")
+    assert layout.validate(built) == []
+
+    blocks = built["pdf_info"][0]["para_blocks"]
+    # image 块没有题注 -> 被跳过（空块会白占一个 seq，而 seq 是出处的定位键）
+    assert [b["type"] for b in blocks] == ["title", "text", "table", "equation"]
+    # 标题的 markdown `#` 前缀要去掉：类型已经由 label 承载，留着会叠成 `## # 标题`
+    assert layout.block_text(blocks[0]) == "2024 年度采购合同"
+    assert "甲方" in layout.block_text(blocks[1])
+    # formula -> equation：契约词汇表里公式块叫 equation
+    assert layout.block_text(blocks[3]) == "$E = mc^2$"
+
+
+def test_dsocr2_table_keeps_both_html_and_searchable_text():
+    """表格结构进 html，同时**必须**留一份纯文本。
+
+    只存 HTML 的话分块与检索读不到内容 —— "表里那个数"永远检索不到，
+    全程无报错。这正是 layout.block_text 注释里记着的那个洞。
+    """
+    from app.services import dsocr2
+
+    page = dsocr2.page_from_output(DSOCR2_PAGE, 0, 612, 792)
+    table = [b for b in page["para_blocks"] if b["type"] == "table"][0]
+    assert layout.table_html(table) == (
+        "<table><tr><td>项目</td><td>金额</td></tr>"
+        "<tr><td>服务费</td><td>120000</td></tr></table>")
+    text = layout.block_text(table)
+    assert "服务费" in text and "120000" in text
+    assert "<td>" not in text
+
+
+def test_dsocr2_coordinates_use_999_not_1000():
+    """官方换算是 `x / 999 * width`。整幅框要正好落在整页上。"""
+    from app.services import dsocr2
+
+    assert dsocr2.to_bbox("[[0, 0, 999, 999]]", 612, 792) == [0.0, 0.0, 612.0, 792.0]
+    assert dsocr2.to_bbox("[[100, 120, 890, 300]]", 612, 792) == pytest.approx(
+        [61.26, 95.14, 545.23, 237.84], abs=0.01)
+
+
+def test_dsocr2_multiple_boxes_become_their_union():
+    """一个 ref 报多个框 = 这块内容确实横跨多个区域，取并集。
+
+    只取第一个框会裁到半句话，出处指向一个不含证据的区域 ——
+    那比框大一点恶劣得多。
+    """
+    from app.services import dsocr2
+
+    assert dsocr2.to_bbox("[[100, 100, 200, 200], [300, 400, 500, 600]]",
+                          999, 999) == [100.0, 100.0, 500.0, 600.0]
+
+
+@pytest.mark.parametrize("det", [
+    "",                                 # 空
+    "[[]]",                             # 没有数字
+    "[[100, 200]]",                     # 不足四个
+    "[[100, 100, 100, 100]]",           # 零面积
+    "[[900, 100, 100, 300]]",           # x1 <= x0
+    "[[0, 0, 5000, 100]]",              # 越界
+    "[[100, 100, 200, 200], [300]]",    # 数量不是 4 的倍数
+])
+def test_dsocr2_bad_det_becomes_none_not_a_guess(det):
+    """**宁可 None 也不要凑合的框** —— 与 vlm_ocr.denormalize_bbox 同一条铁律。"""
+    from app.services import dsocr2
+
+    assert dsocr2.to_bbox(det, 612, 792) is None
+
+
+def test_dsocr2_det_is_not_evaluated_as_python(tmp_path):
+    """det 字符串来自模型输出，是不可信输入。
+
+    官方脚本用的是 `eval()`；服务端照抄等于给模型开一个执行入口。
+    这条钉住"解析而不是求值"：能算出数就算，算不出就 None，绝不执行。
+
+    **三条断言都是判别性的** —— 换回 `eval()` 实现时必须有至少一条变红。
+    （前一版只断言了 `to_bbox("[[__import__('sys')]]") is None`，
+    而 eval 版对这个输入**也**返回 None：payload 求值成功、结果不是合法框。
+    那条用例因此对 eval 与解析两种实现同样绿，是个假守卫。）
+    """
+    import inspect
+
+    from app.services import dsocr2
+
+    # ① 副作用：eval 会真的把文件写出来，解析路径不可能
+    probe = tmp_path / "pwned.txt"
+    payload = (f"[[1,2,3,4]] if __import__('pathlib')"
+               f".Path({str(probe)!r}).write_text('x') else 0")
+    dsocr2.to_bbox(payload, 612, 792)
+    assert not probe.exists(), "det 字符串被求值了 —— 模型输出拿到了代码执行"
+
+    # ② 判别性取值：eval 得到两个相同的框（并集是个合法 bbox），
+    #    解析只数出 5 个数字（不是 4 的整数倍）-> None
+    assert dsocr2.to_bbox("[[100,100,200,200]] * 2", 612, 792) is None
+
+    # ③ 实现本身。①② 挡的是"眼下这个 eval 写法"，这条挡的是所有写法 ——
+    #    守的正是"以后有人为了跟官方脚本对齐把它换回去"。
+    #    走 AST 而不是查子串：模块注释里就写着"官方脚本用的是 eval()"，
+    #    子串匹配会被这句话钉死；AST 只看**真的调用**。
+    import ast
+
+    called = {
+        node.func.id
+        for node in ast.walk(ast.parse(inspect.getsource(dsocr2)))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert not called & {"eval", "exec"}, \
+        "dsocr2 里出现了 eval/exec —— det/ref 全是模型输出，不许求值"
+
+
+def test_dsocr2_block_without_any_tag_returns_none_not_empty():
+    """没有 grounding 标签 -> None（"这页没走 grounding"），不是"解析出 0 个块"。
+
+    两者必须分开：前者要退回整页纯文本，后者是真的空页。
+    """
+    from app.services import dsocr2
+
+    assert dsocr2.page_from_output("就是一段普通的识别结果", 0, 612, 792) is None
+    assert dsocr2.blocks_from_output("", 612, 792) is None
+
+
+def test_dsocr2_strip_tags_leaves_clean_markdown():
+    from app.services import dsocr2
+
+    cleaned = dsocr2.strip_tags(DSOCR2_PAGE)
+    assert "<|ref|>" not in cleaned and "<|det|>" not in cleaned
+    assert "2024 年度采购合同" in cleaned
+
+
+VQA = "http://vqa-dsocr:8000"
+ONE_PAGE_PDF = (FIXTURES / "sample.pdf").read_bytes()
+
+
+async def _recognize(content: str, options: dict):
+    """打一次 vlm-ocr，返回 (layout_json, 发出去的请求体)。"""
+    with respx.mock:
+        route = respx.post(f"{VQA}/v1/chat/completions").mock(
+            return_value=Response(200, json={
+                "choices": [{"message": {"content": content}}]}))
+        async with httpx.AsyncClient(trust_env=False) as http:
+            built = await vlm_ocr_module().recognize(
+                http, endpoint=VQA, model="deepseek-ocr-2",
+                pdf_bytes=ONE_PAGE_PDF, options=options)
+    return built, json.loads(route.calls[0].request.content)
+
+
+def vlm_ocr_module():
+    from app.services import vlm_ocr
+    return vlm_ocr
+
+
+async def test_dsocr2_request_carries_the_params_that_make_bbox_possible():
+    """**这条守的是整个出处功能。**
+
+    `skip_special_tokens` 在 OpenAI 接口里缺省是 true，而 `<|ref|>` / `<|det|>`
+    正是特殊 token —— 不显式关掉的话，模型报出来的 bbox 会在返回前被剥光，
+    我们只会看到"每个块 bbox 都是 null"，没有任何报错。
+    `vllm_xargs` 里的 ngram 参数同理：vLLM 侧挂了 logits processor 还不够，
+    每个请求得带 ngram_size 才会生效（没传就整个跳过）。
+    """
+    _, body = await _recognize(DSOCR2_PAGE, {"dialect": "deepseek-ocr2"})
+
+    assert body["skip_special_tokens"] is False
+    assert body["vllm_xargs"] == {
+        "ngram_size": 20, "window_size": 50,
+        "whitelist_token_ids": [128821, 128822],   # <td> / </td>
+    }
+    assert body["temperature"] == 0
+    # 官方 prompt 逐字。`<image>` 不由我们写 —— vLLM 按 image_url 部件的位置插入，
+    # 自己再写一个会变成两个占位符，直接对不上视觉 token 数
+    content = body["messages"][0]["content"]
+    assert content[0]["type"] == "image_url" and content[1]["type"] == "text"
+    assert content[1]["text"] == "<|grounding|>Convert the document to markdown."
+
+
+async def test_default_dialect_request_is_unchanged():
+    """缺省方言（generic-json）**一个字段都不许多发**。
+
+    老部署的注册表里没有 dialect，行为必须与 v1.1 逐字一致：
+    多发 vLLM 私有字段会让严格的 OpenAI 代理（one-api / LiteLLM）直接 400。
+    """
+    _, body = await _recognize('{"blocks": [{"type": "text", "text": "甲"}]}', {})
+
+    assert "vllm_xargs" not in body
+    assert "skip_special_tokens" not in body
+    assert set(body) == {"model", "messages", "stream"}
+
+
+async def test_dsocr2_without_grounding_tags_leaves_a_visible_note():
+    """标签被上游吃掉时**必须留痕**，不能只是安静地把 bbox 全填 null。
+
+    模型返回了文字、却一个 grounding 标签都没有，几乎只可能是
+    skip_special_tokens 没生效。这时每条出处都不能裁剪，
+    而现有的每一条路径都不会报错 —— 正是这个项目最忌讳的静默降级。
+    """
+    built, _ = await _recognize("识别出来的正文，但没有任何标签",
+                                {"dialect": "deepseek-ocr2"})
+
+    notes = built.get("engine_notes") or []
+    assert any("dsocr2_no_grounding" in n for n in notes), built
+    assert built["pdf_info"][0]["para_blocks"][0]["bbox"] is None
+
+
+async def test_dsocr2_with_grounding_leaves_no_note():
+    """正常路径不该有噪音 —— 留痕机制只在真出事时说话。"""
+    built, _ = await _recognize(DSOCR2_PAGE, {"dialect": "deepseek-ocr2"})
+
+    assert "engine_notes" not in built
+    assert built["pdf_info"][0]["para_blocks"][0]["bbox"] is not None
+
+
+def test_dsocr2_strips_the_stop_string_from_the_last_block():
+    """`include_stop_str_in_output: true` 会把结束符留在返回文本里。
+
+    最后一个块的正文一路取到字符串结尾 —— 不剥掉的话
+    `<｜end▁of▁sentence｜>` 就成了正文的一部分，跟着进检索索引和出处文本，
+    而且**不会有任何报错**。官方脚本也是先 replace 掉再解析的。
+    """
+    from app.services import dsocr2
+
+    raw = (DSOCR2_PAGE + "<｜end▁of▁sentence｜>")
+    page = dsocr2.page_from_output(raw, 0, 612, 792)
+    last = page["para_blocks"][-1]
+    assert layout.block_text(last) == "$E = mc^2$"
+    assert "end" not in layout.block_text(last)
+    assert "end▁of▁sentence" not in dsocr2.strip_tags(raw)
+
+
+def test_dsocr2_keeps_text_that_appears_before_the_first_tag():
+    """第一个 grounding 标签之前的文字**不许丢**。
+
+    正常输出里没有这一段，但模型偶尔会先说一句再开始报版面。
+    从第一个标签开始遍历会把它悄悄丢掉 —— 丢的是文档内容本身，
+    下游只会看到"这段原文检索不到"，全程无报错。
+    位置确实不知道，所以 bbox 留 None（不编一个）。
+    """
+    from app.services import dsocr2
+
+    raw = "这是模型多说的一句开场白\n" + DSOCR2_PAGE
+    blocks = dsocr2.blocks_from_output(raw, 612, 792)
+    assert layout.block_text(blocks[0]) == "这是模型多说的一句开场白"
+    assert blocks[0]["bbox"] is None
+    assert blocks[0]["type"] == "text"
+    # 后面的块一个不少，顺序不变
+    assert [b["type"] for b in blocks[1:]] == ["title", "text", "table", "equation"]
+
+
+async def test_dsocr2_max_tokens_leaves_room_for_the_prompt():
+    """`prompt_tokens + max_tokens` 必须放得进 8192 的上下文窗口。
+
+    官方离线脚本写的是 max_tokens=8192，那是 LLM 类直连的用法。
+    走 OpenAI 接口照抄的话，加上视觉 token（一页 256~1120 个）必然越界，
+    **每个请求都 400** —— 而错误信息只说"上下文超了"，看不出是这里抄错了。
+    """
+    from app.services import vlm_ocr
+
+    _, body = await _recognize(DSOCR2_PAGE, {"dialect": "deepseek-ocr2"})
+    # 模型 config 的 max_position_embeddings = 8192；给视觉 token 留够余量
+    assert body["max_tokens"] <= 8192 - 2048, body["max_tokens"]
+    assert body["max_tokens"] == vlm_ocr._DSOCR2_MAX_TOKENS
+
+    # 注册表可以调大，但调过头一样会 400 —— 这里只钉住缺省值是安全的
+    _, custom = await _recognize(DSOCR2_PAGE,
+                                 {"dialect": "deepseek-ocr2", "max_tokens": 2048})
+    assert custom["max_tokens"] == 2048
+
+
+def test_dsocr2_chat_template_emits_bos():
+    """部署用的 chat template **必须**输出 BOS。
+
+    这是本项目在真机上撞到过的最贵的一个坑（2026-08-25，4090D）：
+    少了 BOS，服务健康、请求 200、token 数正常，但模型输出是彻底的垃圾
+    （`Free OCR.` 吐 "PUBLIC DATA / ## 10 10 10 10…" 复读到 max_tokens），
+    **没有任何报错**。原因是官方脚本 tokenize 时 `bos=True`，
+    而 vLLM 渲染完模板是用 `add_special_tokens=False` 分词的。
+
+    这条守的是"以后有人来精简这个模板"。理由写在模板自己的注释里。
+    """
+    tpl = (Path(__file__).resolve().parent.parent
+           / "deploy" / "autodl" / "chat-template-deepseek-ocr2.jinja")
+    assert tpl.exists(), f"部署模板不见了：{tpl}"
+    body = tpl.read_text(encoding="utf-8")
+    # 注释块里也会提到 BOS，所以要断言的是**真的输出语句**
+    bos = "{{- '<｜begin▁of▁sentence｜>' -}}"
+    assert bos in body, "模板没有输出 BOS —— 模型会吐垃圾且不报错，见模板注释"
+    # **位置也要断言，不能只查存在。** 坏掉的方式不止"删掉它"：把这句挪到
+    # 消息循环之后，渲染出的 prompt 就不再以 BOS 开头 —— 与彻底删掉是同一个
+    # 故障（模型吐垃圾、零报错），而只查子串的断言对这种改法一片绿。
+    # venv 里没有 jinja2，做不了真渲染；比较两者在模板里的先后是最省的等价判据。
+    assert body.index(bos) < body.index("{%- for message in messages -%}"), \
+        "BOS 必须在消息循环之前 —— 渲染出的 prompt 要以它开头，否则等于没有"
+    # 反过来：模板绝不能自己写 <image>，那会变成两个占位符
+    body_no_comment = body.split("-#}", 1)[-1]
+    assert "<image>" not in body_no_comment, \
+        "模板里不能自己写 <image> —— vLLM 会按 image_url 部件位置插入"
+
+
+# ---- 用**真模型输出**回归（fixtures/dsocr2-real-output.json）----
+# 上面那些用例喂的是手写样例，钉的是"我以为的格式"。这一条喂的是
+# 2026-08-25 在 4090D 上 DeepSeek-OCR-2 对 tests/fixtures/contract.pdf
+# 真吐出来的东西，钉的是"它实际的格式"。两者都要有：
+# 手写样例覆盖边界，真实样本保证我们没有在对着幻想编程。
+
+REAL_OUTPUT = FIXTURES / "dsocr2-real-output.json"
+
+
+@pytest.mark.skipif(not REAL_OUTPUT.exists(), reason="缺真模型输出夹具")
+def test_dsocr2_parses_real_model_output():
+    """真实输出 -> 合规版面，且内容与 contract.truth.json 对得上。"""
+    from app.services import dsocr2
+
+    captured = json.loads(REAL_OUTPUT.read_text(encoding="utf-8"))
+    truth = json.loads((FIXTURES / "contract.truth.json").read_text(encoding="utf-8"))
+
+    # 生产里传的是 PDF 页尺寸（坐标是 0~999 归一化，与渲染倍率无关）
+    pages = [dsocr2.page_from_output(captured[str(i)]["raw"], i, 612.0, 792.0)
+             for i in range(len(captured))]
+    assert all(p is not None for p in pages), "真实输出里没解析出 grounding 标签"
+
+    built = layout.build_pages(pages, engine="vlm-ocr")
+    assert layout.validate(built) == [], layout.validate(built)
+
+    blocks = [b for p in built["pdf_info"] for b in p["para_blocks"]]
+    # 真机实测 18 块；这里只钉"有内容且每块都有 bbox"，别把块数写死
+    assert len(blocks) >= 10, len(blocks)
+    assert all(b["bbox"] for b in blocks), "有块没有 bbox —— 真实输出里本该每块都有"
+    for page in built["pdf_info"]:
+        for b in page["para_blocks"]:
+            x0, y0, x1, y1 = b["bbox"]
+            assert 0 <= x0 < x1 <= 612.1 and 0 <= y0 < y1 <= 792.1, b["bbox"]
+
+    text = " ".join(layout.block_text(b) for b in blocks)
+    for fact in ("PURCHASE AGREEMENT", "NW-2026-0817",
+                 "Northwind Trading Company Limited", "486,200.50"):
+        assert fact in text, f"真实输出里没识别出 {fact!r}"
+
+
+@pytest.mark.skipif(not REAL_OUTPUT.exists(), reason="缺真模型输出夹具")
+def test_dsocr2_real_table_keeps_structure_and_text():
+    """真实输出里的表格：HTML 结构与标准答案一致，同时留得下可检索文本。"""
+    from app.services import dsocr2
+
+    captured = json.loads(REAL_OUTPUT.read_text(encoding="utf-8"))
+    truth = json.loads((FIXTURES / "contract.truth.json").read_text(encoding="utf-8"))
+    expected_html = truth["pages"][1]["tables"][0]
+
+    page = dsocr2.page_from_output(captured["1"]["raw"], 1, 612.0, 792.0)
+    tables = [b for b in page["para_blocks"] if b["type"] == "table"]
+    assert tables, "第 2 页应当有表格块"
+
+    html = layout.table_html(tables[0])
+    assert html == expected_html, f"表格 HTML 与标准答案不符：\n{html}"
+    # **结构进 html，文本也要留一份** —— 只存 HTML 的话"表里那个数"检索不到
+    cell_text = layout.block_text(tables[0])
+    for cell in ("Industrial bearing 6204", "410.40", "Quantity"):
+        assert cell in cell_text, f"表格文本里缺 {cell!r}"
+    assert "<td>" not in cell_text
+
+
+async def test_free_ocr_mode_does_not_cry_wolf():
+    """**阻塞-7 的守卫（2026-08-26 验收）：没要过 grounding 就不许报"标签没来"。**
+
+    `options.grounding: false` 是受支持的用法（走官方 `Free OCR.`，
+    全页一个块、本来就没有 bbox）。旧实现只判方言不判 grounding，
+    于是这条路**每次解析**都会往归档的版面里写一条"静默失效"告警。
+    狼来了会毁掉这个信号本身 —— 而它是"任何降级都必须可见"在这条链路上的唯一落点。
+    """
+    from app.services import layout as layout_mod
+
+    built, body = await _recognize(
+        "整页纯文本，没有任何 grounding 标签",
+        {"dialect": "deepseek-ocr2", "grounding": False})
+
+    # 确实走了 Free OCR. 那条官方 prompt
+    assert body["messages"][0]["content"][1]["text"] == "Free OCR."
+    assert layout_mod.ENGINE_NOTES not in built, \
+        f"没要过 grounding 却报了标签缺失：{built.get(layout_mod.ENGINE_NOTES)}"
+
+
+async def test_skip_special_tokens_cannot_be_overridden_by_the_registry():
+    """`skip_special_tokens` 不接受注册表覆盖 —— 模块注释称它是"最要命的一行"。
+
+    它一旦变成 true，`<|ref|>`/`<|det|>` 会在返回前被剥光：
+    bbox 全为 null 且**没有任何报错**，出处功能整体失效而无人察觉。
+    能配的东西迟早会有人配错，所以这里根本不给配。
+    """
+    _, body = await _recognize(DSOCR2_PAGE, {
+        "dialect": "deepseek-ocr2",
+        "skip_special_tokens": True,        # 有人手贱配了
+    })
+    assert body["skip_special_tokens"] is False, \
+        "注册表把 skip_special_tokens 顶成了 True —— 所有 bbox 会静默变 null"
+
+
+async def test_max_tokens_cannot_exceed_the_context_window():
+    """注册表把 max_tokens 配大了要被钳住，不能让它把每个请求送成 400。
+
+    走 OpenAI 接口时 prompt_tokens + max_tokens 必须 <= max_model_len(8192)，
+    而一页视觉 token 就有 256~1120 个。配成 8192 的话每个请求都 400，
+    而 `_recognize_page` 会静默吞掉异常，最终抛的是
+    "模型不可达，或返回全为空" —— **配置错误被报成网络错误**，排查方向全歪。
+    """
+    _, body = await _recognize(DSOCR2_PAGE,
+                               {"dialect": "deepseek-ocr2", "max_tokens": 8192})
+    assert body["max_tokens"] <= 4096, body["max_tokens"]
+
+
+def test_truncated_output_does_not_leak_half_a_tag_into_a_block():
+    """被 max_tokens 截断时尾部留下的半个标签，不许跟着块正文进索引。
+
+    这不是臆想的输入：防复读处理器存在的理由就是 OCR 模型会复读到 max_tokens，
+    而**截断处必然是半个标签**。`strip_tags` 的两遍剥离只覆盖兜底路径，
+    正常 grounding 路径的块正文走的是另一条代码路。
+    """
+    from app.services import dsocr2
+
+    raw = ("<|ref|>text<|/ref|><|det|>[[10,10,200,50]]<|/det|>\n第一段正文\n"
+           "<|ref|>text<|/ref|><|det|>[[10,60,200,90]]<|/det|>\n尾段 <|ref|>text compa")
+    blocks = dsocr2.blocks_from_output(raw, 612, 792)
+    texts = [layout.block_text(b) for b in blocks]
+    assert not any("<|ref|>" in x or "<|det|>" in x for x in texts), texts
+    assert "尾段 text compa" in texts[-1] or "尾段" in texts[-1], texts
+
+
+async def test_max_tokens_zero_or_negative_is_also_clamped():
+    """下界同样要挡：0/负数一样让每个请求 400。
+
+    而单页失败是静默吞的，最终抛的是"模型不可达，或返回全为空" ——
+    配置错误伪装成网络错误，正是钳制这件事要防的那个后果。
+    """
+    _, body = await _recognize(DSOCR2_PAGE,
+                               {"dialect": "deepseek-ocr2", "max_tokens": -1})
+    assert body["max_tokens"] >= 1, body["max_tokens"]
+
+
+def test_strip_tags_also_removes_half_a_tag():
+    """半个标签也要剥掉 —— 兜底路径遇到的正是残缺输出。
+
+    走到 strip_tags 这条兜底路径的输出，十有八九**就是标签残缺**的那一类：
+    真机上少 BOS 时模型吐的就是 `<|ref|>text compared with in 45 c`
+    （连 `<|/ref|>` 都配不齐）。只剥完整四元组的话这半个标签原样穿透，
+    跟着进检索索引和出处文本，全程无报错。
+    """
+    from app.services import dsocr2
+
+    raw = "<|ref|>text compared with in 45 c"
+    assert dsocr2.strip_tags(raw) == "text compared with in 45 c"
+    # 落单的 det 标签同理
+    assert dsocr2.strip_tags("正文<|det|>[[1,2,3,4]]") == "正文[[1,2,3,4]]"
+
+# ---- 随仓库发布的注册表：形状守卫 ----
+# 起因（2026-08-26 验收）：`no_instruct` 与 `transcribe_prompt` 加在了
+# models.yaml / models.cpu.yaml / models.autodl.yaml 上，**唯独漏了
+# models.dev-host.yaml** —— 而漏标的两个后果都不报错：
+#   抽值挑中 OCR 专用模型 -> 假的 not_found（系统能力缺失伪装成"文档里没有"）
+#   核对拿中文指令去问它  -> 每条出处被误判 parse_mismatch
+# 在这之前 conftest 只加载 models.yaml，另外三份**从没被任何测试碰过**，
+# 连能不能 parse 都没人验过。这一组补上那道网。
+
+REGISTRIES = sorted((Path(__file__).resolve().parent.parent).glob("models*.yaml"))
+
+# OCR 专用模型：只会把图上的字抄出来，不会遵循指令。判据是名字里带 ocr。
+# 认得出来就必须标 no_instruct + 给 transcribe_prompt。
+_OCR_ONLY_HINT = "ocr"
+
+
+@pytest.mark.parametrize("path", REGISTRIES, ids=lambda p: p.name)
+def test_every_shipped_registry_parses(path):
+    """随仓库发布的注册表都必须能被 load_registry 读出来。
+
+    不是凑数：三份注册表此前从没被加载过，一个 YAML 手误就能让
+    "换个部署档位"在真机上第一步就炸，而本机测试一片绿。
+    """
+    from app.config import load_registry
+
+    registry = load_registry(path)
+    assert registry.parse_engines, f"{path.name} 一个解析引擎都没注册"
+
+
+@pytest.mark.parametrize("path", REGISTRIES, ids=lambda p: p.name)
+def test_shipped_vqa_entries_declare_capabilities_explicitly(path):
+    """随仓库发布的 `vqa_models` 条目**必须自己写 capabilities**，不许靠段名回填。
+
+    段名缺省会把没写 capabilities 的 vqa 条目补成 `[vision]`
+    （`config.SECTION_CAPABILITIES`）。这个缺省对"vqa 段里只住视觉模型"的
+    旧世界是对的，但 `no_instruct` 之后这一段开始住纯文本模型了 ——
+    于是"没写"就等于"被默默声明成看得见图"，而视觉核对会挑中它，
+    **每条好出处都被判成 parse_mismatch**。
+    这不是假想：`DeepDocParse-Web/quickstart.sh` 生成的注册表正好踩了它。
+
+    强制显式声明，新条目就没机会被默默贴错标。
+
+    **能挡到哪儿，说清楚**：这条挡的是"忘了写"。有人**明知故犯**地给纯文本
+    条目写上 `[vision]`，从注册表本身是分辨不出来的（里面没有别的真值来源），
+    任何只读注册表的守卫都到此为止。旁边那条按名字认 OCR 模型的守卫同理。
+    """
+    import yaml
+
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    section = raw.get("vqa_models") or {}
+    if not section:
+        pytest.skip(f"{path.name} 没有 vqa 段（无 GPU 档）")
+    for name, entry in section.items():
+        assert (entry or {}).get("capabilities"), (
+            f"{path.name} 的 {name} 没写 capabilities —— 会被段名默默补成 [vision]，"
+            f"若它其实是纯文本模型，视觉核对会挑中它并把每条好出处判成 parse_mismatch")
+
+
+@pytest.mark.parametrize("path", REGISTRIES, ids=lambda p: p.name)
+def test_capability_labels_are_internally_consistent(path):
+    """**与名字无关**的一致性不变式，补上名字判据的天花板。
+
+    下面那条守卫按名字里有没有 "ocr" 认 OCR 专用模型 —— 注册表里没有别的
+    真值来源，但它管不住改名字的：二次验收实测把条目改名 `dsv2-transcriber`
+    并同时去掉两个标，12 条守卫一条不红，两个 bug 原样复活。
+
+    这两条不依赖名字：
+      不听指令的模型**按定义**就需要原生 prompt -> no_instruct ⇒ transcribe_prompt
+      声明了怎么问它抄字的，**按定义**就得看得见图 -> transcribe_prompt ⇒ vision
+    """
+    from app.config import load_registry
+    from app.services.extraction import NO_INSTRUCT, VISION
+
+    registry = load_registry(path)
+    for name, entry in registry.vqa_models.items():
+        caps = entry.capabilities or []
+        prompt = (entry.options or {}).get("transcribe_prompt")
+        if NO_INSTRUCT in caps:
+            assert prompt, (
+                f"{path.name} 的 {name} 标了 {NO_INSTRUCT} 却没给 transcribe_prompt —— "
+                f"不听指令的模型只认自己的原生 prompt，拿缺省中文指令去问它，"
+                f"每条出处都会被误判 parse_mismatch")
+        if prompt:
+            assert VISION in caps, (
+                f"{path.name} 的 {name} 给了 transcribe_prompt 却没标 {VISION} —— "
+                f"抄写是看图的活，标不上视觉核对根本挑不到它")
+
+
+@pytest.mark.parametrize("path", REGISTRIES, ids=lambda p: p.name)
+def test_ocr_only_entries_are_labelled_in_every_registry(path):
+    """OCR 专用模型在**每一份**注册表里都要标 no_instruct + transcribe_prompt。
+
+    这条守的是"改了三份漏了第四份"。两个漏标后果都不报错，见本节开头。
+    """
+    from app.config import load_registry
+    from app.services.extraction import NO_INSTRUCT
+
+    registry = load_registry(path)
+    if not registry.vqa_models:
+        # 显式 skip 而不是让空循环变成绿的：一条恒真的守卫会让后人
+        # 以为该性质被钉住了。"passed" 必须意味着"真的看过"
+        pytest.skip(f"{path.name} 没有 vqa 段（无 GPU 档）")
+    for name, entry in registry.vqa_models.items():
+        if _OCR_ONLY_HINT not in name.lower():
+            continue
+        assert NO_INSTRUCT in entry.capabilities, (
+            f"{path.name} 的 {name} 是 OCR 专用模型却没标 {NO_INSTRUCT} —— "
+            f"/v1/extract 会拿它硬抽，抽出假的 not_found")
+        assert (entry.options or {}).get("transcribe_prompt"), (
+            f"{path.name} 的 {name} 没给 transcribe_prompt —— "
+            f"视觉核对会拿中文指令去问它，每条出处都会被误判 parse_mismatch")
+
+
+@pytest.mark.parametrize("path", REGISTRIES, ids=lambda p: p.name)
+def test_vqa_section_can_always_do_visual_verification(path):
+    """注册了 vqa 段的话，里面至少得有一个**看得见图**的条目。
+
+    加了 no_instruct 之后 vqa_models 段第一次住进了纯文本模型；
+    整段全是纯文本时视觉核对无从做起，而那条路只会静默地退成
+    vision_unavailable —— 部署时就该发现，不该等到线上。
+    """
+    from app.config import load_registry
+    from app.services.extraction import VISION
+
+    registry = load_registry(path)
+    if not registry.vqa_models:
+        pytest.skip(f"{path.name} 没有 vqa 段（无 GPU 档）")
+    assert any(VISION in entry.capabilities for entry in registry.vqa_models.values()), \
+        f"{path.name} 的 vqa 段里没有任何看得见图的条目，视觉核对做不了"

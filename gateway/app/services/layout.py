@@ -66,6 +66,11 @@ def normalize_type(raw: object) -> str:
 # 契约承诺的字段——**只有这些**。消费方只准依赖它们，validate() 也照着这两张表检查
 # （所以往这里加字段是真的有效的，别让它们变成没人读的常量）。
 # 值是校验函数：拿到字段值，返回 True 表示合规
+# v1.2 顶层可选承诺：引擎对这一趟解析的自述（"识别出来了，但有理由怀疑不对劲"）。
+# 每条形如 `<code>: <人话>`，跟着 layout_json 一起归档。见 docs/layout-format.md。
+# 名字放这儿而不是散在各 normalizer 里：它是契约字段，拼错了就等于没写。
+ENGINE_NOTES = "engine_notes"
+
 PROMISED_PAGE_FIELDS = {
     "page_idx": lambda v: isinstance(v, int),
     # 缺 page_size 时裁剪只能拿 pdfium 的页尺寸凑合，遇到 CropBox 偏移或旋转页
@@ -239,9 +244,17 @@ def validate(layout: dict[str, Any]) -> list[str]:
     但必须能被发现（这个项目吃过"静默不对劲"的亏）。
     """
     problems: list[str] = []
+
+    # v1.2 顶层可选承诺。缺省是对的（绝大多数解析没什么好说的）；
+    # 给了就必须是字符串列表 —— 消费方按 `<code>: <人话>` 的前缀分支
+    notes = layout.get(ENGINE_NOTES)
+    if notes is not None and not (isinstance(notes, list)
+                                  and all(isinstance(n, str) for n in notes)):
+        problems.append(f"{ENGINE_NOTES} 不合规（值={notes!r}），应为字符串列表或缺省")
+
     pages = layout.get("pdf_info")
     if not isinstance(pages, list):
-        return ["pdf_info 不是列表"]
+        return problems + ["pdf_info 不是列表"]
 
     for i, page in enumerate(pages):
         where = f"pdf_info[{i}]"

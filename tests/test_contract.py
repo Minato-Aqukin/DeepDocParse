@@ -299,14 +299,14 @@ SSE_BODY = (
 @respx.mock
 async def test_chat_completions_openai_compat(client, app_state):
     """image_url + text 的标准 OpenAI 请求可用；流式 SSE 原样透传；未知 model -> 404。"""
-    endpoint = app_state.registry.vqa_models["deepseek-ocr"].endpoint  # 跟随 models.yaml
+    endpoint = app_state.registry.vqa_models["deepseek-ocr-2"].endpoint  # 跟随 models.yaml
     upstream = respx.post(f"{endpoint}/v1/chat/completions").mock(
         return_value=Response(200, content=SSE_BODY, headers={"content-type": "text/event-stream"})
     )
 
     # 1. 流式透传：SSE 字节与 content-type 原样到达
     payload = {
-        "model": "deepseek-ocr",
+        "model": "deepseek-ocr-2",
         "stream": True,
         "messages": [{"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
@@ -322,7 +322,7 @@ async def test_chat_completions_openai_compat(client, app_state):
     resp = await client.post("/v1/chat/completions", json={"messages": []})
     assert resp.status_code == 200
     forwarded = json.loads(upstream.calls.last.request.content)
-    assert forwarded["model"] == "deepseek-ocr"
+    assert forwarded["model"] == "deepseek-ocr-2"
 
     # 3. 未知 model -> OpenAI 风格 404，不打上游
     before = upstream.call_count
@@ -343,7 +343,7 @@ async def test_chat_completions_openai_compat(client, app_state):
     # 5. /v1/models 来自注册表
     resp = await client.get("/v1/models")
     assert resp.status_code == 200
-    assert [m["id"] for m in resp.json()["data"]] == ["deepseek-ocr"]
+    assert [m["id"] for m in resp.json()["data"]] == ["deepseek-ocr-2", "qwen3-4b-instruct"]
 
 
 @respx.mock
@@ -356,7 +356,7 @@ async def test_chat_stream_error_releases_semaphore(client, app_state):
 
     from app.main import app as _app
 
-    endpoint = app_state.registry.vqa_models["deepseek-ocr"].endpoint
+    endpoint = app_state.registry.vqa_models["deepseek-ocr-2"].endpoint
 
     class BrokenStream(httpx.AsyncByteStream):
         async def __aiter__(self):
@@ -369,7 +369,7 @@ async def test_chat_stream_error_releases_semaphore(client, app_state):
     )
 
     _app.state.vqa_semaphore = asyncio.Semaphore(1)  # 容量 1：泄漏一次即封死，放大信号
-    payload = {"model": "deepseek-ocr", "stream": True, "messages": []}
+    payload = {"model": "deepseek-ocr-2", "stream": True, "messages": []}
     with pytest.raises(Exception):
         await client.post("/v1/chat/completions", json=payload)
 

@@ -18,7 +18,10 @@ from app.services import extraction
 from app.services.task_store import TaskStore
 from app.worker.tasks import run_extraction
 
-VQA = "http://vqa-dsocr:8000"
+# 抽值走的是**指令模型**的端点（见 models.yaml 的 qwen3-4b-instruct）。
+# OCR 专用模型标了 no_instruct，抽值路径会跳过它 —— 拿它硬抽只会
+# 抽出一堆假的 not_found，那是这个平面最忌讳的输出。
+CHAT = "http://chat-instruct:8000"
 
 GOOD_SCHEMA = {
     "type": "object",
@@ -179,7 +182,7 @@ async def test_extraction_end_to_end(app_state, worker_ctx):
         return Response(200, json={"choices": [
             {"message": {"content": json.dumps(answer, ensure_ascii=False)}}]})
 
-    respx.post(f"{VQA}/v1/chat/completions").mock(side_effect=reply)
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=reply)
 
     schema = {"type": "object", "properties": {
         "buyer": {"type": "string", "description": "买方单位全称"},
@@ -210,7 +213,7 @@ async def test_unparseable_model_output_becomes_schema_violation(app_state):
     """
     doc_hash = "e" * 64
     await _seed_corpus(app_state.task_store, doc_hash)
-    respx.post(f"{VQA}/v1/chat/completions").mock(
+    respx.post(f"{CHAT}/v1/chat/completions").mock(
         return_value=Response(200, json={"choices": [{"message": {"content": "我觉得是这样"}}]}))
 
     schema = {"type": "object", "properties": {
@@ -228,7 +231,7 @@ async def test_unparseable_model_output_becomes_schema_violation(app_state):
 async def test_upstream_down_becomes_error_not_not_found(app_state):
     doc_hash = "f" * 64
     await _seed_corpus(app_state.task_store, doc_hash)
-    respx.post(f"{VQA}/v1/chat/completions").mock(return_value=Response(503))
+    respx.post(f"{CHAT}/v1/chat/completions").mock(return_value=Response(503))
 
     schema = {"type": "object", "properties": {
         "buyer": {"type": "string", "description": "买方单位全称"}}}
@@ -304,7 +307,7 @@ async def test_one_field_blowing_up_does_not_lose_the_others(app_state):
     """
     doc_hash = "a" * 64
     await _seed_corpus(app_state.task_store, doc_hash)
-    respx.post(f"{VQA}/v1/chat/completions").mock(side_effect=lambda r: Response(
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
         200, json={"choices": [{"message": {"content": json.dumps(
             {"found": True, "value": "北极星科技有限公司", "source": 1})}}]}))
 
@@ -334,3 +337,163 @@ async def test_one_field_blowing_up_does_not_lose_the_others(app_state):
     assert result["fields"]["boom"]["status"] == "error"
     # 关键：另一个字段的结果没被连累
     assert result["fields"]["buyer"]["status"] == "found"
+
+
+# ------------------------------------------------- 能力守卫：OCR 模型不许拿来抽值
+#
+# 抽取平面「复用 VQA 平面的模型」这个设计有一个塌陷点：VQA 位上放的若是
+# **OCR 专用模型**，它只会把看到的字抄出来。给它抽取指令，最好的结果是
+# schema_violation，最坏的结果是它吐出一个能解析、但 found=false 的东西 ——
+# 于是**系统能力缺失伪装成了「文档里没有」**。这一节钉住这条不许发生。
+
+@respx.mock
+async def test_ocr_only_registry_reports_error_not_a_fake_not_found(app_state):
+    """注册表里只剩 OCR 专用模型时，抽值**如实报 error**，不硬抽。
+
+    这里断言的重点是 status=error：只要它是 not_found，
+    调用方就会把"我们没有能干这活的模型"读成"这份文档里没有这个字段"。
+    """
+    doc_hash = "1" * 64
+    await _seed_corpus(app_state.task_store, doc_hash)
+    # 摘掉指令模型，只留标了 no_instruct 的 OCR 模型
+    app_state.registry.vqa_models.pop("qwen3-4b-instruct")
+    assert [e.capabilities for e in app_state.registry.vqa_models.values()] == \
+        [["vision", "no_instruct"]]
+
+    schema = {"type": "object", "properties": {
+        "buyer": {"type": "string", "description": "买方单位全称"}}}
+    ctx = extraction.ExtractContext(
+        store=app_state.task_store, http=app_state.http, registry=app_state.registry,
+        doc_hash=doc_hash, corpus=await app_state.task_store.load_chunks(doc_hash))
+    result = await extraction.run(ctx, fmt.parse_schema(schema))
+
+    field = result["fields"]["buyer"]
+    assert field["status"] == "error", field
+    assert field["degraded"] == "no_instruct_model", field
+    assert field["value"] is None
+    # 而且**一次上游都没打** —— 明知抽不出来还去打模型是纯烧钱
+    assert fmt.validate_result(result) == []
+
+
+async def test_extraction_picks_the_instruct_model_not_the_default(app_state):
+    """默认 VQA 模型是 OCR-2（default: true），抽值却必须挑中指令模型。
+
+    挑错的后果不是报错而是**抽出一堆假的 not_found**，所以这条得直接断言端点。
+    """
+    picked = extraction._pick_chat(
+        extraction.ExtractContext(store=None, http=None, registry=app_state.registry,
+                                  doc_hash="x" * 64, corpus=[]),
+        instruct=True)
+    assert picked is not None
+    name, entry = picked
+    assert name == "qwen3-4b-instruct", name
+    assert "no_instruct" not in entry.capabilities
+
+
+async def test_visual_verification_still_uses_the_ocr_model(app_state):
+    """反向守卫：原样抄写是 OCR 模型的**本行**，不许把它排除在外。
+
+    能力守卫写过头的话，视觉核对会连带失效 —— 那条路正是 OCR-2 最擅长的。
+    """
+    picked = extraction._pick_chat(
+        extraction.ExtractContext(store=None, http=None, registry=app_state.registry,
+                                  doc_hash="x" * 64, corpus=[]),
+        instruct=False)
+    assert picked is not None
+    name, _ = picked
+    assert name == "deepseek-ocr-2", name
+
+
+async def test_transcribe_prompt_follows_the_registry(app_state):
+    """视觉核对**要用模型听得懂的话问**。
+
+    2026-08-25 真机标定时抓到：拿缺省那句中文指令去问 DeepSeek-OCR-2，
+    它不抄写、而是回应那句指令（原文 "PURCHASE AGREEMENT" →
+    抄写 "例如，如果问题涉及…"）。后果比抽值那边更阴险 ——
+    抄写对不上会被判成 parse_mismatch，于是**每条出处都被打上可疑标记**，
+    而解析本身其实是好的：核对功能不是失灵，是变成了纯噪声。
+    """
+    ctx = extraction.ExtractContext(
+        store=None, http=None, registry=app_state.registry,
+        doc_hash="x" * 64, corpus=[])
+    # 注册表里 OCR-2 声明了自己的原生 prompt
+    assert extraction._transcribe_prompt(ctx) == "Free OCR."
+
+    # 没声明的模型走缺省那句中文指令（通用视觉模型能听懂）
+    app_state.registry.vqa_models["deepseek-ocr-2"].options = {}
+    assert extraction._transcribe_prompt(ctx) == extraction._TRANSCRIBE_PROMPT
+
+
+async def test_transcribe_prompt_survives_an_empty_registry(app_state):
+    """vqa_models 为空时不能炸 —— 核对本来就是增强路径。"""
+    app_state.registry.vqa_models.clear()
+    ctx = extraction.ExtractContext(
+        store=None, http=None, registry=app_state.registry,
+        doc_hash="x" * 64, corpus=[])
+    assert extraction._transcribe_prompt(ctx) == extraction._TRANSCRIBE_PROMPT
+
+
+async def test_visual_verification_skips_a_text_only_model(app_state):
+    """**阻塞-2 的守卫（2026-08-26 验收）：纯文本模型不许被派去看图。**
+
+    `no_instruct` 让 `vqa_models` 段第一次住进了纯文本模型（抽取要一个会遵循
+    指令的模型，而它不必会看图）。于是反向错配随之诞生：视觉核对若挑中它，
+    模型根本收不到图，只会对着那句指令自说自话 —— 抄写比对必然对不上，
+    **每一条好出处都被打成 parse_mismatch**。
+    与 transcribe_prompt 修的那个 bug 后果完全一样，只是方向相反。
+
+    这条把"纯文本条目被标成 default"这个最坏配置摆出来：核对路必须避开它。
+    """
+    registry = app_state.registry
+    # 最坏情况：纯文本模型被标成缺省，OCR 模型退居其次
+    registry.vqa_models["deepseek-ocr-2"].default = False
+    registry.vqa_models["qwen3-4b-instruct"].default = True
+
+    ctx = extraction.ExtractContext(store=None, http=None, registry=registry,
+                                    doc_hash="x" * 64, corpus=[])
+
+    picked = extraction._pick_chat(ctx, instruct=False)
+    assert picked is not None, "OCR 模型还在段里，核对不该没得挑"
+    assert picked[0] == "deepseek-ocr-2", \
+        f"核对挑中了 {picked[0]} —— 纯文本模型看不见图，每条出处都会被误判"
+    # prompt 也必须跟着挑中的那个走，不能拿 A 的 prompt 去问 B
+    assert extraction._transcribe_prompt(ctx) == "Free OCR."
+
+    # 抽值那条路仍然只挑得到指令模型（两条路各走各的）
+    assert extraction._pick_chat(ctx, instruct=True)[0] == "qwen3-4b-instruct"
+
+
+async def test_verification_reports_vision_unavailable_when_nothing_can_see(app_state):
+    """整段全是纯文本时，核对要如实说"没有视觉模型"，不许硬挑一个。
+
+    挑一个看不见图的顶上 = 把好出处打成存疑，比不做核对糟得多。
+    挑不到时返回 None，调用方那条路会落到可见降级 vision_unavailable。
+    """
+    registry = app_state.registry
+    del registry.vqa_models["deepseek-ocr-2"]
+    ctx = extraction.ExtractContext(store=None, http=None, registry=registry,
+                                    doc_hash="x" * 64, corpus=[])
+
+    assert extraction._pick_chat(ctx, instruct=False) is None
+    # 但抽值照常 —— 两种能力互不牵连
+    assert extraction.instruct_available(ctx) is True
+
+
+async def test_whole_plane_unavailable_rolls_up_to_the_top(app_state):
+    """抽取平面整体不可用时，**顶层** degraded 必须说出来。
+
+    非阻塞-2（2026-08-26 验收）：`no_instruct_model` 原来不在 `_DEGRADED_PRIORITY`
+    里，于是每个字段各自打了这个标、顶层 degraded 却是 null、status 只是 partial ——
+    "我们没有这个能力"在结果摘要里长得像"这份文档字段比较少"。
+    它是全平面故障，理应排在优先级最前面。
+    """
+    items = [
+        {"degraded": "no_hits"},
+        {"degraded": "no_instruct_model"},
+        {"degraded": "crop_unsupported"},
+    ]
+    assert extraction._rollup_degraded(items) == "no_instruct_model"
+    # 它压得住其余每一种（含此前排第一的 upstream_error）
+    assert extraction._rollup_degraded(
+        [{"degraded": "upstream_error"}, {"degraded": "no_instruct_model"}]
+    ) == "no_instruct_model"

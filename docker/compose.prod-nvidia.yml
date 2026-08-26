@@ -70,15 +70,126 @@ services:
   #   environment: { CUDA_VISIBLE_DEVICES: "1" }
   #   deploy: *gpu
 
-  # ---- VQA 平面：官方 vLLM 部署 ----
+  # ---- VQA 平面：DeepSeek-OCR-2 官方 vLLM 部署 ----
+  # 参数与 deploy/autodl/serve-vllm.sh **保持一致**（那份是裸进程版，这份是容器版，
+  # 同一套判据：vLLM 官方 recipe + 官方推理脚本）。改一处记得改另一处。
+  #
+  # **唯一有意的差异**：裸进程那边要 `VLLM_USE_FLASHINFER_SAMPLER=0`，这里没有。
+  # 那条是给 AutoDL 基础镜像擦屁股的 —— FlashInfer 的采样内核是首次使用时 JIT 编译的，
+  # 需要 ninja + nvcc，而那个镜像里没有 ninja（会崩在 FileNotFoundError: 'ninja'）。
+  # 官方 vllm-openai 镜像自带完整工具链，不需要。真在别的镜像上撞到了，
+  # 在这里加 `environment: { VLLM_USE_FLASHINFER_SAMPLER: "0" }`。
   vqa-dsocr:
-    # pin 与 mineru 基座一致的 v0.21.0（本项目已实测可用版本；升级前先跑绿 tests/）
-    image: vllm/vllm-openai:v0.21.0
+    # 0.27.1 的 registry 里确认有 DeepseekOCR2ForCausalLM，不需要自定义注册代码。
+    # **别随手升级**：社区报过 0.20~0.23 若干版本在 CUDA graph 捕获阶段 worker 直接死。
+    image: vllm/vllm-openai:v0.27.1
     command: >
-      --model deepseek-ai/DeepSeek-OCR
+      --model deepseek-ai/DeepSeek-OCR-2
+      --served-model-name deepseek-ocr-2
       --trust-remote-code
-      --gpu-memory-utilization 0.25
-    environment: { CUDA_VISIBLE_DEVICES: "0" }
+      --chat-template /app/chat-template-deepseek-ocr2.jinja
+      --chat-template-content-format string
+      --logits-processors vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor
+      --no-enable-prefix-caching
+      --mm-processor-cache-gb 0
+      --max-model-len 8192
+      --block-size 256
+      --gpu-memory-utilization 0.38
+      --max-num-seqs 32
+      --limit-mm-per-prompt '{"image": 1}'
+    # util 0.38 与 serve-vllm.sh 的 GPU_MEMORY_UTILIZATION 缺省值（共卡档）一致。
+    # **只有先起的那个可以用 util 分显存**，理由见下面 chat-instruct 那段。
+    # CUDA graph 捕获阶段崩溃时的退路（社区在 0.20~0.23 若干版本上报过）是
+    # `--enforce-eager`，代价是吞吐下降所以缺省不加 —— 裸进程版对应 env.sh 的
+    # ENFORCE_EAGER=1。**注意 command 是 YAML 折叠标量，里面不能写 `#` 注释**
+    # （会被原样当成参数传给 vLLM），所以这些说明只能放在块外。
+    volumes:
+      # **不能省**：DeepSeek-OCR-2 的 tokenizer_config.json 里没有 chat_template，
+      # 不给这个文件的话服务起得来、但每个 /v1/chat/completions 都 400。
+      - ../deploy/autodl/chat-template-deepseek-ocr2.jinja:/app/chat-template-deepseek-ocr2.jinja:ro
+      # 权重缓存。**加了 healthcheck 之后这个卷从"省事"变成"必需"**：
+      # 没有它每次 --force-recreate 都要重下 ~7GB，而下载慢到超过 start_period
+      # 就会被判 unhealthy —— 下面 chat-instruct 的 service_healthy 会把它
+      # 升级成 `dependency failed to start`，**整个 up 中止**。
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      # 与 deploy/autodl/env.sh 同一个理由：直连 HF 在国内很慢，
+      # 而现在"慢"会通过 healthcheck 变成"失败"
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+    # **这个 healthcheck 是显存编排的一部分，不只是运维摆设。**
+    # chat-instruct 要等它 healthy 才能起（见那边的 depends_on）：vLLM 从
+    # 容器 running 到真正吃满显存要几分钟加载权重，只钉「启动顺序」等于没钉 ——
+    # 两个进程会并行做 memory profiling，谁先分配完全看运气，而**后分配的那个
+    # 必定算出负的 KV 预算**。也就是说：漏了它，下面那段推导里"先起的是 OCR"
+    # 这个前提有一半时间不成立，确定性失败变成 50/50 的间歇失败。
+    # 用 python 而不是 curl：vllm-openai 镜像里不保证有 curl，但一定有 python。
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # **给到 30 分钟**，不是保守，是算过的：首次启动要下 ~7GB 权重
+      # （挂了 hf-cache 卷之后只有第一次），再加载 + memory profiling +
+      # CUDA graph 捕获。这期间探测失败不计入 retries；超过之后才开始计，
+      # 约 start_period + 5×15s 判 unhealthy。
+      # **判 unhealthy 的代价比"慢"大得多**：chat-instruct 的 service_healthy
+      # 会把它升级成 dependency failed to start，整个 up 中止。
+      start_period: 30m
+    deploy: *gpu
+
+  # ---- 抽取平面用的通用指令模型 ----
+  # **不能省**（除非不用 /v1/extract）：抽取平面「复用 VQA 平面的模型」这个设计，
+  # 在 VQA 位上是 OCR 专用模型时会塌掉 —— DeepSeek-OCR-2 只会抄字，
+  # 给它抽取指令抽不出东西，而抽不出来会被记成 not_found（"文档里没有"），
+  # 一个看起来像结论的空值。models.yaml 里 OCR-2 因此标了 no_instruct，
+  # 抽值路径会跳过它；没有这个服务时 /v1/extract 会如实报 no_instruct_model。
+  #
+  # Qwen3 自带 chat_template，不像 OCR-2 那样要挂 --chat-template。
+  # 前缀缓存**开着**（不加 --no-enable-prefix-caching）：抽取的 prompt 前半段
+  # 在同一份 schema 的多个字段之间高度重复，命中率很高 —— 与 OCR 那边正好相反。
+  #
+  # ---- 共卡的显存不是用 gpu-memory-utilization 分的 ----
+  # **这条是 2026-08-25 在 4090D 上实测撞出来的，别改回去。** vLLM 的 KV 预算是
+  #
+  #     util × 卡容量 − 全卡已用
+  #
+  # 注意减数是**整卡**已用，不是本进程已用。先起的 OCR-2 已经占了 0.38×容量，
+  # 后起的这个若也写一个小 util，算出来恒为负（`Available KV cache memory: -N GiB`
+  # 直接崩），**与卡多大无关** —— 曾经写在这里的「两边加起来 < 1」是错的判据，
+  # 按它部署 chat-instruct 必然起不来，于是 /v1/extract 永远返回 no_instruct_model。
+  #
+  # 正解是给第二个服务 `--kv-cache-memory-bytes` **直接写死 KV 大小**
+  # （官方 docstring：设了它就忽略 gpu_memory_utilization），util 只留着过
+  # vLLM 那道启动前置检查（要求 空闲 >= util × 卡容量）。
+  # 数值与 deploy/autodl/env.sh 的 CHAT_GPU_MEMORY_UTILIZATION / CHAT_KV_CACHE_BYTES
+  # 一致（0.55 / 3 GiB），完整推导在那份文件的「两个服务共卡时」一节。
+  #
+  # **顺序重要**：vqa-dsocr 必须**先分配完显存**，否则两边都算不出预算。
+  # 注意钉的是 `condition: service_healthy` 而不是 compose 的 depends_on 短语法 ——
+  # 短语法等价于 service_started（容器 running 即满足），而 vLLM 要几分钟加载权重
+  # 才真正吃显存。用短语法的话两个进程实际上是并行 profiling 的，
+  # 谁先分配全看运气，**而后分配的那个必定算出负的 KV**：
+  # 失败从"必然"变成"50/50"，比必然更难排查。
+  chat-instruct:
+    image: vllm/vllm-openai:v0.27.1
+    command: >
+      --model Qwen/Qwen3-4B-Instruct-2507
+      --served-model-name qwen3-4b-instruct
+      --max-model-len 4096
+      --gpu-memory-utilization 0.55
+      --kv-cache-memory-bytes 3221225472
+      --max-num-seqs 32
+    depends_on:
+      vqa-dsocr:
+        condition: service_healthy
+    volumes:
+      # 同 vqa-dsocr：它自己也要下 ~7.5GB 权重
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
     deploy: *gpu
 
   # ---- v2 (M4)：embedding（models.yaml embedding_models 已启用） ----
@@ -113,3 +224,6 @@ services:
 
 volumes:
   redis-data:
+  # 两个 vLLM 共用。**不是可选的**：见 vqa-dsocr 的 healthcheck 注释 ——
+  # 没有它，每次重建都重下 ~15GB，而下载超时现在会让整个 up 中止
+  hf-cache:

@@ -95,12 +95,96 @@ class ExtractContext:
 
 # ---------- 上游调用 ----------
 
-async def _chat(ctx: ExtractContext, messages: list[dict]) -> str | None:
+# 能力词：这个条目**不会遵循指令**，只会干它专精的那件事。
+#
+# 为什么需要它：抽取平面「复用 VQA 平面的模型」这个设计，在 VQA 位上是
+# **OCR 专用模型**时会塌掉。DeepSeek-OCR 系就是典型 —— 给它一张图，它把字抄出来；
+# 给它一段"请按 schema 抽取并输出 JSON"的指令，它还是继续抄字。
+# 抄出来的东西解析不出 JSON，重试用尽后打 schema_violation；
+# 更糟的情况是它恰好吐出一个能解析、但 found=false 的东西 ——
+# **那就变成了"文档里没有"，一个看起来像结论的空值**，正是本模块开头说的最危险输出。
+#
+# 所以：OCR 专用模型在注册表里写 `capabilities: [vision, no_instruct]`，
+# 抽值路径挑模型时跳过它们；一个都挑不到就如实报 no_instruct_model，
+# 而不是拿 OCR 模型去硬抽。视觉核对（原样抄写）**照常用它们** —— 那正是它们的本行。
+NO_INSTRUCT = "no_instruct"
+
+# 能力词：这个条目**看得见图**。
+#
+# 它是上面那条的镜像，而且是同一个坑的另一半。加了 no_instruct 之后，
+# `vqa_models` 段里第一次出现了**纯文本模型**（抽取平面需要一个会遵循指令的模型，
+# 而它不必会看图）。于是反向的错配随之诞生：视觉核对若挑中纯文本条目，
+# 模型根本收不到图，只会对着那句指令自说自话 —— 抄写比对必然对不上，
+# 于是**每一条好出处都被打成 parse_mismatch**。
+# 这与 transcribe_prompt 修的那个 bug 后果完全一样，只是方向相反。
+#
+# 段名会把没写 capabilities 的 vqa 条目缺省补成 [vision]（config.SECTION_CAPABILITIES），
+# 所以老注册表一字不改照跑；被这条挡住的只可能是**显式声明了自己不会看图**的条目。
+VISION = "vision"
+
+
+def _pick_chat(ctx: ExtractContext, *, instruct: bool):
+    """挑一个能干这活的 vqa 条目，挑不到返回 None。
+
+    instruct=True  抽值：必须会遵循指令、能按要求吐 JSON，**不需要看图**
+    instruct=False 视觉核对：必须看得见图，OCR 专用模型正合适
+
+    两条路各自按能力词过滤，**不能只筛一边**：`vqa_models` 段如今同时住着
+    OCR 专用模型（会看图、不听指令）与纯文本指令模型（听指令、看不见图），
+    少筛哪一边，哪一边就会挑中干不了这活的那个 —— 而两种错配都**不报错**，
+    只是让核对变成噪声（挑错视觉模型）或让抽值变成假的 not_found（挑错指令模型）。
+    """
+    section = ctx.registry.vqa_models
+    if not section:
+        return None
+    want, unwanted = (None, NO_INSTRUCT) if instruct else (VISION, None)
+    usable = {
+        name: entry for name, entry in section.items()
+        if (want is None or want in (entry.capabilities or []))
+        and (unwanted is None or unwanted not in (entry.capabilities or []))
+    }
+    if not usable:
+        return None
+    # default_of 会优先取标了 default 的那个；缺省项不可用时自动落到第一个可用项
+    return ctx.registry.default_of(usable)
+
+
+def instruct_available(ctx: ExtractContext) -> bool:
+    return _pick_chat(ctx, instruct=True) is not None
+
+
+def _transcribe_prompt(ctx: ExtractContext) -> str:
+    """让模型"把这块图上的字抄出来"，**用它听得懂的话问**。
+
+    2026-08-25 在真机上标定阈值时抓到的：拿 `_TRANSCRIBE_PROMPT`（一句中文指令）
+    去问 DeepSeek-OCR-2，它不抄写，而是**回应那句指令**——
+
+        原文 "PURCHASE AGREEMENT" -> 抄写 "例如，如果问题涉及"购买协议"，则写"购买协议"。"
+
+    这和 no_instruct 是同一类问题：OCR 专用模型只认它自己那两个官方 prompt。
+    后果比抽值那边更阴险 —— 抄写对不上会被判成 `parse_mismatch`
+    （"这块的解析结果可疑"），于是**每一条出处都被打上可疑标记**，
+    而解析本身其实是好的。核对功能不是失灵，是变成了纯噪声。
+
+    所以：注册表条目可以用 `options.transcribe_prompt` 声明"该怎么问我"。
+    OCR 专用模型填它自己的原生 OCR prompt（DeepSeek-OCR 系是 `Free OCR.`）；
+    通用视觉模型不用填，走缺省那句中文指令。
+    """
+    picked = _pick_chat(ctx, instruct=False)
+    if picked is None:
+        return _TRANSCRIBE_PROMPT
+    _, entry = picked
+    return str((entry.options or {}).get("transcribe_prompt") or _TRANSCRIBE_PROMPT)
+
+
+async def _chat(ctx: ExtractContext, messages: list[dict], *,
+                instruct: bool = True) -> str | None:
     """调 VQA 平面（OpenAI 协议）。不可达/非 200 返回 None -> 字段判 error。"""
-    if not ctx.registry.vqa_models:
+    picked = _pick_chat(ctx, instruct=instruct)
+    if picked is None:
         return None
     try:
-        name, entry = ctx.registry.default_of(ctx.registry.vqa_models)
+        name, entry = picked
         ctx.usage["chat_calls"] += 1
         resp = await ctx.http.post(
             f"{entry.endpoint}/v1/chat/completions",
@@ -207,10 +291,12 @@ async def _verify_citation(ctx: ExtractContext, hit: dict) -> tuple[str | None, 
         return None, None
     uri = "data:image/png;base64," + base64.b64encode(png).decode()
 
+    # instruct=False：原样抄写是 OCR 模型的本行，别把它们排除在外。
+    # 但**得用它听得懂的话去问** —— 见 _transcribe_prompt。
     transcript = await _chat(ctx, [{"role": "user", "content": [
         {"type": "image_url", "image_url": {"url": uri}},
-        {"type": "text", "text": _TRANSCRIBE_PROMPT},
-    ]}])
+        {"type": "text", "text": _transcribe_prompt(ctx)},
+    ]}], instruct=False)
     if transcript is None:
         return uri, None
     left, right = _comparable(transcript), _comparable(hit.get("text", ""))
@@ -244,6 +330,11 @@ async def extract_field(ctx: ExtractContext, spec: FieldSpec) -> dict:
         # 它是信息（"我们什么都没看到"），不是掩饰
         return fmt.field_result(status="not_found",
                                 degraded=found.degraded or "no_hits")
+
+    if not instruct_available(ctx):
+        # 注册表里只有 OCR 专用模型（或压根没有 vqa 条目）。**如实报错，不硬抽** ——
+        # 拿 OCR 模型抽值最好的结果是 schema_violation，最坏的结果是一个假的 not_found
+        return fmt.field_result(status="error", degraded="no_instruct_model")
 
     prompt = _FIELD_PROMPT.format(
         name=spec.name, description=spec.description, type=spec.type,
@@ -322,6 +413,10 @@ async def extract_records(ctx: ExtractContext, spec: SchemaSpec) -> tuple[list[d
                            prefer_types=("table",))
     if not found.hits:
         return [], found.degraded or "no_hits"
+    if not instruct_available(ctx):
+        # 与单字段路径同一条理由：宁可空手报 no_instruct_model，
+        # 也不拿 OCR 专用模型去抽记录（那会抽出一堆看似合理的空记录）
+        return [], "no_instruct_model"
 
     field_lines = "\n".join(
         f"- {f.name}（{f.type}）：{f.description}{_field_extra(f)}" for f in spec.fields)
@@ -427,9 +522,14 @@ async def run(ctx: ExtractContext, spec: SchemaSpec) -> dict:
 
 
 # 越靠前越值得让用户先看见。no_hits 排最后：单个字段没检索到很常见，
-# 把它冒泡成整体降级会淹掉真正的系统问题
-_DEGRADED_PRIORITY = ("upstream_error", "schema_violation", "parse_mismatch",
-                      "embedding_unavailable", "vision_unavailable",
+# 把它冒泡成整体降级会淹掉真正的系统问题。
+#
+# **no_instruct_model 排第一**：它不是"某个字段没抽出来"，是**整个抽取平面不可用**
+# （注册表里一个会遵循指令的模型都没有）。漏收录它的后果很隐蔽 ——
+# 每个字段各自打了这个标，而顶层 degraded 是 null、status 只是 partial，
+# 于是"我们没有这个能力"在结果摘要里长得像"这份文档字段比较少"。
+_DEGRADED_PRIORITY = ("no_instruct_model", "upstream_error", "schema_violation",
+                      "parse_mismatch", "embedding_unavailable", "vision_unavailable",
                       "crop_failed", "crop_unsupported", "no_hits")
 
 

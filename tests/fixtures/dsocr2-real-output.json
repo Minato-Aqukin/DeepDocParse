@@ -1,0 +1,18 @@
+{
+ "0": {
+  "page_size": [
+   1224,
+   1584
+  ],
+  "raw": "<|ref|>text<|/ref|><|det|>[[94, 50, 339, 68]]<|/det|>\nPURCHASE AGREEMENT\n\n<|ref|>text<|/ref|><|det|>[[94, 116, 355, 134]]<|/det|>\nContract No.: NW-2026-0817\n\n<|ref|>text<|/ref|><|det|>[[94, 149, 361, 167]]<|/det|>\nDate of signature: 2026-03-14\n\n<|ref|>text<|/ref|><|det|>[[94, 215, 480, 234]]<|/det|>\nBuyer: Northwind Trading Company Limited\n\n<|ref|>text<|/ref|><|det|>[[94, 247, 532, 266]]<|/det|>\nRegistered address: 88 Harbour Road, Wellington\n\n<|ref|>text<|/ref|><|det|>[[94, 313, 424, 332]]<|/det|>\nSeller: Contoso Manufacturing Group\n\n<|ref|>text<|/ref|><|det|>[[94, 346, 524, 365]]<|/det|>\nRegistered address: 21 Foundry Street, Sheffield\n\n<|ref|>text<|/ref|><|det|>[[94, 412, 233, 429]]<|/det|>\nArticle 1 - Price\n\n<|ref|>text<|/ref|><|det|>[[94, 444, 472, 463]]<|/det|>\nThe total contract price is USD 486,200.50,\n\n<|ref|>text<|/ref|><|det|>[[94, 477, 463, 496]]<|/det|>\ninclusive of all taxes and delivery charges.\n\n<|ref|>text<|/ref|><|det|>[[94, 543, 268, 561]]<|/det|>\nArticle 2 - Payment\n\n<|ref|>text<|/ref|><|det|>[[94, 575, 535, 595]]<|/det|>\nThe Buyer shall pay the full amount within 45 days\n\n<|ref|>text<|/ref|><|det|>[[94, 608, 488, 627]]<|/det|>\nafter receipt of the goods and a valid invoice.\n\n<|ref|>text<|/ref|><|det|>[[94, 674, 260, 692]]<|/det|>\nArticle 3 - Delivery\n\n<|ref|>text<|/ref|><|det|>[[94, 707, 645, 726]]<|/det|>\nDelivery shall be made to the Buyer’s warehouse in Wellington.<｜end▁of▁sentence｜>",
+  "completion_tokens": 413
+ },
+ "1": {
+  "page_size": [
+   1224,
+   1584
+  ],
+  "raw": "<|ref|>text<|/ref|><|det|>[[94, 50, 275, 69]]<|/det|>\nSchedule A - Goods\n\n<|ref|>table<|/ref|><|det|>[[92, 114, 475, 235]]<|/det|>\n<table><tr><td>Item</td><td>Quantity</td><td>Unit price</td></tr><tr><td>Industrial bearing 6204</td><td>1200</td><td>18.50</td></tr><tr><td>Hydraulic seal kit HS-9</td><td>340</td><td>62.00</td></tr><tr><td>Precision shaft PS-220</td><td>75</td><td>410.40</td></tr></table>\n\n<|ref|>text<|/ref|><|det|>[[94, 280, 266, 299]]<|/det|>\nEnd of Schedule A.<｜end▁of▁sentence｜>",
+  "completion_tokens": 137
+ }
+}

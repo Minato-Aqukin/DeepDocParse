@@ -7,7 +7,7 @@
 | 平面 | 接口 | 引擎 |
 |------|------|------|
 | 识别 | `POST /v1/parse`（异步任务） | MinerU / born-digital / **vlm-ocr**（注册表驱动，见 models.yaml） |
-| VQA | `POST /v1/chat/completions`（OpenAI 协议） | DeepSeek-OCR |
+| VQA | `POST /v1/chat/completions`（OpenAI 协议） | DeepSeek-OCR-2 |
 | 向量 | `POST /v1/embeddings`、`POST /v1/rerank` | bge-m3 / bge-reranker-v2-m3（TEI） |
 | **抽取** | **`POST /v1/extract`（异步任务）** | 编排层（检索定位 → 抽值 → bbox 裁剪 → 视觉核对） |
 | MCP | `ask_document` 单一复合工具 | 编排层（解析缓存 → 检索 → bbox 裁剪 + VQA） |
@@ -42,6 +42,7 @@
 DeepDocParse/
 ├── openapi.yaml            # 与 DeepDocParse-Web/backend 的接口契约（唯一依赖面）
 ├── models.yaml             # 模型注册表：加模型 = 加容器 + 一行配置
+├── models.autodl.yaml      # 无 docker 的 GPU 机器用（endpoint 全是回环地址）
 ├── gateway/                # 唯一自研服务：薄适配层
 │   └── app/
 │       ├── main.py         # FastAPI 入口
@@ -54,6 +55,8 @@ DeepDocParse/
 ├── docker/
 │   ├── compose.dev.yml     # RTX 4060 8GB：MinerU pipeline（VQA 走宿主机原生二进制，见 models.dev-host.yaml）
 │   └── compose.prod-nvidia.yml  # RTX 6000 级：vLLM + mineru-router 多卡
+├── deploy/autodl/          # **跑不了 docker 的 GPU 机器**（AutoDL 实例本身是非特权容器）：
+│                           #   裸进程部署 DeepSeek-OCR-2 + 抽取用指令模型，含 chat template 与验证脚本
 ├── scripts/                # make_fixtures（e2e 素材）/ prepare_bge_m3（权重转 safetensors）/ e2e_mcp（真机 e2e）
 └── tests/                  # 契约测试（mineru 升级前必须通过）
 ```
@@ -98,7 +101,7 @@ docker compose -f compose.cpu.yml --env-file ../.env up -d --build
 `degraded="vision_unavailable"` 标记，用户看得见"这条没做视觉验证"。
 七种降级本来就是按"视觉模型不可用时纯文本作答并打标"设计的。
 
-有 GPU 时换成完整配置（MinerU pipeline + DeepSeek-OCR + TEI）：
+有 GPU 时换成完整配置（MinerU pipeline + DeepSeek-OCR-2 + 指令模型 + TEI）：
 
 ```bash
 docker compose -f compose.dev.yml --env-file ../.env up -d --build

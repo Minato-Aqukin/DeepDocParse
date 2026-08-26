@@ -34,6 +34,11 @@ DEGRADED_VALUES = (
     # 产品层会真的产出它，不收录的话 validate_result 会把一份合法结果判成不合规
     # （service 侧的 run_extraction 因此会直接把任务标 failed）
     "rerank_unavailable",
+    # 第十种：注册表里没有会遵循指令的模型（只有 OCR 专用模型，或 vqa_models 为空）。
+    # 它守的是抽取平面的一个塌陷点：OCR 专用模型只会抄字，拿它抽值抽不出东西，
+    # 而抽不出来会被记成 not_found —— **系统能力缺失伪装成"文档里没有"**。
+    # 判据是注册表能力词 no_instruct，见 services/extraction.py。
+    "no_instruct_model",
 )
 
 # 不支持的 JSON Schema 构造。**不是没来得及做**：每一条都会让"一个字段一次定位"
