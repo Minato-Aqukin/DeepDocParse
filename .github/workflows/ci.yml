@@ -30,6 +30,21 @@ jobs:
         working-directory: gateway
         run: pytest -q
 
+      # 这个 job 装的就是"最小集"（gateway[dev] + mcp_server）。趁它还在，
+      # 顺手断言 sqlalchemy **不在里面** —— gateway 是无状态适配层，
+      # 一旦哪个依赖把 ORM 拖进来，`[corpus]` 的切分就名存实亡，
+      # 而表现只会是几个月后某次 docker build 变大、没人察觉
+      - name: 最小集不得依赖 sqlalchemy
+        run: |
+          python - <<'EOF'
+          import importlib.util
+          assert importlib.util.find_spec("sqlalchemy") is None, \
+              "最小集里出现了 sqlalchemy —— [corpus] 的切分失效了"
+          import ddp_core, ddp_core.chunking, ddp_core.crops, ddp_core.tokenize
+          import ddp_core.blocks, ddp_core.extract_format, ddp_core.hits, ddp_core.rerank
+          print("最小集 8 个模块可加载，且确实没有 sqlalchemy")
+          EOF
+
       - name: 契约守卫（openapi.yaml ←→ gateway 实际端点）
         run: python scripts/check_contract.py
 
@@ -56,3 +71,31 @@ jobs:
             echo "::error::确属纯重构（对外行为零变化）就给 PR 加 no-contract-change 标签。"
             exit 1
           fi
+
+  # ddp_core 的五个模块物理上住在本仓库，测试却全在 DeepDocParse-Web ——
+  # 上面那个 job 装的是 gateway[dev]（不含 sqlalchemy），连 import 都做不到。
+  # 后果是**改 ddp_core/search.py 会让本仓库 CI 绿、只在 Web 那边红**。
+  # 这个 job 是能在本仓库做到的最低限度：装上 [corpus] 把它们真的加载一遍。
+  # 与 contract job 里那条"最小集不得依赖 sqlalchemy"是一对，缺哪边哪边失守。
+  corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装 gateway[corpus]
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "gateway[corpus]"
+
+      - name: import 冒烟（这一步就是 [corpus] extra 的验收）
+        run: |
+          python - <<'EOF'
+          import ddp_core.models, ddp_core.search, ddp_core.types, ddp_core.hits
+          # 共用 metadata 必须真的建得起来 —— 声明写错在 import 阶段是看不出来的
+          assert ddp_core.models.Base.metadata.tables, "metadata 是空的"
+          print("corpus 层可加载，表：", len(ddp_core.models.Base.metadata.tables))
+          EOF
