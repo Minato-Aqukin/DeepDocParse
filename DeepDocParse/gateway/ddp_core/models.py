@@ -236,19 +236,10 @@ class Chunk(Base):
 # 读切换与历史回填是阶段 3。所以这一步随时可以停：drop 掉两张表即可回滚。
 
 
-def digest_of(text: str) -> str:
-    """内容指纹 —— 「可更新」的支点，阶段 3 靠它判断"这个块还是不是当初那段话"。
-
-    归一化只压空白，**不动标点也不改大小写**：这里要的是"内容变没变"，
-    不是"读起来像不像"。口径与 `app/qa.py::_same_content` 的前半段一致
-    （那边压完空白之后做的是子串包含，因为它手上只有截断过的 snippet）。
-
-    阶段 3 会有**两条路**：新记录有 digest 走 digest（严格），
-    老记录只有 snippet 只能走 `_same_content`（宽松）。别以为 digest 是全覆盖的。
-    """
-    import hashlib
-
-    return hashlib.sha256(" ".join((text or "").split()).encode("utf-8")).hexdigest()
+# 锚定判据在 `ddp_core.anchor`（阶段 3 抽出去的）：运行时与 alembic 迁移
+# **必须用同一份**，判据一漂就会把"对不上"的出处标成有效 —— 假出处。
+# 这里原样再导出，既有的 `from ddp_core.models import digest_of` 一字不用改。
+from ddp_core.anchor import digest_of, same_content  # noqa: F401,E402
 
 
 class Evidence(Base):
@@ -334,6 +325,22 @@ class Citation(Base):
     similarity: Mapped[float | None] = mapped_column(Float, default=None)
     # 引用当时看到的那段文字。留着它是为了阶段 3 回填老记录时还有东西可比
     snippet: Mapped[str] = mapped_column(Text, default="")
+    # **这一次引用当时，那个块的内容指纹。**
+    #
+    # 与 `Evidence.content_digest` 是两回事，别合并（阶段 3 想清楚的）：
+    #   Evidence.content_digest  = 这条**证据**被首次锚定时的内容（实体的属性）
+    #   Citation.content_digest  = 这**一次引用**看到的内容（事件的属性）
+    #
+    # 只留证据那一份的话，同一个块被一月和三月各引一次、中间重建过索引，
+    # 两次引用共享同一个指纹 —— 于是**三月那次刚问完就显示出处失效**。
+    # 判定"这条出处还指着原文吗"问的是事件，所以读路径用的是这一列。
+    # 回填来的老记录这里为空：当年没存指纹，凭空补一个等于替历史作证
+    content_digest: Mapped[str] = mapped_column(String(64), default="")
+    # 检索名次（0 起）。**阶段 3 补的列，2b 漏了**：老的 `messages.citations`
+    # 是一个**有序列表**，顺序就是检索名次；而表是无序的行集合。
+    # 靠 `score` 排替代不了 —— RRF 分只由名次决定，两路都排第一的块分数完全相同，
+    # 于是并列的出处在界面上每次刷新都可能换位置
+    rank: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     __table_args__ = (
