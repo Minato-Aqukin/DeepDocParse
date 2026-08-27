@@ -37,7 +37,8 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import (
-    JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
+    JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -220,4 +221,125 @@ class Chunk(Base):
     __table_args__ = (
         Index("ix_chunks_doc_page_seq", "document_id", "page_idx", "seq"),
         UniqueConstraint("document_id", "parse_job_id", "seq", name="uq_chunks_doc_job_seq"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Evidence 是一等实体（plan.md §5.1，阶段 2b 新建）
+# ---------------------------------------------------------------------------
+#
+# 在它之前，"出处"只是 `messages.citations` / `extraction_items.fields[].citations`
+# 里的一段 JSON：查不了、连不了、没法反查"这条证据被谁引过"，更没有地方安放
+# 复核状态。三条系统级属性（可追溯 / 可复核 / 可更新）各自缺一个支点。
+#
+# **阶段 2b 只双写，不改读。** 老的两处 JSON 照常写，这两张表同时写一份；
+# 读切换与历史回填是阶段 3。所以这一步随时可以停：drop 掉两张表即可回滚。
+
+
+def digest_of(text: str) -> str:
+    """内容指纹 —— 「可更新」的支点，阶段 3 靠它判断"这个块还是不是当初那段话"。
+
+    归一化只压空白，**不动标点也不改大小写**：这里要的是"内容变没变"，
+    不是"读起来像不像"。口径与 `app/qa.py::_same_content` 的前半段一致
+    （那边压完空白之后做的是子串包含，因为它手上只有截断过的 snippet）。
+
+    阶段 3 会有**两条路**：新记录有 digest 走 digest（严格），
+    老记录只有 snippet 只能走 `_same_content`（宽松）。别以为 digest 是全覆盖的。
+    """
+    import hashlib
+
+    return hashlib.sha256(" ".join((text or "").split()).encode("utf-8")).hexdigest()
+
+
+class Evidence(Base):
+    """一条证据：文档里一个可定位、可复核、可追溯的区域。
+
+    与 `Chunk` 的关系：chunk 是**检索单元**（每次 reindex 都重铸，id 是随机 UUID），
+    evidence 是**被引用过的那个区域的稳定身份**（跨重建不变）。
+    同一个块被引 N 次只有一行 evidence —— 唯一约束 `(parse_job_id, seq)` 钉着，
+    用的正是 chunks 那把稳定定位键的后两段。
+    """
+
+    __tablename__ = "evidence"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    document_id: Mapped[str] = mapped_column(String(32), ForeignKey("documents.id"), index=True)
+    # §5.1 列了这个字段，先建上但**本阶段恒 0**：documents today 没有版本概念。
+    # 文档换版（同一份手册的 v2）要到阶段 5 编译层才有意义，那时它才开始有值
+    doc_version: Mapped[int] = mapped_column(Integer, default=0)
+    parse_job_id: Mapped[str] = mapped_column(String(32), ForeignKey("parse_jobs.id"))
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    page_idx: Mapped[int] = mapped_column(Integer, default=0)
+    bbox: Mapped[list | None] = mapped_column(JSON, default=None)
+    # 缺它遇到 CropBox 偏移/旋转页会裁错区域 —— 出处图对不上原文是最恶劣的一种错。
+    # **问答侧的 citation dict 里没有这个字段**，所以 evidence 一律从 chunks 行取，
+    # 不从 citation dict 取（那样会静默存成 NULL）
+    page_size: Mapped[list | None] = mapped_column(JSON, default=None)
+    # 取自 `chunks.block_type`（DDP-Layout v1.1 词汇表）。
+    # ⚠️ 与 §5.1 写的那张表**不完全一样**：这里有 `title`（真实存在的块类型），
+    # 没有 `code`（§5.3 的 code 原子要到阶段 5 编译层才产出）。
+    # 如实记录今天真有的东西，别为了对齐一份未来的表而造假
+    kind: Mapped[str] = mapped_column(String(16), default="text", index=True)
+    # 编译期产出的裁图。阶段 2b 只是把问答/抽取当时顺手裁的那张记下来，
+    # 「编译期就产出」是阶段 5 的事
+    crop_key: Mapped[str | None] = mapped_column(String(512), default=None)
+    content_digest: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # 「可追溯」的支点：哪个引擎、哪个模型、什么版本产出的这块版面
+    provider: Mapped[dict] = mapped_column(JSON, default=dict)
+    # 「可复核」的支点。**默认 unreviewed 而不是 NULL** —— NULL 会让阶段 7 的
+    # 复核队列分不清"还没人看过"和"这行是旧数据、字段那时还不存在"
+    review_state: Mapped[str] = mapped_column(String(16), default="unreviewed", index=True)
+    # 生成物标记：VLM 描述指向它所描述的原子。阶段 5 才开始有值。
+    # 不变式 3（生成内容必须与原文可区分）在库上的落点就是这一列非空
+    derived_from: Mapped[str | None] = mapped_column(String(32), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        # 同一个块只有一行证据。用的是 chunks 那把稳定定位键的后两段 ——
+        # document_id 不进约束是因为它由 parse_job 唯一决定，进去反而允许出现
+        # "同一次解析的同一个块挂在两个文档下"这种不可能的行
+        UniqueConstraint("parse_job_id", "seq", name="uq_evidence_job_seq"),
+        Index("ix_evidence_doc_page", "document_id", "page_idx"),
+    )
+
+
+class Citation(Base):
+    """谁引了哪条证据。**有外键，可反查** —— 这是它相对老 JSON 的全部意义。
+
+    ⚠️ 表名 `citations` 与 `messages.citations` 那个 **JSON 列**同名。
+    不是笔误：阶段 3 读切换之后那个列会退成只读，阶段 4 删掉。
+    在那之前，"citations" 这个词在库里同时指两样东西，写查询时看清楚。
+    """
+
+    __tablename__ = "citations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    evidence_id: Mapped[str] = mapped_column(String(32), ForeignKey("evidence.id"), index=True)
+    # message | extract_field —— 阶段 6 上线断言后加 assertion，阶段 7 加 graph_edge /
+    # wiki_sentence。**§5.1 的词汇表里没有 message**：那份表是按"答案是断言序列"
+    # （§5.2，阶段 6）写的，而今天问答的出处主体就是 messages 行。
+    # 硬套 assertion 是在契约里撒谎 —— 阶段 6 的人会照着字段名去 join 断言表
+    source_kind: Mapped[str] = mapped_column(String(16))
+    # message -> messages.id；extract_field -> f"{extraction_items.id}:{字段名}"
+    source_id: Mapped[str] = mapped_column(String(128))
+    # primary | supporting | rejected。
+    # **阶段 2b 只写 primary**：`rejected`（"为什么没引这条"）要求保留被丢弃的
+    # 检索候选，而今天候选出了 retrieve() 就没了。捕获它是独立的一件事，
+    # 混进这一刀会让"老 JSON 与新表逐条相同"这条验收标准失真。
+    # ⚠️ 与 `Evidence.review_state` 的 `rejected`（人工驳回）**不是一回事**
+    role: Mapped[str] = mapped_column(String(16), default="primary")
+    # RRF 融合分（只由名次决定）与余弦相似度（有校准量纲）。两把不同的尺子，
+    # 别混用 —— 详见 ddp_core/hits.py 的说明
+    score: Mapped[float | None] = mapped_column(Float, default=None)
+    similarity: Mapped[float | None] = mapped_column(Float, default=None)
+    # 引用当时看到的那段文字。留着它是为了阶段 3 回填老记录时还有东西可比
+    snippet: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        Index("ix_citations_source", "source_kind", "source_id"),
+        # 同一个来源不该把同一条证据引两次（同一条 message 的 citations 列表里
+        # 出现两个相同的 (parse_job_id, seq) 是数据错误，不是"引用了两次"）
+        UniqueConstraint("source_kind", "source_id", "evidence_id", "role",
+                         name="uq_citations_source_evidence"),
     )
