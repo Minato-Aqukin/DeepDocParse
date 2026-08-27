@@ -17,7 +17,7 @@ DeepDocParse-Web/
 ├── docker/     # compose.web.yml：PostgreSQL(pgvector) + MinIO + Redis（多副本才需要）
 ├── deploy/     # compose.edge.yml：nginx 边缘层（静态托管前端 + 反代 backend）
 ├── docs/       # DEPLOY.md 部署 · DESIGN.md M6 设计（问答、Document/ParseJob 拆分、多副本）
-└── scripts/    # e2e_web.py 真环境全链路验证
+└── scripts/    # e2e_web.py 真环境全链路验证 · reconcile_evidence.py 双写对拍
 ```
 
 后端模块速览：`chunking` 分块（块类型感知）· `tokenize` 中文分词 · `indexing` 索引管线 ·
@@ -220,6 +220,12 @@ cd frontend && npm run build                          # 含 vue-tsc 类型检查
 .venv/bin/python scripts/e2e_web.py --phase parse --user e2e_split   # 需 mineru + TEI
 #   ...停掉 mineru、起 VQA（deepseek-ocr-server --device cpu --port 18001）...
 .venv/bin/python scripts/e2e_web.py --phase qa --user e2e_split      # 需 VQA + TEI
+
+# 双写对拍（阶段 2b）：老 JSON 的出处定位元组与 evidence/citations 两张新表逐条相同。
+# **读还走老路，所以这是切读之前唯一能发现"新表悄悄少了一批"的手段** ——
+# 少掉的那部分，阶段 3 切过去之后会变成"这条回答没有出处"
+.venv/bin/python scripts/reconcile_evidence.py            # 各抽 200 条
+.venv/bin/python scripts/reconcile_evidence.py --limit 0  # 全量
 ```
 
 ## 出处评测

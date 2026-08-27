@@ -25,6 +25,7 @@ from app.config import settings
 from app.db import get_session, get_sessionmaker
 from app.deps import current_user, get_storage
 from app.errors import APIError
+from app.evidence import record_evidence
 from app.metering import record_usage
 from app.models import Conversation, Document, Message, ParseJob, User, utcnow
 from app.qa import (
@@ -327,6 +328,11 @@ async def _persist(*, conversation_id: str, user_id: str, content: str, citation
                           citations=citations, verified=verified, degraded=degraded,
                           model_meta=model_meta or {})
         db.add(message)
+        # **双写在老路径写完之后**（阶段 2b）：老 JSON 一个字节没动，
+        # 新表同时记一份。读仍然走老路，所以这一步随时能停。
+        # flush 是为了拿到 message.id —— citation 要指回它
+        await db.flush()
+        await record_evidence(db, citations, source_kind="message", source_id=message.id)
         await record_usage(db, user_id=user_id, kind="qa", requests=1)
         await db.commit()
         return message.id

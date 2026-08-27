@@ -27,6 +27,7 @@ from app.deps import current_user, get_storage
 from app.errors import APIError
 from ddp_core.extract_format import SchemaError, parse_schema, validate_schema
 from app.extraction import ExtractContext, extraction_model_meta, run as run_extraction
+from app.evidence import record_evidence
 from app.metering import record_usage
 from app.qa import attach_resolution, load_citation_targets
 from app.models import (
@@ -366,16 +367,29 @@ async def _extract_one(session: AsyncSession, run_id: str, document_id: str, spe
     outcome = await run_extraction(ctx, spec)
 
     if outcome.records:
-        for i, record in enumerate(outcome.records):
-            session.add(ExtractionItem(
-                run_id=run_id, document_id=document_id,
-                parse_job_id=job.id if job else None, record_index=i,
-                status=outcome.status, degraded=outcome.degraded, fields=record["fields"]))
+        items = [ExtractionItem(
+            run_id=run_id, document_id=document_id,
+            parse_job_id=job.id if job else None, record_index=i,
+            status=outcome.status, degraded=outcome.degraded, fields=record["fields"])
+            for i, record in enumerate(outcome.records)]
     else:
-        session.add(ExtractionItem(
+        items = [ExtractionItem(
             run_id=run_id, document_id=document_id,
             parse_job_id=job.id if job else None, record_index=0,
-            status=outcome.status, degraded=outcome.degraded, fields=outcome.fields))
+            status=outcome.status, degraded=outcome.degraded, fields=outcome.fields)]
+    session.add_all(items)
+    # **双写在老路径写完之后**（阶段 2b）：`fields[].citations` 一个字节没动。
+    # 抽取的出处是**字段级**的，所以 source_id 要带上字段名 —— 这正是本产品
+    # 相对"字段 + 置信度"那类抽取产品的差异点，新表不能把它压回 item 级
+    await session.flush()
+    for item in items:
+        for name, field in (item.fields or {}).items():
+            # 字段值理论上一定是 dict（DDP-Extract v1 的三态结构），但这里是
+            # **落库路径**：形状不对时宁可跳过这一条出处，也不能让整批抽取炸掉
+            if isinstance(field, dict):
+                await record_evidence(session, field.get("citations") or [],
+                                      source_kind="extract_field",
+                                      source_id=f"{item.id}:{name}")
 
     # 按**字段数**计量：一次抽取 = N 次检索 + N 次模型调用，
     # 按"一次请求"计费会让 60 字段的 schema 和 1 字段的一样便宜
