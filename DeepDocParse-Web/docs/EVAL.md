@@ -26,8 +26,8 @@
 综合分只告诉你「变好了 3%」，切片才告诉你「双栏页的出处命中率只有 40%」——
 前者没法指导任何决策，后者直接指向下一步该修哪儿。
 
-当前属性标签：`中文` / `英文单栏` / `中文双栏` / `含表格` / `扫描件` / `旋转页` /
-`短事实` / `标题` / `拒答` / `born-digital`。加标签不用改代码，写进样本的 `attributes` 即可。
+当前核心域标签：`论文双栏` / `公式密集` / `图表引用` / `扫描版老手册` / `代码密集`；
+另有语言、块类型、拒答等交叉属性。加标签不用改代码，写进样本的 `attributes` 即可。
 
 ## 四个指标
 
@@ -47,6 +47,8 @@
 
 ```bash
 python scripts/eval_citations.py --mode offline
+python scripts/eval_citations.py --mode offline \
+  --dataset eval/omnidocbench-citations-v1.6.json
 python scripts/eval_citations.py --mode live --web http://127.0.0.1:8080
 python scripts/eval_citations.py --mode offline --markdown docs/EVAL-report.md
 ```
@@ -65,6 +67,8 @@ python scripts/eval_citations.py --mode offline --markdown docs/EVAL-report.md
       "id": "long-doc/zephyr-code",
       "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/long-doc.pdf"},
       // 外部样本用 {"kind": "url", "url": "https://arxiv.org/pdf/xxxx.pdf"}
+      // OmniDocBench 切片用 {"kind": "omnidocbench", "slice": "论文双栏",
+      //                     "image_path": "page-....png"}
       "question": "What is the launch code of project Zephyr?",
       "expect": {
         "answerable": true,
@@ -80,8 +84,10 @@ python scripts/eval_citations.py --mode offline --markdown docs/EVAL-report.md
 }
 ```
 
-**样本必须可公开**：仓库自带的 fixture，或 arXiv（CC-BY）、政府公开文件这类
-可自由引用的来源。外部样本**只记 URL，PDF 不进仓库**——再分发别人的文件是另一回事。
+**样本必须有明确使用边界**：仓库自带的 fixture，或条款明确的公开评测集、政府公开文件。
+OmniDocBench 只提交页 ID、问题与锚点；原图/标注由准备脚本从官方地址下载到
+`.eval-cache/`，不随仓库再分发；其数据按官方 Copyright Statement 仅用于研究、
+非商业用途。
 
 ### 半自动标注
 
@@ -95,26 +101,43 @@ python scripts/eval_citations.py --mode offline --markdown docs/EVAL-report.md
 都必然「覆盖」它，**bbox 指标恒等于页码指标，永远不会独立变红**（2026-08-18 验收抓到）。
 回归用例在 `backend/tests/test_eval_metrics.py`。
 
-**还剩一处循环性，用之前必须知道**：ground truth 的坐标终究来自解析器本身。
-所以 bbox 指标衡量的是「检索有没有指到正确的块」，**不是**「解析器切得准不准」。
-后者要人工核对原件。不要拿这个数字去论证解析质量。
+仓库 fixture 的 bbox 真值来自随仓库冻结的 DDP-Layout golden，所以这组指标衡量的是
+「检索有没有指到正确的块」，**不是**「解析器切得准不准」。OmniDocBench 样本则从
+官方 polygon 适配 bbox；图表题直接钉官方视觉原子 bbox，空的 `chart_mask` 也不能被
+适配器丢掉。两者都不能代替解析质量评测；后者见 service 侧 `docs/EVAL-ocr.md`。
 
-## 当前结论（2026-08-18，offline 模式，6 条种子样本）
+`answer_contains` 是留给 live 答案质量评测的真值提示，当前出处报表**不读取它**。
+因此这里的页码/bbox 数字只能证明出处定位，不能用来声称回答文本准确。
 
-| 切片 | 页码命中率 | bbox 包含率 | 拒答正确率 |
-|---|---|---|---|
-| 全部 | 25.0% (1/4) | 25.0% (1/4) | 50.0% (1/2) |
-| 标题 | 0.0% (0/2) | 0.0% (0/2) | — |
-| 短事实 | 50.0% (1/2) | 50.0% (1/2) | — |
+## 当前结论（2026-08-27，offline 模式）
+
+数据现分两组：仓库内 16 条回归样本（含代码密集核心 10 页）和 OmniDocBench v1.6
+四个真实域各 10 页。后者每域合成一个 10 页 PDF，不能把每张图单独包装成单页——
+那会令页码命中率天然变绿。
+
+代码域的版面 golden 是 `backend/tests/fixtures/layout-code-corpus.json`；测试会把它的
+24 页逐页与 service 侧生成源 `code-corpus.truth.json` 对拍，标识符或页序漂移会直接红，
+不会让评测集悄悄过期。
+
+OmniDocBench 四域的纯关键词下界如下；完整逐条结果见 `docs/EVAL-omnidocbench-report.md`：
+
+| 切片 | 页码命中率 | bbox 包含率 |
+|---|---|---|
+| 全部 | 65.0% (26/40) | 37.5% (15/40) |
+| 论文双栏 | 70.0% (7/10) | 60.0% (6/10) |
+| 公式密集 | 40.0% (4/10) | 0.0% (0/10) |
+| 图表引用 | 60.0% (6/10) | 10.0% (1/10) |
+| 扫描版老手册 | 90.0% (9/10) | 80.0% (8/10) |
 
 **已经暴露出两个可改进点**（这正是验收标准要的：指标必须问得出问题）：
 
-1. **关键词路单独工作时定位很差**（页码命中率 25%）。种子文档每页共享大量填充词，
-   纯词面打分区分不开页。这量化了一件以前只是"知道"的事：
+1. **关键词路单独工作时块级定位仍弱**（四域页码 65.0%，bbox 37.5%），
+   公式原子为 0%，图表视觉原子也只有 10%。
+   这量化了一件以前只是"知道"的事：
    `degraded=embedding_unavailable` 时出处的可信度会掉到什么程度。
    → 直接支持 D2（中文分词）与 D1（rerank）的优先级判断，**但先要 live 模式的数字**
    才能知道向量路补回了多少。
-2. **拒答正确率 50%**：`unanswerable-ceo` 这条靠共现词捞出了两条"出处"。
+2. **仓库回归集的拒答正确率仍是 50%**：`unanswerable-ceo` 靠共现词捞出了两条"出处"。
    相似度下限（`qa_min_similarity`）正是为了拦住它，而 offline 模式没有向量、
    下限无从生效 —— 这条失败**恰好证明了那道下限不是可选项**。
 
@@ -122,7 +145,11 @@ python scripts/eval_citations.py --mode offline --markdown docs/EVAL-report.md
 
 ## 前置条件
 
-- `--mode offline` 只读 `backend/tests/fixtures/layout-*.json`，**没有任何外部依赖**。
+- 默认数据集的 `--mode offline` 只读 `backend/tests/fixtures/layout-*.json`，没有外部依赖。
+- OmniDocBench 数据集先在相邻的 service 仓库运行
+  `scripts/prepare_eval_corpus.py`；默认读取
+  `../DeepDocParse/.eval-cache/omnidocbench-v1.6`，也可用
+  `EVAL_OMNIDOCBENCH_ROOT` 覆盖。
 - `--mode live` 会按样本的 `source` 取原件。种子样本里 `kind=local` 的路径指向
   `../DeepDocParse/tests/fixtures/long-doc.pdf`，**要求两个仓库并排 clone**；
   单独 clone 本仓库时那几条会 FileNotFoundError。外部样本（`kind=url`）当场下载，
@@ -130,10 +157,7 @@ python scripts/eval_citations.py --mode offline --markdown docs/EVAL-report.md
 
 ## 还没做的
 
-- **样本量**：种子只有 6 条，目标 30~50 条。缺的是标注工作量，不是工具。
-- **属性覆盖**：`中文双栏` / `含表格` / `扫描件` / `旋转页` 四个切片目前**一条样本都没有**——
-  而它们恰恰是最可能出问题的那几类。
 - **live 模式的真实数字**：需要 embedding + chat 运行时，本机无 GPU 跑不了。
   offline 的数字**不能**代表产品表现，别混着引用。
-- **版面样本只有 born-digital 产出的一份**。mineru 的格式漂移仍然没有测试盯着
-  （那需要一份真实 mineru middle_json，要 GPU）。见 `backend/tests/test_chunking.py` 的说明。
+- **官方 OCR 数字**：OmniDocBench 的 TEDS/TEDS-S 与 CDM 必须在官方评测环境回灌，
+  不能拿本地近似指标冒充；准备与回灌命令见相邻 service 仓库的 `docs/EVAL-ocr.md`。

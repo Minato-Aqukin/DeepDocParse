@@ -61,6 +61,76 @@
       "question": "Who is the chief executive officer of Acme Corp?",
       "expect": {"answerable": false},
       "attributes": ["英文单栏", "拒答", "born-digital"]
+    },
+    {
+      "id": "code/http-request-parser",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/code-corpus.pdf"},
+      "question": "Where is the HttpRequestParser identifier defined?",
+      "expect": {"answerable": true, "page_idx": 0, "answer_contains": ["HttpRequestParser"], "text_anchor": "HttpRequestParser"},
+      "attributes": ["代码密集", "标识符精确查询", "born-digital"]
+    },
+    {
+      "id": "code/parse-job-id",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/code-corpus.pdf"},
+      "question": "Find the exact identifier parse_job_id.",
+      "expect": {"answerable": true, "page_idx": 1, "answer_contains": ["parse_job_id"], "text_anchor": "parse_job_id"},
+      "attributes": ["代码密集", "标识符精确查询", "born-digital"]
+    },
+    {
+      "id": "code/registry-default-of",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/code-corpus.pdf"},
+      "question": "Which page contains registry.default_of?",
+      "expect": {"answerable": true, "page_idx": 2, "answer_contains": ["registry.default_of"], "text_anchor": "registry.default_of"},
+      "attributes": ["代码密集", "标识符精确查询", "born-digital"]
+    },
+    {
+      "id": "code/ddp-core-path",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/code-corpus.pdf"},
+      "question": "Locate the DDP_CORE_PATH constant.",
+      "expect": {"answerable": true, "page_idx": 3, "answer_contains": ["DDP_CORE_PATH"], "text_anchor": "DDP_CORE_PATH"},
+      "attributes": ["代码密集", "标识符精确查询", "born-digital"]
+    },
+    {
+      "id": "code/std-vector-result",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/code-corpus.pdf"},
+      "question": "Find the C++ type std::vector<Result>.",
+      "expect": {"answerable": true, "page_idx": 4, "answer_contains": ["std::vector<Result>"], "text_anchor": "std::vector<Result>"},
+      "attributes": ["代码密集", "标识符精确查询", "born-digital"]
+    },
+    {
+      "id": "code/java-indexer",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/code-corpus.pdf"},
+      "question": "Where does com.example.deepdoc.Indexer appear?",
+      "expect": {"answerable": true, "page_idx": 5, "answer_contains": ["com.example.deepdoc.Indexer"], "text_anchor": "com.example.deepdoc.Indexer"},
+      "attributes": ["代码密集", "标识符精确查询", "born-digital"]
+    },
+    {
+      "id": "code/skip-special-tokens",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/code-corpus.pdf"},
+      "question": "Locate the --skip-special-tokens flag.",
+      "expect": {"answerable": true, "page_idx": 6, "answer_contains": ["--skip-special-tokens"], "text_anchor": "--skip-special-tokens"},
+      "attributes": ["代码密集", "标识符精确查询", "born-digital"]
+    },
+    {
+      "id": "code/qa-mismatch-threshold",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/code-corpus.pdf"},
+      "question": "Find QA_PARSE_MISMATCH_THRESHOLD exactly.",
+      "expect": {"answerable": true, "page_idx": 7, "answer_contains": ["QA_PARSE_MISMATCH_THRESHOLD"], "text_anchor": "QA_PARSE_MISMATCH_THRESHOLD"},
+      "attributes": ["代码密集", "标识符精确查询", "born-digital"]
+    },
+    {
+      "id": "code/load-citation-targets",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/code-corpus.pdf"},
+      "question": "Which page defines loadCitationTargets?",
+      "expect": {"answerable": true, "page_idx": 8, "answer_contains": ["loadCitationTargets"], "text_anchor": "loadCitationTargets"},
+      "attributes": ["代码密集", "标识符精确查询", "born-digital"]
+    },
+    {
+      "id": "code/evidence-content-digest",
+      "source": {"kind": "local", "path": "../DeepDocParse/tests/fixtures/code-corpus.pdf"},
+      "question": "Locate evidence.content_digest.",
+      "expect": {"answerable": true, "page_idx": 9, "answer_contains": ["evidence.content_digest"], "text_anchor": "evidence.content_digest"},
+      "attributes": ["代码密集", "标识符精确查询", "born-digital"]
     }
   ]
 }

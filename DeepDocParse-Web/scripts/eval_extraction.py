@@ -5,13 +5,14 @@
 综合分只告诉你「变好了 3%」，切片才告诉你「表格类字段的准确率只有 40%」——
 前者没法指导任何决策，后者直接指向下一步该修哪儿。
 
-## 四个指标
+## 五个指标
 
 | 指标 | 定义 | 适用字段 |
 |---|---|---|
 | **字段准确率** | 抽出来的值与期望值一致（按类型归一化后比较） | 期望 `status=found` 的字段 |
 | **字段出处命中率** | 该字段的出处落在期望页码上（默认只看 top-1 出处） | 同上，且样本标了 page |
 | **空值正确率** | 文档里确实没有的字段，是否真的报了 not_found | 期望 `status=not_found` 的字段 |
+| **多记录行准确率** | 顶层 array 的记录逐行精确匹配；忽略顺序，重复行按次数计，缺行/多行都扣分 | 期望含 `records` 的样本 |
 | **schema 合规率** | 结果整体是否符合 DDP-Extract v1（自检无问题）。**负样本反着算**：标了 `expect.schema_valid=false` 的样本，被守卫拦下才算通过 | 每个样本一次 |
 
 **空值正确率是这套评测的核心**，不是凑数的第四个指标。抽取里最危险的输出是
@@ -23,7 +24,7 @@
 | 模式 | 依赖 | 量的是什么 |
 |---|---|---|
 | `offline` | 只要本地版面样本 + 本层分块与 schema 代码 | **schema 层与定位链路**：字段是否检索得到、schema 校验是否严格。**不调模型**，所以量不到抽值准确率 |
-| `live` | backend + PG + MinIO + embedding + chat 全在跑 | 四个指标全量，就是用户真实拿到的东西 |
+| `live` | backend + PG + MinIO + embedding + chat 全在跑 | 五个指标全量，就是用户真实拿到的东西 |
 
 没有 GPU 的机器上只跑得动 `offline` —— 而它恰好覆盖差异化所在的那一半（定位与契约），
 不是模型能力那一半。**offline 的数字不能代表产品表现，别混着引用。**
@@ -61,11 +62,21 @@ class FieldOutcome:
 
 
 @dataclass
+class RecordOutcome:
+    sample_id: str
+    row: str
+    attributes: list[str]
+    ok: bool
+    note: str = ""
+
+
+@dataclass
 class SampleOutcome:
     sample_id: str
     attributes: list[str]
     schema_ok: bool | None = None
     fields: list[FieldOutcome] = field(default_factory=list)
+    records: list[RecordOutcome] = field(default_factory=list)
     note: str = ""
 
 
@@ -94,6 +105,7 @@ class Slice:
     value: Metric = field(default_factory=Metric)
     citation: Metric = field(default_factory=Metric)
     empty: Metric = field(default_factory=Metric)
+    records: Metric = field(default_factory=Metric)
     schema: Metric = field(default_factory=Metric)
     samples: int = 0
 
@@ -168,6 +180,70 @@ def judge_fields(sample: dict, fields: dict, *, any_citation: bool) -> list[Fiel
                     f"出处页 {pages} 不含期望页 {want_page}"
         outcomes.append(outcome)
     return outcomes
+
+
+def _record_values(record: dict) -> dict:
+    """DDP-Extract record -> 可比较的普通值；非 found 状态保留显式哨兵。"""
+    values = {}
+    for name, field_result in (record.get("fields") or {}).items():
+        status = field_result.get("status") if isinstance(field_result, dict) else None
+        values[name] = field_result.get("value") if status == "found" else ("__status__", status)
+    return values
+
+
+def _row_equal(want: dict, got: dict) -> bool:
+    """按 schema 字段精确比一行；额外字段也算不一致。"""
+    return set(want) == set(got) and all(values_equal(value, got[name])
+                                                for name, value in want.items())
+
+
+def judge_records(sample: dict, records: list[dict]) -> list[RecordOutcome]:
+    """顺序无关地逐行判定顶层 array。
+
+    这是多重集合匹配，不是 set：相同记录出现两次就必须在预测里也出现两次。
+    每条期望行最多消费一条预测行；未消费的预测行作为“多出来的行”单独记错。
+    """
+    expected = list((sample.get("expect") or {}).get("records") or [])
+    actual = [_record_values(record) for record in records]
+    unused = set(range(len(actual)))
+    outcomes: list[RecordOutcome] = []
+    attributes = list(sample.get("attributes") or [])
+
+    for index, want in enumerate(expected):
+        match = next((i for i in sorted(unused) if _row_equal(want, actual[i])), None)
+        ok = match is not None
+        if match is not None:
+            unused.remove(match)
+        outcomes.append(RecordOutcome(
+            sample_id=sample["id"], row=f"期望行 {index + 1}", attributes=attributes, ok=ok,
+            note="" if ok else f"未找到匹配行：{want!r}",
+        ))
+
+    for index in sorted(unused):
+        outcomes.append(RecordOutcome(
+            sample_id=sample["id"], row=f"额外行 {index + 1}", attributes=attributes, ok=False,
+            note=f"模型多返回了一行：{actual[index]!r}",
+        ))
+    return outcomes
+
+
+def result_payload(sample: dict, items: list[dict]) -> dict:
+    """Web API 的 array 结果是“一条记录一个 ExtractionItem”，不是 items[0].records。
+
+    评测器必须先还原 DDP-Extract v1 的 records 形状；只读第一项会让多记录指标
+    永远看到空数组，代码存在却一次真实结果都量不到。
+    """
+    is_array = (sample.get("schema") or {}).get("type") == "array"
+    if is_array:
+        fields = {}
+        records = [{"fields": item.get("fields") or {}} for item in items]
+    else:
+        fields = items[0].get("fields") or {}
+        records = []
+    degraded = next((item.get("degraded") for item in items if item.get("degraded")), None)
+    status = "ok" if all(item.get("status", "ok") == "ok" for item in items) else "partial"
+    return {"extract_version": "ddp-extract/1", "status": status,
+            "degraded": degraded, "fields": fields, "records": records}
 
 
 # --------------------------------------------------------------------------- offline
@@ -290,16 +366,17 @@ async def run_live(samples: list[dict], web: str, any_citation: bool) -> list[Sa
                     result.note = "抽取没有产出结果"
                     outcomes.append(result)
                     continue
-                fields = items[0].get("fields") or {}
+                payload = result_payload(sample, items)
+                fields = payload["fields"]
+                records = payload["records"]
                 # 结果自检：形状不合 DDP-Extract v1 就是我们的问题，不是模型的
-                problems = validate_result({
-                    "extract_version": "ddp-extract/1", "status": items[0].get("status", "ok"),
-                    "degraded": items[0].get("degraded"), "fields": fields,
-                })
+                problems = validate_result(payload)
                 result.schema_ok = not problems
                 if problems:
                     result.note = problems[0]
                 result.fields = judge_fields(sample, fields, any_citation=any_citation)
+                if "records" in (sample.get("expect") or {}):
+                    result.records = judge_records(sample, records)
             except Exception as exc:  # noqa: BLE001
                 result.note = f"{type(exc).__name__}: {exc}"
             outcomes.append(result)
@@ -364,6 +441,8 @@ def summarize(outcomes: list[SampleOutcome]) -> tuple[Slice, list[Slice]]:
                 target.value.add(f.value_ok)
                 target.citation.add(f.citation_ok)
                 target.empty.add(f.empty_ok)
+            for record in sample.records:
+                target.records.add(record.ok)
     return overall, sorted(by_attr.values(), key=lambda s: s.name)
 
 
@@ -375,10 +454,10 @@ def render(outcomes: list[SampleOutcome], mode: str) -> str:
     if mode == "offline":
         lines += ["> offline 模式不调模型，量的是 schema 层与关键词路的可定位性。",
                   "> 「字段准确率」这一列必然为空 —— 它需要 live。", ""]
-    lines += ["| 切片 | 样本 | 字段准确率 | 出处命中率 | 空值正确率 | schema 合规率 |",
-              "|---|---|---|---|---|---|"]
+    lines += ["| 切片 | 样本 | 字段准确率 | 出处命中率 | 空值正确率 | 多记录行准确率 | schema 合规率 |",
+              "|---|---|---|---|---|---|---|"]
     for s in [overall, *slices]:
-        lines.append(f"| {s.name} | {s.samples} | {s.value} | {s.citation} | {s.empty} | "
+        lines.append(f"| {s.name} | {s.samples} | {s.value} | {s.citation} | {s.empty} | {s.records} | "
                      f"{s.schema} |")
 
     lines += ["", "## 逐字段", "", "| 样本 | 字段 | 值 | 出处 | 空值 | 备注 |",
@@ -390,6 +469,12 @@ def render(outcomes: list[SampleOutcome], mode: str) -> str:
         for f in sample.fields:
             lines.append(f"| `{f.sample_id}` | {f.field} | {mark[f.value_ok]} | "
                          f"{mark[f.citation_ok]} | {mark[f.empty_ok]} | {f.note} |")
+    if any(sample.records for sample in outcomes):
+        lines += ["", "## 多记录逐行", "", "| 样本 | 行 | 结果 | 备注 |",
+                  "|---|---|---|---|"]
+        for sample in outcomes:
+            for record in sample.records:
+                lines.append(f"| `{record.sample_id}` | {record.row} | {mark[record.ok]} | {record.note} |")
     return "\n".join(lines) + "\n"
 
 
@@ -419,7 +504,8 @@ def main() -> int:
     overall, _ = summarize(outcomes)
     # 有指标但一条都没命中 = 评测本身跑歪了（数据集写错、服务没起），非零退出。
     # 与 eval_citations.py 同一个判据
-    measured = [m for m in (overall.value, overall.citation, overall.empty, overall.schema)
+    measured = [m for m in (overall.value, overall.citation, overall.empty,
+                            overall.records, overall.schema)
                 if m.total]
     return 0 if any(m.hit for m in measured) or not measured else 1
 

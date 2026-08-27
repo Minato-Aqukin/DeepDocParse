@@ -39,8 +39,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import html
 import json
 import os
+import re
 import sys
 import uuid
 from collections import defaultdict
@@ -51,6 +53,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "backend"))
 
 DATASET = ROOT / "eval" / "citations.json"
+OMNIDOCBENCH_ROOT = Path(os.environ.get(
+    "EVAL_OMNIDOCBENCH_ROOT",
+    ROOT.parent / "DeepDocParse" / ".eval-cache" / "omnidocbench-v1.6",
+))
+OMNIDOCBENCH_MANIFEST = ROOT.parent / "DeepDocParse" / "eval" / "omnidocbench-v1.6-slices.json"
 REFUSAL_MARKERS = ("未找到", "没有找到", "文档中未", "not found", "no information")
 
 
@@ -204,18 +211,29 @@ def run_offline(samples: list[dict], any_citation: bool) -> list[Outcome]:
     outcomes: list[Outcome] = []
     for sample in samples:
         source = sample["source"]
-        if source["kind"] != "local":
+        if source["kind"] == "local":
+            layout_path = _layout_for(Path(source["path"]))
+            if layout_path is None:
+                outcomes.append(Outcome(sample["id"], list(sample.get("attributes") or []), True,
+                                        note=f"没有可用的版面样本：{source['path']}"))
+                continue
+            layout = layouts.setdefault(str(layout_path),
+                                        json.loads(layout_path.read_text(encoding="utf-8")))
+        elif source["kind"] == "omnidocbench":
+            key = source["slice"]
+            try:
+                if key not in layouts:
+                    layouts[key] = _omnidocbench_slice_layout(key)
+                layout = layouts[key]
+            except (FileNotFoundError, KeyError, ValueError) as exc:
+                outcomes.append(Outcome(sample["id"], list(sample.get("attributes") or []), True,
+                                        note=f"OmniDocBench 版面不可用：{exc}"))
+                continue
+        else:
             outcomes.append(Outcome(sample["id"], list(sample.get("attributes") or []),
                                     bool((sample.get("expect") or {}).get("answerable", True)),
                                     note="offline 模式跳过外部样本（用 --mode live）"))
             continue
-        layout_path = _layout_for(Path(source["path"]))
-        if layout_path is None:
-            outcomes.append(Outcome(sample["id"], list(sample.get("attributes") or []), True,
-                                    note=f"没有可用的版面样本：{source['path']}"))
-            continue
-        layout = layouts.setdefault(str(layout_path),
-                                    json.loads(layout_path.read_text(encoding="utf-8")))
 
         from ddp_core.chunking import layout_to_chunks
         chunks = layout_to_chunks(layout, settings.chunk_max_chars)
@@ -235,15 +253,129 @@ def _layout_for(pdf_path: Path) -> Path | None:
     return candidate if candidate.exists() else None
 
 
-def _keyword_rank(question: str, chunks: list[dict]) -> list[dict]:
-    import re
+def _poly_bbox(poly: list[float]) -> list[float]:
+    if len(poly) < 4 or len(poly) % 2:
+        raise ValueError(f"非法 polygon：{poly}")
+    xs, ys = poly[0::2], poly[1::2]
+    return [min(xs), min(ys), max(xs), max(ys)]
 
-    terms = [t for t in re.split(r"[\s\W_]+", question.lower()) if t]
-    scored = [(sum(c["text"].lower().count(t) for t in terms), c) for c in chunks]
+
+def _plain_table(table_html: str) -> str:
+    """给关键词路一份可检索的表格文本；行列关系仍由 table_html 保留。"""
+    with_breaks = re.sub(r"</(?:td|th|tr|li)\s*>", " ", table_html, flags=re.I)
+    return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", with_breaks)).split())
+
+
+def _omnidocbench_page(entry: dict, page_idx: int) -> dict:
+    type_map = {
+        "title": "title", "header": "title",
+        "table": "table", "table_caption": "table", "table_footnote": "table",
+        "figure": "figure", "chart_mask": "figure",
+        "figure_caption": "figure", "figure_footnote": "figure",
+        "equation_isolated": "equation", "equation_semantic": "equation",
+        "list_group": "list",
+    }
+    blocks = []
+    for det in sorted(entry.get("layout_dets") or [],
+                      key=lambda item: item.get("order")
+                      if isinstance(item.get("order"), (int, float)) else float("inf")):
+        if det.get("ignore"):
+            continue
+        category = str(det.get("category_type") or "text_block")
+        table_html = str(det.get("html") or "") if category == "table" else ""
+        content = str(det.get("text") or det.get("latex") or "")
+        if table_html:
+            content = _plain_table(table_html)
+        is_visual_atom = category in {"chart_mask", "figure"}
+        if not content.strip() and not is_visual_atom:
+            continue
+        block = {
+            "type": type_map.get(category, "text"),
+            "bbox": _poly_bbox(list(det.get("poly") or [])),
+            # 视觉原子没有臆造文字：它仍以 figure+bbox 进入版面，检索不到时
+            # bbox 指标应如实变红，而不是让评测适配器先把原子删掉。
+            "lines": [],
+        }
+        if content.strip():
+            span = {"content": content}
+            if table_html:
+                # DDP-Layout v1.1 的可选承诺在 spans[].html，**不是**块顶层。
+                # 放错位置会让生产 table_html() 与抽取评测都看不到行列结构。
+                span["html"] = table_html
+            block["lines"] = [{"spans": [span]}]
+        blocks.append(block)
+
+    info = entry["page_info"]
+    return {
+        "page_idx": page_idx,
+        "page_size": [info["width"], info["height"]],
+        "para_blocks": blocks,
+    }
+
+
+def _omnidocbench_layout(image_path: str, root: Path | None = None) -> dict:
+    """把一页官方标注适配成 DDP-Layout（主要用于适配器单测）。"""
+    corpus_root = root or OMNIDOCBENCH_ROOT
+    entries = json.loads(
+        (corpus_root / "OmniDocBench.subset.json").read_text(encoding="utf-8"))
+    entry = next((item for item in entries
+                  if (item.get("page_info") or {}).get("image_path") == image_path), None)
+    if entry is None:
+        raise KeyError(image_path)
+    return {
+        "layout_version": "ddp-layout/1",
+        "provider": {"name": "OmniDocBench", "version": "1.6"},
+        "pdf_info": [_omnidocbench_page(entry, 0)],
+    }
+
+
+def _omnidocbench_slice_layout(slice_name: str, root: Path | None = None,
+                                manifest_path: Path | None = None) -> dict:
+    """按 manifest 固定顺序组装一个 10 页域，页码指标因此不会天然命中。"""
+    corpus_root = root or OMNIDOCBENCH_ROOT
+    manifest_file = manifest_path or OMNIDOCBENCH_MANIFEST
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    images = (manifest.get("slices") or {}).get(slice_name)
+    if not images:
+        raise KeyError(slice_name)
+    entries = json.loads(
+        (corpus_root / "OmniDocBench.subset.json").read_text(encoding="utf-8"))
+    by_image = {(entry.get("page_info") or {}).get("image_path"): entry for entry in entries}
+    missing = [image for image in images if image not in by_image]
+    if missing:
+        raise KeyError(f"{slice_name}: {missing}")
+    return {
+        "layout_version": "ddp-layout/1",
+        "provider": {"name": "OmniDocBench", "version": "1.6"},
+        "pdf_info": [_omnidocbench_page(by_image[image], page_idx)
+                     for page_idx, image in enumerate(images)],
+    }
+
+
+def _keyword_rank(question: str, chunks: list[dict]) -> list[dict]:
+    # 与生产 PgVectorIndex / MemoryIndex 用**同一套 tokenizer 与 OR 语义**。
+    # 旧实现按标点切，整句中文会变成一个超长 token，中文切片大量 no_hits，
+    # 量到的是评测器自己的缺陷而不是产品关键词路。
+    from ddp_core.tokenize import query_string
+
+    terms = [term for term in query_string(question).split() if term]
+    scored = []
+    for chunk in chunks:
+        indexed = (chunk.get("text_tokenized") or query_string(chunk["text"])).lower().split()
+        scored.append((sum(indexed.count(term) for term in terms), chunk))
     return [c for score, c in sorted(scored, key=lambda p: p[0], reverse=True) if score > 0]
 
 
 # --------------------------------------------------------------------------- live
+
+async def _upload_once(http, web: str, headers: dict, source: dict,
+                       cache: dict[str, str | None]) -> tuple[str, str | None]:
+    """同一文档成功或失败都只尝试一次；失败必须被缓存为可见状态。"""
+    key = source.get("path") or source.get("url") or source.get("slice")
+    if key not in cache:
+        cache[key] = await _upload_and_wait(http, web, headers, source)
+    return key, cache[key]
+
 
 async def run_live(samples: list[dict], web: str, any_citation: bool) -> list[Outcome]:
     import httpx
@@ -256,27 +388,41 @@ async def run_live(samples: list[dict], web: str, any_citation: bool) -> list[Ou
         resp.raise_for_status()
         headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
-        uploaded: dict[str, str] = {}
+        uploaded: dict[str, str | None] = {}
+        truth_layouts: dict[str, dict | None] = {}
         for sample in samples:
             source = sample["source"]
-            key = source.get("path") or source.get("url")
-            if key not in uploaded:
-                document_id = await _upload_and_wait(http, web, headers, source)
-                if document_id is None:
-                    outcomes.append(Outcome(sample["id"],
-                                            list(sample.get("attributes") or []), True,
-                                            note=f"上传/索引失败：{key}"))
-                    continue
-                uploaded[key] = document_id
-            outcomes.append(await _ask_and_judge(http, web, headers, uploaded[key], sample,
-                                                 any_citation))
+            key, document_id = await _upload_once(http, web, headers, source, uploaded)
+            if document_id is None:
+                outcomes.append(Outcome(sample["id"],
+                                        list(sample.get("attributes") or []), True,
+                                        note=f"上传/索引失败：{key}"))
+                continue
+            if key not in truth_layouts:
+                truth_layouts[key] = _ground_truth_layout(source)
+            outcomes.append(await _ask_and_judge(http, web, headers, document_id, sample,
+                                                 any_citation, truth_layouts[key]))
     return outcomes
+
+
+def _ground_truth_layout(source: dict) -> dict | None:
+    """live 也必须有独立真值版面，否则 text_anchor 的 bbox 列会整列“不适用”。"""
+    if source["kind"] == "local":
+        path = _layout_for(Path(source["path"]))
+        return json.loads(path.read_text(encoding="utf-8")) if path else None
+    if source["kind"] == "omnidocbench":
+        return _omnidocbench_slice_layout(source["slice"])
+    return None
 
 
 async def _upload_and_wait(http, web: str, headers: dict, source: dict) -> str | None:
     if source["kind"] == "local":
         content = (ROOT / source["path"]).resolve().read_bytes()
         name = Path(source["path"]).name
+    elif source["kind"] == "omnidocbench":
+        path = OMNIDOCBENCH_ROOT / "slice-documents" / f"{source['slice']}.pdf"
+        content = path.read_bytes()
+        name = path.name
     else:
         # 外部样本只记 URL，不进仓库 —— 再分发别人的 PDF 是另一回事
         content = (await http.get(source["url"], follow_redirects=True)).content
@@ -298,7 +444,7 @@ async def _upload_and_wait(http, web: str, headers: dict, source: dict) -> str |
 
 
 async def _ask_and_judge(http, web: str, headers: dict, document_id: str, sample: dict,
-                         any_citation: bool) -> Outcome:
+                         any_citation: bool, layout: dict | None = None) -> Outcome:
     cid = (await http.post(f"{web}/api/documents/{document_id}/conversations",
                            headers=headers)).json()["id"]
     events: list[tuple[str, dict]] = []
@@ -317,7 +463,7 @@ async def _ask_and_judge(http, web: str, headers: dict, document_id: str, sample
     citations = dict(events).get("citations", {}).get("citations", [])
     return judge(sample, pages=[c["page_idx"] for c in citations],
                  bboxes=[c.get("bbox") for c in citations], answer=answer,
-                 degraded=done.get("degraded"), layout=None, any_citation=any_citation)
+                 degraded=done.get("degraded"), layout=layout, any_citation=any_citation)
 
 
 # --------------------------------------------------------------------------- 报表
