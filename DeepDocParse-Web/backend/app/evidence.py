@@ -52,7 +52,7 @@ def _locator(citation: dict) -> tuple[str, int] | None:
     """出处的稳定定位键 `(parse_job_id, seq)`。
 
     缺任一段就定位不到块 —— 那种 citation 老路径里也是"接不回去"的
-    （`attach_resolution` 会标 `resolved=False`），新表同样不该给它造一行证据。
+    （老路径的接回逻辑会标 `resolved=False`），新表同样不该给它造一行证据。
     """
     job, seq = citation.get("parse_job_id"), citation.get("seq")
     if not job or seq is None:
@@ -216,7 +216,7 @@ async def load_citations(session: AsyncSession, *, source_kind: str,
         return {}
 
     # 全部来源的定位键合起来查**一次**当前 chunk（每条来源查一次的话，
-    # 一个长会话就是 N+1 —— 老路径 load_citation_targets 也是为这个抽出来的）
+    # 一个长会话就是 N+1）
     live = {
         (c.parse_job_id, c.seq): c
         for c in (await session.execute(
@@ -252,4 +252,31 @@ async def load_citations(session: AsyncSession, *, source_kind: str,
             "similarity": citation.similarity,
             "resolved": resolved,
         })
+    return out
+
+
+def citation_out(document_id: str, citation: dict, *, fresh: bool = False) -> dict:
+    """把出处里的对象键换成前端能直接取的 URL。**两个平面共用的唯一一份。**
+
+    截图受 JWT 保护，`<img src>` 直接取不到（发不出 Authorization 头），
+    前端要先 fetch 成 blob URL，所以复用 `/api/documents/{id}/crops/{job}/{name}`
+    这个既有端点。问答与抽取必须给出完全一样的形状 —— 前端的 CitationChip
+    两边共用一个组件。此前这里是**各写一份**，而抽取那份的 docstring 正写着
+    "形状必须与 conversations._citation_out 一致"：靠注释维持一致，
+    正是这次重构要消灭的东西。
+
+    `fresh=True`：这条出处是**刚检索出来的**（流式那一帧），按构造就指向当前块，
+    没有"接不接得回去"的问题。**这是调用方作出的断言，不是默认值** ——
+    写成 `setdefault("resolved", True)` 的话，任何忘了算 resolved 的路径
+    都会静默地被判成有效，那正是假出处的来源。
+    """
+    out = dict(citation)
+    if fresh:
+        out["resolved"] = True
+    key = out.pop("crop_key", None)
+    if key:
+        job_id, name = key.split("/")[1], key.rsplit("/", 1)[-1]
+        out["crop_url"] = f"/api/documents/{document_id}/crops/{job_id}/{name}"
+    else:
+        out["crop_url"] = None
     return out

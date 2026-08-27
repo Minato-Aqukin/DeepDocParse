@@ -93,9 +93,10 @@ class Message(Base):
                                                   index=True)
     role: Mapped[str] = mapped_column(String(16))                  # user | assistant
     content: Mapped[str] = mapped_column(Text, default="")
-    # [{chunk_id, parse_job_id, seq, page_idx, bbox, crop_key, snippet, score}]
-    # chunk_id 会随 reindex 失效，(parse_job_id, seq) 才是能一直接回原文的定位键
-    citations: Mapped[list] = mapped_column(JSON, default=list)
+    # 出处**不在这里**（阶段 4 起）：它住在 evidence / citations 两张表，
+    # 由 `app.evidence.load_citations` 接回当前索引。
+    # 这里曾经有一个 JSON 列，与新表并存了两个阶段（2b 双写 / 3 读切换）——
+    # 留着两个真相的代价是：其中一份没人维护、没人读，却长得跟真的一模一样
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     # no_hits | embedding_unavailable | vision_unavailable | crop_unsupported | crop_failed
     # | parse_mismatch | client_aborted | upstream_error | upstream_interrupted
@@ -175,9 +176,11 @@ class ExtractionItem(Base):
     前端的结果表格就是它：行是 item，列是 schema 字段，点单元格跳原件 bbox。
 
     fields 的形状是 DDP-Extract v1 的字段表：
-      {"字段名": {status, value, citations, verified, degraded, confidence}}
-    **citations 里存的是稳定定位键 (parse_job_id, seq)**，不是 chunk_id ——
-    chunk_id 每次 reindex 都会重铸，只存它等于历史抽取结果一次重建就永久失去依据（P0）。
+      {"字段名": {status, value, verified, degraded, confidence}}
+    **出处不在这份 JSON 里**（阶段 4 起）：它住在 evidence / citations 两张表，
+    来源键是 `{item_id}:{字段名}` —— 抽取的出处是字段级的，
+    "这个字段的值是从哪一块抽出来的"正是本产品相对"字段 + 置信度"那类
+    抽取产品的差异点。对外响应仍然带 citations，由 `_fields_out` 现拼。
     """
 
     __tablename__ = "extraction_items"

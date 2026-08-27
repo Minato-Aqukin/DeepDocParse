@@ -10,7 +10,7 @@
    那是 MCP 场景的取舍；Web 端文档可以很长，必须靠检索裁出 top-k。
 3. **出处要经得起重建索引**。chunk_id 是随机 UUID，reindex 会全部重铸，
    只存它等于历史回答一次重建就永久失去原文依据（补不回来）。citations 因此
-   同时存稳定定位键 `(parse_job_id, seq)`，读取时用 resolve_citations 接回。
+   同时存稳定定位键 `(parse_job_id, seq)`，读取时由 `app.evidence.load_citations` 接回。
 """
 import base64
 import difflib
@@ -98,92 +98,6 @@ def retrieval_confidence(citations: list[dict]) -> dict:
     top = max(sims)
     return {"level": "high" if top >= settings.qa_low_similarity else "low",
             "top_similarity": top, "warn_below": settings.qa_low_similarity}
-
-
-# ⚠️ 下面三个函数（resolve_citations / load_citation_targets / attach_resolution）
-# **阶段 3 起已经不在读路径上了** —— 读走 `app.evidence.load_citations`。
-# 留着它们是 plan.md 给阶段 3 定的回滚手段：把 conversations/extractions 的读
-# 换回来即可，老列全程没被碰过。**阶段 4 连同老列一起删。**
-
-
-async def resolve_citations(session: AsyncSession, document_id: str,
-                            citations: list[dict]) -> list[dict]:
-    """把历史 citations 接回**当前**索引里的 chunk。
-
-    reindex 会重铸全部 chunk_id，所以按 `(parse_job_id, seq)` 找回来，把 chunk_id
-    刷新成当前值（前端靠它做块高亮）。接不回来的（换引擎重解析、0003 之前落库的
-    老记录）标 `resolved=False` —— 依旧不许静默：前端要能显示"这条出处已失效"，
-    而不是给一个点不开的高亮。
-
-    **page_idx / bbox 不刷新**：它们记录的是"这个回答当时是拿哪块区域作证的"，
-    是审计事实，不该被后来的重新分块改写。crop_url 指向的截图也是按当时的 bbox
-    存的，跟着改会让高亮框和截图对不上。
-
-    一次只处理一条 message 的 citations。要一次处理整个会话（避免 N+1），
-    直接用下面的 `load_citation_targets` + `attach_resolution`。
-    """
-    lookup = await load_citation_targets(session, document_id, citations)
-    return [attach_resolution(c, lookup) for c in citations]
-
-
-async def load_citation_targets(session: AsyncSession, document_id: str,
-                                citations: list[dict]) -> dict[tuple[str, int], tuple[str, str]]:
-    """批量查出 `(parse_job_id, seq) -> (当前 chunk_id, 当前 chunk 文本)`。
-
-    单独抽出来是为了让调用方能把**多条 message 的 citations 合并成一次查询**
-    （`list_messages` 会这么用）—— 每条 message 查一次的话，一个长会话就是 N+1。
-
-    **文本也要取回来**：`seq` 存在不等于它还指着同一段原文，见 attach_resolution。
-    """
-    job_ids = {c.get("parse_job_id") for c in citations if c.get("parse_job_id")}
-    seqs = {c.get("seq") for c in citations if c.get("seq") is not None}
-    if not job_ids or not seqs:
-        return {}
-    rows = (await session.execute(
-        select(Chunk.id, Chunk.parse_job_id, Chunk.seq, Chunk.text).where(
-            Chunk.document_id == document_id,
-            Chunk.parse_job_id.in_(job_ids), Chunk.seq.in_(seqs))
-    )).all()
-    return {(job_id, seq): (chunk_id, text) for chunk_id, job_id, seq, text in rows}
-
-
-def _same_content(snippet: str, chunk_text: str) -> bool:
-    """这条出处存下来的片段，还在当前这个块里吗？
-
-    **判据本身在 `ddp_core.anchor`**（阶段 3 抽出去的）：读路径、历史回填、
-    这条老路径必须用同一份，判据一漂就会把"对不上"的出处标成有效 —— 假出处。
-    这里不传 digest，走的是宽松那条（老 JSON 里本来就没有指纹）。
-    """
-    return same_content(snippet=snippet, chunk_text=chunk_text, digest="")
-
-
-def attach_resolution(citation: dict,
-                      lookup: dict[tuple[str, int], tuple[str, str]]) -> dict:
-    """按查好的 lookup 给一条 citation 贴上 resolved 标记并刷新 chunk_id。
-
-    **只查 `seq` 存不存在是不够的。** `seq` 是块在文档里的序号，而分块规则一变
-    （M9 让表格/公式/图片独立成块、标题作前缀），同一份归档重建索引就会切出
-    **不同数量、不同 seq** 的块 —— 于是老 citation 的 seq 照样查得到，
-    指的却是另一段原文。而 UI 只看 `resolved`：用户会看到一条"可点开"的出处，
-    snippet 是旧文本、高亮框指向别处。**这正是这个项目定义的最恶劣错误：
-    带着已验证标记的假出处。**
-
-    所以这里加一道内容比对：对不上就 `resolved=False`，前端照旧显示"出处已失效"。
-    宁可说"接不回去"，也绝不指错地方。
-    """
-    item = dict(citation)
-    target = lookup.get((citation.get("parse_job_id"), citation.get("seq")))
-    if target is None:
-        item["resolved"] = False
-        return item
-    chunk_id, text = target
-    if not _same_content(citation.get("snippet", ""), text):
-        # seq 还在，但那个位置上已经不是当初那段话了（多半是重建索引时
-        # 分块规则变了）。**不刷新 chunk_id** —— 刷了就等于把高亮指到错块
-        item["resolved"] = False
-        return item
-    item.update(chunk_id=chunk_id, resolved=True)
-    return item
 
 
 async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncClient, *,

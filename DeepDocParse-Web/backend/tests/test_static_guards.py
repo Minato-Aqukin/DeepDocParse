@@ -168,17 +168,20 @@ def test_every_anchor_judgement_is_the_same_function():
     from ddp_core import anchor
     import app.backfill as backfill
     import app.evidence as evidence
-    import app.qa as qa
 
     assert evidence.same_content is anchor.same_content
     assert backfill.same_content is anchor.same_content
-    assert qa.same_content is anchor.same_content
-    # 老路径的 _same_content 必须**调用**它，不能自己再实现一遍
-    import inspect
+    # 阶段 4 删掉了 app.qa 里那份老的接回逻辑（连同 messages.citations 列）。
+    # **判据的实现只许有一处** —— 全仓库扫一遍，除 anchor.py 外不许再出现
+    import pathlib
 
-    source = inspect.getsource(qa._same_content)
-    assert "same_content(" in source and "in " not in source.split('"""')[-1], \
-        "app.qa._same_content 又自己实现了一遍判据"
+    reimplemented = []
+    for path in sorted((BACKEND / "app").rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        if 'rstrip("…")' in text:
+            reimplemented.append(path.name)
+    assert not reimplemented, \
+        f"{reimplemented} 又自己实现了一遍锚定判据 —— 判据一漂就会产出假出处"
 
 
 def test_the_two_anchor_paths_really_differ():
@@ -198,3 +201,36 @@ def test_the_two_anchor_paths_really_differ():
     # 严格路：指纹对不上 -> 拦住
     assert same_content(snippet=snippet, chunk_text=tampered,
                         digest=digest_of(original)) is False
+
+
+def test_citation_shape_has_exactly_one_implementation():
+    """出处的对外形状只许有一处实现（阶段 4 合并的）。
+
+    问答与抽取必须给出完全一样的形状 —— 前端的 CitationChip 两边共用一个组件。
+    此前是各写一份，靠抽取那份 docstring 里"形状必须与 conversations 一致"
+    这句话维持，而**靠注释维持的一致性迟早会破**：阶段 3 就抓到过
+    两份接回逻辑走岔的后果（抽取的出处被无条件标成有效）。
+    """
+    import ast
+
+    hits = []
+    for path in sorted((BACKEND / "app").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name.endswith("citation_out"):
+                hits.append(f"{path.relative_to(BACKEND)}::{node.name}")
+    assert hits == ["app/evidence.py::citation_out"], \
+        f"出处形状又出现了第二份实现：{hits}"
+
+
+def test_fresh_is_an_assertion_not_a_default():
+    """`resolved` 不许有默认值 —— 忘了算就必须缺，不能静默变成"有效"。
+
+    写成 `setdefault("resolved", True)` 的话，任何漏算 resolved 的路径都会被
+    判成有效出处。阶段 3 抓到的抽取平面 bug 就是这么来的。
+    """
+    from app.evidence import citation_out
+
+    plain = citation_out("d1", {"seq": 0, "crop_key": None})
+    assert "resolved" not in plain, "没人给 resolved，却被兜底成了有效"
+    assert citation_out("d1", {"seq": 0, "crop_key": None}, fresh=True)["resolved"] is True

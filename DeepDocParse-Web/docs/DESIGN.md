@@ -6,11 +6,12 @@
 > 下面凡是提到"按 user 过滤""文档属于用户"的地方都以此为准；
 > 已就地标注的三处见 §数据模型与 §检索。
 >
-> ⚠️ **出处的读路径变了**（阶段 3，2026-08-27）：出处不再从
-> `messages.citations` / `extraction_items.fields[].citations` 这两处 JSON 读，
-> 改从 `evidence` + `citations` 两张表读（`app/evidence.py::load_citations`）。
-> 老列仍在写、仍可回滚，阶段 4 才删。下面凡是描述"出处存在 JSON 列里"的地方，
-> 说的是**写**的那一半，读已经不走那里了。
+> ⚠️ **出处已经搬家了**（阶段 2b–4，2026-08-27）：出处不再住在
+> `messages.citations` / `extraction_items.fields[].citations` 这两处 JSON，
+> 而是 `evidence` + `citations` 两张表（写：`app/evidence.py::record_evidence`，
+> 读：`load_citations`）。**那一列和那个键已经删了**（迁移 0009，不可逆）。
+> 下面凡是描述"出处存在 JSON 列里"的地方一律作废 —— 对外响应的形状没变，
+> 是 `_fields_out` / `list_messages` 现拼出来的。
 >
 > ⚠️ **模块位置也变了**（阶段 2a）：本文提到的 `app/types.py` / `app/search.py` /
 > `app/chunking.py` 连同 models / tokenize / rerank 已迁入 `DeepDocParse/gateway/ddp_core/`，
@@ -135,8 +136,8 @@ User ─┬─ Document (一份文件，内容 sha256 唯一)
 
 - `conversations`：id / user_id / document_id / title(200，取首个问题前 40 字) / created_at / updated_at
 - `messages`：id / conversation_id(idx) / role(`user`\|`assistant`) / content /
-  `citations`(JSON：`[{chunk_id, page_idx, bbox, crop_key, snippet, score}]`) /
   `verified`(Bool) / `degraded`(String(32) null) / created_at
+  （**出处不在这张表上** —— 见顶部推翻说明，它住在 `evidence` / `citations`）
 - `file_tokens.task_id` → `document_id`；新增 `scope`（`source` \| `share`）
 - `usage_records.task_id` → `parse_job_id`；`kind` 增加 `qa` / `embed`
 
@@ -300,7 +301,7 @@ event: error      data: {"message":"…","code":"index_not_ready"}
    缓存键 results/{job_id}/crops/{page_idx}_{sha1(bbox)[:12]}.png，命中即用
 6. 组 prompt -> service POST /v1/chat/completions (stream=true)
 7. 边收边转 SSE delta 转发
-8. 流结束：另开 session 落 assistant message + citations + usage(kind='qa')
+8. 流结束：另开 session 落 assistant message + evidence/citations + usage(kind='qa')
 ```
 
 ### 5.3 Prompt 与预算

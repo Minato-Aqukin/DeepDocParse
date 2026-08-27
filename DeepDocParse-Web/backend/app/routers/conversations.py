@@ -25,7 +25,7 @@ from app.config import settings
 from app.db import get_session, get_sessionmaker
 from app.deps import current_user, get_storage
 from app.errors import APIError
-from app.evidence import load_citations, record_evidence
+from app.evidence import citation_out, load_citations, record_evidence
 from app.metering import record_usage
 from app.models import Conversation, Document, Message, ParseJob, User, utcnow
 from app.qa import (
@@ -51,19 +51,6 @@ class AskRequest(BaseModel):
 
 def _sse(event: str, payload: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
-
-
-def _citation_out(document_id: str, citation: dict) -> dict:
-    """把对象键换成前端能直接取的 URL。"""
-    out = dict(citation)
-    out.setdefault("resolved", True)     # 流式返回的这一轮必然指向刚检索到的 chunk
-    key = out.pop("crop_key", None)
-    if key:
-        job_id, name = key.split("/")[1], key.rsplit("/", 1)[-1]
-        out["crop_url"] = f"/api/documents/{document_id}/crops/{job_id}/{name}"
-    else:
-        out["crop_url"] = None
-    return out
 
 
 async def _owned_document(document_id: str, user: User, session: AsyncSession) -> Document:
@@ -114,13 +101,12 @@ async def list_messages(cid: str, user: User = Depends(current_user),
     rows = (await session.execute(
         select(Message).where(Message.conversation_id == cid).order_by(Message.created_at)
     )).scalars().all()
-    # **读走 evidence/citations 两张表**（阶段 3 切换）。老的 messages.citations
-    # 仍在写（阶段 4 才删），但不再被读 —— 回滚就是把这里换回 attach_resolution。
+    # 出处的唯一真相是 evidence/citations 两张表（阶段 3 切读，阶段 4 删掉老列）。
     # 全会话一次查完（每条 message 查一次的话，长会话就是 N+1）
     resolved = await load_citations(session, source_kind="message",
                                     source_ids=[m.id for m in rows])
     return [{"id": m.id, "role": m.role, "content": m.content,
-             "citations": [_citation_out(conversation.document_id, c)
+             "citations": [citation_out(conversation.document_id, c)
                            for c in resolved.get(m.id, [])],
              "verified": m.verified, "degraded": m.degraded, "model_meta": m.model_meta or {},
              "confidence": retrieval_confidence(resolved.get(m.id, [])),
@@ -285,7 +271,8 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
             citations=retrieval.citations, verified=verified and not error, degraded=degraded,
             model_meta=answer_model_meta()))
 
-    yield _sse("citations", {"citations": [_citation_out(document_id, c)
+    # fresh=True：这一帧的出处是刚检索出来的，按构造就指向当前块
+    yield _sse("citations", {"citations": [citation_out(document_id, c, fresh=True)
                                            for c in retrieval.citations]})
     yield _sse("done", {"message_id": message_id, "verified": verified and not error,
                         "degraded": degraded,
@@ -323,11 +310,9 @@ async def _persist(*, conversation_id: str, user_id: str, content: str, citation
     """
     async with get_sessionmaker()() as db:
         message = Message(conversation_id=conversation_id, role="assistant", content=content,
-                          citations=citations, verified=verified, degraded=degraded,
-                          model_meta=model_meta or {})
+                          verified=verified, degraded=degraded, model_meta=model_meta or {})
         db.add(message)
-        # **双写在老路径写完之后**（阶段 2b）：老 JSON 一个字节没动，
-        # 新表同时记一份。读仍然走老路，所以这一步随时能停。
+        # 出处只写 evidence/citations 两张表（阶段 4 起 messages.citations 列已删）。
         # flush 是为了拿到 message.id —— citation 要指回它
         await db.flush()
         await record_evidence(db, citations, source_kind="message", source_id=message.id)

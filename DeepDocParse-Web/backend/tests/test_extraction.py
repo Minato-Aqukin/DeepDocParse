@@ -480,27 +480,46 @@ async def test_stale_citation_is_marked_unresolved_not_pointed_at_the_wrong_bloc
     老 citation 照样"查得到"，指的却是另一段原文 —— 而 UI 只看 `resolved`，
     用户会看到一条可点开的出处，snippet 是旧文本、高亮指向别处。
     **这正是这个项目定义的最恶劣错误：带着已验证标记的假出处。**
+
+    阶段 4 起走的是 `app.evidence.load_citations`（老的那套接回逻辑连同
+    `messages.citations` 列一起删了）。判据没变，且严格了一档：
+    指纹对得上才算数，不再只看 snippet 还在不在块里。
     """
-    from app.qa import attach_resolution, load_citation_targets
+    from sqlalchemy import select
+
+    from app.evidence import load_citations, record_evidence
 
     document, job = await _seed_document(session, (await _a_user(session)))
-    # 模拟"重建索引后 seq=0 上换了内容"：库里 seq=0 是买方那段
-    citations = [
-        {"parse_job_id": job.id, "seq": 0, "snippet": "买方：北极星科技有限公司", "page_idx": 0},
-        {"parse_job_id": job.id, "seq": 0, "snippet": "这是重建索引前那段已经不在了的文本",
-         "page_idx": 0},
-        {"parse_job_id": job.id, "seq": 99, "snippet": "根本不存在的块", "page_idx": 0},
-    ]
-    lookup = await load_citation_targets(session, document.id, citations)
-    resolved = [attach_resolution(c, lookup) for c in citations]
+    chunks = (await session.execute(
+        select(Chunk).where(Chunk.parse_job_id == job.id).order_by(Chunk.seq))).scalars().all()
 
-    assert resolved[0]["resolved"] is True, "内容还对得上的出处不该被误判失效"
-    assert resolved[0]["chunk_id"], "对得上就要刷新 chunk_id"
-    assert resolved[1]["resolved"] is False, \
+    def cite(seq, snippet):
+        return {"chunk_id": "x", "parse_job_id": job.id, "seq": seq, "page_idx": 0,
+                "bbox": [72, 100, 500, 130], "crop_key": None, "snippet": snippet,
+                "score": 0.03, "similarity": 0.7}
+
+    # 三条出处，写下时全都指得好好的
+    await record_evidence(session, [cite(0, chunks[0].text[:20]), cite(1, chunks[1].text[:20])],
+                          source_kind="extract_field", source_id="item-1:buyer")
+    # 第三条指向一个根本不存在的块 —— 写的时候就该被跳过
+    await record_evidence(session, [cite(99, "根本不存在的块")],
+                          source_kind="extract_field", source_id="item-1:missing")
+    await session.commit()
+
+    # 模拟"重建索引后 seq=1 上换了内容"
+    chunks[1].text = "这是重建索引之后换上去的另一段文本，与当初作证的那段无关。"
+    await session.commit()
+
+    out = await load_citations(session, source_kind="extract_field",
+                               source_ids=["item-1:buyer", "item-1:missing"])
+    by_seq = {c["seq"]: c for c in out["item-1:buyer"]}
+
+    assert by_seq[0]["resolved"] is True, "内容还对得上的出处不该被误判失效"
+    assert by_seq[0]["chunk_id"], "对得上就要刷新 chunk_id"
+    assert by_seq[1]["resolved"] is False, \
         "seq 还在但内容换了 —— 必须说接不回去，绝不许指到错块"
-    assert "chunk_id" not in resolved[1] or resolved[1].get("chunk_id") is None \
-        or resolved[1]["resolved"] is False
-    assert resolved[2]["resolved"] is False
+    assert by_seq[1]["chunk_id"] is None, "接不回去就不许给 chunk_id"
+    assert "item-1:missing" not in out, "指向不存在的块的出处，写的时候就该被跳过"
 
 
 async def test_hard_deleted_document_does_not_break_the_whole_run(session, app_state):

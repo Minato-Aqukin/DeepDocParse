@@ -27,7 +27,7 @@ from app.deps import current_user, get_storage
 from app.errors import APIError
 from ddp_core.extract_format import SchemaError, parse_schema, validate_schema
 from app.extraction import ExtractContext, extraction_model_meta, run as run_extraction
-from app.evidence import load_citations, record_evidence
+from app.evidence import citation_out, load_citations, record_evidence
 from app.metering import record_usage
 from app.models import (
     Document, ExtractionItem, ExtractionRun, ExtractionTemplate, ParseJob, User, as_aware, utcnow,
@@ -365,24 +365,23 @@ async def _extract_one(session: AsyncSession, run_id: str, document_id: str, spe
                          document=document, job=job, user_id=initiator, verify=verify)
     outcome = await run_extraction(ctx, spec)
 
-    if outcome.records:
-        items = [ExtractionItem(
-            run_id=run_id, document_id=document_id,
-            parse_job_id=job.id if job else None, record_index=i,
-            status=outcome.status, degraded=outcome.degraded, fields=record["fields"])
-            for i, record in enumerate(outcome.records)]
-    else:
-        items = [ExtractionItem(
-            run_id=run_id, document_id=document_id,
-            parse_job_id=job.id if job else None, record_index=0,
-            status=outcome.status, degraded=outcome.degraded, fields=outcome.fields)]
+    records = outcome.records or [{"fields": outcome.fields}]
+    items = [ExtractionItem(
+        run_id=run_id, document_id=document_id,
+        parse_job_id=job.id if job else None, record_index=i,
+        status=outcome.status, degraded=outcome.degraded,
+        # **出处不再进这份 JSON**（阶段 4）：它只住在 evidence/citations 两张表里。
+        # 留一份在这儿就会有两个真相，而阶段 3 已经证明过——第二份没人维护、
+        # 也没人读，却会让下一个人以为它是可信的
+        fields=_fields_without_citations(record["fields"]))
+        for i, record in enumerate(records)]
     session.add_all(items)
-    # **双写在老路径写完之后**（阶段 2b）：`fields[].citations` 一个字节没动。
     # 抽取的出处是**字段级**的，所以 source_id 要带上字段名 —— 这正是本产品
-    # 相对"字段 + 置信度"那类抽取产品的差异点，新表不能把它压回 item 级
+    # 相对"字段 + 置信度"那类抽取产品的差异点，别把它压回 item 级。
+    # 这里用的是**剥离之前**的 record，出处还在里面
     await session.flush()
-    for item in items:
-        for name, field in (item.fields or {}).items():
+    for item, record in zip(items, records):
+        for name, field in (record["fields"] or {}).items():
             # 字段值理论上一定是 dict（DDP-Extract v1 的三态结构），但这里是
             # **落库路径**：形状不对时宁可跳过这一条出处，也不能让整批抽取炸掉
             if isinstance(field, dict):
@@ -487,30 +486,15 @@ async def _load_items(session: AsyncSession, run_id: str) -> tuple[
     return items, filenames, citations
 
 
-def _citation_out(document_id: str, citation: dict) -> dict:
-    """把对象键换成前端能直接取的 URL —— 与问答平面同一套路径。
+def _fields_without_citations(fields: dict) -> dict:
+    """落库前把 `citations` 从字段值里摘掉（阶段 4）。
 
-    截图受 JWT 保护，`<img src>` 直接取不到（发不出 Authorization 头），
-    前端要先 fetch 成 blob URL。复用 `/api/documents/{id}/crops/{job}/{name}`
-    这个既有端点，因此这里的形状必须与 conversations._citation_out 一致 ——
-    不一致的话前端的 CitationChip 就没法两边共用了。
-
-    **`resolved` 由 `load_citations` 算好后传进来，这里不许再兜底。**
-    阶段 3 之前这里是 `attach_resolution(citation, lookup) if lookup is not None
-    else dict(citation)` + `setdefault("resolved", True)` —— 而**没有任何一个
-    调用点传过 lookup**（`load_citation_targets` 导入了却从没被调用）。
-    于是那句"不能无脑 resolved=True"的注释底下，代码干的正是无脑 resolved=True：
-    抽取的每一条出处都被无条件标成有效，重建索引改了分块之后就是
-    **可点开、标着有效、却指向错块**的假出处。参数是死的，守卫就是装饰。
+    出处的唯一真相是 evidence/citations 两张表。这份 JSON 里再留一份的话，
+    重建索引之后它就成了永远不会更新的旧快照 —— 而它长得跟真的一模一样。
     """
-    out = dict(citation)
-    key = out.pop("crop_key", None)
-    if key:
-        job_id, name = key.split("/")[1], key.rsplit("/", 1)[-1]
-        out["crop_url"] = f"/api/documents/{document_id}/crops/{job_id}/{name}"
-    else:
-        out["crop_url"] = None
-    return out
+    return {name: ({k: v for k, v in cell.items() if k != "citations"}
+                   if isinstance(cell, dict) else cell)
+            for name, cell in (fields or {}).items()}
 
 
 def _fields_out(document_id: str, fields: dict, item_id: str,
@@ -525,7 +509,7 @@ def _fields_out(document_id: str, fields: dict, item_id: str,
         if not isinstance(cell, dict):
             continue
         item = dict(cell)
-        item["citations"] = [_citation_out(document_id, c)
+        item["citations"] = [citation_out(document_id, c)
                              for c in citations.get(f"{item_id}:{name}", [])]
         out[name] = item
     return out

@@ -163,8 +163,8 @@ async def test_citation_pointing_at_a_vanished_chunk_is_skipped(session):
     assert (await session.execute(select(Evidence))).scalars().all() == []
 
 
-async def test_dual_write_failure_leaves_the_old_path_intact(session, monkeypatch):
-    """**双写挂了不许拖垮老路径。**
+async def test_evidence_write_failure_does_not_lose_the_answer(session, monkeypatch):
+    """**出处写挂了，回答本身不许跟着丢。**
 
     只是 try/except 吞掉是不够的：session 已经被 IntegrityError 之类污染，
     接下来老路径那次 commit 照样会炸。savepoint 才能真的把影响圈住。
@@ -179,8 +179,7 @@ async def test_dual_write_failure_leaves_the_old_path_intact(session, monkeypatc
     conversation = Conversation(document_id=document.id, user_id=document.uploaded_by, title="c")
     session.add(conversation)
     await session.flush()
-    message = Message(conversation_id=conversation.id, role="assistant", content="答案",
-                      citations=[_citation(job.id, 0)])
+    message = Message(conversation_id=conversation.id, role="assistant", content="答案")
     session.add(message)
 
     async def boom(sess, *a, **kw):
@@ -200,7 +199,7 @@ async def test_dual_write_failure_leaves_the_old_path_intact(session, monkeypatc
 
     assert await mod.record_evidence(session, [_citation(job.id, 0)],
                                      source_kind="message", source_id=message.id) == 0
-    # 老路径必须还能提交 —— 这才是"不影响老路径"的实际含义
+    # 回答必须还能提交 —— 出处没了很糟，但连回答一起丢更糟
     await session.commit()
 
     assert (await session.get(Message, message.id)) is not None
@@ -212,8 +211,13 @@ async def test_dual_write_failure_leaves_the_old_path_intact(session, monkeypatc
 # ------------------------------------------------------------------ 端到端对拍
 
 @respx.mock
-async def test_qa_dual_writes_and_matches_the_old_json(auth_client, session):
-    """问答走完一遍：老 JSON 的定位元组与新表**逐条相同**。"""
+async def test_qa_citations_come_back_from_the_new_tables(auth_client, session):
+    """问答走完一遍：接口返回的出处与 evidence/citations 两张表逐条相同。
+
+    阶段 4 删掉 `messages.citations` 之后，**新表是唯一真相** ——
+    这条用例因此从"对拍老 JSON"变成了"对拍接口返回"：
+    表里有什么，用户就该看到什么，不多不少。
+    """
     document = await _ready_document(auth_client)
     cid = await _conversation(auth_client, document["id"])
     respx.post(CHAT).mock(return_value=_sse_answer())
@@ -222,20 +226,21 @@ async def test_qa_dual_writes_and_matches_the_old_json(auth_client, session):
 
     message = (await session.execute(
         select(Message).where(Message.role == "assistant"))).scalars().one()
-    assert message.citations, "前提不成立：这一问应当给出出处"
-
-    old = sorted((c["parse_job_id"], c["seq"]) for c in message.citations)
-    rows = (await session.execute(
+    rows = sorted((await session.execute(
         select(Evidence.parse_job_id, Evidence.seq)
         .join(Citation, Citation.evidence_id == Evidence.id)
         .where(Citation.source_kind == "message", Citation.source_id == message.id)
-    )).all()
-    assert sorted(rows) == old, f"对拍不上：老 JSON {old}，新表 {sorted(rows)}"
+    )).all())
+    assert rows, "前提不成立：这一问应当给出出处"
+
+    shown = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()[1]["citations"]
+    assert sorted((c["parse_job_id"], c["seq"]) for c in shown) == rows, \
+        f"接口返回的出处与表里对不上：接口 {shown}，表 {rows}"
 
 
 @respx.mock
-async def test_extraction_dual_writes_at_field_granularity(auth_client, session):
-    """抽取的出处是**字段级**的，新表不能把它压回 item 级。
+async def test_extraction_citations_are_stored_per_field(auth_client, session):
+    """抽取的出处是**字段级**的，存储不能把它压回 item 级。
 
     "这个字段的值是从哪一块抽出来的"正是本产品相对"字段 + 置信度"那类
     抽取产品的差异点。source_id 丢了字段名，这个差异点就没了。
@@ -269,21 +274,29 @@ async def test_extraction_dual_writes_at_field_granularity(auth_client, session)
     items = (await session.execute(select(ExtractionItem))).scalars().all()
     assert items, f"前提不成立：抽取没有产出 item（run.status={run.status} error={run.error}）"
 
+    # **落库的 fields JSON 里不许再有 citations**（阶段 4）：
+    # 留一份就有两个真相，而那一份重建索引之后永远不会更新
+    for item in items:
+        for name, cell in (item.fields or {}).items():
+            assert "citations" not in cell, f"字段 {name} 的出处又被写回 JSON 了"
+
     checked = 0
     for item in items:
-        for name, field in (item.fields or {}).items():
-            old = sorted((c["parse_job_id"], c["seq"])
-                         for c in (field.get("citations") or [])
-                         if c.get("parse_job_id") and c.get("seq") is not None)
+        for name in (item.fields or {}):
             rows = sorted((await session.execute(
                 select(Evidence.parse_job_id, Evidence.seq)
                 .join(Citation, Citation.evidence_id == Evidence.id)
                 .where(Citation.source_kind == "extract_field",
                        Citation.source_id == f"{item.id}:{name}")
             )).all())
-            assert rows == old, f"字段 {name} 对拍不上：老 {old}，新 {rows}"
-            checked += len(old)
+            checked += len(rows)
     assert checked, "前提不成立：一条字段级出处都没有，这条用例什么都没验到"
+
+    # 接口仍然按字段给出处 —— 存储换了，对外形状不变
+    detail = (await auth_client.get(f"/api/extractions/runs/{run.id}")).json()
+    shown = [c for i in detail["items"] for f in i["fields"].values()
+             for c in f["citations"]]
+    assert len(shown) == checked, f"接口给了 {len(shown)} 条出处，表里有 {checked} 条"
 
 
 def _sse_answer():

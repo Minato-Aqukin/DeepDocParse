@@ -102,7 +102,13 @@ async def test_ask_streams_answer_with_citations(auth_client, session):
         select(Message).where(Message.conversation_id == cid).order_by(Message.created_at)
     )).scalars().all()
     assert [m.role for m in messages] == ["user", "assistant"]
-    assert messages[1].content == answer and messages[1].citations
+    assert messages[1].content == answer
+    # 出处不在 message 行上了（阶段 4 删了那一列），在 evidence/citations 两张表里
+    from ddp_core.models import Citation
+
+    assert (await session.execute(select(Citation).where(
+        Citation.source_kind == "message",
+        Citation.source_id == messages[1].id))).scalars().all(), "出处没落库"
 
     conversation = await session.get(Conversation, cid)
     await session.refresh(conversation)
@@ -207,7 +213,11 @@ async def test_ask_reports_no_hits_for_unrelated_question(auth_client, session):
 
     message = (await session.execute(
         select(Message).where(Message.role == "assistant"))).scalars().one()
-    assert message.degraded == "no_hits" and message.citations == []
+    assert message.degraded == "no_hits"
+    from ddp_core.models import Citation
+
+    assert not (await session.execute(select(Citation).where(
+        Citation.source_id == message.id))).scalars().all(), "无关问题不得凭空落出处"
 
 
 @respx.mock
@@ -593,9 +603,8 @@ async def test_unresolvable_citation_is_marked_not_silently_dropped(auth_client,
     静默把它当成好的，用户会点开一个空高亮；静默丢掉，回答就成了无出处的断言。
     两种都不行——降级必须可见。
 
-    ⚠️ 阶段 3 读切换之后，这条用例改的是 **evidence 表**而不是
-    `messages.citations`（老 JSON 还在写，但不再被读）。改错地方的话用例会
-    在"读根本没看那份数据"的情况下绿着通过。
+    ⚠️ 这条用例改的是 **evidence 表** —— 阶段 4 之后那是唯一真相
+    （`messages.citations` 列已删）。
     """
     from ddp_core.models import Evidence
 

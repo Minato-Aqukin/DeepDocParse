@@ -1,4 +1,10 @@
-"""历史出处回填（阶段 3）。
+"""历史出处回填（阶段 3 写的，阶段 4 之后仍要能跑）。
+
+⚠️ **这个文件操作的是遗留 schema。** `messages.citations` 列在阶段 4 被删了
+（迁移 0009），但迁移 0008 仍然要能在**还没删列**的库上跑 —— 那正是任何一个
+从 0007 升上来的既有部署。所以这里用裸 SQL 把那一列造回来，
+而不是靠 ORM 模型（模型里已经没有它了）。
+
 
 plan.md 把阶段 3 标成**全重构最容易出假出处的一步**，验收要求三条：
 
@@ -46,6 +52,7 @@ async def _seed(session) -> tuple[Document, ParseJob, Conversation]:
     session.add(conversation)
     await session.flush()
     await session.commit()
+    await _legacy_column(session)
     return document, job, conversation
 
 
@@ -59,6 +66,32 @@ def _old(job_id: str, seq: int, snippet: str | None, **over) -> dict:
     return base | over
 
 
+async def _legacy_column(session) -> None:
+    """把阶段 4 删掉的 `messages.citations` 列造回来，模拟一个未升级的库。"""
+    from sqlalchemy import text
+
+    await session.execute(text("ALTER TABLE messages ADD COLUMN citations JSON"))
+    await session.commit()
+
+
+async def _legacy_message(session, conversation_id: str, citations: list) -> str:
+    """按遗留形状插一条 message（ORM 模型里已经没有 citations 了）。"""
+    import json as _json
+
+    from sqlalchemy import text
+
+    from ddp_core.models import new_id
+
+    mid = new_id()
+    await session.execute(
+        text("INSERT INTO messages (id, conversation_id, role, content, citations, "
+             "verified, model_meta, created_at) VALUES "
+             "(:id, :cid, 'assistant', '答', :c, 0, '{}', CURRENT_TIMESTAMP)"),
+        {"id": mid, "cid": conversation_id, "c": _json.dumps(citations)})
+    await session.commit()
+    return mid
+
+
 async def _run(session):
     return await session.run_sync(lambda sync: backfill(sync.connection()))
 
@@ -66,8 +99,7 @@ async def _run(session):
 async def test_matching_snippet_becomes_an_anchored_evidence(session):
     """块还在、snippet 对得上 -> 写指纹，从此走**严格**判据。"""
     document, job, conversation = await _seed(session)
-    session.add(Message(conversation_id=conversation.id, role="assistant", content="答",
-                        citations=[_old(job.id, 0, TEXTS[0][:20])]))
+    await _legacy_message(session, conversation.id, [_old(job.id, 0, TEXTS[0][:20])])
     await session.commit()
 
     report = await _run(session)
@@ -86,9 +118,8 @@ async def test_mismatching_snippet_is_kept_but_never_anchored(session):
     但那等于宣布"这条出处一直指着这里" —— 而它明明指不上。
     """
     document, job, conversation = await _seed(session)
-    session.add(Message(conversation_id=conversation.id, role="assistant", content="答",
-                        citations=[_old(job.id, 0, "这段文字在任何一个块里都不存在")]))
-    await session.commit()
+    await _legacy_message(session, conversation.id,
+                          [_old(job.id, 0, "这段文字在任何一个块里都不存在")])
 
     report = await _run(session)
     assert (report.total, report.anchored, report.unanchored) == (1, 0, 1), str(report)
@@ -112,8 +143,7 @@ async def test_missing_snippet_stays_unanchored_and_is_not_wrongly_invalidated(s
     原样保留：改成"标失效"的话，一批其实没问题的老回答会突然集体显示出处已失效。
     """
     document, job, conversation = await _seed(session)
-    session.add(Message(conversation_id=conversation.id, role="assistant", content="答",
-                        citations=[_old(job.id, 1, None)]))
+    await _legacy_message(session, conversation.id, [_old(job.id, 1, None)])
     await session.commit()
 
     report = await _run(session)
@@ -130,9 +160,8 @@ async def test_missing_snippet_stays_unanchored_and_is_not_wrongly_invalidated(s
 async def test_vanished_chunk_is_kept_and_marked(session):
     """块没了：证据照建（审计事实要留住），但不写指纹，读出来失效。"""
     document, job, conversation = await _seed(session)
-    session.add(Message(conversation_id=conversation.id, role="assistant", content="答",
-                        citations=[_old(job.id, 99, "指向一个不存在的块")]))
-    await session.commit()
+    await _legacy_message(session, conversation.id,
+                          [_old(job.id, 99, "指向一个不存在的块")])
 
     report = await _run(session)
     assert (report.total, report.unanchored, report.skipped_no_job) == (1, 1, 0), str(report)
@@ -149,11 +178,9 @@ async def test_citation_without_locator_is_counted_not_lost(session):
     静默丢掉的话，那一步会变成"不知道弄丢了什么"。
     """
     document, job, conversation = await _seed(session)
-    session.add(Message(conversation_id=conversation.id, role="assistant", content="答",
-                        citations=[_old(job.id, 0, TEXTS[0][:20]),
+    await _legacy_message(session, conversation.id, [_old(job.id, 0, TEXTS[0][:20]),
                                    _old(job.id, 0, "x") | {"parse_job_id": None},
-                                   _old(job.id, 0, "y") | {"seq": None}]))
-    await session.commit()
+                                   _old(job.id, 0, "y") | {"seq": None}])
 
     report = await _run(session)
     assert report.total == 3
@@ -165,10 +192,8 @@ async def test_citation_without_locator_is_counted_not_lost(session):
 async def test_dead_parse_job_is_counted_not_crashed(session):
     """那次解析已经不存在 -> 建不出证据（外键），计数并继续，不许炸整批。"""
     document, job, conversation = await _seed(session)
-    session.add(Message(conversation_id=conversation.id, role="assistant", content="答",
-                        citations=[_old("已经没有的解析", 0, "x"),
-                                   _old(job.id, 0, TEXTS[0][:20])]))
-    await session.commit()
+    await _legacy_message(session, conversation.id, [_old("已经没有的解析", 0, "x"),
+                                   _old(job.id, 0, TEXTS[0][:20])])
 
     report = await _run(session)
     assert (report.total, report.skipped_no_job, report.anchored) == (2, 1, 1), str(report)
@@ -178,8 +203,7 @@ async def test_dead_parse_job_is_counted_not_crashed(session):
 async def test_backfill_is_idempotent(session):
     """跑第二遍不许翻倍 —— 迁移会被重跑（灾备重建、downgrade 后再 upgrade）。"""
     document, job, conversation = await _seed(session)
-    session.add(Message(conversation_id=conversation.id, role="assistant", content="答",
-                        citations=[_old(job.id, 0, TEXTS[0][:20]), _old(job.id, 1, TEXTS[1][:20])]))
+    await _legacy_message(session, conversation.id, [_old(job.id, 0, TEXTS[0][:20]), _old(job.id, 1, TEXTS[1][:20])])
     await session.commit()
 
     first = await _run(session)
@@ -197,11 +221,10 @@ async def test_rank_preserves_the_old_list_order(session):
     """
     document, job, conversation = await _seed(session)
     # 三条出处**分数完全一样**，只有列表顺序区分得开名次
-    session.add(Message(conversation_id=conversation.id, role="assistant", content="答",
-                        citations=[_old(job.id, 2, TEXTS[2][:20], score=0.0328),
-                                   _old(job.id, 0, TEXTS[0][:20], score=0.0328),
-                                   _old(job.id, 1, TEXTS[1][:20], score=0.0328)]))
-    await session.commit()
+    await _legacy_message(session, conversation.id,
+                          [_old(job.id, 2, TEXTS[2][:20], score=0.0328),
+                           _old(job.id, 0, TEXTS[0][:20], score=0.0328),
+                           _old(job.id, 1, TEXTS[1][:20], score=0.0328)])
     await _run(session)
 
     from app.evidence import load_citations
@@ -249,12 +272,9 @@ async def test_backfill_never_overwrites_a_digest_written_by_the_dual_write(sess
 
     document, job, conversation = await _seed(session)
     citation = _old(job.id, 0, TEXTS[0][:20])
-    message = Message(conversation_id=conversation.id, role="assistant", content="答",
-                      citations=[citation])
-    session.add(message)
-    await session.flush()
+    message_id = await _legacy_message(session, conversation.id, [citation])
     # 双写：此刻块的内容是 TEXTS[0]，指纹按它记
-    await record_evidence(session, [citation], source_kind="message", source_id=message.id)
+    await record_evidence(session, [citation], source_kind="message", source_id=message_id)
     await session.commit()
     original = (await session.execute(select(Evidence))).scalars().one().content_digest
     assert original == digest_of(TEXTS[0])
@@ -269,8 +289,8 @@ async def test_backfill_never_overwrites_a_digest_written_by_the_dual_write(sess
     evidence = (await session.execute(select(Evidence))).scalars().one()
     assert evidence.content_digest == original, \
         "回填把双写记下的指纹覆盖成了今天的内容 —— 失效的出处被重新锚定成有效"
-    out = await load_citations(session, source_kind="message", source_ids=[message.id])
-    assert out[message.id][0]["resolved"] is False, "块内容已经变了，这条出处必须是失效的"
+    out = await load_citations(session, source_kind="message", source_ids=[message_id])
+    assert out[message_id][0]["resolved"] is False, "块内容已经变了，这条出处必须是失效的"
 
 
 async def test_report_counts_are_not_decorative(session):
