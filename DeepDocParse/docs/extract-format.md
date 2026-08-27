@@ -6,8 +6,12 @@
 抽取产品普遍只给「字段 + 置信度」，指不回原文——本项目把出处从 chunk 级下沉到**字段级**，
 差异化全押在这里。
 
+- 格式本身（schema 解析 / 结果校验 / 降级词汇表）：`gateway/ddp_core/extract_format.py`
+  —— **唯一一份，两个仓库共用**（铁律 7）
 - 抽取编排：`gateway/app/services/extraction.py`（service 侧）
-  与 `DeepDocParse-Web/backend/app/extraction.py`（产品侧，按铁律 1 各写一份）
+  与 `DeepDocParse-Web/backend/app/extraction.py`（产品侧）**目前仍是两份**。
+  这不是铁律要求的（铁律 1 说的是别重写 mineru），是还没搬 ——
+  卡点见 `plan.md`「阶段 2a 搬了哪些、为什么停在这里」
 - 消费方：`openapi.yaml` 的 `/v1/extract*`、前端 `components/extract/`、`scripts/eval_extraction.py`
 
 ## 输入：受限的 JSON Schema

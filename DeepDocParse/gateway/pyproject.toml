@@ -18,6 +18,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# `ddp_core` 里碰数据库的那部分（models / 后续的 search、indexing…）需要 SQLAlchemy，
+# 而 **gateway 自己不需要** —— 它是无状态的 HTTP 适配层，一行 ORM 都不 import。
+# 所以做成 extra：gateway 装最小集，语料侧（DeepDocParse-Web）装 `[corpus]`。
+#
+# 这个划分不是包装技巧，是 plan.md §2 那条边界的物理体现：
+# core 内部拆成**无状态算力 worker**（gateway 侧，只要纯函数）与
+# **有状态语料服务**（要 ORM）。哪天 core 真的长出自己的语料进程，
+# 它装的就是 `[corpus]`。
+corpus = [
+    "sqlalchemy[asyncio]>=2.0",
+    "pgvector>=0.3",
+]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21", "fakeredis>=2.26"]
 
 [tool.pytest.ini_options]

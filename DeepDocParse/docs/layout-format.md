@@ -21,9 +21,9 @@
 - 归一化实现：`gateway/app/services/layout.py`
 - 生成方（normalizer，每个引擎一个）：`gateway/app/services/engines.py`
 - 消费方：
-  - `gateway/app/services/chunking.py`（索引链分块）
+  - `gateway/ddp_core/chunking.py`（分块的**唯一一份**实现，两个仓库共用 —— 见铁律 7）
   - `mcp_server/server.py::_layout_blocks`（ask_document 检索与裁剪）
-  - `DeepDocParse-Web/backend/app/chunking.py`（产品层分块，按铁律 1 各写一份）
+  - `DeepDocParse-Web`（产品层分块，import 上面那一份，**不再各写一份**）
   - `DeepDocParse/openapi.yaml` 的 `layout_json` 字段
 
 ## 结构

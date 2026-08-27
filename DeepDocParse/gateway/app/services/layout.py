@@ -1,9 +1,9 @@
 """版面中间表示（DDP-Layout v1）——**这是一个契约，不是内部结构**。
 
 背景：`layout_json` 一直是事实上的内部 schema，四处消费它却从没被承认为契约：
-  - gateway/app/services/chunking.py
+  - gateway/ddp_core/chunking.py（**唯一一份**分块实现，两个仓库共用）
   - mcp_server/server.py::_layout_blocks
-  - DeepDocParse-Web/backend/app/chunking.py（按铁律 1 各写一份）
+  - DeepDocParse-Web（产品层分块，import 上面那一份 —— 曾经各写一份，2026-08-26 已合并）
   - openapi.yaml 的 layout_json 字段
 后果是：注册表在传输层做到了引擎无关，数据格式层却写死了 mineru ——
 "加引擎 = 加容器 + 一行配置"这个承诺只兑现了一半。

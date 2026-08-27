@@ -463,7 +463,10 @@ def test_placeholder_service_token_refuses_to_start(monkeypatch, placeholder):
 
 
 def test_single_oversized_block_is_split():
-    """回归：单块超过 max_chars 必须切开（与 Web 层 app/chunking.py 同规则）。
+    """回归：单块超过 max_chars 必须切开。
+
+    "与 Web 层同规则"这句话现在是**结构上成立**的：两侧 import 的是同一份
+    `ddp_core.chunking`（铁律 7），不再是两份需要人工对齐的实现。
 
     不切的话它会被原样送进 embedding 运行时，由后者按模型最大长度静默截断——
     块尾内容从此检索不到，且全程没有报错。
