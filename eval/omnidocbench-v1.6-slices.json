@@ -1,0 +1,89 @@
+{
+  "name": "DeepDocParse domain slices on OmniDocBench v1.6",
+  "source": {
+    "dataset": "opendatalab/OmniDocBench",
+    "annotation_url": "https://huggingface.co/datasets/opendatalab/OmniDocBench/resolve/d386947f7fc3bafdcd756c8485845a2f43a19875/OmniDocBench.json",
+    "annotation_sha256": "a45cd84b04ad8b793e775089640e6b681209abea33ead54c1828ddca35fae496",
+    "official_evaluator_commit": "147cd5ac9472002f5751221d390bf00abdbc0d2f",
+    "data_usage_terms": "research-only/non-commercial; see the official OmniDocBench Copyright Statement"
+  },
+  "policy": "四个真实域各固定 10 页；代码域另用 scripts/make_fixtures.py 生成 24 页，其中前 10 页是核心切片。切片之间不复用页面。",
+  "selection_criteria": {
+    "论文双栏": "page_attribute.layout == double_column",
+    "公式密集": "非 ignore 的 equation_isolated/equation_semantic >= 20",
+    "图表引用": "非 ignore 的 chart_mask >= 1",
+    "扫描版老手册": "data_source == book，且官方标注正文包含 manifest 为该页钉住的技术手册/旧标准锚点"
+  },
+  "selection_evidence": {
+    "扫描版老手册": {
+      "page-9d14b692-a01c-45bd-9726-929bd3c4b726.png": "紧固件材料手册",
+      "page-422d6037-0834-47e5-932a-408286b37ec5.png": "汽车技术经典手册",
+      "docstructbench_dianzishu_zhongwenzaixian-o.O-61465568.pdf_186.jpg": "电路图的识读",
+      "docstructbench_dianzishu_zhongwenzaixian-o.O-61522126.pdf_206.jpg": "操作方法",
+      "book_zh_DLT10902008_extracted_page_8.png": "DL/T 1090—2008",
+      "book_zh_DLT10562007_extracted_page_17.png": "DL/T 1056 — 2007",
+      "book_zh_GBT 50744-2011_extracted_page_67.png": "连轧机相邻两个机架平行度测量",
+      "book_zh_GB149361994_extracted_page_7.png": "GB 14936-94",
+      "book_zh_JGJ1022003_extracted_page_27.png": "本规范第7.4.2条",
+      "page-fe0bca35-a6c4-4591-a6dc-c5649c01ba6d.png": "静电放电标准波形"
+    }
+  },
+  "slices": {
+    "论文双栏": [
+      "page-bd9166d9-2c1a-4e3c-87f3-717e2474c77e.png",
+      "page-83587fc3-fe55-4e51-a3c5-f0664edba743.png",
+      "page-232d386f-6c9d-4b50-9463-89dedce995e5.png",
+      "page-49746735-505c-442d-b3f6-c55b1bf9e48b.png",
+      "docstructbench_llm-raw-scihub-o.O-ajhb.10190.pdf_5.jpg",
+      "docstructbench_llm-raw-scihub-o.O-ana.20363.pdf_5.jpg",
+      "docstructbench_llm-raw-scihub-o.O-bf00326833.pdf_3.jpg",
+      "docstructbench_llm-raw-scihub-o.O-ceat.200600266.pdf_2.jpg",
+      "docstructbench_llm-raw-scihub-o.O-chem.200700118.pdf_7.jpg",
+      "docstructbench_llm-raw-scihub-o.O-chem.200701412.pdf_10.jpg"
+    ],
+    "公式密集": [
+      "page-cdb92c2f-f43f-45ef-ace7-91d4664a7834.png",
+      "page-d5c82c0e-2a7d-4573-9dce-bff939504367.png",
+      "page-21967f5d-667d-488e-a5b3-76b9d6f53656.png",
+      "page-4009495f-1a7c-46dc-9f52-7f80f5f0cc5c.png",
+      "page-617783f8-bbd6-4faf-bca6-a05222c29314.png",
+      "page-404e0471-bd71-426a-8e5a-81b8327f88e5.png",
+      "page-e4053f20-e6e6-430e-83ef-db298a3199aa.png",
+      "page-8524b54d-6372-4f9e-a662-5254349cfda3.png",
+      "page-a6d06208-475c-4c6e-9d84-858f7e2ecf72.png",
+      "page-c7fec126-2adb-4094-8110-5d81a92e05b0.png"
+    ],
+    "图表引用": [
+      "page-bb98165a-8033-4ea4-a527-58ac974f2c32.png",
+      "page-8c21f73a-b849-4f71-9573-57d50fbcc180.png",
+      "page-0c8b5994-685d-4b1b-816a-74f43aff8a53.png",
+      "page-374e9c4b-6fdb-4176-8ac7-519b86d97e40.png",
+      "page-4254323d-8940-46fc-8cbb-b255c26b9693.png",
+      "page-d5f79be0-5d57-4849-9897-6106dd32117a.png",
+      "page-f8fad378-8ee9-4bb0-b195-35a4d55f3113.png",
+      "page-7bfad9a4-c5b7-40f3-8600-be513d1b1aaa.png",
+      "page-b4d4cf5b-0a0e-454b-8220-8c7f58402791.png",
+      "page-dbed9c07-e155-4ba1-92f9-a2962dc9a8f9.png"
+    ],
+    "扫描版老手册": [
+      "page-9d14b692-a01c-45bd-9726-929bd3c4b726.png",
+      "page-422d6037-0834-47e5-932a-408286b37ec5.png",
+      "docstructbench_dianzishu_zhongwenzaixian-o.O-61465568.pdf_186.jpg",
+      "docstructbench_dianzishu_zhongwenzaixian-o.O-61522126.pdf_206.jpg",
+      "book_zh_DLT10902008_extracted_page_8.png",
+      "book_zh_DLT10562007_extracted_page_17.png",
+      "book_zh_GBT 50744-2011_extracted_page_67.png",
+      "book_zh_GB149361994_extracted_page_7.png",
+      "book_zh_JGJ1022003_extracted_page_27.png",
+      "page-fe0bca35-a6c4-4591-a6dc-c5649c01ba6d.png"
+    ]
+  },
+  "synthetic": {
+    "代码密集": {
+      "fixture": "tests/fixtures/code-corpus.pdf",
+      "truth": "tests/fixtures/code-corpus.truth.json",
+      "pages": 24,
+      "core_page_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    }
+  }
+}

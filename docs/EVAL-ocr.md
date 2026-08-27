@@ -19,12 +19,19 @@
 与出处评测同一套（借自 OmniDocBench）。上一轮借了它的**方法**，
 这一轮把它的**数据**也接上（`--dataset` 直接读官方标注）。
 
-## 两个指标
+## 两层指标
 
-| 指标 | 定义 | 适用页 |
-|---|---|---|
-| **文本准确率** | `1 - 编辑距离(识别文本, 真值) / len(真值)`，归一化后按字符算 | 有 `text` 真值的页 |
-| **表格单元格 F1** | 表格拍成 `(行, 列, 单元格文本)` 三元组，求 P/R/F1 | 有 `tables` 真值的页 |
+本机轻量层用于 CI 与快速回归：
+
+| 指标 | 定义 | 适用页 | 能否和官方榜单比较 |
+|---|---|---|---|
+| **文本准确率** | `1 - 编辑距离(识别文本, 真值) / len(真值)`，归一化后按字符算 | 有 `text` 真值的页 | ⚠️ 定义同源，但本表是 accuracy 方向 |
+| **表格单元格 F1** | 表格拍成 `(行, 列, 单元格文本)` 三元组，求 P/R/F1 | 有 `tables` 真值的页 | ❌，只作回归 |
+| **公式编辑准确率** | `1 - 编辑距离(识别 LaTeX, 真值) / len(真值)` | 有 `formulas` 真值的页 | ❌，只作回归 |
+
+OmniDocBench v1.6 官方层由它自己的评测器计算：**Text Edit Distance / Table TEDS /
+TEDS-S / Formula CDM / Reading-order Edit Distance**。本脚本只负责把 DDP-Layout 导出为
+官方输入，并把官方 `metric_result.json` 合回报告；不会重新实现一个近似版冒充官方数字。
 
 ### 为什么表格这条不是 TEDS
 
@@ -35,7 +42,7 @@ TEDS 是这个领域的标准指标，但它是 HTML 表格树的树编辑距离
 单元格 F1 定义清楚、能自己验证、跨引擎可比，够回答唯一真正要问的问题：
 **换引擎之后表格识别是变好了还是变差了。**
 
-要报 TEDS 就直接跑 OmniDocBench 官方评测器，**不要拿这里的数字冒充**。
+现在用 `--export-official` 直接产出官方评测输入，见下方命令。
 
 ### 归一化只做一件事
 
@@ -63,11 +70,22 @@ python scripts/make_fixtures.py     # 产出 contract.pdf + contract.truth.json
 
 | 来源 | 怎么用 | 覆盖什么 |
 |---|---|---|
-| 仓库 fixture（默认） | `tests/fixtures/*.pdf` + 同名 `.truth.json` | 零外部依赖，CI 可跑。**只有英文单栏合同** |
-| OmniDocBench | `--dataset ~/OmniDocBench/` | 真实版式：中文双栏、扫描件、旋转页、公式、表格 |
+| 仓库 fixture（默认） | `tests/fixtures/*.pdf` + 同名 `.truth.json` | 零外部依赖。英文合同 2 页 + **自建代码密集 24 页** |
+| OmniDocBench v1.6 固定子集 | `scripts/prepare_eval_corpus.py` | 论文双栏 / 公式密集 / 图表引用 / 扫描版老手册，各 10 页 |
 
-适配层是 `load_omnidocbench()`，只读官方标注里的 `text` 与 `html`，
+适配层是 `load_omnidocbench()`，读官方标注里的 `text` / `html` / `latex`，
 **不依赖官方评测代码**。官方每个样本一页，`page_attribute` 直接拿来做切片。
+
+固定清单在 `eval/omnidocbench-v1.6-slices.json`，钉了官方标注 SHA-256 与官方评测器
+commit。真数据不进 git；准备脚本只下载入选的 40 张图，并同时生成单页 bitmap-only PDF
+（OCR 官方逐页评测）与每域 10 页 PDF（Web 出处页码评测）：
+
+```bash
+python scripts/prepare_eval_corpus.py
+```
+
+公开基准的代码页太少，另由 `scripts/make_fixtures.py` 生成 24 页 Courier 代码小集，
+覆盖 CamelCase / snake_case / dotted.name / namespace / path / `--flag`；前 10 页是核心切片。
 
 ## 用法
 
@@ -79,23 +97,44 @@ python scripts/eval_ocr.py --engine borndigital
 env EVAL_FILE_BASE=http://127.0.0.1:18081 SERVICE_TOKEN=xxx \
     python scripts/eval_ocr.py --engine mineru --gateway http://127.0.0.1:9000
 
-# 接 OmniDocBench
-python scripts/eval_ocr.py --dataset ~/OmniDocBench/ --engine vlm-ocr \
+# 跑固定的 OmniDocBench v1.6 子集，并导出官方输入
+python scripts/eval_ocr.py \
+    --dataset .eval-cache/omnidocbench-v1.6 \
+    --manifest eval/omnidocbench-v1.6-slices.json \
+    --engine vlm-ocr --gateway http://127.0.0.1:9000 \
+    --export-official /tmp/ddp-omnidocbench
+
+# 官方评测器必须用它验证过的 Python 3.10/3.11 + TeX/ImageMagick/Ghostscript 环境
+(cd /tmp/ddp-omnidocbench && /path/to/omnidocbench-venv/bin/python \
+    /path/to/OmniDocBench/pdf_validation.py --config omnidocbench.yaml)
+
+# 把官方 TEDS / TEDS-S / CDM 合回 DDP 报告
+python scripts/eval_ocr.py ... \
+    --official-result /tmp/ddp-omnidocbench/result/predictions_quick_match_metric_result.json \
     --markdown docs/EVAL-ocr-report.md
 ```
+
+清单同时钉住 v1.6 数据 revision、标注 SHA-256 与 v1.6 评测器 commit；OmniDocBench
+数据受官方 Copyright Statement 的仅研究、非商业用途限制，不能沿用代码仓库的
+Apache-2.0 许可。
+
+合回报告时五项官方汇总值必须全部存在且为有限数；`metric_debug` 中任一 TEDS/CDM
+超时、错误或异常计数也会令脚本非零退出。官方评测器会把部分逐样本异常记成 0 分，
+若只看汇总值就会把评测环境故障误当成模型表现。
 
 `--gateway` 走 HTTP 而不是进程内直调，是刻意的：**评测要量部署形态下的真实行为**，
 进程内直调会绕开注册表与归一化层，量出来的是另一回事。
 
-## 当前结论（2026-08-23，fixtures，本地直跑）
+## 当前结论（2026-08-27，fixtures，本地直跑）
 
-| 切片 | 页 | 文本准确率 | 表格单元格 F1 |
-|---|---|---|---|
-| 全部 | 2 | 99.9% | 0.0% |
+| 切片 | 页 | 文本准确率 | 表格单元格 F1 | 公式编辑准确率 |
+|---|---|---|---|---|
+| 代码密集 | 24 | 100.0% | — | — |
+| 英文合同 | 2 | 99.9% | 0.0% | — |
 
 两个数字都是**预期之内**，且都有用：
 
-1. **文本 99.9%**：born-digital 直接读 PDF 文字层，本来就该接近满分。
+1. **代码文本 100% / 合同 99.9%**：born-digital 直接读 PDF 文字层，本来就该接近满分。
    它是这条指标的**上界基准** —— OCR 引擎在扫描件上达不到这个数，差距就是 OCR 的代价。
 2. **表格 0%**：born-digital 不做表格识别（`docs/layout-format.md` 里写着）。
    **这正是要量的东西**：换成 mineru 或 vlm-ocr 之后这个数字应该起来，
@@ -105,6 +144,5 @@ python scripts/eval_ocr.py --dataset ~/OmniDocBench/ --engine vlm-ocr \
 
 - **真机数字全缺**：本机无 GPU，mineru 与 vlm-ocr 一次都没量过。
   拿到 GPU 机器后第一件事就是把这两列填上。
-- **样本只有英文单栏**：中文、双栏、扫描件、旋转页、公式一个都没有。
-  接 OmniDocBench 就能补上，缺的是跑一次的环境不是工具。
-- **TEDS**：见上面那一节，刻意不做。
+- **四个真实域的真机数字**：固定 40 页与下载/导出链已经就位，但本机无 GPU。
+- **官方 TEDS/CDM 数字**：导出与回读已经就位；要在 §8 批次一的官方复现环境里跑。

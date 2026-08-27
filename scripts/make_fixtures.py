@@ -4,6 +4,7 @@
   long-doc.pdf   5 页文本 PDF，第 3/5 页各埋一条唯一事实，用于验证检索定位与出处页码
   vqa-test.png   含文字的图片，用于验证图片直答路径
   contract.pdf   2 页合同样本，字段值与表格行**已知**，用于抽取评测（DDP-Extract）
+  code-corpus.pdf 24 页代码密集小集，公开基准缺口的自建回归集
 
 用法：python scripts/make_fixtures.py
 """
@@ -39,7 +40,8 @@ def build_long_pdf(pages: int = 5) -> bytes:
     return _write_pdf(page_lines, leading=34)
 
 
-def _write_pdf(page_lines: list[list[str]], *, leading: int = 34) -> bytes:
+def _write_pdf(page_lines: list[list[str]], *, leading: int = 34,
+               font: str = "Helvetica") -> bytes:
     """把每页的文本行写成一份合法 PDF（不引入额外依赖）。
 
     **xref 表不可省**：缺 xref 的 PDF 解析器只能读出第一页，
@@ -63,13 +65,15 @@ def _write_pdf(page_lines: list[list[str]], *, leading: int = 34) -> bytes:
         y = 740
         parts = []
         for ln in lines:
-            safe = ln.replace("(", "").replace(")", "").replace("\\", "")
+            # PDF literal string：反斜杠与括号必须转义。旧实现直接删除，
+            # 对代码/公式样本会把原文真值悄悄改掉。
+            safe = ln.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
             parts.append(f"BT /F1 12 Tf 60 {y} Td ({safe}) Tj ET")
             y -= leading
         stream = "\n".join(parts).encode()
         objects[content_nums[i]] = (b"<</Length " + str(len(stream)).encode() + b">>stream\n"
                                     + stream + b"\nendstream")
-    objects[font_num] = b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"
+    objects[font_num] = f"<</Type/Font/Subtype/Type1/BaseFont/{font}>>".encode()
 
     out = bytearray(b"%PDF-1.4\n")
     offsets: dict[int, int] = {}
@@ -186,6 +190,58 @@ def contract_truth() -> dict:
     }
 
 
+# 公开文档解析基准几乎不量代码块。这里自建 24 页，覆盖驼峰、下划线、点号、
+# 命名空间、路径、泛型与 shell flag；每页一个唯一标识符，方便阶段 5 做精确查询回归。
+CODE_IDENTIFIERS = [
+    "HttpRequestParser", "parse_job_id", "registry.default_of", "DDP_CORE_PATH",
+    "std::vector<Result>", "com.example.deepdoc.Indexer", "--skip-special-tokens",
+    "QA_PARSE_MISMATCH_THRESHOLD", "loadCitationTargets", "evidence.content_digest",
+    "asyncio.to_thread", "DocumentUpload.uploaded_by", "uq_documents_doc_origin",
+    "VLLM_USE_FLASHINFER_SAMPLER", "SearchIndex.min_similarity", "layout_to_chunks",
+    "code_detection_unavailable", "CitationRole.REJECTED", "graph_neighbors",
+    "WikiSentence.evidence_ids", "RRF_K", "EXTRACT_MAX_RECORD_BLOCKS",
+    "get_evidence", "entity_merge_uncertain",
+]
+
+
+def _code_page(index: int, identifier: str) -> list[str]:
+    return [
+        f"// DeepDocParse code benchmark page {index + 1:02d}",
+        "from __future__ import annotations",
+        "",
+        f"TARGET_IDENTIFIER = \"{identifier}\"",
+        "",
+        "async def resolve_document(document_id: str, *, min_score: float = 0.55):",
+        "    candidates = await index.search(document_id, min_similarity=min_score)",
+        "    for candidate in candidates:",
+        "        if candidate.evidence_id and candidate.bbox:",
+        "            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}",
+        "",
+        "class EvidenceCompiler(Generic[T]):",
+        "    def compile_atom(self, atom: T) -> tuple[str, list[float]]:",
+        "        provider = f\"{self.engine.name}:{self.engine.version}\"",
+        "        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]",
+        "",
+        "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.",
+        f"assert normalize_identifier(TARGET_IDENTIFIER)  # {identifier}",
+    ]
+
+
+def build_code_corpus_pdf() -> bytes:
+    return _write_pdf([_code_page(i, identifier)
+                       for i, identifier in enumerate(CODE_IDENTIFIERS)],
+                      leading=20, font="Courier")
+
+
+def code_corpus_truth() -> dict:
+    return {
+        "attributes": ["代码密集", "born-digital", "自建代码基准"],
+        "pages": [{"page_idx": i, "text": "\n".join(_code_page(i, identifier)),
+                   "identifier": identifier}
+                  for i, identifier in enumerate(CODE_IDENTIFIERS)],
+    }
+
+
 # PIL 默认字体是 ~11px 位图字体，OCR 完全读不出（踩过：VQA 一直返回乱码）。
 # 必须用 TrueType 且字号够大；按平台依次尝试。
 FONT_CANDIDATES = [
@@ -233,6 +289,12 @@ if __name__ == "__main__":
     truth.write_text(json.dumps(contract_truth(), ensure_ascii=False, indent=2),
                      encoding="utf-8")
     print(f"wrote {contract} ({contract.stat().st_size} bytes) + {truth.name}")
+    code_pdf = FIXTURES / "code-corpus.pdf"
+    code_truth = FIXTURES / "code-corpus.truth.json"
+    code_pdf.write_bytes(build_code_corpus_pdf())
+    code_truth.write_text(json.dumps(code_corpus_truth(), ensure_ascii=False, indent=2),
+                          encoding="utf-8")
+    print(f"wrote {code_pdf} ({code_pdf.stat().st_size} bytes) + {code_truth.name}")
     pdf = FIXTURES / "long-doc.pdf"
     png = FIXTURES / "vqa-test.png"
     pdf.write_bytes(build_long_pdf())
