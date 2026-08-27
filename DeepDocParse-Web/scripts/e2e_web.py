@@ -216,7 +216,7 @@ async def scenario_qa(http: httpx.AsyncClient, headers: dict, document: dict) ->
         check("未验证时给出降级原因（不许静默）", bool(done.get("degraded")),
               f"done={done}")
 
-    # 出处必须带可量纲的相关度（RRF 名次分表达不了"有多相关"，见 app/search.py）
+    # 出处必须带可量纲的相关度（RRF 名次分表达不了"有多相关"，见 `ddp_core/search.py`）
     if citations:
         confidence = done.get("confidence") or {}
         check("回答带检索可信度", confidence.get("level") in ("high", "low", "unknown"),

@@ -220,6 +220,11 @@ async def test_keyword_only_match_below_floor_is_not_a_citation(auth_client, ses
 
     这里的问题与第 1 页仅共享一个高频字"的"，字符袋余弦远低于 qa_min_similarity，
     但词面确实命中 —— 正是旧实现会漏过去的那一类。
+
+    ⚠️ **这一条只钉住了向量路**，别拿它当关键词路的守卫（阶段 2a 二次验收实测：
+    把 `similar_enough` 改成恒 True，167 例全绿）。原因是 `"的"` 会被 jieba 当停用词
+    滤掉 -> `terms` 为空 -> 关键词路压根产不出候选 -> 那个过滤器从未被执行。
+    下面那条 `..._keyword_path...` 才是关键词路的守卫。
     """
     document = await _ready_document(auth_client)
     cid = await _conversation(auth_client, document["id"])
@@ -229,7 +234,7 @@ async def test_keyword_only_match_below_floor_is_not_a_citation(auth_client, ses
     texts = [c.text for c in chunks]
 
     from app.config import settings as cfg
-    from app.search import MemoryIndex, _cosine
+    from ddp_core.search import MemoryIndex, _cosine, _query_tokens
 
     question = "的"
     qvec = _embed_response(
@@ -238,11 +243,69 @@ async def test_keyword_only_match_below_floor_is_not_a_citation(auth_client, ses
     assert all(s <= cfg.qa_min_similarity for s in sims), \
         f"前提不成立：问题与 {texts} 的相似度 {sims} 未全部低于下限"
     assert any(question in t for t in texts), "前提不成立：词面应当命中"
+    # 但**裸子串命中 ≠ 检索里的词面命中**：检索走的是 tokenizer。这里如实记下
+    # 这条用例的真实覆盖面 —— `"的"` 被滤成空，关键词路本就没有候选
+    assert _query_tokens(question).split() == [], \
+        "前提变了：`的` 现在能产出检索词了，这条用例的覆盖面随之改变，请重读 docstring"
 
     hits = await MemoryIndex().search(session, vector=qvec, query=question,
                                       document_id=document["id"],
+                                      min_similarity=cfg.qa_min_similarity,
                                       limit=cfg.qa_top_k, candidates=cfg.qa_candidates)
     assert hits == [], f"低于相似度下限的词面命中不得成为出处，实际返回 {hits}"
+
+    events = await _ask(auth_client, cid, question=question)
+    done = dict(events)["done"]
+    assert done["degraded"] == "no_hits" and done["verified"] is False
+    assert dict(events)["citations"]["citations"] == []
+
+
+@respx.mock
+async def test_similarity_floor_also_filters_the_keyword_path(auth_client, session):
+    """回归：下限对**关键词路**同样生效 —— 上一条用例覆盖不到的那一半。
+
+    RRF 是并集融合，两条腿各自出候选。下限只管住向量路的话，
+    "向量路判定全都不相关"的问题仍会靠共现词把 chunk 捞进出处，
+    而 `verified` 只看有没有裁剪图 —— 假出处还会被打上"已做视觉验证"。
+    **这是本项目定义的最恶劣错误**（plan.md §9 不变式 1）。
+
+    与上一条的区别全在选题：这里的问题**分词后仍有词能落到块里**（"表格"），
+    但整句与块的字符袋余弦远低于下限。于是关键词路真的产出了候选，
+    `similar_enough` 那道过滤器才第一次被执行到。
+
+    前提断言用的是**真 tokenizer**（`_query_tokens` + `tokenized`），
+    不是裸子串 —— 裸子串命中与检索里的词面命中不是一回事，
+    上一条用例正是栽在这里（阶段 2a 二次验收抓到）。
+    """
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(CHAT).mock(return_value=_chat_sse("文档中未找到"))
+
+    from app.config import settings as cfg
+    from ddp_core.search import MemoryIndex, _cosine, _query_tokens
+    from ddp_core.tokenize import tokenized
+
+    chunks = (await session.execute(select(Chunk).order_by(Chunk.seq))).scalars().all()
+    question = "表格究竟从什么时候开始不再被任何主流实现所支持"
+    qvec = _embed_response(
+        httpx.Request("POST", EMBEDDINGS, json={"input": [question]})).json()["data"][0]["embedding"]
+
+    # 前提一：向量路必须判定"全都不相关"
+    sims = [_cosine(qvec, c.embedding) for c in chunks]
+    assert all(s <= cfg.qa_min_similarity for s in sims), \
+        f"前提不成立：相似度 {sims} 未全部低于下限 {cfg.qa_min_similarity}"
+    # 前提二：关键词路必须真的产出候选（否则那道过滤器还是执行不到，用例又成了摆设）
+    terms = [t for t in _query_tokens(question).split() if t]
+    kw_hits = [sum(tokenized(c.text).count(t) for t in terms) for c in chunks]
+    assert terms and any(n > 0 for n in kw_hits), \
+        f"前提不成立：分词 {terms} 在块里一个都没命中（{kw_hits}），关键词路没有候选"
+
+    hits = await MemoryIndex().search(session, vector=qvec, query=question,
+                                      document_id=document["id"],
+                                      min_similarity=cfg.qa_min_similarity,
+                                      limit=cfg.qa_top_k, candidates=cfg.qa_candidates)
+    assert hits == [], \
+        f"关键词路绕过了相似度下限：{[h['text'] for h in hits]} 成了出处，而它们全都不相关"
 
     events = await _ask(auth_client, cid, question=question)
     done = dict(events)["done"]

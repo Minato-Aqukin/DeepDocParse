@@ -125,7 +125,11 @@ def _backfill_tokenized(bind) -> None:
     root = Path(__file__).resolve().parents[2]
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    from app.tokenize import tokenized
+    # 分词已搬进 ddp_core（阶段 1）。**迁移里的 import 必须跟着改** ——
+    # 这一段是无条件执行的，空库也会走到，所以一个全新部署会在这里
+    # ModuleNotFoundError 然后停在 0004。已有库早就过了 0005，看不见这个洞，
+    # 那正是它到阶段 2a 验收才被发现的原因。
+    from ddp_core.tokenize import tokenized
 
     chunks = sa.table("chunks", sa.column("id", sa.String), sa.column("text", sa.Text),
                       sa.column("text_tokenized", sa.Text))

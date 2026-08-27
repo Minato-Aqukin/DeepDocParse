@@ -24,7 +24,7 @@ settings.bcrypt_rounds = 4
 from app.main import app  # noqa: E402
 from app.metering import MemoryRateLimiter
 from app.models import Base
-from app.search import MemoryIndex
+from ddp_core.search import MemoryIndex
 from app.service_client import ServiceClient
 from app.storage import MemoryStorage
 

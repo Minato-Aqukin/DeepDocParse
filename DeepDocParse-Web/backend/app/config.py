@@ -264,6 +264,24 @@ settings = Settings()
 _PLACEHOLDER_SECRETS = {"", "change-me", "change-me-please", "changeme", "secret"}
 
 
+def rerank_config() -> "RerankConfig":
+    """把本层的 settings 装配成 core 认识的形状。
+
+    `ddp_core.rerank` 是两个仓库共用的叶子模块，**不能 import 任何一侧的
+    `app.config`**（两边各有一个 `app` 顶层包）。所以配置由调用方装配后传进去。
+    """
+    from ddp_core.rerank import RerankConfig
+
+    return RerankConfig(
+        enabled=settings.rerank_enabled,
+        endpoint=settings.rerank_endpoint,
+        # 留空用 service_token —— 这条口径留在本层，core 不该知道 service_token 是什么
+        token=settings.rerank_token or settings.service_token,
+        model=settings.rerank_model,
+        timeout=settings.rerank_timeout,
+    )
+
+
 def assert_secrets_configured() -> None:
     """启动即失败，而不是带着占位密钥安静地跑起来。
 

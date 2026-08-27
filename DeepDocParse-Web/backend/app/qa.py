@@ -21,11 +21,11 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
+from app.config import rerank_config, settings
 from app.crops import get_or_create_crop
 from app.models import Chunk, Document, ParseJob
-from app.rerank import rerank_hits
-from app.search import Hit, SearchIndex
+from ddp_core.rerank import rerank_hits
+from ddp_core.search import Hit, SearchIndex
 from app.storage import Storage
 from ddp_core.tokenize import backend as tokenize_backend
 from app.upstream import chat_request, embed_one
@@ -202,11 +202,13 @@ async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncC
 
     hits = await index.search(session, vector=vector, query=question,
                               document_id=document.id,
-                              limit=limit, candidates=candidates)
+                              limit=limit, candidates=candidates,
+                              min_similarity=settings.qa_min_similarity)
     if not hits:
         return Retrieval(degraded=degraded or "no_hits")
 
-    hits, rerank_degraded = await rerank_hits(http, question, hits, top_k=settings.qa_top_k)
+    hits, rerank_degraded = await rerank_hits(http, question, hits,
+                                              top_k=settings.qa_top_k, cfg=rerank_config())
     # 向量化不可用比"没重排"严重得多，不能被后者盖掉 —— 前者意味着整条语义路都没跑
     return Retrieval(hits=hits, degraded=degraded or rerank_degraded)
 

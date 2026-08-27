@@ -55,9 +55,12 @@
 - backend：FastAPI + SQLAlchemy 2.0(async) + asyncpg + Alembic；JWT 用 jose，密码 bcrypt，
   API key 用 sha256（每请求都要验，bcrypt 会压垮代理路径）
 - 模型只用可移植类型（String/JSON/DateTime），不用 PG 专有的 UUID/JSONB —— 单测因此能跑 SQLite。
-  **向量列走 `app/types.py::Vector`**（PG 上是 pgvector，其它方言退回 JSON），
-  检索本身抽在 `app/search.py::SearchIndex` 协议后面：生产 `PgVectorIndex`，单测 `MemoryIndex`。
-  这两处是"单测不需要任何外部依赖"的命门，别绕过去直接写 SQL
+  **向量列走 `ddp_core/types.py::Vector`**（PG 上是 pgvector，其它方言退回 JSON），
+  检索本身抽在 `ddp_core/search.py::SearchIndex` 协议后面：生产 `PgVectorIndex`，单测 `MemoryIndex`。
+  这两处是"单测不需要任何外部依赖"的命门，别绕过去直接写 SQL。
+  **这两个模块（连同 models / chunking / tokenize / rerank / blocks / crops / extract_format）
+  自阶段 2a 起住在 `DeepDocParse/gateway/ddp_core/`，两个仓库共用同一份**——
+  `app/` 下再也没有它们的副本，别照着旧路径新建一个
 - 库里读出的时间要过 `models.as_aware()` 再和 `utcnow()` 比（SQLite 存 naive，PG 存 aware）
 - frontend：Vue3 + TS + Router + Pinia + Element Plus；解析结果渲染**必须过 DOMPurify**
   （文档内容是不可信输入）

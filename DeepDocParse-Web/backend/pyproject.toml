@@ -38,8 +38,11 @@ dependencies = [
 #
 # 所以约定是**显式按顺序装**，先 gateway 再 backend：
 #
-#     pip install -e ../DeepDocParse/gateway
+#     pip install -e "../DeepDocParse/gateway[corpus]"
 #     pip install -e "backend[dev]"
+#
+# **注意那个 `[corpus]`**：`ddp_core` 里碰数据库的部分（models 等）需要
+# SQLAlchemy，而 gateway 自己是无状态的、不装 ORM。本层要的是全套。
 #
 # quickstart.sh 与 .github/workflows/ci.yml 都已按这个顺序来。
 # 漏装的表现是 import 期 `ModuleNotFoundError: No module named 'ddp_core'`，

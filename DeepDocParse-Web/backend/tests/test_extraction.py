@@ -19,7 +19,8 @@ from ddp_core.extract_format import parse_schema, validate_schema
 from app.extraction import ExtractContext, run as run_extraction
 from app.models import Chunk, Document, ParseJob
 from app.routers.extractions import _csv_safe
-from app.search import MemoryIndex
+from app.config import settings
+from ddp_core.search import MemoryIndex
 from ddp_core.tokenize import tokenized
 
 from tests.conftest import CHAT, EMBEDDINGS
@@ -294,7 +295,7 @@ def test_keyword_query_is_or_not_and():
     「字段名 + description」切出四五个词，要求一个块同时含全部 —— 真 PG 实测恒不命中。
     而单测的 MemoryIndex 是 OR，于是单测绿、生产红。
     """
-    from app.search import _or_tsquery
+    from ddp_core.search import _or_tsquery
 
     assert _or_tsquery("buyer 买方单位全称") == "buyer | 买方 | 单位 | 全称"
     # 切不出词时不能返回空串（to_tsquery 会抛语法错，整条关键词路被 except 吞掉）
@@ -312,7 +313,7 @@ def test_keyword_sql_does_not_use_websearch_to_tsquery():
     import inspect
     import re
 
-    from app.search import PgVectorIndex
+    from ddp_core.search import PgVectorIndex
 
     source = inspect.getsource(PgVectorIndex.search)
     # **先剥掉注释行**：那段长注释里正记着"曾经是 websearch_to_tsquery"这条教训，
@@ -335,7 +336,8 @@ async def test_memory_index_keyword_path_is_or_by_behaviour(session, app_state):
     # AND 语义下应当零命中，OR 语义下应当命中
     hits = await MemoryIndex().search(
         session, vector=None, query="买方 完全不存在的词 另一个不存在的词",
-        document_id=document.id, limit=4, candidates=8)
+        document_id=document.id, limit=4, candidates=8,
+        min_similarity=settings.qa_min_similarity)
     assert hits, "关键词路变成 AND 了 —— 与 PgVectorIndex 的 OR 语义对不上"
 
 
@@ -348,12 +350,12 @@ def test_pg_keyword_path_uses_or_tsquery():
     import inspect
     import re
 
-    from app.search import PgVectorIndex
+    from ddp_core.search import PgVectorIndex
 
     code = "\n".join(line for line in inspect.getsource(PgVectorIndex.search).splitlines()
                      if not line.lstrip().startswith("#"))
     assert not re.search(r"websearch_to_tsquery\s*\(", code)
-    assert "_or_tsquery" in inspect.getsource(__import__("app.search", fromlist=["x"]))
+    assert "_or_tsquery" in inspect.getsource(__import__("ddp_core.search", fromlist=["x"]))
 
 
 def test_rerank_unavailable_is_in_the_contract_vocabulary():

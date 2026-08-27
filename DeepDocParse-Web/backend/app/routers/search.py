@@ -1,6 +1,6 @@
 """跨文档检索：在自己的全部文档里找内容，命中带页码可直达。
 
-与问答共用同一套混合检索（app/search.py），区别只是不限定 document_id。
+与问答共用同一套混合检索（`ddp_core/search.py`），区别只是不限定 document_id。
 """
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
@@ -42,7 +42,8 @@ async def search(request: Request, q: str = "", doc: str = "", limit: int = 20,
 
     hits = await index.search(session, vector=vector, query=q, document_id=doc or None,
                               limit=min(limit, 50),
-                              candidates=max(limit, settings.qa_candidates))
+                              candidates=max(limit, settings.qa_candidates),
+                              min_similarity=settings.qa_min_similarity)
     if not hits:
         return {"query": q, "degraded": degraded, "groups": []}
 

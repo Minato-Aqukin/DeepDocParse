@@ -289,10 +289,10 @@ README 顶部与**每个页面的页脚**（`frontend/src/layouts/AppShell.vue`�
         **绝不静默当成"文档里没有"** —— 那会让系统故障伪装成事实
   - [x] **块类型感知分块**：表格独立成块并保住 `table_html`（行列关系只在 HTML 里），
         标题作上下文前缀。顺带堵掉「mineru 表格块的文字被静默丢弃」那个洞
-  - [x] **D2 中文分词**（`app/tokenize.py`，jieba 软依赖 + 二元组兜底，降级可见）：
+  - [x] **D2 中文分词**（`ddp_core/tokenize.py`，jieba 软依赖 + 二元组兜底，降级可见）：
         `to_tsvector('simple', text)` 把整段中文当成一个 token，
         混合检索在中文文档上此前实际只有向量一条腿
-  - [x] **D1 rerank**（`app/rerank.py`）：上游没注册 rerank 模型时返回 404，
+  - [x] **D1 rerank**（`ddp_core/rerank.py`）：上游没注册 rerank 模型时返回 404，
         本层打 `rerank_unavailable` 并照常返回融合名次 —— 可见降级，不是静默跳过
   - [x] **抽取评测**（[docs/EVAL-extraction.md](docs/EVAL-extraction.md)）：
         offline 已跑出数字并抓到一个真问题（关键词路跨不了语种）

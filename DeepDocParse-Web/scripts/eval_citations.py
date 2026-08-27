@@ -217,7 +217,7 @@ def run_offline(samples: list[dict], any_citation: bool) -> list[Outcome]:
         layout = layouts.setdefault(str(layout_path),
                                     json.loads(layout_path.read_text(encoding="utf-8")))
 
-        from app.chunking import layout_to_chunks
+        from ddp_core.chunking import layout_to_chunks
         chunks = layout_to_chunks(layout, settings.chunk_max_chars)
         ranked = _keyword_rank(sample["question"], chunks)[:settings.qa_top_k]
         outcomes.append(judge(

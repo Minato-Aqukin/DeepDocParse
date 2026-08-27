@@ -226,3 +226,54 @@ async def test_healthz_does_not_depend_on_anything(client):
 async def test_metrics_exposed(client):
     resp = await client.get("/metrics")
     assert resp.status_code == 200 and "http_request" in resp.text
+
+
+def test_rerank_config_falls_back_to_service_token(monkeypatch):
+    """`rerank_token` 留空时必须退回 `service_token`。
+
+    这条兜底是**部署约定**：rerank 与 embed 是同一类 TEI 容器，在同一张内网里，
+    绝大多数部署不会为它单独配一个令牌。`docs/CONFIG.md` 与 `config.py:149`
+    的注释都写着"留空用 service_token"，但阶段 2a 之前没有任何用例钉着它 ——
+    验收把 `or settings.service_token` 砍掉，152 例全绿。
+
+    砍掉的后果是**静默的**：token 变空串 -> TEI 返回 401 ->
+    `rerank_hits` 打 `rerank_unavailable` 照常返回原名次。
+    看起来只是"没部署 rerank"，实际是配置装配错了（不变式 2：降级必须可见，
+    但这里降级的原因会指向错误的方向）。
+    """
+    from app.config import rerank_config
+
+    monkeypatch.setattr(settings, "service_token", "svc-token")
+
+    monkeypatch.setattr(settings, "rerank_token", "")
+    assert rerank_config().token == "svc-token", "留空没有退回 service_token"
+
+    # 配了就用配的那个 —— 不许反过来被 service_token 盖掉
+    monkeypatch.setattr(settings, "rerank_token", "its-own-token")
+    assert rerank_config().token == "its-own-token"
+
+
+def test_rerank_config_carries_the_rest_of_the_settings(monkeypatch):
+    """其余四个字段是直传，接错一个就是"配了但没生效"（而且照样是 404 + 可见降级，
+    看起来跟"没部署 rerank"一模一样）。
+
+    `endpoint` 不是直传而是走 `rerank_endpoint` 那个计算属性：
+    留空回落到 `{service_url}/v1/rerank`，配了就用配的。这条一并钉住。
+    """
+    from app.config import rerank_config
+
+    monkeypatch.setattr(settings, "rerank_enabled", True)
+    monkeypatch.setattr(settings, "rerank_model", "BAAI/bge-reranker-v2-m3")
+    monkeypatch.setattr(settings, "rerank_timeout", 12.5)
+
+    # 留空 -> 回落到 service_url
+    monkeypatch.setattr(settings, "rerank_url", "")
+    monkeypatch.setattr(settings, "service_url", "http://svc:9000")
+    cfg = rerank_config()
+    assert cfg.endpoint == "http://svc:9000/v1/rerank", "留空没有回落到 service_url"
+    assert (cfg.enabled, cfg.model, cfg.timeout) == (
+        True, "BAAI/bge-reranker-v2-m3", 12.5)
+
+    # 配了就用配的 —— 独立部署一个 TEI rerank 容器时走这条
+    monkeypatch.setattr(settings, "rerank_url", "http://tei-rerank:80/rerank")
+    assert rerank_config().endpoint == "http://tei-rerank:80/rerank"

@@ -47,9 +47,12 @@ jobs:
           # **顺序不能反**：ddp_core 没写在 backend 的 dependencies 里
           # （路径依赖没有可移植写法，uv.sources 只有 uv 读、pip 不读），
           # 靠显式先装。理由见 backend/pyproject.toml 末尾
-          pip install -e .service-repo/gateway
+          pip install -e ".service-repo/gateway[corpus]"
           pip install -e "backend[dev]"
-          python -c "import ddp_core.chunking"   # 漏装就当场红，别拖到用例里
+          # 漏装就当场红，别拖到用例里。**验的是 models 不是 chunking** ——
+          # chunking 不需要 sqlalchemy，`[corpus]` 漏了它照样能 import，
+          # 于是这一步会绿着放过正要验的那件事（阶段 2a 二次验收指出）
+          python -c "import ddp_core.models, ddp_core.search, ddp_core.chunking"
 
       - name: 单测
         working-directory: backend

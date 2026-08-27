@@ -26,7 +26,7 @@ from dataclasses import dataclass, field as dc_field
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
+from app.config import rerank_config, settings
 from app.crops import get_or_create_crop
 from ddp_core.extract_format import (
     CoerceError, FieldSpec, SchemaSpec, coerce_value, field_result, overall_status,
@@ -34,10 +34,10 @@ from ddp_core.extract_format import (
 )
 from app.models import Document, ParseJob
 from app.qa import verify_parse_consistency
-from app.search import Hit, SearchIndex
+from ddp_core.search import Hit, SearchIndex
 from app.storage import Storage
 from app.upstream import chat_request, embed_one
-from app.rerank import rerank_hits
+from ddp_core.rerank import rerank_hits
 
 _SYSTEM = (
     "你是文档信息抽取器。只依据【资料】抽取，资料里没有的信息必须如实报告没有，"
@@ -142,11 +142,13 @@ async def _retrieve(ctx: ExtractContext, query: str, *, k: int,
     candidates = max(settings.rerank_candidates if settings.rerank_enabled else k * 3, k)
     hits = await ctx.index.search(ctx.session, vector=vector, query=query,
                                   document_id=ctx.document.id,
-                                  limit=candidates, candidates=candidates)
+                                  limit=candidates, candidates=candidates,
+                                  min_similarity=settings.qa_min_similarity)
     if not hits:
         return [], degraded or "no_hits"
 
-    hits, rerank_degraded = await rerank_hits(ctx.http, query, hits, top_k=max(k, 1))
+    hits, rerank_degraded = await rerank_hits(ctx.http, query, hits, top_k=max(k, 1),
+                                              cfg=rerank_config())
     degraded = degraded or rerank_degraded
     if prefer_types:
         # 稳定排序：表格块提前，同类保持原名次

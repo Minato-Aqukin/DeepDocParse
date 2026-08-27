@@ -25,7 +25,7 @@ from app.routers import (
     apikeys, auth, conversations, documents, extractions, files, internal, proxy,
     search, usage,
 )
-from app.search import PgVectorIndex
+from ddp_core.search import PgVectorIndex
 from ddp_core.tokenize import backend as tokenize_backend
 from app.service_client import ServiceClient, new_http_client
 from app.storage import MinioStorage

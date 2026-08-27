@@ -979,7 +979,7 @@ cmd_build() {
   [ -d "$SERVICE_DIR/gateway" ] \
     || die "找不到 $SERVICE_DIR/gateway —— 两个仓库必须同级（先跑 ./quickstart.sh configure）"
   ( cd "$WEB_DIR" && ./.venv/bin/pip install ${PIP_INDEX:+--index-url "$PIP_INDEX"} \
-      -e "$SERVICE_DIR/gateway" ) \
+      -e "$SERVICE_DIR/gateway[corpus]" ) \
     || die "ddp_core（service 仓库的 gateway 包）安装失败"
   ( cd "$WEB_DIR" && ./.venv/bin/pip install ${PIP_INDEX:+--index-url "$PIP_INDEX"} -e "backend[dev]" ) \
     || die "backend 依赖安装失败"

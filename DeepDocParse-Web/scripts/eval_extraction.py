@@ -182,9 +182,9 @@ def run_offline(samples: list[dict], any_citation: bool) -> list[SampleOutcome]:
        看它的期望页是否进得了候选。这是抽值准确率的**上界** ——
        检索都到不了那一页，模型再强也抽不出来
     """
-    from app.chunking import layout_to_chunks
-    from app.extract_schema import parse_schema, validate_schema
-    from app.tokenize import tokens as tokenize
+    from ddp_core.chunking import layout_to_chunks
+    from ddp_core.extract_format import parse_schema, validate_schema
+    from ddp_core.tokenize import tokens as tokenize
 
     outcomes: list[SampleOutcome] = []
     for sample in samples:
@@ -269,7 +269,7 @@ async def run_live(samples: list[dict], web: str, any_citation: bool) -> list[Sa
     """全链路：上传 -> 等索引 -> 建 run -> 等完成 -> 判定。"""
     import httpx
 
-    from app.extract_schema import validate_result
+    from ddp_core.extract_format import validate_result
 
     outcomes: list[SampleOutcome] = []
     # trust_env=False 是契约的一部分（铁律 7）：本机 SOCKS 代理会污染 localhost 调用

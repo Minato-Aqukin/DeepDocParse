@@ -5,6 +5,11 @@
 > `uploaded_by`（仅归属署名），去重变全局，全站唯一残留的授权是删除权限。
 > 下面凡是提到"按 user 过滤""文档属于用户"的地方都以此为准；
 > 已就地标注的三处见 §数据模型与 §检索。
+>
+> ⚠️ **模块位置也变了**（阶段 2a）：本文提到的 `app/types.py` / `app/search.py` /
+> `app/chunking.py` 连同 models / tokenize / rerank 已迁入 `DeepDocParse/gateway/ddp_core/`，
+> 两个仓库共用同一份。**设计结论没变，只是文件换了地方** ——
+> 下面的路径已就地改成 `ddp_core/*`，`app/` 下不再有它们的副本。
 
 
 > 状态：**已实现并通过真机 e2e**（单测 67 例、前端类型检查、parse/qa 两段 e2e 全绿）。
@@ -111,7 +116,7 @@ User ─┬─ Document (一份文件，内容 sha256 唯一)
 |---|---|
 | id / document_id(idx) / parse_job_id | 换 current_job 时整体替换 |
 | seq | 文档内顺序 |
-| page_idx / bbox(JSON) / page_size(JSON) | 出处三件套，由本层 `app/chunking.py` 从归档的 layout.json 算出 |
+| page_idx / bbox(JSON) / page_size(JSON) | 出处三件套，由 `ddp_core/chunking.py` 从归档的 layout.json 算出 |
 | text / char_len | char_len 用于 prompt 预算 |
 | embedding | `Vector(1024)` null，见 §2.5 |
 
@@ -133,10 +138,10 @@ User ─┬─ Document (一份文件，内容 sha256 唯一)
 
 M5 的单测能在 SQLite in-memory 跑完是很值钱的资产（34 例，不用起 PG/MinIO），不能因为 pgvector 丢掉。
 
-- `app/types.py::Vector`：`TypeDecorator`，`load_dialect_impl` 在 PG 上返回
+- `ddp_core/types.py::Vector`：`TypeDecorator`，`load_dialect_impl` 在 PG 上返回
   `pgvector.sqlalchemy.Vector(dim)`，其它方言退回 `JSON`（存 float 数组）。
   `Base.metadata.create_all` 在 SQLite 上照样能建表。
-- 检索抽成协议 `app/search.py::SearchIndex`（`upsert(document_id, chunks)` /
+- 检索抽成协议 `ddp_core/search.py::SearchIndex`（`upsert(document_id, chunks)` /
   `search(document_id, vector, text, top_k)`），与 M5 的 `Storage` 协议同套路：
   `PgVectorIndex` 走 SQL，`MemoryIndex` 供单测注入（纯 Python 余弦 + 子串匹配）。
 - compose 镜像换 `pgvector/pgvector:pg16`（当前是 `postgres:15-alpine`）。
@@ -170,7 +175,7 @@ M5 的单测能在 SQLite in-memory 跑完是很值钱的资产（34 例，不�
 
 ---
 
-## 3. 本层分块（`app/chunking.py`）
+## 3. 分块（`ddp_core/chunking.py`，阶段 2a 前是本层的 `app/chunking.py`）
 
 **DeepDocParse 仓库零改动。** 输入是本层归档的 `results/{job_id}/layout.json`。
 
@@ -203,7 +208,7 @@ index_document:  pending -> indexing -> ready
 1. claim: UPDATE documents SET index_status='indexing'
           WHERE id=:id AND index_status IN ('pending','failed')
           -- rowcount==0 直接返回：多副本/重复投递天然幂等（沿用 M5 归档 claim 的套路）
-2. 从 MinIO 读 results/{job_id}/layout.json -> app/chunking.py 分块
+2. 从 MinIO 读 results/{job_id}/layout.json -> `ddp_core/chunking.py` 分块
    -- 读的是本层永久副本，不碰 service，也不受 24h 窗口约束
 3. 批量向量化：按 embedding_batch_size=16 切分，逐批 POST {embedding_url}
    -- TEI 的 max-client-batch-size 是 32，service 侧 worker 已因整批被拒踩过坑
