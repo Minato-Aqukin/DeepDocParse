@@ -27,9 +27,8 @@ from app.deps import current_user, get_storage
 from app.errors import APIError
 from ddp_core.extract_format import SchemaError, parse_schema, validate_schema
 from app.extraction import ExtractContext, extraction_model_meta, run as run_extraction
-from app.evidence import record_evidence
+from app.evidence import load_citations, record_evidence
 from app.metering import record_usage
-from app.qa import attach_resolution, load_citation_targets
 from app.models import (
     Document, ExtractionItem, ExtractionRun, ExtractionTemplate, ParseJob, User, as_aware, utcnow,
 )
@@ -444,12 +443,12 @@ async def list_runs(limit: int = 50, user: User = Depends(current_user),
 async def get_run(run_id: str, user: User = Depends(current_user),
                   session: AsyncSession = Depends(get_session)):
     run = await _owned_run(run_id, user, session)
-    items, filenames = await _load_items(session, run_id)
+    items, filenames, citations = await _load_items(session, run_id)
     return {
         # by_alias：线上字段名必须是 schema_json（前端与库里都用这个名），
         # 不加的话前端会拿到一个叫 doc_schema 的字段
         "run": _run_out(run).model_dump(by_alias=True),
-        "items": [_item_out(i, filenames) for i in items],
+        "items": [_item_out(i, filenames, citations) for i in items],
     }
 
 
@@ -469,8 +468,8 @@ async def _owned_run(run_id: str, user: User, session: AsyncSession) -> Extracti
     return run
 
 
-async def _load_items(session: AsyncSession,
-                      run_id: str) -> tuple[list[ExtractionItem], dict[str, str]]:
+async def _load_items(session: AsyncSession, run_id: str) -> tuple[
+        list[ExtractionItem], dict[str, str], dict[str, list[dict]]]:
     items = (await session.execute(
         select(ExtractionItem).where(ExtractionItem.run_id == run_id)
         .order_by(ExtractionItem.created_at, ExtractionItem.record_index)
@@ -480,22 +479,31 @@ async def _load_items(session: AsyncSession,
     filenames = dict((await session.execute(
         select(Document.id, Document.filename).where(Document.id.in_(doc_ids))
     )).all()) if doc_ids else {}
-    return items, filenames
+    # **出处走 evidence/citations 两张表**（阶段 3 切换）。抽取的出处是字段级的，
+    # 所以来源键是 `{item_id}:{字段名}`。整批一次查完，同样是为了避开 N+1
+    sources = [f"{i.id}:{name}" for i in items for name in (i.fields or {})]
+    citations = await load_citations(session, source_kind="extract_field",
+                                     source_ids=sources)
+    return items, filenames, citations
 
 
-def _citation_out(document_id: str, citation: dict,
-                  lookup: dict | None = None) -> dict:
+def _citation_out(document_id: str, citation: dict) -> dict:
     """把对象键换成前端能直接取的 URL —— 与问答平面同一套路径。
 
     截图受 JWT 保护，`<img src>` 直接取不到（发不出 Authorization 头），
     前端要先 fetch 成 blob URL。复用 `/api/documents/{id}/crops/{job}/{name}`
     这个既有端点，因此这里的形状必须与 conversations._citation_out 一致 ——
     不一致的话前端的 CitationChip 就没法两边共用了。
+
+    **`resolved` 由 `load_citations` 算好后传进来，这里不许再兜底。**
+    阶段 3 之前这里是 `attach_resolution(citation, lookup) if lookup is not None
+    else dict(citation)` + `setdefault("resolved", True)` —— 而**没有任何一个
+    调用点传过 lookup**（`load_citation_targets` 导入了却从没被调用）。
+    于是那句"不能无脑 resolved=True"的注释底下，代码干的正是无脑 resolved=True：
+    抽取的每一条出处都被无条件标成有效，重建索引改了分块之后就是
+    **可点开、标着有效、却指向错块**的假出处。参数是死的，守卫就是装饰。
     """
-    # **不能无脑 resolved=True**：抽取结果会被反复打开，而重建索引会改 seq
-    # （M9 的分块规则变化就会）。走与问答平面同一道内容比对，指不回去就如实说
-    out = attach_resolution(citation, lookup) if lookup is not None else dict(citation)
-    out.setdefault("resolved", True)
+    out = dict(citation)
     key = out.pop("crop_key", None)
     if key:
         job_id, name = key.split("/")[1], key.rsplit("/", 1)[-1]
@@ -505,21 +513,26 @@ def _citation_out(document_id: str, citation: dict,
     return out
 
 
-def _fields_out(document_id: str, fields: dict, lookup: dict | None = None) -> dict:
-    """字段表里的每条出处都要过一遍 URL 转换（库里存的是对象键）+ 定位校验。"""
+def _fields_out(document_id: str, fields: dict, item_id: str,
+                citations: dict[str, list[dict]]) -> dict:
+    """字段表里的每条出处都要过一遍 URL 转换（库里存的是对象键）。
+
+    **出处本身来自新表，不再来自 `cell["citations"]`**（阶段 3 读切换）。
+    老 JSON 还在写，但不再被读 —— 回滚就是把这里换回 `cell.get("citations")`。
+    """
     out = {}
     for name, cell in (fields or {}).items():
         if not isinstance(cell, dict):
             continue
         item = dict(cell)
-        item["citations"] = [_citation_out(document_id, c, lookup)
-                             for c in (cell.get("citations") or [])]
+        item["citations"] = [_citation_out(document_id, c)
+                             for c in citations.get(f"{item_id}:{name}", [])]
         out[name] = item
     return out
 
 
 def _item_out(item: ExtractionItem, filenames: dict[str, str],
-              lookup: dict | None = None) -> dict:
+              citations: dict[str, list[dict]] | None = None) -> dict:
     return {
         "id": item.id,
         "document_id": item.document_id,
@@ -529,7 +542,8 @@ def _item_out(item: ExtractionItem, filenames: dict[str, str],
         "status": item.status,
         "degraded": item.degraded,
         "error": item.error,
-        "fields": _fields_out(item.document_id, item.fields or {}, lookup),
+        "fields": _fields_out(item.document_id, item.fields or {},
+                              item.id, citations or {}),
     }
 
 
@@ -565,7 +579,7 @@ async def export_run_csv(run_id: str, user: User = Depends(current_user),
     """
     run = await _owned_run(run_id, user, session)
     spec = parse_schema(run.schema_json or {})
-    items, filenames = await _load_items(session, run_id)
+    items, filenames, citations = await _load_items(session, run_id)
 
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -583,9 +597,12 @@ async def export_run_csv(run_id: str, user: User = Depends(current_user),
         for field in spec.fields:
             cell = fields.get(field.name) or {}
             row.append(_csv_safe(cell.get("value")))
-            citations = cell.get("citations") or []
+            # 出处同样走新表（阶段 3）。**导出与界面必须同源** ——
+            # 两边各读一处的话，界面显示"出处已失效"而导出的 CSV 照样给页码，
+            # 而 CSV 是拿去做决策的那一份
+            cell_citations = citations.get(f"{item.id}:{field.name}", [])
             # 页码对用户是 1 基的；库里是 0 基
-            pages = sorted({c["page_idx"] + 1 for c in citations
+            pages = sorted({c["page_idx"] + 1 for c in cell_citations
                             if c.get("page_idx") is not None})
             row.append(",".join(str(p) for p in pages))
         writer.writerow(row)

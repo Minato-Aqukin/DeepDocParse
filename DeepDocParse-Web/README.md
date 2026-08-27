@@ -221,9 +221,9 @@ cd frontend && npm run build                          # 含 vue-tsc 类型检查
 #   ...停掉 mineru、起 VQA（deepseek-ocr-server --device cpu --port 18001）...
 .venv/bin/python scripts/e2e_web.py --phase qa --user e2e_split      # 需 VQA + TEI
 
-# 双写对拍（阶段 2b）：老 JSON 的出处定位元组与 evidence/citations 两张新表逐条相同。
-# **读还走老路，所以这是切读之前唯一能发现"新表悄悄少了一批"的手段** ——
-# 少掉的那部分，阶段 3 切过去之后会变成"这条回答没有出处"
+# 双写对拍：老 JSON 的出处定位元组与 evidence/citations 两张新表逐条相同。
+# **阶段 3 起读已经切到新表**，老列只写不读（阶段 4 才删）。所以这个脚本现在量的是
+# "写进新表的和老列记的是不是同一批" —— 对不上就意味着界面上少了或多了出处
 .venv/bin/python scripts/reconcile_evidence.py            # 各抽 200 条
 .venv/bin/python scripts/reconcile_evidence.py --limit 0  # 全量
 ```

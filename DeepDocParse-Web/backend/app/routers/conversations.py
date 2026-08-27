@@ -25,12 +25,12 @@ from app.config import settings
 from app.db import get_session, get_sessionmaker
 from app.deps import current_user, get_storage
 from app.errors import APIError
-from app.evidence import record_evidence
+from app.evidence import load_citations, record_evidence
 from app.metering import record_usage
 from app.models import Conversation, Document, Message, ParseJob, User, utcnow
 from app.qa import (
-    Retrieval, answer_model_meta, attach_crops, attach_resolution, build_messages,
-    load_citation_targets, retrieval_confidence, retrieve, verify_parse_consistency,
+    Retrieval, answer_model_meta, attach_crops, build_messages,
+    retrieval_confidence, retrieve, verify_parse_consistency,
 )
 from app.storage import Storage, crop_key as build_crop_key
 from app.upstream import chat_request
@@ -114,13 +114,11 @@ async def list_messages(cid: str, user: User = Depends(current_user),
     rows = (await session.execute(
         select(Message).where(Message.conversation_id == cid).order_by(Message.created_at)
     )).scalars().all()
-    # 出处要接回**当前**索引：chunk_id 每次 reindex 都重铸，直接回放旧值全是悬空指针。
-    # 全会话的定位键合起来查**一次**（每条 message 查一次的话，长会话就是 N+1）
-    lookup = await load_citation_targets(
-        session, conversation.document_id,
-        [c for m in rows for c in (m.citations or [])])
-    resolved = {m.id: [attach_resolution(c, lookup) for c in (m.citations or [])]
-                for m in rows if m.citations}
+    # **读走 evidence/citations 两张表**（阶段 3 切换）。老的 messages.citations
+    # 仍在写（阶段 4 才删），但不再被读 —— 回滚就是把这里换回 attach_resolution。
+    # 全会话一次查完（每条 message 查一次的话，长会话就是 N+1）
+    resolved = await load_citations(session, source_kind="message",
+                                    source_ids=[m.id for m in rows])
     return [{"id": m.id, "role": m.role, "content": m.content,
              "citations": [_citation_out(conversation.document_id, c)
                            for c in resolved.get(m.id, [])],

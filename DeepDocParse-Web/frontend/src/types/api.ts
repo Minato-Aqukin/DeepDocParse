@@ -80,7 +80,13 @@ export interface DocumentStats {
 }
 
 export interface Citation {
-  chunk_id: string
+  /**
+   * 当前索引里对应的块。**接不回来时是 null**（阶段 3 起）——
+   * 后端宁可不给，也不会回放一个失效的旧值：给了就等于让前端把高亮指到错块。
+   * 点击定位时它会让 selectedChunkId 变成 null，于是没有任何块被选中，
+   * 而 `resolved === false` 会让这条出处显示成失效样式。
+   */
+  chunk_id: string | null
   /** 稳定定位键：chunk_id 每次 reindex 都会重铸，(parse_job_id, seq) 不会 */
   parse_job_id: string | null
   seq: number | null

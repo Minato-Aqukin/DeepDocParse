@@ -289,3 +289,43 @@ async def test_extraction_dual_writes_at_field_granularity(auth_client, session)
 def _sse_answer():
     from tests.test_qa import _chat_sse
     return _chat_sse("第二页", "讲的是表格数据。")
+
+
+async def test_two_citations_of_one_block_across_a_reindex_are_judged_separately(session):
+    """同一个块被跨重建引两次 —— **后一次不许被前一次的指纹判成失效**。
+
+    这是把指纹从 evidence 挪到 citation 的原因（阶段 3 发现的 2b 设计缺陷）：
+
+        一月：引 seq=0，块内容是 A -> 证据建立，锚定 A
+        （重建索引，分块规则变了，seq=0 的内容变成 B）
+        三月：又引 seq=0，这次看到的是 B -> **共用那一行证据**
+
+    指纹只挂在证据上的话，两次引用共享"锚定 A"这一个事实，
+    于是三月那次刚问完就显示"出处已失效" —— 而它明明指得好好的。
+    反过来一月那次必须失效：它当时作证的那段内容已经不在了。
+    """
+    from app.evidence import load_citations
+
+    document, job = await _seed(session, texts=["一月的内容"])
+    await record_evidence(session, [_citation(job.id, 0, snippet="一月的内容")],
+                          source_kind="message", source_id="m-jan")
+    await session.commit()
+
+    # 重建索引：同一个 (job, seq) 上的内容换了
+    chunk = (await session.execute(select(Chunk).where(Chunk.seq == 0))).scalars().one()
+    chunk.text = "三月的内容"
+    await session.commit()
+
+    await record_evidence(session, [_citation(job.id, 0, snippet="三月的内容")],
+                          source_kind="message", source_id="m-mar")
+    await session.commit()
+
+    assert len((await session.execute(select(Evidence))).scalars().all()) == 1, \
+        "前提不成立：同一个块应当只有一行证据"
+
+    out = await load_citations(session, source_kind="message",
+                              source_ids=["m-jan", "m-mar"])
+    assert out["m-mar"][0]["resolved"] is True, \
+        "三月这次看到的就是当前内容，却被一月那次的指纹判成了失效"
+    assert out["m-jan"][0]["resolved"] is False, \
+        "一月作证的那段内容已经不在了，必须失效"

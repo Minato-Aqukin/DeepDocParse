@@ -31,7 +31,8 @@ from prometheus_client import Counter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ddp_core.models import Chunk, Citation, Evidence, digest_of
+from ddp_core.anchor import digest_of, same_content
+from ddp_core.models import Chunk, Citation, Evidence
 
 # 老 JSON 写成功、新表没写成的次数。阶段 3 读切换之前，这个计数必须是 0 —— 
 # 非 0 意味着新表缺了一批出处，而切过去之后那些回答会变成"没有出处"
@@ -83,15 +84,26 @@ async def record_evidence(session: AsyncSession, citations: list[dict], *,
         return 0
 
 
-async def _record(session: AsyncSession, citations: list[dict], *,
-                  source_kind: str, source_id: str) -> int:
-    locators = {}
-    for citation in citations:
+def locators_of(citations: list[dict]) -> dict[tuple[str, int], dict]:
+    """老 JSON 的出处列表 -> `{定位键: 出处}`，**保序**（顺序即检索名次）。
+
+    抽出来是因为**双写与历史回填必须用同一条规则**：
+    规则一旦有差异，对拍（阶段 2b 的验收标准）就会报出一堆不存在的差异，
+    而真正的差异反倒被淹掉。
+    """
+    locators: dict[tuple[str, int], dict] = {}
+    for citation in citations or []:
         key = _locator(citation)
         if key is not None:
             # 同一条 message 的 citations 里出现两个相同的定位键是数据错误，
             # 不是"引用了两次" —— 保留先出现的那条（它的名次更靠前）
             locators.setdefault(key, citation)
+    return locators
+
+
+async def _record(session: AsyncSession, citations: list[dict], *,
+                  source_kind: str, source_id: str) -> int:
+    locators = locators_of(citations)
     if not locators:
         return 0
 
@@ -118,7 +130,9 @@ async def _record(session: AsyncSession, citations: list[dict], *,
     }
 
     written = 0
-    for key, citation in locators.items():
+    # **enumerate 的顺序就是名次**：`citations` 传进来时是有序列表（检索名次），
+    # locators 用 dict 保序，所以这里的下标与老 JSON 的下标一一对应
+    for rank, (key, citation) in enumerate(locators.items()):
         chunk = chunks.get(key)
         if chunk is None:
             # 块已经不在了（重建索引换了分块规则，或文档被删）。
@@ -145,10 +159,97 @@ async def _record(session: AsyncSession, citations: list[dict], *,
             evidence_id=evidence.id, source_kind=source_kind, source_id=source_id,
             role="primary",         # 阶段 2b 只写 primary，理由见 models.Citation
             score=citation.get("score"), similarity=citation.get("similarity"),
-            snippet=citation.get("snippet") or "",
+            snippet=citation.get("snippet") or "", rank=rank,
+            # **每条引用各记各的**：证据行上那份是首次锚定时的内容，
+            # 这份是这一次引用当时的内容。同一个块跨重建被引两次，两者会不同
+            content_digest=digest_of(chunk.text),
         ))
         written += 1
 
     await session.flush()
     DUAL_WRITE_CITATIONS.labels(source_kind=source_kind).inc(written)
     return written
+
+
+# ---------------------------------------------------------------------------
+# 读（阶段 3）
+# ---------------------------------------------------------------------------
+
+
+async def load_citations(session: AsyncSession, *, source_kind: str,
+                         source_ids: list[str]) -> dict[str, list[dict]]:
+    """一次查回多个来源的出处，**并接回当前索引**。返回 source_id -> 有序出处列表。
+
+    形状与老 JSON 逐字段一致（前端 CitationChip 两个平面共用，不能只对一边改）。
+    唯一不同的是 `chunk_id`：它每次 reindex 都重铸，所以不落库、每次读时现算。
+
+    ## 接回来的判据分两条路（`ddp_core.anchor.same_content`）
+
+        content_digest 非空 -> 阶段 2b 之后写的，比指纹，**严格**
+        content_digest 为空 -> 回填过来的老记录，比 snippet 包含，**宽松**
+
+    老记录当年只存了截断过的 snippet，指纹无从补算 —— 硬给它算一个"当前块的
+    指纹"就等于宣布"它一直指着这里"，那是凭空造证。
+
+    ## 接不回来时：标失效，**不刷新指向**
+
+    `resolved=False` 且 `chunk_id=None`。刷了 chunk_id 就等于把高亮指到错块 ——
+    用户看到一条"可点开"的出处，snippet 是旧文本、框在别处。
+    宁可说"接不回去"，也绝不指错地方（plan.md §9 不变式 1）。
+
+    `page_idx` / `bbox` **一律回放当年的值，不跟着现在的块走**：
+    它们记录的是"这个回答当时拿哪块区域作证"，是审计事实。
+    """
+    if not source_ids:
+        return {}
+
+    rows = (await session.execute(
+        select(Citation, Evidence)
+        .join(Evidence, Citation.evidence_id == Evidence.id)
+        .where(Citation.source_kind == source_kind,
+               Citation.source_id.in_(source_ids),
+               Citation.role == "primary")
+        # rank 是检索名次；id 只是并列时的稳定兜底，保证同一份数据每次顺序一样
+        .order_by(Citation.rank, Citation.id)
+    )).all()
+    if not rows:
+        return {}
+
+    # 全部来源的定位键合起来查**一次**当前 chunk（每条来源查一次的话，
+    # 一个长会话就是 N+1 —— 老路径 load_citation_targets 也是为这个抽出来的）
+    live = {
+        (c.parse_job_id, c.seq): c
+        for c in (await session.execute(
+            select(Chunk).where(
+                Chunk.parse_job_id.in_({e.parse_job_id for _, e in rows}),
+                Chunk.seq.in_({e.seq for _, e in rows}))
+        )).scalars().all()
+    }
+
+    out: dict[str, list[dict]] = {}
+    for citation, evidence in rows:
+        chunk = live.get((evidence.parse_job_id, evidence.seq))
+        # **用 citation 的指纹，不是 evidence 的**：判定问的是"这一次引用
+        # 还指着它当时看到的原文吗"，那是引用这个事件的属性。
+        # 用证据那份的话，同一个块跨重建被引两次，后一次会被前一次的指纹判成失效
+        resolved = chunk is not None and same_content(
+            snippet=citation.snippet, chunk_text=chunk.text,
+            digest=citation.content_digest)
+        out.setdefault(citation.source_id, []).append({
+            "chunk_id": chunk.id if resolved else None,
+            "parse_job_id": evidence.parse_job_id,
+            "seq": evidence.seq,
+            # 契约把 doc_hash 列成了字段。产品层的稳定定位键是 (parse_job_id, seq)，
+            # 这一路用不上它 —— 如实给 None 而不是省略，省略会让消费方在两个平面
+            # 之间写两套取字段的代码
+            "doc_hash": None,
+            "page_idx": evidence.page_idx,
+            "bbox": evidence.bbox,
+            "page_size": evidence.page_size,
+            "crop_key": evidence.crop_key,
+            "snippet": citation.snippet,
+            "score": citation.score,
+            "similarity": citation.similarity,
+            "resolved": resolved,
+        })
+    return out

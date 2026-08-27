@@ -147,3 +147,54 @@ def test_the_search_scan_actually_finds_the_call_sites():
     # 三条检索路各一处：问答、抽取、跨文档检索。少了任何一条都说明扫漏了
     assert files >= {"app/qa.py", "app/extraction.py", "app/routers/search.py"}, \
         f"三条检索路没扫全，实际扫到 {sorted(files)}"
+
+
+# ---------------------------------------------------------------------------
+# §3 出处锚定判据只许有一份
+# ---------------------------------------------------------------------------
+
+
+def test_every_anchor_judgement_is_the_same_function():
+    """读路径、历史回填、老的接回逻辑，用的必须是**同一个函数对象**。
+
+    判据回答的是同一个问题："这条出处指的，还是当初那段原文吗？"
+    三处一旦有差异，回填就会把一批本来对得上的标成失效（可惜，但安全），
+    或者把对不上的标成有效 —— **那就是带着已验证标记的假出处**
+    （plan.md §9 不变式 1）。
+
+    这条守的是"同一个对象"而不是"行为一致"：行为一致要靠穷举输入才能证明，
+    而同一个对象是结构性的，改不掉。
+    """
+    from ddp_core import anchor
+    import app.backfill as backfill
+    import app.evidence as evidence
+    import app.qa as qa
+
+    assert evidence.same_content is anchor.same_content
+    assert backfill.same_content is anchor.same_content
+    assert qa.same_content is anchor.same_content
+    # 老路径的 _same_content 必须**调用**它，不能自己再实现一遍
+    import inspect
+
+    source = inspect.getsource(qa._same_content)
+    assert "same_content(" in source and "in " not in source.split('"""')[-1], \
+        "app.qa._same_content 又自己实现了一遍判据"
+
+
+def test_the_two_anchor_paths_really_differ():
+    """严格路与宽松路**不能是同一件事** —— 否则 content_digest 白加了。
+
+    反哨兵：如果 `same_content` 退化成只看 snippet，指纹就形同虚设，
+    而"块尾被改掉"这类改动正好是 snippet 判据抓不到、指纹能抓到的。
+    """
+    from ddp_core.anchor import digest_of, same_content
+
+    original = "开头这段话会被存进 snippet，后面还有很长一截内容。"
+    tampered = original + "（后来被追加的一段，snippet 里看不见）"
+    snippet = original[:12]
+
+    # 宽松路：snippet 还在里面 -> 放行（这正是老判据的盲区）
+    assert same_content(snippet=snippet, chunk_text=tampered, digest="") is True
+    # 严格路：指纹对不上 -> 拦住
+    assert same_content(snippet=snippet, chunk_text=tampered,
+                        digest=digest_of(original)) is False

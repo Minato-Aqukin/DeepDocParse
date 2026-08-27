@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import rerank_config, settings
 from app.crops import get_or_create_crop
 from app.models import Chunk, Document, ParseJob
+from ddp_core.anchor import same_content
 from ddp_core.rerank import rerank_hits
 from ddp_core.search import Hit, SearchIndex
 from app.storage import Storage
@@ -99,6 +100,12 @@ def retrieval_confidence(citations: list[dict]) -> dict:
             "top_similarity": top, "warn_below": settings.qa_low_similarity}
 
 
+# ⚠️ 下面三个函数（resolve_citations / load_citation_targets / attach_resolution）
+# **阶段 3 起已经不在读路径上了** —— 读走 `app.evidence.load_citations`。
+# 留着它们是 plan.md 给阶段 3 定的回滚手段：把 conversations/extractions 的读
+# 换回来即可，老列全程没被碰过。**阶段 4 连同老列一起删。**
+
+
 async def resolve_citations(session: AsyncSession, document_id: str,
                             citations: list[dict]) -> list[dict]:
     """把历史 citations 接回**当前**索引里的 chunk。
@@ -143,13 +150,11 @@ async def load_citation_targets(session: AsyncSession, document_id: str,
 def _same_content(snippet: str, chunk_text: str) -> bool:
     """这条出处存下来的片段，还在当前这个块里吗？
 
-    片段是当时截断过的（160 字 + 省略号），所以用**包含**而不是相等；
-    归一化掉空白，因为分块规则变化会改换行与前缀（标题现在会并进块首）。
+    **判据本身在 `ddp_core.anchor`**（阶段 3 抽出去的）：读路径、历史回填、
+    这条老路径必须用同一份，判据一漂就会把"对不上"的出处标成有效 —— 假出处。
+    这里不传 digest，走的是宽松那条（老 JSON 里本来就没有指纹）。
     """
-    want = " ".join((snippet or "").rstrip("…").split())
-    if not want:
-        return True          # 老记录没存 snippet：无从判断，不冤枉它
-    return want in " ".join((chunk_text or "").split())
+    return same_content(snippet=snippet, chunk_text=chunk_text, digest="")
 
 
 def attach_resolution(citation: dict,

@@ -588,24 +588,72 @@ async def test_citations_survive_reindex(auth_client, session):
 
 @respx.mock
 async def test_unresolvable_citation_is_marked_not_silently_dropped(auth_client, session):
-    """接不回来的出处（换引擎重解析 / 0003 之前的老记录）必须显式标 resolved=False。
+    """块没了 —— 出处必须显式标 resolved=False，且**不给 chunk_id**。
 
     静默把它当成好的，用户会点开一个空高亮；静默丢掉，回答就成了无出处的断言。
     两种都不行——降级必须可见。
+
+    ⚠️ 阶段 3 读切换之后，这条用例改的是 **evidence 表**而不是
+    `messages.citations`（老 JSON 还在写，但不再被读）。改错地方的话用例会
+    在"读根本没看那份数据"的情况下绿着通过。
+    """
+    from ddp_core.models import Evidence
+
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+    respx.post(CHAT).mock(return_value=_chat_sse("答案"))
+    await _ask(auth_client, cid)
+
+    evidence = (await session.execute(select(Evidence))).scalars().first()
+    assert evidence is not None, "前提不成立：双写应当已经写下证据"
+    # 模拟"这条出处属于另一次解析"：定位键指向一个已经没有块的 parse_job
+    await session.execute(
+        Chunk.__table__.delete().where(Chunk.parse_job_id == evidence.parse_job_id,
+                                       Chunk.seq == evidence.seq))
+    await session.commit()
+
+    after = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    citation = after[1]["citations"][0]
+    assert citation["resolved"] is False
+    assert citation["chunk_id"] is None, "接不回去却给了 chunk_id —— 前端会把高亮指到错块"
+
+
+@respx.mock
+async def test_changed_block_content_invalidates_the_citation(auth_client, session):
+    """**负样本**：块还在、seq 也对，但内容被改了 —— 必须标失效。
+
+    这是 plan.md 给阶段 3 定的核心验收：`seq` 是块在文档里的序号，分块规则一变
+    （M9 让表格/公式/图片独立成块、标题作前缀），同一份归档重建索引就会切出
+    不同数量、不同 seq 的块 —— 老出处的 seq 照样查得到，指的却是另一段原文。
+    而 UI 只看 `resolved`：用户会看到一条"可点开"的出处，snippet 是旧文本、
+    高亮框指向别处。**这正是本项目定义的最恶劣错误：带着已验证标记的假出处。**
+
+    阶段 2b 之后写的出处有 content_digest，走的是**指纹**比对 ——
+    比老的 snippet 包含判据严格得多：块尾被改掉也会被抓到。
     """
     document = await _ready_document(auth_client)
     cid = await _conversation(auth_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("答案"))
     await _ask(auth_client, cid)
 
-    message = (await session.execute(
-        select(Message).where(Message.role == "assistant"))).scalars().one()
-    # 模拟"这条出处属于另一次解析"：定位键指向一个已经不存在的 parse_job
-    message.citations = [{**message.citations[0], "parse_job_id": "gone", "chunk_id": "gone"}]
+    before = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    assert before[1]["citations"][0]["resolved"] is True, "前提不成立：这条出处本该是好的"
+
+    from ddp_core.models import Evidence
+
+    evidence = (await session.execute(select(Evidence))).scalars().first()
+    chunk = (await session.execute(select(Chunk).where(
+        Chunk.parse_job_id == evidence.parse_job_id,
+        Chunk.seq == evidence.seq))).scalars().one()
+    # 只在**块尾**追加 —— snippet 是前 160 字，老的包含判据抓不到这种改动，
+    # 指纹能。这两条判据的差别正体现在这里
+    chunk.text = chunk.text + "（后来被人改掉的一段）"
     await session.commit()
 
     after = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
-    assert after[1]["citations"][0]["resolved"] is False
+    citation = after[1]["citations"][0]
+    assert citation["resolved"] is False, "块内容变了却仍标成有效 —— 这是假出处"
+    assert citation["chunk_id"] is None, "不许刷新指向：刷了就等于把高亮指到错块"
 
 
 @respx.mock

@@ -6,6 +6,12 @@
 > 下面凡是提到"按 user 过滤""文档属于用户"的地方都以此为准；
 > 已就地标注的三处见 §数据模型与 §检索。
 >
+> ⚠️ **出处的读路径变了**（阶段 3，2026-08-27）：出处不再从
+> `messages.citations` / `extraction_items.fields[].citations` 这两处 JSON 读，
+> 改从 `evidence` + `citations` 两张表读（`app/evidence.py::load_citations`）。
+> 老列仍在写、仍可回滚，阶段 4 才删。下面凡是描述"出处存在 JSON 列里"的地方，
+> 说的是**写**的那一半，读已经不走那里了。
+>
 > ⚠️ **模块位置也变了**（阶段 2a）：本文提到的 `app/types.py` / `app/search.py` /
 > `app/chunking.py` 连同 models / tokenize / rerank 已迁入 `DeepDocParse/gateway/ddp_core/`，
 > 两个仓库共用同一份。**设计结论没变，只是文件换了地方** ——
