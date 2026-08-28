@@ -51,6 +51,8 @@ const tooltip = computed(() =>
                     content="这条出处指向的分块已随重建索引失效，无法再定位到原文">
           <StatusTag label="出处已失效" type="danger" />
         </el-tooltip>
+        <StatusTag v-if="citation.source_type === 'generated'"
+                   label="生成理解 → 原子出处" type="info" />
       </div>
       <span class="snippet">{{ citation.snippet }}</span>
     </div>

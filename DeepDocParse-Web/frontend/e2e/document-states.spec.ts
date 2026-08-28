@@ -3,7 +3,8 @@ import { expect, test, type Page } from '@playwright/test'
 import { fakeLogin, stubApi } from './stub-api'
 
 /**
- * 用例 3：**上传 → 编译中 → 完成，三态在 UI 上都出现过。**
+ * 用例 3：解析状态全可见；且**待编译 → 编译中 → 编译完整**三态真正在 UI 上出现。
+ * 阶段 5 另钉住 `code_detection` 的 native / heuristic / unavailable 三态。
  * 用例 4：**后端返回降级标记时界面必须显示原因，不许静默**（对应不变式 2）。
  *
  * 后端整个被 route 拦截打桩：这一层要验的是"界面把状态说清楚了没有"，
@@ -15,6 +16,8 @@ const BASE = {
   id: 'doc-1', filename: '技术手册.pdf', doc_id: 'h'.repeat(64), origin: 'upload',
   mime: 'application/pdf', size_bytes: 1024, page_count: 0,
   error: null, index_error: null, current_job_id: 'job-1',
+  compile_status: 'ready', compile_degraded: [], compile_fingerprint: 'f'.repeat(64),
+  layout_version: 'ddp-layout/1', code_detection: 'heuristic',
   uploaders: ['e2e'], can_delete: true,
   created_at: new Date().toISOString(),
 }
@@ -25,8 +28,8 @@ const BASE = {
 const STATES = {
   pending: { ...BASE, status: 'pending', index_status: 'none' },
   running: { ...BASE, status: 'running', index_status: 'none' },
-  // 归档中 —— plan.md 用例 3 说的「编译中」其实是 running + archiving 两段，
-  // 而 archiving 在 status.ts 里同样标了 active: true（会触发轮询）
+  // 归档中与阶段 5 新增的 compiling 是两个独立状态：前者取回并归档
+  // service 结果，后者在本层裁图 / VLM 理解 / 建索引，不再混用一个文案。
   archiving: { ...BASE, status: 'archiving', index_status: 'none' },
   succeeded: { ...BASE, status: 'succeeded', index_status: 'ready', page_count: 12 },
 } as const
@@ -75,6 +78,45 @@ test('文档库把排队 / 解析中 / 归档中 / 完成每种状态都显示�
       page.locator('#app'),
       `状态 ${status} 在界面上没有任何说法`,
     ).toContainText(label)
+  }
+})
+
+test('code_detection 三态在文档库都有明确文案', async ({ page }) => {
+  const cases = [
+    ['native', '代码识别：原生'],
+    ['heuristic', '代码识别：启发式'],
+    ['unavailable', '代码识别：不可用'],
+  ] as const
+  await login(page)
+  await stubDocuments(page, cases.map(([codeDetection], index) => ({
+    ...BASE, id: `doc-${index}`, filename: `code-${index}.pdf`, code_detection: codeDetection,
+  })))
+  await page.goto('/#/documents')
+  for (const [, label] of cases) {
+    await expect(page.locator('#app')).toContainText(label)
+  }
+})
+
+test('工作台把待编译 / 编译中 / 编译完整三态显示出来', async ({ page }) => {
+  const cases = [
+    ['pending', '待编译'],
+    ['compiling', '编译中'],
+    ['ready', '编译完整'],
+  ] as const
+  let currentCompileStatus: string = 'pending'
+  await login(page)
+  await page.route(
+    (url) => /\/api\/documents\/[^/]+$/.test(url.pathname),
+    (route) => route.fulfill({
+      json: { ...BASE, ...STATES.succeeded, compile_status: currentCompileStatus },
+    }),
+  )
+  for (const [caseStatus, label] of cases) {
+    // 单一 route 通过可变当前值返回三态，避免循环注册多个相同 route
+    // 后取决于 Playwright 的匹配先后，把测试写成偶发绿。
+    currentCompileStatus = caseStatus
+    await page.goto('/#/documents/doc-1')
+    await expect(page.locator('#app')).toContainText(label)
   }
 })
 

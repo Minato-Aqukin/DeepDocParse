@@ -2,6 +2,8 @@
 
 export type ParseStatus = 'pending' | 'running' | 'archiving' | 'succeeded' | 'failed'
 export type IndexStatus = 'none' | 'pending' | 'indexing' | 'ready' | 'failed'
+export type CompileStatus = 'none' | 'pending' | 'compiling' | 'ready' | 'partial' | 'failed'
+export type CodeDetection = 'native' | 'heuristic' | 'unavailable'
 export type DownloadFormat = 'md' | 'json' | 'zip' | 'source'
 
 export interface DocumentInfo {
@@ -16,6 +18,11 @@ export interface DocumentInfo {
   error: string | null
   index_status: IndexStatus
   index_error: string | null
+  compile_status: CompileStatus
+  compile_degraded: string[]
+  compile_fingerprint: string
+  layout_version: string
+  code_detection: CodeDetection
   current_job_id: string | null
   created_at: string
   /** 全部上传者的用户名。语料共享后同一份文件可能好几个人先后传过 */
@@ -34,6 +41,17 @@ export interface JobInfo {
   is_current: boolean
   created_at: string
   archived_at: string | null
+  document_version: number
+}
+
+export interface IndexValidation {
+  status: 'current' | 'stale' | 'unresolved' | 'uncompiled'
+  observed_fingerprints: string[]
+  expected_fingerprint: string
+  reasons: string[]
+  citation_reconnectable: number
+  citation_invalidations: number
+  safe_to_reindex: boolean
 }
 
 export interface Block {
@@ -80,6 +98,9 @@ export interface DocumentStats {
 }
 
 export interface Citation {
+  evidence_id: string | null
+  source_type: 'source' | 'generated'
+  derived_from?: string | null
   /**
    * 当前索引里对应的块。**接不回来时是 null**（阶段 3 起）——
    * 后端宁可不给，也不会回放一个失效的旧值：给了就等于让前端把高亮指到错块。

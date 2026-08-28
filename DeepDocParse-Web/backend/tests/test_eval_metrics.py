@@ -105,6 +105,28 @@ def test_offline_keyword_rank_uses_the_production_cjk_tokenizer():
     assert ranked and ranked[0]["page_idx"] == 6
 
 
+def test_identifier_report_measures_same_set_before_and_after_code_route():
+    chunks = [
+        {"page_idx": 0, "bbox": [0, 0, 90, 30], "block_type": "code",
+         "text": "# preserve fetchUser when rendering a long explanatory comment",
+         "text_tokenized": "preserve fetchuser rendering explanatory comment"},
+        {"page_idx": 1, "bbox": [0, 40, 90, 60], "block_type": "code",
+         "text": "def fetchUser(user_id):", "text_tokenized": "def fetchuser user id"},
+    ]
+    question = "Where is fetchUser defined?"
+    before = ev._keyword_rank(question, chunks, code_boost=False)
+    after = ev._keyword_rank(question, chunks)
+    assert before[0]["page_idx"] == 0
+    assert after[0]["page_idx"] == 1
+
+    outcome = ev.Outcome("code", ["标识符精确查询"], True,
+                         page_hit=True, bbox_hit=True,
+                         legacy_page_hit=False, legacy_bbox_hit=False)
+    report = ev.render([outcome], "offline")
+    assert "同集合改造前后" in report
+    assert "+100.0%" in report
+
+
 def test_wrong_page_never_counts_as_a_bbox_hit():
     """不同页的块坐标当然可能重叠（版式一样）。往好里错的指标不能要。"""
     page_idx, want = ev._anchor_bbox(LAYOUT, "launch code of project Zephyr")
@@ -142,10 +164,17 @@ def test_code_layout_golden_matches_all_generated_identifiers():
         (ROOT.parent / "DeepDocParse" / "tests" / "fixtures" / "code-corpus.truth.json")
         .read_text(encoding="utf-8"))
     assert len(layout["pdf_info"]) == len(truth["pages"]) == 24
+    assert layout["code_detection"] == "heuristic"
     for expected in truth["pages"]:
         located = ev._anchor_bbox(layout, expected["identifier"])
         assert located is not None
         assert located[0] == expected["page_idx"]
+        page = layout["pdf_info"][expected["page_idx"]]
+        assert any(block["type"] == "code" and expected["identifier"] in " ".join(
+            str(span.get("content") or "")
+            for line in (block.get("lines") or [])
+            for span in (line.get("spans") or []))
+                   for block in page["para_blocks"])
 
 
 def test_omnidocbench_adapter_preserves_formula_table_and_page_order(tmp_path):
@@ -303,3 +332,19 @@ def test_array_api_items_are_reconstructed_as_records_instead_of_dropping_all_bu
     assert [extract_ev._record_values(row) for row in payload["records"]] == [
         {"item": "bearing"}, {"item": "seal"},
     ]
+
+
+def test_stage5_atom_hit_rates_are_always_reported_separately():
+    outcomes = [
+        ev.Outcome("c", ["代码密集"], True, page_hit=True, bbox_hit=True),
+        ev.Outcome("e", ["公式密集"], True, page_hit=True, bbox_hit=False),
+        ev.Outcome("t", ["操作表格"], True, page_hit=True, bbox_hit=True),
+        ev.Outcome("f", ["图表引用"], True, page_hit=False, bbox_hit=False),
+    ]
+    metrics = ev.summarize_atoms(outcomes)
+    assert list(metrics) == ["code", "equation", "table", "figure"]
+    assert metrics["code"].rate == 1.0
+    assert metrics["equation"].rate == 0.0
+    report = ev.render(outcomes, "offline")
+    for kind in metrics:
+        assert f"| `{kind}` |" in report

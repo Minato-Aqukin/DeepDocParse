@@ -3,6 +3,7 @@ import { computed, reactive, ref } from 'vue'
 
 import { documentsApi } from '@/api'
 import { INDEX_STATUS, PARSE_STATUS } from '@/constants/status'
+import { COMPILE_STATUS } from '@/constants/compilation'
 import type { DocumentInfo, DocumentStats, IndexStatus, ParseStatus } from '@/types/api'
 
 /**
@@ -33,7 +34,8 @@ export const useDocumentsStore = defineStore('documents', () => {
   /** 还有任务在动就继续轮询；全落定就停（active 标记来自状态文案表） */
   const hasActive = computed(() =>
     items.value.some(
-      (d) => PARSE_STATUS[d.status]?.active || INDEX_STATUS[d.index_status]?.active,
+      (d) => PARSE_STATUS[d.status]?.active || INDEX_STATUS[d.index_status]?.active ||
+        COMPILE_STATUS[d.compile_status]?.active,
     ),
   )
 

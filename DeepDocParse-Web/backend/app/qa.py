@@ -154,11 +154,16 @@ async def attach_crops(retrieval: Retrieval, storage: Storage, document: Documen
             if key:
                 raw = await storage.get(key)
                 crops.append(("data:image/png;base64," + base64.b64encode(raw).decode(), hit))
+        generated = bool(hit.get("derived_text") and hit.get("derived_evidence_id"))
+        evidence_id = hit.get("derived_evidence_id") if generated else hit.get("evidence_id")
+        cited_text = hit.get("derived_text") if generated else hit["text"]
         retrieval.citations.append({
             # chunk_id 只作即时引用；(parse_job_id, seq) 才是熬得过 reindex 的定位键
             "chunk_id": hit["chunk_id"], "parse_job_id": hit.get("parse_job_id"),
             "seq": hit.get("seq"), "page_idx": hit["page_idx"], "bbox": hit.get("bbox"),
-            "crop_key": key, "snippet": _snippet(hit["text"]),
+            "crop_key": key, "snippet": _snippet(cited_text or ""),
+            "evidence_id": evidence_id,
+            "source_type": "generated" if generated else "source",
             # score 是 RRF 名次分（表达不了"有多相关"），similarity 才是给用户看的那个
             "score": hit.get("score"), "similarity": hit.get("similarity"),
         })
@@ -227,7 +232,12 @@ def build_messages(question: str, retrieval: Retrieval, history: list[dict],
     sources: list[str] = []
     budget = settings.qa_context_chars
     for i, hit in enumerate(retrieval.hits, start=1):
-        text = hit["text"]
+        generated = hit.get("derived_text")
+        if generated:
+            text = (f"[生成理解，原子证据 {hit.get('evidence_id') or '未编号'}]\n"
+                    f"{generated}\n[原文/OCR]\n{hit['text']}")
+        else:
+            text = hit["text"]
         if budget <= 0:
             break
         if len(text) > budget:

@@ -76,7 +76,7 @@ def _embed_response(request: httpx.Request) -> httpx.Response:
     inputs = json.loads(request.content)["input"]
     if isinstance(inputs, str):
         inputs = [inputs]
-    return httpx.Response(200, json={"data": [
+    return httpx.Response(200, json={"model": settings.embedding_model, "data": [
         {"index": i, "embedding": _fake_vector(t)} for i, t in enumerate(inputs)]})
 
 
@@ -476,6 +476,32 @@ async def test_archive_is_idempotent(auth_client, session, app_state):
     usage = (await session.execute(
         select(UsageRecord).where(UsageRecord.kind == "parse"))).scalars().all()
     assert len(usage) == 1, "重复归档不得重复记账"
+
+
+@respx.mock
+async def test_late_archive_cannot_revive_deleted_document(
+        auth_client, session, app_state):
+    """解析中删除后，迟到 callback 只归档/计解析费，绝不能复活索引或再产生推理费。"""
+    _mock_service(status="succeeded")
+    document = await _upload(auth_client)
+    job = (await session.execute(select(ParseJob))).scalars().one()
+    assert (await auth_client.delete(f"/api/documents/{document['id']}")).status_code == 204
+
+    assert await archive_job(session, app_state.storage, app_state.service_client, job.id)
+    row = await session.get(Document, document["id"])
+    await session.refresh(row)
+    assert row.deleted_at is not None
+    assert row.index_status == "none"
+
+    from app.indexing import index_document
+    assert await index_document(
+        session, app_state.storage, app_state.http, document["id"]
+    ) == 0
+    assert (await session.scalar(select(Chunk.id).where(
+        Chunk.document_id == document["id"]))) is None
+    expensive = (await session.execute(select(UsageRecord).where(
+        UsageRecord.kind.in_(("compile_vision", "embed"))))).scalars().all()
+    assert expensive == []
 
 
 @respx.mock

@@ -2,6 +2,7 @@
 import StatusTag from '@/components/common/StatusTag.vue'
 import type { DocumentInfo, DownloadFormat } from '@/types/api'
 import { indexStatusOf, parseStatusOf } from '@/constants/status'
+import { codeDetectionOf } from '@/constants/compilation'
 
 /**
  * 文档表格。
@@ -74,6 +75,12 @@ function onCommand(command: string, doc: DocumentInfo) {
           <el-tooltip :content="row.index_error" :disabled="!row.index_error">
             <StatusTag :meta="indexStatusOf(row.index_status)" />
           </el-tooltip>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="代码识别" width="132">
+        <template #default="{ row }">
+          <StatusTag :meta="codeDetectionOf(row.code_detection)" />
         </template>
       </el-table-column>
 

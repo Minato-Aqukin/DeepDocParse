@@ -18,7 +18,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 # 语料模型与 Base 都在 core（两侧共用同一份 metadata）。
 # **这里原样再导出**，让既有的 `from app.models import Document` 一字不用改。
 from ddp_core.models import (  # noqa: F401
-    Base, Chunk, Document, DocumentUpload, ParseJob, as_aware, new_id, utcnow,
+    Base, Chunk, Citation, Document, DocumentUpload, Evidence, ParseJob,
+    as_aware, new_id, utcnow,
 )
 
 
@@ -233,7 +234,7 @@ class UsageRecord(Base):
                                                     default=None)
     parse_job_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("parse_jobs.id"),
                                                       default=None)
-    # parse | chat | embeddings | mcp | qa | embed | extract
+    # parse | chat | embeddings | mcp | qa | embed | compile_vision | extract
     # extract 按**字段数**计 requests：一次抽取 = N 次检索 + N 次模型调用，
     # 按"一次请求"计费会让 60 字段的 schema 和 1 字段的一样便宜
     kind: Mapped[str] = mapped_column(String(16))

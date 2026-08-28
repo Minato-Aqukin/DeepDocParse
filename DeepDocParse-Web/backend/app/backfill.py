@@ -198,7 +198,8 @@ def _ensure_evidence(conn, report: BackfillReport, job_id: str, seq: int,
                      citation: dict, chunk, digest: str) -> str:
     existing = conn.execute(
         sa.text("SELECT id, content_digest, crop_key FROM evidence "
-                "WHERE parse_job_id = :job AND seq = :seq"),
+                "WHERE parse_job_id = :job AND seq = :seq AND derived_from IS NULL "
+                "ORDER BY created_at LIMIT 1"),
         {"job": job_id, "seq": seq}).fetchone()
     if existing:
         # 已有证据（双写建的，或上一轮回填建的）。**只补空缺，绝不覆盖**：
@@ -216,13 +217,13 @@ def _ensure_evidence(conn, report: BackfillReport, job_id: str, seq: int,
     # 记下的那份 —— 那正是"这个回答当时拿哪块区域作证"的审计事实
     conn.execute(
         sa.text("INSERT INTO evidence (id, document_id, doc_version, parse_job_id, seq, "
-                "page_idx, bbox, page_size, kind, crop_key, content_digest, provider, "
-                "review_state, created_at) VALUES "
-                "(:id, :doc, 0, :job, :seq, :page, :bbox, :psize, :kind, :crop, :digest, "
-                ":provider, 'unreviewed', CURRENT_TIMESTAMP)"),
+                "atom_key, page_idx, bbox, page_size, kind, crop_key, content_digest, content, "
+                "provider, provider_fingerprint, review_state, created_at) VALUES "
+                "(:id, :doc, 0, :job, :seq, :atom, :page, :bbox, :psize, :kind, :crop, "
+                ":digest, :content, :provider, '', 'unreviewed', CURRENT_TIMESTAMP)"),
         {"id": evidence_id,
          "doc": chunk[1] if chunk else _document_of(conn, job_id),
-         "job": job_id, "seq": seq,
+         "job": job_id, "seq": seq, "atom": f"source:{seq}",
          "page": citation.get("page_idx") if citation.get("page_idx") is not None
                  else (chunk[3] if chunk else 0),
          "bbox": json.dumps(citation.get("bbox") or (_as_json(chunk[4]) if chunk else None)),
@@ -230,6 +231,7 @@ def _ensure_evidence(conn, report: BackfillReport, job_id: str, seq: int,
                              or (_as_json(chunk[5]) if chunk else None)),
          "kind": (chunk[6] if chunk else None) or "text",
          "crop": citation.get("crop_key"), "digest": digest,
+         "content": chunk[2] if chunk else citation.get("snippet", ""),
          "provider": json.dumps({"backfilled": True})})
     report.evidence_created += 1
     return evidence_id

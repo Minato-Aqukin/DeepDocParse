@@ -28,11 +28,17 @@ from app.deps import current_user, get_service_client, get_storage
 from app.errors import APIError
 from app.indexing import index_document
 from app.models import (
-    Chunk, Conversation, Document, DocumentUpload, FileToken, Message, ParseJob, User,
-    new_id, utcnow,
+    Chunk, Citation, Conversation, Document, DocumentUpload, Evidence, FileToken, Message,
+    ParseJob, User,
+    as_aware, new_id, utcnow,
 )
 from app.service_client import ServiceClient, ServiceError
 from app.storage import Storage, prefix_of, source_key
+from app.versions import advance_index_generation, next_document_version
+from ddp_core.anchor import digest_of, same_content
+from ddp_core.compilation import (
+    code_detection_of, compile_chunks, fingerprint, provider_of, source_anchor,
+)
 
 router = APIRouter()
 
@@ -55,6 +61,7 @@ class JobInfo(BaseModel):
     is_current: bool
     created_at: datetime
     archived_at: datetime | None
+    document_version: int
 
 
 class DocumentInfo(BaseModel):
@@ -69,6 +76,11 @@ class DocumentInfo(BaseModel):
     error: str | None
     index_status: str
     index_error: str | None
+    compile_status: str
+    compile_degraded: list[str]
+    compile_fingerprint: str
+    layout_version: str
+    code_detection: str
     current_job_id: str | None
     created_at: datetime
     # 语料共享之后（1b）文档库里会有别人传的东西，界面得说得清**这份是谁传的**、
@@ -76,6 +88,16 @@ class DocumentInfo(BaseModel):
     # `uploaders` 是全部上传者的用户名（同一份文件可能好几个人先后传过）
     uploaders: list[str] = []
     can_delete: bool = False
+
+
+class IndexValidation(BaseModel):
+    status: str                 # current | stale | uncompiled
+    observed_fingerprints: list[str]
+    expected_fingerprint: str
+    reasons: list[str]
+    citation_reconnectable: int
+    citation_invalidations: int
+    safe_to_reindex: bool
 
 
 def _doc_info(document: Document, job: ParseJob | None, *,
@@ -86,6 +108,11 @@ def _doc_info(document: Document, job: ParseJob | None, *,
         page_count=document.page_count,
         status=job.status if job else "pending", error=job.error if job else None,
         index_status=document.index_status, index_error=document.index_error,
+        compile_status=document.compile_status,
+        compile_degraded=document.compile_degraded or [],
+        compile_fingerprint=document.compile_fingerprint,
+        layout_version=document.layout_version,
+        code_detection=document.code_detection or "unavailable",
         current_job_id=document.current_job_id, created_at=document.created_at,
         uploaders=uploaders or [], can_delete=can_delete,
     )
@@ -268,6 +295,7 @@ async def upload(
 
     document = (await session.execute(
         select(Document).where(Document.doc_id == doc_id, Document.origin == "web")
+        .with_for_update().execution_options(populate_existing=True)
     )).scalar_one_or_none()
 
     if document is None:
@@ -292,6 +320,7 @@ async def upload(
             document = (await session.execute(
                 select(Document).where(Document.doc_id == doc_id,
                                        Document.origin == "web")
+                .with_for_update().execution_options(populate_existing=True)
             )).scalar_one_or_none()
             if document is None:
                 raise
@@ -301,15 +330,49 @@ async def upload(
             except Exception:       # noqa: BLE001 - 清不掉只是留个孤儿，不该让上传失败
                 pass
     elif document.deleted_at is not None:       # 删过又传回来：复活这一行
-        document.deleted_at = None
-        document.object_key = document.object_key or source_key(document.id, filename)
-        await storage.put(document.object_key, data, mime)
+        object_key = document.object_key or source_key(document.id, filename)
+        await storage.put(object_key, data, mime)
         # 删除时把 chunks 清空并置 index_status='none'。复活后如果解析结果还在，
         # 必须重新排队建索引 —— 否则文档看着好好的却永远不可问答，
         # 而对账只捞 pending，自愈不了，只能等用户自己发现去点"重建索引"
         if document.current_job_id:
-            document.index_status = "pending"
-            document.index_error = None
+            has_citations = bool(await session.scalar(
+                select(func.count(Citation.id)).join(
+                    Evidence, Citation.evidence_id == Evidence.id
+                ).where(Evidence.document_id == document.id)
+            ))
+            if has_citations:
+                index_status = "failed"
+                index_error = (
+                    "文档已复活且存在历史出处；请先执行版本校验，确认后再重建索引")
+                compile_status = "failed"
+                compile_degraded = ["reindex_validation_required"]
+            else:
+                index_status = "pending"
+                index_error = None
+                compile_status = "pending"
+                compile_degraded = []
+            generation = await advance_index_generation(
+                session, document.id, deleted=True,
+                values={
+                    "deleted_at": None, "object_key": object_key,
+                    "index_status": index_status, "index_error": index_error,
+                    "compile_status": compile_status,
+                    "compile_degraded": compile_degraded,
+                    "index_lease_until": None, "updated_at": utcnow(),
+                })
+            if generation is None:
+                raise APIError(409, "document revival raced with another request; retry",
+                               "invalid_request_error", "document_state_changed")
+        else:
+            revived = await session.execute(
+                update(Document).where(Document.id == document.id,
+                                       Document.deleted_at.is_not(None)).values(
+                    deleted_at=None, object_key=object_key, updated_at=utcnow()))
+            if revived.rowcount == 0:
+                raise APIError(409, "document revival raced with another request; retry",
+                               "invalid_request_error", "document_state_changed")
+        await session.refresh(document)
         await session.commit()
 
     # **归属：谁传过都记一笔。** 全局去重之后第二个人传同一份文件不会产生新的
@@ -342,7 +405,8 @@ async def upload(
     if job is None:
         job = ParseJob(document_id=document.id, engine=engine, options=parsed_options,
                        initiated_by=user.id,
-                       options_hash=digest)
+                       options_hash=digest,
+                       document_version=await next_document_version(session, document.id))
         session.add(job)
     else:
         job.status, job.error = "pending", None
@@ -442,7 +506,8 @@ async def list_jobs(document_id: str, user: User = Depends(current_user),
     )).scalars().all()
     return [JobInfo(id=j.id, engine=j.engine, options=j.options, status=j.status, error=j.error,
                     page_count=j.page_count, is_current=(j.id == document.current_job_id),
-                    created_at=j.created_at, archived_at=j.archived_at) for j in jobs]
+                    created_at=j.created_at, archived_at=j.archived_at,
+                    document_version=j.document_version) for j in jobs]
 
 
 class ReparseRequest(BaseModel):
@@ -476,12 +541,14 @@ async def reparse(document_id: str, req: ReparseRequest, user: User = Depends(cu
         return JobInfo(id=job.id, engine=job.engine, options=job.options, status=job.status,
                        error=job.error, page_count=job.page_count,
                        is_current=(job.id == document.current_job_id),
-                       created_at=job.created_at, archived_at=job.archived_at)
+                       created_at=job.created_at, archived_at=job.archived_at,
+                       document_version=job.document_version)
 
     if job is None:
         job = ParseJob(document_id=document.id, engine=engine, options=req.options,
                        initiated_by=user.id,
-                       options_hash=digest)
+                       options_hash=digest,
+                       document_version=await next_document_version(session, document.id))
         session.add(job)
     else:
         job.status, job.error = "pending", None
@@ -489,18 +556,26 @@ async def reparse(document_id: str, req: ReparseRequest, user: User = Depends(cu
     await _submit(session, service, document, job)
     return JobInfo(id=job.id, engine=job.engine, options=job.options, status=job.status,
                    error=job.error, page_count=job.page_count, is_current=False,
-                   created_at=job.created_at, archived_at=job.archived_at)
+                   created_at=job.created_at, archived_at=job.archived_at,
+                   document_version=job.document_version)
 
 
 class CurrentJobRequest(BaseModel):
     job_id: str
+    acknowledge_invalidations: bool = False
+
+
+def _index_lease_active(document: Document) -> bool:
+    lease = as_aware(document.index_lease_until)
+    return document.index_status == "indexing" and lease is not None and lease > utcnow()
 
 
 @router.put("/{document_id}/current-job", response_model=DocumentInfo)
 async def set_current_job(document_id: str, req: CurrentJobRequest, tasks: BackgroundTasks,
                           request: Request,
                           user: User = Depends(current_user),
-                          session: AsyncSession = Depends(get_session)):
+                          session: AsyncSession = Depends(get_session),
+                          storage: Storage = Depends(get_storage)):
     """切换生效的解析版本。索引跟着换版本重建——否则问答会引用到旧版本的块。"""
     document = await _visible(document_id, session)
     job = await session.get(ParseJob, req.job_id)
@@ -509,12 +584,27 @@ async def set_current_job(document_id: str, req: CurrentJobRequest, tasks: Backg
     if job.status != "succeeded":
         raise APIError(409, "only a succeeded job can be made current",
                        "invalid_request_error", "job_not_ready")
+    validated_current_job_id = document.current_job_id
+    validation = await _validate_index(document, job, session, storage)
+    if not validation.safe_to_reindex and not req.acknowledge_invalidations:
+        raise APIError(
+            409,
+            f"切换版本会使 {validation.citation_invalidations} 条当前出处显式失效；"
+            "请先查看版本校验结果并确认",
+            "invalid_request_error", "index_version_unsafe")
 
-    document.current_job_id = job.id
-    document.page_count = job.page_count
-    document.index_status = "pending"
-    document.index_error = None
-    document.updated_at = utcnow()
+    generation = await advance_index_generation(
+        session, document.id, expected_current_job_id=validated_current_job_id,
+        deleted=False, values={
+            "current_job_id": job.id, "page_count": job.page_count,
+            "index_status": "pending", "index_error": None,
+            "compile_status": "pending", "compile_degraded": [],
+            "index_lease_until": None, "updated_at": utcnow(),
+        })
+    if generation is None:
+        raise APIError(409, "current parse version changed during validation; retry",
+                       "invalid_request_error", "index_version_changed")
+    await session.refresh(document)
     await session.commit()
     _schedule_index(tasks, request, document.id)
     return _doc_info(document, job)
@@ -522,18 +612,171 @@ async def set_current_job(document_id: str, req: CurrentJobRequest, tasks: Backg
 
 @router.post("/{document_id}/reindex", response_model=DocumentInfo, status_code=202)
 async def reindex(document_id: str, tasks: BackgroundTasks, request: Request,
+                  acknowledge_invalidations: bool = False,
                   user: User = Depends(current_user),
-                  session: AsyncSession = Depends(get_session)):
+                  session: AsyncSession = Depends(get_session),
+                  storage: Storage = Depends(get_storage)):
     document = await _visible(document_id, session)
     job = await _latest_job(session, document)
     if job is None or job.status != "succeeded":
         raise APIError(409, "document has no archived result to index",
                        "invalid_request_error", "result_not_ready")
-    document.index_status = "pending"
-    document.index_error = None
+    if document.index_status == "pending" or _index_lease_active(document):
+        raise APIError(409, "document index build is already in progress",
+                       "invalid_request_error", "index_in_progress")
+    validation = await _validate_index(document, job, session, storage)
+    if not validation.safe_to_reindex and not acknowledge_invalidations:
+        raise APIError(
+            409,
+            f"重建会使 {validation.citation_invalidations} 条历史出处显式失效；"
+            "请先查看版本校验结果，确认后带 acknowledge_invalidations=true 重试",
+            "invalid_request_error", "index_version_unsafe")
+    # validate 期间旧 worker 可能刚好续租/完成；锁住并重读，不能拿检查前的过期
+    # lease 去误杀一个仍活着的 generation。
+    document = (await session.execute(
+        select(Document).where(Document.id == document_id).with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalar_one()
+    if document.current_job_id != job.id:
+        raise APIError(409, "current parse version changed during validation; retry",
+                       "invalid_request_error", "index_version_changed")
+    if document.index_status == "pending" or _index_lease_active(document):
+        raise APIError(409, "document index build is already in progress",
+                       "invalid_request_error", "index_in_progress")
+    generation = await advance_index_generation(
+        session, document.id, expected_current_job_id=job.id, deleted=False,
+        values={
+            "index_status": "pending", "index_error": None,
+            "compile_status": "pending", "compile_degraded": [],
+            "index_lease_until": None, "updated_at": utcnow(),
+        })
+    if generation is None:
+        raise APIError(409, "document state changed during validation; retry",
+                       "invalid_request_error", "index_version_changed")
+    await session.refresh(document)
     await session.commit()
     _schedule_index(tasks, request, document.id)
     return _doc_info(document, job)
+
+
+@router.post("/{document_id}/validate-index", response_model=IndexValidation)
+async def validate_index(document_id: str, job_id: str = "",
+                         user: User = Depends(current_user),
+                         session: AsyncSession = Depends(get_session),
+                         storage: Storage = Depends(get_storage)):
+    """只读校验 provider 与老出处回接；绝不在背后触发重建。"""
+    document = await _visible(document_id, session)
+    job = await session.get(ParseJob, job_id) if job_id else await _latest_job(session, document)
+    if job is not None and job.document_id != document.id:
+        job = None
+    if job is None or job.status != "succeeded" or not job.result_prefix:
+        raise APIError(409, "document has no archived result to validate",
+                       "invalid_request_error", "result_not_ready")
+    return await _validate_index(document, job, session, storage)
+
+
+async def _validate_index(document: Document, job: ParseJob, session: AsyncSession,
+                          storage: Storage) -> IndexValidation:
+    layout = json.loads((await storage.get(f"{job.result_prefix}layout.json")).decode())
+    expected_provider = provider_of(
+        layout=layout, parse_options_hash=job.options_hash,
+        embedding_model=settings.embedding_model, vision_model=settings.chat_model)
+    expected = fingerprint(expected_provider)
+    rows = (await session.execute(
+        select(Chunk).where(Chunk.document_id == document.id,
+                            Chunk.parse_job_id == job.id).order_by(Chunk.seq)
+    )).scalars().all()
+    observed = sorted({c.provider_fingerprint for c in rows if c.provider_fingerprint})
+    reasons: list[str] = []
+    if not rows:
+        status = "uncompiled"
+        reasons.append("no_compiled_chunks")
+    elif not expected_provider["provider_resolved"] or any(
+            not (c.provider or {}).get("provider_resolved", False) for c in rows):
+        status = "unresolved"
+        reasons.append("provider_unresolved")
+    elif observed == [expected]:
+        status = "current"
+    else:
+        status = "stale"
+        if len(observed) > 1:
+            reasons.append("mixed_provider_fingerprints")
+        current_provider = rows[0].provider or {}
+        for field, value in expected_provider.items():
+            if current_provider.get(field) != value:
+                reasons.append(f"{field}_changed")
+        if not reasons:
+            reasons.append("provider_fingerprint_changed")
+    if code_detection_of(layout) == "unavailable":
+        reasons.append("code_detection_unavailable")
+
+    candidate = {}
+    for chunk in compile_chunks(
+            layout, max_chars=settings.chunk_max_chars, provider=expected_provider):
+        candidate[source_anchor(
+            seq=chunk["seq"], content_digest=digest_of(chunk["text"]),
+            page_idx=chunk["page_idx"], bbox=chunk.get("bbox"))] = chunk
+    cited = (await session.execute(
+        select(Citation, Evidence).join(Evidence, Citation.evidence_id == Evidence.id)
+        .where(Evidence.parse_job_id == job.id)
+    )).all()
+    reconnectable = invalidations = 0
+    for citation, evidence in cited:
+        chunk = candidate.get(source_anchor(
+            seq=evidence.seq, content_digest=evidence.content_digest,
+            page_idx=evidence.page_idx, bbox=evidence.bbox))
+        # 生成理解每次调用模型都可能变化，不能拿旧描述冒充“必定能接回”。
+        if evidence.derived_from:
+            invalidations += 1
+            continue
+        if chunk is not None and same_content(
+                snippet=citation.snippet, chunk_text=chunk["text"],
+                digest=citation.content_digest):
+            reconnectable += 1
+        else:
+            invalidations += 1
+    if document.current_job_id and document.current_job_id != job.id:
+        replacement_invalidations = await _resolved_citation_count(
+            session, document.current_job_id)
+        if replacement_invalidations:
+            invalidations += replacement_invalidations
+            reasons.append("current_version_citations_will_invalidate")
+    if invalidations:
+        reasons.append("historical_citations_will_invalidate")
+    reasons = list(dict.fromkeys(reasons))
+    return IndexValidation(
+        status=status, observed_fingerprints=observed,
+        expected_fingerprint=expected, reasons=reasons,
+        citation_reconnectable=reconnectable, citation_invalidations=invalidations,
+        safe_to_reindex=(invalidations == 0),
+    )
+
+
+async def _resolved_citation_count(session: AsyncSession, job_id: str) -> int:
+    """切版本时统计当前仍能接回、会因替换整份 Chunk 集而失效的出处。"""
+    cited = (await session.execute(
+        select(Citation, Evidence).join(Evidence, Citation.evidence_id == Evidence.id)
+        .where(Evidence.parse_job_id == job_id)
+    )).all()
+    if not cited:
+        return 0
+    chunks = {
+        c.seq: c for c in (await session.execute(
+            select(Chunk).where(Chunk.parse_job_id == job_id)
+        )).scalars().all()
+    }
+    total = 0
+    for citation, evidence in cited:
+        chunk = chunks.get(evidence.seq)
+        if chunk is None:
+            continue
+        live_id = chunk.derived_evidence_id if evidence.derived_from else chunk.evidence_id
+        live_text = (chunk.derived_text or "") if evidence.derived_from else chunk.text
+        if live_id == evidence.id and same_content(
+                snippet=citation.snippet, chunk_text=live_text,
+                digest=citation.content_digest):
+            total += 1
+    return total
 
 
 def _schedule_index(tasks: BackgroundTasks, request: Request, document_id: str) -> None:
@@ -719,13 +962,20 @@ async def delete_document(document_id: str, user: User = Depends(current_user),
     "看得见"不再需要判谁，但"能不能删"必须判 —— 否则任何人都能删掉
     别人传进来的语料。
     """
-    document = await _visible(document_id, session)
+    document = (await session.execute(
+        select(Document).where(Document.id == document_id,
+                               Document.deleted_at.is_(None)).with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if document is None:
+        raise APIError(404, f"document not found: {document_id}",
+                       "invalid_request_error", "document_not_found")
     if not await _may_delete(document, user, session):
         # 403 而不是 404：文档本来就是全员可见的，装作不存在没有任何意义，
         # 只会让人以为自己找错了 id
         raise APIError(403, "只有上传过这份文档的人或管理员能删除它",
                        "invalid_request_error", "not_uploader")
-    document.deleted_at = utcnow()
+    deleted_at = utcnow()
     await session.execute(update(FileToken).where(FileToken.document_id == document.id)
                           .values(revoked=True))
     await session.execute(delete(Chunk).where(Chunk.document_id == document.id))
@@ -733,7 +983,15 @@ async def delete_document(document_id: str, user: User = Depends(current_user),
     await session.execute(delete(Message).where(Message.conversation_id.in_(
         select(Conversation.id).where(Conversation.document_id == document.id))))
     await session.execute(delete(Conversation).where(Conversation.document_id == document.id))
-    document.index_status = "none"
+    generation = await advance_index_generation(
+        session, document.id, deleted=False, values={
+            "deleted_at": deleted_at, "index_status": "none",
+            "index_lease_until": None, "updated_at": deleted_at,
+        })
+    if generation is None:
+        raise APIError(409, "document state changed during deletion; retry",
+                       "invalid_request_error", "document_state_changed")
+    await session.refresh(document)
     await session.commit()
 
 

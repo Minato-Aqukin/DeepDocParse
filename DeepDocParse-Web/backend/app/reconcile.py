@@ -12,7 +12,7 @@ import asyncio
 from datetime import timedelta
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.archive import archive_job, fail_job
@@ -72,8 +72,13 @@ async def reconcile_once(sessionmaker: async_sessionmaker, storage: Storage,
                 await session.commit()
 
         # 归档完但索引没跟上的（投递丢失/上次失败后被手动重置）
+        now = utcnow()
         pending_index = (await session.execute(
-            select(Document.id).where(Document.index_status == "pending",
+            select(Document.id).where(
+                or_(Document.index_status == "pending",
+                    and_(Document.index_status == "indexing",
+                         or_(Document.index_lease_until.is_(None),
+                             Document.index_lease_until < now))),
                                       Document.deleted_at.is_(None)).limit(20)
         )).scalars().all()
         for document_id in pending_index:

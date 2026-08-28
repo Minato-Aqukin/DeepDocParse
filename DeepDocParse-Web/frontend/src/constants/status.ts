@@ -49,6 +49,7 @@ export const DEGRADED_LABEL: Record<string, string> = {
   client_aborted: '回答被中断',
   upstream_error: '问答服务异常',
   upstream_interrupted: '回答生成中途断流',
+  index_changed_during_answer: '回答生成期间索引版本已变化，出处已标为失效',
   // v1.1 新增两种
   schema_violation: '模型输出不符合 schema（已重试仍失败）',
   rerank_unavailable: '未做精排（重排序服务不可用）',

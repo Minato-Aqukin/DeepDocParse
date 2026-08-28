@@ -171,6 +171,8 @@ def _citation(hit: Hit, crop_key: str | None) -> dict:
     """
     return {
         "chunk_id": hit["chunk_id"],
+        "evidence_id": hit.get("evidence_id"),
+        "source_type": "source",
         "parse_job_id": hit.get("parse_job_id"),
         # 产品层的稳定定位键是 (parse_job_id, seq)，doc_hash 这一路用不上；
         # 但契约把它列成了字段，如实给 None 而不是省略 —— 省略会让消费方

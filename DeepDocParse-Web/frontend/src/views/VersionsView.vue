@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -46,7 +46,17 @@ async function reparse() {
 }
 
 async function makeCurrent(job: JobInfo) {
-  await documentsApi.setCurrentJob(String(route.params.id), job.id)
+  const documentId = String(route.params.id)
+  const validation = (await documentsApi.validateIndex(documentId, job.id)).data
+  if (!validation.safe_to_reindex) {
+    await ElMessageBox.confirm(
+      `切换后 ${validation.citation_invalidations} 条当前出处会明确标为失效，` +
+      `目标版本可接回 ${validation.citation_reconnectable} 条。继续切换？`,
+      '确认出处失效',
+      { type: 'warning', confirmButtonText: '确认切换', cancelButtonText: '取消' },
+    )
+  }
+  await documentsApi.setCurrentJob(documentId, job.id, !validation.safe_to_reindex)
   ElMessage.success('已切换当前版本，索引将重建')
   await load()
 }
@@ -67,7 +77,7 @@ onMounted(load)
     <el-table :data="jobs" v-loading="loading">
       <el-table-column label="版本" width="200">
         <template #default="{ row }">
-          <code>{{ row.id.slice(0, 8) }}</code>
+          <code>v{{ row.document_version }} · {{ row.id.slice(0, 8) }}</code>
           <StatusTag v-if="row.is_current" label="当前" type="success" class="tag" />
         </template>
       </el-table-column>

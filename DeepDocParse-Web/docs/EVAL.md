@@ -29,6 +29,10 @@
 当前核心域标签：`论文双栏` / `公式密集` / `图表引用` / `扫描版老手册` / `代码密集`；
 另有语言、块类型、拒答等交叉属性。加标签不用改代码，写进样本的 `attributes` 即可。
 
+阶段 5 另有一道**固定分报**：`code / equation / table / figure` 四类原子各自给命中率，
+即使某类没有样本也显示 `—`，不许拿综合分掩盖。样本类型由既有 attributes 映射；
+有 bbox 真值时按 bbox 命中，否则退回页码命中。
+
 ## 四个指标
 
 | 指标 | 定义 | 适用样本 |
@@ -49,6 +53,9 @@
 python scripts/eval_citations.py --mode offline
 python scripts/eval_citations.py --mode offline \
   --dataset eval/omnidocbench-citations-v1.6.json
+python scripts/eval_citations.py --mode offline \
+  --dataset eval/citations.json \
+  --dataset eval/omnidocbench-citations-v1.6.json   # 合并跑，固定分报四类原子
 python scripts/eval_citations.py --mode live --web http://127.0.0.1:8080
 python scripts/eval_citations.py --mode offline --markdown docs/EVAL-report.md
 ```
@@ -117,7 +124,15 @@ OmniDocBench 只提交页 ID、问题与锚点；原图/标注由准备脚本从
 
 代码域的版面 golden 是 `backend/tests/fixtures/layout-code-corpus.json`；测试会把它的
 24 页逐页与 service 侧生成源 `code-corpus.truth.json` 对拍，标识符或页序漂移会直接红，
-不会让评测集悄悄过期。
+不会让评测集悄悄过期。阶段 5 起这份 golden 是对真 PDF 跑
+born-digital 启发式得到的产物，带 `code_detection=heuristic` 与真实 `code`
+原子，不再是把全部块人工标成 `text` 的粗略夹具。
+
+阶段 5 的同集合改造前后对照已进报表：10 条标识符精确查询的页码命中率
+均为 100%，bbox 命中率从通用关键词路的 **80% (8/10)** 提到 code 精确路的
+**100% (10/10)，绝对提升 20 个百分点**。完整 56 条报表见
+`docs/EVAL-stage5-offline-report.md`。这个数字只归因于 code 检测/分词/精确 RRF 路；
+图表 + VLM 理解的相对提升必须留给 GPU 批次二，不用 offline 数字冒充。
 
 OmniDocBench 四域的纯关键词下界如下；完整逐条结果见 `docs/EVAL-omnidocbench-report.md`：
 

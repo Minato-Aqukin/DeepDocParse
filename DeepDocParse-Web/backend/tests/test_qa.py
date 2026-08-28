@@ -10,7 +10,7 @@ import json
 import httpx
 import pytest
 import respx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.models import Chunk, Conversation, Document, Message
 from tests.conftest import CHAT, EMBEDDINGS
@@ -113,6 +113,48 @@ async def test_ask_streams_answer_with_citations(auth_client, session):
     conversation = await session.get(Conversation, cid)
     await session.refresh(conversation)
     assert conversation.title != "新会话", "首个问题应成为会话标题"
+
+
+@respx.mock
+async def test_stream_reindex_race_preserves_explicit_evidence_and_marks_invalid(
+        auth_client, session, monkeypatch):
+    """检索后、流结束前重建：不能把刚返回给用户的出处静默丢掉。"""
+    from app import config as cfg
+    from app.db import get_sessionmaker
+    from ddp_core.models import Citation
+    from app.evidence import load_citations
+
+    monkeypatch.setattr(cfg.settings, "qa_verify_parse", False)
+    document = await _ready_document(auth_client)
+    cid = await _conversation(auth_client, document["id"])
+
+    async def answer_then_reindex():
+        yield (f'data: {json.dumps({"choices": [{"delta": {"content": "旧索引答案"}}]})}'
+               '\n\n').encode()
+        async with get_sessionmaker()() as concurrent:
+            row = await concurrent.get(Document, document["id"])
+            row.index_generation += 1
+            row.index_status = "pending"
+            await concurrent.execute(delete(Chunk).where(Chunk.document_id == row.id))
+            await concurrent.commit()
+        yield b"data: [DONE]\n\n"
+
+    respx.post(CHAT).mock(return_value=httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=answer_then_reindex()))
+    events = dict(await _ask(auth_client, cid))
+    assert events["done"]["verified"] is False
+    assert events["done"]["degraded"] == "index_changed_during_answer"
+    assert events["citations"]["citations"][0]["resolved"] is False
+    assert events["citations"]["citations"][0]["chunk_id"] is None
+
+    message = (await session.execute(select(Message).where(
+        Message.conversation_id == cid, Message.role == "assistant"))).scalars().one()
+    assert message.degraded == "index_changed_during_answer" and message.verified is False
+    stored = (await session.execute(select(Citation).where(
+        Citation.source_id == message.id))).scalars().all()
+    assert len(stored) == 1, "chunk 已删也必须靠检索时的 evidence_id 保留引用审计事实"
+    loaded = await load_citations(session, source_kind="message", source_ids=[message.id])
+    assert loaded[message.id][0]["resolved"] is False
 
 
 @respx.mock
@@ -606,14 +648,16 @@ async def test_unresolvable_citation_is_marked_not_silently_dropped(auth_client,
     ⚠️ 这条用例改的是 **evidence 表** —— 阶段 4 之后那是唯一真相
     （`messages.citations` 列已删）。
     """
-    from ddp_core.models import Evidence
+    from ddp_core.models import Citation, Evidence
 
     document = await _ready_document(auth_client)
     cid = await _conversation(auth_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("答案"))
     await _ask(auth_client, cid)
 
-    evidence = (await session.execute(select(Evidence))).scalars().first()
+    evidence = (await session.execute(
+        select(Evidence).join(Citation, Citation.evidence_id == Evidence.id)
+    )).scalars().first()
     assert evidence is not None, "前提不成立：双写应当已经写下证据"
     # 模拟"这条出处属于另一次解析"：定位键指向一个已经没有块的 parse_job
     await session.execute(
@@ -648,9 +692,11 @@ async def test_changed_block_content_invalidates_the_citation(auth_client, sessi
     before = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
     assert before[1]["citations"][0]["resolved"] is True, "前提不成立：这条出处本该是好的"
 
-    from ddp_core.models import Evidence
+    from ddp_core.models import Citation, Evidence
 
-    evidence = (await session.execute(select(Evidence))).scalars().first()
+    evidence = (await session.execute(
+        select(Evidence).join(Citation, Citation.evidence_id == Evidence.id)
+    )).scalars().first()
     chunk = (await session.execute(select(Chunk).where(
         Chunk.parse_job_id == evidence.parse_job_id,
         Chunk.seq == evidence.seq))).scalars().one()

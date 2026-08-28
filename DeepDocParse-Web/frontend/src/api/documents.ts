@@ -6,6 +6,7 @@ import type {
   DownloadFormat,
   EngineChoice,
   JobInfo,
+  IndexValidation,
   SourceUrl,
 } from '@/types/api'
 
@@ -51,9 +52,19 @@ export const documentsApi = {
   listJobs: (id: string) => http.get<JobInfo[]>(`/api/documents/${id}/jobs`),
   reparse: (id: string, choice: EngineChoice) =>
     http.post<JobInfo>(`/api/documents/${id}/reparse`, choice),
-  setCurrentJob: (id: string, job_id: string) =>
-    http.put<DocumentInfo>(`/api/documents/${id}/current-job`, { job_id }),
-  reindex: (id: string) => http.post<DocumentInfo>(`/api/documents/${id}/reindex`),
+  setCurrentJob: (id: string, job_id: string, acknowledgeInvalidations = false) =>
+    http.put<DocumentInfo>(`/api/documents/${id}/current-job`, {
+      job_id,
+      acknowledge_invalidations: acknowledgeInvalidations,
+    }),
+  validateIndex: (id: string, jobId?: string) =>
+    http.post<IndexValidation>(`/api/documents/${id}/validate-index`, null, {
+      params: jobId ? { job_id: jobId } : {},
+    }),
+  reindex: (id: string, acknowledgeInvalidations = false) =>
+    http.post<DocumentInfo>(`/api/documents/${id}/reindex`, null, {
+      params: acknowledgeInvalidations ? { acknowledge_invalidations: true } : {},
+    }),
 
   downloadUrl: (id: string, format: DownloadFormat, job?: string) =>
     `/api/documents/${id}/download?format=${format}${job ? `&job=${job}` : ''}`,

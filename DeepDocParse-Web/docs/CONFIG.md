@@ -12,7 +12,7 @@
 **`VITE_DEFAULT_ENGINE` 要与后端 `DEFAULT_PARSE_ENGINE`、service 的 `models.yaml` 三者对齐**——
 任一处对不上，上传会在 service 侧收 404 unknown_engine。
 
-共 **62** 项。
+共 **67** 项。
 
 ## 本层资源
 
@@ -63,6 +63,11 @@
 | `EMBEDDING_DIM` | `int` | `1024` | bge-m3 是 1024 维。换模型维度变了必须整体 reindex（关系库不能像 Redis 那样按维度分索引名） |
 | `EMBEDDING_BATCH_SIZE` | `int` | `16` | 单次 embeddings 请求的最大条数。必须低于运行时的 max-client-batch-size（TEI 默认 32）， 否则长文档整批被拒 413（service 侧 worker 已经踩过） |
 | `CHUNK_MAX_CHARS` | `int` | `800` | 分块上限，影响出处粒度 |
+| `COMPILE_VISION_ENABLED` | `bool` | `True` | DDP-Compile v1：视觉原子在入库时裁图并由视觉模型生成派生理解。 关掉不是“等价的轻量模式”：文档仍可索引，但 compile_degraded 会明确记录 vision_unavailable，图表类问题不会假装已获得视觉理解。 |
+| `COMPILE_VISION_CONCURRENCY` | `int` | `2` | 单文档同时调用 VLM 的原子数 |
+| `COMPILE_VISION_TIMEOUT` | `float` | `120.0` | 每个原子的 VLM 超时（秒） |
+| `INDEX_LEASE_SECONDS` | `int` | `300` | 索引 worker 租约：heartbeat 续租，进程崩溃后 reconcile 才能安全接管。 heartbeat 必须显著短于 lease；generation fencing 保证旧 worker 复活也写不进去。 worker 无 heartbeat 后多久允许接管 |
+| `INDEX_HEARTBEAT_SECONDS` | `int` | `30` | 活 worker 的续租周期 |
 | `QA_TOP_K` | `int` | `4` | 进 prompt 的 chunk 数 |
 | `QA_CANDIDATES` | `int` | `8` | 每路检索的候选数（融合前） |
 | `QA_CONTEXT_CHARS` | `int` | `6000` | 资料段总字符上限 |

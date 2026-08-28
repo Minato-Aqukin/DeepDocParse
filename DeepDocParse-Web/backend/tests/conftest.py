@@ -20,6 +20,10 @@ from app.config import settings
 # 必须在 import app.main 之前设好（模块级代码可能已经开始建密码哈希）。
 # 生产值在 app/config.py，这里只影响测试进程。
 settings.bcrypt_rounds = 4
+# 编译指纹测试必须模拟可追溯部署；另有专门用例把模型置空，验证
+# provider_unresolved，不能让整套测试无意中都跑在不可比较的默认模型下。
+settings.embedding_model = "test-embedding"
+settings.chat_model = "test-vision"
 
 from app.main import app  # noqa: E402
 from app.metering import MemoryRateLimiter

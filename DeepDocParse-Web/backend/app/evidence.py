@@ -122,34 +122,58 @@ async def _record(session: AsyncSession, citations: list[dict], *,
         if (c.parse_job_id, c.seq) in locators
     }
 
-    existing = {
-        (e.parse_job_id, e.seq): e
-        for e in (await session.execute(
-            select(Evidence).where(Evidence.parse_job_id.in_(jobs), Evidence.seq.in_(seqs))
-        )).scalars().all()
-    }
+    evidence_rows = (await session.execute(
+        select(Evidence).where(Evidence.parse_job_id.in_(jobs), Evidence.seq.in_(seqs))
+    )).scalars().all()
+    existing_by_id = {e.id: e for e in evidence_rows}
+    legacy_source = {}
+    for row in evidence_rows:
+        if row.derived_from is None:
+            legacy_source.setdefault((row.parse_job_id, row.seq), row)
 
     written = 0
     # **enumerate 的顺序就是名次**：`citations` 传进来时是有序列表（检索名次），
     # locators 用 dict 保序，所以这里的下标与老 JSON 的下标一一对应
     for rank, (key, citation) in enumerate(locators.items()):
         chunk = chunks.get(key)
+        wanted = citation.get("evidence_id")
+        evidence = existing_by_id.get(wanted) if wanted else None
         if chunk is None:
-            # 块已经不在了（重建索引换了分块规则，或文档被删）。
-            # 老路径对这种 citation 同样是 resolved=False，双写跟着跳过就是一致的
+            # 流式回答期间索引可能被重建。检索时已经拿到明确 evidence_id 的引用
+            # 仍须保留；它之后自然以 resolved=false 展示。没有明确 Evidence 才不能造。
+            if evidence is None:
+                continue
+            session.add(Citation(
+                evidence_id=evidence.id, source_kind=source_kind, source_id=source_id,
+                role="primary", score=citation.get("score"),
+                similarity=citation.get("similarity"),
+                snippet=citation.get("snippet") or "", rank=rank,
+                content_digest=evidence.content_digest or digest_of(evidence.content or ""),
+            ))
+            written += 1
             continue
-        evidence = existing.get(key)
+        legacy_mode = not wanted and not chunk.evidence_id
+        if evidence is None and chunk.evidence_id:
+            evidence = existing_by_id.get(chunk.evidence_id)
+        if evidence is None:
+            # 0009 以前建的 chunk 没有 evidence_id。兼容期仍按旧稳定键复用；
+            # 阶段 5 编译出的 chunk 一律有显式 evidence_id，不会走这条模糊路径。
+            evidence = legacy_source.get(key)
         if evidence is None:
             evidence = Evidence(
                 document_id=chunk.document_id, parse_job_id=chunk.parse_job_id,
-                seq=chunk.seq, page_idx=chunk.page_idx, bbox=chunk.bbox,
+                seq=chunk.seq, atom_key=f"source:{chunk.seq}:{digest_of(chunk.text)[:16]}",
+                page_idx=chunk.page_idx, bbox=chunk.bbox,
                 page_size=chunk.page_size, kind=chunk.block_type or "text",
                 crop_key=citation.get("crop_key"),
-                content_digest=digest_of(chunk.text),
+                content_digest=digest_of(chunk.text), content=chunk.text,
+                provider=chunk.provider or {},
+                provider_fingerprint=chunk.provider_fingerprint or "",
             )
             session.add(evidence)
             await session.flush()
-            existing[key] = evidence
+            existing_by_id[evidence.id] = evidence
+            legacy_source[key] = evidence
         elif evidence.crop_key is None and citation.get("crop_key"):
             # 第一次引用时没裁图（不是 PDF、或裁剪失败），这次裁出来了 —— 补上。
             # **反过来不覆盖**：已有的裁图不因为这次没裁而被抹掉
@@ -162,7 +186,9 @@ async def _record(session: AsyncSession, citations: list[dict], *,
             snippet=citation.get("snippet") or "", rank=rank,
             # **每条引用各记各的**：证据行上那份是首次锚定时的内容，
             # 这份是这一次引用当时的内容。同一个块跨重建被引两次，两者会不同
-            content_digest=digest_of(chunk.text),
+            content_digest=(digest_of(chunk.text) if legacy_mode else
+                            (evidence.content_digest or
+                             digest_of(evidence.content or chunk.text))),
         ))
         written += 1
 
@@ -232,11 +258,21 @@ async def load_citations(session: AsyncSession, *, source_kind: str,
         # **用 citation 的指纹，不是 evidence 的**：判定问的是"这一次引用
         # 还指着它当时看到的原文吗"，那是引用这个事件的属性。
         # 用证据那份的话，同一个块跨重建被引两次，后一次会被前一次的指纹判成失效
-        resolved = chunk is not None and same_content(
-            snippet=citation.snippet, chunk_text=chunk.text,
-            digest=citation.content_digest)
+        live_text = (((chunk.derived_text or "") if evidence.derived_from else chunk.text)
+                     if chunk is not None else "")
+        live_evidence_id = ((chunk.derived_evidence_id if evidence.derived_from else
+                             chunk.evidence_id) if chunk is not None else None)
+        id_matches = (live_evidence_id == evidence.id or
+                      (chunk is not None and chunk.evidence_id is None
+                       and evidence.derived_from is None))
+        resolved = (chunk is not None and id_matches and same_content(
+            snippet=citation.snippet, chunk_text=live_text,
+            digest=citation.content_digest))
         out.setdefault(citation.source_id, []).append({
             "chunk_id": chunk.id if resolved else None,
+            "evidence_id": evidence.id,
+            "source_type": "generated" if evidence.derived_from else "source",
+            "derived_from": evidence.derived_from,
             "parse_job_id": evidence.parse_job_id,
             "seq": evidence.seq,
             # 契约把 doc_hash 列成了字段。产品层的稳定定位键是 (parse_job_id, seq)，

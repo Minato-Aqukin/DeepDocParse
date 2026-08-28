@@ -10,8 +10,14 @@ import PdfCanvas from '@/components/viewer/PdfCanvas.vue'
 import ResultPane from '@/components/viewer/ResultPane.vue'
 import { usePolling } from '@/composables/usePolling'
 import { indexStatusOf, parseStatusOf } from '@/constants/status'
-import type { Block, Citation, DocumentInfo, DownloadFormat, PageBlocks } from '@/types/api'
+import {
+  COMPILE_DEGRADED, codeDetectionOf, compileStatusOf,
+} from '@/constants/compilation'
+import type {
+  Block, Citation, DocumentInfo, DownloadFormat, IndexValidation, PageBlocks,
+} from '@/types/api'
 import type { Highlight } from '@/types/workbench'
+import { validateAndReindex } from '@/utils/reindex'
 
 /**
  * 三栏工作台：原文 / 解析结果 / 问答。
@@ -29,6 +35,7 @@ const highlights = ref<Highlight[]>([])
 const selectedChunkId = ref<string | null>(null)
 const showChunks = ref(false)
 const loading = ref(true)
+const validation = ref<IndexValidation>()
 let poller: number | undefined
 
 const pageSize = computed(
@@ -86,7 +93,8 @@ async function load() {
 const polling = usePolling(load, () => {
   const doc = document.value
   if (!doc) return false
-  return Boolean(parseStatusOf(doc.status).active || indexStatusOf(doc.index_status).active)
+  return Boolean(parseStatusOf(doc.status).active || indexStatusOf(doc.index_status).active ||
+    compileStatusOf(doc.compile_status).active)
 })
 
 function locate(citation: Citation) {
@@ -119,10 +127,21 @@ async function download(format: DownloadFormat) {
 }
 
 async function reindex() {
-  await documentsApi.reindex(String(route.params.id))
+  validation.value = await validateAndReindex(String(route.params.id))
   ElMessage.success('已重新排队建立索引')
   await load()
   polling.start()
+}
+
+async function validateIndex() {
+  validation.value = (await documentsApi.validateIndex(String(route.params.id))).data
+  const current = validation.value.status === 'current' ? '当前版本一致' :
+    validation.value.status === 'stale' ? '索引版本已过期' :
+      validation.value.status === 'unresolved' ? '上游实际模型未解析，版本不可比较' : '尚未编译'
+  ElMessage.info(
+    `${current}；可接回 ${validation.value.citation_reconnectable} 条，` +
+    `会失效 ${validation.value.citation_invalidations} 条出处`,
+  )
 }
 
 watch(
@@ -153,6 +172,7 @@ watch(
         <el-button size="small" @click="router.push(`/documents/${document?.id}/versions`)">
           解析版本
         </el-button>
+        <el-button size="small" @click="validateIndex">校验版本</el-button>
         <el-button size="small" @click="reindex">重建索引</el-button>
         <el-dropdown @command="download">
           <el-button size="small">下载<el-icon class="el-icon--right">▾</el-icon></el-button>
@@ -173,7 +193,21 @@ watch(
     <el-alert v-else-if="document?.status !== 'succeeded'" type="info" :closable="false"
               title="解析中，完成后自动刷新" />
 
-    <div v-else class="panes">
+    <div v-if="document?.status === 'succeeded'" class="compile-line">
+      <StatusTag :meta="compileStatusOf(document.compile_status)" />
+      <StatusTag :meta="codeDetectionOf(document.code_detection)" />
+      <span v-if="document.layout_version" class="ddp-num">{{ document.layout_version }}</span>
+      <span v-if="validation" class="validation ddp-num">
+        版本 {{ validation.status }} · 可接回 {{ validation.citation_reconnectable }} ·
+        将失效 {{ validation.citation_invalidations }}
+      </span>
+    </div>
+    <div v-for="reason in document?.compile_degraded || []" :key="reason"
+         class="compile-degraded">
+      {{ COMPILE_DEGRADED[reason] || reason }}
+    </div>
+
+    <div v-if="document?.status === 'succeeded'" class="panes">
       <section class="pane source">
         <div class="pane-head">
           <span>原文</span>
@@ -182,7 +216,7 @@ watch(
           </el-checkbox>
           <el-pagination
             v-model:current-page="activePage"
-            :page-count="document.page_count"
+            :page-count="document?.page_count ?? 0"
             :pager-count="5"
             layout="prev, pager, next"
             small
@@ -227,6 +261,21 @@ watch(
   height: calc(100vh - 100px);
   gap: 10px;
 }
+.compile-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 24px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.compile-degraded {
+  border-left: 2px solid var(--warn);
+  padding: 2px 10px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.validation { margin-left: auto; }
 .head {
   display: flex;
   align-items: center;

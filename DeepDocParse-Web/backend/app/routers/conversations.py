@@ -193,6 +193,8 @@ async def ask(cid: str, req: AskRequest, request: Request, user: User = Depends(
     return StreamingResponse(
         _stream_answer(http, messages, retrieval, conversation_id=cid,
                        document_id=document.id, user_id=user.id, has_image=bool(image_uris),
+                       expected_job_id=job.id,
+                       expected_generation=document.index_generation,
                        # 图与文本必须成对取，不能一个取 image_uris[0] 一个取 hits[0]
                        verify_pair=(crops[0][0], crops[0][1]["text"]) if crops else None),
         media_type="text/event-stream",
@@ -202,12 +204,15 @@ async def ask(cid: str, req: AskRequest, request: Request, user: User = Depends(
 
 async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieval: Retrieval, *,
                          conversation_id: str, document_id: str, user_id: str, has_image: bool,
-                         verify_pair: tuple[str, str] | None = None):
+                         verify_pair: tuple[str, str] | None = None,
+                         expected_job_id: str | None = None,
+                         expected_generation: int | None = None):
     message_id = None
     chunks: list[str] = []
     degraded = retrieval.degraded
     verified = has_image
     error: dict | None = None
+    index_changed = False
 
     # 出处一致性核对（A4）与回答**并发**跑：核对要多打一次视觉模型，
     # 串行做会把首字延迟顶上去，而它的结论只在最后的 done 帧里才用得上
@@ -266,15 +271,20 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
             verify_task.cancel()
         # shield：客户端断开时这个 finally 跑在已取消的作用域里，
         # 不屏蔽的话第一个 await 就被打断，client_aborted 的回答根本落不了库
-        message_id = await asyncio.shield(_persist(
+        message_id, verified, degraded, index_changed = await asyncio.shield(_persist(
             conversation_id=conversation_id, user_id=user_id, content="".join(chunks),
             citations=retrieval.citations, verified=verified and not error, degraded=degraded,
-            model_meta=answer_model_meta()))
+            model_meta=answer_model_meta(), document_id=document_id,
+            expected_job_id=expected_job_id, expected_generation=expected_generation))
 
-    # fresh=True：这一帧的出处是刚检索出来的，按构造就指向当前块
-    yield _sse("citations", {"citations": [citation_out(document_id, c, fresh=True)
-                                           for c in retrieval.citations]})
-    yield _sse("done", {"message_id": message_id, "verified": verified and not error,
+    citation_payload = [citation_out(document_id, c, fresh=not index_changed)
+                        for c in retrieval.citations]
+    if index_changed:
+        for citation in citation_payload:
+            citation["resolved"] = False
+            citation["chunk_id"] = None
+    yield _sse("citations", {"citations": citation_payload})
+    yield _sse("done", {"message_id": message_id, "verified": verified,
                         "degraded": degraded,
                         # 出处够不够可信要跟着回答一起给：只给出处不给可信度，
                         # 用户没法判断该不该采信（kotaemon 的做法，A2）
@@ -302,13 +312,30 @@ async def _verdict(task: asyncio.Task) -> bool | None:
 
 
 async def _persist(*, conversation_id: str, user_id: str, content: str, citations: list,
-                   verified: bool, degraded: str | None, model_meta: dict | None = None) -> str:
+                   verified: bool, degraded: str | None, model_meta: dict | None = None,
+                   document_id: str | None = None, expected_job_id: str | None = None,
+                   expected_generation: int | None = None
+                   ) -> tuple[str, bool, str | None, bool]:
     """把回答落库。
 
     **必须新开 session**：请求作用域的那个在响应体开始流之前就关了，
     复用它必炸（M5 在 proxy 上踩过，见 proxy.py 模块 docstring）。
     """
     async with get_sessionmaker()() as db:
+        index_changed = False
+        if (document_id is not None and expected_job_id is not None
+                and expected_generation is not None):
+            # generation 核对与 Message/Citation 提交必须在同一把 Document 行锁内；
+            # 否则 reindex 仍可插进“检查通过 → record_evidence”之间。
+            document = (await db.execute(
+                select(Document).where(Document.id == document_id).with_for_update()
+            )).scalar_one_or_none()
+            index_changed = (document is None or document.current_job_id != expected_job_id
+                             or document.index_generation != expected_generation
+                             or document.index_status != "ready")
+            if index_changed:
+                verified = False
+                degraded = "index_changed_during_answer"
         message = Message(conversation_id=conversation_id, role="assistant", content=content,
                           verified=verified, degraded=degraded, model_meta=model_meta or {})
         db.add(message)
@@ -318,7 +345,7 @@ async def _persist(*, conversation_id: str, user_id: str, content: str, citation
         await record_evidence(db, citations, source_kind="message", source_id=message.id)
         await record_usage(db, user_id=user_id, kind="qa", requests=1)
         await db.commit()
-        return message.id
+        return message.id, verified, degraded, index_changed
 
 
 class _UpstreamDown(RuntimeError):

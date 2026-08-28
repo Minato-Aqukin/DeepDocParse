@@ -71,6 +71,8 @@ class Outcome:
     refusal_ok: bool | None = None
     degraded: str | None = None
     degraded_ok: bool | None = None
+    legacy_page_hit: bool | None = None
+    legacy_bbox_hit: bool | None = None
     note: str = ""
 
 
@@ -101,6 +103,36 @@ class Slice:
     refusal: Metric = field(default_factory=Metric)
     degraded: Metric = field(default_factory=Metric)
     samples: int = 0
+
+
+ATOM_KINDS = ("code", "equation", "table", "figure")
+
+
+def atom_kind_of(attributes: list[str]) -> str | None:
+    values = set(attributes)
+    if "代码密集" in values or "标识符精确查询" in values:
+        return "code"
+    if "公式密集" in values or "独立公式" in values or "公式行内" in values:
+        return "equation"
+    if "操作表格" in values or "表格" in values:
+        return "table"
+    if "图表引用" in values or values & {
+            "图注", "示意图", "几何图", "信息图", "物理图像", "统计图", "走势图",
+            "表内配图", "多子图"}:
+        return "figure"
+    return None
+
+
+def summarize_atoms(outcomes: list[Outcome]) -> dict[str, Metric]:
+    """四类原子固定分报；有 bbox 真值时用 bbox，否则退回页码。"""
+    metrics = {kind: Metric() for kind in ATOM_KINDS}
+    for outcome in outcomes:
+        kind = atom_kind_of(outcome.attributes)
+        if kind is None:
+            continue
+        hit = outcome.bbox_hit if outcome.bbox_hit is not None else outcome.page_hit
+        metrics[kind].add(hit)
+    return metrics
 
 
 # --------------------------------------------------------------------------- 判定
@@ -238,12 +270,24 @@ def run_offline(samples: list[dict], any_citation: bool) -> list[Outcome]:
         from ddp_core.chunking import layout_to_chunks
         chunks = layout_to_chunks(layout, settings.chunk_max_chars)
         ranked = _keyword_rank(sample["question"], chunks)[:settings.qa_top_k]
-        outcomes.append(judge(
+        outcome = judge(
             sample,
             pages=[c["page_idx"] for c in ranked],
             bboxes=[c["bbox"] for c in ranked],
             answer="", degraded=None if ranked else "no_hits",
-            layout=layout, any_citation=any_citation))
+            layout=layout, any_citation=any_citation)
+        if "标识符精确查询" in (sample.get("attributes") or []):
+            legacy = _keyword_rank(
+                sample["question"], chunks, code_boost=False)[:settings.qa_top_k]
+            baseline = judge(
+                sample,
+                pages=[c["page_idx"] for c in legacy],
+                bboxes=[c["bbox"] for c in legacy],
+                answer="", degraded=None if legacy else "no_hits",
+                layout=layout, any_citation=any_citation)
+            outcome.legacy_page_hit = baseline.page_hit
+            outcome.legacy_bbox_hit = baseline.bbox_hit
+        outcomes.append(outcome)
     return outcomes
 
 
@@ -352,18 +396,35 @@ def _omnidocbench_slice_layout(slice_name: str, root: Path | None = None,
     }
 
 
-def _keyword_rank(question: str, chunks: list[dict]) -> list[dict]:
+def _keyword_rank(question: str, chunks: list[dict], *, code_boost: bool = True) -> list[dict]:
     # 与生产 PgVectorIndex / MemoryIndex 用**同一套 tokenizer 与 OR 语义**。
     # 旧实现按标点切，整句中文会变成一个超长 token，中文切片大量 no_hits，
     # 量到的是评测器自己的缺陷而不是产品关键词路。
     from ddp_core.tokenize import query_string
 
     terms = [term for term in query_string(question).split() if term]
-    scored = []
-    for chunk in chunks:
+    scored: list[tuple[int, int, dict]] = []
+    for index, chunk in enumerate(chunks):
         indexed = (chunk.get("text_tokenized") or query_string(chunk["text"])).lower().split()
-        scored.append((sum(indexed.count(term) for term in terms), chunk))
-    return [c for score, c in sorted(scored, key=lambda p: p[0], reverse=True) if score > 0]
+        scored.append((sum(indexed.count(term) for term in terms), index, chunk))
+    keyword = [(index, chunk) for score, index, chunk
+               in sorted(scored, key=lambda item: (-item[0], item[1])) if score > 0]
+    if not code_boost:
+        return [chunk for _, chunk in keyword]
+
+    # 与生产一样：原关键词名次 + code 精确命中名次做 RRF，不把词频
+    # 和向量分数硬加。保留 code_boost=False 作同一评测集上的改造前对照。
+    from ddp_core.search import EXACT_CODE_WEIGHT, RRF_K, exact_code_ids
+    by_id = {str(index): chunk for index, chunk in keyword}
+    kw_ids = list(by_id)
+    code_ids = exact_code_ids([
+        (str(index), chunk.get("block_type", "text"), chunk.get("text", ""))
+        for index, chunk in keyword], question)
+    fused: dict[str, float] = {}
+    for ranked in (kw_ids, *([code_ids] * EXACT_CODE_WEIGHT)):
+        for rank, cid in enumerate(ranked):
+            fused[cid] = fused.get(cid, 0.0) + 1.0 / (RRF_K + rank + 1)
+    return [by_id[cid] for cid in sorted(fused, key=fused.get, reverse=True)]
 
 
 # --------------------------------------------------------------------------- live
@@ -491,6 +552,28 @@ def render(outcomes: list[Outcome], mode: str) -> str:
     for s in [overall, *slices]:
         lines.append(f"| {s.name} | {s.samples} | {s.page} | {s.bbox} | {s.refusal} | "
                      f"{s.degraded} |")
+    atoms = summarize_atoms(outcomes)
+    lines += ["", "## 四类原子命中率（固定分报）", "",
+              "| 原子 | 命中率 |", "|---|---|"]
+    for kind in ATOM_KINDS:
+        lines.append(f"| `{kind}` | {atoms[kind]} |")
+    identifier = [outcome for outcome in outcomes
+                  if outcome.legacy_page_hit is not None or outcome.legacy_bbox_hit is not None]
+    if identifier:
+        before_page, after_page = Metric(), Metric()
+        before_bbox, after_bbox = Metric(), Metric()
+        for outcome in identifier:
+            before_page.add(outcome.legacy_page_hit)
+            after_page.add(outcome.page_hit)
+            before_bbox.add(outcome.legacy_bbox_hit)
+            after_bbox.add(outcome.bbox_hit)
+        lines += ["", "## 标识符精确查询（同集合改造前后）", "",
+                  "| 指标 | 改造前（通用关键词路） | 改造后（code 精确路） | 绝对提升 |",
+                  "|---|---|---|---|",
+                  f"| 页码命中率 | {before_page} | {after_page} | "
+                  f"{_delta(before_page, after_page)} |",
+                  f"| bbox 命中率 | {before_bbox} | {after_bbox} | "
+                  f"{_delta(before_bbox, after_bbox)} |"]
     lines += ["", "## 逐条", "", "| 样本 | 页码 | bbox | 拒答 | 降级 | 备注 |", "|---|---|---|---|---|---|"]
     mark = {True: "✅", False: "❌", None: "—"}
     for o in outcomes:
@@ -499,18 +582,27 @@ def render(outcomes: list[Outcome], mode: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _delta(before: Metric, after: Metric) -> str:
+    if before.rate is None or after.rate is None:
+        return "—"
+    return f"{after.rate - before.rate:+.1%}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mode", choices=("offline", "live"), default="offline")
-    parser.add_argument("--dataset", default=str(DATASET))
+    parser.add_argument("--dataset", action="append",
+                        help="评测集 JSON；可重复传入并合并（缺省 eval/citations.json）")
     parser.add_argument("--web", default=os.environ.get("WEB_URL", "http://127.0.0.1:8080"))
     parser.add_argument("--markdown", help="把报表写到这个文件")
     parser.add_argument("--any-citation", action="store_true",
                         help="命中判定放宽到「出现在任意一条出处里」（默认只看 top-1）")
     args = parser.parse_args()
 
-    samples = json.loads(Path(args.dataset).read_text(encoding="utf-8"))["samples"]
+    datasets = args.dataset or [str(DATASET)]
+    samples = [sample for dataset in datasets for sample in
+               json.loads(Path(dataset).read_text(encoding="utf-8"))["samples"]]
     if args.mode == "offline":
         outcomes = run_offline(samples, args.any_citation)
     else:

@@ -12,6 +12,7 @@ import { usePolling } from '@/composables/usePolling'
 import { useDocumentsStore } from '@/stores/documents'
 import type { DocumentInfo, DownloadFormat } from '@/types/api'
 import type { DocumentFilters as Filters } from '@/stores/documents'
+import { validateAndReindex } from '@/utils/reindex'
 
 const router = useRouter()
 const store = useDocumentsStore()
@@ -37,7 +38,7 @@ async function download(doc: DocumentInfo, format: DownloadFormat) {
 }
 
 async function reindex(doc: DocumentInfo) {
-  await documentsApi.reindex(doc.id)
+  await validateAndReindex(doc.id)
   ElMessage.success('已排队重建索引')
   await reload()
 }

@@ -37,6 +37,7 @@ from app.models import (
     ApiKey, Document, DocumentUpload, ParseJob, UsageRecord, utcnow,
 )
 from app.routers.documents import options_hash
+from app.versions import next_document_version
 
 router = APIRouter()
 
@@ -177,7 +178,8 @@ async def _proxy_parse_submit(request: Request, session: AsyncSession, key: ApiK
         if job is None:
             job = ParseJob(document_id=document.id, engine=engine, options=options,
                            initiated_by=key.user_id,
-                           options_hash=digest)
+                           options_hash=digest,
+                           document_version=await next_document_version(session, document.id))
             session.add(job)
         job.api_key_id = key.id
         job.service_task_id = service_task_id

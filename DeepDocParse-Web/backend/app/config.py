@@ -87,6 +87,16 @@ class Settings(BaseSettings):
     # 否则长文档整批被拒 413（service 侧 worker 已经踩过）
     embedding_batch_size: int = 16
     chunk_max_chars: int = 800          # 分块上限，影响出处粒度
+    # DDP-Compile v1：视觉原子在入库时裁图并由视觉模型生成派生理解。
+    # 关掉不是“等价的轻量模式”：文档仍可索引，但 compile_degraded 会明确记录
+    # vision_unavailable，图表类问题不会假装已获得视觉理解。
+    compile_vision_enabled: bool = True
+    compile_vision_concurrency: int = 2       # 单文档同时调用 VLM 的原子数
+    compile_vision_timeout: float = 120.0      # 每个原子的 VLM 超时（秒）
+    # 索引 worker 租约：heartbeat 续租，进程崩溃后 reconcile 才能安全接管。
+    # heartbeat 必须显著短于 lease；generation fencing 保证旧 worker 复活也写不进去。
+    index_lease_seconds: int = 300          # worker 无 heartbeat 后多久允许接管
+    index_heartbeat_seconds: int = 30       # 活 worker 的续租周期
     qa_top_k: int = 4                   # 进 prompt 的 chunk 数
     qa_candidates: int = 8              # 每路检索的候选数（融合前）
     qa_context_chars: int = 6000        # 资料段总字符上限
@@ -238,6 +248,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"QA_LOW_SIMILARITY({self.qa_low_similarity}) 必须大于 "
                 f"QA_MIN_SIMILARITY({self.qa_min_similarity})，否则低相关提示永远不会触发")
+        return self
+
+    @model_validator(mode="after")
+    def _check_index_lease(self):
+        if self.index_lease_seconds < 3 or not (
+                0 < self.index_heartbeat_seconds < self.index_lease_seconds / 2):
+            raise ValueError(
+                "INDEX_HEARTBEAT_SECONDS 必须 > 0 且小于 INDEX_LEASE_SECONDS 的一半，"
+                "INDEX_LEASE_SECONDS 至少为 3")
         return self
 
     @property

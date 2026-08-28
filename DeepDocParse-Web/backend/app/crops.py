@@ -12,9 +12,12 @@ import hashlib
 import json
 
 from app.storage import Storage, crop_key
-from ddp_core.crops import CROP_MARGIN, RENDER_SCALE, render_crop  # noqa: F401
+from ddp_core.crops import CROP_MARGIN, RENDER_SCALE, render_crop, render_crops  # noqa: F401
 
-__all__ = ["CROP_MARGIN", "RENDER_SCALE", "bbox_digest", "get_or_create_crop", "render_crop"]
+__all__ = [
+    "CROP_MARGIN", "RENDER_SCALE", "bbox_digest", "get_or_create_crop",
+    "get_or_create_crops", "render_crop",
+]
 
 
 def bbox_digest(bbox: list) -> str:
@@ -44,3 +47,38 @@ async def get_or_create_crop(storage: Storage, *, job_id: str, source_key: str, 
         return None
     await storage.put(key, png, "image/png")
     return key
+
+
+async def get_or_create_crops(storage: Storage, *, job_id: str, source_key: str, mime: str,
+                              atoms: list[dict]) -> dict[int, str]:
+    """编译期批量裁图：PDF 只读一次，每页只渲染一次。"""
+    if not source_key or "pdf" not in (mime or "").lower():
+        return {}
+    usable = [atom for atom in atoms if atom.get("bbox") and atom.get("page_size")]
+    if not usable:
+        return {}
+
+    found: dict[int, str] = {}
+    missing: list[tuple[dict, str]] = []
+    for atom in usable:
+        key = crop_key(job_id, atom["page_idx"], bbox_digest(atom["bbox"]))
+        if await storage.exists(key):
+            found[atom["seq"]] = key
+        else:
+            missing.append((atom, key))
+    if not missing:
+        return found
+
+    try:
+        pdf_bytes = await storage.get(source_key)
+    except Exception:
+        return found
+    requests = [(atom["page_idx"], atom["bbox"], atom["page_size"])
+                for atom, _ in missing]
+    rendered = await asyncio.to_thread(render_crops, pdf_bytes, requests)
+    for (atom, key), png in zip(missing, rendered):
+        if png is None:
+            continue
+        await storage.put(key, png, "image/png")
+        found[atom["seq"]] = key
+    return found

@@ -77,6 +77,9 @@ export async function stubApi(page: Page): Promise<void> {
             id: 'demo-id', filename: 'demo.pdf', doc_id: 'd'.repeat(64), origin: 'upload',
             mime: 'application/pdf', size_bytes: 1, page_count: 1, status: 'succeeded',
             error: null, index_status: 'ready', index_error: null,
+            compile_status: 'ready', compile_degraded: [],
+            compile_fingerprint: 'f'.repeat(64), layout_version: 'ddp-layout/1',
+            code_detection: 'heuristic',
             current_job_id: 'job-1', created_at: new Date().toISOString(),
             // 形状要跟 types/api.ts 的 DocumentInfo 一致 —— 少字段不会红，
             // 但组件会走进"没人传过/不能删"的分支，静默把覆盖降下去

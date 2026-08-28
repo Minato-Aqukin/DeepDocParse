@@ -18,7 +18,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 
-from sqlalchemy import and_, or_, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_core.chunking import page_count_of
@@ -26,6 +26,7 @@ from app.metering import record_usage
 from app.models import Document, ParseJob, utcnow
 from app.service_client import ServiceClient
 from app.storage import Storage, job_result_prefix
+from app.versions import advance_index_generation
 
 # markdown 图片引用：![alt](target "title")
 _IMG_REF = re.compile(r"(!\[[^\]]*\]\()(<[^>]*>|[^)\s]+)(\s*(?:\"[^\"]*\")?\))")
@@ -158,7 +159,16 @@ async def archive_job(session: AsyncSession, storage: Storage, service: ServiceC
     await storage.put(f"{prefix}layout.json",
                       json.dumps(layout, ensure_ascii=False).encode(), "application/json")
 
-    # 4. 落库 + 计量（页数只有解析完才知道，额度在此刻才真正扣减）
+    # 4. 落库 + 计量（页数只有解析完才知道，额度在此刻才真正扣减）。
+    # 取结果/写对象可能很久；最终写 Document 前必须锁行重读。用户若在此期间
+    # 删除文档，解析结果仍可归档并据实计量，但绝不能把已删除行重新置为 pending。
+    document = (await session.execute(
+        select(Document).where(Document.id == job.document_id).with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if document is None:
+        await release_job(session, job, "document missing after result download")
+        return False
     page_count = page_count_of(layout) or 1
     job.page_count = page_count
     job.result_prefix = prefix
@@ -166,14 +176,25 @@ async def archive_job(session: AsyncSession, storage: Storage, service: ServiceC
     job.error = None
     job.archived_at = datetime.now(UTC)
 
-    # 首次解析成功即成为当前版本；后续重解析要用户显式切换，避免结果在脚下被换掉
-    if document.current_job_id is None:
-        document.current_job_id = job.id
-    if document.current_job_id == job.id:
-        document.page_count = page_count
-        document.index_status = "pending"     # 索引任务由调用方投递
-        document.index_error = None
-    document.updated_at = utcnow()
+    # 首次解析成功即成为当前版本；后续重解析要用户显式切换，避免结果在脚下被换掉。
+    # deleted_at 是第二道安全闸：即使 callback 随后仍投递 index task，claim 也拒绝删除行。
+    if document.deleted_at is None:
+        previous_current = document.current_job_id
+        effective_current = previous_current or job.id
+        if effective_current == job.id:
+            generation = await advance_index_generation(
+                session, document.id, expected_current_job_id=previous_current,
+                deleted=False, values={
+                    "current_job_id": effective_current, "page_count": page_count,
+                    "index_status": "pending", "index_error": None,
+                    "index_lease_until": None, "compile_status": "pending",
+                    "compile_degraded": [], "updated_at": utcnow(),
+                })
+            if generation is None:  # 行锁下只可能是异常的外部状态改写
+                raise RuntimeError("document state changed while archive row was locked")
+            await session.refresh(document)
+        else:
+            document.updated_at = utcnow()
 
     # 记在发起这次解析的人头上；老 job 没这个信息时退回上传者
     await record_usage(session, user_id=job.initiated_by or document.uploaded_by,

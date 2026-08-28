@@ -33,13 +33,14 @@ describe('降级文案', () => {
     expect(degradedLabelOf('')).toBeNull()
   })
 
-  it('service 契约里的十种降级值前端全都认得', () => {
-    // 与 DeepDocParse/gateway/app/services/extract_format.py 的 DEGRADED_VALUES 同源。
+  it('service 契约与 Web 并发路径的降级值前端全都认得', () => {
+    // 前十种与 DeepDocParse/gateway/app/services/extract_format.py 的 DEGRADED_VALUES 同源；
+    // index_changed_during_answer 是 Web 流式落库与重建并发时独有。
     // 漏一个的话，界面上会退化成"已降级（英文枚举）"——不算静默，但很难看懂
     const contract = [
       'no_hits', 'embedding_unavailable', 'vision_unavailable', 'crop_unsupported',
       'crop_failed', 'parse_mismatch', 'upstream_error', 'schema_violation',
-      'rerank_unavailable', 'no_instruct_model',
+      'rerank_unavailable', 'no_instruct_model', 'index_changed_during_answer',
     ]
     const missing = contract.filter((v) => !(v in DEGRADED_LABEL))
     expect(missing).toEqual([])
