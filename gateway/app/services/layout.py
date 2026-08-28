@@ -38,6 +38,8 @@ from ddp_core.blocks import (  # noqa: F401
 )
 
 ENGINE_NOTES = "engine_notes"
+CODE_DETECTION = "code_detection"
+CODE_DETECTION_STATES = ("native", "heuristic", "unavailable")
 
 PROMISED_PAGE_FIELDS = {
     "page_idx": lambda v: isinstance(v, int),
@@ -60,7 +62,8 @@ PROMISED_BLOCK_FIELDS = {
 }
 
 
-def build(pages: list[dict], *, engine: str) -> dict:
+def build(pages: list[dict], *, engine: str,
+          code_detection: str = "unavailable") -> dict:
     """从零构造 layout_json（born-digital 这类自产版面的引擎用）。
 
     pages: [{page_idx, page_size: [w, h], blocks: [{bbox, text}]}]
@@ -68,6 +71,7 @@ def build(pages: list[dict], *, engine: str) -> dict:
     return {
         "layout_version": LAYOUT_VERSION,
         "engine": engine,
+        CODE_DETECTION: code_detection,
         "pdf_info": [
             {
                 "page_idx": page["page_idx"],
@@ -89,7 +93,8 @@ def build(pages: list[dict], *, engine: str) -> dict:
     }
 
 
-def build_pages(pages: list[dict], *, engine: str) -> dict:
+def build_pages(pages: list[dict], *, engine: str,
+                code_detection: str = "unavailable") -> dict:
     """已经是 DDP-Layout 形状的页 -> 完整 layout_json（盖章 + 归一化块类型）。
 
     与 `build` 的区别是**输入形状**：`build` 收的是引擎自己的
@@ -99,6 +104,7 @@ def build_pages(pages: list[dict], *, engine: str) -> dict:
     return {
         "layout_version": LAYOUT_VERSION,
         "engine": engine,
+        CODE_DETECTION: code_detection,
         "pdf_info": [
             {
                 "page_idx": page.get("page_idx", i),
@@ -121,6 +127,9 @@ def from_mineru(middle_json: dict | None, *, engine: str = "mineru") -> dict:
     layout = dict(middle_json or {})
     layout.setdefault("layout_version", LAYOUT_VERSION)
     layout.setdefault("engine", engine)
+    # MinerU pipeline 没有稳定的代码类型信号。原生输出偶尔出现未知 type 也不能
+    # 被消费方误解成“已经检测过且没有代码”。
+    layout.setdefault(CODE_DETECTION, "unavailable")
 
     pages = []
     for index, page in enumerate(layout.get("pdf_info") or []):
@@ -170,6 +179,12 @@ def validate(layout: dict[str, Any]) -> list[str]:
     if notes is not None and not (isinstance(notes, list)
                                   and all(isinstance(n, str) for n in notes)):
         problems.append(f"{ENGINE_NOTES} 不合规（值={notes!r}），应为字符串列表或缺省")
+
+    code_detection = layout.get(CODE_DETECTION)
+    if code_detection is not None and code_detection not in CODE_DETECTION_STATES:
+        problems.append(
+            f"{CODE_DETECTION} 不合规（值={code_detection!r}），"
+            f"应为 {' | '.join(CODE_DETECTION_STATES)} 或缺省")
 
     pages = layout.get("pdf_info")
     if not isinstance(pages, list):

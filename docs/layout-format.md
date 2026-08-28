@@ -1,10 +1,11 @@
 # DDP-Layout v1 —— 版面中间表示
 
-> **v1.2（2026-08-26）**：新增顶层可选承诺 `engine_notes`（引擎对这一趟解析的自述，
-> 见下面「引擎自述」一节）。`layout_version` **不变**（仍是 `ddp-layout/1`）——
-> 与 v1.1 升 `type` 同样是向后兼容的新增：老消费方不读它照跑。
-> 动机是不变式「任何降级都必须可见」：有一类故障请求 200、文字也出来了，
-> 只是 bbox 悄悄全没了，而抛异常太狠、只打日志又不会跟着归档走。
+> **v1.2（2026-08-26，2026-08-28 扩展）**：新增顶层可选承诺
+> `engine_notes` 与 `code_detection`，并把 `code` 加进块类型词汇表。
+> `layout_version` **不变**（仍是 `ddp-layout/1`）——这些都是向后兼容的新增：
+> 老消费方不读它们照跑；老归档缺 `code_detection` 时按 `unavailable` 解释。
+> 两个动机分别是不变式「任何降级都必须可见」，以及让代码原子在进入索引前就有
+> 明确类型，避免消费方各自用一套启发式猜测。
 
 > **v1.1（2026-08-23）**：`para_blocks[].type` 从「不在承诺范围内」升进承诺字段，
 > 并把表格 HTML（`spans[].html`，经 `layout.table_html()` 取）纳入可选承诺。`layout_version` **不变**（仍是 `ddp-layout/1`）——
@@ -32,6 +33,7 @@
 {
   "layout_version": "ddp-layout/1",   // 版本标记，加字段不改它，改语义/删字段才改
   "engine": "mineru",                 // 产出它的引擎名（排查用，不要拿来做分支逻辑）
+  "code_detection": "unavailable",   // native | heuristic | unavailable；老归档缺省 unavailable
   "pdf_info": [                       // 一页一个元素，顺序即页序
     {
       "page_idx": 0,                  // 0 基页码。**出处必须落到唯一页**，缺它整套定位失效
@@ -60,7 +62,7 @@
 | `pdf_info[].page_size` | [number, number] | 该页的 `[宽, 高]`，与 bbox 同一坐标系 |
 | `pdf_info[].para_blocks[]` | array | 页内块，按阅读序 |
 | `pdf_info[].para_blocks[].bbox` | [x0, y0, x1, y1] \| null | 块的外接矩形；可能缺失（缺了就不能裁剪，但块仍然有效）|
-| `pdf_info[].para_blocks[].type` | string | **v1.1**：归一化块类型，取值只能是下表七个之一 |
+| `pdf_info[].para_blocks[].type` | string | **v1.1，v1.2 扩展**：归一化块类型，取值只能是下表八个之一 |
 | `pdf_info[].para_blocks[]…spans[].html` | string \| null | **v1.1，可选承诺**：表格块的 HTML。**不是块上的 `table_html` 字段**——它塞在 span 里，规范取法是 `layout.table_html(block)`（会下潜嵌套 blocks）。引擎没给就是 None，消费方必须能处理 |
 | `pdf_info[].para_blocks[].lines[].spans[].content` | string | 文本片段；块文本 = 按序拼接（规范实现见 `layout.block_text`）|
 
@@ -92,6 +94,22 @@
 > `options.grounding: false` 是受支持的用法（走官方 `Free OCR.`，全页一个块、本来就没有 bbox），
 > 那一趟**不会**产出这条 note —— 没要过标签就不该报"标签没来"。
 
+### 代码检测能力：`code_detection`（v1.2，可选承诺）
+
+| 路径 | 类型 | 含义 |
+|---|---|---|
+| `code_detection` | `native \| heuristic \| unavailable` | **顶层**，可缺省。描述这一趟解析如何识别 `code`；老归档缺省等同 `unavailable` |
+
+三态描述的是**能力来源**，不是“这份文档有没有代码”：
+
+- `native`：版面模型 / VLM prompt 原生输出 `code` 类型；
+- `heuristic`：born-digital 依据等宽字体、缩进与符号密度判定；
+- `unavailable`：该引擎没有可复现的代码类型信号。当前 mineru pipeline 与
+  DeepSeek-OCR-2 方言属于这一态。
+
+消费方必须把 `unavailable` 显示出来，不能把“没有检测能力”说成“文档没有代码”。
+任何未知值都按契约违规处理，而不是静默回退。
+
 **不在承诺范围内的**：`type_native`、`index`、`angle` 以及引擎塞进来的其它字段。
 归一化**不会删掉**它们（删了会让"下载版面 JSON"这类排查手段凭空变差），
 但消费方依赖它们就要自担风险 —— 换个引擎它们可能根本不存在。
@@ -99,23 +117,24 @@
 > 想让某个字段进契约（例如按 `type` 区分表格块，做块类型感知分块）：
 > 先改这份文档 + `layout.PROMISED_*`，再改消费方。反过来做迟早会漂。
 
-## 块类型词汇表（v1.1）
+## 块类型词汇表（v1.1，v1.2 扩展）
 
-`type` 只能是这七个值之一。**归一化认不出来的一律归 `other`，不许丢块**——
+`type` 只能是这八个值之一。**归一化认不出来的一律归 `other`，不许丢块**——
 丢块会让新引擎的内容凭空消失，而那正是这份契约要防的事。
 
 | 值 | 含义 | 下游谁在用 |
 |---|---|---|
 | `text` | 正文段落 | 分块的主体 |
 | `title` | 标题 | 作后续块的上下文前缀（不单独成块，太短检索不到） |
+| `code` | 代码 / 配置 / 命令块 | 独立成块；标识符感知分词，保留原串并拆驼峰、下划线与点号 |
 | `table` | 表格 | **独立成块，永不与正文合并**；抽取平面按它找记录数组 |
 | `figure` | 图片 / 图注 | 独立成块；无文字层时只留 bbox |
 | `equation` | 行间公式 | 独立成块 |
 | `list` | 列表 / 目录 | 当正文处理，但不做标题前缀 |
 | `other` | 认不出来的 | 当正文处理 |
 
-映射表在 `layout.normalize_type()`（`_MINERU_TYPE_MAP`）。加引擎时先看能不能映射到已有七值，
-**不要顺手加第八个值**：加值要同步改所有消费方的分支，是破坏性变更。
+映射表在 `layout.normalize_type()`（`_MINERU_TYPE_MAP`）。加引擎时先看能不能映射到已有八值，
+**不要顺手加第九个值**：加值要同步改所有消费方的分支，是破坏性变更。
 
 ### 为什么 type 要进契约
 

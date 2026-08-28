@@ -10,7 +10,8 @@ rerank / qa / extraction 都拿它，而那几个模块正在陆续迁进 core�
 
 class Hit(dict):
     """命中：{chunk_id, document_id, parse_job_id, seq, page_idx, bbox, page_size, text,
-              block_type, table_html, score, similarity}
+              derived_text, evidence_id, derived_evidence_id, block_type, table_html,
+              score, similarity}
 
     `block_type` / `table_html` 是 v1.1 加的：抽取平面按块类型优先看表格块，
     并靠 table_html 把表格映射成记录数组（拼出来的单元格文字已经丢了行列关系）。

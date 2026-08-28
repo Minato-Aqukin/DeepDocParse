@@ -69,7 +69,7 @@ _PROMPT = """把这一页的内容识别成结构化版面，输出**纯 JSON**�
 {"blocks": [{"type": "...", "bbox": [x0, y0, x1, y1], "text": "..."}]}
 
 规则：
-- type 只能是：text（正文段落）、title（标题）、table（表格）、figure（图片）、
+- type 只能是：text（正文段落）、title（标题）、code（代码/配置/命令块）、table（表格）、figure（图片）、
   equation（行间公式）、list（列表）、other
 - bbox 是该块在页面上的位置，坐标归一化到 0~1000（左上角为原点，x 向右、y 向下）。
   **定不出准确位置就写 null，不要估一个** —— 位置错的出处比没有出处更糟
@@ -321,7 +321,12 @@ async def recognize(http: httpx.AsyncClient, *, endpoint: str, model: str,
         raise RuntimeError(
             "vlm-ocr 引擎没有从任何一页识别出内容（模型不可达，或返回全为空）")
 
-    built = layout.build_pages(pages, engine="vlm-ocr")
+    built = layout.build_pages(
+        pages, engine="vlm-ocr",
+        # 通用 VLM prompt 明确要求输出 code；OCR-2 官方方言只抄写/grounding，
+        # 没有块类型能力，不能因为“它也是 VLM”就谎报 native。
+        code_detection=("native" if dialect == GENERIC_JSON else "unavailable"),
+    )
     notes = _engine_notes(dialect, options, results)
     if notes:
         built[layout.ENGINE_NOTES] = notes

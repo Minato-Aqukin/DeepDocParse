@@ -30,30 +30,62 @@ def render_crop(pdf_bytes: bytes, page_idx: int, bbox: list,
     失败一律返回 None —— 裁剪是增强路径，不该阻断抽取本身；
     但调用方必须把"裁不出来"打成 crop_failed / crop_unsupported，不许当没发生。
     """
+    return render_crops(pdf_bytes, [(page_idx, bbox, page_size)])[0]
+
+
+def render_crops(
+    pdf_bytes: bytes, requests: list[tuple[int, list, list | None]],
+) -> list[bytes | None]:
+    """一次打开 PDF，且每页只渲染一次，批量产出原子裁图。
+
+    编译层会给一份长文档的每个 Evidence 建裁图。逐原子调
+    `render_crop` 会重复打开同一 PDF、重复渲染同一页 N 次；这不是小优化，
+    而是编译是否能处理手册的边界。返回顺序与 requests 一致，单个失败为 None。
+    """
+    if not requests:
+        return []
+    out: list[bytes | None] = [None] * len(requests)
     try:
         import pypdfium2 as pdfium
 
         doc = pdfium.PdfDocument(pdf_bytes)
         try:
-            if page_idx >= len(doc):
-                return None
-            page = doc[page_idx]
-            img = page.render(scale=RENDER_SCALE).to_pil()
-            sx = img.width / (page_size[0] if page_size else page.get_width())
-            sy = img.height / (page_size[1] if page_size else page.get_height())
-            x0, y0, x1, y1 = bbox
-            box = (max(0, int((x0 - CROP_MARGIN) * sx)), max(0, int((y0 - CROP_MARGIN) * sy)),
-                   min(img.width, int((x1 + CROP_MARGIN) * sx)),
-                   min(img.height, int((y1 + CROP_MARGIN) * sy)))
-            if box[2] <= box[0] or box[3] <= box[1]:
-                return None
-            buf = io.BytesIO()
-            img.crop(box).save(buf, format="PNG")
-            return buf.getvalue()
+            rendered: dict[int, object | None] = {}
+            for index, (page_idx, bbox, page_size) in enumerate(requests):
+                try:
+                    if not isinstance(page_idx, int) or page_idx < 0 or page_idx >= len(doc):
+                        continue
+                    page = doc[page_idx]
+                    if page_idx not in rendered:
+                        try:
+                            rendered[page_idx] = page.render(scale=RENDER_SCALE).to_pil()
+                        except Exception:
+                            rendered[page_idx] = None
+                    img = rendered[page_idx]
+                    if img is None:
+                        continue
+                    sx = img.width / (page_size[0] if page_size else page.get_width())
+                    sy = img.height / (page_size[1] if page_size else page.get_height())
+                    x0, y0, x1, y1 = bbox
+                    box = (
+                        max(0, int((x0 - CROP_MARGIN) * sx)),
+                        max(0, int((y0 - CROP_MARGIN) * sy)),
+                        min(img.width, int((x1 + CROP_MARGIN) * sx)),
+                        min(img.height, int((y1 + CROP_MARGIN) * sy)),
+                    )
+                    if box[2] <= box[0] or box[3] <= box[1]:
+                        continue
+                    buf = io.BytesIO()
+                    img.crop(box).save(buf, format="PNG")
+                    out[index] = buf.getvalue()
+                except Exception:
+                    # 畸形 bbox/page_size 只废掉这个原子，不能抹掉整批有效裁图。
+                    continue
         finally:
             doc.close()
     except Exception:
-        return None
+        return [None] * len(requests)
+    return out
 
 
 def render_page(pdf_bytes: bytes, page_idx: int, scale: float = RENDER_SCALE) -> bytes | None:
