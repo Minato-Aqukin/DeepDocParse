@@ -117,7 +117,8 @@ class BornDigitalEngine:
 
         return {
             "markdown": borndigital.to_markdown(pages),
-            "layout_json": layout.build(pages, engine="borndigital"),
+            "layout_json": layout.build(
+                pages, engine="borndigital", code_detection="heuristic"),
             "images": [],       # 不抽图：born-digital 的定位是文字层兜底，不是全功能解析
         }
 

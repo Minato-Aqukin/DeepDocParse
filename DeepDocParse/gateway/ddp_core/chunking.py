@@ -59,13 +59,13 @@ from typing import Any
 from ddp_core.blocks import (
     block_text as _block_text, normalize_type as _normalize_type, table_html as _table_html,
 )
-from ddp_core.tokenize import tokenized as _tokenized
+from ddp_core.tokenize import code_tokenized as _code_tokenized, tokenized as _tokenized
 
 # 优先在这些字符后断句；中日文没有空白，必须带上句读
 _BREAK_AFTER = "\n。！？；…!?;. "
 
 # 这些类型自成一块，不与邻居合并
-_STANDALONE = {"table", "figure", "equation"}
+_STANDALONE = {"code", "table", "figure", "equation"}
 
 
 def _split_oversized(text: str, max_chars: int) -> list[str]:
@@ -145,7 +145,9 @@ def layout_to_chunks(layout_json: dict[str, Any], max_chars: int = 800) -> list[
                 # 会跟到表格后面那一段里去，页内阅读序就乱了
                 flush()
                 html = _table_html(block) if btype == "table" else None
-                if text or html:
+                # figure 没 caption 也必须留下原子：阶段 5 的 VLM 理解正是为了让
+                # “只有图、没有文字”的区域进入索引。把它丢掉会让视觉链路永远没输入。
+                if text or html or btype == "figure":
                     body = f"{heading}\n{text}" if heading and text else text
                     emit(body or "", block.get("bbox"), btype, html)
                 continue
@@ -171,6 +173,12 @@ def layout_to_chunks(layout_json: dict[str, Any], max_chars: int = 800) -> list[
                 bbox = _union_bbox(bbox, block.get("bbox"))
                 length += len(piece)
         flush()
+
+    # code 用标识符感知分词。保留完整标识符并拆 camel/snake/dot，精确查询与
+    # “只搜其中一段”都能命中；其它块继续走通用分词。
+    for chunk in chunks:
+        if chunk["block_type"] == "code":
+            chunk["text_tokenized"] = _code_tokenized(chunk["text"])
 
     return chunks
 

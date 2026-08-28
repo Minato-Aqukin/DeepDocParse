@@ -17,15 +17,16 @@
 # 归一化后的块类型词汇表 —— **契约的一部分**（v1.1 新增）。
 # 以前 type 明确写着"不在承诺范围内"，消费方因此只能把所有块当正文对待：
 # 表格被拆散揉进相邻段落、标题被并成正文，而这正是"结构化信息提取"最需要的信号。
-# 升进契约的代价是**每个引擎的 normalizer 都必须产出这七个值之一**，
+# 升进契约的代价是**每个引擎的 normalizer 都必须产出这八个值之一**，
 # 认不出来的一律归 other（不是丢弃——丢弃会让新引擎的块凭空消失）。
-BLOCK_TYPES = ("text", "title", "table", "figure", "equation", "list", "other")
+BLOCK_TYPES = ("text", "title", "code", "table", "figure", "equation", "list", "other")
 
 # mineru 原生类型 -> 契约词汇表。mineru 的类型体系比这里细
 # （image_body / table_caption / interline_equation …），归一化只保留下游真正会分支的那几类。
 _MINERU_TYPE_MAP = {
     "text": "text", "plain text": "text", "paragraph": "text",
     "title": "title", "header": "title", "sub_title": "title",
+    "code": "code", "code_block": "code", "source_code": "code",
     "table": "table", "table_body": "table", "table_caption": "table",
     "table_footnote": "table",
     "image": "figure", "figure": "figure", "image_body": "figure",

@@ -52,6 +52,10 @@ _CJK_CHAR = re.compile(r"[一-鿿]")
 # 代价可控且不需要任何词典
 _MIN_CJK_LEN = 2
 
+# 代码标识符：完整串必须保留，同时拆 camelCase / snake_case / dotted.path。
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_.:-]*")
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
 
 def backend() -> str:
     """当前用的分词实现：jieba | bigram。会进 model_meta 与启动日志。"""
@@ -106,6 +110,21 @@ def tokenized(text: str) -> str:
     现切要在 SQL 里调 Python 函数，做不到；而且索引时切一次比每次查询切一遍便宜得多。
     """
     return " ".join(tokens(text))
+
+
+def code_tokens(text: str) -> list[str]:
+    """代码块的标识符感知 token；完整标识符与拆分结果同时保留。"""
+    out = tokens(text)
+    for match in _IDENTIFIER.finditer(text):
+        original = match.group(0)
+        out.append(original.lower())
+        for dotted in re.split(r"[_.:-]+", original):
+            out.extend(part.lower() for part in _CAMEL_BOUNDARY.split(dotted) if part)
+    return out
+
+
+def code_tokenized(text: str) -> str:
+    return " ".join(code_tokens(text))
 
 
 def query_string(text: str) -> str:

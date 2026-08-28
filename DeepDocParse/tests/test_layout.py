@@ -68,6 +68,30 @@ def test_validate_checks_the_v12_engine_notes_shape():
     assert layout.validate({"pdf_info": [], "engine_notes": None}) == []
 
 
+def test_code_detection_contract_and_code_type():
+    built = layout.build_pages([{
+        "page_idx": 0, "page_size": [600, 800],
+        "para_blocks": [{"type": "code", "bbox": [1, 2, 3, 4], "lines": []}],
+    }], engine="vlm-ocr", code_detection="native")
+    assert layout.validate(built) == []
+    assert built["code_detection"] == "native"
+    assert built["pdf_info"][0]["para_blocks"][0]["type"] == "code"
+    problems = layout.validate({"pdf_info": [], "code_detection": "maybe"})
+    assert any("code_detection" in problem for problem in problems)
+
+
+def test_borndigital_code_heuristic_requires_two_signals():
+    assert borndigital._looks_like_code(
+        "  client.fetchUser(user_id);", {"Courier New"}, indented=True)
+    assert borndigital._looks_like_code(
+        "  client.fetchUser(user_id);", set(), indented=True)
+    assert not borndigital._looks_like_code(
+        "This is ordinary prose without programming syntax.", {"Times New Roman"},
+        indented=False)
+    assert borndigital._looks_like_code(
+        'TARGET_IDENTIFIER = "HttpRequestParser"', {"Courier New"}, indented=False)
+
+
 def test_validate_catches_missing_page_size():
     """page_size 缺失必须报出来：裁剪要靠它换算，缺了会裁到错误区域。"""
     broken = {"pdf_info": [{"page_idx": 0, "para_blocks": []}]}

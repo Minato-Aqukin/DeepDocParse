@@ -21,6 +21,8 @@ MarkItDown 能成为 MCP 生态下载量第一不是因为能力强（扫描件�
   裁剪出处图时按 page_size 换算，一旦这里搞错，用户看到的"出处截图"
   会是页面上另一块区域 —— 带着"已做视觉验证"标记的假出处，本项目最恶劣的错误。
 """
+import ctypes
+import re
 from statistics import median
 
 # 行间距超过行高的这个倍数就断段。1.6 是常见正文行距（1.2~1.5 倍行高）之上、
@@ -28,6 +30,65 @@ from statistics import median
 PARAGRAPH_GAP_RATIO = 1.6
 # 两行水平投影重叠不足这个比例视为不同栏/不同块，不合并
 MIN_HORIZONTAL_OVERLAP = 0.15
+
+_MONO_FONT_PARTS = (
+    "courier", "mono", "consolas", "menlo", "monaco", "sourcecode",
+    "liberationmono", "dejavusansmono", "inconsolata", "firacode", "jetbrainsmono",
+)
+_CODE_SYMBOLS = set("{}[]();=<>/\\|&*$#@~`_^:%")
+_CODE_TOKEN = re.compile(
+    r"(?:\b(?:def|class|function|return|import|from|const|let|var|SELECT|INSERT|UPDATE)\b"
+    r"|(?:[A-Za-z_][\w]*\s*=)"
+    r"|(?:[A-Za-z_][\w]*\.[A-Za-z_][\w]*)|(?:[A-Za-z_][\w]*\([^)]*\)))")
+
+
+def _font_name(textpage, char_index: int) -> str:
+    """取一个字符的字体名。pypdfium2 尚未包这条 PDFium API，失败就返回空串。"""
+    try:
+        import pypdfium2.raw as pdfium_c
+        flags = ctypes.c_int()
+        needed = pdfium_c.FPDFText_GetFontInfo(
+            textpage.raw, char_index, None, 0, ctypes.byref(flags))
+        if not needed:
+            return ""
+        buf = ctypes.create_string_buffer(needed)
+        pdfium_c.FPDFText_GetFontInfo(
+            textpage.raw, char_index, buf, needed, ctypes.byref(flags))
+        return buf.value.decode("utf-8", errors="ignore")
+    except Exception:  # PDFium 版本/畸形字体不该拖垮整页文字抽取
+        return ""
+
+
+def _char_fonts(textpage) -> list[tuple[tuple[float, float, float, float], str]]:
+    out = []
+    for i in range(textpage.count_chars()):
+        try:
+            out.append((textpage.get_charbox(i), _font_name(textpage, i)))
+        except Exception:
+            continue
+    return out
+
+
+def _fonts_in_rect(char_fonts, rect) -> set[str]:
+    left, bottom, right, top = rect
+    names = set()
+    for box, name in char_fonts:
+        cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        if left - 0.5 <= cx <= right + 0.5 and bottom - 0.5 <= cy <= top + 0.5 and name:
+            names.add(name)
+    return names
+
+
+def _looks_like_code(text: str, fonts: set[str], *, indented: bool) -> bool:
+    """等宽字体 + 缩进 + 符号密度三信号，至少两个同意才标 code。"""
+    compact = "".join(text.split())
+    if len(compact) < 8:
+        return False
+    mono = any(part in name.lower().replace(" ", "")
+               for name in fonts for part in _MONO_FONT_PARTS)
+    symbols = sum(ch in _CODE_SYMBOLS for ch in compact) / len(compact) >= 0.12
+    syntax = bool(_CODE_TOKEN.search(text))
+    return (mono and (indented or symbols or syntax)) or (indented and (symbols or syntax))
 
 
 def _to_display_bbox(rect: tuple[float, float, float, float],
@@ -60,12 +121,20 @@ def _lines_of_page(page) -> tuple[list[dict], list[float]]:
         unrotated = (cropbox[2] - cropbox[0], cropbox[3] - cropbox[1])
 
         lines: list[dict] = []
+        char_fonts = _char_fonts(textpage)
         for i in range(textpage.count_rects()):
             rect = textpage.get_rect(i)
-            text = (textpage.get_text_bounded(*rect) or "").strip()
+            raw_text = textpage.get_text_bounded(*rect) or ""
+            indented = any(line.startswith(("\t", "  ")) for line in raw_text.splitlines())
+            text = raw_text.strip()
             if not text:
                 continue
-            lines.append({"bbox": _to_display_bbox(rect, unrotated, rotation), "text": text})
+            fonts = _fonts_in_rect(char_fonts, rect)
+            lines.append({
+                "bbox": _to_display_bbox(rect, unrotated, rotation),
+                "text": text,
+                "type": "code" if _looks_like_code(text, fonts, indented=indented) else "text",
+            })
         return lines, page_size
     finally:
         textpage.close()
@@ -115,13 +184,17 @@ def _merge_lines(lines: list[dict]) -> list[dict]:
         best, best_gap = None, None
         for block in open_blocks:
             gap = box[1] - block["last"][3]
+            if block["type"] != line.get("type", "text"):
+                continue
             # 拿最后一行比，不是并集 —— 见 docstring
             if _horizontal_overlap(block["last"], box) < MIN_HORIZONTAL_OVERLAP:
                 continue        # 不同栏 / 不同块
             if best_gap is None or abs(gap) < abs(best_gap):
                 best, best_gap = block, gap
         if best is None:
-            open_blocks.append({"bbox": list(box), "last": list(box), "texts": [line["text"]]})
+            open_blocks.append({"bbox": list(box), "last": list(box),
+                                "texts": [line["text"]],
+                                "type": line.get("type", "text")})
             continue
         union = best["bbox"]
         best["bbox"] = [min(union[0], box[0]), min(union[1], box[1]),
@@ -131,7 +204,8 @@ def _merge_lines(lines: list[dict]) -> list[dict]:
 
     blocks = done + open_blocks
     blocks.sort(key=lambda b: (round(b["bbox"][1], 1), b["bbox"][0]))
-    return [{"bbox": b["bbox"], "text": "\n".join(b["texts"])} for b in blocks]
+    return [{"bbox": b["bbox"], "text": "\n".join(b["texts"]), "type": b["type"]}
+            for b in blocks]
 
 
 def extract_pages(pdf_bytes: bytes) -> list[dict]:

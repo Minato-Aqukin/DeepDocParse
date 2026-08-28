@@ -243,3 +243,6 @@ def test_code_corpus_keeps_all_exact_identifiers_in_the_pdf_text_layer():
     for page, expected in zip(pages, truth["pages"]):
         text = "\n".join(block["text"] for block in page["blocks"])
         assert expected["identifier"] in text
+        assert any(expected["identifier"] in block["text"] and block["type"] == "code"
+                   for block in page["blocks"]), \
+            f"{expected['identifier']} 仍在文字层，但 code 启发式漏检了"

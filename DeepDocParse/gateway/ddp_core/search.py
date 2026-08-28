@@ -31,10 +31,51 @@ from ddp_core.hits import Hit
 from ddp_core.tokenize import query_string as _query_tokens
 
 RRF_K = 60          # 业界惯用值：名次靠后的贡献平滑衰减
+EXACT_CODE_WEIGHT = 2  # 精确标识符路要能压过“长注释词频更高”的假第一
 
 # tsquery 里有特殊含义的字符。切完词还可能残留它们（英文缩写里的 & 、路径里的 : 等），
 # 不剥掉的话 to_tsquery 会直接抛语法错，整条关键词路被 except 吞成零命中
 _TSQUERY_UNSAFE = re.compile(r"[&|!()<>:*\\'\"]+")
+_CODE_TOKEN = re.compile(
+    r"--[A-Za-z0-9][A-Za-z0-9-]*"
+    r"|[A-Za-z_][A-Za-z0-9_]*(?:(?:::|\.)[A-Za-z_][A-Za-z0-9_]*)+(?:<[^<>\s]+>)?"
+    r"|[A-Za-z_][A-Za-z0-9_]*")
+
+
+def exact_identifiers(query: str) -> list[str]:
+    """从自然语言问题里抽出明显的代码标识符。
+
+    真实问题通常是 ``Where is HttpRequestParser defined?``，而不是一个裸
+    token。只接受带代码形状的词（snake/camel/路径/flag），避免把
+    Where/Find 这类普通英文词当成“精确命中”。
+    """
+    found: list[str] = []
+    for match in _CODE_TOKEN.finditer(query):
+        value = match.group(0)
+        simple = not any(mark in value for mark in ("--", ".", "::", "<", ">"))
+        looks_code = (not simple or "_" in value
+                      or any(char.isupper() for char in value[1:]))
+        if looks_code:
+            found.append(value.lower())
+    return list(dict.fromkeys(found))
+
+
+def exact_code_ids(candidates: list[tuple[str, str, str]], query: str) -> list[str]:
+    """给 code 中的精确标识符命中单独排名。
+
+    一页常同时有定义和一段“请保留 FooBar”的长注释。两者都精确包含
+    token 时，更短的代码原子更接近定义点；仍以原关键词名次作同长度时的
+    稳定次序。这一路只向 RRF 贡献名次，不与余弦/ts_rank 的数值硬相加。
+    """
+    terms = exact_identifiers(query)
+    if not terms:
+        return []
+    matching = [
+        (position, cid, len((source or "").strip()))
+        for position, (cid, block_type, source) in enumerate(candidates)
+        if block_type == "code" and any(term in (source or "").lower() for term in terms)
+    ]
+    return [cid for _, cid, _ in sorted(matching, key=lambda item: (item[2], item[0]))]
 
 
 def _or_tsquery(query: str) -> str:
@@ -122,7 +163,8 @@ class PgVectorIndex:
         # 正好落在下面那条注释自己警告的坑里。相关度由 ts_rank_cd 排序把关，
         # 召回由相似度下限（kw_floor）把关，OR 不会把噪声灌进来。
         kw_sql = text(f"""
-            SELECT c.id, {"c.embedding <=> CAST(:qvec AS vector)" if vector else "NULL"} AS dist
+            SELECT c.id, {"c.embedding <=> CAST(:qvec AS vector)" if vector else "NULL"} AS dist,
+                   c.block_type, c.text
             FROM chunks c JOIN documents d ON d.id = c.document_id,
                  to_tsquery('simple', :q) tsq
             WHERE {scope} AND d.deleted_at IS NULL
@@ -140,15 +182,23 @@ class PgVectorIndex:
                 similarity[cid] = 1.0 - float(dist)      # <=> 是余弦距离
         try:
             kw_ids = []
-            for cid, dist in (await session.execute(kw_sql, params)).all():
+            keyword_rows = (await session.execute(kw_sql, params)).all()
+            for cid, dist, block_type, source_text in keyword_rows:
                 kw_ids.append(cid)
                 if dist is not None:
                     similarity.setdefault(cid, 1.0 - float(dist))
+            code_ids = exact_code_ids(
+                [(cid, block_type, source_text) for cid, _, block_type, source_text
+                 in keyword_rows], query)
         except Exception:       # 关键词路失败（畸形查询等）不该拖垮整个检索
             await session.rollback()
             kw_ids = []
+            code_ids = []
 
-        scores = _rrf([vec_ids, kw_ids])
+        # 标识符精确命中的 code 路按固定权重多贡献 RRF 名次，等价于
+        # “精确词面比 dense/通用词频更强”，但不把不可比较的 ts_rank 与
+        # 余弦分数硬相加。权重 2 由同集合改造前后评测钉着。
+        scores = _rrf([vec_ids, kw_ids, *([code_ids] * EXACT_CODE_WEIGHT)])
         if not scores:
             return []
         top_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)[:limit]
@@ -159,7 +209,8 @@ async def _load_hits(session: AsyncSession, chunk_ids: list[str], scores: dict[s
                      similarity: dict[str, float] | None = None) -> list[Hit]:
     rows = (await session.execute(
         text("""SELECT id, document_id, parse_job_id, seq, page_idx, bbox, page_size,
-                       text, block_type, table_html
+                       text, derived_text, evidence_id, derived_evidence_id,
+                       block_type, table_html
                 FROM chunks WHERE id IN :ids""").bindparams(
             bindparam("ids", expanding=True)),
         {"ids": chunk_ids},
@@ -174,6 +225,8 @@ async def _load_hits(session: AsyncSession, chunk_ids: list[str], scores: dict[s
                         parse_job_id=row["parse_job_id"], seq=row["seq"],
                         page_idx=row["page_idx"], bbox=_as_list(row["bbox"]),
                         page_size=_as_list(row["page_size"]), text=row["text"],
+                        derived_text=row["derived_text"], evidence_id=row["evidence_id"],
+                        derived_evidence_id=row["derived_evidence_id"],
                         block_type=row["block_type"] or "text",
                         table_html=row["table_html"],
                         score=round(scores[cid], 6),
@@ -236,15 +289,20 @@ class MemoryIndex:
         kw_ids = [cid for cid, n in sorted(scored_kw, key=lambda p: p[1], reverse=True)[:candidates]
                   if n > 0]
 
-        scores = _rrf([vec_ids, kw_ids])
+        by_id = {c.id: c for c, _ in rows}
+        code_ids = exact_code_ids(
+            [(cid, by_id[cid].block_type, by_id[cid].text) for cid in kw_ids], query)
+        scores = _rrf([vec_ids, kw_ids, *([code_ids] * EXACT_CODE_WEIGHT)])
         if not scores:
             return []
         top_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)[:limit]
-        by_id = {c.id: c for c, _ in rows}
         return [Hit(chunk_id=cid, document_id=by_id[cid].document_id,
                     parse_job_id=by_id[cid].parse_job_id, seq=by_id[cid].seq,
                     page_idx=by_id[cid].page_idx, bbox=by_id[cid].bbox,
                     page_size=by_id[cid].page_size, text=by_id[cid].text,
+                    derived_text=getattr(by_id[cid], "derived_text", None),
+                    evidence_id=getattr(by_id[cid], "evidence_id", None),
+                    derived_evidence_id=getattr(by_id[cid], "derived_evidence_id", None),
                     block_type=getattr(by_id[cid], "block_type", "text") or "text",
                     table_html=getattr(by_id[cid], "table_html", None),
                     score=round(scores[cid], 6),

@@ -109,6 +109,16 @@ class Document(Base):
     # none | pending | indexing | ready | failed —— 索引失败必须能在 UI 上看到，不许静默
     index_status: Mapped[str] = mapped_column(String(16), default="none", index=True)
     index_error: Mapped[str | None] = mapped_column(Text, default=None)
+    # generation 是 fencing token；lease 只解决“谁可接管”，最终写入仍必须比 generation。
+    index_generation: Mapped[int] = mapped_column(Integer, default=0)
+    index_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, index=True)
+    # DDP-Compile v1。索引 ready 不代表视觉理解完整，编译状态与降级单列，前端必须展示。
+    compile_status: Mapped[str] = mapped_column(String(16), default="none", index=True)
+    compile_degraded: Mapped[list] = mapped_column(JSON, default=list)
+    compile_fingerprint: Mapped[str] = mapped_column(String(64), default="", index=True)
+    layout_version: Mapped[str] = mapped_column(String(32), default="")
+    code_detection: Mapped[str] = mapped_column(String(16), default="unavailable", index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
@@ -171,6 +181,8 @@ class ParseJob(Base):
     error: Mapped[str | None] = mapped_column(Text, default=None)
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     result_prefix: Mapped[str | None] = mapped_column(String(512), default=None)
+    # 同一 Document 下按创建顺序递增。Evidence.doc_version 从这里取，不再恒为 0。
+    document_version: Mapped[int] = mapped_column(Integer, default=1)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
@@ -178,6 +190,7 @@ class ParseJob(Base):
 
     __table_args__ = (
         UniqueConstraint("document_id", "options_hash", name="uq_parse_jobs_doc_options"),
+        UniqueConstraint("document_id", "document_version", name="uq_parse_jobs_doc_version"),
     )
 
 
@@ -204,8 +217,11 @@ class Chunk(Base):
     bbox: Mapped[list | None] = mapped_column(JSON, default=None)
     page_size: Mapped[list | None] = mapped_column(JSON, default=None)
     text: Mapped[str] = mapped_column(Text)
+    # 检索文本允许加入公式别名、邻接句和 VLM 生成理解；原文 text 永远不被改写。
+    search_text: Mapped[str] = mapped_column(Text, default="")
+    derived_text: Mapped[str | None] = mapped_column(Text, default=None)
     char_len: Mapped[int] = mapped_column(Integer, default=0)      # prompt 预算用
-    # DDP-Layout v1.1 的块类型（text/title/table/figure/equation/list/other）。
+    # DDP-Layout v1.2 的块类型（text/title/table/figure/equation/code/list/other）。
     # 表格块靠它被检索侧优先看到 —— 在它之前，表格与正文在索引里完全无法区分
     block_type: Mapped[str] = mapped_column(String(16), default="text", index=True)
     # 表格结构的唯一载体。block_text 拼出来的是拍平的单元格文字，行列关系已经没了；
@@ -215,6 +231,14 @@ class Chunk(Base):
     # `to_tsvector('simple', text)` 会把整段中文当成一个 token，
     # 于是"混合检索"在中文文档上实际只有向量一条腿（A1 量到关键词路命中率 25%）
     text_tokenized: Mapped[str] = mapped_column(Text, default="")
+    provider: Mapped[dict] = mapped_column(JSON, default=dict)
+    provider_fingerprint: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # 源原子与 VLM 派生理解分别有 Evidence；检索命中视觉块时引用后者，
+    # 沿 derived_from 最终回到前者的 bbox。
+    evidence_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("evidence.id"),
+                                                    default=None)
+    derived_evidence_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("evidence.id"), default=None)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM),
                                                           default=None)
 
@@ -247,49 +271,49 @@ class Evidence(Base):
 
     与 `Chunk` 的关系：chunk 是**检索单元**（每次 reindex 都重铸，id 是随机 UUID），
     evidence 是**被引用过的那个区域的稳定身份**（跨重建不变）。
-    同一个块被引 N 次只有一行 evidence —— 唯一约束 `(parse_job_id, seq)` 钉着，
-    用的正是 chunks 那把稳定定位键的后两段。
+    同一个块可同时有源原子与 VLM 派生原子；唯一约束
+    `(parse_job_id, atom_key)` 防止任何一种原子重复，又不会把源与派生内容混为一行。
     """
 
     __tablename__ = "evidence"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     document_id: Mapped[str] = mapped_column(String(32), ForeignKey("documents.id"), index=True)
-    # §5.1 列了这个字段，先建上但**本阶段恒 0**：documents today 没有版本概念。
-    # 文档换版（同一份手册的 v2）要到阶段 5 编译层才有意义，那时它才开始有值
+    # 阶段 5 起取 ParseJob.document_version；老回填记录仍可能为 0。
     doc_version: Mapped[int] = mapped_column(Integer, default=0)
     parse_job_id: Mapped[str] = mapped_column(String(32), ForeignKey("parse_jobs.id"))
     seq: Mapped[int] = mapped_column(Integer, default=0)
+    # 同一个 seq 可以同时有源原子与 VLM 派生理解，靠 atom_key 区分。
+    atom_key: Mapped[str] = mapped_column(String(64), default="", index=True)
     page_idx: Mapped[int] = mapped_column(Integer, default=0)
     bbox: Mapped[list | None] = mapped_column(JSON, default=None)
     # 缺它遇到 CropBox 偏移/旋转页会裁错区域 —— 出处图对不上原文是最恶劣的一种错。
     # **问答侧的 citation dict 里没有这个字段**，所以 evidence 一律从 chunks 行取，
     # 不从 citation dict 取（那样会静默存成 NULL）
     page_size: Mapped[list | None] = mapped_column(JSON, default=None)
-    # 取自 `chunks.block_type`（DDP-Layout v1.1 词汇表）。
-    # ⚠️ 与 §5.1 写的那张表**不完全一样**：这里有 `title`（真实存在的块类型），
-    # 没有 `code`（§5.3 的 code 原子要到阶段 5 编译层才产出）。
-    # 如实记录今天真有的东西，别为了对齐一份未来的表而造假
+    # 取自 `chunks.block_type`（DDP-Layout v1.2 词汇表），包含 `code`。
     kind: Mapped[str] = mapped_column(String(16), default="text", index=True)
     # 编译期产出的裁图。阶段 2b 只是把问答/抽取当时顺手裁的那张记下来，
     # 「编译期就产出」是阶段 5 的事
     crop_key: Mapped[str | None] = mapped_column(String(512), default=None)
     content_digest: Mapped[str] = mapped_column(String(64), default="", index=True)
+    content: Mapped[str] = mapped_column(Text, default="")
     # 「可追溯」的支点：哪个引擎、哪个模型、什么版本产出的这块版面
     provider: Mapped[dict] = mapped_column(JSON, default=dict)
+    provider_fingerprint: Mapped[str] = mapped_column(String(64), default="", index=True)
     # 「可复核」的支点。**默认 unreviewed 而不是 NULL** —— NULL 会让阶段 7 的
     # 复核队列分不清"还没人看过"和"这行是旧数据、字段那时还不存在"
     review_state: Mapped[str] = mapped_column(String(16), default="unreviewed", index=True)
     # 生成物标记：VLM 描述指向它所描述的原子。阶段 5 才开始有值。
     # 不变式 3（生成内容必须与原文可区分）在库上的落点就是这一列非空
-    derived_from: Mapped[str | None] = mapped_column(String(32), default=None)
+    derived_from: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("evidence.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     __table_args__ = (
-        # 同一个块只有一行证据。用的是 chunks 那把稳定定位键的后两段 ——
-        # document_id 不进约束是因为它由 parse_job 唯一决定，进去反而允许出现
-        # "同一次解析的同一个块挂在两个文档下"这种不可能的行
-        UniqueConstraint("parse_job_id", "seq", name="uq_evidence_job_seq"),
+        # atom_key 区分源与派生原子；document_id 由 parse_job 唯一决定，
+        # 不放进约束，否则反而允许同一次解析挂到两份文档。
+        UniqueConstraint("parse_job_id", "atom_key", name="uq_evidence_job_atom"),
         Index("ix_evidence_doc_page", "document_id", "page_idx"),
     )
 
