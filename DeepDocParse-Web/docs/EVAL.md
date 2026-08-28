@@ -158,6 +158,20 @@ OmniDocBench 四域的纯关键词下界如下；完整逐条结果见 `docs/EVA
 
 > 报表产物在 `docs/EVAL-report.md`（可重跑覆盖）。
 
+## Deep Agent 结构评测（阶段 6）
+
+`scripts/eval_agent.py` 用 `eval/agent.json` 的固定代理输出调用生产
+`gate_candidates` 与 `assertions_from_text`，把漏检率、冗余检索率、门控前后引用
+精确率、句级覆盖/正确率、拒答正确率和 unsupported 违反率分开报告：
+
+```bash
+.venv/bin/python scripts/eval_agent.py
+```
+
+固定离线结果见 `docs/EVAL-stage6-offline-report.md`。它验证的是结构链路与指标会不会
+变红，**不是判定/chat 模型质量**；真实模型数字仍须在 GPU 批次二按相同列定义重跑，
+不得把固定输入的数字写成 live 结论。
+
 ## 前置条件
 
 - 默认数据集的 `--mode offline` 只读 `backend/tests/fixtures/layout-*.json`，没有外部依赖。

@@ -28,7 +28,7 @@ from app.deps import current_user, get_service_client, get_storage
 from app.errors import APIError
 from app.indexing import index_document
 from app.models import (
-    Chunk, Citation, Conversation, Document, DocumentUpload, Evidence, FileToken, Message,
+    Assertion, Chunk, Citation, Conversation, Document, DocumentUpload, Evidence, FileToken, Message,
     ParseJob, User,
     as_aware, new_id, utcnow,
 )
@@ -980,6 +980,11 @@ async def delete_document(document_id: str, user: User = Depends(current_user),
                           .values(revoked=True))
     await session.execute(delete(Chunk).where(Chunk.document_id == document.id))
     # 先删消息再删会话：messages 有指向 conversations 的外键，反过来会被 PG 拒掉
+    message_ids = select(Message.id).where(Message.conversation_id.in_(
+        select(Conversation.id).where(Conversation.document_id == document.id)))
+    assertion_ids = select(Assertion.id).where(Assertion.message_id.in_(message_ids))
+    await session.execute(delete(Citation).where(
+        Citation.source_kind == "assertion", Citation.source_id.in_(assertion_ids)))
     await session.execute(delete(Message).where(Message.conversation_id.in_(
         select(Conversation.id).where(Conversation.document_id == document.id))))
     await session.execute(delete(Conversation).where(Conversation.document_id == document.id))

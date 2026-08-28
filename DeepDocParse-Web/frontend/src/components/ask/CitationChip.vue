@@ -51,6 +51,10 @@ const tooltip = computed(() =>
                     content="这条出处指向的分块已随重建索引失效，无法再定位到原文">
           <StatusTag label="出处已失效" type="danger" />
         </el-tooltip>
+        <el-tooltip v-if="citation.bbox && !citation.page_size"
+                    content="历史出处缺少页面坐标基准，为避免画错位置，本次不显示 bbox 红框">
+          <StatusTag label="坐标基准缺失" type="warning" />
+        </el-tooltip>
         <StatusTag v-if="citation.source_type === 'generated'"
                    label="生成理解 → 原子出处" type="info" />
       </div>

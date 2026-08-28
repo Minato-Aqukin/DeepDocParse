@@ -15,7 +15,7 @@ from httpx import Response
 from sqlalchemy import select
 
 from app.evidence import record_evidence
-from app.models import Chunk, Document, Message, ParseJob
+from app.models import Assertion, Chunk, Document, Message, ParseJob
 from ddp_core.models import Citation, Evidence, digest_of
 from ddp_core.tokenize import tokenized
 
@@ -229,7 +229,8 @@ async def test_qa_citations_come_back_from_the_new_tables(auth_client, session):
     rows = sorted((await session.execute(
         select(Evidence.parse_job_id, Evidence.seq)
         .join(Citation, Citation.evidence_id == Evidence.id)
-        .where(Citation.source_kind == "message", Citation.source_id == message.id)
+        .join(Assertion, Assertion.id == Citation.source_id)
+        .where(Citation.source_kind == "assertion", Assertion.message_id == message.id)
     )).all())
     assert rows, "前提不成立：这一问应当给出出处"
 
@@ -301,7 +302,7 @@ async def test_extraction_citations_are_stored_per_field(auth_client, session):
 
 def _sse_answer():
     from tests.test_qa import _chat_sse
-    return _chat_sse("第二页", "讲的是表格数据。")
+    return _chat_sse("第二页", "讲的是表格数据。", cited=True)
 
 
 async def test_two_citations_of_one_block_across_a_reindex_are_judged_separately(session):

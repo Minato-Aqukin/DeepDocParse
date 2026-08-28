@@ -114,7 +114,7 @@ def _search_calls() -> list[tuple[pathlib.Path, ast.Call]]:
 
 
 def test_every_retrieval_passes_the_similarity_floor():
-    """检索调用必须显式传 `min_similarity=settings.qa_min_similarity`。
+    """检索调用必须在 SearchIndex 或紧随其后的可审计门控应用统一下限。
 
     **这条守的是不变式 1：出处必须是真出处。** 下限的作用是让"向量路判定全都
     不相关"的问题不要靠共现词捞出 chunk 来充当出处 —— 而 `verified` 只看有没有
@@ -123,7 +123,9 @@ def test_every_retrieval_passes_the_similarity_floor():
     问答路有行为断言钉着（test_qa.py），但抽取路与跨文档检索路没有：
     阶段 2a 验收把这两处的 `settings.qa_min_similarity` 换成 `0.0`，**152 例全绿**。
     行为断言给这两条路补起来代价不小（要造"词面命中但语义不相关"的语料），
-    而形状守卫在这里够用：少传或写死字面量都会红。
+    阶段 6 的问答路是唯一例外：它要保留低分候选和拒绝原因，所以 SearchIndex
+    不得先丢数据，必须取全后立刻交给 `gate_candidates`。其余检索路仍在 search
+    调用处应用下限。两种形状都在这里钉死。
     """
     violations = []
     for path, call in _search_calls():
@@ -131,12 +133,27 @@ def test_every_retrieval_passes_the_similarity_floor():
         kw = next((k for k in call.keywords if k.arg == "min_similarity"), None)
         if kw is None:
             violations.append(f"{where} 没传 min_similarity")
+        elif path.name == "qa.py" and ast.unparse(kw.value) == "-1.01":
+            continue
         elif not (isinstance(kw.value, ast.Attribute) and kw.value.attr == FLOOR):
             violations.append(f"{where} 的 min_similarity 是 {ast.unparse(kw.value)}，"
                               f"不是 settings.{FLOOR}")
     assert not violations, (
         "检索少了相似度下限 —— 低于下限的词面命中会成为出处，且被打上 verified：\n  "
         + "\n  ".join(violations))
+
+
+def test_qa_deferred_gate_uses_the_configured_floor():
+    """问答取全候选后必须用同一配置门控；否则假出处会从后门进入回答。"""
+    path = APP / "qa.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and ast.unparse(node.func).endswith("gate_candidates")]
+    assert len(calls) == 1, f"预期唯一 gate_candidates 调用，实际 {len(calls)}"
+    kw = next((item for item in calls[0].keywords if item.arg == "min_similarity"), None)
+    assert kw is not None
+    assert isinstance(kw.value, ast.Attribute) and kw.value.attr == FLOOR, \
+        f"问答门控阈值不是 settings.{FLOOR}: {ast.unparse(kw.value)}"
 
 
 def test_the_search_scan_actually_finds_the_call_sites():

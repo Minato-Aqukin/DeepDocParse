@@ -41,6 +41,9 @@ describe('降级文案', () => {
       'no_hits', 'embedding_unavailable', 'vision_unavailable', 'crop_unsupported',
       'crop_failed', 'parse_mismatch', 'upstream_error', 'schema_violation',
       'rerank_unavailable', 'no_instruct_model', 'index_changed_during_answer',
+      'decision_unavailable', 'no_evidence_in_turn', 'inherited_evidence_incomplete',
+      'gate_rejected_all', 'citation_persist_failed',
+      'verification_unavailable',
     ]
     const missing = contract.filter((v) => !(v in DEGRADED_LABEL))
     expect(missing).toEqual([])

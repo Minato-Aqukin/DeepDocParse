@@ -2,6 +2,11 @@ import type {
   ChatMessage,
   Citation,
   ConversationInfo,
+  AnswerAssertion,
+  CandidateDecision,
+  EvidenceDetail,
+  EvidenceVerification,
+  QueryDecision,
   RetrievalConfidence,
 } from '@/types/api'
 
@@ -14,12 +19,28 @@ export const conversationsApi = {
     http.get<ConversationInfo[]>('/api/conversations', { params: { document: documentId } }),
   messages: (cid: string) => http.get<ChatMessage[]>(`/api/conversations/${cid}/messages`),
   remove: (cid: string) => http.delete(`/api/conversations/${cid}`),
+  evidence: (evidenceId: string) =>
+    http.get<EvidenceDetail>(`/api/evidence/${evidenceId}`),
+  verifyEvidence: (
+    evidenceId: string,
+    data: {
+      verdict: 'pass' | 'reject' | 'question'
+      reason_code?: string
+      reason_text?: string
+    },
+  ) => http.post<EvidenceVerification & { review_state: EvidenceDetail['review_state'] }>(
+    `/api/evidence/${evidenceId}/verification`, data,
+  ),
 }
 
 export interface AskHandlers {
-  onMeta?: (data: { retrieval: { chunk_ids: string[] } }) => void
+  onMeta?: (data: {
+    query_decision: QueryDecision
+    retrieval: { chunk_ids: string[]; candidates: CandidateDecision[] }
+  }) => void
   onDelta: (text: string) => void
   onCitations?: (citations: Citation[]) => void
+  onAssertions?: (assertions: AnswerAssertion[]) => void
   onDone?: (data: {
     message_id: string
     verified: boolean
@@ -106,6 +127,8 @@ function dispatch(block: string, handlers: AskHandlers) {
   else if (event === 'delta') handlers.onDelta((data as { text: string }).text)
   else if (event === 'citations')
     handlers.onCitations?.((data as { citations: Citation[] }).citations)
+  else if (event === 'assertions')
+    handlers.onAssertions?.((data as { assertions: AnswerAssertion[] }).assertions)
   else if (event === 'done')
     handlers.onDone?.(data as Parameters<NonNullable<AskHandlers['onDone']>>[0])
   else if (event === 'error')

@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { documentsApi, downloadAs } from '@/api'
 import AskPanel from '@/components/ask/AskPanel.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
+import EvidencePreview from '@/components/evidence/EvidencePreview.vue'
 import PdfCanvas from '@/components/viewer/PdfCanvas.vue'
 import ResultPane from '@/components/viewer/ResultPane.vue'
 import { usePolling } from '@/composables/usePolling'
@@ -33,6 +34,7 @@ const sourcePath = ref('')
 const activePage = ref(0)
 const highlights = ref<Highlight[]>([])
 const selectedChunkId = ref<string | null>(null)
+const selectedCitation = ref<Citation | null>(null)
 const showChunks = ref(false)
 const loading = ref(true)
 const validation = ref<IndexValidation>()
@@ -98,18 +100,22 @@ const polling = usePolling(load, () => {
 })
 
 function locate(citation: Citation) {
+  selectedCitation.value = citation
   activePage.value = citation.page_idx
   selectedChunkId.value = citation.chunk_id
   highlights.value = [{
     pageIdx: citation.page_idx,
-    bbox: citation.bbox,
-    pageSize: pages.value.find((p) => p.page_idx === citation.page_idx)?.page_size ?? null,
+    // 历史 bbox 必须使用引用当时的坐标基准。page_size 缺失时不猜当前版本，
+    // 否则 CropBox / 旋转归一化变化会把红框画到错误位置。
+    bbox: citation.page_size ? citation.bbox : null,
+    pageSize: citation.page_size,
     kind: 'citation',
     label: citation.snippet,
   }]
 }
 
 function selectBlock(block: Block) {
+  selectedCitation.value = null
   activePage.value = block.page_idx
   selectedChunkId.value = block.chunk_id
   highlights.value = [{
@@ -237,7 +243,13 @@ watch(
       </section>
 
       <section class="pane result">
+        <EvidencePreview
+          v-if="selectedCitation?.evidence_id"
+          :evidence-id="selectedCitation.evidence_id"
+          @close="selectedCitation = null"
+        />
         <ResultPane
+          v-else
           :pages="pages"
           :markdown="markdown"
           :active-page="activePage"

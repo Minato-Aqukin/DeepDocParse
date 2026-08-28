@@ -18,7 +18,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 # 语料模型与 Base 都在 core（两侧共用同一份 metadata）。
 # **这里原样再导出**，让既有的 `from app.models import Document` 一字不用改。
 from ddp_core.models import (  # noqa: F401
-    Base, Chunk, Citation, Document, DocumentUpload, Evidence, ParseJob,
+    AgentTurn, Assertion, Base, Chunk, Citation, Document, DocumentUpload, Evidence,
+    EvidenceVerification, ParseJob, RetrievalCandidate,
     as_aware, new_id, utcnow,
 )
 

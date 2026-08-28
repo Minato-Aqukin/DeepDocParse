@@ -11,7 +11,7 @@ describe('CitationChip 的生成物标记', () => {
         citation: {
           chunk_id: 'c1', evidence_id: 'derived-e1', source_type: 'generated',
           derived_from: 'source-e1', parse_job_id: 'j1', seq: 0,
-          page_idx: 0, bbox: [1, 2, 3, 4], crop_url: null,
+          page_idx: 0, bbox: [1, 2, 3, 4], page_size: null, crop_url: null,
           snippet: '延迟在 80ms 后趋稳', score: 0.03, similarity: 0.8, resolved: true,
         },
       },

@@ -6,6 +6,7 @@
 import importlib.util
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -34,8 +35,18 @@ def _load_extraction_eval():
     return module
 
 
+def _load_agent_eval():
+    spec = importlib.util.spec_from_file_location(
+        "eval_agent_metrics", ROOT / "scripts" / "eval_agent.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 ev = _load_eval()
 extract_ev = _load_extraction_eval()
+agent_ev = _load_agent_eval()
 LAYOUT = json.loads((FIXTURES / "layout-long-doc.json").read_text(encoding="utf-8"))
 
 
@@ -348,3 +359,48 @@ def test_stage5_atom_hit_rates_are_always_reported_separately():
     report = ev.render(outcomes, "offline")
     for kind in metrics:
         assert f"| `{kind}` |" in report
+
+
+def test_stage6_agent_metrics_are_separate_and_unsupported_is_invariant():
+    dataset = json.loads((ROOT / "eval" / "agent.json").read_text(encoding="utf-8"))
+    metrics = agent_ev.evaluate(dataset)
+    assert metrics.retrieval_misses == (1, 6)
+    assert metrics.redundant_retrievals == (1, 6)
+    assert metrics.gate_precision_before == (4, 8)
+    assert metrics.gate_precision_after == (4, 5)
+    assert metrics.sentence_coverage == (3, 4)
+    assert metrics.citation_correctness == (2, 3)
+    assert metrics.refusal_before == (3, 4)
+    assert metrics.refusal_after == (4, 4)
+    assert metrics.unsupported_violations == (0, 4)
+    assert agent_ev.passes_acceptance(metrics)
+
+    report = agent_ev.render(metrics, revision=dataset["revision"])
+    for label in ("漏检率", "冗余检索率", "门控前引用精确率", "门控后引用精确率",
+                  "句级引用覆盖率", "句级引用正确率", "拒答正确率",
+                  "unsupported 不变式违反率"):
+        assert label in report
+
+
+def _passing_agent_metrics():
+    return agent_ev.AgentMetrics(
+        retrieval_misses=(0, 1), redundant_retrievals=(0, 1),
+        gate_precision_before=(1, 2), gate_precision_after=(1, 1),
+        sentence_coverage=(1, 2), citation_correctness=(1, 1),
+        refusal_before=(1, 1), refusal_after=(1, 1),
+        unsupported_violations=(0, 2))
+
+
+def test_stage6_agent_guard_independently_rejects_refusal_regression():
+    assert not agent_ev.passes_acceptance(replace(
+        _passing_agent_metrics(), refusal_after=(0, 1)))
+
+
+def test_stage6_agent_guard_independently_rejects_unsupported_violation():
+    assert not agent_ev.passes_acceptance(replace(
+        _passing_agent_metrics(), unsupported_violations=(1, 2)))
+
+
+def test_stage6_agent_guard_independently_rejects_gate_precision_regression():
+    assert not agent_ev.passes_acceptance(replace(
+        _passing_agent_metrics(), gate_precision_after=(0, 1)))

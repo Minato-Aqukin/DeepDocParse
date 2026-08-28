@@ -1,0 +1,39 @@
+{
+  "$schema": "DDP-Agent v1 固定离线评测输入；模型真机输出由 GPU 批次二另行采集",
+  "revision": "stage6-offline-v1",
+  "decision_cases": [
+    {"id": "fresh-fact-1", "expected_need_retrieval": true, "predicted_need_retrieval": true},
+    {"id": "fresh-fact-2", "expected_need_retrieval": true, "predicted_need_retrieval": true},
+    {"id": "cross-section", "expected_need_retrieval": true, "predicted_need_retrieval": true},
+    {"id": "new-comparison", "expected_need_retrieval": true, "predicted_need_retrieval": true},
+    {"id": "evidence-insufficient", "expected_need_retrieval": true, "predicted_need_retrieval": true},
+    {"id": "ambiguous-new-fact", "expected_need_retrieval": true, "predicted_need_retrieval": false},
+    {"id": "rewrite", "expected_need_retrieval": false, "predicted_need_retrieval": false},
+    {"id": "summarize-cited", "expected_need_retrieval": false, "predicted_need_retrieval": false},
+    {"id": "format-as-table", "expected_need_retrieval": false, "predicted_need_retrieval": false},
+    {"id": "explain-citation", "expected_need_retrieval": false, "predicted_need_retrieval": false},
+    {"id": "shorten", "expected_need_retrieval": false, "predicted_need_retrieval": false},
+    {"id": "pronoun-followup", "expected_need_retrieval": false, "predicted_need_retrieval": true}
+  ],
+  "candidates": [
+    {"id": "e1", "document_id": "manual-a", "similarity": 0.91, "relevant": true},
+    {"id": "e2", "document_id": "manual-a", "similarity": 0.78, "relevant": true},
+    {"id": "e3", "document_id": "manual-a", "similarity": 0.30, "relevant": false},
+    {"id": "e4", "document_id": "manual-b", "similarity": 0.22, "relevant": false},
+    {"id": "e5", "document_id": "manual-b", "similarity": 0.11, "relevant": false},
+    {"id": "e6", "document_id": "paper-c", "similarity": 0.74, "relevant": true},
+    {"id": "e7", "document_id": "paper-c", "similarity": 0.61, "relevant": true},
+    {"id": "e8", "document_id": "paper-d", "similarity": 0.40, "relevant": false}
+  ],
+  "answer": {
+    "text": "额定电压为 24V。[1] 维护周期是六个月。[2] 设备支持水下运行。[3] 制造商位于上海。",
+    "evidence_order": ["e1", "e2", "e3"],
+    "relevant_evidence_ids": ["e1", "e2", "e6", "e7"]
+  },
+  "refusal_cases": [
+    {"id": "absent-quantum", "baseline_ok": true, "agent_ok": true},
+    {"id": "absent-ceo", "baseline_ok": true, "agent_ok": true},
+    {"id": "absent-password", "baseline_ok": false, "agent_ok": true},
+    {"id": "absent-roadmap", "baseline_ok": true, "agent_ok": true}
+  ]
+}

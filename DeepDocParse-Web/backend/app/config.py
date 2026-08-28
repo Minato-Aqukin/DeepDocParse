@@ -115,6 +115,11 @@ class Settings(BaseSettings):
     qa_low_similarity: float = 0.60
     qa_history_turns: int = 6           # 带入的历史消息条数
     qa_crop_count: int = 1              # 做视觉验证的区域数
+    # DDP-Agent v1 是否让模型先判断本轮需不需要检索。判定失败必须保守检索，
+    # 绝不能退回模型常识；测试基线会显式关闭，另有专门契约用例覆盖开启路径。
+    qa_decision_enabled: bool = True
+    # 判定先于 SSE 首帧，必须单独限时；超时按 decision_unavailable 保守执行检索。
+    qa_decision_timeout: float = 20.0
     # 出处一致性核对（A4）：把裁出来的区域图让视觉模型原样抄一遍，与 chunk 文本比对。
     # 补的是七种降级里唯一的洞 ——「解析本身错了」。那时 chunk 文本是错的，
     # 但语义相似度照样过阈值、照样裁图、照样标 verified，产出这个类别最恶劣的错误：

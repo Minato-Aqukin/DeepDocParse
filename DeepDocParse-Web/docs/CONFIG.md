@@ -12,7 +12,7 @@
 **`VITE_DEFAULT_ENGINE` 要与后端 `DEFAULT_PARSE_ENGINE`、service 的 `models.yaml` 三者对齐**——
 任一处对不上，上传会在 service 侧收 404 unknown_engine。
 
-共 **67** 项。
+共 **69** 项。
 
 ## 本层资源
 
@@ -75,6 +75,8 @@
 | `QA_LOW_SIMILARITY` | `float` | `0.6` | "低相关"提示线：命中过了下限、但离典型真实命中还差得远时，界面主动提醒用户 "这个回答的依据不太牢靠"，而不是替他判断。取 0.60 = 下限 0.45 与实测真实命中 0.725~0.786 之间偏下的位置：宁可多提醒，也不要让勉强及格的出处看起来同样可信。 **必须 > qa_min_similarity**，否则永远不触发。 |
 | `QA_HISTORY_TURNS` | `int` | `6` | 带入的历史消息条数 |
 | `QA_CROP_COUNT` | `int` | `1` | 做视觉验证的区域数 |
+| `QA_DECISION_ENABLED` | `bool` | `True` | DDP-Agent v1 是否让模型先判断本轮需不需要检索。判定失败必须保守检索， 绝不能退回模型常识；测试基线会显式关闭，另有专门契约用例覆盖开启路径。 |
+| `QA_DECISION_TIMEOUT` | `float` | `20.0` | 判定先于 SSE 首帧，必须单独限时；超时按 decision_unavailable 保守执行检索。 |
 | `QA_VERIFY_PARSE` | `bool` | `True` | 出处一致性核对（A4）：把裁出来的区域图让视觉模型原样抄一遍，与 chunk 文本比对。 补的是七种降级里唯一的洞 ——「解析本身错了」。那时 chunk 文本是错的， 但语义相似度照样过阈值、照样裁图、照样标 verified，产出这个类别最恶劣的错误： **带着"已做视觉验证"标记的假出处**。核对与回答并发跑，不增加首字延迟。 |
 | `QA_PARSE_MISMATCH_THRESHOLD` | `float` | `0.55` | 相似度低于它就判定解析与原图对不上（difflib 比值，0~1）。  **2026-08-25 在 4090D + DeepSeek-OCR-2 上标定过**（此前是没有依据的 0.35）： 一致组（块图 vs 自己的文本）  n=10，全部 1.000 不一致组（块图 vs 别人的文本）n=90，p95=0.382，max=0.643 旧的 0.35 会放过 5/90 个该报的不一致。标定脚本在 service 仓库： `DeepDocParse/scripts/calibrate_verify_threshold.py`。  取 0.55 而不是脚本建议的中点 0.69：标定样本是 born-digital 英文单栏， 是最容易的一类；扫描件/中文上抄写保真度会掉。仍然**宁可漏报不要误报**： 误报会把好出处打成"存疑"，比不报更伤信任。  **这个数字的来源与本层的实际用法并不完全对得上，用之前先读这段。** 标定跑的是 service 侧：DeepSeek-OCR-2 + 它的原生 prompt `Free OCR.`。 而本层 qa.TRANSCRIBE_PROMPT 写死的是一句**中文指令**，模型由 CHAT_MODEL 决定 （quickstart 缺省引导用户填一个通用文本/视觉模型）—— service 侧那套 "按注册表 options.transcribe_prompt 换成模型听得懂的话"**没有移植到本层**。 也就是说：把阈值从 0.35 提到 0.55 在本层是朝着**误报**方向动的， 而上面刚说过本层的既定取向是宁可漏报。之所以仍然跟着提，是因为两处同源、 分叉会更难解释；但**本层至今没有自己的标定数据**。 拿到 GPU 机器后要做的是：用本层真实的 CHAT_MODEL + 中文 prompt 重跑一次 calibrate_verify_threshold.py，按那个分布定本层自己的值 （或者把 transcribe_prompt 那套移植过来，让两层真的同源）。 |
 | `QA_VERIFY_TIMEOUT` | `float` | `20.0` | 等核对结果的上限（秒）。核对与回答并发跑，正常情况下回答先结束、这里几乎不等； 但视觉模型在 CPU 上抄一段文字可能要几分钟（read 超时是 900s）， **没有上限的话 done 帧会被硬生生拖后几分钟**，用户看着答案已经出完却迟迟不落定。 超时就当"没测出来"——宁可不打标，也不能让核对拖垮体验 |

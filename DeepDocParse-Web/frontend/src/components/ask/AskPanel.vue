@@ -6,7 +6,7 @@ import { askStream, conversationsApi } from '@/api'
 import CitationChip from '@/components/ask/CitationChip.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { confidenceOf, degradedLabelOf } from '@/constants/status'
-import type { ChatMessage, Citation, DocumentInfo } from '@/types/api'
+import type { AnswerAssertion, CandidateDecision, ChatMessage, Citation, DocumentInfo } from '@/types/api'
 import { fetchAuthedImage } from '@/utils/markdown'
 
 /**
@@ -62,7 +62,10 @@ async function loadMessages() {
 /** 出处缩略图受 JWT 保护，必须取回来换成 blob——直接绑到 src 上会 401。 */
 async function loadCrops() {
   const pending = messages.value
-    .flatMap((m) => m.citations || [])
+    .flatMap((m) => [
+      ...(m.citations || []),
+      ...(m.assertions || []).flatMap((assertion) => assertion.citations),
+    ])
     .filter((c) => c.crop_url && !cropUrls.value[c.crop_url])
   await Promise.all(
     pending.map(async (c) => {
@@ -73,6 +76,27 @@ async function loadCrops() {
       else cropUrls.value[c.crop_url!] = objectUrl
     }),
   )
+}
+
+function verificationLabel(assertion: AnswerAssertion) {
+  const { state, mode } = assertion.verification
+  if (state === 'passed') return mode === 'human' ? '人工核对通过' : '自动核对通过'
+  if (state === 'rejected') return mode === 'human' ? '人工核对驳回' : '自动核对不一致'
+  if (state === 'questioned') return '人工标疑'
+  return '尚未核对'
+}
+
+function verificationType(assertion: AnswerAssertion) {
+  const { state } = assertion.verification
+  if (state === 'passed') return 'success' as const
+  if (state === 'rejected') return 'danger' as const
+  if (state === 'questioned') return 'warning' as const
+  return 'info' as const
+}
+
+function candidateSummary(candidates: CandidateDecision[]) {
+  const accepted = candidates.filter((candidate) => candidate.accepted).length
+  return `${accepted} 条通过 · ${candidates.length - accepted} 条拒绝`
 }
 
 function revokeCrops() {
@@ -172,7 +196,75 @@ onBeforeUnmount(() => {
 
     <div ref="scroller" class="stream">
       <div v-for="message in messages" :key="message.id" class="bubble" :class="message.role">
-        <div class="text">{{ message.content }}</div>
+        <div v-if="message.role !== 'assistant' || !message.assertions?.length" class="text">
+          {{ message.content }}
+        </div>
+        <div v-else class="assertions">
+          <section
+            v-for="assertion in message.assertions"
+            :key="assertion.id ?? assertion.position"
+            class="assertion"
+            :class="{ unsupported: assertion.unsupported }"
+          >
+            <div class="assertion-text">{{ assertion.text }}</div>
+            <div class="assertion-state">
+              <StatusTag
+                v-if="assertion.unsupported || !assertion.evidence_ids.length"
+                label="无证据支持"
+                type="warning"
+              />
+              <StatusTag
+                v-else
+                :label="verificationLabel(assertion)"
+                :type="verificationType(assertion)"
+              />
+            </div>
+            <div v-if="assertion.citations.length" class="citations assertion-citations">
+              <CitationChip
+                v-for="(citation, i) in assertion.citations"
+                :key="citation.evidence_id ?? i"
+                :citation="citation"
+                :index="i + 1"
+                :crop-url="citation.crop_url ? cropUrls[citation.crop_url] : undefined"
+                :warn-below="message.confidence?.warn_below"
+                @locate="emit('locate', citation)"
+              />
+            </div>
+          </section>
+        </div>
+
+        <div v-if="message.role === 'assistant' && message.query_decision" class="agent-trace">
+          <StatusTag
+            :label="message.query_decision.need_retrieval
+              ? '本轮执行检索'
+              : `继承上一轮 ${message.query_decision.inherited_evidence_ids.length} 条证据`"
+            type="info"
+          />
+          <span>{{ message.query_decision.reason }}</span>
+          <StatusTag
+            v-if="message.query_decision.degraded"
+            :label="degradedLabelOf(message.query_decision.degraded) ?? message.query_decision.degraded"
+            type="warning"
+          />
+        </div>
+        <details
+          v-if="message.role === 'assistant' && message.retrieval?.candidates.length"
+          class="candidate-trace"
+        >
+          <summary>候选门控：{{ candidateSummary(message.retrieval.candidates) }}</summary>
+          <ol>
+            <li
+              v-for="candidate in message.retrieval.candidates"
+              :key="`${candidate.document_id}:${candidate.chunk_id}:${candidate.rank}`"
+            >
+              <StatusTag
+                :label="candidate.accepted ? '通过' : '拒绝'"
+                :type="candidate.accepted ? 'success' : 'warning'"
+              />
+              <span>#{{ candidate.rank }} · {{ candidate.reason }}</span>
+            </li>
+          </ol>
+        </details>
         <div v-if="message.role === 'assistant'" class="meta">
           <StatusTag v-if="message.verified" label="已做视觉验证" type="success" />
           <StatusTag
@@ -199,7 +291,7 @@ onBeforeUnmount(() => {
           show-icon
         />
 
-        <div v-if="message.citations?.length" class="citations">
+        <div v-if="!message.assertions?.length && message.citations?.length" class="citations">
           <CitationChip
             v-for="(citation, i) in message.citations"
             :key="i"
@@ -276,6 +368,55 @@ onBeforeUnmount(() => {
 .text {
   white-space: pre-wrap;
   line-height: 1.7;
+}
+.assertions {
+  display: grid;
+  gap: 10px;
+}
+.assertion {
+  display: grid;
+  gap: 7px;
+  padding-left: 10px;
+  border-left: 2px solid var(--ddp-line-2);
+}
+.assertion.unsupported {
+  border-left-style: dashed;
+}
+.assertion-text {
+  white-space: pre-wrap;
+  line-height: 1.7;
+}
+.assertion-state,
+.agent-trace {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.agent-trace {
+  margin-top: 8px;
+  color: var(--ddp-ink-2);
+  font-size: 12px;
+}
+.candidate-trace {
+  margin-top: 8px;
+  color: var(--ddp-ink-2);
+  font-size: 12px;
+}
+.candidate-trace summary {
+  cursor: pointer;
+}
+.candidate-trace ol {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding-left: 22px;
+}
+.candidate-trace li {
+  padding-left: 2px;
+}
+.candidate-trace li > span + span {
+  margin-left: 6px;
 }
 .meta {
   margin-top: 6px;

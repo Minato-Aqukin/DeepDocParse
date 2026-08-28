@@ -113,6 +113,8 @@ export interface Citation {
   seq: number | null
   page_idx: number
   bbox: [number, number, number, number] | null
+  /** 引用当时 bbox 所在页面的坐标基准；缺失时不得拿当前解析版本的尺寸猜。 */
+  page_size: [number, number] | null
   crop_url: string | null
   snippet: string
   /** RRF 融合分：只用来排序，**不是**相关度（上限约 0.033，由名次决定） */
@@ -121,6 +123,40 @@ export interface Citation {
   similarity: number | null
   /** 这条出处还能不能接回当前索引里的原文（reindex/换引擎重解析后可能接不回） */
   resolved: boolean
+}
+
+export interface QueryDecision {
+  need_retrieval: boolean
+  reason: string
+  inherited_evidence_ids: string[]
+  degraded: string | null
+}
+
+export interface CandidateDecision {
+  evidence_id: string | null
+  document_id: string
+  chunk_id?: string | null
+  rank: number
+  score: number | null
+  similarity: number | null
+  accepted: boolean
+  reason: string
+}
+
+export interface AssertionVerification {
+  state: 'passed' | 'rejected' | 'questioned' | 'unverified'
+  mode: 'auto' | 'human' | null
+}
+
+/** 回答的语义真相；无 evidence_ids 时 unsupported 必须为 true。 */
+export interface AnswerAssertion {
+  id: string | null
+  position: number
+  text: string
+  evidence_ids: string[]
+  verification: AssertionVerification
+  unsupported: boolean
+  citations: Citation[]
 }
 
 /** 这一组出处有多可信。后端算好给前端，校准值只在 backend/app/config.py 一处。 */
@@ -135,12 +171,44 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   citations: Citation[]
+  assertions?: AnswerAssertion[]
+  query_decision?: QueryDecision
+  retrieval?: { candidates: CandidateDecision[] }
   verified: boolean
   degraded: string | null
   /** 这一轮用的模型与检索参数快照，换模型后靠它分组对比历史 */
   model_meta?: Record<string, unknown>
   confidence?: RetrievalConfidence
   created_at: string
+}
+
+export interface EvidenceVerification {
+  id: string
+  mode: 'auto' | 'human'
+  verdict: 'pass' | 'reject' | 'question'
+  reason_code: string | null
+  reason_text: string | null
+  reviewer_id: string | null
+  created_at: string
+}
+
+export interface EvidenceDetail {
+  id: string
+  document: { id: string; filename: string }
+  page_idx: number
+  seq: number
+  parse_job_id: string
+  doc_version: number
+  bbox: [number, number, number, number] | null
+  page_size: [number, number] | null
+  kind: string
+  content: string
+  source_type: 'source' | 'generated'
+  derived_from: string | null
+  crop_url: string | null
+  review_state: 'unreviewed' | 'passed' | 'rejected' | 'questioned'
+  chunk_id: string | null
+  verifications: EvidenceVerification[]
 }
 
 export interface ConversationInfo {

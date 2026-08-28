@@ -50,6 +50,12 @@ export const DEGRADED_LABEL: Record<string, string> = {
   upstream_error: '问答服务异常',
   upstream_interrupted: '回答生成中途断流',
   index_changed_during_answer: '回答生成期间索引版本已变化，出处已标为失效',
+  decision_unavailable: '是否检索判定不可用，已保守执行检索',
+  no_evidence_in_turn: '本轮没有可继承证据，已拒绝脱离文档作答',
+  inherited_evidence_incomplete: '上一轮证据已部分失效，需重新检索后再回答',
+  gate_rejected_all: '检索候选均未通过逐篇质量门控',
+  citation_persist_failed: '出处保存失败，相关结论已标为无证据支持',
+  verification_unavailable: '原文自动核对未得出结论，请人工复核',
   // v1.1 新增两种
   schema_violation: '模型输出不符合 schema（已重试仍失败）',
   rerank_unavailable: '未做精排（重排序服务不可用）',

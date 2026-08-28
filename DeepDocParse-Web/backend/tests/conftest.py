@@ -24,6 +24,9 @@ settings.bcrypt_rounds = 4
 # provider_unresolved，不能让整套测试无意中都跑在不可比较的默认模型下。
 settings.embedding_model = "test-embedding"
 settings.chat_model = "test-vision"
+# 既有问答用例只测试检索/回答/核对；是否检索判定由阶段 6 专门用例显式开启，
+# 避免每条旧用例都被迫 mock 第二种 JSON chat 响应。
+settings.qa_decision_enabled = False
 
 from app.main import app  # noqa: E402
 from app.metering import MemoryRateLimiter
