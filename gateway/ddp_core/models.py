@@ -5,9 +5,10 @@
 按 `plan.md` §2 的划线：**core = 语料服务器**（编译 / 证据 / 检索 / 生成 / 知识），
 **web 端 = 账号 / API key / 配额与计量 / 对外 HTTP / 前端**。所以：
 
-    这里（core）   Document · DocumentUpload · ParseJob · Chunk
+    这里（core）   Document · DocumentUpload · ParseJob · Chunk · Evidence · Citation
+                   AgentTurn · Assertion · RetrievalCandidate · EvidenceVerification
     留在 web 层    User · ApiKey · UsageRecord（账号层）
-                   Conversation · Message · Extraction*（暂留，后续阶段再看）
+                   Conversation · Message · Extraction*（HTTP 产品壳；断言/核对已在 core）
 
 **`Base` 也在这里**，两侧共用同一份 metadata —— 否则 `create_all` 与 alembic
 只看得见一半的表。web 层的模型 import 这个 Base 定义自己的表，
@@ -374,3 +375,84 @@ class Citation(Base):
         UniqueConstraint("source_kind", "source_id", "evidence_id", "role",
                          name="uq_citations_source_evidence"),
     )
+
+
+class AgentTurn(Base):
+    """一次 assistant 回合的检索判定；与展示用 Message 一一对应。"""
+
+    __tablename__ = "agent_turns"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    message_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("messages.id", ondelete="CASCADE"), unique=True, index=True)
+    need_retrieval: Mapped[bool] = mapped_column(Boolean, default=True)
+    decision_reason: Mapped[str] = mapped_column(String(64), default="fresh_question")
+    inherited_evidence_ids: Mapped[list] = mapped_column(JSON, default=list)
+    degraded: Mapped[str | None] = mapped_column(String(32), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Assertion(Base):
+    """回答中的一个可独立引用、核对和反查的断言。"""
+
+    __tablename__ = "assertions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    message_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("messages.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    text: Mapped[str] = mapped_column(Text, default="")
+    unsupported: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    # passed | rejected | questioned | unverified；mode = auto | human | NULL。
+    verification_state: Mapped[str] = mapped_column(
+        String(16), default="unverified", index=True)
+    verification_mode: Mapped[str | None] = mapped_column(String(16), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("message_id", "position", name="uq_assertions_message_position"),
+    )
+
+
+class RetrievalCandidate(Base):
+    """逐篇门控的完整候选轨迹；rejected 也保留理由，不冒充 Citation。"""
+
+    __tablename__ = "retrieval_candidates"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    turn_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_turns.id", ondelete="CASCADE"), index=True)
+    evidence_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("evidence.id"), default=None, index=True)
+    document_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("documents.id"), index=True)
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    score: Mapped[float | None] = mapped_column(Float, default=None)
+    similarity: Mapped[float | None] = mapped_column(Float, default=None)
+    accepted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    reason: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("turn_id", "rank", name="uq_retrieval_candidates_turn_rank"),
+    )
+
+
+class EvidenceVerification(Base):
+    """自动与人工使用同一形状的核对审计记录。"""
+
+    __tablename__ = "evidence_verifications"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    evidence_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("evidence.id"), index=True)
+    assertion_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("assertions.id", ondelete="SET NULL"), default=None, index=True)
+    mode: Mapped[str] = mapped_column(String(16))       # auto | human
+    verdict: Mapped[str] = mapped_column(String(16))    # pass | reject | question
+    reason_code: Mapped[str | None] = mapped_column(String(64), default=None)
+    reason_text: Mapped[str | None] = mapped_column(Text, default=None)
+    reviewer_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("users.id"), default=None, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                  index=True)
