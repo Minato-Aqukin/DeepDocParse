@@ -16,8 +16,10 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
+    "@types/d3-force": "^3.0.10",
     "@vueuse/core": "^14.3.0",
     "axios": "^1.7.9",
+    "d3-force": "^3.0.0",
     "dompurify": "^3.2.4",
     "element-plus": "^2.9.4",
     "katex": "^0.16.21",

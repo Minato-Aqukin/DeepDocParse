@@ -63,6 +63,18 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/SearchView.vue'),
     meta: { title: '全文检索', icon: 'Search', group: 'workspace', nav: true },
   },
+  {
+    path: '/wiki',
+    name: 'wiki',
+    component: () => import('@/views/WikiView.vue'),
+    meta: { title: '知识 Wiki', icon: 'Notebook', group: 'workspace', nav: true },
+  },
+  {
+    path: '/graph',
+    name: 'graph',
+    component: () => import('@/views/GraphView.vue'),
+    meta: { title: '实体图谱', icon: 'Share', group: 'workspace', nav: true },
+  },
 
   {
     path: '/keys',

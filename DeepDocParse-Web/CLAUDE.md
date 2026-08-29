@@ -8,7 +8,8 @@
 
 ## 职责边界
 - 用户/API key/额度限流/计量全在本层；对 service 统一用 SERVICE_TOKEN，service 不感知用户
-- 文件与解析结果的**永久存储**在本层（MinIO + PostgreSQL）；service 结果暂存仅 24h
+- 文件与解析结果的**永久存储**仍由本层 API 写入 PostgreSQL/MinIO；数据库模型与
+  检索/知识逻辑属于共享 `ddp_core`，阶段 7 的 MCP 直接连接同一语料库读取。
 - `/v1/*` 对外 API 与 `/mcp` 反代：验 key → 限速 → 额度 → 转发 → 记 usage
 
 ## 铁律

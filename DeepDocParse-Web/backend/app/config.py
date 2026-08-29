@@ -155,6 +155,9 @@ class Settings(BaseSettings):
     # 超时就当"没测出来"——宁可不打标，也不能让核对拖垮体验
     qa_verify_timeout: float = 20.0
     qa_rate_per_min: int = 20           # 每用户问答限速
+    knowledge_enabled: bool = True      # 可整体关掉知识层，旧检索/问答路径不受影响
+    knowledge_rate_per_min: int = 2     # 图谱/wiki 生成很贵，单独限速
+    knowledge_max_evidence: int = 50    # 单次生成送入模型的证据原子上限
 
     # ---- 重排序（D1）----
     # 交叉编码器精排。留空 = 回落到 {service_url}/v1/rerank；

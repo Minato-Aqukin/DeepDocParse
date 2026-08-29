@@ -271,6 +271,7 @@ async def load_citations(session: AsyncSession, *, source_kind: str,
         out.setdefault(citation.source_id, []).append({
             "chunk_id": chunk.id if resolved else None,
             "evidence_id": evidence.id,
+            "document_id": evidence.document_id,
             "source_type": "generated" if evidence.derived_from else "source",
             "derived_from": evidence.derived_from,
             "parse_job_id": evidence.parse_job_id,

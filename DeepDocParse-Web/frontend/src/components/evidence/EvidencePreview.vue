@@ -7,7 +7,9 @@ import StatusTag from '@/components/common/StatusTag.vue'
 import type { EvidenceDetail } from '@/types/api'
 import { fetchAuthedImage } from '@/utils/markdown'
 
-const props = defineProps<{ evidenceId: string }>()
+const props = withDefaults(defineProps<{ evidenceId: string; closeLabel?: string }>(), {
+  closeLabel: '返回解析结果',
+})
 defineEmits<{ (e: 'close'): void }>()
 
 const detail = ref<EvidenceDetail>()
@@ -84,7 +86,7 @@ onBeforeUnmount(() => {
         <h3>证据预览</h3>
         <StatusTag v-if="detail" :meta="reviewMeta" />
       </div>
-      <el-button link @click="$emit('close')">返回解析结果</el-button>
+      <el-button link @click="$emit('close')">{{ props.closeLabel }}</el-button>
     </header>
 
     <el-alert v-if="errorText" :title="errorText" type="error" :closable="false" />

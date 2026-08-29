@@ -4,16 +4,17 @@
 
 产品层：前端 + 后端 monorepo。总体架构见 [../ARCHITECTURE.md](../ARCHITECTURE.md)。
 
-本层是「可验证出处」这个定位真正落到用户眼前的地方：回答的每条依据、**抽取的每一个字段**
-都带页码 + bbox + 原件裁出来的区域截图，并且**任何降级都必须打标**（检索零命中 / 向量化不可用 /
+本层是「可验证出处」这个定位真正落到用户眼前的地方：回答的每条依据、**抽取的每一个字段**、
+图谱边与 Wiki 句子都回指页码 + bbox + 原件裁图；没有依据就明确标 `unsupported`。
+**任何降级都必须打标**（检索零命中 / 向量化不可用 /
 视觉模型不可用 / 不能裁剪 / 解析可疑 / 模型输出不合 schema / 未精排）。
 定位与「明确不做」清单见 [../DeepDocParse/README.md](../DeepDocParse/README.md)。
 
 ```
 DeepDocParse-Web/
 ├── quickstart.sh  # 一键部署：环境配置 -> 按硬件调参 -> 下权重 -> 起服务（见 docs/DEPLOY.md）
-├── backend/    # FastAPI：用户、key、额度、归档、分块索引、文档问答、**结构化抽取**、对外 API 与 MCP 代理
-├── frontend/   # Vue 3 + TS + Element Plus：文档库、三栏工作台（原文/结果/问答）、**抽取**、检索、用量
+├── backend/    # FastAPI：账号/计量、语料、问答/抽取、Agent、图谱/Wiki/复核、API 与 MCP 代理
+├── frontend/   # Vue 3 + TS：文档工作台、抽取、检索、Wiki、canvas 图谱、用量
 ├── docker/     # compose.web.yml：PostgreSQL(pgvector) + MinIO + Redis（多副本才需要）
 ├── deploy/     # compose.edge.yml：nginx 边缘层（静态托管前端 + 反代 backend）
 ├── docs/       # DEPLOY.md 部署 · DESIGN.md M6 设计（问答、Document/ParseJob 拆分、多副本）
@@ -22,11 +23,13 @@ DeepDocParse-Web/
 
 后端模块速览：`chunking` 分块（块类型感知）· `tokenize` 中文分词 · `indexing` 索引管线 ·
 `search` 混合检索（pgvector/内存两实现）· `rerank` 交叉编码器精排 · `qa` 问答编排 ·
-`extraction` 抽取编排 · `extract_schema` 受限 JSON Schema · `crops` 出处裁剪 ·
+`extraction` 抽取编排 · `knowledge` 图谱/Wiki 生成 · `review_export` 复核样本固化 ·
+`extract_schema` 受限 JSON Schema · `crops` 出处裁剪 ·
 `archive` 归档 · `reconcile` 对账 · `gc` 对象回收。
 
-对 DeepDocParse 的调用**只依赖** [../DeepDocParse/openapi.yaml](../DeepDocParse/openapi.yaml) 契约。
-下一轮的设计已定稿在 [docs/DESIGN.md](docs/DESIGN.md)——改动本层结构前先读它。
+对 DeepDocParse gateway 的 HTTP 调用**只依赖**
+[../DeepDocParse/openapi.yaml](../DeepDocParse/openapi.yaml) 契约；语料模型、检索与知识纯逻辑
+则复用 service 仓库安装出的 `ddp_core` 包，避免两仓各维护一份真相。
 
 ## 三类调用方，三套凭据
 
@@ -50,8 +53,9 @@ service 永远看不到用户凭据：本层验完 key/JWT 后统一换成 `SERV
 未落终态的任务，这是本层可靠性的底线。
 
 **为什么用稳定文件 URL 而不是预签名**：预签名会过期，签名还绑 host（给 service 的和给浏览器的
-签名不同）；更要命的是 MCP 平面的 `ask_document` 只拿得到一个裸 URL，URL 每次变化会让
-service 侧的向量索引永远命中不到。详见 ADR #12（文档身份本身见 ADR #11）。
+签名不同）；历史 MCP `ask_document` 只拿得到一个裸 URL，URL 每次变化会让旧索引永远
+命中不到。五个新语料工具直接按持久化 evidence 工作，不再依赖这条别名机器；
+旧入口仍兼容保留。详见 ADR #12（文档身份本身见 ADR #11）。
 
 **文档问答（M6）**：归档完成后本层自己分块（读自家 `layout.json`，不碰 service）→ 向量化 →
 存进 Postgres+pgvector。提问时混合检索（向量 + 关键词，RRF 融合）→ 按 bbox 裁出原文区域 →
@@ -66,9 +70,15 @@ service 侧的向量索引永远命中不到。详见 ADR #12（文档身份本�
 schema 边界（不支持嵌套/oneOf/$ref，叶子必须带 description）见
 [../DeepDocParse/docs/extract-format.md](../DeepDocParse/docs/extract-format.md)。
 
-**与 service 的耦合面**只有两处：解析契约（`openapi.yaml`）与 OpenAI 兼容的 embedding/chat
-端点——后者可以配成任意兼容服务（`EMBEDDING_URL` / `CHAT_URL`），本层不绑定 DeepDocParse
-的部署形态。检索索引、分块、问答编排全部在本层。
+**知识层（重构阶段 7）**：从 evidence 抽关系 → STORM 两阶段生成 Wiki 大纲与逐句正文 →
+每条边、每句 Wiki 回指同一张 evidence/citation 真相表。低置信实体合并在图谱里显式可见、
+可一键拆分；通过/驳回/标疑只写复核标注，不会改写机器产物，驳回样本可导出进固定评测集。
+MCP 的 `search` / `ask` / `get_evidence` / `read_wiki` / `graph_neighbors` 直接读取这份语料，
+其中 `get_evidence` 返回 MCP 原生图片内容，外部 agent 也能自己核对裁图。
+
+**与 service 的耦合面**是：HTTP 契约（`openapi.yaml`）、共享 `ddp_core` 包，以及 OpenAI
+兼容的 embedding/chat 端点。后者可以配成任意兼容服务（`EMBEDDING_URL` / `CHAT_URL`）；
+gateway 仍不感知用户，语料数据则由 PostgreSQL/MinIO 持久化并供 Web 与 MCP 共用。
 
 ## 部署到服务器（一键）
 
@@ -115,7 +125,7 @@ npm run test:e2e      # E2E（Playwright），需要能起前端；会自己拉�
 | 层 | 管什么 | 为什么需要 |
 |---|---|---|
 | **Vitest** + `@vue/test-utils` | 组件卸载清理（定时器、blob URL）、状态机、降级文案、路由守卫 | 本项目前端已知的真 bug —— 轮询活过组件卸载、卸载后新建的 blob URL 永不回收 —— **全是 `vue-tsc` 抓不到的那一类** |
-| **Playwright** | 13 条路径逐条首屏渲染 + **零 console error**、三态可见、降级必须给出原因 | 唯一能抓「按钮点了没反应」「路由白屏」的东西 |
+| **Playwright** | 全部路由逐条首屏渲染 + **零 console error/warn**、三态可见、降级必须给出原因 | 唯一能抓「按钮点了没反应」「路由白屏」的东西 |
 
 **跑不动 e2e 时先看这两条**（都踩过）：
 
@@ -322,8 +332,8 @@ README 顶部与**每个页面的页脚**（`frontend/src/layouts/AppShell.vue`�
         两种聊天气泡撞成同色，分不出谁在说话；`.ddp-num` 定义了却零使用
   - [x] 自查：`letter-spacing` 0 处、硬编码色 0 处、`el-tag` 0 处、静态容器投影 0 处；
         八个页面 × 深浅两档逐屏截图核对
-  - [x] **前端没有任何自动化测试**（无 vitest/eslint），唯一门禁是 `npm run build` 里的 `vue-tsc`，
-        所以视觉部分全靠人工截图核对 —— 这是这条里程碑最大的验证缺口
+  - [x] **该轮当时没有前端自动化测试**，视觉部分只能靠截图核对；重构阶段 0b 已补
+        Vitest + Playwright，阶段 7 又把 Wiki/图谱、千节点 canvas 与 console warn 纳入门禁
   - [x] 二次验收通过，另修掉它指出的 4 项：`toLocaleString()` 跟的是**浏览器**语言而不是
         `<html lang>`，en-US 下时间戳变 `12/22/2026, 10:49:20 PM`（217px）会被三个时间列
         静默截断 —— 已钉 `'zh-CN'`；`大小` 列 100px 到 1GB 溢出，加宽到 112px；
@@ -332,3 +342,9 @@ README 顶部与**每个页面的页脚**（`frontend/src/layouts/AppShell.vue`�
   - [x] **已知代价**：字体走 Google Fonts CDN，断网或校园网受限时中文会回退到系统字体；
         规范建议改本地打包 woff2，本轮未做。`Noto Sans SC` 只请求了 400/500/700，
         而标题字重是 600 —— 中文标题靠浏览器合成
+- [x] 重构阶段 7（代码完成，live 数字待 GPU 批次三）：
+  - [x] DDP-Graph v1、实体合并审计、STORM 两阶段 Wiki；边/句无引用时显式 `unsupported`
+  - [x] 复核队列覆盖图谱边、Wiki 句、抽取字段与低置信合并；驳回样本可复现导出到评测集
+  - [x] Wiki 三栏界面、反链与局部图谱；全局 canvas 图谱支持邻域高亮、点边看 bbox 裁图、低置信拆分
+  - [x] 千节点图谱 Playwright 门禁；五个语料 MCP 工具端到端形状守卫
+  - [x] 固定离线集分项报告见 [docs/EVAL-stage7-offline-report.md](docs/EVAL-stage7-offline-report.md)

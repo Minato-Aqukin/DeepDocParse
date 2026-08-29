@@ -1,0 +1,2193 @@
+{
+  "$schema": "DDP-Graph v1 fixed offline fixture; GPU batch three replaces output with live model results",
+  "revision": "stage7-offline-v1",
+  "edges": [
+    {
+      "id": "edge-001",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity1",
+      "predicate": "uses",
+      "object": "Component2",
+      "expect": {
+        "status": "found",
+        "basis": "Entity1 uses Component2"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-001",
+          "page_idx": 0,
+          "bbox": [
+            10,
+            1,
+            110,
+            21
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity1 uses Component2."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-002",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity2",
+      "predicate": "depends_on",
+      "object": "Component3",
+      "expect": {
+        "status": "found",
+        "basis": "Entity2 depends_on Component3"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-002",
+          "page_idx": 1,
+          "bbox": [
+            10,
+            2,
+            110,
+            22
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity2 depends_on Component3."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-003",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity3",
+      "predicate": "uses",
+      "object": "Component4",
+      "expect": {
+        "status": "found",
+        "basis": "Entity3 uses Component4"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-003",
+          "page_idx": 2,
+          "bbox": [
+            10,
+            3,
+            110,
+            23
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity3 uses Component4."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-004",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity4",
+      "predicate": "depends_on",
+      "object": "Component5",
+      "expect": {
+        "status": "found",
+        "basis": "Entity4 depends_on Component5"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-004",
+          "page_idx": 3,
+          "bbox": [
+            10,
+            4,
+            110,
+            24
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity4 depends_on Component5."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-005",
+      "attributes": [
+        "paper",
+        "extraction"
+      ],
+      "subject": "Entity5",
+      "predicate": "uses",
+      "object": "Component6",
+      "expect": {
+        "status": "found",
+        "basis": "Entity5 uses Component6"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-005",
+          "page_idx": 4,
+          "bbox": [
+            10,
+            5,
+            110,
+            25
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity5 uses Component6."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-006",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity6",
+      "predicate": "depends_on",
+      "object": "Component7",
+      "expect": {
+        "status": "found",
+        "basis": "Entity6 depends_on Component7"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-006",
+          "page_idx": 5,
+          "bbox": [
+            10,
+            6,
+            110,
+            26
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity6 depends_on Component7."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-007",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity7",
+      "predicate": "uses",
+      "object": "Component8",
+      "expect": {
+        "status": "found",
+        "basis": "Entity7 uses Component8"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-007",
+          "page_idx": 6,
+          "bbox": [
+            10,
+            7,
+            110,
+            27
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity7 uses Component8."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-008",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity8",
+      "predicate": "depends_on",
+      "object": "Component9",
+      "expect": {
+        "status": "found",
+        "basis": "Entity8 depends_on Component9"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-008",
+          "page_idx": 7,
+          "bbox": [
+            10,
+            8,
+            110,
+            28
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity8 depends_on Component9."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-009",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity9",
+      "predicate": "uses",
+      "object": "Component10",
+      "expect": {
+        "status": "found",
+        "basis": "Entity9 uses Component10"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-009",
+          "page_idx": 8,
+          "bbox": [
+            10,
+            9,
+            110,
+            29
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity9 uses Component10."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-010",
+      "attributes": [
+        "paper",
+        "recognition"
+      ],
+      "subject": "Entity10",
+      "predicate": "depends_on",
+      "object": "Component11",
+      "expect": {
+        "status": "found",
+        "basis": "Entity10 depends_on Component11"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-010",
+          "page_idx": 9,
+          "bbox": [
+            10,
+            10,
+            110,
+            30
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity10 depends_on Component11."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-011",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity11",
+      "predicate": "uses",
+      "object": "Component12",
+      "expect": {
+        "status": "found",
+        "basis": "Entity11 uses Component12"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-011",
+          "page_idx": 10,
+          "bbox": [
+            10,
+            11,
+            110,
+            31
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity11 uses Component12."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-012",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity12",
+      "predicate": "depends_on",
+      "object": "Component13",
+      "expect": {
+        "status": "found",
+        "basis": "Entity12 depends_on Component13"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-012",
+          "page_idx": 11,
+          "bbox": [
+            10,
+            12,
+            110,
+            32
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity12 depends_on Component13."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-013",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity13",
+      "predicate": "uses",
+      "object": "Component1",
+      "expect": {
+        "status": "found",
+        "basis": "Entity13 uses Component1"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-013",
+          "page_idx": 0,
+          "bbox": [
+            10,
+            13,
+            110,
+            33
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity13 uses Component1."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-014",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity14",
+      "predicate": "depends_on",
+      "object": "Component2",
+      "expect": {
+        "status": "found",
+        "basis": "Entity14 depends_on Component2"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-014",
+          "page_idx": 1,
+          "bbox": [
+            10,
+            14,
+            110,
+            34
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity14 depends_on Component2."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-015",
+      "attributes": [
+        "paper",
+        "link"
+      ],
+      "subject": "Entity15",
+      "predicate": "uses",
+      "object": "Component3",
+      "expect": {
+        "status": "found",
+        "basis": "Entity15 uses Component3"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-015",
+          "page_idx": 2,
+          "bbox": [
+            10,
+            15,
+            110,
+            35
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity15 uses Component3."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-016",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity16",
+      "predicate": "depends_on",
+      "object": "Component4",
+      "expect": {
+        "status": "found",
+        "basis": "Entity16 depends_on Component4"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-016",
+          "page_idx": 3,
+          "bbox": [
+            10,
+            16,
+            110,
+            36
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity16 depends_on Component4."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-017",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity17",
+      "predicate": "uses",
+      "object": "Component5",
+      "expect": {
+        "status": "found",
+        "basis": "Entity17 uses Component5"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-017",
+          "page_idx": 4,
+          "bbox": [
+            10,
+            17,
+            110,
+            37
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity17 uses Component5."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-018",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity18",
+      "predicate": "depends_on",
+      "object": "Component6",
+      "expect": {
+        "status": "found",
+        "basis": "Entity18 depends_on Component6"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-018",
+          "page_idx": 5,
+          "bbox": [
+            10,
+            18,
+            110,
+            38
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity18 depends_on Component6."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-019",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity19",
+      "predicate": "uses",
+      "object": "Component7",
+      "expect": {
+        "status": "found",
+        "basis": "Entity19 uses Component7"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-019",
+          "page_idx": 6,
+          "bbox": [
+            10,
+            19,
+            110,
+            39
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity19 uses Component7."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-020",
+      "attributes": [
+        "paper",
+        "extraction"
+      ],
+      "subject": "Entity20",
+      "predicate": "depends_on",
+      "object": "Component8",
+      "expect": {
+        "status": "found",
+        "basis": "Entity20 depends_on Component8"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-020",
+          "page_idx": 7,
+          "bbox": [
+            10,
+            20,
+            110,
+            40
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity20 depends_on Component8."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-021",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity21",
+      "predicate": "uses",
+      "object": "Component9",
+      "expect": {
+        "status": "found",
+        "basis": "Entity21 uses Component9"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-021",
+          "page_idx": 8,
+          "bbox": [
+            10,
+            21,
+            110,
+            41
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity21 uses Component9."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-022",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity22",
+      "predicate": "depends_on",
+      "object": "Component10",
+      "expect": {
+        "status": "found",
+        "basis": "Entity22 depends_on Component10"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-022",
+          "page_idx": 9,
+          "bbox": [
+            10,
+            22,
+            110,
+            42
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity22 depends_on Component10."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-023",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity23",
+      "predicate": "uses",
+      "object": "Component11",
+      "expect": {
+        "status": "found",
+        "basis": "Entity23 uses Component11"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-023",
+          "page_idx": 10,
+          "bbox": [
+            10,
+            23,
+            110,
+            43
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity23 uses Component11."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-024",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity24",
+      "predicate": "depends_on",
+      "object": "Component12",
+      "expect": {
+        "status": "found",
+        "basis": "Entity24 depends_on Component12"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-024",
+          "page_idx": 11,
+          "bbox": [
+            10,
+            24,
+            110,
+            44
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity24 depends_on Component12."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-025",
+      "attributes": [
+        "paper",
+        "recognition"
+      ],
+      "subject": "Entity25",
+      "predicate": "uses",
+      "object": "Component13",
+      "expect": {
+        "status": "found",
+        "basis": "Entity25 uses Component13"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-025",
+          "page_idx": 0,
+          "bbox": [
+            10,
+            25,
+            110,
+            45
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity25 uses Component13."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-026",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity26",
+      "predicate": "depends_on",
+      "object": "Component1",
+      "expect": {
+        "status": "found",
+        "basis": "Entity26 depends_on Component1"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-026",
+          "page_idx": 1,
+          "bbox": [
+            10,
+            26,
+            110,
+            46
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity26 depends_on Component1."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-027",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity27",
+      "predicate": "uses",
+      "object": "Component2",
+      "expect": {
+        "status": "found",
+        "basis": "Entity27 uses Component2"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-027",
+          "page_idx": 2,
+          "bbox": [
+            10,
+            27,
+            110,
+            47
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity27 uses Component2."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-028",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity28",
+      "predicate": "depends_on",
+      "object": "Component3",
+      "expect": {
+        "status": "found",
+        "basis": "Entity28 depends_on Component3"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-028",
+          "page_idx": 3,
+          "bbox": [
+            10,
+            28,
+            110,
+            48
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity28 depends_on Component3."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-029",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity29",
+      "predicate": "uses",
+      "object": "Component4",
+      "expect": {
+        "status": "found",
+        "basis": "Entity29 uses Component4"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-029",
+          "page_idx": 4,
+          "bbox": [
+            10,
+            29,
+            110,
+            49
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity29 uses Component4."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-030",
+      "attributes": [
+        "paper",
+        "link"
+      ],
+      "subject": "Entity30",
+      "predicate": "depends_on",
+      "object": "Component5",
+      "expect": {
+        "status": "found",
+        "basis": "Entity30 depends_on Component5"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-030",
+          "page_idx": 5,
+          "bbox": [
+            10,
+            30,
+            110,
+            50
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity30 depends_on Component5."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-031",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity31",
+      "predicate": "uses",
+      "object": "Component6",
+      "expect": {
+        "status": "found",
+        "basis": "Entity31 uses Component6"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-031",
+          "page_idx": 6,
+          "bbox": [
+            10,
+            31,
+            110,
+            51
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity31 uses Component6."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-032",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity32",
+      "predicate": "depends_on",
+      "object": "Component7",
+      "expect": {
+        "status": "found",
+        "basis": "Entity32 depends_on Component7"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-032",
+          "page_idx": 7,
+          "bbox": [
+            10,
+            32,
+            110,
+            52
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity32 depends_on Component7."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-033",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity33",
+      "predicate": "uses",
+      "object": "Component8",
+      "expect": {
+        "status": "found",
+        "basis": "Entity33 uses Component8"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-033",
+          "page_idx": 8,
+          "bbox": [
+            10,
+            33,
+            110,
+            53
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity33 uses Component8."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-034",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity34",
+      "predicate": "depends_on",
+      "object": "Component9",
+      "expect": {
+        "status": "found",
+        "basis": "Entity34 depends_on Component9"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-034",
+          "page_idx": 9,
+          "bbox": [
+            10,
+            34,
+            110,
+            54
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity34 depends_on Component9."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-035",
+      "attributes": [
+        "paper",
+        "extraction"
+      ],
+      "subject": "Entity35",
+      "predicate": "uses",
+      "object": "Component10",
+      "expect": {
+        "status": "found",
+        "basis": "Entity35 uses Component10"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-035",
+          "page_idx": 10,
+          "bbox": [
+            10,
+            35,
+            110,
+            55
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity35 uses Component10."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-036",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity36",
+      "predicate": "depends_on",
+      "object": "Component11",
+      "expect": {
+        "status": "found",
+        "basis": "Entity36 depends_on Component11"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-036",
+          "page_idx": 11,
+          "bbox": [
+            10,
+            36,
+            110,
+            56
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity36 depends_on Component11."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-037",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity37",
+      "predicate": "uses",
+      "object": "Component12",
+      "expect": {
+        "status": "found",
+        "basis": "Entity37 uses Component12"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-037",
+          "page_idx": 0,
+          "bbox": [
+            10,
+            37,
+            110,
+            57
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity37 uses Component12."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-038",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity38",
+      "predicate": "depends_on",
+      "object": "Component13",
+      "expect": {
+        "status": "found",
+        "basis": "Entity38 depends_on Component13"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-038",
+          "page_idx": 1,
+          "bbox": [
+            10,
+            38,
+            110,
+            58
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity38 depends_on Component13."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-039",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity39",
+      "predicate": "uses",
+      "object": "Component1",
+      "expect": {
+        "status": "found",
+        "basis": "Entity39 uses Component1"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-039",
+          "page_idx": 2,
+          "bbox": [
+            10,
+            39,
+            110,
+            59
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity39 uses Component1."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-040",
+      "attributes": [
+        "paper",
+        "recognition"
+      ],
+      "subject": "Entity40",
+      "predicate": "depends_on",
+      "object": "Component2",
+      "expect": {
+        "status": "found",
+        "basis": "Entity40 depends_on Component2"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-040",
+          "page_idx": 3,
+          "bbox": [
+            10,
+            40,
+            110,
+            60
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity40 depends_on Component2."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-041",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity41",
+      "predicate": "uses",
+      "object": "Component3",
+      "expect": {
+        "status": "found",
+        "basis": "Entity41 uses Component3"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-041",
+          "page_idx": 4,
+          "bbox": [
+            10,
+            41,
+            110,
+            61
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity41 uses Component3."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-042",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity42",
+      "predicate": "depends_on",
+      "object": "Component4",
+      "expect": {
+        "status": "found",
+        "basis": "Entity42 depends_on Component4"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-042",
+          "page_idx": 5,
+          "bbox": [
+            10,
+            42,
+            110,
+            62
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity42 depends_on Component4."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-043",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity43",
+      "predicate": "uses",
+      "object": "Component5",
+      "expect": {
+        "status": "found",
+        "basis": "Entity43 uses Component5"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-043",
+          "page_idx": 6,
+          "bbox": [
+            10,
+            43,
+            110,
+            63
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity43 uses Component5."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-044",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity44",
+      "predicate": "depends_on",
+      "object": "Component6",
+      "expect": {
+        "status": "found",
+        "basis": "Entity44 depends_on Component6"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-044",
+          "page_idx": 7,
+          "bbox": [
+            10,
+            44,
+            110,
+            64
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity44 depends_on Component6."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-045",
+      "attributes": [
+        "paper",
+        "link"
+      ],
+      "subject": "Entity45",
+      "predicate": "uses",
+      "object": "Component7",
+      "expect": {
+        "status": "found",
+        "basis": "Entity45 uses Component7"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-045",
+          "page_idx": 8,
+          "bbox": [
+            10,
+            45,
+            110,
+            65
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity45 uses Component7."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-046",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity46",
+      "predicate": "depends_on",
+      "object": "Component8",
+      "expect": {
+        "status": "found",
+        "basis": "Entity46 depends_on Component8"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-046",
+          "page_idx": 9,
+          "bbox": [
+            10,
+            46,
+            110,
+            66
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity46 depends_on Component8."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-047",
+      "attributes": [
+        "manual",
+        "extraction"
+      ],
+      "subject": "Entity47",
+      "predicate": "uses",
+      "object": "Component9",
+      "expect": {
+        "status": "found",
+        "basis": "Entity47 uses Component9"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-047",
+          "page_idx": 10,
+          "bbox": [
+            10,
+            47,
+            110,
+            67
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity47 uses Component9."
+        },
+        "error_stage": "extraction"
+      }
+    },
+    {
+      "id": "edge-048",
+      "attributes": [
+        "manual",
+        "link"
+      ],
+      "subject": "Entity48",
+      "predicate": "depends_on",
+      "object": "Component10",
+      "expect": {
+        "status": "found",
+        "basis": "Entity48 depends_on Component10"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-048",
+          "page_idx": 11,
+          "bbox": [
+            10,
+            48,
+            110,
+            68
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity48 depends_on Component10."
+        },
+        "error_stage": "link"
+      }
+    },
+    {
+      "id": "edge-049",
+      "attributes": [
+        "manual",
+        "recognition"
+      ],
+      "subject": "Entity49",
+      "predicate": "uses",
+      "object": "Component11",
+      "expect": {
+        "status": "found",
+        "basis": "Entity49 uses Component11"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-049",
+          "page_idx": 0,
+          "bbox": [
+            10,
+            49,
+            110,
+            69
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity49 uses Component11."
+        },
+        "error_stage": "recognition"
+      }
+    },
+    {
+      "id": "edge-050",
+      "attributes": [
+        "paper",
+        "extraction"
+      ],
+      "subject": "Entity50",
+      "predicate": "depends_on",
+      "object": "Component12",
+      "expect": {
+        "status": "found",
+        "basis": "Entity50 depends_on Component12"
+      },
+      "output": {
+        "status": "found",
+        "citation": {
+          "evidence_id": "ev-050",
+          "page_idx": 1,
+          "bbox": [
+            10,
+            50,
+            110,
+            70
+          ],
+          "page_size": [
+            612,
+            792
+          ],
+          "crop_text": "Excerpt: Entity50 depends_on Component12."
+        },
+        "error_stage": "extraction"
+      }
+    }
+  ],
+  "negative_relations": [
+    {
+      "id": "negative-01",
+      "query": "不存在关系 1",
+      "expect": {
+        "status": "not_found"
+      },
+      "output": {
+        "status": "not_found"
+      }
+    },
+    {
+      "id": "negative-02",
+      "query": "不存在关系 2",
+      "expect": {
+        "status": "not_found"
+      },
+      "output": {
+        "status": "not_found"
+      }
+    },
+    {
+      "id": "negative-03",
+      "query": "不存在关系 3",
+      "expect": {
+        "status": "not_found"
+      },
+      "output": {
+        "status": "not_found"
+      }
+    },
+    {
+      "id": "negative-04",
+      "query": "不存在关系 4",
+      "expect": {
+        "status": "not_found"
+      },
+      "output": {
+        "status": "not_found"
+      }
+    },
+    {
+      "id": "negative-05",
+      "query": "不存在关系 5",
+      "expect": {
+        "status": "not_found"
+      },
+      "output": {
+        "status": "not_found"
+      }
+    },
+    {
+      "id": "negative-06",
+      "query": "不存在关系 6",
+      "expect": {
+        "status": "not_found"
+      },
+      "output": {
+        "status": "not_found"
+      }
+    },
+    {
+      "id": "negative-07",
+      "query": "不存在关系 7",
+      "expect": {
+        "status": "not_found"
+      },
+      "output": {
+        "status": "not_found"
+      }
+    },
+    {
+      "id": "negative-08",
+      "query": "不存在关系 8",
+      "expect": {
+        "status": "not_found"
+      },
+      "output": {
+        "status": "not_found"
+      }
+    },
+    {
+      "id": "negative-09",
+      "query": "不存在关系 9",
+      "expect": {
+        "status": "not_found"
+      },
+      "output": {
+        "status": "not_found"
+      }
+    },
+    {
+      "id": "negative-10",
+      "query": "不存在关系 10",
+      "expect": {
+        "status": "not_found"
+      },
+      "output": {
+        "status": "not_found"
+      }
+    }
+  ],
+  "merges": [
+    {
+      "id": "merge-01",
+      "left": "Name 1",
+      "right": "Name-1",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "exact",
+      "confidence": 1,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-02",
+      "left": "Name 2",
+      "right": "Alias 2",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "exact",
+      "confidence": 1,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-03",
+      "left": "Name 3",
+      "right": "Name-3",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "alias",
+      "confidence": 0.82,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-04",
+      "left": "Name 4",
+      "right": "Alias 4",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "alias",
+      "confidence": 0.82,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-05",
+      "left": "Name 5",
+      "right": "Name-5",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "model",
+      "confidence": 0.48,
+      "uncertain": true,
+      "splittable": true
+    },
+    {
+      "id": "merge-06",
+      "left": "Name 6",
+      "right": "Alias 6",
+      "expected_same": false,
+      "predicted_same": false,
+      "merged_by": "none",
+      "confidence": 0,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-07",
+      "left": "Name 7",
+      "right": "Name-7",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "exact",
+      "confidence": 1,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-08",
+      "left": "Name 8",
+      "right": "Alias 8",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "exact",
+      "confidence": 1,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-09",
+      "left": "Name 9",
+      "right": "Name-9",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "alias",
+      "confidence": 0.82,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-10",
+      "left": "Name 10",
+      "right": "Alias 10",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "alias",
+      "confidence": 0.82,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-11",
+      "left": "Name 11",
+      "right": "Name-11",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "model",
+      "confidence": 0.48,
+      "uncertain": true,
+      "splittable": true
+    },
+    {
+      "id": "merge-12",
+      "left": "Name 12",
+      "right": "Alias 12",
+      "expected_same": false,
+      "predicted_same": false,
+      "merged_by": "none",
+      "confidence": 0,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-13",
+      "left": "Name 13",
+      "right": "Name-13",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "exact",
+      "confidence": 1,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-14",
+      "left": "Name 14",
+      "right": "Alias 14",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "exact",
+      "confidence": 1,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-15",
+      "left": "Name 15",
+      "right": "Name-15",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "alias",
+      "confidence": 0.82,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-16",
+      "left": "Name 16",
+      "right": "Alias 16",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "alias",
+      "confidence": 0.82,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-17",
+      "left": "Name 17",
+      "right": "Name-17",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "model",
+      "confidence": 0.48,
+      "uncertain": true,
+      "splittable": true
+    },
+    {
+      "id": "merge-18",
+      "left": "Name 18",
+      "right": "Alias 18",
+      "expected_same": false,
+      "predicted_same": false,
+      "merged_by": "none",
+      "confidence": 0,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-19",
+      "left": "Name 19",
+      "right": "Name-19",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "exact",
+      "confidence": 1,
+      "uncertain": false,
+      "splittable": false
+    },
+    {
+      "id": "merge-20",
+      "left": "Name 20",
+      "right": "Alias 20",
+      "expected_same": true,
+      "predicted_same": true,
+      "merged_by": "exact",
+      "confidence": 1,
+      "uncertain": false,
+      "splittable": false
+    }
+  ],
+  "wiki_sentences": [
+    {
+      "id": "wiki-01",
+      "text": "Wiki claim 1",
+      "evidence_ids": [
+        "ev-001"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-02",
+      "text": "Wiki claim 2",
+      "evidence_ids": [
+        "ev-002"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-03",
+      "text": "Wiki claim 3",
+      "evidence_ids": [
+        "ev-003"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-04",
+      "text": "Wiki claim 4",
+      "evidence_ids": [
+        "ev-004"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-05",
+      "text": "Wiki claim 5",
+      "evidence_ids": [],
+      "unsupported": true,
+      "citation_correct": false
+    },
+    {
+      "id": "wiki-06",
+      "text": "Wiki claim 6",
+      "evidence_ids": [
+        "ev-006"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-07",
+      "text": "Wiki claim 7",
+      "evidence_ids": [
+        "ev-007"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-08",
+      "text": "Wiki claim 8",
+      "evidence_ids": [
+        "ev-008"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-09",
+      "text": "Wiki claim 9",
+      "evidence_ids": [
+        "ev-009"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-10",
+      "text": "Wiki claim 10",
+      "evidence_ids": [],
+      "unsupported": true,
+      "citation_correct": false
+    },
+    {
+      "id": "wiki-11",
+      "text": "Wiki claim 11",
+      "evidence_ids": [
+        "ev-011"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-12",
+      "text": "Wiki claim 12",
+      "evidence_ids": [
+        "ev-012"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-13",
+      "text": "Wiki claim 13",
+      "evidence_ids": [
+        "ev-013"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-14",
+      "text": "Wiki claim 14",
+      "evidence_ids": [
+        "ev-014"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-15",
+      "text": "Wiki claim 15",
+      "evidence_ids": [],
+      "unsupported": true,
+      "citation_correct": false
+    },
+    {
+      "id": "wiki-16",
+      "text": "Wiki claim 16",
+      "evidence_ids": [
+        "ev-016"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-17",
+      "text": "Wiki claim 17",
+      "evidence_ids": [
+        "ev-017"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-18",
+      "text": "Wiki claim 18",
+      "evidence_ids": [
+        "ev-018"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-19",
+      "text": "Wiki claim 19",
+      "evidence_ids": [
+        "ev-019"
+      ],
+      "unsupported": false,
+      "citation_correct": true
+    },
+    {
+      "id": "wiki-20",
+      "text": "Wiki claim 20",
+      "evidence_ids": [],
+      "unsupported": true,
+      "citation_correct": false
+    }
+  ],
+  "agent_baseline": {
+    "$source": "docs/EVAL-stage6-offline-report.md (stage6-offline-v1)",
+    "retrieval_misses": [
+      1,
+      6
+    ],
+    "redundant_retrievals": [
+      1,
+      6
+    ],
+    "gate_precision_before": [
+      4,
+      8
+    ],
+    "gate_precision_after": [
+      4,
+      5
+    ],
+    "sentence_coverage": [
+      3,
+      4
+    ],
+    "citation_correctness": [
+      2,
+      3
+    ],
+    "refusal_before": [
+      3,
+      4
+    ],
+    "refusal_after": [
+      4,
+      4
+    ],
+    "unsupported_violations": [
+      0,
+      4
+    ]
+  }
+}

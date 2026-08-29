@@ -211,6 +211,79 @@ export interface EvidenceDetail {
   verifications: EvidenceVerification[]
 }
 
+export type KnowledgeReviewState = 'unreviewed' | 'passed' | 'rejected' | 'questioned'
+
+export interface KnowledgeEntity {
+  id: string
+  canonical_name: string
+  normalized_name: string
+  entity_type: string
+  aliases: string[]
+  merged_by: string
+  merge_confidence: number
+  entity_merge_uncertain: boolean
+  split_from_id: string | null
+  review_state: KnowledgeReviewState
+  provider: Record<string, unknown>
+}
+
+export interface KnowledgeEdge {
+  id: string
+  subject_id: string
+  predicate: string
+  object_id: string
+  confidence: number
+  evidence_ids: string[]
+  unsupported: boolean
+  review_state: KnowledgeReviewState
+  provider: Record<string, unknown>
+  citations: Citation[]
+}
+
+export interface KnowledgeGraph {
+  graph_version: 'ddp-graph/1'
+  entities: KnowledgeEntity[]
+  edges: KnowledgeEdge[]
+}
+
+export interface WikiSummary {
+  id: string
+  entity: KnowledgeEntity
+  title: string
+  outline: string[]
+  provider: Record<string, unknown>
+}
+
+export interface WikiSentence {
+  id: string
+  text: string
+  evidence_ids: string[]
+  unsupported: boolean
+  conflict_group: string | null
+  review_state: KnowledgeReviewState
+  provider: Record<string, unknown>
+  citations: Citation[]
+}
+
+export interface WikiDetail {
+  entry: WikiSummary
+  sections: { id: string; heading: string; sentences: WikiSentence[] }[]
+}
+
+export interface EvidenceBacklink {
+  source_kind: 'assertion' | 'extract_field' | 'graph_edge' | 'wiki_sentence'
+  source_id: string
+  role: string
+  label: string
+}
+
+export interface KnowledgeReviewItem {
+  target_kind: 'graph_edge' | 'wiki_sentence' | 'entity_merge' | 'extract_field'
+  target_id: string
+  label: string
+  review_state: KnowledgeReviewState
+}
+
 export interface ConversationInfo {
   id: string
   document_id: string

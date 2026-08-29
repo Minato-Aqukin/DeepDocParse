@@ -162,22 +162,35 @@ async def _index_claimed(session: AsyncSession, storage: Storage, http: httpx.As
     return len(chunks)
 
 
+async def _renew_lease_once(factory, document_id: str, generation: int) -> bool:
+    """续一次租；这一代已被别人接管则返回 False。"""
+    async with factory() as heartbeat:
+        result = await heartbeat.execute(
+            update(Document).where(
+                Document.id == document_id,
+                Document.index_status == "indexing",
+                Document.index_generation == generation,
+            ).values(index_lease_until=_lease_deadline(), updated_at=utcnow())
+        )
+        await heartbeat.commit()
+        return result.rowcount > 0
+
+
 async def _heartbeat_lease(bind, document_id: str, generation: int) -> None:
-    """独立事务续租；worker 消失后 lease 自然过期，对账可接管。"""
+    """独立事务续租；worker 消失后 lease 自然过期，对账可接管。
+
+    **取消必须落在 sleep 上，不能落在语句中间。** `index_document` 的 finally
+    每轮都会 cancel 这个任务，而在 DBAPI 调用中途被取消时，连接池只能把那条
+    连接判成状态不明并作废 —— 生产上是每轮索引白扔一条池连接，单测里更狠：
+    共享的 in-memory SQLite 连接一作废，整个库连表带数据一起消失
+    （`test_active_index_worker_renews_lease` 因此单独跑 8 次红 6 次）。
+    shield 让在飞的那次续租跑完，取消在下一个 await 处生效。
+    """
     factory = async_sessionmaker(bind, expire_on_commit=False)
     while True:
         await asyncio.sleep(settings.index_heartbeat_seconds)
-        async with factory() as heartbeat:
-            result = await heartbeat.execute(
-                update(Document).where(
-                    Document.id == document_id,
-                    Document.index_status == "indexing",
-                    Document.index_generation == generation,
-                ).values(index_lease_until=_lease_deadline(), updated_at=utcnow())
-            )
-            await heartbeat.commit()
-            if result.rowcount == 0:
-                return
+        if not await asyncio.shield(_renew_lease_once(factory, document_id, generation)):
+            return
 
 
 async def _embed_all(http: httpx.AsyncClient, texts: list[str]) -> list[list[float]]:

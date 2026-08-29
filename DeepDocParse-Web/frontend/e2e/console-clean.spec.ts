@@ -3,7 +3,7 @@ import { expect, test, type ConsoleMessage, type Page } from '@playwright/test'
 import { fakeLogin, stubApi } from './stub-api'
 
 /**
- * 用例 5：**11 条路由逐条首屏渲染成功、console 零 error。**
+ * 用例 5：全部路由逐条首屏渲染成功、console 零 error。
  *
  * 这是整套 e2e 里最便宜也最容易退化的一条门禁。它抓的是
  * 「按钮点了没反应」「路由白屏」这一类 —— vue-tsc 与 jsdom 单测都够不着。
@@ -12,11 +12,13 @@ import { fakeLogin, stubApi } from './stub-api'
  * 同样不许报错。带 token 的那一组另外跑（见下面 describe）。
  */
 
-/** 收集这一页产生的所有 console error 与未处理的 promise rejection。 */
+/** 收集 console error/warn 与未处理 promise rejection；阶段 7 起 warning 也必须为零。 */
 function watchErrors(page: Page): string[] {
   const errors: string[] = []
   page.on('console', (msg: ConsoleMessage) => {
-    if (msg.type() === 'error') errors.push(`console.error: ${msg.text()}`)
+    if (msg.type() === 'error' || msg.type() === 'warning') {
+      errors.push(`console.${msg.type()}: ${msg.text()}`)
+    }
   })
   page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`))
   return errors
@@ -57,6 +59,7 @@ function realErrors(errors: string[]): string[] {
 const PATHS = [
   '/', '/login', '/documents', '/documents/demo-id', '/documents/demo-id/versions',
   '/extractions', '/search', '/keys', '/usage', '/settings',
+  '/wiki', '/graph',
   '/dashboard', '/task/demo-id', '/no/such/path',
 ]
 

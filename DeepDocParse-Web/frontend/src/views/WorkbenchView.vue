@@ -167,9 +167,9 @@ watch(
         <el-button link @click="router.push('/documents')">← 文档库</el-button>
         <span class="name">{{ document?.filename }}</span>
         <span class="pages">{{ document?.page_count }} 页</span>
-        <el-tooltip :content="document?.index_error" :disabled="!document?.index_error">
+        <el-tooltip v-if="document && document.index_status !== 'ready'"
+                    :content="document.index_error" :disabled="!document.index_error">
           <StatusTag
-            v-if="document && document.index_status !== 'ready'"
             :meta="indexStatusOf(document.index_status)"
           />
         </el-tooltip>
@@ -225,7 +225,7 @@ watch(
             :page-count="document?.page_count ?? 0"
             :pager-count="5"
             layout="prev, pager, next"
-            small
+            size="small"
             @update:current-page="highlights = []"
           />
         </div>

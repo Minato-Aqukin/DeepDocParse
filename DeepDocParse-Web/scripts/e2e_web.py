@@ -291,12 +291,9 @@ async def scenario_api_key(http: httpx.AsyncClient, headers: dict, document: dic
 
 
 async def scenario_mcp(http: httpx.AsyncClient, headers: dict, document: dict) -> None:
-    print("\n[5] Agent 视角：经 backend 反代调 MCP ask_document")
+    print("\n[5] Agent 视角：经 backend 反代调五个语料 MCP 工具")
     created = (await http.post(f"{WEB}/api/keys", headers=headers,
                                json={"name": "e2e-mcp", "rate_limit_per_min": 120})).json()
-    src = (await http.get(f"{WEB}/api/documents/{document['id']}/source-url",
-                          headers=headers)).json()
-
     init = await http.post(f"{WEB}/mcp", headers={
         "Authorization": f"Bearer {created['key']}",
         "Accept": "application/json, text/event-stream",
@@ -314,12 +311,26 @@ async def scenario_mcp(http: httpx.AsyncClient, headers: dict, document: dict) -
                    "mcp-session-id": session}
     await http.post(f"{WEB}/mcp", headers=mcp_headers,
                     json={"jsonrpc": "2.0", "method": "notifications/initialized"})
-    call = await http.post(f"{WEB}/mcp", headers=mcp_headers, timeout=600.0, json={
-        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-        "params": {"name": "ask_document",
-                   "arguments": {"file_url": src["url"], "question": "这份文档讲了什么？"}}})
-    check("ask_document 有返回", call.status_code == 200 and "result" in call.text,
-          call.text[:200])
+    listed = await http.post(f"{WEB}/mcp", headers=mcp_headers, json={
+        "jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    expected = ("search", "ask", "get_evidence", "read_wiki", "graph_neighbors")
+    check("五个语料工具全部可见", listed.status_code == 200
+          and all(f'"name":"{name}"' in listed.text.replace(" ", "")
+                  for name in expected), listed.text[:260])
+
+    searched = await http.post(f"{WEB}/mcp", headers=mcp_headers, timeout=600.0, json={
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": "search", "arguments": {"query": "文档", "limit": 3}}})
+    check("search 返回 evidence + bbox + crop_url", searched.status_code == 200
+          and "evidence_id" in searched.text and "bbox" in searched.text
+          and "crop_url" in searched.text, searched.text[:260])
+
+    asked = await http.post(f"{WEB}/mcp", headers=mcp_headers, timeout=600.0, json={
+        "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+        "params": {"name": "ask", "arguments": {"question": "这份语料讲了什么？"}}})
+    check("ask 返回类型化 assertions（不是无类型长字符串）",
+          asked.status_code == 200 and "assertions" in asked.text
+          and "unsupported" in asked.text, asked.text[:260])
 
 
 async def scenario_gc(http: httpx.AsyncClient, headers: dict, document: dict) -> None:

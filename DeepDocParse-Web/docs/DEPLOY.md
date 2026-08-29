@@ -38,18 +38,18 @@ cd DeepDocParse-Web
       +-----------+-----------+------------------+
       v           v           v                  v
   PG 15432   MinIO 19000  Redis 16379     gateway 9000 (容器)
-  (pgvector)  (对象存储)   (多副本才起)          |
-                                          +-----+-----+
-                                          v           v
-                                    redis-stack   TEI 18080
-                                       6379       (bge-m3)
+  (语料/知识)  (原件/裁图)   (多副本才起)          |
+      ^           ^                          +-----+-----+
+      |           |                          v           v
+      +--- mcp-server（五个语料工具）    redis-stack   TEI 18080
+                                             6379       (bge-m3)
 ```
 
 **对外只开一个端口**。backend 绑 127.0.0.1，公网够不着；所有流量走 nginx。
 前端是 hash 路由（`createWebHashHistory`）、axios 的 `baseURL` 是 `/`，
 所以静态托管不需要任何 SPA 回退规则，也不存在跨域。
 
-## 四件必须知道的事
+## 五件必须知道的事
 
 ### 1. `--host` 不能是 127.0.0.1
 
@@ -61,7 +61,7 @@ cd DeepDocParse-Web
 **服务器自己也能访问到**的地址。`./quickstart.sh doctor` 会从 gateway 容器里
 真的 curl 一次来验证这条链路。
 
-### 2. 不配 `--chat-url` 就没有问答和抽取
+### 2. 不配 `--chat-url` 就没有问答、抽取和知识生成
 
 本层只要求一个 **OpenAI 兼容**的 chat 端点，不绑定任何具体部署（ADR #17）。
 本地 Ollama / llama.cpp / 任意托管 API 都行：
@@ -75,7 +75,8 @@ cd DeepDocParse-Web
 `host.docker.internal` 并给 gateway 加 `extra_hosts: host-gateway` ——
 Linux 上不加这一条容器解析不了这个名字。
 
-不配也能用：上传、解析、检索、出处三件套都不受影响，只有问答与抽取会失败。
+不配也能用：上传、解析、检索、出处三件套都不受影响；问答、抽取与图谱/Wiki 生成会
+返回明确错误，已有知识的读取不受影响。
 
 ### 3. 解析引擎名有三处，必须一致
 
@@ -94,6 +95,17 @@ compose 项目名固定在仓库的 compose 文件里（`ddp-web` / `ddp-service
 
 `start` 之前会读容器上的 compose 标签认出这种情况并要求确认，**非交互时直接中止**。
 要并存就先停掉另一套：`docker compose -f <那边的 compose.web.yml> down`。
+
+### 5. MCP 五工具直接读语料库
+
+`search` / `ask` / `get_evidence` / `read_wiki` / `graph_neighbors` 不再走旧
+`ask_document` 的 Redis 文档别名，而是从同一套 PostgreSQL/MinIO 读取 evidence、bbox、
+图谱与 Wiki；`get_evidence` 还会返回原件裁图。quickstart 生成的 service 配置会把
+`CORPUS_DATABASE_URL` 与 `CORPUS_MINIO_*` 指向本机数据面。数据库或对象存储不可达时，
+工具会显式失败，不会静默退回另一份索引。
+
+`/mcp` 仍经 nginx → Web backend 做 API key 鉴权，再反代到语料旁的 mcp-server；
+不要把 mcp-server 的内部端口直接暴露到公网。
 
 ## 硬件与调参
 
@@ -183,6 +195,9 @@ git pull && ./quickstart.sh build && ./quickstart.sh restart
 `configure` 重跑是安全的：已有的密钥（`JWT_SECRET` / `SERVICE_TOKEN` / 数据库与
 MinIO 凭据）原样保留，只刷新脚本管的那些键。`JWT_SECRET` 变了等于全员掉线，
 所以它绝不会被自动换掉。
+
+升级会运行到迁移 `0012`，新增知识层六张表。空知识库可 downgrade；一旦已有图谱、Wiki
+或复核数据，迁移会拒绝破坏性 downgrade 并报告各表行数。
 
 > **从 M9 之前的版本升上来时不要对老文档点重建索引**：分块规则变了，
 > 老出处接不回去（不会指错地方，`attach_resolution` 会比对内容并标失效）。

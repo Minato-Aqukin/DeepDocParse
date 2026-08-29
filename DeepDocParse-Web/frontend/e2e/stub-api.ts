@@ -36,6 +36,14 @@ export async function stubApi(page: Page): Promise<void> {
           json: { daily: [], by_kind: [], total_pages: 0, total_requests: 0 },
         })
       }
+      if (path === '/api/knowledge/graph') {
+        return route.fulfill({ json: { graph_version: 'ddp-graph/1', entities: [], edges: [] } })
+      }
+      if (path === '/api/knowledge/entities') {
+        return route.fulfill({ json: { graph_version: 'ddp-graph/1', entities: [] } })
+      }
+      if (path === '/api/reviews') return route.fulfill({ json: { items: [] } })
+      if (path === '/api/wiki') return route.fulfill({ json: [] })
       if (/\/documents\/[^/]+\/result$/.test(path)) {
         return route.fulfill({
           json: {
@@ -87,7 +95,7 @@ export async function stubApi(page: Page): Promise<void> {
           },
         })
       }
-      // 其余一律给一个空列表：本项目的列表接口都直接返回数组
+      // 其余一律给一个空列表；有对象形状的接口必须在上面显式列出。
       return route.fulfill({ json: [] })
     },
   )

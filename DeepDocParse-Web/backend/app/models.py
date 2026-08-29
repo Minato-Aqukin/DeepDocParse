@@ -19,7 +19,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 # **这里原样再导出**，让既有的 `from app.models import Document` 一字不用改。
 from ddp_core.models import (  # noqa: F401
     AgentTurn, Assertion, Base, Chunk, Citation, Document, DocumentUpload, Evidence,
-    EvidenceVerification, ParseJob, RetrievalCandidate,
+    EvidenceVerification, GraphEdge, KnowledgeEntity, KnowledgeReview, ParseJob,
+    RetrievalCandidate, WikiEntry, WikiSection, WikiSentence,
     as_aware, new_id, utcnow,
 )
 

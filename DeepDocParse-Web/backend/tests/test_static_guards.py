@@ -89,6 +89,27 @@ def test_the_scan_actually_covers_something():
     assert total >= 5, f"一条本项目的 import 都没扫到（{total}），解析逻辑可能坏了"
 
 
+def test_quickstart_passes_corpus_credentials_to_the_mcp_service():
+    """干净部署的随机 PG/MinIO 密钥必须同步给 service 侧 MCP。
+
+    只写 Web `.env` 时所有容器都会健康，直到第一次 MCP 调用才报数据库认证失败；
+    这是部署脚本特有的静默错位，常规 API 单测与 compose config 都抓不到。
+    """
+    text = (REPO / "quickstart.sh").read_text(encoding="utf-8")
+    start = text.index("write_service_env()")
+    end = text.index("write_frontend_env()", start)
+    body = text[start:end]
+    required = {
+        "CORPUS_DATABASE_URL", "MINIO_ENDPOINT", "MINIO_ACCESS_KEY",
+        "MINIO_SECRET_KEY", "MINIO_BUCKET", "MCP_PUBLIC_BASE_URL",
+    }
+    missing = sorted(key for key in required
+                     if f'set_env "$SERVICE_ENV" {key}' not in body)
+    assert not missing, f"quickstart 没把这些语料 MCP 配置写进 service .env：{missing}"
+    assert "host.docker.internal:15432" in body
+    assert "host.docker.internal:19000" in body
+
+
 # ---------------------------------------------------------------------------
 # §2 每一次检索都必须带相似度下限
 # ---------------------------------------------------------------------------
@@ -251,3 +272,43 @@ def test_fresh_is_an_assertion_not_a_default():
     plain = citation_out("d1", {"seq": 0, "crop_key": None})
     assert "resolved" not in plain, "没人给 resolved，却被兜底成了有效"
     assert citation_out("d1", {"seq": 0, "crop_key": None}, fresh=True)["resolved"] is True
+
+
+# ---------------------------------------------------------------------------
+# §3 知识层可以整体关掉 —— 既有问答/检索链路不许 import 它
+# ---------------------------------------------------------------------------
+
+# 阶段 7 之前就存在、且被 `eval_agent` 那张表衡量的生产路径
+QA_PATH = (
+    BACKEND / "app" / "qa.py",
+    BACKEND / "app" / "extraction.py",
+    BACKEND / "app" / "indexing.py",
+    BACKEND / "app" / "routers" / "conversations.py",
+    BACKEND / "app" / "routers" / "search.py",
+)
+KNOWLEDGE_MODULES = ("app.knowledge", "app.review_export", "app.routers.knowledge",
+                     "ddp_core.knowledge")
+
+
+def test_the_existing_qa_path_does_not_import_the_knowledge_layer():
+    """plan.md 阶段 7 验收的「图关掉后既有指标不变」，结构上的那一半。
+
+    数值那一半在 `scripts/eval_graph.py`：对阶段 6 报表记录的基线逐字段比。
+    **但只比数字挡不住"知识层被悄悄挂进问答链"** —— 那种改动会让基线一起漂，
+    而人很容易顺手把基线也改了（`agent_baseline` 就在仓库里）。
+    这条守卫改成机械可判的：这几个文件里出现任何一个知识层模块就红。
+
+    反过来说，`app/routers/knowledge.py` 依赖问答侧的东西（evidence / metering）
+    是允许的 —— 依赖方向只许从新到旧，关掉新的那头不影响旧的。
+    """
+    offenders = []
+    for path in QA_PATH:
+        assert path.is_file(), f"{path} 不在了 —— 这条守卫的扫描面得跟着改"
+        for module in sorted(_local_imports(path)):
+            if any(module == name or module.startswith(name + ".")
+                   for name in KNOWLEDGE_MODULES):
+                offenders.append(f"{path.relative_to(BACKEND)} -> {module}")
+    assert not offenders, (
+        f"既有问答链引用了知识层：{offenders}。"
+        f"知识层必须能被 knowledge_enabled=False 整体关掉而不动既有指标；"
+        f"真要挂进去，先改 plan.md 的验收标准并重跑 eval_agent 定新基线")

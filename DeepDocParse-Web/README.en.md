@@ -5,27 +5,30 @@
 The product layer: frontend + backend monorepo. System architecture lives in
 [../ARCHITECTURE.md](../ARCHITECTURE.md).
 
-This is where "verifiable provenance" actually reaches a user: every piece of evidence
-behind an answer carries a page number, a bbox and a crop of the original region — and
+This is where "verifiable provenance" reaches a user: answer evidence, extracted fields,
+graph edges and wiki sentences carry a page number, bbox and crop of the original region;
+generated knowledge without evidence is explicitly marked `unsupported`. In addition,
 **every degradation is labelled** (no retrieval hits, embedding down, vision model
 unavailable, cannot crop, parse looks wrong). Positioning and the explicit non-goals list
 live in [../DeepDocParse/README.en.md](../DeepDocParse/README.en.md).
 
 ```
 DeepDocParse-Web/
-├── backend/    # FastAPI: users, API keys, quota, archival, chunk+index, document QA, /v1 and /mcp proxy
-├── frontend/   # Vue 3 + TS + Element Plus: library, three-pane workbench, search, usage
+├── backend/    # FastAPI: accounts, corpus, QA/extraction, agent, graph/wiki/review, API/MCP proxy
+├── frontend/   # Vue 3 + TS: workbench, extraction, search, wiki, canvas graph, usage
 ├── docker/     # compose.web.yml: PostgreSQL(pgvector) + MinIO + Redis
 ├── docs/       # DESIGN.md · EVAL.md (citation evaluation) · CONFIG.md
 ├── eval/       # citations.json — the citation eval dataset
 └── scripts/    # e2e_web.py (full-stack) · eval_citations.py · gen_config_docs.py
 ```
 
-Backend modules: `chunking` · `indexing` · `search` (pgvector / in-memory) · `qa`
-(orchestration) · `crops` (provenance cropping) · `archive` · `reconcile` · `gc`.
+Backend modules: `chunking` · `indexing` · `search` (pgvector / in-memory) · `qa` ·
+`extraction` · `knowledge` · `review_export` · `crops` · `archive` · `reconcile` · `gc`.
 
-Calls into DeepDocParse depend **only** on
-[../DeepDocParse/openapi.yaml](../DeepDocParse/openapi.yaml).
+HTTP calls into the DeepDocParse gateway depend **only** on
+[../DeepDocParse/openapi.yaml](../DeepDocParse/openapi.yaml). Corpus models, retrieval and
+knowledge primitives reuse the installed `ddp_core` package so the two repositories do
+not maintain competing implementations.
 
 ## Three kinds of caller, three kinds of credential
 
@@ -83,13 +86,21 @@ backend restart at the wrong moment would lose the result permanently (the servi
 caches for 24h). `app/reconcile.py` sweeps unfinished tasks every 60s.
 
 **Why a stable file URL instead of presigned**: presigned URLs expire and their signature
-is bound to the host; worse, the MCP `ask_document` plane only receives a bare URL, so a
-changing URL means the vector index never hits. See ADR #12 (and ADR #11 for document
-identity).
+is bound to the host. The legacy MCP `ask_document` endpoint only receives a bare URL, so
+a changing URL means its old index never hits. The five corpus tools now read persistent
+evidence directly; the legacy endpoint remains for compatibility. See ADR #12 (and ADR
+#11 for document identity).
 
 **Document QA**: this layer chunks the archived `layout.json` itself → embeds → stores in
 Postgres+pgvector. On a question: hybrid retrieval (vector + keyword, fused with RRF) →
 crop the region by bbox → multimodal answer → SSE stream, with page/bbox/crop provenance.
+
+**Knowledge layer (refactor stage 7)**: extract evidence-grounded relations → generate a
+STORM-style outline and sentence-level wiki → store every edge and sentence against the
+same evidence/citation truth. Low-confidence entity merges are visible and splittable;
+reviews annotate rather than rewrite generated content, and rejected samples can be
+exported into the fixed evaluation set. The five MCP tools expose the same corpus and
+return evidence, bbox and native crop images.
 
 Provenance carries a **stable locator** `(parse_job_id, seq)` alongside the chunk id:
 chunk ids are re-minted on every reindex, so storing only the id would mean losing "which
@@ -113,8 +124,15 @@ Definitions, dataset format and current findings: [docs/EVAL.md](docs/EVAL.md).
 
 ## Configuration
 
-All 45 settings: [docs/CONFIG.md](docs/CONFIG.md), generated from `backend/app/config.py`
+All backend settings: [docs/CONFIG.md](docs/CONFIG.md), generated from `backend/app/config.py`
 by `scripts/gen_config_docs.py`. CI fails if it goes stale.
+
+## Current milestone
+
+Refactor stage 7 is code-complete: DDP-Graph v1, two-phase wiki generation, review queue,
+Wiki and canvas graph views, and the five corpus MCP tools. The fixed offline report is
+[docs/EVAL-stage7-offline-report.md](docs/EVAL-stage7-offline-report.md); live quality
+numbers still require GPU batch three.
 
 ## Verification
 

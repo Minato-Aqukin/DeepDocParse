@@ -22,8 +22,8 @@ from app.errors import install_error_handlers
 from app.metering import MemoryRateLimiter, RedisRateLimiter
 from app.reconcile import reconcile_loop
 from app.routers import (
-    apikeys, auth, conversations, documents, extractions, files, internal, proxy,
-    search, usage,
+    apikeys, auth, conversations, documents, extractions, files, internal, knowledge,
+    proxy, search, usage,
 )
 from ddp_core.search import PgVectorIndex
 from ddp_core.tokenize import backend as tokenize_backend
@@ -98,6 +98,7 @@ app.include_router(documents.router, prefix="/api/documents", tags=["documents"]
 app.include_router(conversations.router, prefix="/api", tags=["qa"])
 app.include_router(search.router, prefix="/api", tags=["search"])
 app.include_router(extractions.router, prefix="/api", tags=["extractions"])
+app.include_router(knowledge.router, prefix="/api", tags=["knowledge"])
 app.include_router(usage.router, prefix="/api/usage", tags=["usage"])
 app.include_router(files.router, tags=["files"])       # /files/{token} 稳定文件 URL（token 即凭证）
 app.include_router(internal.router, tags=["internal"]) # /internal/* service 回调

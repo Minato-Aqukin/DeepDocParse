@@ -542,7 +542,13 @@ write_web_env() {
 }
 
 write_service_env() {
-  local svc; svc="$(get_env "$WEB_ENV" SERVICE_TOKEN)"
+  local svc pguser pgpass pgdb mk ms
+  svc="$(get_env "$WEB_ENV" SERVICE_TOKEN)"
+  pguser="$(get_env "$WEB_ENV" POSTGRES_USER)"
+  pgpass="$(get_env "$WEB_ENV" POSTGRES_PASSWORD)"
+  pgdb="$(get_env "$WEB_ENV" POSTGRES_DB)"
+  mk="$(get_env "$WEB_ENV" MINIO_ACCESS_KEY)"
+  ms="$(get_env "$WEB_ENV" MINIO_SECRET_KEY)"
   [ -f "$SERVICE_ENV" ] || cp "$SERVICE_DIR/.env.example" "$SERVICE_ENV" 2>/dev/null || touch "$SERVICE_ENV"
   # 两边必须是同一个令牌：Web -> service 的所有调用与 service -> Web 的回调都靠它
   set_env "$SERVICE_ENV" SERVICE_TOKEN "$svc"
@@ -552,8 +558,17 @@ write_service_env() {
   set_env "$SERVICE_ENV" QUEUE_INFLIGHT_TTL 2400
   set_env "$SERVICE_ENV" VQA_MAX_CONCURRENCY "$VQA_MAX_CONCURRENCY"
   set_env "$SERVICE_ENV" RESULT_TTL 86400
+  # 阶段 7 的五个语料 MCP 工具直读 Web 数据面。quickstart 会随机生成 PG/MinIO
+  # 密钥，所以绝不能依赖 service compose 里的开发占位默认值。
+  set_env "$SERVICE_ENV" CORPUS_DATABASE_URL \
+    "postgresql+asyncpg://$pguser:$pgpass@host.docker.internal:15432/$pgdb"
+  set_env "$SERVICE_ENV" MINIO_ENDPOINT "http://host.docker.internal:19000"
+  set_env "$SERVICE_ENV" MINIO_ACCESS_KEY "$mk"
+  set_env "$SERVICE_ENV" MINIO_SECRET_KEY "$ms"
+  set_env "$SERVICE_ENV" MINIO_BUCKET "$(get_env "$WEB_ENV" MINIO_BUCKET)"
+  set_env "$SERVICE_ENV" MCP_PUBLIC_BASE_URL "$PUBLIC_BASE_URL"
   chmod 600 "$SERVICE_ENV"
-  ok "$SERVICE_ENV（SERVICE_TOKEN 与 Web 侧同值）"
+  ok "$SERVICE_ENV（SERVICE_TOKEN 与 PG/MinIO 凭据均与 Web 侧一致）"
 }
 
 write_frontend_env() {
@@ -823,7 +838,7 @@ cmd_configure() {
   write_systemd_unit
   save_state
 
-  [ -n "$CHAT_COMPLETIONS" ] || warn "没配 --chat-url：问答与抽取会因为拿不到 chat 端点而失败（解析、检索、出处不受影响）"
+  [ -n "$CHAT_COMPLETIONS" ] || warn "没配 --chat-url：问答、抽取与知识生成会因为拿不到 chat 端点而失败（解析、检索、出处与已有知识读取不受影响）"
 }
 
 # ---------------------------------------------------------------- models：模型权重
