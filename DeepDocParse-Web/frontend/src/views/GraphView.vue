@@ -105,9 +105,14 @@ onMounted(load)
       <span>{{ filteredEntities.length }} 节点 · {{ filteredEdges.length }} 条边</span>
     </section>
 
-    <el-empty v-if="!graph.entities.length && !loading && !errorText" description="知识图谱为空；先从已有证据生成" />
-    <div v-else class="workspace">
-      <GraphCanvas :entities="filteredEntities" :edges="filteredEdges"
+    <!-- **复核队列不能挂在"图谱非空"这个条件下面。** 它同时覆盖抽取字段与
+         Wiki 句：一份刚建好的语料完全可能有抽取结果而还没连出任何边，
+         那时把整块藏起来，等于让复核 —— 也就是评测集的生产线 —— 无从进入。
+         所以图谱区按空/非空切，右栏常驻。 -->
+    <div class="workspace">
+      <el-empty v-if="!graph.entities.length && !loading && !errorText"
+                description="知识图谱为空；先从已有证据生成" />
+      <GraphCanvas v-else :entities="filteredEntities" :edges="filteredEdges"
                    :selected-entity-id="selectedEntity?.id"
                    @select-node="selectedEntity = $event; selectedEdge = undefined; evidenceId = ''"
                    @select-edge="selectEdge" />

@@ -355,3 +355,42 @@ test.describe('键盘走得完主路径且焦点看得见', () => {
     expect(invisible, `这个元素聚焦了却看不出来：${invisible}`).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// 门禁五 · 三态齐全：出错时必须说出原因（不变式 2）
+// ---------------------------------------------------------------------------
+
+/**
+ * 阶段 7 新加的三块界面（Wiki / 图谱 / 复核队列）此前只验过"数据正常时长什么样"。
+ * 后端挂掉时它们各自 `catch` 住并写 `errorText` —— 但**没有任何用例证明那句话
+ * 真的出现在屏幕上**，而"静默地什么都不显示"正是本项目反复吃亏的形态：
+ * 用户看到一个空列表，以为语料里就是没有东西。
+ *
+ * 判据有两条，缺一不可：① 错误态可见；② **说得出原因**（不是光一句"失败了"）。
+ */
+const FAILING = { status: 500, json: { error: { message: 'upstream exploded', code: 'upstream_error' } } }
+
+test.describe('后端出错时界面必须说出原因', () => {
+  test.beforeEach(async ({ page }) => { await fakeLogin(page); await stubApi(page) })
+
+  for (const [path, api, label] of [
+    ['/wiki', '/api/wiki', 'Wiki 列表'],
+    ['/graph', '/api/knowledge/graph', '图谱'],
+  ] as const) {
+    test(`${label}加载失败时给出错误态而不是空列表`, async ({ page }) => {
+      await page.route((url) => url.pathname === api, (route) => route.fulfill(FAILING))
+      await page.goto(`/#${path}`)
+      const alert = page.locator('.el-alert--error').first()
+      await expect(alert, `${label} 挂了却什么都没说`).toBeVisible()
+      // 原因必须带上：只说"加载失败"等于把排查成本全推给用户
+      await expect(alert).toContainText(/失败/)
+      await expect(alert).not.toHaveText(/^\s*(加载失败|失败)\s*$/)
+    })
+  }
+
+  test('复核队列加载失败时同样有错误态', async ({ page }) => {
+    await page.route((url) => url.pathname === '/api/reviews', (route) => route.fulfill(FAILING))
+    await page.goto('/#/graph')
+    await expect(page.getByText(/复核队列加载失败/)).toBeVisible()
+  })
+})
