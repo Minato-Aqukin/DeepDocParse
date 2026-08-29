@@ -2,13 +2,16 @@
 
 [中文](README.md) · Apache-2.0 · **Document parsing powered by [MinerU](https://github.com/opendatalab/MinerU)**
 
-A multimodal document-understanding **service layer**. Stateless, GPU-optional, three planes:
+A multimodal document corpus server. Its gateway is stateless and GPU-optional; the
+corpus core persists evidence and knowledge in PostgreSQL and MinIO:
 
 | Plane | Endpoint | Engine |
 |---|---|---|
 | Parsing | `POST /v1/parse` (async task) | MinerU (official `mineru-api` / `mineru-router`, never reimplemented), or the built-in born-digital fallback |
 | VQA | `POST /v1/chat/completions` (OpenAI protocol) | DeepSeek-OCR |
-| MCP | `ask_document` — one composite tool | Orchestration layer (parse cache → retrieve → bbox crop + VQA) |
+| Embedding / rerank | `POST /v1/embeddings`, `POST /v1/rerank` | bge-m3 / bge-reranker-v2-m3 |
+| Extraction | `POST /v1/extract` (async task) | retrieve → extract → bbox crop → visual verification |
+| MCP | `search`, `ask`, `get_evidence`, `read_wiki`, `graph_neighbors` | Corpus interface with evidence, bbox, and crops; `ask_document` remains deprecated |
 
 Architecture decisions live in [../ARCHITECTURE.md](../ARCHITECTURE.md).
 
@@ -50,6 +53,12 @@ docker compose -f compose.cpu.yml --env-file ../.env up -d --build
 # gateway:  http://localhost:9000   contract docs: http://localhost:9000/docs
 ```
 
+The five corpus MCP tools read PostgreSQL and MinIO directly. By default they connect to
+DeepDocParse-Web on the same host at ports `15432/19000`; start that data plane first, or
+set `CORPUS_DATABASE_URL` and `CORPUS_MINIO_*` in `.env`. An unavailable database is an
+explicit tool error, never a silent fallback to the legacy Redis index. See
+[docs/mcp-tools.md](docs/mcp-tools.md) for the frozen tool contract.
+
 > Skipping the ~2GB download: comment out the `embed` service in `compose.cpu.yml` together
 > with `embedding_models` in `models.cpu.yaml`. With no embedding section in the registry the
 > service falls back to BM25 on its own (a registry-driven switch, no code change).
@@ -83,12 +92,13 @@ DeepDocParse/
 ├── models.yaml             # Model registry: adding a model = a container + one line here
 ├── models.cpu.yaml         # No-GPU registry (born-digital + TEI CPU, no VQA)
 ├── gateway/                # The only bespoke service: a thin adapter layer
+│   ├── ddp_core/           # shared corpus models, retrieval, compile, agent, knowledge logic
 │   └── app/
 │       ├── routers/        # parse / chat / embeddings / health
 │       ├── services/       # engines (adapter layer) / layout (normalizer) / borndigital
 │       │                   # / mineru_client / task_store / chunking
 │       └── worker/         # ARQ chain: poll → archive → callback → chunk & index
-├── mcp_server/             # FastMCP: ask_document
+├── mcp_server/             # FastMCP: five PG/MinIO-backed corpus tools + deprecated ask_document
 ├── docker/                 # compose.cpu.yml (no GPU) / compose.dev.yml / compose.prod-nvidia.yml
 ├── docs/                   # layout-format.md (DDP-Layout v1) · CONFIG.md · mineru-api-contract.md
 ├── scripts/                # check_contract · gen_config_docs · make_fixtures · e2e_mcp
@@ -97,7 +107,7 @@ DeepDocParse/
 
 ## Configuration
 
-All 12 settings are documented in [docs/CONFIG.md](docs/CONFIG.md), generated from
+All gateway settings are documented in [docs/CONFIG.md](docs/CONFIG.md), generated from
 `gateway/app/config.py` by `scripts/gen_config_docs.py`. CI fails if it goes stale.
 
 ## Adding a parse engine
@@ -117,6 +127,14 @@ Write a normalizer that emits [DDP-Layout v1](docs/layout-format.md), run
 **No consumer needs to change.** The born-digital engine exists partly as proof: it is the
 second engine, and it went in without touching any consumer.
 
+## Current milestone
+
+Refactor stages 5 and 6 are implemented locally: DDP-Layout v1.2 compilation, visual
+atoms, and the Deep Agent assertion/review trail. Stage 7 code is also complete: DDP-Graph
+v1, two-phase STORM-style wiki generation, a review queue, and the five corpus MCP tools.
+All generated sentences and graph edges either point to auditable evidence or are marked
+`unsupported`; live quality numbers still require the planned GPU batches.
+
 ## Explicit non-goals
 
 This says more about what the project is than a feature list does. Each row carries the
@@ -125,7 +143,6 @@ answer stays no and the argument is not reopened.
 
 | Not doing | Who has it | What would change our mind |
 |---|---|---|
-| GraphRAG / RAPTOR | RAGFlow, WeKnora | The eval set shows a significant share of cross-chunk synthesis questions |
 | Connectors (drives, wikis, mail) | Onyx, WeKnora | Document sources live outside this system. Upload is enough |
 | Multi-channel IM delivery | WeKnora | Never in the main repo (fine as a side project) |
 | Workflow orchestration | Dify | Never — different product category |
@@ -149,7 +166,8 @@ answer stays no and the argument is not reopened.
 2. **Never queue twice** — inference queuing belongs to MinerU; ARQ only orchestrates post-processing
 3. **Registry-driven** — the gateway imports no model code; it looks up `models.yaml` and forwards
 4. **Contract first** — changing `/v1/*` means changing `openapi.yaml` first; CI enforces it
-5. **Stateless** — results are cached for 24h; permanent archival belongs to the product layer
+5. **Explicit state boundary** — gateway task results are cached for 24h; the corpus,
+   evidence and knowledge layer persist in PostgreSQL/MinIO; vector indexes are rebuildable
 
 ## License
 

@@ -52,13 +52,20 @@ services:
 
   mcp-server:
     build:
-      context: ../mcp_server
+      context: ..
+      dockerfile: mcp_server/Dockerfile
       args: { PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple" }
     ports: ["9100:9100"]
     environment:
       GATEWAY_URL: http://gateway:9000
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       REDIS_URL: redis://redis:6379/0
+      CORPUS_DATABASE_URL: ${CORPUS_DATABASE_URL:-postgresql+asyncpg://ddp:ddp@host.docker.internal:15432/deepdocparse}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://host.docker.internal:19000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-deepdocparse}
+    extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on: [gateway]
 
   redis:

@@ -5,10 +5,12 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 
 WORKDIR /app
-COPY pyproject.toml .
-RUN pip install --no-cache-dir .
+COPY mcp_server/pyproject.toml /tmp/mcp/pyproject.toml
+COPY mcp_server/server.py mcp_server/corpus.py /tmp/mcp/
+RUN pip install --no-cache-dir /tmp/mcp
 
-COPY server.py .
+COPY gateway/ddp_core /app/ddp_core
+COPY mcp_server/server.py mcp_server/corpus.py /app/
 
 EXPOSE 9100
 CMD ["python", "server.py"]

@@ -456,3 +456,117 @@ class EvidenceVerification(Base):
         String(32), ForeignKey("users.id"), default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
                                                   index=True)
+
+
+class KnowledgeEntity(Base):
+    """DDP-Graph v1 实体；合并过程必须可解释、可拆。"""
+
+    __tablename__ = "knowledge_entities"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    canonical_name: Mapped[str] = mapped_column(String(255), index=True)
+    normalized_name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    entity_type: Mapped[str] = mapped_column(String(32), default="other", index=True)
+    aliases: Mapped[list] = mapped_column(JSON, default=list)
+    merged_by: Mapped[str] = mapped_column(String(16), default="none", index=True)
+    merge_confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    entity_merge_uncertain: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    split_from_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("knowledge_entities.id"), default=None, index=True)
+    review_state: Mapped[str] = mapped_column(String(16), default="unreviewed", index=True)
+    provider: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 onupdate=utcnow)
+
+
+class GraphEdge(Base):
+    """有向关系边；Citation(source_kind=graph_edge) 才是其证据真相。"""
+
+    __tablename__ = "graph_edges"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    subject_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("knowledge_entities.id"), index=True)
+    predicate: Mapped[str] = mapped_column(String(96), index=True)
+    object_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("knowledge_entities.id"), index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    unsupported: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    review_state: Mapped[str] = mapped_column(String(16), default="unreviewed", index=True)
+    provider: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("subject_id", "predicate", "object_id",
+                         name="uq_graph_edges_spo"),
+    )
+
+
+class WikiEntry(Base):
+    """STORM 两阶段 wiki 的实体入口。"""
+
+    __tablename__ = "wiki_entries"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    entity_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("knowledge_entities.id"), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(255), index=True)
+    outline: Mapped[list] = mapped_column(JSON, default=list)
+    provider: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 onupdate=utcnow)
+
+
+class WikiSection(Base):
+    __tablename__ = "wiki_sections"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    entry_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("wiki_entries.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    heading: Mapped[str] = mapped_column(String(255))
+
+    __table_args__ = (
+        UniqueConstraint("entry_id", "position", name="uq_wiki_sections_entry_position"),
+    )
+
+
+class WikiSentence(Base):
+    """wiki 的最小可追溯单元；Citation(source_kind=wiki_sentence) 挂在这里。"""
+
+    __tablename__ = "wiki_sentences"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    section_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("wiki_sections.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    text: Mapped[str] = mapped_column(Text)
+    unsupported: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    conflict_group: Mapped[str | None] = mapped_column(String(32), default=None, index=True)
+    review_state: Mapped[str] = mapped_column(String(16), default="unreviewed", index=True)
+    provider: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    __table_args__ = (
+        UniqueConstraint("section_id", "position", name="uq_wiki_sentences_section_position"),
+    )
+
+
+class KnowledgeReview(Base):
+    """图谱/wiki/实体合并的人工标注；内容本身不可由此表编辑。"""
+
+    __tablename__ = "knowledge_reviews"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    target_kind: Mapped[str] = mapped_column(String(24), index=True)
+    # extract_field 用 `{item_id}:{field_name}`，字段名本身最长 255；32 会在 PG
+    # 静默通过 SQLite 测试、上线后才以 varchar overflow 失败。
+    target_id: Mapped[str] = mapped_column(String(320), index=True)
+    action: Mapped[str] = mapped_column(String(16), index=True)
+    reason_code: Mapped[str | None] = mapped_column(String(64), default=None)
+    reason_text: Mapped[str | None] = mapped_column(Text, default=None)
+    reviewer_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
+    exported_revision: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                  index=True)

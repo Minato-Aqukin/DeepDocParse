@@ -34,11 +34,19 @@ services:
     depends_on: [redis]
 
   mcp-server:
-    build: ../mcp_server
+    build:
+      context: ..
+      dockerfile: mcp_server/Dockerfile
     environment:
       GATEWAY_URL: http://gateway:9000
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       REDIS_URL: redis://redis:6379/0   # v2 向量检索
+      CORPUS_DATABASE_URL: ${CORPUS_DATABASE_URL:-postgresql+asyncpg://ddp:ddp@host.docker.internal:15432/deepdocparse}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://host.docker.internal:19000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-deepdocparse}
+    extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on: [gateway]
 
   redis:
