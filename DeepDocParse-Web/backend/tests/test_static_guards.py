@@ -89,6 +89,12 @@ def test_the_scan_actually_covers_something():
     assert total >= 5, f"一条本项目的 import 都没扫到（{total}），解析逻辑可能坏了"
 
 
+CORPUS_MCP_KEYS = {
+    "CORPUS_DATABASE_URL", "MINIO_ENDPOINT", "MINIO_ACCESS_KEY",
+    "MINIO_SECRET_KEY", "MINIO_BUCKET", "MCP_PUBLIC_BASE_URL",
+}
+
+
 def test_quickstart_passes_corpus_credentials_to_the_mcp_service():
     """干净部署的随机 PG/MinIO 密钥必须同步给 service 侧 MCP。
 
@@ -99,15 +105,32 @@ def test_quickstart_passes_corpus_credentials_to_the_mcp_service():
     start = text.index("write_service_env()")
     end = text.index("write_frontend_env()", start)
     body = text[start:end]
-    required = {
-        "CORPUS_DATABASE_URL", "MINIO_ENDPOINT", "MINIO_ACCESS_KEY",
-        "MINIO_SECRET_KEY", "MINIO_BUCKET", "MCP_PUBLIC_BASE_URL",
-    }
-    missing = sorted(key for key in required
-                     if f'set_env "$SERVICE_ENV" {key}' not in body)
-    assert not missing, f"quickstart 没把这些语料 MCP 配置写进 service .env：{missing}"
+    missing = sorted(key for key in CORPUS_MCP_KEYS
+                     if f'set_env "$SERVICE_MCP_ENV" {key}' not in body)
+    assert not missing, f"quickstart 没把这些语料 MCP 配置写进 .env.mcp：{missing}"
     assert "host.docker.internal:15432" in body
     assert "host.docker.internal:19000" in body
+
+
+def test_corpus_keys_stay_out_of_the_file_gateway_reads():
+    """语料 MCP 的键**不许**写进 gateway 读的那份 `.env`。
+
+    gateway 的 Settings 是 `extra="forbid"`（故意的，用来抓拼错的键），
+    而 pydantic-settings 直接读 cwd 下的 `.env` 文件，不只是环境变量 ——
+    这几个键混进去，**裸进程起 gateway 会当场 `extra_forbidden` 拒绝启动**。
+    2026-08-29 在 AutoDL 上实测撞到：容器部署没事（compose 给每个服务
+    显式的 environment 列表），而 AutoDL 跑不了 docker，只能裸进程。
+
+    compose 侧要两份 `--env-file` 才能做变量替换，一并钉住。
+    """
+    text = (REPO / "quickstart.sh").read_text(encoding="utf-8")
+    leaked = sorted(key for key in CORPUS_MCP_KEYS
+                    if f'set_env "$SERVICE_ENV" {key}' in text)
+    assert not leaked, (
+        f"这些键被写进了 gateway 读的 .env：{leaked}。"
+        f"gateway 的 Settings 是 extra=forbid，裸进程部署会拒绝启动")
+    assert text.count('--env-file "$SERVICE_MCP_ENV"') >= 2, \
+        "compose 少了第二份 --env-file，那几个键的变量替换会退回开发占位默认值"
 
 
 # ---------------------------------------------------------------------------

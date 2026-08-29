@@ -46,6 +46,7 @@ STATE_FILE="$STATE_DIR/state.env"          # 记住上次选的参数，重跑�
 
 WEB_ENV="$WEB_DIR/.env"
 SERVICE_ENV="$SERVICE_DIR/.env"
+SERVICE_MCP_ENV="$SERVICE_DIR/.env.mcp"   # 语料 MCP 专用；gateway 的 Settings 是 extra=forbid，混进 .env 会让它拒绝启动
 FRONT_ENV="$WEB_DIR/frontend/.env.local"
 REGISTRY_FILE="$STATE_DIR/models.registry.yaml"
 SERVICE_OVERRIDE="$STATE_DIR/compose.service-override.yml"
@@ -558,17 +559,26 @@ write_service_env() {
   set_env "$SERVICE_ENV" QUEUE_INFLIGHT_TTL 2400
   set_env "$SERVICE_ENV" VQA_MAX_CONCURRENCY "$VQA_MAX_CONCURRENCY"
   set_env "$SERVICE_ENV" RESULT_TTL 86400
+  chmod 600 "$SERVICE_ENV"
+
   # 阶段 7 的五个语料 MCP 工具直读 Web 数据面。quickstart 会随机生成 PG/MinIO
   # 密钥，所以绝不能依赖 service compose 里的开发占位默认值。
-  set_env "$SERVICE_ENV" CORPUS_DATABASE_URL \
+  #
+  # **单独一份文件，不写进 $SERVICE_ENV。** gateway 的 Settings 是
+  # `extra="forbid"`，而 pydantic-settings 会直接读 cwd 下的 `.env` 文件 ——
+  # 这几个键混进去，裸进程起 gateway 会当场 `extra_forbidden` 拒绝启动
+  # （2026-08-29 在 AutoDL 上实测撞到）。容器部署本来就只吃 compose 里
+  # 显式列出的 environment，不受影响。
+  set_env "$SERVICE_MCP_ENV" CORPUS_DATABASE_URL \
     "postgresql+asyncpg://$pguser:$pgpass@host.docker.internal:15432/$pgdb"
-  set_env "$SERVICE_ENV" MINIO_ENDPOINT "http://host.docker.internal:19000"
-  set_env "$SERVICE_ENV" MINIO_ACCESS_KEY "$mk"
-  set_env "$SERVICE_ENV" MINIO_SECRET_KEY "$ms"
-  set_env "$SERVICE_ENV" MINIO_BUCKET "$(get_env "$WEB_ENV" MINIO_BUCKET)"
-  set_env "$SERVICE_ENV" MCP_PUBLIC_BASE_URL "$PUBLIC_BASE_URL"
-  chmod 600 "$SERVICE_ENV"
-  ok "$SERVICE_ENV（SERVICE_TOKEN 与 PG/MinIO 凭据均与 Web 侧一致）"
+  set_env "$SERVICE_MCP_ENV" MINIO_ENDPOINT "http://host.docker.internal:19000"
+  set_env "$SERVICE_MCP_ENV" MINIO_ACCESS_KEY "$mk"
+  set_env "$SERVICE_MCP_ENV" MINIO_SECRET_KEY "$ms"
+  set_env "$SERVICE_MCP_ENV" MINIO_BUCKET "$(get_env "$WEB_ENV" MINIO_BUCKET)"
+  set_env "$SERVICE_MCP_ENV" MCP_PUBLIC_BASE_URL "$PUBLIC_BASE_URL"
+  chmod 600 "$SERVICE_MCP_ENV"
+  ok "$SERVICE_ENV（SERVICE_TOKEN 与 Web 侧同值）"
+  ok "$SERVICE_MCP_ENV（语料 MCP 的 PG/MinIO 凭据；单独一份，gateway 不读）"
 }
 
 write_frontend_env() {
@@ -1015,7 +1025,8 @@ cmd_build() {
 
   info "拉取/构建 service 镜像"
   ( cd "$SERVICE_DIR/docker" && docker compose -f "$SERVICE_COMPOSE" -f "$SERVICE_OVERRIDE" \
-      --env-file "$SERVICE_ENV" build gateway arq-worker mcp-server ) || die "service 镜像构建失败"
+      --env-file "$SERVICE_ENV" --env-file "$SERVICE_MCP_ENV" \
+      build gateway arq-worker mcp-server ) || die "service 镜像构建失败"
   ok "service 镜像就绪"
 }
 
@@ -1047,7 +1058,11 @@ kill_tree() {   # 先收子进程再收本体：uvicorn --workers 会 fork 出�
 }
 
 compose_web()     { docker compose -f "$WEB_COMPOSE" --env-file "$WEB_ENV" "$@"; }
-compose_service() { docker compose -f "$SERVICE_COMPOSE" -f "$SERVICE_OVERRIDE" --env-file "$SERVICE_ENV" "$@"; }
+# 两份 --env-file：`.env` 是 gateway/worker 的，`.env.mcp` 只有语料 MCP 那几个键。
+# 分开的理由见 write_service_env()：混在一起会让裸进程起的 gateway 拒绝启动。
+# compose v2 支持多个 --env-file，只用于变量替换，不会整份注入给容器。
+compose_service() { docker compose -f "$SERVICE_COMPOSE" -f "$SERVICE_OVERRIDE" \
+  --env-file "$SERVICE_ENV" --env-file "$SERVICE_MCP_ENV" "$@"; }
 compose_edge()    { docker compose -f "$EDGE_COMPOSE" "$@"; }
 
 service_units() {   # 这次部署该起哪些 service 侧容器（与注册表一一对应）
