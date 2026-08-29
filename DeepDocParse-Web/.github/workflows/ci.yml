@@ -112,3 +112,17 @@ jobs:
 
       - name: 类型检查 + 构建
         run: npm run build
+
+      # 阶段 0b 建的组件单测。它抓的是类型检查够不着的那一类：
+      # 卸载后定时器还在跑、blob URL 没回收、ResizeObserver 没断。
+      - name: 组件单测
+        run: npm run test:unit
+
+      # 阶段 8 §3 的门禁全在 e2e 里：零 console error/warn · 全路由可达 ·
+      # 两套主题 · 零投影零字距 · 不破版 · 键盘可达。
+      # **必须进 CI** —— 一次性检查挡不住下一个 commit 的退化。
+      - name: 装 Playwright 浏览器
+        run: npx playwright install --with-deps chromium
+
+      - name: 端到端门禁
+        run: npm run test:e2e

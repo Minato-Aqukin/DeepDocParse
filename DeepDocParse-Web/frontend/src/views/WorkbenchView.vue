@@ -328,6 +328,11 @@ watch(
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* **栅格项默认 `min-width: auto`，即"不许窄于内容"。** 少了这一行，
+     一张 200 列的表会把 `1fr` 这一列撑到七千多像素，整个工作台跟着横向滑
+     —— 而 `.markdown-body` 明明写着 `overflow: auto`，只是永远轮不到它生效。
+     阶段 8 的不破版门禁抓到的就是这个（实测 main 7520 > 1072）。 */
+  min-width: 0;
 }
 .pane-head {
   display: flex;

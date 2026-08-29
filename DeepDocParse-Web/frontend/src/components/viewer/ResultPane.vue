@@ -81,6 +81,8 @@ watch([html, view], async () => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  /* 同上：这一层也是 flex 项，`min-width: auto` 会把宽表的宽度继续往上传 */
+  min-width: 0;
 }
 .toolbar {
   display: flex;

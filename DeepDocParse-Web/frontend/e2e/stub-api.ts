@@ -43,6 +43,13 @@ export async function stubApi(page: Page): Promise<void> {
         return route.fulfill({ json: { graph_version: 'ddp-graph/1', entities: [] } })
       }
       if (path === '/api/reviews') return route.fulfill({ json: { items: [] } })
+      // **形状必须是 SearchResult，不能落到下面那个 `[]` 兜底。** 落下去的话
+      // `data.groups` 是 undefined，模板里 `!groups.length` 当场抛，
+      // 而**只访问 /search 不搜索是发现不了的**（q 为空时 run() 直接 return）——
+      // 一条静默降低覆盖的打桩，正是阶段 8 门禁要盯的那类。
+      if (path === '/api/search') {
+        return route.fulfill({ json: { query: url.searchParams.get('q') || '', degraded: null, groups: [] } })
+      }
       if (path === '/api/wiki') return route.fulfill({ json: [] })
       if (/\/documents\/[^/]+\/result$/.test(path)) {
         return route.fulfill({

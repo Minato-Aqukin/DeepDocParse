@@ -8,9 +8,12 @@ import { defineConfig, devices } from '@playwright/test'
  * 全是这一类。这一层的核心断言是 **零 console error / 零未处理 promise rejection** ——
  * 它比任何具体断言都便宜，也最容易在下一个 commit 里退化。
  *
- * **要跑它必须先起前端**（`npm run dev`，或整套 `./dev.sh start`）。
- * 所以 `npm run test` 里**不含** e2e：commit 前的一条龙自验必须在
- * 没有任何外部依赖的机器上也能跑绿。e2e 单独用 `npm run test:e2e`。
+ * **它自己会构建并起一个静态服务**（见文件末尾的 webServer），不需要先开 dev server。
+ * `npm run test` 里仍然**不含** e2e：那条一条龙要在没有浏览器的机器上也能跑绿。
+ * e2e 单独用 `npm run test:e2e`。
+ *
+ * ⚠️ `reuseExistingServer` 会复用本地已经开着的 5173 —— 那多半是 dev server，
+ * 于是这一轮又变回"对 dev server 跑"。**验稳定性时先把它关掉**。
  */
 const PORT = Number(process.env.E2E_PORT || 5173)
 
@@ -22,11 +25,12 @@ export default defineConfig({
   timeout: 60_000,
   forbidOnly: !!process.env.CI,
   // **必须给 worker 数封顶。** 不设的话 Playwright 按 CPU 核数开
-  // （本机 16 线程 → 8 个 Chrome），而它们打的是**单线程的 vite dev server**：
-  // on-demand transform 排不过来，报出来的是 ERR_CONNECTION_CLOSED /
-  // ERR_TIMED_OUT / goto 超时三种，看起来像前端的 bug，其实是把自己压垮了。
-  // 验收实测：默认 worker 下冷启动连跑 3 次全红（1/3/2 条）；
-  // workers=4 连跑 2 次全绿且比 workers=2 快一倍。
+  // （本机 16 线程 → 8 个 Chrome）。历史上这些 worker 打的是**单线程的
+  // vite dev server**，on-demand transform 排不过来，报出来的是
+  // ERR_CONNECTION_CLOSED / ERR_TIMED_OUT / goto 超时，看起来像前端的 bug。
+  // 阶段 8 把用例加到 65 条之后，即使 workers=4 也会把 dev server 打死
+  // （实测 ERR_CONNECTION_REFUSED：进程直接没了），所以**改成对构建产物跑**，
+  // 见下面的 webServer。静态服务扛得住，也顺带验了真正要发布的那份产物。
   // 注意加宽 console 允许列表挡不住这个 —— goto 超时根本不是 console 事件。
   workers: 4,
   // 本机也留一次重试：retry 成功会被报成 **flaky** 而不是 passed，
@@ -52,9 +56,18 @@ export default defineConfig({
       channel: process.env.E2E_CHANNEL || undefined,
     },
   }],
-  // 没有现成的前端就自己起一个。reuseExistingServer 让本地开着 dev server 时直接复用
+  // **对构建产物跑，不对 dev server 跑。**
+  // 理由有两条：① dev server 是单线程的 on-demand transform，65 条用例并行
+  // 会把它压死（阶段 8 实测直接 ERR_CONNECTION_REFUSED）；
+  // ② CI 与生产发的都是 `dist/`，对它跑才验到真正要发布的东西。
+  //
+  // **构建放在 `test:e2e` 脚本里，不放这条命令里。** 写成
+  // `npm run build && npm run preview` 的话，Playwright 收尾时杀掉的是那层 shell，
+  // 孙进程 `vite preview` 活下来继续占着 5173 —— 下一轮 `reuseExistingServer`
+  // 直接复用它，于是**测的是上一次的 dist**（实测发生过，进程留了两分多钟）。
+  // 这里只起一个能被干净杀掉的进程。
   webServer: {
-    command: `npm run dev -- --host 127.0.0.1 --port ${PORT}`,
+    command: `npx vite preview --host 127.0.0.1 --port ${PORT}`,
     url: `http://localhost:${PORT}`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
