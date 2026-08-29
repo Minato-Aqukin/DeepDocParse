@@ -1,10 +1,10 @@
-"""MCP 平面 —— 单一复合工具 ask_document（决策 #7）。
+"""MCP 平面 —— 五个语料工具 + deprecated ask_document。
 
 传输：Streamable HTTP。对外经 DeepDocParse-Web/backend 代理（方案 A，key 鉴权在 backend），
 本服务只对内网开放，调 gateway 时带 SERVICE_TOKEN。
 
 设计要点：
-- 工具越少、描述越清晰，agent 选择准确率越高 -> 只此一个工具
+- 五个语料工具保持小而正交；旧 ask_document 只为兼容保留
 - 大文档解析耗时 -> "解析中即返回 + 请稍后重试"模式，不阻塞 MCP 同步调用
 - 返回"证据 + 出处（页码/bbox）"而非只有结论
 - v1 检索 = BM25（中文按二元组、英文按词切分）；v2 换向量检索 ——
@@ -27,6 +27,10 @@ import pypdfium2 as pdfium
 import redis.asyncio as redis
 from fastmcp import FastMCP
 from rank_bm25 import BM25Okapi
+
+from corpus import (
+    ask_impl, get_evidence_impl, graph_neighbors_impl, read_wiki_impl, search_impl,
+)
 
 GATEWAY = os.environ.get("GATEWAY_URL", "http://localhost:9000")
 SERVICE_TOKEN = os.environ.get("SERVICE_TOKEN", "change-me")
@@ -230,8 +234,38 @@ async def _crop_page_region(pdf_bytes: bytes, page_idx: int, bbox: list,
 
 
 @mcp.tool()
+async def search(query: str, limit: int = 10) -> dict:
+    """跨整份共享语料混合检索，返回带 evidence、bbox 与裁图 URL 的结果。"""
+    return await search_impl(query, limit)
+
+
+@mcp.tool()
+async def ask(question: str) -> dict:
+    """基于语料证据回答，返回 DDP-Agent Assertion[]，不返回无类型长字符串。"""
+    return await ask_impl(question)
+
+
+@mcp.tool()
+async def get_evidence(evidence_id: str):
+    """按 ID 读取证据原文、定位信息与 MCP 原生裁图内容。"""
+    return await get_evidence_impl(evidence_id)
+
+
+@mcp.tool()
+async def read_wiki(entry_id_or_title: str) -> dict:
+    """读取 Wiki 条目；每个句子均带 evidence 或显式 unsupported。"""
+    return await read_wiki_impl(entry_id_or_title)
+
+
+@mcp.tool()
+async def graph_neighbors(entity_id_or_name: str, depth: int = 1) -> dict:
+    """读取实体 1~3 跳邻域；每条边均携带可复核 Evidence。"""
+    return await graph_neighbors_impl(entity_id_or_name, depth)
+
+
+@mcp.tool()
 async def ask_document(file_url: str, question: str) -> str:
-    """对文档或图片提问，返回带出处的答案。
+    """[deprecated] 对未入库文档或图片提问，返回带出处的答案。
 
     支持 PDF/DOCX/PPTX/XLSX/图片的 URL。首次询问大文档时会触发解析，
     若返回"解析中"，请稍后用相同参数重试。

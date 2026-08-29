@@ -10,10 +10,9 @@
 都是错的：在本仓库解析成 gateway 的应用层，在 Web 那边解析成 Web 的，
 而两者都不是作者想要的那个。
 
-第二层是依赖切分：`ddp_core` 里碰数据库的那几个模块要 SQLAlchemy，
-在 `[corpus]` extra 里；**gateway 自己一行 ORM 都不 import，venv 里压根没装**。
-所以 gateway / mcp_server 一旦 import 到那几个模块，容器起来就是
-`ModuleNotFoundError` —— 而单测在装了 sqlalchemy 的开发机上照样绿。
+第二层是依赖切分：`ddp_core` 里碰数据库的模块要 SQLAlchemy，在 `[corpus]`
+extra 里；**gateway 自己一行 ORM 都不 import，venv 里压根没装**。阶段 7 起
+MCP 随语料部署，正是 corpus 消费方，因此只禁止 gateway 越界。
 （阶段 2a 搬模型时就是被这个 ModuleNotFoundError 撞出来的。）
 """
 import ast
@@ -90,7 +89,7 @@ def _corpus_modules() -> set[str]:
 
 
 def test_gateway_does_not_reach_into_the_corpus_layer():
-    """gateway / mcp_server 不得 import 需要 SQLAlchemy 的 core 模块。
+    """gateway 不得 import 需要 SQLAlchemy 的 core 模块。
 
     它们的 venv 里没有 sqlalchemy（无状态适配层，plan.md §2 的边界）。
     违反的表现是**容器起不来**，而开发机上单测全绿。
@@ -99,15 +98,24 @@ def test_gateway_does_not_reach_into_the_corpus_layer():
     assert corpus, "一个 corpus 模块都没识别出来，探测逻辑坏了"
 
     offenders = []
-    for root in (GATEWAY, MCP):
+    for root in (GATEWAY,):
         for path in sorted(root.rglob("*.py")):
             for module in _imports(path, top_level_only=False):
                 head = module.split(".")
                 if head[0] == "ddp_core" and len(head) > 1 and head[1] in corpus:
                     offenders.append(f"{path.relative_to(root.parent)} -> {module}")
     assert not offenders, (
-        f"gateway/mcp_server 碰到了 [corpus] 层（{sorted(corpus)}）：" + "; ".join(offenders)
-        + "。它们的 venv 没有 sqlalchemy，容器会起不来")
+        f"gateway 碰到了 [corpus] 层（{sorted(corpus)}）：" + "; ".join(offenders)
+        + "。gateway 的 venv 没有 sqlalchemy，容器会起不来")
+
+
+def test_mcp_image_installs_and_copies_the_corpus_layer():
+    """MCP 已是语料服务：镜像必须安装 ORM 依赖并复制 ddp_core。"""
+    pyproject = (MCP / "pyproject.toml").read_text(encoding="utf-8")
+    dockerfile = (MCP / "Dockerfile").read_text(encoding="utf-8")
+    assert "sqlalchemy[asyncio]" in pyproject and "pgvector" in pyproject
+    assert "COPY gateway/ddp_core /app/ddp_core" in dockerfile
+    assert "COPY mcp_server/server.py mcp_server/corpus.py /app/" in dockerfile
 
 
 def test_the_boundary_scan_actually_covers_something():

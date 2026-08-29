@@ -1,6 +1,6 @@
 """真环境 e2e：MCP 客户端 -> mcp_server -> gateway -> mineru / VQA / TEI 全链路。
 
-覆盖 ask_document 的三条路径 + v2 向量索引物证：
+覆盖 corpus MCP 契约、deprecated ask_document 三条路径 + v2 向量索引物证：
   1. 图片 URL        -> 直接 VQA，不碰解析平面
   2. 文档首次询问     -> 触发解析，返回"解析中"，重试后得到带出处的答案
   3. 长文档跨页事实   -> 检索定位到正确页码（v2 走向量检索，未配 embedding 则 BM25 兜底）
@@ -104,7 +104,9 @@ async def main(skip_image: bool) -> int:
     async with Client(MCP_URL) as client:
         tools = [t.name for t in await client.list_tools()]
         print("== 工具清单 ==")
-        ok &= check("只暴露 ask_document（铁律 6）", tools == ["ask_document"], str(tools))
+        expected = ["search", "ask", "get_evidence", "read_wiki", "graph_neighbors",
+                    "ask_document"]
+        ok &= check("五个语料工具 + deprecated ask_document", tools == expected, str(tools))
 
         if not skip_image:
             print("\n== 场景 1：图片直答 ==")

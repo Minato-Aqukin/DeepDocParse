@@ -2,7 +2,8 @@
 
 [English](README.en.md) · Apache-2.0 · **文档解析由 [MinerU](https://github.com/opendatalab/MinerU) 提供支持**
 
-基于大语言模型的多模态文字识别与结构化信息提取服务层。无状态、GPU 部署，对外四平面：
+面向技术手册与论文的多模态语料服务器。gateway 无状态转发模型，核心语料以
+PostgreSQL + MinIO 持久化，对外提供解析、检索、抽取、知识与 MCP 能力：
 
 | 平面 | 接口 | 引擎 |
 |------|------|------|
@@ -10,7 +11,7 @@
 | VQA | `POST /v1/chat/completions`（OpenAI 协议） | DeepSeek-OCR-2 |
 | 向量 | `POST /v1/embeddings`、`POST /v1/rerank` | bge-m3 / bge-reranker-v2-m3（TEI） |
 | **抽取** | **`POST /v1/extract`（异步任务）** | 编排层（检索定位 → 抽值 → bbox 裁剪 → 视觉核对） |
-| MCP | `ask_document` 单一复合工具 | 编排层（解析缓存 → 检索 → bbox 裁剪 + VQA） |
+| MCP | `search` / `ask` / `get_evidence` / `read_wiki` / `graph_neighbors` | 语料级接口，返回 evidence + bbox + 裁图；`ask_document` 仅兼容保留 |
 
 架构决策见根目录 [../ARCHITECTURE.md](../ARCHITECTURE.md)。
 
@@ -44,6 +45,7 @@ DeepDocParse/
 ├── models.yaml             # 模型注册表：加模型 = 加容器 + 一行配置
 ├── models.autodl.yaml      # 无 docker 的 GPU 机器用（endpoint 全是回环地址）
 ├── gateway/                # 唯一自研服务：薄适配层
+│   ├── ddp_core/           # 共享语料模型、检索、编译、Agent 与知识纯逻辑
 │   └── app/
 │       ├── main.py         # FastAPI 入口
 │       ├── config.py       # 配置 + 注册表加载
@@ -51,7 +53,7 @@ DeepDocParse/
 │       ├── routers/        # parse / chat / health
 │       ├── services/       # mineru_client / vqa_client / task_store
 │       └── worker/         # ARQ 任务：结果归档链（v2 追加向量化步骤）
-├── mcp_server/             # FastMCP：ask_document
+├── mcp_server/             # FastMCP：直读 PG/MinIO 的五个语料工具 + deprecated ask_document
 ├── docker/
 │   ├── compose.dev.yml     # RTX 4060 8GB：MinerU pipeline（VQA 走宿主机原生二进制，见 models.dev-host.yaml）
 │   └── compose.prod-nvidia.yml  # RTX 6000 级：vLLM + mineru-router 多卡
@@ -75,6 +77,11 @@ cd docker
 docker compose -f compose.cpu.yml --env-file ../.env up -d --build
 # gateway:  http://localhost:9000   契约文档: http://localhost:9000/docs
 ```
+
+五个语料级 MCP 工具会直接读取 PostgreSQL/MinIO。默认连接同机
+DeepDocParse-Web 的 `15432/19000` 端口；请先启动 Web 数据面，或在 `.env` 里设置
+`CORPUS_DATABASE_URL` / `CORPUS_MINIO_*`。数据库不可达时工具会返回明确错误，
+不会退回旧 Redis 索引假装成功。工具签名见 [docs/mcp-tools.md](docs/mcp-tools.md)。
 
 > **从 2026-08 之前的版本升上来的注意：compose 项目名变了**（缺省的 `docker` → 固定的
 > `ddp-service`）。两个仓库的 compose 目录都叫 `docker`，缺省项目名会撞车，
@@ -109,7 +116,7 @@ docker compose -f compose.dev.yml --env-file ../.env up -d --build
 
 ## 配置
 
-全部 12 项配置见 [docs/CONFIG.md](docs/CONFIG.md)（由 `scripts/gen_config_docs.py`
+全部 gateway 配置见 [docs/CONFIG.md](docs/CONFIG.md)（由 `scripts/gen_config_docs.py`
 从 `gateway/app/config.py` 生成，CI 会检查它有没有过期）。
 改了配置项的注释后重跑一次即可刷新：
 
@@ -121,7 +128,7 @@ python scripts/gen_config_docs.py
 
 - [x] M1 解析平面：gateway + MinerU pipeline + ARQ 归档链（mineru 3.4.4 实测契约见 docs/mineru-api-contract.md）
 - [x] M2 VQA 平面：deepseek-ocr.rs 接入（dev 用 Windows 原生二进制 v0.6.0 + ModelScope 自动下权重，见 models.dev-host.yaml；prod 用 vLLM 容器）
-- [x] M3 MCP：ask_document v1（BM25 检索 + bbox 裁剪 VQA 验证 + 带出处返回；解析中即返回重试模式）
+- [x] M3 MCP（历史）：`ask_document` v1；阶段 7 后仅作兼容入口
 - [x] M4a embedding v2 + metrics + prod compose 锁版本：`/v1/embeddings` 透传、结构感知分块、
       bge-m3(TEI) 向量化、Redis Stack 向量检索（BM25 自动兜底）、Prometheus `/metrics`
       —— dev 全链路真机验证（`scripts/e2e_mcp.py`）
@@ -162,6 +169,11 @@ python scripts/gen_config_docs.py
         （上线第一天就抓到 openapi.yaml 不是合法 YAML —— 从没有人机械校验过它）
   - [x] C5 英文 README（[README.en.md](README.en.md)）+「明确不做」写进 README
   - [x] E 注册表能力显式化：`runtime` / `capabilities` / `adapter`（纯增量，老配置照跑）
+- [x] 重构阶段 5/6：DDP-Layout v1.2 编译层、视觉原子与 Deep Agent 断言/核对链；
+      本机契约与离线评测已通过，live 质量数字待 GPU 批次二
+- [x] 重构阶段 7（代码完成）：DDP-Graph v1、STORM 两阶段 Wiki、复核队列，以及
+      `search` / `ask` / `get_evidence` / `read_wiki` / `graph_neighbors` 五个语料级 MCP 工具；
+      MCP 直接读持久化语料，返回 evidence、页码、bbox 与原件裁图。live 数字待 GPU 批次三
 
 ## 明确不做
 
@@ -169,7 +181,6 @@ python scripts/gen_config_docs.py
 
 | 不做 | 谁有 | 什么情况下会重新考虑 |
 |---|---|---|
-| GraphRAG / RAPTOR | RAGFlow、WeKnora | 评测集显示跨块综合类问题占比显著 |
 | 连接器（网盘/知识库/邮箱） | Onyx、WeKnora | 文档来源不在本系统内。上传够用 |
 | 多渠道 IM 投放 | WeKnora | 永不进主仓（可做外围项目） |
 | 工作流编排 | Dify | 永不——那是另一个品类 |
@@ -183,7 +194,6 @@ python scripts/gen_config_docs.py
 | 端到端「文档 → JSON」黑箱抽取 | 多数抽取产品 | **永不**——出处链断裂，撞下面那条贯穿性准则（ADR #19） |
 | 抽取工作流编排（多步/条件分支） | Dify | 永不——那是另一个品类。`/v1/extract` 只做单一操作的批量化 |
 | 抽取结果的人工编辑 | 多数抽取产品 | 永不——与"分块的人工编辑"同理由：该调的是抽取器 |
-| 通用实体关系抽取 / 知识图谱 | RAGFlow | 「GraphRAG」那条的变体，触发条件相同 |
 
 > **贯穿性准则：凡是把信息压进权重或潜空间的方案，都与"可验证出处"冲突。**
 > 它们只能用在出处已经确定之后的终端环节（例如"读这张区域图并回答"），不得进入定位链路——
@@ -195,7 +205,8 @@ python scripts/gen_config_docs.py
 2. **不双重排队** —— 推理排队归 mineru 任务管理，ARQ 只管编排与后处理
 3. **注册表驱动** —— gateway 不 import 任何模型代码，只查 models.yaml 转发
 4. **锁版本 + 契约测试** —— mineru/deepseek-ocr.rs 镜像 pin 版本，升级前跑 tests/
-5. **无状态** —— 结果暂存 24h（Redis/本地盘），永久归档在 backend；向量索引是可重建缓存
+5. **状态边界明确** —— gateway 的任务结果暂存 24h；语料、证据与知识层持久化在
+   PostgreSQL/MinIO；向量索引是可重建缓存
 
 ## 许可
 

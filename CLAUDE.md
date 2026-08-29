@@ -16,8 +16,11 @@
      真正的模型一律进容器，这条不变
 4. **契约优先**——改 `/v1/*` 接口必须先改 openapi.yaml；mineru/deepseek-ocr.rs 升级前必须先跑绿 tests/。
    **openapi.yaml 已在 M5 冻结为 v1.0**：此后只许向后兼容的新增，不得删改既有字段语义
-5. **无状态**——结果暂存 TTL=24h；永久归档是 DeepDocParse-Web/backend 的事；向量索引是可重建缓存
-6. **MCP 只有一个工具** `ask_document`，签名永不变，检索升级只改内部实现
+5. **语料核心有状态、gateway 无状态**——PostgreSQL/MinIO 的 evidence、citation、graph、wiki
+   属于 `ddp_core`；gateway 仍只做注册表转发与 TTL 任务缓存，向量索引仍是可重建缓存。
+6. **MCP 是五个小而正交的语料工具**：`search` / `ask` / `get_evidence` /
+   `read_wiki` / `graph_neighbors`。签名见 `docs/mcp-tools.md`；旧 `ask_document`
+   只为向后兼容保留并明确 deprecated，不再是语料接口。
 7. **`ddp_core` 是对外共享包，只准单向依赖**（2026-08-26 新增）。
    分块 / 裁图 / 分词 / 抽取 schema 的**唯一一份**实现住在 `gateway/ddp_core/`，
    DeepDocParse-Web 通过安装本仓库的 gateway 包来 import 它。因此：
@@ -32,7 +35,8 @@
    - **Dockerfile 要 `COPY ddp_core`** —— 漏了镜像起来直接 ModuleNotFoundError
 
 ## 开发顺序（按 TODO(Mx) 标注走）
-M1 解析平面 → M2 VQA 平面 → M3 MCP ask_document v1(BM25) → M4 prod+embedding v2 → M5 契约冻结（已完成）
+M1 解析平面 → M2 VQA 平面 → M3 MCP ask_document → M4 embedding → M5 契约冻结
+→ 重构阶段 1~6 → 阶段 7 语料级 MCP + 知识层（当前）
 
 M1 第一步必须先拿到 mineru-api 的真实接口：启动官方容器后访问其 /docs，
 把 /tasks 相关参数记录到 `docs/mineru-api-contract.md`，再实现 mineru_client.py。
