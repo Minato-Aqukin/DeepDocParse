@@ -19,31 +19,36 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: 安装依赖
+      - name: 安装 gateway 最小集
         run: |
           python -m pip install --upgrade pip
           pip install -e "gateway[dev]"
-          pip install -e mcp_server
+
+      # **顺序有讲究：这一步必须在装 mcp_server 之前。**
+      # 阶段 7 起 mcp_server 是语料消费方，它的依赖里**就有** sqlalchemy；
+      # 装完再断言"没有 sqlalchemy"必然红，而红的是判据不是代码。
+      # 要钉的一直只是 gateway：它是无状态适配层，一旦哪个依赖把 ORM 拖进来，
+      # `[corpus]` 的切分就名存实亡，而表现只会是几个月后某次 docker build
+      # 变大、没人察觉。
+      - name: gateway 最小集不得依赖 sqlalchemy
+        run: |
+          python - <<'EOF'
+          import importlib.util
+          assert importlib.util.find_spec("sqlalchemy") is None, \
+              "gateway 最小集里出现了 sqlalchemy —— [corpus] 的切分失效了"
+          import ddp_core, ddp_core.chunking, ddp_core.crops, ddp_core.tokenize
+          import ddp_core.blocks, ddp_core.extract_format, ddp_core.hits, ddp_core.rerank
+          print("最小集 8 个模块可加载，且确实没有 sqlalchemy")
+          EOF
+
+      # 语料 MCP 需要 ORM/对象存储依赖，契约测试要 import 它，所以放在断言之后装
+      - name: 安装 mcp_server（语料消费方）
+        run: pip install -e mcp_server
 
       # testpaths 是 ../tests，必须在 gateway/ 下跑
       - name: 契约测试
         working-directory: gateway
         run: pytest -q
-
-      # 这个 job 装的就是"最小集"（gateway[dev] + mcp_server）。趁它还在，
-      # 顺手断言 sqlalchemy **不在里面** —— gateway 是无状态适配层，
-      # 一旦哪个依赖把 ORM 拖进来，`[corpus]` 的切分就名存实亡，
-      # 而表现只会是几个月后某次 docker build 变大、没人察觉
-      - name: 最小集不得依赖 sqlalchemy
-        run: |
-          python - <<'EOF'
-          import importlib.util
-          assert importlib.util.find_spec("sqlalchemy") is None, \
-              "最小集里出现了 sqlalchemy —— [corpus] 的切分失效了"
-          import ddp_core, ddp_core.chunking, ddp_core.crops, ddp_core.tokenize
-          import ddp_core.blocks, ddp_core.extract_format, ddp_core.hits, ddp_core.rerank
-          print("最小集 8 个模块可加载，且确实没有 sqlalchemy")
-          EOF
 
       - name: 契约守卫（openapi.yaml ←→ gateway 实际端点）
         run: python scripts/check_contract.py
@@ -76,7 +81,7 @@ jobs:
   # 上面那个 job 装的是 gateway[dev]（不含 sqlalchemy），连 import 都做不到。
   # 后果是**改 ddp_core/search.py 会让本仓库 CI 绿、只在 Web 那边红**。
   # 这个 job 是能在本仓库做到的最低限度：装上 [corpus] 把它们真的加载一遍。
-  # 与 contract job 里那条"最小集不得依赖 sqlalchemy"是一对，缺哪边哪边失守。
+  # 与 contract job 里那条"gateway 最小集不得依赖 sqlalchemy"是一对，缺哪边哪边失守。
   corpus:
     runs-on: ubuntu-latest
     steps:
