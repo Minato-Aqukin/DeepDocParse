@@ -1,4 +1,22 @@
-# 在 AutoDL 上部署 DeepSeek-OCR-2（无 docker）
+# 在 AutoDL 上部署（无 docker）
+
+> **两条线，别混**：模型线（`bootstrap` / `serve-vllm` / `serve-chat` / `verify`）
+> 与 Web 全栈线（`serve-web.sh`）。想要一个**能用浏览器打开的站点**，两条都要起：
+>
+> ```bash
+> bash deploy/autodl/bootstrap.sh          # 装 vLLM + 下权重（最长的一根杆子）
+> bash deploy/autodl/serve-vllm.sh --daemon
+> bash deploy/autodl/serve-chat.sh --daemon
+> bash deploy/autodl/verify.sh             # 六项，别跳过
+> bash deploy/autodl/serve-web.sh --install   # 首次：PG/MinIO/Redis/Node/venv
+> bash deploy/autodl/serve-web.sh             # 起全栈，幂等
+> ```
+>
+> **MinIO 要自己准备**：dl.min.io 与所有国内镜像、GitHub 代理 2026-08-29 实测
+> 全不可用或龟速（20 分钟 6MB）。本地下好后
+> `autodl push <id> ./minio /usr/local/bin/minio`，再 `chmod +x`。
+
+## 模型线：DeepSeek-OCR-2
 
 这套脚本把 **VQA 平面 / 抽取平面 / vlm-ocr 解析引擎**——也就是本项目里
 「基于大语言模型」的那三条线——跑在一台 AutoDL GPU 实例上，**全部是裸进程，不用 docker**。
@@ -11,6 +29,7 @@
 | `serve-chat.sh` | 起通用指令模型（抽取线）。不起它 `/v1/extract` 用不了 |
 | `verify.sh` | **别跳过**。两分钟，专抓四处不会报错的失效 |
 | `e2e-llm.sh` | 真机全链路：解析 → 出处 bbox → 抽取 → 视觉核对 |
+| `serve-web.sh` | **Web 侧全栈**（PG + MinIO + Redis + gateway + arq worker + 后端 + 前端）。`quickstart.sh` 要 docker，这里用不了 |
 | `chat-template-deepseek-ocr2.jinja` | 模型自己没带 chat template，不给就每个请求 400 |
 | `../../models.autodl.yaml` | 配套注册表（endpoint 全是回环地址） |
 | `../../scripts/calibrate_verify_threshold.py` | 标定视觉核对阈值（换文档类型就该重标） |
