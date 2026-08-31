@@ -1,5 +1,16 @@
 # DeepDocParse
 
+## 统一入口
+
+本仓库与同级的 `DeepDocParse-Web` 使用相同的两个入口；从任一仓库执行均可：
+
+```bash
+./init.sh local          # 初始化本机依赖；也支持 docker / autodl
+./start.sh local start   # start / stop / status / logs
+```
+
+复杂部署逻辑位于 `deploy/*.bash`，属于内部模块，不再作为用户入口。
+
 [English](README.en.md) · Apache-2.0 · **文档解析由 [MinerU](https://github.com/opendatalab/MinerU) 提供支持**
 
 面向技术手册与论文的多模态语料服务器。gateway 无状态转发模型，核心语料以
