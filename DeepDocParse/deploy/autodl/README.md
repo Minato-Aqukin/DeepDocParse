@@ -8,9 +8,14 @@
 > bash deploy/autodl/serve-vllm.sh --daemon
 > bash deploy/autodl/serve-chat.sh --daemon
 > bash deploy/autodl/verify.sh             # 六项，别跳过
+> bash deploy/autodl/serve-embed.sh --daemon  # 没有 TEI 时的 embedding 替身
 > bash deploy/autodl/serve-web.sh --install   # 首次：PG/MinIO/Redis/Node/venv
 > bash deploy/autodl/serve-web.sh             # 起全栈，幂等
 > ```
+>
+> **起了 serve-embed.sh 就要把 `models.autodl.yaml` 的 `embedding_models` 段打开**
+> （默认注释掉）。不打开的话索引会失败并写 `index_error`、检索退回 BM25 并标
+> `degraded=embedding_unavailable` —— 那是可见降级，不是坏了，但问答就没东西可检索。
 >
 > **MinIO 要自己准备**：dl.min.io 与所有国内镜像、GitHub 代理 2026-08-29 实测
 > 全不可用或龟速（20 分钟 6MB）。本地下好后
@@ -30,6 +35,7 @@
 | `verify.sh` | **别跳过**。两分钟，专抓四处不会报错的失效 |
 | `e2e-llm.sh` | 真机全链路：解析 → 出处 bbox → 抽取 → 视觉核对 |
 | `serve-web.sh` | **Web 侧全栈**（PG + MinIO + Redis + gateway + arq worker + 后端 + 前端）。`quickstart.sh` 要 docker，这里用不了 |
+| `serve-embed.sh` + `embed_shim.py` | bge-m3 的 CPU `/v1/embeddings`。**TEI 的替身，不是等价物** —— 不起它索引会失败、检索退 BM25（可见降级） |
 | `chat-template-deepseek-ocr2.jinja` | 模型自己没带 chat template，不给就每个请求 400 |
 | `../../models.autodl.yaml` | 配套注册表（endpoint 全是回环地址） |
 | `../../scripts/calibrate_verify_threshold.py` | 标定视觉核对阈值（换文档类型就该重标） |
