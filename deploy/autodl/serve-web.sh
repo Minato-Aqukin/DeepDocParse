@@ -112,6 +112,17 @@ if [ "${1:-}" = "--install" ]; then
   exit $(( FAILS > 0 ))
 fi
 
+# ---------------------------------------------------------------- 前置
+# 缺 venv 时早点说人话。不检查的话表现是后面三条 `setsid: No such file or
+# directory`，看起来像"服务崩了"，而其实只是没跑过 --install（实测踩过）。
+for pair in "$GW_VENV:gateway" "$WEB_VENV:web"; do
+  dir="${pair%%:*}"; name="${pair##*:}"
+  [ -x "$dir/bin/python" ] || {
+    fail "$name venv 不在 $dir —— 先跑 \`bash $0 --install\`；"
+    fail "  venv 在别处就覆盖变量：GW_VENV=... WEB_VENV=... bash $0"
+    exit 1; }
+done
+
 # ---------------------------------------------------------------- 配置
 section "1. 配置（首次生成随机密钥，之后复用）"
 mkdir -p "$WEB_LOGS"
