@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 起 bge-m3 的 /v1/embeddings（CPU），给没有 TEI 的机器用。
 #
-#   bash deploy/autodl/serve-embed.sh --daemon
+#   bash deploy/autodl/embed.bash --daemon
 #
 # `models.autodl.yaml` 的 embedding_models 段本来就写着这条出路
 # （"得下 TEI 的裸二进制或用 sentence-transformers 包一个 /v1/embeddings"）。
@@ -18,8 +18,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=env.sh
-source "$HERE/env.sh"
+# shellcheck source=env.bash
+source "$HERE/env.bash"
 
 EMBED_PORT="${EMBED_PORT:-18080}"
 EMBED_MODEL_DIR="${EMBED_MODEL_DIR:-$DDP_ROOT/models/bge-m3}"
@@ -42,7 +42,7 @@ mkdir -p "$LOG_DIR"
 CMD=("$VENV_DIR/bin/python" -m uvicorn embed_shim:app --host 127.0.0.1 --port "$EMBED_PORT")
 
 if [ "$DAEMON" = "1" ]; then
-  # setsid -f：nohup 会随 SSH 会话被回收（见 serve-web.sh 里的同一条注释）
+  # setsid -f：nohup 会随 SSH 会话被回收（见 web.bash 里的同一条注释）
   ( cd "$HERE" && EMBED_MODEL_DIR="$EMBED_MODEL_DIR" \
     setsid -f "${CMD[@]}" > "$LOG_DIR/embed.log" 2>&1 < /dev/null )
   echo "[embed] 后台启动 -> http://127.0.0.1:$EMBED_PORT，日志 $LOG_DIR/embed.log"

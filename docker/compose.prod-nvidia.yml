@@ -79,7 +79,7 @@ services:
   #   deploy: *gpu
 
   # ---- VQA 平面：DeepSeek-OCR-2 官方 vLLM 部署 ----
-  # 参数与 deploy/autodl/serve-vllm.sh **保持一致**（那份是裸进程版，这份是容器版，
+  # 参数与 deploy/autodl/ocr.bash **保持一致**（那份是裸进程版，这份是容器版，
   # 同一套判据：vLLM 官方 recipe + 官方推理脚本）。改一处记得改另一处。
   #
   # **唯一有意的差异**：裸进程那边要 `VLLM_USE_FLASHINFER_SAMPLER=0`，这里没有。
@@ -105,10 +105,10 @@ services:
       --gpu-memory-utilization 0.38
       --max-num-seqs 32
       --limit-mm-per-prompt '{"image": 1}'
-    # util 0.38 与 serve-vllm.sh 的 GPU_MEMORY_UTILIZATION 缺省值（共卡档）一致。
+    # util 0.38 与 ocr.bash 的 GPU_MEMORY_UTILIZATION 缺省值（共卡档）一致。
     # **只有先起的那个可以用 util 分显存**，理由见下面 chat-instruct 那段。
     # CUDA graph 捕获阶段崩溃时的退路（社区在 0.20~0.23 若干版本上报过）是
-    # `--enforce-eager`，代价是吞吐下降所以缺省不加 —— 裸进程版对应 env.sh 的
+    # `--enforce-eager`，代价是吞吐下降所以缺省不加 —— 裸进程版对应 env.bash 的
     # ENFORCE_EAGER=1。**注意 command 是 YAML 折叠标量，里面不能写 `#` 注释**
     # （会被原样当成参数传给 vLLM），所以这些说明只能放在块外。
     volumes:
@@ -122,7 +122,7 @@ services:
       - hf-cache:/root/.cache/huggingface
     environment:
       CUDA_VISIBLE_DEVICES: "0"
-      # 与 deploy/autodl/env.sh 同一个理由：直连 HF 在国内很慢，
+      # 与 deploy/autodl/env.bash 同一个理由：直连 HF 在国内很慢，
       # 而现在"慢"会通过 healthcheck 变成"失败"
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
     # **这个 healthcheck 是显存编排的一部分，不只是运维摆设。**
@@ -171,7 +171,7 @@ services:
   # 正解是给第二个服务 `--kv-cache-memory-bytes` **直接写死 KV 大小**
   # （官方 docstring：设了它就忽略 gpu_memory_utilization），util 只留着过
   # vLLM 那道启动前置检查（要求 空闲 >= util × 卡容量）。
-  # 数值与 deploy/autodl/env.sh 的 CHAT_GPU_MEMORY_UTILIZATION / CHAT_KV_CACHE_BYTES
+  # 数值与 deploy/autodl/env.bash 的 CHAT_GPU_MEMORY_UTILIZATION / CHAT_KV_CACHE_BYTES
   # 一致（0.55 / 3 GiB），完整推导在那份文件的「两个服务共卡时」一节。
   #
   # **顺序重要**：vqa-dsocr 必须**先分配完显存**，否则两边都算不出预算。

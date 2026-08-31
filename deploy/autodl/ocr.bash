@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # 起 vLLM 的 OpenAI 兼容服务，喂 DeepSeek-OCR-2。
 #
-#   bash deploy/autodl/serve-vllm.sh            # 前台跑，Ctrl-C 停
-#   bash deploy/autodl/serve-vllm.sh --daemon   # 后台跑，日志在 $LOG_DIR/vllm.log
+#   bash deploy/autodl/ocr.bash            # 前台跑，Ctrl-C 停
+#   bash deploy/autodl/ocr.bash --daemon   # 后台跑，日志在 $LOG_DIR/vllm.log
 #
-# 起来之后跑 verify.sh 验证 —— **别跳过那一步**，有两处失效是不报错的
-# （chat template 缺失、特殊 token 被剥），verify.sh 就是专门抓它们的。
+# 起来之后跑 verify.bash 验证 —— **别跳过那一步**，有两处失效是不报错的
+# （chat template 缺失、特殊 token 被剥），verify.bash 就是专门抓它们的。
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=env.sh
-source "$HERE/env.sh"
+# shellcheck source=env.bash
+source "$HERE/env.bash"
 
 DAEMON=0
 [ "${1:-}" = "--daemon" ] && DAEMON=1
 
-[ -x "$VENV_DIR/bin/vllm" ] || { echo "vLLM 没装，先跑 bootstrap.sh" >&2; exit 1; }
-[ -f "$MODEL_DIR/config.json" ] || { echo "权重不在 $MODEL_DIR，先跑 bootstrap.sh" >&2; exit 1; }
+[ -x "$VENV_DIR/bin/vllm" ] || { echo "vLLM 没装，先跑 bootstrap.bash" >&2; exit 1; }
+[ -f "$MODEL_DIR/config.json" ] || { echo "权重不在 $MODEL_DIR，先跑 bootstrap.bash" >&2; exit 1; }
 
 TEMPLATE="$HERE/chat-template-deepseek-ocr2.jinja"
 [ -f "$TEMPLATE" ] || { echo "chat template 不见了：$TEMPLATE" >&2; exit 1; }
@@ -85,7 +85,7 @@ if [ "$DAEMON" = "1" ]; then
   nohup "$VENV_DIR/bin/vllm" serve "${ARGS[@]}" >"$LOG_DIR/vllm.log" 2>&1 &
   echo $! > "$LOG_DIR/vllm.pid"
   echo "[serve] 后台启动，pid $(cat "$LOG_DIR/vllm.pid")，日志 $LOG_DIR/vllm.log"
-  echo "[serve] 就绪后跑：bash $HERE/verify.sh"
+  echo "[serve] 就绪后跑：bash $HERE/verify.bash"
 else
   exec "$VENV_DIR/bin/vllm" serve "${ARGS[@]}"
 fi

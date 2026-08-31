@@ -17,8 +17,8 @@
 
 vqa_models:
   # DeepSeek-OCR-2（2026-01 发布，3B，DeepEncoder V2 + DeepSeek-V2 MoE）。
-  # 由 deploy/autodl/serve-vllm.sh 起的 vLLM 提供，OpenAI 兼容。
-  # 名字必须与 serve-vllm.sh 的 --served-model-name 一致，否则 model 字段对不上（404）。
+  # 由 deploy/autodl/ocr.bash 起的 vLLM 提供，OpenAI 兼容。
+  # 名字必须与 ocr.bash 的 --served-model-name 一致，否则 model 字段对不上（404）。
   deepseek-ocr-2:
     endpoint: "http://127.0.0.1:18001"
     default: true
@@ -80,7 +80,7 @@ parse_engines:
       # 调高不会更准（模型内部会缩到 1024/768），只会更慢更占显存。
       scale: 2.0
 
-      # 同时打几页。受显存约束；serve-vllm.sh 的 --max-num-seqs 是另一半闸门，
+      # 同时打几页。受显存约束；ocr.bash 的 --max-num-seqs 是另一半闸门，
       # 两者取小。24G 卡上 4 是稳的，要压吞吐先动这里。
       concurrency: 4
 

@@ -87,7 +87,7 @@ _FENCE = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
 # （DeepSeek-OCR2-vllm/run_dpsk_ocr2_pdf.py），别凭感觉改：
 #   ngram_size / window_size  防重复 logits processor 的窗口。OCR 模型在
 #       表格、页眉页脚这类高度重复的版面上会陷进复读循环，一路吐到 max_tokens。
-#       vLLM 侧要用 `--logits-processors` 把它挂上（见 deploy/autodl/serve-vllm.sh），
+#       vLLM 侧要用 `--logits-processors` 把它挂上（见 deploy/autodl/ocr.bash），
 #       **并且**每个请求带 ngram_size 才会生效 —— 没传就整个跳过
 #       （见 vLLM 的 NGramPerReqLogitsProcessor.validate_params）。两边缺一不可。
 #   whitelist  <td> / </td> 的 token id。表格里这两个标签本来就该反复出现，

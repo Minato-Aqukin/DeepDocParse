@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # vLLM 起来之后跑这个。**别跳过。**
 #
-#   bash deploy/autodl/verify.sh
+#   bash deploy/autodl/verify.bash
 #
 # 它花不到两分钟，但专门抓这条链路上**四处不会报错的失效**：
 #
@@ -17,8 +17,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=env.sh
-source "$HERE/env.sh"
+# shellcheck source=env.bash
+source "$HERE/env.bash"
 
 BASE="http://$VLLM_HOST:$VLLM_PORT"
 PY="$VENV_DIR/bin/python"
@@ -193,7 +193,7 @@ PYEOF
 if [ $? -eq 0 ]; then pass "端到端识别通过"; else fail "端到端识别没通过（细节见上）"; fi
 
 # ---------------------------------------------------------------- 5. FlashAttention
-# 不装 flash-attn 这个 pip 包是**故意的**（见 bootstrap.sh 的长注释）：
+# 不装 flash-attn 这个 pip 包是**故意的**（见 bootstrap.bash 的长注释）：
 # vLLM 自带 vllm-flash-attn，FlashAttention 照样在用。这里打印证据，
 # 免得将来有人看见"没装 flash-attn"就以为没用上，又去编译一个小时。
 section "5. FlashAttention 用上了吗"
@@ -250,7 +250,7 @@ PYEOF
   # shellcheck disable=SC2181
   if [ $? -eq 0 ]; then pass "指令跟随 + JSON 输出"; else fail "指令模型没按要求输出"; fi
 else
-  fail "http://$VLLM_HOST:$CHAT_PORT 不通 —— 先跑 serve-chat.sh（看 $LOG_DIR/chat.log）"
+  fail "http://$VLLM_HOST:$CHAT_PORT 不通 —— 先跑 chat.bash（看 $LOG_DIR/chat.log）"
 fi
 
 # ---------------------------------------------------------------- 汇总

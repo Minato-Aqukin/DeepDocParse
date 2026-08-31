@@ -1039,7 +1039,7 @@ def test_shipped_vqa_entries_declare_capabilities_explicitly(path):
     旧世界是对的，但 `no_instruct` 之后这一段开始住纯文本模型了 ——
     于是"没写"就等于"被默默声明成看得见图"，而视觉核对会挑中它，
     **每条好出处都被判成 parse_mismatch**。
-    这不是假想：`DeepDocParse-Web/quickstart.sh` 生成的注册表正好踩了它。
+    这不是假想：`DeepDocParse-Web/deploy/docker.bash` 生成的注册表正好踩了它。
 
     强制显式声明，新条目就没机会被默默贴错标。
 

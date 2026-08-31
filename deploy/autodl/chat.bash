@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # 起抽取平面用的通用指令模型（缺省 Qwen3-4B-Instruct）。
 #
-#   bash deploy/autodl/serve-chat.sh --daemon
+#   bash deploy/autodl/chat.bash --daemon
 #
-# 与 serve-vllm.sh 是**两个独立的 vLLM 进程，挤同一张卡**，
+# 与 ocr.bash 是**两个独立的 vLLM 进程，挤同一张卡**，
 # **必须在它之后起**。
 #
 # 共卡的显存不是靠 `gpu-memory-utilization` 分的 —— 那条路走不通：它算的是
 # **整卡**已用显存，再叠上启动前置检查（`空闲 >= util × 卡容量`），
 # 对方的占用会被扣两遍，24G 卡上放 6.7G + 7.5G 两套权重怎么调都解不出正数。
 # 这里的办法是 `--kv-cache-memory-bytes` 直接写死 KV 大小（设了它就忽略 util），
-# util 只留着过那道启动检查。完整推导见 env.sh 的「两个服务共卡时」一节。
+# util 只留着过那道启动检查。完整推导见 env.bash 的「两个服务共卡时」一节。
 #
 # 为什么不能省：DeepSeek-OCR-2 是 OCR 专用模型，只会把看到的字抄出来。
 # 给它"请按 schema 抽取并输出 JSON"的指令，抽不出东西 —— 而抽不出来会被记成
@@ -20,8 +20,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=env.sh
-source "$HERE/env.sh"
+# shellcheck source=env.bash
+source "$HERE/env.bash"
 
 DAEMON=0
 [ "${1:-}" = "--daemon" ] && DAEMON=1
@@ -31,14 +31,14 @@ if [ "$ENABLE_CHAT" != "1" ]; then
   exit 0
 fi
 
-[ -x "$VENV_DIR/bin/vllm" ] || { echo "vLLM 没装，先跑 bootstrap.sh" >&2; exit 1; }
+[ -x "$VENV_DIR/bin/vllm" ] || { echo "vLLM 没装，先跑 bootstrap.bash" >&2; exit 1; }
 [ -f "$CHAT_MODEL_DIR/config.json" ] || {
-  echo "指令模型不在 $CHAT_MODEL_DIR —— 先跑 bootstrap.sh（它会一起下）" >&2; exit 1; }
+  echo "指令模型不在 $CHAT_MODEL_DIR —— 先跑 bootstrap.bash（它会一起下）" >&2; exit 1; }
 
 mkdir -p "$LOG_DIR"
 
 # ---- 等 OCR 那个服务真的分配完显存再起 ----
-# **"先起 serve-vllm.sh"这句话不够。** `--daemon` 是 nohup 立刻返回的，
+# **"先起 ocr.bash"这句话不够。** `--daemon` 是 nohup 立刻返回的，
 # 而 vLLM 从进程启动到真正吃满显存要几分钟（加载权重 + memory profiling +
 # CUDA graph 捕获）。照 README 三步连着敲，两个进程实际上是**并行** profiling 的，
 # 谁先分配完全看运气 —— 而按上面那段推导，**后分配的那个必定算出负的 KV**。
@@ -55,7 +55,7 @@ wait_for_ocr() {
   esac
   # 探测靠这个 python，它不在的话每轮都会被当成"还没就绪"，白等满 limit 才失败
   [ -x "$VENV_DIR/bin/python" ] || {
-    echo "[chat] $VENV_DIR/bin/python 不存在，先跑 bootstrap.sh" >&2; return 1; }
+    echo "[chat] $VENV_DIR/bin/python 不存在，先跑 bootstrap.bash" >&2; return 1; }
   echo "[chat] 等 OCR 服务就绪（$url，最多 ${limit}s）…"
   while [ "$waited" -lt "$limit" ]; do
     if "$VENV_DIR/bin/python" -c "
@@ -94,7 +94,7 @@ ARGS=(
   --max-model-len "$CHAT_MAX_MODEL_LEN"
   # util 在这里**只用来过 vLLM 的启动前置检查**（要求 空闲 >= util×卡容量）；
   # KV 大小由下面那行说了算（官方 docstring：设了 kv-cache-memory-bytes
-  # 就忽略 gpu-memory-utilization）。共卡时这是唯一算得清的办法，见 env.sh。
+  # 就忽略 gpu-memory-utilization）。共卡时这是唯一算得清的办法，见 env.bash。
   --gpu-memory-utilization "$CHAT_GPU_MEMORY_UTILIZATION"
   --max-num-seqs "$MAX_NUM_SEQS"
 )
