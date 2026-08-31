@@ -36,8 +36,13 @@ async def lifespan(app: FastAPI):
     # 阈值配反了不会报错，只会让低相关提示永远不触发（又一个静默失效的功能）
     assert_thresholds_sane()
     app.state.registry = load_registry(settings.models_config)
-    # 下载 file_url / 转传 mineru 可能是大文件，读超时放宽
-    app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
+    # 下载 file_url / 转传 mineru 可能是大文件，读超时放宽。
+    # **`trust_env=False` 不能省**：带代理变量的机器（AutoDL 镜像常年自带，
+    # 旧 dev 机的 SOCKS 也是）会把 `http://127.0.0.1:...` 这种内网调用
+    # 也塞进代理，表现是解析卡住而不是报错 —— mcp_server 两处与 Web 的
+    # service_client 早就带着它，只有 gateway 这两处漏了。
+    app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0),
+                                       trust_env=False)
     # VQA 同步通道的并发闸（满载 429，见 chat.py）
     app.state.vqa_semaphore = asyncio.Semaphore(settings.vqa_max_concurrency)
     app.state.redis = redis.from_url(settings.redis_url)
