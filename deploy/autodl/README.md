@@ -1,16 +1,11 @@
 # 在 AutoDL 上部署（无 docker）
 
-> **两条线，别混**：模型线（`bootstrap` / `serve-vllm` / `serve-chat` / `verify`）
-> 与 Web 全栈线（`web.bash`）。想要一个**能用浏览器打开的站点**，两条都要起：
+> 对外只使用仓库根的 `init.sh` 与 `start.sh`；本目录的 `.bash` 都是内部模块。
 >
 > ```bash
-> bash deploy/autodl/bootstrap.bash          # 装 vLLM + 下权重（最长的一根杆子）
-> bash deploy/autodl/ocr.bash --daemon
-> bash deploy/autodl/chat.bash --daemon
-> bash deploy/autodl/verify.bash             # 六项，别跳过
-> bash deploy/autodl/embed.bash --daemon  # 没有 TEI 时的 embedding 替身
-> bash deploy/autodl/web.bash --install   # 首次：PG/MinIO/Redis/Node/venv
-> bash deploy/autodl/web.bash             # 起全栈，幂等
+> ./init.sh autodl
+> ./start.sh autodl start
+> ./start.sh autodl doctor                 # 六项，别跳过
 > ```
 >
 > **起了 embed.bash 就要把 `models.autodl.yaml` 的 `embedding_models` 段打开**
@@ -137,16 +132,16 @@ autodl create --gpu 4090d --disk 50 --ttl 4h --wait --name ddp-ocr2
 ## 三步
 
 ```bash
-bash deploy/autodl/bootstrap.bash          # 约 25~45 分钟（两个模型的下载占大头）
-bash deploy/autodl/ocr.bash --daemon    # 识别 / VQA 线（:18001）
-bash deploy/autodl/chat.bash --daemon    # 抽取线（:18002）。会先等 OCR 就绪，最多 10 分钟
-bash deploy/autodl/verify.bash             # 不到 2 分钟，6 项检查
-bash deploy/autodl/e2e-llm.bash            # 真机全链路（起 redis/gateway/worker 跑一遍）
+./init.sh autodl                           # 约 25~45 分钟（两个模型的下载占大头）
+./start.sh autodl start                    # OCR / 抽取 / Web 全栈
+./start.sh autodl doctor                   # 不到 2 分钟，6 项检查
+./start.sh autodl e2e                      # 真机全链路（起 redis/gateway/worker 跑一遍）
 ```
 
 `verify.bash` 全绿之前不要往下走。带病跑 e2e 只会烧掉更多 GPU 时间。
 
-只想验识别线、不管抽取的话：`ENABLE_CHAT=0 bash deploy/autodl/bootstrap.bash`，
+只想验识别线、不管抽取的话，两步都显式带同一个开关：
+`ENABLE_CHAT=0 ./init.sh autodl`，随后 `ENABLE_CHAT=0 ./start.sh autodl start`。
 省 8G 磁盘和一半显存，代价是 `/v1/extract` 一律报 `no_instruct_model`。
 
 > ⚠️ **`ENABLE_CHAT=0` 时要把 `models.autodl.yaml` 里的 `qwen3-4b-instruct`
@@ -318,7 +313,7 @@ autodl stop pro-xxx                # 用完立刻关，数据保留
   `VLLM_USE_FLASHINFER_SAMPLER=0` 关掉了。FlashInfer 的采样内核是首次使用时
   JIT 编译的，要 ninja + 版本匹配的 nvcc，AutoDL 基础镜像两样都不满足。
   2026-08-25 在 4090D 上实测撞到过：权重都加载完了，崩在内存 profiling 那一步。
-- **启动时 worker 在 CUDA graph 捕获阶段死掉** → `ENFORCE_EAGER=1 bash ocr.bash`。
+- **启动时 worker 在 CUDA graph 捕获阶段死掉** → `ENFORCE_EAGER=1 ./start.sh autodl start`。
   社区在 0.20~0.23 若干版本上报过（vLLM 论坛 2727 / issue 41468）。代价是吞吐下降。
 - **`/v1/models` 里没有 `deepseek-ocr-2`** → `--served-model-name` 与
   `models.autodl.yaml` 的 `options.model` 不一致，gateway 发过来会 404。
