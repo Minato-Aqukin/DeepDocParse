@@ -175,7 +175,10 @@ async def _chunk_and_index(ctx: dict, task_id: str) -> None:
 
 
 async def startup(ctx: dict) -> None:
-    ctx["http"] = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
+    # trust_env=False 的理由同 app/main.py：worker 要回 Web 层下载源文件
+    # （`PUBLIC_BASE_URL/files/{token}`，通常是回环地址），走代理就废了。
+    ctx["http"] = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0),
+                                    trust_env=False)
     ctx["redis_store"] = redis.from_url(settings.redis_url)
     ctx["task_store"] = TaskStore(ctx["redis_store"], settings.result_ttl,
                                   settings.queue_inflight_ttl)

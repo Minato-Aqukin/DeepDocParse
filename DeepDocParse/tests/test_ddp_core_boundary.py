@@ -125,3 +125,53 @@ def test_the_boundary_scan_actually_covers_something():
     assert _corpus_modules() >= {"models", "search", "types"}, \
         f"corpus 层识别结果不对：{_corpus_modules()}"
     assert any(GATEWAY.rglob("*.py")) and any(MCP.rglob("*.py"))
+
+
+def test_every_httpx_client_disables_proxy_env():
+    """所有 `httpx.AsyncClient` 都必须显式 `trust_env=False`。
+
+    带代理变量的机器（AutoDL 镜像常年自带，旧 dev 机的 SOCKS 也是）会把
+    `http://127.0.0.1:...` 这种内网调用也塞进代理。**表现不是报错，是卡住**：
+    worker 回 Web 层下载源文件那一步过不去，解析任务就停在 running，
+    直到 30 分钟的 poll_timeout 才落成 failed —— 中间一点线索都没有。
+
+    2026-08-29 上机时实测：`mcp_server` 两处与 Web 的 `service_client` 早就带着它，
+    **只有 gateway 的 `main.py` 与 `worker/tasks.py` 漏了**。靠"记得写"维持
+    一致性的东西迟早会漏一处，所以钉成守卫。
+    """
+    import ast
+
+    offenders = []
+    for root in (GATEWAY, MCP):
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                target = node.func
+                name = (target.attr if isinstance(target, ast.Attribute)
+                        else getattr(target, "id", ""))
+                if name not in ("AsyncClient", "Client"):
+                    continue
+                keywords = {kw.arg for kw in node.keywords}
+                if "trust_env" not in keywords:
+                    offenders.append(f"{path.relative_to(root.parent)}:{node.lineno}")
+    assert not offenders, (
+        f"这些 httpx 客户端没写 trust_env=False：{offenders}。"
+        f"带代理变量的机器上，内网调用会被塞进代理并卡住而不是报错")
+
+
+def test_the_httpx_scan_actually_finds_clients():
+    """反哨兵：扫不到任何客户端时上一条会恒真。"""
+    import ast
+
+    total = 0
+    for root in (GATEWAY, MCP):
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            total += sum(
+                1 for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and (node.func.attr if isinstance(node.func, ast.Attribute)
+                     else getattr(node.func, "id", "")) in ("AsyncClient", "Client"))
+    assert total >= 3, f"只扫到 {total} 个 httpx 客户端，扫描逻辑可能坏了"
