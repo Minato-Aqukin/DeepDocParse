@@ -1,19 +1,19 @@
 # 在 AutoDL 上部署（无 docker）
 
 > **两条线，别混**：模型线（`bootstrap` / `serve-vllm` / `serve-chat` / `verify`）
-> 与 Web 全栈线（`serve-web.sh`）。想要一个**能用浏览器打开的站点**，两条都要起：
+> 与 Web 全栈线（`web.bash`）。想要一个**能用浏览器打开的站点**，两条都要起：
 >
 > ```bash
-> bash deploy/autodl/bootstrap.sh          # 装 vLLM + 下权重（最长的一根杆子）
-> bash deploy/autodl/serve-vllm.sh --daemon
-> bash deploy/autodl/serve-chat.sh --daemon
-> bash deploy/autodl/verify.sh             # 六项，别跳过
-> bash deploy/autodl/serve-embed.sh --daemon  # 没有 TEI 时的 embedding 替身
-> bash deploy/autodl/serve-web.sh --install   # 首次：PG/MinIO/Redis/Node/venv
-> bash deploy/autodl/serve-web.sh             # 起全栈，幂等
+> bash deploy/autodl/bootstrap.bash          # 装 vLLM + 下权重（最长的一根杆子）
+> bash deploy/autodl/ocr.bash --daemon
+> bash deploy/autodl/chat.bash --daemon
+> bash deploy/autodl/verify.bash             # 六项，别跳过
+> bash deploy/autodl/embed.bash --daemon  # 没有 TEI 时的 embedding 替身
+> bash deploy/autodl/web.bash --install   # 首次：PG/MinIO/Redis/Node/venv
+> bash deploy/autodl/web.bash             # 起全栈，幂等
 > ```
 >
-> **起了 serve-embed.sh 就要把 `models.autodl.yaml` 的 `embedding_models` 段打开**
+> **起了 embed.bash 就要把 `models.autodl.yaml` 的 `embedding_models` 段打开**
 > （默认注释掉）。不打开的话索引会失败并写 `index_error`、检索退回 BM25 并标
 > `degraded=embedding_unavailable` —— 那是可见降级，不是坏了，但问答就没东西可检索。
 >
@@ -28,14 +28,14 @@
 
 | 文件 | 干什么 |
 |---|---|
-| `env.sh` | 唯一配置面。路径、版本、端口、显存旋钮都在这里 |
-| `bootstrap.sh` | 建 venv → 装 vLLM → 下权重。幂等，断线可重跑 |
-| `serve-vllm.sh` | 起 DeepSeek-OCR-2（识别 / VQA 线），带全部推理优化参数 |
-| `serve-chat.sh` | 起通用指令模型（抽取线）。不起它 `/v1/extract` 用不了 |
-| `verify.sh` | **别跳过**。两分钟，专抓四处不会报错的失效 |
-| `e2e-llm.sh` | 真机全链路：解析 → 出处 bbox → 抽取 → 视觉核对 |
-| `serve-web.sh` | **Web 侧全栈**（PG + MinIO + Redis + gateway + arq worker + 后端 + 前端）。`quickstart.sh` 要 docker，这里用不了 |
-| `serve-embed.sh` + `embed_shim.py` | bge-m3 的 CPU `/v1/embeddings`。**TEI 的替身，不是等价物** —— 不起它索引会失败、检索退 BM25（可见降级） |
+| `env.bash` | 唯一配置面。路径、版本、端口、显存旋钮都在这里 |
+| `bootstrap.bash` | 建 venv → 装 vLLM → 下权重。幂等，断线可重跑 |
+| `ocr.bash` | 起 DeepSeek-OCR-2（识别 / VQA 线），带全部推理优化参数 |
+| `chat.bash` | 起通用指令模型（抽取线）。不起它 `/v1/extract` 用不了 |
+| `verify.bash` | **别跳过**。两分钟，专抓四处不会报错的失效 |
+| `e2e-llm.bash` | 真机全链路：解析 → 出处 bbox → 抽取 → 视觉核对 |
+| `web.bash` | **Web 侧全栈**（PG + MinIO + Redis + gateway + arq worker + 后端 + 前端）。`deploy/docker.bash` 要 docker，这里用不了 |
+| `embed.bash` + `embed_shim.py` | bge-m3 的 CPU `/v1/embeddings`。**TEI 的替身，不是等价物** —— 不起它索引会失败、检索退 BM25（可见降级） |
 | `chat-template-deepseek-ocr2.jinja` | 模型自己没带 chat template，不给就每个请求 400 |
 | `../../models.autodl.yaml` | 配套注册表（endpoint 全是回环地址） |
 | `../../scripts/calibrate_verify_threshold.py` | 标定视觉核对阈值（换文档类型就该重标） |
@@ -95,7 +95,7 @@ DeepSeek-OCR-2 是 **OCR 专用模型**，只在两个官方 prompt 上训练过
 
 所以注册表里 OCR-2 标了 `capabilities: [vision, no_instruct]`，抽值路径会跳过它。
 一个可用的指令模型都没有时，`/v1/extract` 如实报 `no_instruct_model` 而不是硬抽。
-要让抽取平面真能干活，就得起 `serve-chat.sh`（缺省 Qwen3-4B-Instruct，
+要让抽取平面真能干活，就得起 `chat.bash`（缺省 Qwen3-4B-Instruct，
 挑 4B 是因为它要和 OCR-2 挤同一张卡，而这个活的上下文已经被检索限定住了）。
 
 ## 为什么不能用 docker
@@ -137,22 +137,22 @@ autodl create --gpu 4090d --disk 50 --ttl 4h --wait --name ddp-ocr2
 ## 三步
 
 ```bash
-bash deploy/autodl/bootstrap.sh          # 约 25~45 分钟（两个模型的下载占大头）
-bash deploy/autodl/serve-vllm.sh --daemon    # 识别 / VQA 线（:18001）
-bash deploy/autodl/serve-chat.sh --daemon    # 抽取线（:18002）。会先等 OCR 就绪，最多 10 分钟
-bash deploy/autodl/verify.sh             # 不到 2 分钟，6 项检查
-bash deploy/autodl/e2e-llm.sh            # 真机全链路（起 redis/gateway/worker 跑一遍）
+bash deploy/autodl/bootstrap.bash          # 约 25~45 分钟（两个模型的下载占大头）
+bash deploy/autodl/ocr.bash --daemon    # 识别 / VQA 线（:18001）
+bash deploy/autodl/chat.bash --daemon    # 抽取线（:18002）。会先等 OCR 就绪，最多 10 分钟
+bash deploy/autodl/verify.bash             # 不到 2 分钟，6 项检查
+bash deploy/autodl/e2e-llm.bash            # 真机全链路（起 redis/gateway/worker 跑一遍）
 ```
 
-`verify.sh` 全绿之前不要往下走。带病跑 e2e 只会烧掉更多 GPU 时间。
+`verify.bash` 全绿之前不要往下走。带病跑 e2e 只会烧掉更多 GPU 时间。
 
-只想验识别线、不管抽取的话：`ENABLE_CHAT=0 bash deploy/autodl/bootstrap.sh`，
+只想验识别线、不管抽取的话：`ENABLE_CHAT=0 bash deploy/autodl/bootstrap.bash`，
 省 8G 磁盘和一半显存，代价是 `/v1/extract` 一律报 `no_instruct_model`。
 
 > ⚠️ **`ENABLE_CHAT=0` 时要把 `models.autodl.yaml` 里的 `qwen3-4b-instruct`
 > 那一段注释掉。** gateway 的 `/readyz` 是 `all(up)` —— 注册了却没起对应服务，
 > 探针恒 503，副本永远不接流量。注册表里写了什么，就得真的起什么：
-> 这正是 `DeepDocParse-Web/quickstart.sh` 的 `write_registry` 特意规避的那个坑
+> 这正是 `DeepDocParse-Web/deploy/docker.bash` 的 `write_registry` 特意规避的那个坑
 > （它按"这次部署真的起了什么"生成注册表，而不是照抄仓库里的模板）。
 
 ### 显存怎么分（24G 卡）
@@ -178,11 +178,11 @@ bash deploy/autodl/e2e-llm.sh            # 真机全链路（起 redis/gateway/w
 | 1 | DeepSeek-OCR-2 (3B) | `--gpu-memory-utilization 0.38` | 全卡 8.9 GiB |
 | 2 | Qwen3-4B-Instruct | `--gpu-memory-utilization 0.55`（只为过①）<br>`--kv-cache-memory-bytes 3221225472`（3 GiB） | 自身 ~12.5 GiB |
 
-**顺序重要**：先 `serve-vllm.sh` 再 `serve-chat.sh`。反过来的话 OCR 那边过不了①。
+**顺序重要**：先 `ocr.bash` 再 `chat.bash`。反过来的话 OCR 那边过不了①。
 
 光按顺序敲还不够 —— `--daemon` 是立刻返回的，而 vLLM 要几分钟才真正吃满显存，
 连着敲两条等于让两个进程**并行** profiling，谁先分配全看运气，
-而后分配的那个必定算出负的 KV。所以 `serve-chat.sh` 会自己**等 OCR 的 `/health` 通**
+而后分配的那个必定算出负的 KV。所以 `chat.bash` 会自己**等 OCR 的 `/health` 通**
 再起（最多 10 分钟，`OCR_WAIT_SECONDS=0` 可跳过）。容器版对应 compose 里
 `vqa-dsocr` 的 healthcheck + `condition: service_healthy`。
 
@@ -190,7 +190,7 @@ bash deploy/autodl/e2e-llm.sh            # 真机全链路（起 redis/gateway/w
 最后一样才是能并发的本钱。抽取那边上下文只给 4096（prompt 是"几个检索出来的块 +
 字段说明"，很短）—— 开到 8192 时一条序列就要 1.12 GiB KV，白白吃掉一半并发。
 
-`env.sh` 会按 `ENABLE_CHAT` 自动选这套值（独占卡时 OCR 回到 0.85），一般不用手动改。
+`env.bash` 会按 `ENABLE_CHAT` 自动选这套值（独占卡时 OCR 回到 0.85），一般不用手动改。
 
 ## 推理优化
 
@@ -209,7 +209,7 @@ bash deploy/autodl/e2e-llm.sh            # 真机全链路（起 redis/gateway/w
 
 这条省的是真金白银：`flash-attn` 没有匹配预编译 wheel 时会源码编译，
 16 核机器上要 **30~90 分钟**，按 GPU 计费全是白烧。
-`verify.sh` 第 5 步会打印 FlashAttention 确实在用的证据，免得后人看见"没装"又去编译一遍。
+`verify.bash` 第 5 步会打印 FlashAttention 确实在用的证据，免得后人看见"没装"又去编译一遍。
 
 ### 启动参数
 
@@ -286,7 +286,7 @@ autodl stop pro-xxx                # 用完立刻关，数据保留
 
 ## 排查：四处不会报错的失效
 
-这条链路上有四个地方坏了也不吭声，`verify.sh` 就是专门盯它们的：
+这条链路上有四个地方坏了也不吭声，`verify.bash` 就是专门盯它们的：
 
 1. **chat template 没挂上** → 服务起得来，每个 chat 请求 400。
    模型仓库里确实没有 chat_template，必须靠 `--chat-template` 显式给。
@@ -314,15 +314,15 @@ autodl stop pro-xxx                # 用完立刻关，数据保留
 
 其他常见问题：
 
-- **启动崩在 `FileNotFoundError: 'ninja'`** → 已经在 `env.sh` 里用
+- **启动崩在 `FileNotFoundError: 'ninja'`** → 已经在 `env.bash` 里用
   `VLLM_USE_FLASHINFER_SAMPLER=0` 关掉了。FlashInfer 的采样内核是首次使用时
   JIT 编译的，要 ninja + 版本匹配的 nvcc，AutoDL 基础镜像两样都不满足。
   2026-08-25 在 4090D 上实测撞到过：权重都加载完了，崩在内存 profiling 那一步。
-- **启动时 worker 在 CUDA graph 捕获阶段死掉** → `ENFORCE_EAGER=1 bash serve-vllm.sh`。
+- **启动时 worker 在 CUDA graph 捕获阶段死掉** → `ENFORCE_EAGER=1 bash ocr.bash`。
   社区在 0.20~0.23 若干版本上报过（vLLM 论坛 2727 / issue 41468）。代价是吞吐下降。
 - **`/v1/models` 里没有 `deepseek-ocr-2`** → `--served-model-name` 与
   `models.autodl.yaml` 的 `options.model` 不一致，gateway 发过来会 404。
-- **pip 慢** → `env.sh` 里已经指到阿里云镜像（实例上实测 4.3s vs pypi 直连 15s）。
+- **pip 慢** → `env.bash` 里已经指到阿里云镜像（实例上实测 4.3s vs pypi 直连 15s）。
 - **识别质量差、bbox 乱** → 先确认 `models.autodl.yaml` 里 `dialect: deepseek-ocr2`
   写了。缺省是 `generic-json`，那是给通用视觉模型的 prompt，
   对这个只在两个官方 prompt 上训练过的 OCR 专用模型是错的用法。

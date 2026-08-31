@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # 「基于大语言模型」那三条线的真机 e2e。**这是本仓库第一次真的在 GPU 上跑通它们。**
 #
-#   bash deploy/autodl/e2e-llm.sh
+#   bash deploy/autodl/e2e-llm.bash
 #
-# 前置：bootstrap.sh 装完、serve-vllm.sh / serve-chat.sh 起好、verify.sh 全绿。
+# 前置：bootstrap.bash 装完、ocr.bash / chat.bash 起好、verify.bash 全绿。
 #
 # 它验的是 mock 单测**验不了**的那部分：单测能钉住"我们发的请求形状对不对"、
 # "拿到 grounding 标签后解析得对不对"，但钉不住"真模型在这个请求形状下到底
@@ -16,8 +16,8 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-# shellcheck source=env.sh
-source "$HERE/env.sh"
+# shellcheck source=env.bash
+source "$HERE/env.bash"
 
 PY="$VENV_DIR/bin/python"
 TOKEN="${SERVICE_TOKEN:-e2e-local-token-not-a-placeholder}"

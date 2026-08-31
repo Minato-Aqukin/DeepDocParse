@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 # 在 AutoDL（无 docker）上把 **Web 侧全栈** 用裸进程起起来。
 #
-#   bash deploy/autodl/serve-web.sh --install   # 首次：装 PG/MinIO/Redis/Node/venv
-#   bash deploy/autodl/serve-web.sh             # 起服务（幂等，可反复跑）
-#   bash deploy/autodl/serve-web.sh --stop      # 停掉本脚本起的所有进程
+#   bash deploy/autodl/web.bash --install   # 首次：装 PG/MinIO/Redis/Node/venv
+#   bash deploy/autodl/web.bash             # 起服务（幂等，可反复跑）
+#   bash deploy/autodl/web.bash --stop      # 停掉本脚本起的所有进程
 #
-# 为什么需要它：`quickstart.sh` 硬依赖 docker（`docker info` 失败就 die），
+# 为什么需要它：`deploy/docker.bash` 硬依赖 docker（`docker info` 失败就 die），
 # 而 AutoDL 实例是非特权容器，dind / rootless / podman 全堵死。
 # 于是 plan.md 阶段 8 §1「照 quickstart 全新部署」在 AutoDL 上做不了，
 # §2「真实用户路径」也就没有载体 —— 2026-08-29 那次上机整套是手工敲的，
 # 光这部分吃掉近一半机时。这个脚本就是把那次手工过程固化下来。
 #
-# 它**不管模型**：OCR / 指令模型仍归 bootstrap.sh + serve-vllm.sh + serve-chat.sh。
+# 它**不管模型**：OCR / 指令模型仍归 bootstrap.bash + ocr.bash + chat.bash。
 # 起的是数据面（PG + MinIO + Redis）与产品面（gateway / arq worker / 后端 / 前端）。
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=env.sh
-source "$HERE/env.sh"
+# shellcheck source=env.bash
+source "$HERE/env.bash"
 
 pass() { printf '\033[32m  OK  \033[0m %s\n' "$*"; }
 fail() { printf '\033[31m FAIL \033[0m %s\n' "$*"; FAILS=$((FAILS + 1)); }
@@ -44,7 +44,10 @@ FRONTEND_PORT="${FRONTEND_PORT:-6006}"
 
 # ---------------------------------------------------------------- 停
 if [ "${1:-}" = "--stop" ]; then
-  for pat in "uvicorn app.main:app" "arq app.worker.tasks" "http.server $FRONTEND_PORT" "minio server"; do
+  # **匹配串必须跟真实 cmdline 对上**：前端那条曾写 "http.server $FRONTEND_PORT"，
+  # 而进程其实是 `python -u .../ddp_static_proxy.py`，于是 --stop 之后 6006 还在服务 ——
+  # 首页 200、每个 API 却拿到反代的 502，看起来像"站还在、功能全坏"（2026-08-31 实测）。
+  for pat in "uvicorn app.main:app" "arq app.worker.tasks" "ddp_static_proxy" "minio server"; do
     pkill -f "$pat" 2>/dev/null && info "停掉 $pat"
   done
   pg_ctlcluster 15 main stop 2>/dev/null && info "停掉 PostgreSQL"
@@ -98,13 +101,17 @@ if [ "${1:-}" = "--install" ]; then
   # **gateway 与 web 必须是两个 venv**：gateway 的最小集里不许有 sqlalchemy
   # （plan.md §2 的 [corpus] 切分），而 backend 需要它。
   export PATH="$HOME/.local/bin:$HOME/miniconda3/bin:$PATH"
-  command -v uv >/dev/null || { fail "没有 uv —— 先跑 bootstrap.sh"; exit 1; }
+  command -v uv >/dev/null || { fail "没有 uv —— 先跑 bootstrap.bash"; exit 1; }
+  # **每处 uv pip 都要显式 --index-url**：uv 不读 /etc/pip.conf、也不认 PIP_INDEX_URL，
+  # 不带就直连 pypi.org。2026-08-31 实测：不带时 8 分钟只装出 2 个包，
+  # 带上阿里云镜像（env.bash 里的 $PIP_INDEX_URL，bootstrap.bash 每处都带）是一分钟的事。
+  UVI=(--index-url "$PIP_INDEX_URL")
   uv python install 3.12 >/dev/null 2>&1
   uv venv --python 3.12 "$GW_VENV" >/dev/null 2>&1
-  VIRTUAL_ENV="$GW_VENV" uv pip install -q -e "$SERVICE_DIR/gateway" -e "$SERVICE_DIR/mcp_server"
+  VIRTUAL_ENV="$GW_VENV" uv pip install "${UVI[@]}" -q -e "$SERVICE_DIR/gateway" -e "$SERVICE_DIR/mcp_server"
   uv venv --python 3.12 "$WEB_VENV" >/dev/null 2>&1
-  VIRTUAL_ENV="$WEB_VENV" uv pip install -q -e "$SERVICE_DIR/gateway[corpus]"
-  VIRTUAL_ENV="$WEB_VENV" uv pip install -q -e "$WEB_DIR/backend"
+  VIRTUAL_ENV="$WEB_VENV" uv pip install "${UVI[@]}" -q -e "$SERVICE_DIR/gateway[corpus]"
+  VIRTUAL_ENV="$WEB_VENV" uv pip install "${UVI[@]}" -q -e "$WEB_DIR/backend"
   "$WEB_VENV/bin/python" -c "import ddp_core.models, app.main" 2>/dev/null \
     && pass "两个 venv 就绪" || fail "venv 装不全"
 
@@ -301,7 +308,7 @@ section "汇总"
 if [ "$FAILS" -eq 0 ]; then
   printf '\033[32m全部就绪。\033[0m\n'
   echo "  浏览器：AutoDL 控制台 -> 自定义服务 -> $FRONTEND_PORT"
-  echo "  模型：还需 serve-vllm.sh（识别）与 serve-chat.sh（抽取），未起时会如实降级"
+  echo "  模型：还需 ocr.bash（识别）与 chat.bash（抽取），未起时会如实降级"
   echo "  停：bash $0 --stop"
 else
   printf '\033[31m%d 项未通过。\033[0m 修完再往下走。\n' "$FAILS"

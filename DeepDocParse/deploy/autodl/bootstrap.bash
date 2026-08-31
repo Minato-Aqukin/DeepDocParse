@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 在 AutoDL 实例上装好 DeepSeek-OCR-2 的推理环境。**幂等**，可以重复跑。
 #
-#   bash deploy/autodl/bootstrap.sh
+#   bash deploy/autodl/bootstrap.bash
 #
 # 干三件事：建 Python 3.12 venv -> 装 vLLM -> 下模型权重。
 # 每一步都先检查"是不是已经做过了"，断线重跑不会从头再来一遍
@@ -9,8 +9,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=env.sh
-source "$HERE/env.sh"
+# shellcheck source=env.bash
+source "$HERE/env.bash"
 
 log()  { printf '\033[32m[bootstrap]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[bootstrap]\033[0m %s\n' "$*"; }
@@ -83,7 +83,7 @@ PY="$VENV_DIR/bin/python"
 #
 # 这不是省事，是省钱：flash-attn 没有匹配的预编译 wheel 时会源码编译，
 # 16 核机器上要 30~90 分钟 —— 按 GPU 计费，纯烧。
-# FlashAttention 照样在用，只是由 vLLM 自带的那份提供（verify.sh 会打印证据）。
+# FlashAttention 照样在用，只是由 vLLM 自带的那份提供（verify.bash 会打印证据）。
 if ! "$PY" -c "import vllm" 2>/dev/null; then
   log "装 vLLM $VLLM_VERSION（不装 flash-attn，理由见脚本注释）"
   VIRTUAL_ENV="$VENV_DIR" uv pip install --python "$PY" \
@@ -93,11 +93,11 @@ else
   log "vLLM $("$PY" -c 'import vllm; print(vllm.__version__)') 已装，跳过"
 fi
 
-# ninja：保险。缺省我们关掉了 FlashInfer 采样（env.sh 里的 VLLM_USE_FLASHINFER_SAMPLER=0），
+# ninja：保险。缺省我们关掉了 FlashInfer 采样（env.bash 里的 VLLM_USE_FLASHINFER_SAMPLER=0），
 # 所以正常路径用不到它；但 vLLM 里还有别的 JIT 路径，装上很小、省得再撞一次
 # "FileNotFoundError: 'ninja'"。它只有几 MB。
 uv pip install --python "$PY" -q --index-url "$PIP_INDEX_URL" ninja 2>/dev/null || \
-  warn "ninja 没装上（不影响缺省路径，见 env.sh 的 VLLM_USE_FLASHINFER_SAMPLER）"
+  warn "ninja 没装上（不影响缺省路径，见 env.bash 的 VLLM_USE_FLASHINFER_SAMPLER）"
 
 installed=$("$PY" -c 'import vllm; print(vllm.__version__)')
 [ "$installed" = "$VLLM_VERSION" ] || warn "装到的是 vLLM $installed，与期望的 $VLLM_VERSION 不一致"
@@ -105,7 +105,7 @@ installed=$("$PY" -c 'import vllm; print(vllm.__version__)')
 # 模型架构必须被 vLLM 认识。这一步是**纯 CPU 检查**，几秒钟，
 # 但能在下 7GB 权重之前就把"这个版本不支持这个模型"挡掉。
 log "确认 vLLM 认识 DeepseekOCR2ForCausalLM"
-"$PY" - <<'PYEOF' || die "这个 vLLM 版本不支持 DeepSeek-OCR-2，换版本（见 env.sh 的 VLLM_VERSION）"
+"$PY" - <<'PYEOF' || die "这个 vLLM 版本不支持 DeepSeek-OCR-2，换版本（见 env.bash 的 VLLM_VERSION）"
 from vllm.model_executor.models.registry import ModelRegistry
 archs = set(ModelRegistry.get_supported_archs())
 assert "DeepseekOCR2ForCausalLM" in archs, "registry 里没有 DeepseekOCR2ForCausalLM"
@@ -149,13 +149,13 @@ grep -q "DeepseekOCR2ForCausalLM" "$MODEL_DIR/config.json" \
 
 if [ "$ENABLE_CHAT" = "1" ]; then
   # 抽取平面要它。不下的话 /v1/extract 会一律报 no_instruct_model（如实报错，
-  # 但抽取平面等于没有）—— 理由见 serve-chat.sh 的头注释
+  # 但抽取平面等于没有）—— 理由见 chat.bash 的头注释
   fetch_weights "$CHAT_MODEL_ID" "$CHAT_MODEL_DIR" "指令模型（抽取平面用）"
 else
   warn "ENABLE_CHAT=0：不下指令模型，/v1/extract 会一律报 no_instruct_model"
 fi
 
 log "完成。下一步："
-log "  bash $HERE/serve-vllm.sh --daemon     # 识别/VQA 线"
-[ "$ENABLE_CHAT" = "1" ] && log "  bash $HERE/serve-chat.sh --daemon      # 抽取线"
-log "  bash $HERE/verify.sh                  # 验证（别跳过）"
+log "  bash $HERE/ocr.bash --daemon     # 识别/VQA 线"
+[ "$ENABLE_CHAT" = "1" ] && log "  bash $HERE/chat.bash --daemon      # 抽取线"
+log "  bash $HERE/verify.bash                  # 验证（别跳过）"

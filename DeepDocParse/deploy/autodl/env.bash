@@ -29,7 +29,7 @@ SERVED_NAME="${SERVED_NAME:-deepseek-ocr-2}"
 #
 # **别随手升级**：社区报告 0.20~0.23 若干版本在部分卡上 CUDA graph 捕获阶段
 # worker 直接死（vLLM 论坛 2727 / issue 41468）。升级前先在这台机器上跑一遍
-# verify.sh，红了就退回本版本，并把 --enforce-eager 打开（见 serve-vllm.sh）。
+# verify.bash，红了就退回本版本，并把 --enforce-eager 打开（见 ocr.bash）。
 VLLM_VERSION="${VLLM_VERSION:-0.27.1}"
 
 # 建 venv 用的 Python。vLLM 0.27 要 3.10+；AutoDL 基础镜像自带的是 3.8，用不了。
@@ -94,7 +94,7 @@ CHAT_KV_CACHE_BYTES="${CHAT_KV_CACHE_BYTES:-3221225472}"
 #                                     -> 自身 ~12.5 GiB（权重 7.5 + 激活 ~2 + KV 3）
 #   全卡合计 ~21.2 GiB / 23.5 GiB，留 2.3 GiB
 #
-# **顺序重要**：先 serve-vllm.sh，再 serve-chat.sh。
+# **顺序重要**：先 ocr.bash，再 chat.bash。
 if [ "${ENABLE_CHAT:-1}" = "1" ]; then
   GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.38}"
   # 这个值**只用来过启动前置检查**（必须 <= 空闲/卡容量）；
