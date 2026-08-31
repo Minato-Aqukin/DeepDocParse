@@ -31,7 +31,7 @@ dependencies = [
 #
 # 为什么不写：它只能用路径依赖表达，而路径依赖没有可移植的写法 ——
 #   · `[tool.uv.sources]` 只有 uv 的 project 接口读，**pip 从不读**，
-#     而本项目全程用 pip（quickstart.sh 与 CI 都是 `pip install -e`）。
+#     而本项目全程用 pip（deploy/docker.bash 与 CI 都是 `pip install -e`）。
 #     写上去的效果是 `pip install -e backend` 直接失败：
 #     `No matching distribution found for deepdocparse-gateway`（实测）
 #   · PEP 508 的 direct reference 要求绝对 URL，写死路径不可移植
@@ -44,7 +44,7 @@ dependencies = [
 # **注意那个 `[corpus]`**：`ddp_core` 里碰数据库的部分（models 等）需要
 # SQLAlchemy，而 gateway 自己是无状态的、不装 ORM。本层要的是全套。
 #
-# quickstart.sh 与 .github/workflows/ci.yml 都已按这个顺序来。
+# deploy/docker.bash 与 .github/workflows/ci.yml 都已按这个顺序来。
 # 漏装的表现是 import 期 `ModuleNotFoundError: No module named 'ddp_core'`，
 # 响亮且指向明确，不会静默。
 # ---------------------------------------------------------------------------

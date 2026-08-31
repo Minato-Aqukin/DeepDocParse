@@ -12,7 +12,7 @@
 
 ```
 DeepDocParse-Web/
-├── quickstart.sh  # 一键部署：环境配置 -> 按硬件调参 -> 下权重 -> 起服务（见 docs/DEPLOY.md）
+├── deploy/docker.bash  # 一键部署：环境配置 -> 按硬件调参 -> 下权重 -> 起服务（见 docs/DEPLOY.md）
 ├── backend/    # FastAPI：账号/计量、语料、问答/抽取、Agent、图谱/Wiki/复核、API 与 MCP 代理
 ├── frontend/   # Vue 3 + TS：文档工作台、抽取、检索、Wiki、canvas 图谱、用量
 ├── docker/     # compose.web.yml：PostgreSQL(pgvector) + MinIO + Redis（多副本才需要）
@@ -87,19 +87,19 @@ ssh 上一台干净的 Linux 服务器，三条命令：
 ```bash
 git clone https://github.com/Minato-Aqukin/DeepDocParse-Web.git
 cd DeepDocParse-Web
-./quickstart.sh --host <服务器IP或域名> --chat-url http://127.0.0.1:11434/v1 --chat-model qwen3:8b -y
+./deploy/docker.bash --host <服务器IP或域名> --chat-url http://127.0.0.1:11434/v1 --chat-model qwen3:8b -y
 ```
 
-跑完打开 `http://<你的IP>` 注册第一个账号即可。`quickstart.sh` 从零装依赖、
+跑完打开 `http://<你的IP>` 注册第一个账号即可。`deploy/docker.bash` 从零装依赖、
 clone service 仓库、生成两份 `.env`（随机密钥）、按 CPU/内存/GPU 调参、下模型权重、
 构建前端、起全套服务，最后自检一遍。四步也能单独跑：
 
 ```bash
-./quickstart.sh configure   # 环境配置：两份 .env + 前端 + 注册表 + nginx
-./quickstart.sh tune        # 优化配置：按硬件定并发/批量/上传上限
-./quickstart.sh models      # 模型权重：bge-m3（TEI 只认 safetensors，会自动转）
-./quickstart.sh start       # 服务启动：容器 -> 迁移 -> backend -> nginx
-./quickstart.sh doctor      # 自检：密钥、引擎名一致性、容器回访、探针
+./deploy/docker.bash configure   # 环境配置：两份 .env + 前端 + 注册表 + nginx
+./deploy/docker.bash tune        # 优化配置：按硬件定并发/批量/上传上限
+./deploy/docker.bash models      # 模型权重：bge-m3（TEI 只认 safetensors，会自动转）
+./deploy/docker.bash start       # 服务启动：容器 -> 迁移 -> backend -> nginx
+./deploy/docker.bash doctor      # 自检：密钥、引擎名一致性、容器回访、探针
 ```
 
 对外只开一个端口：nginx 静态托管前端并反代 backend，backend 只监听 127.0.0.1。

@@ -12,7 +12,7 @@
 §1 **为什么需要这条**：阶段 1 把 `app/tokenize.py` 等模块搬进了 `ddp_core`，
 但 `alembic/versions/0005_*.py:128` 里那句 `from app.tokenize import tokenized`
 没跟着改。已有库早就过了 0005，所以升级路径上看不见 —— 而**任何全新部署
-都会死在那里并停在 0004**（`quickstart.sh`、CI 接真库、灾备重建）。
+都会死在那里并停在 0004**（`deploy/docker.bash`、CI 接真库、灾备重建）。
 阶段 1 的验收放过了它，阶段 2a 的验收才抓到。
 
 两套 pytest 都覆盖不到这类问题：迁移文件从不被 import，脚本也不被 import。
@@ -101,7 +101,7 @@ def test_quickstart_passes_corpus_credentials_to_the_mcp_service():
     只写 Web `.env` 时所有容器都会健康，直到第一次 MCP 调用才报数据库认证失败；
     这是部署脚本特有的静默错位，常规 API 单测与 compose config 都抓不到。
     """
-    text = (REPO / "quickstart.sh").read_text(encoding="utf-8")
+    text = (REPO / "deploy/docker.bash").read_text(encoding="utf-8")
     start = text.index("write_service_env()")
     end = text.index("write_frontend_env()", start)
     body = text[start:end]
@@ -123,7 +123,7 @@ def test_corpus_keys_stay_out_of_the_file_gateway_reads():
 
     compose 侧要两份 `--env-file` 才能做变量替换，一并钉住。
     """
-    text = (REPO / "quickstart.sh").read_text(encoding="utf-8")
+    text = (REPO / "deploy/docker.bash").read_text(encoding="utf-8")
     leaked = sorted(key for key in CORPUS_MCP_KEYS
                     if f'set_env "$SERVICE_ENV" {key}' in text)
     assert not leaked, (

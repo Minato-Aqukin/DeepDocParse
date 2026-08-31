@@ -79,7 +79,7 @@
    | 其它任何目录 | ⚠️ **gateway 的** `DeepDocParse/gateway/app/` |
 
    本层的一切本来就都在 `backend/` 下跑（pytest、alembic、uvicorn、两个 eval
-   脚本、`dev.sh`），所以今天不出事。
+   脚本、`start.sh local`），所以今天不出事。
 
    **别指望它会拦你。** 从 `backend/` 以外的目录 import，本机会当场报
    pydantic `extra_forbidden`（因为本机 `.env` 里有 Web 专属键，而 gateway 的
@@ -95,7 +95,7 @@
    也就是说这是个**静默**陷阱，而且静默恰恰发生在最可能有人从别的 cwd
    起进程的地方。所以：**一切都必须在 `backend/` 下跑。**
 
-   根治要给本层的包改名（`app` → `ddp_web`），那会动 alembic / dev.sh /
+   根治要给本层的包改名（`app` → `ddp_web`），那会动 alembic / start.sh local /
    eval 脚本 / pytest 路径，是独立的一次改名，**留给阶段 2**。
    在那之前：**别在仓库根目录直接 `python -c "import app..."`**。
 
