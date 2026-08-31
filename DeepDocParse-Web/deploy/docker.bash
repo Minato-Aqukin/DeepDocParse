@@ -3,7 +3,7 @@
 #
 #   ssh you@server
 #   git clone https://github.com/Minato-Aqukin/DeepDocParse-Web.git
-#   cd DeepDocParse-Web && ./deploy/docker.bash
+#   cd DeepDocParse-Web && ./init.sh
 #
 # 它做四件事（也就是四个可以单独跑的子命令）：
 #   configure  环境配置：拉 service 仓库、生成两份 .env（随机密钥）、写前端与 nginx 配置
@@ -30,7 +30,7 @@
 #    否则每个 worker 各限各的（等于限速×副本数）、对账重复跑。
 #    本脚本据此联动：workers>1 时自动启用 Web 侧 redis 并写 REDIS_URL。
 #
-# 用法：./deploy/docker.bash [子命令] [选项]，./deploy/docker.bash help 看全部选项。
+# 用法：./init.sh docker [子命令] [选项]，./init.sh docker help 看全部选项。
 set -euo pipefail
 
 # ---------------------------------------------------------------- 路径与常量
@@ -181,7 +181,7 @@ gen_alnum() {   # gen_alnum <长度>：只用字母数字，避免进 DATABASE_U
 save_state() {
   mkdir -p "$STATE_DIR"
   {
-    echo "# 由 deploy/docker.bash 生成，记住上次的部署参数；改这里不如重跑 configure"
+    echo "# 由 init.sh 生成，记住上次的部署参数；改这里不如重跑 configure"
     for k in PROFILE PUBLIC_HOST PUBLIC_PORT PUBLIC_BASE_URL SERVICE_REPO SERVICE_BRANCH \
              CHAT_URL CHAT_MODEL CHAT_TOKEN SKIP_MODELS WITH_RERANK WITH_MINERU \
              WEIGHTS_SOURCE NPM_REGISTRY PIP_INDEX SERVICE_COMPOSE; do
@@ -595,7 +595,7 @@ write_registry() {
   [ -n "$CHAT_BASE" ] && chat_ep="$(to_container_url "$CHAT_BASE")"
 
   {
-    echo "# 由 deploy/docker.bash 生成 —— 不要手改，重跑 ./deploy/docker.bash configure 会覆盖。"
+    echo "# 由 init.sh 生成 —— 不要手改，重跑 ./init.sh docker configure 会覆盖。"
     echo "# 只登记这次部署真的起了的容器：gateway 的 /readyz 是 all(up)。"
     echo
     echo "parse_engines:"
@@ -663,7 +663,7 @@ write_service_override() {
   fi
 
   {
-    echo "# 由 deploy/docker.bash 生成 —— 叠在 DeepDocParse/docker/compose.cpu.yml 之上。"
+    echo "# 由 init.sh 生成 —— 叠在 DeepDocParse/docker/compose.cpu.yml 之上。"
     echo "# 覆盖层只做三件事：换注册表、按硬件调 TEI 的批量参数、加重启策略。"
     echo "# 路径一律写绝对路径：覆盖文件里的相对路径按“第一个 -f 文件所在目录”解析，容易踩空。"
     echo "name: ddp-service"
@@ -723,7 +723,7 @@ write_service_override() {
 write_nginx_conf() {
   local upstream="127.0.0.1:$BACKEND_PORT"
   cat > "$NGINX_CONF" <<NGINX
-# 由 deploy/docker.bash 生成 —— 重跑 ./deploy/docker.bash configure 会覆盖。
+# 由 init.sh 生成 —— 重跑 ./init.sh docker configure 会覆盖。
 # 前端是 hash 路由（createWebHashHistory），静态托管不需要任何 SPA 回退规则。
 server {
     listen $PUBLIC_PORT default_server;
@@ -771,14 +771,14 @@ NGINX
 }
 
 # 容器都带 restart: unless-stopped，重启机器会自己回来；宿主上的 backend 不会。
-# 单元文件先生成好放着，装不装由 `./deploy/docker.bash systemd` 决定（那一步要 root）
+# 单元文件先生成好放着，装不装由 `./init.sh docker systemd` 决定（那一步要 root）
 write_systemd_unit() {
   local workers="$BACKEND_WORKERS"
   [ "$NEED_REDIS" = 1 ] || workers=1
   local exec_start="$WEB_DIR/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port $BACKEND_PORT"
   [ "$workers" -gt 1 ] && exec_start="$exec_start --workers $workers"
   cat > "$SYSTEMD_UNIT_FILE" <<UNIT
-# 由 deploy/docker.bash 生成。安装：./deploy/docker.bash systemd
+# 由 init.sh 生成。安装：./init.sh docker systemd
 [Unit]
 Description=DeepDocParse-Web backend
 After=docker.service network-online.target
@@ -797,7 +797,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
-  ok "$SYSTEMD_UNIT_FILE（要开机自启就跑 ./deploy/docker.bash systemd）"
+  ok "$SYSTEMD_UNIT_FILE（要开机自启就跑 ./init.sh docker systemd）"
 }
 
 # 装过单元就一切以 systemd 为准：start/stop/status/logs 全部改走 systemctl，
@@ -808,7 +808,7 @@ cmd_systemd() {
   step "安装 systemd 单元（开机自启）"
   load_state
   command -v systemctl >/dev/null 2>&1 || die "这台机器没有 systemd"
-  [ -f "$SYSTEMD_UNIT_FILE" ] || die "缺 $SYSTEMD_UNIT_FILE，先跑 ./deploy/docker.bash configure"
+  [ -f "$SYSTEMD_UNIT_FILE" ] || die "缺 $SYSTEMD_UNIT_FILE，先跑 ./init.sh docker configure"
   need_sudo || die "需要 root 或 sudo"
   $SUDO cp "$SYSTEMD_UNIT_FILE" "/etc/systemd/system/$SYSTEMD_UNIT.service"
   $SUDO systemctl daemon-reload
@@ -969,7 +969,7 @@ cmd_models() {
   step "模型权重"
   load_state
   mkdir -p "$MODELS_DIR" "$STATE_DIR"
-  find_python || die "找不到 >=3.11 的 python（先跑 ./deploy/docker.bash deps）"
+  find_python || die "找不到 >=3.11 的 python（先跑 ./init.sh docker deps）"
 
   if [ "$SKIP_MODELS" = 1 ]; then
     warn "--skip-models：不下权重。检索退回关键词路，Web 的索引会标 index_status=failed，问答不可用"
@@ -991,7 +991,7 @@ cmd_models() {
 cmd_build() {
   step "构建"
   load_state
-  find_python || die "找不到 >=3.11 的 python（先跑 ./deploy/docker.bash deps）"
+  find_python || die "找不到 >=3.11 的 python（先跑 ./init.sh docker deps）"
 
   info "backend venv：$WEB_DIR/.venv"
   [ -x "$WEB_DIR/.venv/bin/python" ] || "$PYTHON" -m venv "$WEB_DIR/.venv"
@@ -1002,7 +1002,7 @@ cmd_build() {
   # `[tool.uv.sources]` 只有 uv 读、pip 从不读（写上去 pip 会直接装不上）。
   # 所以在这里显式先装 gateway。理由与替代方案写在 backend/pyproject.toml 末尾。
   [ -d "$SERVICE_DIR/gateway" ] \
-    || die "找不到 $SERVICE_DIR/gateway —— 两个仓库必须同级（先跑 ./deploy/docker.bash configure）"
+    || die "找不到 $SERVICE_DIR/gateway —— 两个仓库必须同级（先跑 ./init.sh docker configure）"
   ( cd "$WEB_DIR" && ./.venv/bin/pip install ${PIP_INDEX:+--index-url "$PIP_INDEX"} \
       -e "$SERVICE_DIR/gateway[corpus]" ) \
     || die "ddp_core（service 仓库的 gateway 包）安装失败"
@@ -1118,10 +1118,10 @@ cmd_start() {
   step "启动"
   load_state
   check_stack_conflict
-  [ -f "$WEB_ENV" ] || die "还没配置过，先跑 ./deploy/docker.bash configure"
-  [ -f "$SERVICE_OVERRIDE" ] || die "缺 $SERVICE_OVERRIDE，先跑 ./deploy/docker.bash configure"
-  [ -x "$WEB_DIR/.venv/bin/python" ] || die "backend venv 不存在，先跑 ./deploy/docker.bash build"
-  [ -f "$WEB_DIR/frontend/dist/index.html" ] || die "前端还没构建，先跑 ./deploy/docker.bash build"
+  [ -f "$WEB_ENV" ] || die "还没配置过，先跑 ./init.sh docker configure"
+  [ -f "$SERVICE_OVERRIDE" ] || die "缺 $SERVICE_OVERRIDE，先跑 ./init.sh docker configure"
+  [ -x "$WEB_DIR/.venv/bin/python" ] || die "backend venv 不存在，先跑 ./init.sh docker build"
+  [ -f "$WEB_DIR/frontend/dist/index.html" ] || die "前端还没构建，先跑 ./init.sh docker build"
   detect_hardware; tune_for_hardware >/dev/null 2>&1 || true
   # 调参值以 .env 里已写好的为准（configure 时算过），这里只重算 worker 数
   local workers; workers="$BACKEND_WORKERS"
@@ -1171,7 +1171,7 @@ cmd_start() {
   printf '\n%s部署完成%s\n' "$C_BOLD$C_GREEN" "$C_RESET"
   info "打开：$PUBLIC_BASE_URL"
   dim "首次使用先在页面上注册一个账号；对外 API key 在「设置 - API Key」里生成"
-  dim "自检：./deploy/docker.bash doctor   看日志：./deploy/docker.bash logs backend"
+  dim "自检：./start.sh docker doctor   看日志：./start.sh docker logs backend"
 }
 
 cmd_stop() {
@@ -1235,7 +1235,7 @@ check() {   # check <说明> <命令...>
 cmd_doctor() {
   step "自检"
   load_state
-  [ -f "$WEB_ENV" ] || die "还没配置过，先跑 ./deploy/docker.bash configure"
+  [ -f "$WEB_ENV" ] || die "还没配置过，先跑 ./init.sh docker configure"
 
   # 1. 密钥。两个仓库的 config.py 都会拒绝带占位密钥启动 —— 提前说清楚是哪一项
   for k in JWT_SECRET SERVICE_TOKEN; do
@@ -1273,7 +1273,7 @@ cmd_doctor() {
   elif [ -f "$MODELS_DIR/bge-m3/model.safetensors" ]; then
     ok "bge-m3 权重就位"
   else
-    fail "缺 $MODELS_DIR/bge-m3/model.safetensors（跑 ./deploy/docker.bash models）"; DOCTOR_FAILED=1
+    fail "缺 $MODELS_DIR/bge-m3/model.safetensors（跑 ./init.sh docker models）"; DOCTOR_FAILED=1
   fi
 
   # 5. 活着没
@@ -1334,7 +1334,7 @@ cmd_help() {
   cat <<'HELP'
 DeepDocParse-Web 一键部署
 
-  ./deploy/docker.bash [子命令] [选项]
+  ./init.sh docker [子命令] [选项]
 
 子命令（不给就是 all）
   all         deps -> fetch -> configure -> models -> build -> start -> doctor
@@ -1374,8 +1374,8 @@ DeepDocParse-Web 一键部署
   -y, --yes               不交互，一路默认
 
 示例
-  ./deploy/docker.bash --host 203.0.113.10 --chat-url http://127.0.0.1:11434/v1 --chat-model qwen3:8b -y
-  ./deploy/docker.bash configure --port 8000 && ./deploy/docker.bash restart
+  ./init.sh docker --host 203.0.113.10 --chat-url http://127.0.0.1:11434/v1 --chat-model qwen3:8b -y
+  ./init.sh docker configure --port 8000 && ./start.sh docker restart
 HELP
 }
 
@@ -1407,7 +1407,7 @@ parse_args() {
       --no-deps)         NO_DEPS=1; shift ;;
       -y|--yes)          ASSUME_YES=1; shift ;;
       -h|--help)         cmd_help; exit 0 ;;
-      *)                 die "不认识的选项：$1（./deploy/docker.bash help 看用法）" ;;
+      *)                 die "不认识的选项：$1（./init.sh docker help 看用法）" ;;
     esac
   done
 }
@@ -1443,7 +1443,7 @@ main() {
     doctor)    cmd_doctor ;;
     systemd)   cmd_systemd ;;
     help)      cmd_help ;;
-    *)         die "不认识的子命令：$cmd（./deploy/docker.bash help 看用法）" ;;
+    *)         die "不认识的子命令：$cmd（./init.sh docker help 看用法）" ;;
   esac
 }
 

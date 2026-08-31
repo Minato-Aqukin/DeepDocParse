@@ -5,12 +5,12 @@
 ```bash
 git clone https://github.com/Minato-Aqukin/DeepDocParse-Web.git
 cd DeepDocParse-Web
-./deploy/docker.bash --host <服务器公网IP或域名> --chat-url http://127.0.0.1:11434/v1 --chat-model qwen3:8b -y
+./init.sh docker --host <服务器公网IP或域名> --chat-url http://127.0.0.1:11434/v1 --chat-model qwen3:8b -y
 ```
 
-跑完打开 `http://<你的IP>`，注册第一个账号即可。
+初始化完成后运行 `./start.sh docker start`，再打开 `http://<你的IP>` 注册第一个账号。
 
-`deploy/docker.bash` 依次做四件事，每一件都能单独重跑：
+`init.sh` 负责初始化，`start.sh` 负责运行；每一步都能单独重跑：
 
 | 子命令 | 做什么 |
 |---|---|
@@ -21,7 +21,7 @@ cd DeepDocParse-Web
 
 其余：`deps`（装 docker/python/node）、`build`（venv + npm + 镜像）、`stop` / `restart` /
 `status` / `logs <名>` / `doctor`（自检）、`systemd`（开机自启）。
-全部选项见 `./deploy/docker.bash help`。
+全部选项见 `./init.sh docker help`。
 
 > **选项会被记住**（存在 `.quickstart/state.env`）：`configure` 过一次之后，
 > 后面的子命令不用再传一遍。反过来说，开关要关掉就得显式关 ——
@@ -58,7 +58,7 @@ cd DeepDocParse-Web
 写回环地址的话它打到的是容器自己，解析结果永远回不来（只能靠 60s 一轮的对账兜底）。
 
 脚本缺省取主网卡地址。域名 + NAT 的场景用 `--public-base-url` 显式指定一个
-**服务器自己也能访问到**的地址。`./deploy/docker.bash doctor` 会从 gateway 容器里
+**服务器自己也能访问到**的地址。`./start.sh docker doctor` 会从 gateway 容器里
 真的 curl 一次来验证这条链路。
 
 ### 2. 不配 `--chat-url` 就没有问答、抽取和知识生成
@@ -67,8 +67,8 @@ cd DeepDocParse-Web
 本地 Ollama / llama.cpp / 任意托管 API 都行：
 
 ```bash
-./deploy/docker.bash configure --chat-url http://127.0.0.1:11434/v1 --chat-model qwen3:8b
-./deploy/docker.bash restart
+./init.sh docker configure --chat-url http://127.0.0.1:11434/v1 --chat-model qwen3:8b
+./start.sh docker restart
 ```
 
 端点在宿主机上（`127.0.0.1`）时，脚本会自动把容器侧地址改写成
@@ -155,7 +155,7 @@ service 的 compose 里挂载路径写死了 `../../models`）。
 要它也自动起来：
 
 ```bash
-./deploy/docker.bash systemd     # 需要 root/sudo
+./init.sh docker systemd     # 需要 root/sudo
 ```
 
 装完之后 `start` / `stop` / `status` / `logs backend` 会自动改走 `systemctl`
@@ -166,9 +166,9 @@ service 的 compose 里挂载路径写死了 `../../models`）。
 ## 排查
 
 ```bash
-./deploy/docker.bash doctor          # 密钥 / 引擎名一致性 / 容器回访 / 探针
-./deploy/docker.bash status          # 容器、进程、各层探针
-./deploy/docker.bash logs backend    # 也可以 gateway | arq-worker | embed | postgres | edge
+./start.sh docker doctor          # 密钥 / 引擎名一致性 / 容器回访 / 探针
+./start.sh docker status          # 容器、进程、各层探针
+./start.sh docker logs backend    # 也可以 gateway | arq-worker | embed | postgres | edge
 ```
 
 `doctor` 覆盖的都是这个项目**真踩过**的坑：占位密钥（两个仓库的 config 都会拒绝启动）、
@@ -189,7 +189,7 @@ service 的 compose 里挂载路径写死了 `../../models`）。
 ## 更新到新版本
 
 ```bash
-git pull && ./deploy/docker.bash build && ./deploy/docker.bash restart
+git pull && ./init.sh docker build && ./start.sh docker restart
 ```
 
 `configure` 重跑是安全的：已有的密钥（`JWT_SECRET` / `SERVICE_TOKEN` / 数据库与
@@ -206,11 +206,11 @@ MinIO 凭据）原样保留，只刷新脚本管的那些键。`JWT_SECRET` 变�
 
 数据全在三个 docker 卷里：`ddp-web_pgdata`（Postgres）、`ddp-web_miniodata`（原件与
 解析结果）、`ddp-service_redis-data`（24h 暂存，丢了重新解析即可）。
-`./deploy/docker.bash stop` 只停容器，卷不动。
+`./start.sh docker stop` 只停容器，卷不动。
 
 ```bash
 # 真要清空（不可逆）
-./deploy/docker.bash stop
+./start.sh docker stop
 docker volume rm ddp-web_pgdata ddp-web_miniodata ddp-service_redis-data
 ```
 
@@ -223,7 +223,7 @@ docker volume rm ddp-web_pgdata ddp-web_miniodata ddp-service_redis-data
 | `.quickstart/models.registry.yaml` | service 注册表（只登记真的起了的容器） | 否 |
 | `.quickstart/compose.service-override.yml` | 叠在 service compose 上的调参层 | 否 |
 | `.quickstart/nginx.conf` | 边缘层配置 | 否 |
-| `.quickstart/ddp-web.service` | systemd 单元（`./deploy/docker.bash systemd` 才会装到系统里） | 否 |
+| `.quickstart/ddp-web.service` | systemd 单元（`./init.sh docker systemd` 才会装到系统里） | 否 |
 | `.quickstart/state.env` | 上次的部署参数 | 否 |
 | `.quickstart/logs/` `.quickstart/run/` | 日志与 pid | 否 |
 
