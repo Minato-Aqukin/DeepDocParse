@@ -116,8 +116,18 @@ PYEOF
 # 断点续传由下载器自己管，重跑不会从头来（OCR-2 约 7G，Qwen3-4B 约 8G）。
 fetch_weights() {
   local repo="$1" dest="$2" label="$3"
-  if [ -f "$dest/config.json" ]; then
+  local complete="$dest/.ddp-download-complete"
+  if [ -f "$complete" ]; then
     log "$label 权重已在 $dest，跳过下载"
+    return 0
+  fi
+  # config.json 通常最先下载；只检查它会在 SSH 中断后把数 GB 的
+  # `*.incomplete` 误判为完整模型。兼容旧目录时必须同时验证权重。
+  if [ -f "$dest/config.json" ] && \
+     find "$dest" -maxdepth 1 -type f -name '*.safetensors' -print -quit | grep -q . && \
+     ! find "$dest" -maxdepth 1 -type f -name '*.incomplete' -print -quit | grep -q .; then
+    touch "$complete"
+    log "$label 权重已在 $dest，补写完成标记并跳过下载"
     return 0
   fi
   mkdir -p "$(dirname "$dest")"
@@ -133,6 +143,11 @@ fetch_weights() {
     *) die "WEIGHTS_SOURCE 只认 modelscope / hf，收到 $WEIGHTS_SOURCE" ;;
   esac
   [ -f "$dest/config.json" ] || die "$dest 里没有 config.json，$label 下载没成功"
+  find "$dest" -maxdepth 1 -type f -name '*.safetensors' -print -quit | grep -q . || \
+    die "$dest 里没有 safetensors 权重，$label 下载没成功"
+  ! find "$dest" -maxdepth 1 -type f -name '*.incomplete' -print -quit | grep -q . || \
+    die "$dest 里仍有 incomplete 文件，$label 下载没完成"
+  touch "$complete"
 }
 
 # 注意：**必须用 uv pip，不能用 `$PY -m pip`** —— uv 建的 venv 缺省不装 pip
