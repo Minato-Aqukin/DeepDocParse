@@ -80,3 +80,36 @@ cwd 与 `.pth` 的字母序。在有环境变量的机器上会当场报 pydanti
 **处理**：四个 Python 服务包名互不相同（`ddp_gateway` / `ddp_corpus` /
 `ddp_worker` / `ddp_mcp`），并加静态守卫
 `tests/test_architecture_guards.py::test_service_packages_do_not_share_a_top_level_name`。
+
+---
+
+## 重构期间自己写出并当场修掉的假守卫
+
+> 记在这里是因为「项目反复写出挡不住任何东西的守卫测试」是这个代码库的
+> 已知失败模式。新守卫**必须做变异确认**（改掉被守的那行，看它是不是真的红）。
+
+### G-1 · `FlushInterval: -1` 的行为测试测不出那一行
+
+第一版 `TestProxyStreamsWithoutBuffering` 直接测代理，声称守的是
+`FlushInterval: -1`。变异确认时把它改成 `0`，**测试照样绿**。
+
+原因：Go 的 `httputil.ReverseProxy` 对 `Content-Type: text/event-stream`
+与 `ContentLength == -1` 的响应本来就立即 flush，与 `FlushInterval` 无关。
+
+**改法**：把用例改成经过**生产同款的中间件包装**（`httpx.StatusRecorder`），
+守的换成"链路里没有人把响应缓冲住"。这条是真的 —— 去掉 `StatusRecorder.Flush`
+的透传后必红，且是干净的 FAIL（第一版还会挂死，因为上游 goroutine 卡在
+channel 上让 `httptest.Server.Close()` 一直等在途请求；守卫红的时候挂死
+等于没有守卫，所以顺手改成不阻塞的写法）。
+
+### G-2 · `Transport.Proxy = nil` 在 loopback 上测不出来
+
+`TestProxyIgnoresProxyEnv` 第一版设 `HTTP_PROXY` 指向一个必然连不上的地址，
+再断言请求成功。变异确认时改成 `http.ProxyFromEnvironment`，**照样绿**。
+
+原因：Go 的 `net/http/httpproxy` 对 loopback 地址一律绕过代理，
+而单测只能用 `httptest` 起 loopback 上游。
+
+**改法**：老老实实做成结构断言（读 `up.Transport().Proxy`），
+并在用例注释里写清"为什么这里不能做行为测试"。
+**测不出来的东西不要假装在测。**

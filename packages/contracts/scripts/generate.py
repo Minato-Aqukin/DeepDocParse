@@ -29,6 +29,8 @@ Python 的字符串字面量、TS 的文案表、openapi.yaml 的 enum 列表。
 import argparse
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -233,11 +235,42 @@ def render_py(spec: dict) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+# ------------------------------------------------------------------ 后处理
+
+def gofmt(source: str) -> str | None:
+    """把 Go 生成物过一遍 gofmt。
+
+    **为什么不自己对齐**：gofmt 的 const/map 块对齐走的是 tabwriter，
+    中日文字符的显示宽度规则很难在 Python 里复现一致。复现得"差不多"
+    比不复现更糟 —— `gofmt -l` 会永远报这个文件，然后所有人学会忽略它。
+
+    没装 Go 时返回 None，调用方**显式报 SKIP**（不是安静跳过）。
+    """
+    tool = shutil.which("gofmt")
+    if tool is None:
+        return None
+    done = subprocess.run([tool], input=source, capture_output=True, text=True)
+    if done.returncode != 0:
+        raise SystemExit(f"gofmt 拒绝了生成的代码，说明生成器写出了语法错误：\n{done.stderr}")
+    return done.stdout
+
+
+def render_go_formatted(spec: dict) -> str:
+    raw = render_go(spec)
+    formatted = gofmt(raw)
+    if formatted is None:
+        print("::warning::没找到 gofmt，Go 生成物未格式化 —— "
+              "CI 的 `gofmt -l` 会因此报红。装 Go 后重跑。", file=sys.stderr)
+        return raw
+    return formatted
+
+
 # ---------------------------------------------------------------------- 主流程
 
 TARGETS = {
     "ts": (CONTRACTS / "generated" / "ts" / "enums.ts", render_ts),
-    "go": (ROOT / "services" / "control-api" / "internal" / "contracts" / "enums.go", render_go),
+    "go": (ROOT / "services" / "control-api" / "internal" / "contracts" / "enums.go",
+           render_go_formatted),
     "py": (ROOT / "python" / "ddp_contracts" / "ddp_contracts" / "enums.py", render_py),
 }
 

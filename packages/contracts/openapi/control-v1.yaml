@@ -1,0 +1,627 @@
+openapi: 3.1.0
+info:
+  title: DeepDocParse Control API
+  version: 1.0.0
+  description: |
+    企业控制面（`services/control-api`，Go）的对外契约。**它是整个产品唯一的入口**：
+    浏览器、SDK、MCP 客户端都只跟它说话。
+
+    ## 三个前缀，三种鉴权
+
+    | 前缀 | 谁在用 | 鉴权 |
+    |---|---|---|
+    | `/api/*` | 浏览器前端 | JWT 会话（Cookie 或 `Authorization: Bearer`） |
+    | `/v1/*`  | 第三方 SDK | API key（`Authorization: Bearer sk-…`） |
+    | `/mcp`   | MCP 客户端 | API key |
+
+    ## 哪些端点归本服务，哪些是转发
+
+    本文件里**显式声明**的端点由 control-api 自己实现：组织、成员、角色、
+    API key、配额、计量、审计、上传会话、文件授权。
+
+    其余前缀是**反向代理**，契约在各自的文件里：
+
+    - `/api/documents/*` `/api/conversations/*` `/api/search` `/api/extractions/*`
+      `/api/knowledge/*` `/api/wiki/*` `/api/reviews/*` `/api/evidence/*`
+      → `services/corpus-api`（见 `corpus-v1.yaml`）
+    - `/v1/parse` `/v1/chat/completions` `/v1/embeddings` `/v1/extract` `/v1/rerank`
+      → `services/model-gateway`（见 `gateway-v1.yaml`）
+    - `/mcp` → `services/mcp`
+
+    代理**不是透明的**：它验身份、扣配额、限速、记计量与审计，并把
+    actor 上下文以内部头下发给上游（见下面的「内部头」一节）。
+
+    ## 内部头（服务间，不对外）
+
+    corpus-api 与 model-gateway **不自己验用户凭据**，只信任这组头：
+
+        X-Request-Id            请求 ID
+        traceparent             W3C trace context
+        X-DDP-Service           调用方服务身份
+        X-DDP-Organization      组织 ID（单组织部署也必须带，值为默认组织）
+        X-DDP-Actor             user id 或 api key id
+        X-DDP-Actor-Kind        user | api_key | service
+        X-DDP-Role              该 actor 在该组织内的角色
+        Idempotency-Key         写操作必带
+
+    **这组头绝不能来自客户端。** 入口无条件剥掉客户端传来的同名头再填自己的
+    —— 否则任何人都能伪造 `X-DDP-Role: admin`。有守卫钉着这件事。
+
+    ## 错误体
+
+    统一 OpenAI 风格（与网关一致，SDK 只需一套解析）：
+
+        {"error": {"message": "...", "type": "...", "code": "..."}}
+
+servers:
+  - url: http://control-api:8080
+
+tags:
+  - name: auth
+  - name: organization
+  - name: apikeys
+  - name: usage
+  - name: audit
+  - name: uploads
+  - name: files
+  - name: health
+
+components:
+  securitySchemes:
+    session:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 浏览器会话。`/api/*` 用它。
+    apiKey:
+      type: http
+      scheme: bearer
+      description: 对外 API key（`sk-` 前缀）。`/v1/*` 与 `/mcp` 用它。
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type]
+          properties:
+            message: { type: string }
+            type: { type: string }
+            code: { type: string, nullable: true }
+
+    Role:
+      type: string
+      description: |
+        组织内角色。取值与语义由 `packages/contracts/enums.yaml` 的 `role` 生成，
+        **不要在这里另抄一份** —— 这个 enum 列表由 CI 校验与生成物一致。
+      enum: [viewer, contributor, reviewer, admin]
+
+    ActorKind:
+      type: string
+      enum: [user, api_key, service]
+
+    UploadStatus:
+      type: string
+      enum: [created, uploading, verifying, ready, failed, expired]
+
+    User:
+      type: object
+      required: [id, username, role]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        email: { type: string, nullable: true }
+        role: { $ref: '#/components/schemas/Role' }
+        organization_id: { type: string }
+        created_at: { type: string, format: date-time }
+
+    Token:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, const: bearer }
+        expires_in: { type: integer, description: 秒 }
+        user: { $ref: '#/components/schemas/User' }
+
+    Organization:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        member_count: { type: integer }
+
+    Member:
+      type: object
+      required: [user_id, username, role]
+      properties:
+        user_id: { type: string }
+        username: { type: string }
+        email: { type: string, nullable: true }
+        role: { $ref: '#/components/schemas/Role' }
+        joined_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time, nullable: true }
+
+    ApiKey:
+      type: object
+      required: [id, name, key_prefix, scopes]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        key_prefix: { type: string, description: 展示用前 8 位，如 sk-AbCdEfGh }
+        scopes:
+          type: array
+          items: { type: string, enum: [parse, chat, embeddings, extract, rerank, mcp, read] }
+          description: |
+            key 能调哪些平面。**最小权限**：只做解析的集成不该能问答。
+            空数组等于全部禁用（不是全部允许 —— 默认拒绝）。
+        quota_pages: { type: integer, nullable: true, description: null = 不限 }
+        used_pages: { type: integer }
+        rate_limit_per_min: { type: integer }
+        expires_at: { type: string, format: date-time, nullable: true }
+        revoked_at: { type: string, format: date-time, nullable: true }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    CreatedApiKey:
+      allOf:
+        - $ref: '#/components/schemas/ApiKey'
+        - type: object
+          required: [key]
+          properties:
+            key:
+              type: string
+              description: |
+                **明文只在创建时返回这一次**，库里只存 sha256。
+                用 sha256 而非 bcrypt：每个对外请求都要验一次 key，
+                bcrypt 的成本函数会直接压垮代理路径；key 本身是 32 字节随机串，
+                不存在弱口令问题。
+
+    UsagePoint:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        kind:
+          type: string
+          enum: [parse, chat, embeddings, mcp, qa, embed, compile_vision, extract]
+        pages: { type: integer }
+        requests: { type: integer }
+
+    Quota:
+      type: object
+      properties:
+        organization_id: { type: string }
+        pages_limit: { type: integer, nullable: true }
+        pages_used: { type: integer }
+        period_start: { type: string, format: date-time }
+        period_end: { type: string, format: date-time }
+
+    AuditEvent:
+      type: object
+      properties:
+        id: { type: string }
+        at: { type: string, format: date-time }
+        actor_id: { type: string, nullable: true }
+        actor_kind: { $ref: '#/components/schemas/ActorKind' }
+        action: { type: string, description: 如 document.delete、apikey.revoke }
+        target: { type: string, nullable: true }
+        request_id: { type: string, nullable: true }
+        detail: { type: object }
+
+    UploadSession:
+      type: object
+      required: [id, status, object_key]
+      properties:
+        id: { type: string }
+        status: { $ref: '#/components/schemas/UploadStatus' }
+        object_key: { type: string }
+        filename: { type: string }
+        mime: { type: string }
+        declared_size: { type: integer }
+        part_size: { type: integer, description: 分片大小（字节） }
+        parts:
+          type: array
+          description: |
+            multipart 预签名。客户端**直接 PUT 到对象存储**，不经过任何应用进程
+            —— 不变式 6（大文件不得完整进入应用进程内存，也不得由应用进程中转）。
+          items:
+            type: object
+            properties:
+              part_number: { type: integer }
+              url: { type: string }
+        expires_at: { type: string, format: date-time }
+
+paths:
+
+  # ------------------------------------------------------------------ auth
+  /api/auth/register:
+    post:
+      tags: [auth]
+      summary: 注册（仅在开放注册的部署上可用）
+      description: |
+        单组织独占部署的引导路径。`REGISTRATION_MODE=closed` 时返回 403，
+        企业部署走 OIDC。**第一个注册的用户自动成为该部署默认组织的 admin**，
+        之后的注册默认 `viewer`（由 `DEFAULT_MEMBER_ROLE` 决定）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, minLength: 3, maxLength: 64 }
+                password: { type: string, minLength: 8 }
+                email: { type: string, nullable: true }
+      responses:
+        "201": { description: 已注册, content: { application/json: { schema: { $ref: '#/components/schemas/Token' } } } }
+        "403": { description: 该部署未开放注册, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "409": { description: 用户名已存在 }
+
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: 登录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Token' } } } }
+        "401":
+          description: |
+            用户名或密码错误。**响应体对"用户不存在"与"密码错"必须一模一样**，
+            否则它就是一个用户名枚举接口。
+        "429": { description: 登录尝试过于频繁 }
+
+  /api/auth/me:
+    get:
+      tags: [auth]
+      summary: 当前用户与其在本组织内的角色
+      security: [{ session: [] }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        "401": { description: 未登录 }
+
+  /api/auth/oidc/login:
+    get:
+      tags: [auth]
+      summary: 发起 OIDC 登录
+      description: |
+        302 到 IdP 的 authorization endpoint。企业部署的推荐路径 ——
+        管理员强制 MFA 由 IdP 策略承担，本服务不实现第二因素。
+      parameters:
+        - { name: redirect_uri, in: query, schema: { type: string }, description: 登录成功后回到前端的哪一页 }
+      responses:
+        "302": { description: 跳转到 IdP }
+        "501": { description: 该部署未配置 OIDC }
+
+  /api/auth/oidc/callback:
+    get:
+      tags: [auth]
+      summary: OIDC 回调
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        "302": { description: 带上会话跳回前端 }
+        "400": { description: state 校验失败 / code 无效 }
+
+  # ---------------------------------------------------------- organization
+  /api/org:
+    get:
+      tags: [organization]
+      summary: 当前组织
+      security: [{ session: [] }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Organization' } } } }
+
+  /api/org/members:
+    get:
+      tags: [organization]
+      summary: 成员列表
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Member' } }
+    post:
+      tags: [organization]
+      summary: 添加成员（admin）
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, role]
+              properties:
+                username: { type: string }
+                role: { $ref: '#/components/schemas/Role' }
+      responses:
+        "201": { description: 已添加, content: { application/json: { schema: { $ref: '#/components/schemas/Member' } } } }
+        "403": { description: 需要 admin }
+
+  /api/org/members/{user_id}:
+    patch:
+      tags: [organization]
+      summary: 改成员角色（admin）
+      security: [{ session: [] }]
+      parameters: [{ name: user_id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { $ref: '#/components/schemas/Role' }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Member' } } } }
+        "403": { description: 需要 admin }
+        "409":
+          description: |
+            不能把最后一个 admin 降级。**没有这条的话，一次误操作就能让
+            组织永久失去管理能力**，而恢复要直接改库。
+    delete:
+      tags: [organization]
+      summary: 移除成员（admin）
+      security: [{ session: [] }]
+      parameters: [{ name: user_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: 已移除 }
+        "403": { description: 需要 admin }
+        "409": { description: 不能移除最后一个 admin }
+
+  # -------------------------------------------------------------- apikeys
+  /api/keys:
+    get:
+      tags: [apikeys]
+      summary: 我的 API key
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/ApiKey' } }
+    post:
+      tags: [apikeys]
+      summary: 新建 API key
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, default: default }
+                scopes:
+                  type: array
+                  items: { type: string }
+                  description: 缺省给该角色允许的全部作用域
+                expires_in_days: { type: integer, nullable: true }
+                quota_pages: { type: integer, nullable: true }
+                rate_limit_per_min: { type: integer, nullable: true }
+      responses:
+        "201":
+          description: 已创建（明文 key 只在这里出现一次）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatedApiKey' }
+
+  /api/keys/{key_id}:
+    delete:
+      tags: [apikeys]
+      summary: 撤销
+      security: [{ session: [] }]
+      parameters: [{ name: key_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: 已撤销 }
+        "404": { description: 不存在或不属于你 }
+
+  # ----------------------------------------------------------- usage/quota
+  /api/usage:
+    get:
+      tags: [usage]
+      summary: 用量流水
+      security: [{ session: [] }]
+      parameters:
+        - { name: days, in: query, schema: { type: integer, default: 30, maximum: 365 } }
+        - { name: scope, in: query, schema: { type: string, enum: [self, organization], default: self } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  points: { type: array, items: { $ref: '#/components/schemas/UsagePoint' } }
+                  quota: { $ref: '#/components/schemas/Quota' }
+        "403": { description: scope=organization 需要 admin }
+
+  # --------------------------------------------------------------- audit
+  /api/audit:
+    get:
+      tags: [audit]
+      summary: 审计日志（admin）
+      description: |
+        **审计日志不可由普通管理员修改**：没有任何写接口，
+        数据库层面对 `ddp_control` 只授 INSERT + SELECT（见 database/control）。
+      security: [{ session: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 1000 } }
+        - { name: before, in: query, schema: { type: string, format: date-time } }
+        - { name: action, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } }
+        "403": { description: 需要 admin }
+
+  # -------------------------------------------------------------- uploads
+  /api/uploads:
+    post:
+      tags: [uploads]
+      summary: 创建上传会话，拿 multipart 预签名
+      description: |
+        §9.1 的第 1–3 步。服务端在这里校验权限、配额、MIME 白名单与
+        **预期大小**，然后下发对象存储的 multipart 预签名。
+
+        客户端拿到后直接 PUT 到对象存储，**不经过任何应用进程**。
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename, size, mime]
+              properties:
+                filename: { type: string }
+                size: { type: integer, description: 预期字节数，服务端 finalize 时会核对真实大小 }
+                mime: { type: string }
+                sha256:
+                  type: string
+                  nullable: true
+                  description: |
+                    客户端算的内容哈希。**服务端不信它** —— finalize 后由后台
+                    流式重算并比对，不一致则整个会话作废。传它只是为了让
+                    "同一份文件重复上传"能提前命中去重。
+      responses:
+        "201": { description: 已创建, content: { application/json: { schema: { $ref: '#/components/schemas/UploadSession' } } } }
+        "402": { description: 配额不足 }
+        "413": { description: 超过单文件上限 }
+        "415": { description: MIME 不在白名单 }
+
+  /api/uploads/{upload_id}:
+    get:
+      tags: [uploads]
+      summary: 查上传会话状态
+      security: [{ session: [] }]
+      parameters: [{ name: upload_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/UploadSession' } } } }
+        "404": { description: 不存在 }
+
+  /api/uploads/{upload_id}/finalize:
+    post:
+      tags: [uploads]
+      summary: 完成上传
+      description: |
+        §9.1 的第 5–7 步。服务端 complete multipart、核对对象**真实大小**，
+        置为 `verifying` 并异步流式校验摘要；通过后写 outbox 事件
+        `DocumentSubmitted`，由 corpus-api 幂等消费。
+
+        **必须幂等**：finalize 重试不得创建两份任务。幂等键是
+        `Idempotency-Key` 头，缺省用 upload_id。
+      security: [{ session: [] }]
+      parameters:
+        - { name: upload_id, in: path, required: true, schema: { type: string } }
+        - { name: Idempotency-Key, in: header, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                parts:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      part_number: { type: integer }
+                      etag: { type: string }
+                engine: { type: string, description: 用哪个解析引擎，缺省取部署默认 }
+                options: { type: object }
+      responses:
+        "202":
+          description: 已受理，正在校验
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadSession' }
+        "409": { description: 会话状态不允许 finalize }
+        "422": { description: 对象大小与声明不符 }
+
+  # ---------------------------------------------------------------- files
+  /files/{token}:
+    get:
+      tags: [files]
+      summary: 稳定文件 URL
+      description: |
+        **这个 URL 的路径必须永远稳定。** model-gateway 用它下载原件，
+        而文档身份 `doc_hash` 在没有 `doc_id` 时会回退成 `sha256(file_url)` ——
+        URL 一变，幂等复用与向量索引分块键全部失效（ADR #11/#12，踩过两次）。
+
+        实现是 **302 到对象存储的短期签名 URL**，而不是由本进程转发字节流
+        （不变式 6）。短期签名只出现在 `Location` 里，不改变本路径。
+
+        token 本身即凭证（32 字节随机），可撤销、可设过期。
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "302":
+          description: 跳转到短期签名 URL
+          headers:
+            Location: { schema: { type: string } }
+            Cache-Control: { schema: { type: string }, description: no-store（签名 URL 不许被缓存） }
+        "404": { description: token 不存在 / 已撤销 / 已过期 }
+
+  /api/documents/{document_id}/download-url:
+    get:
+      tags: [files]
+      summary: 取浏览器用的短期下载/预览 URL
+      description: |
+        与 `/files/{token}` **分开**：这条每次返回一个新的短期 URL，
+        给浏览器 PDF.js 用（支持 HTTP Range，看一页不用下整份）。
+        绝不能拿它去喂 model-gateway —— 那会破坏 doc_hash 幂等。
+      security: [{ session: [] }]
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string } }
+        - { name: disposition, in: query, schema: { type: string, enum: [inline, attachment], default: inline } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string }
+                  expires_at: { type: string, format: date-time }
+                  supports_range: { type: boolean }
+        "403": { description: 无权访问 }
+
+  # --------------------------------------------------------------- health
+  /healthz:
+    get:
+      tags: [health]
+      summary: 存活探针（不查依赖 —— 依赖挂了不该被重启）
+      responses:
+        "200": { description: ok }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: 就绪探针（查 PG / Redis / 对象存储 / 上游服务）
+      responses:
+        "200": { description: ready }
+        "503": { description: 依赖未就绪 }

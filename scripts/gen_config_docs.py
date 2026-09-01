@@ -38,6 +38,8 @@ class Target:
     title: str
     intro: str
     class_name: str = "Settings"
+    #: python（pydantic Settings）或 go（config.go 里的 env(...) 调用）
+    lang: str = "python"
 
 
 TARGETS = (
@@ -54,6 +56,25 @@ TARGETS = (
 环境变量名 = 字段名大写（pydantic-settings 默认规则，未设前缀）。
 配置来源优先级：环境变量 > 服务自己的 `.env` > 下表默认值。
 """,
+    ),
+    Target(
+        key="control-api",
+        source=ROOT / "services" / "control-api" / "internal" / "config" / "config.go",
+        output=ROOT / "services" / "control-api" / "CONFIG.md",
+        title="DeepDocParse 控制面配置参考",
+        intro="""\
+Go 控制面的全部配置项。取自 `services/control-api/internal/config/config.go`，
+**本文件由脚本生成，不要手改** —— 改注释请改源码，然后重跑
+`python scripts/gen_config_docs.py`。
+
+配置来源：环境变量（Go 侧不读 `.env` 文件 —— 那是 pydantic-settings 的行为，
+Go 这边由容器/systemd 注入环境变量）。
+
+**占位密钥会拒绝启动**：`JWT_SECRET` 是 change-me 等于任何人都能给任意
+user_id 伪造一个有效会话，且运行时不报任何错。一次性容器 / CI 可用
+`ALLOW_INSECURE_DEFAULTS=true` 显式跳过 —— 逃生口必须显式且留痕。
+""",
+        lang="go",
     ),
     Target(
         key="corpus-api",
@@ -131,6 +152,77 @@ def collect(source_path: Path, class_name: str) -> list[tuple[str, list[dict]]]:
     return [(title, fields) for title, fields in sections if fields]
 
 
+# --------------------------------------------------------------- Go 源码
+
+#: `env("KEY", "default")` / envInt / envBool / envList
+GO_CALL_RE = re.compile(
+    r'(?P<field>\w+):\s*(?:int32\()?env(?P<kind>Int|Bool|List)?\('
+    r'"(?P<key>[A-Z0-9_]+)"\s*,\s*(?P<default>[^\n]*?)\)')
+GO_SECTION_RE = re.compile(r"^\s*//\s*-+\s*(.+?)\s*-+\s*$")
+
+GO_TYPES = {None: "string", "Int": "int", "Bool": "bool", "List": "list[str]"}
+
+
+def collect_go(source_path: Path) -> list[tuple[str, list[dict]]]:
+    """从 config.go 的 `env(...)` 调用里抽配置项。
+
+    说明取自**结构体字段的注释**（Load() 里那一片赋值是没有注释的），
+    所以先扫一遍结构体建索引，再按字段名对上。这样注释只写一处，
+    与 pydantic 那边"注释就在字段上方"的习惯一致。
+    """
+    lines = source_path.read_text(encoding="utf-8").splitlines()
+
+    docs: dict[str, str] = {}
+    sections: list[tuple[str, list[str]]] = [("通用", [])]
+    pending: list[str] = []
+    in_struct = False
+    for line in lines:
+        if line.startswith("type Config struct {"):
+            in_struct = True
+            continue
+        if in_struct and line.startswith("}"):
+            break
+        if not in_struct:
+            continue
+        marker = GO_SECTION_RE.match(line)
+        if marker:
+            sections.append((marker.group(1), []))
+            pending = []
+            continue
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            pending.append(stripped.lstrip("/").strip())
+            continue
+        if not stripped:
+            pending = []
+            continue
+        field = stripped.split()[0]
+        trailing = stripped.split("//", 1)[1].strip() if "//" in stripped else ""
+        docs[field] = " ".join([*pending, trailing]).strip()
+        sections[-1][1].append(field)
+        pending = []
+
+    body = "\n".join(lines)
+    found: dict[str, dict] = {}
+    for m in GO_CALL_RE.finditer(body):
+        field = m.group("field")
+        default = m.group("default").strip().rstrip(")").strip()
+        found[field] = {
+            "name": field,
+            "env": m.group("key"),
+            "type": GO_TYPES[m.group("kind")],
+            "default": default,
+            "doc": docs.get(field, ""),
+        }
+
+    out: list[tuple[str, list[dict]]] = []
+    for title, fields in sections:
+        rows = [found[f] for f in fields if f in found]
+        if rows:
+            out.append((title, rows))
+    return out
+
+
 def render(target: Target, sections: list[tuple[str, list[dict]]]) -> str:
     total = sum(len(fields) for _, fields in sections)
     out = [f"# {target.title}", "", target.intro, f"共 **{total}** 项。", ""]
@@ -146,7 +238,10 @@ def render(target: Target, sections: list[tuple[str, list[dict]]]) -> str:
 
 
 def process(target: Target, check: bool) -> int:
-    sections = collect(target.source, target.class_name)
+    if target.lang == "go":
+        sections = collect_go(target.source)
+    else:
+        sections = collect(target.source, target.class_name)
     # "每一项都有说明"是验收标准本身，所以由脚本机械把关：
     # 没说明的配置项等于没文档，部署者照样得回去读源码
     undocumented = [f["env"] for _, fields in sections for f in fields if not f["doc"]]

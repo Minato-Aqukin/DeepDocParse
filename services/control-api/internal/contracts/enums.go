@@ -7,11 +7,11 @@ package contracts
 type Severity string
 
 const (
-	SeverityNeutral   Severity = "neutral"
-	SeverityProgress  Severity = "progress"
-	SeverityOk        Severity = "ok"
-	SeverityWarn      Severity = "warn"
-	SeverityError     Severity = "error"
+	SeverityNeutral  Severity = "neutral"
+	SeverityProgress Severity = "progress"
+	SeverityOk       Severity = "ok"
+	SeverityWarn     Severity = "warn"
+	SeverityError    Severity = "error"
 )
 
 // EnumMeta 是一个枚举取值的全部对外信息。
@@ -105,27 +105,27 @@ var DegradedValues = []Degraded{
 }
 
 var DegradedMeta = map[Degraded]EnumMeta{
-	DegradedNoHits: {Value: "no_hits", Label: "未在本文档中检索到相关内容", Severity: SeverityNeutral},
-	DegradedParseMismatch: {Value: "parse_mismatch", Label: "出处存疑（图上内容与解析文本对不上）", Severity: SeverityWarn},
-	DegradedEmbeddingUnavailable: {Value: "embedding_unavailable", Label: "仅关键词检索（向量化服务不可用）", Severity: SeverityWarn},
-	DegradedVisionUnavailable: {Value: "vision_unavailable", Label: "未做视觉验证（视觉模型不可用）", Severity: SeverityWarn},
-	DegradedCropUnsupported: {Value: "crop_unsupported", Label: "未做视觉验证（该文件不支持区域截图）", Severity: SeverityNeutral},
-	DegradedCropFailed: {Value: "crop_failed", Label: "未做视觉验证（区域截图失败）", Severity: SeverityWarn},
-	DegradedClientAborted: {Value: "client_aborted", Label: "回答被中断", Severity: SeverityNeutral},
-	DegradedUpstreamError: {Value: "upstream_error", Label: "问答服务异常", Severity: SeverityError},
-	DegradedUpstreamInterrupted: {Value: "upstream_interrupted", Label: "回答生成中途断流", Severity: SeverityError},
-	DegradedIndexChangedDuringAnswer: {Value: "index_changed_during_answer", Label: "回答生成期间索引版本已变化，出处已标为失效", Severity: SeverityWarn},
-	DegradedDecisionUnavailable: {Value: "decision_unavailable", Label: "是否检索判定不可用，已保守执行检索", Severity: SeverityNeutral},
-	DegradedNoEvidenceInTurn: {Value: "no_evidence_in_turn", Label: "本轮没有可继承证据，已拒绝脱离文档作答", Severity: SeverityWarn},
+	DegradedNoHits:                      {Value: "no_hits", Label: "未在本文档中检索到相关内容", Severity: SeverityNeutral},
+	DegradedParseMismatch:               {Value: "parse_mismatch", Label: "出处存疑（图上内容与解析文本对不上）", Severity: SeverityWarn},
+	DegradedEmbeddingUnavailable:        {Value: "embedding_unavailable", Label: "仅关键词检索（向量化服务不可用）", Severity: SeverityWarn},
+	DegradedVisionUnavailable:           {Value: "vision_unavailable", Label: "未做视觉验证（视觉模型不可用）", Severity: SeverityWarn},
+	DegradedCropUnsupported:             {Value: "crop_unsupported", Label: "未做视觉验证（该文件不支持区域截图）", Severity: SeverityNeutral},
+	DegradedCropFailed:                  {Value: "crop_failed", Label: "未做视觉验证（区域截图失败）", Severity: SeverityWarn},
+	DegradedClientAborted:               {Value: "client_aborted", Label: "回答被中断", Severity: SeverityNeutral},
+	DegradedUpstreamError:               {Value: "upstream_error", Label: "问答服务异常", Severity: SeverityError},
+	DegradedUpstreamInterrupted:         {Value: "upstream_interrupted", Label: "回答生成中途断流", Severity: SeverityError},
+	DegradedIndexChangedDuringAnswer:    {Value: "index_changed_during_answer", Label: "回答生成期间索引版本已变化，出处已标为失效", Severity: SeverityWarn},
+	DegradedDecisionUnavailable:         {Value: "decision_unavailable", Label: "是否检索判定不可用，已保守执行检索", Severity: SeverityNeutral},
+	DegradedNoEvidenceInTurn:            {Value: "no_evidence_in_turn", Label: "本轮没有可继承证据，已拒绝脱离文档作答", Severity: SeverityWarn},
 	DegradedInheritedEvidenceIncomplete: {Value: "inherited_evidence_incomplete", Label: "上一轮证据已部分失效，需重新检索后再回答", Severity: SeverityWarn},
-	DegradedGateRejectedAll: {Value: "gate_rejected_all", Label: "检索候选均未通过逐篇质量门控", Severity: SeverityWarn},
-	DegradedCitationPersistFailed: {Value: "citation_persist_failed", Label: "出处保存失败，相关结论已标为无证据支持", Severity: SeverityError},
-	DegradedVerificationUnavailable: {Value: "verification_unavailable", Label: "原文自动核对未得出结论，请人工复核", Severity: SeverityWarn},
-	DegradedSchemaViolation: {Value: "schema_violation", Label: "模型输出不符合 schema（已重试仍失败）", Severity: SeverityError},
-	DegradedRerankUnavailable: {Value: "rerank_unavailable", Label: "未做精排（重排序服务不可用）", Severity: SeverityNeutral},
-	DegradedNoInstructModel: {Value: "no_instruct_model", Label: "未抽取（后端没有可用的指令模型）", Severity: SeverityError},
-	DegradedEmptyQuery: {Value: "empty_query", Label: "查询词为空", Severity: SeverityNeutral},
-	DegradedAnswerUnavailable: {Value: "answer_unavailable", Label: "生成服务不可用（证据已返回，结论未生成）", Severity: SeverityError},
+	DegradedGateRejectedAll:             {Value: "gate_rejected_all", Label: "检索候选均未通过逐篇质量门控", Severity: SeverityWarn},
+	DegradedCitationPersistFailed:       {Value: "citation_persist_failed", Label: "出处保存失败，相关结论已标为无证据支持", Severity: SeverityError},
+	DegradedVerificationUnavailable:     {Value: "verification_unavailable", Label: "原文自动核对未得出结论，请人工复核", Severity: SeverityWarn},
+	DegradedSchemaViolation:             {Value: "schema_violation", Label: "模型输出不符合 schema（已重试仍失败）", Severity: SeverityError},
+	DegradedRerankUnavailable:           {Value: "rerank_unavailable", Label: "未做精排（重排序服务不可用）", Severity: SeverityNeutral},
+	DegradedNoInstructModel:             {Value: "no_instruct_model", Label: "未抽取（后端没有可用的指令模型）", Severity: SeverityError},
+	DegradedEmptyQuery:                  {Value: "empty_query", Label: "查询词为空", Severity: SeverityNeutral},
+	DegradedAnswerUnavailable:           {Value: "answer_unavailable", Label: "生成服务不可用（证据已返回，结论未生成）", Severity: SeverityError},
 }
 
 // Valid 报告 s 是不是一个已知的 degraded 取值。
@@ -171,14 +171,14 @@ var CompileDegradedValues = []CompileDegraded{
 }
 
 var CompileDegradedMeta = map[CompileDegraded]EnumMeta{
-	CompileDegradedCodeDetectionUnavailable: {Value: "code_detection_unavailable", Label: "当前版面引擎不能识别代码块", Severity: SeverityNeutral},
-	CompileDegradedCropUnsupported: {Value: "crop_unsupported", Label: "部分视觉原子没有可定位裁图", Severity: SeverityNeutral},
-	CompileDegradedCropFailed: {Value: "crop_failed", Label: "部分视觉原子裁图失败", Severity: SeverityWarn},
-	CompileDegradedVisionUnavailable: {Value: "vision_unavailable", Label: "视觉理解模型不可用", Severity: SeverityWarn},
-	CompileDegradedVisionInvalidOutput: {Value: "vision_invalid_output", Label: "视觉理解模型返回的结构不合规", Severity: SeverityWarn},
-	CompileDegradedProviderUnresolved: {Value: "provider_unresolved", Label: "上游实际模型未解析，当前编译版本不可比较", Severity: SeverityWarn},
+	CompileDegradedCodeDetectionUnavailable:  {Value: "code_detection_unavailable", Label: "当前版面引擎不能识别代码块", Severity: SeverityNeutral},
+	CompileDegradedCropUnsupported:           {Value: "crop_unsupported", Label: "部分视觉原子没有可定位裁图", Severity: SeverityNeutral},
+	CompileDegradedCropFailed:                {Value: "crop_failed", Label: "部分视觉原子裁图失败", Severity: SeverityWarn},
+	CompileDegradedVisionUnavailable:         {Value: "vision_unavailable", Label: "视觉理解模型不可用", Severity: SeverityWarn},
+	CompileDegradedVisionInvalidOutput:       {Value: "vision_invalid_output", Label: "视觉理解模型返回的结构不合规", Severity: SeverityWarn},
+	CompileDegradedProviderUnresolved:        {Value: "provider_unresolved", Label: "上游实际模型未解析，当前编译版本不可比较", Severity: SeverityWarn},
 	CompileDegradedReindexValidationRequired: {Value: "reindex_validation_required", Label: "存在历史出处，需先校验并确认后重建", Severity: SeverityWarn},
-	CompileDegradedCompileFailed: {Value: "compile_failed", Label: "版面编译失败", Severity: SeverityError},
+	CompileDegradedCompileFailed:             {Value: "compile_failed", Label: "版面编译失败", Severity: SeverityError},
 }
 
 // Valid 报告 s 是不是一个已知的 compile_degraded 取值。
@@ -215,11 +215,11 @@ var ParseStatusValues = []ParseStatus{
 }
 
 var ParseStatusMeta = map[ParseStatus]EnumMeta{
-	ParseStatusPending: {Value: "pending", Label: "排队中", Severity: SeverityNeutral, Active: true},
-	ParseStatusRunning: {Value: "running", Label: "解析中", Severity: SeverityProgress, Active: true},
+	ParseStatusPending:   {Value: "pending", Label: "排队中", Severity: SeverityNeutral, Active: true},
+	ParseStatusRunning:   {Value: "running", Label: "解析中", Severity: SeverityProgress, Active: true},
 	ParseStatusArchiving: {Value: "archiving", Label: "归档中", Severity: SeverityProgress, Active: true},
 	ParseStatusSucceeded: {Value: "succeeded", Label: "已完成", Severity: SeverityOk},
-	ParseStatusFailed: {Value: "failed", Label: "失败", Severity: SeverityError},
+	ParseStatusFailed:    {Value: "failed", Label: "失败", Severity: SeverityError},
 }
 
 // Valid 报告 s 是不是一个已知的 parse_status 取值。
@@ -254,11 +254,11 @@ var IndexStatusValues = []IndexStatus{
 }
 
 var IndexStatusMeta = map[IndexStatus]EnumMeta{
-	IndexStatusNone: {Value: "none", Label: "未索引", Severity: SeverityNeutral},
-	IndexStatusPending: {Value: "pending", Label: "待索引", Severity: SeverityNeutral, Active: true},
+	IndexStatusNone:     {Value: "none", Label: "未索引", Severity: SeverityNeutral},
+	IndexStatusPending:  {Value: "pending", Label: "待索引", Severity: SeverityNeutral, Active: true},
 	IndexStatusIndexing: {Value: "indexing", Label: "索引中", Severity: SeverityProgress, Active: true},
-	IndexStatusReady: {Value: "ready", Label: "可问答", Severity: SeverityOk},
-	IndexStatusFailed: {Value: "failed", Label: "索引失败", Severity: SeverityError},
+	IndexStatusReady:    {Value: "ready", Label: "可问答", Severity: SeverityOk},
+	IndexStatusFailed:   {Value: "failed", Label: "索引失败", Severity: SeverityError},
 }
 
 // Valid 报告 s 是不是一个已知的 index_status 取值。
@@ -297,12 +297,12 @@ var CompileStatusValues = []CompileStatus{
 }
 
 var CompileStatusMeta = map[CompileStatus]EnumMeta{
-	CompileStatusNone: {Value: "none", Label: "未编译", Severity: SeverityNeutral},
-	CompileStatusPending: {Value: "pending", Label: "待编译", Severity: SeverityNeutral, Active: true},
+	CompileStatusNone:      {Value: "none", Label: "未编译", Severity: SeverityNeutral},
+	CompileStatusPending:   {Value: "pending", Label: "待编译", Severity: SeverityNeutral, Active: true},
 	CompileStatusCompiling: {Value: "compiling", Label: "编译中", Severity: SeverityProgress, Active: true},
-	CompileStatusReady: {Value: "ready", Label: "编译完整", Severity: SeverityOk},
-	CompileStatusPartial: {Value: "partial", Label: "编译有降级", Severity: SeverityWarn},
-	CompileStatusFailed: {Value: "failed", Label: "编译失败", Severity: SeverityError},
+	CompileStatusReady:     {Value: "ready", Label: "编译完整", Severity: SeverityOk},
+	CompileStatusPartial:   {Value: "partial", Label: "编译有降级", Severity: SeverityWarn},
+	CompileStatusFailed:    {Value: "failed", Label: "编译失败", Severity: SeverityError},
 }
 
 // Valid 报告 s 是不是一个已知的 compile_status 取值。
@@ -339,11 +339,11 @@ var RunStatusValues = []RunStatus{
 }
 
 var RunStatusMeta = map[RunStatus]EnumMeta{
-	RunStatusPending: {Value: "pending", Label: "排队中", Severity: SeverityNeutral, Active: true},
-	RunStatusRunning: {Value: "running", Label: "抽取中", Severity: SeverityProgress, Active: true},
+	RunStatusPending:   {Value: "pending", Label: "排队中", Severity: SeverityNeutral, Active: true},
+	RunStatusRunning:   {Value: "running", Label: "抽取中", Severity: SeverityProgress, Active: true},
 	RunStatusSucceeded: {Value: "succeeded", Label: "已完成", Severity: SeverityOk},
-	RunStatusPartial: {Value: "partial", Label: "部分完成", Severity: SeverityWarn},
-	RunStatusFailed: {Value: "failed", Label: "失败", Severity: SeverityError},
+	RunStatusPartial:   {Value: "partial", Label: "部分完成", Severity: SeverityWarn},
+	RunStatusFailed:    {Value: "failed", Label: "失败", Severity: SeverityError},
 }
 
 // Valid 报告 s 是不是一个已知的 run_status 取值。
@@ -375,9 +375,9 @@ var FieldStatusValues = []FieldStatus{
 }
 
 var FieldStatusMeta = map[FieldStatus]EnumMeta{
-	FieldStatusFound: {Value: "found", Label: "已抽取", Severity: SeverityOk},
+	FieldStatusFound:    {Value: "found", Label: "已抽取", Severity: SeverityOk},
 	FieldStatusNotFound: {Value: "not_found", Label: "文档中未提及", Severity: SeverityNeutral},
-	FieldStatusError: {Value: "error", Label: "抽取失败", Severity: SeverityError},
+	FieldStatusError:    {Value: "error", Label: "抽取失败", Severity: SeverityError},
 }
 
 // Valid 报告 s 是不是一个已知的 field_status 取值。
@@ -406,8 +406,8 @@ var CodeDetectionValues = []CodeDetection{
 }
 
 var CodeDetectionMeta = map[CodeDetection]EnumMeta{
-	CodeDetectionNative: {Value: "native", Label: "代码识别：原生", Severity: SeverityOk},
-	CodeDetectionHeuristic: {Value: "heuristic", Label: "代码识别：启发式", Severity: SeverityNeutral},
+	CodeDetectionNative:      {Value: "native", Label: "代码识别：原生", Severity: SeverityOk},
+	CodeDetectionHeuristic:   {Value: "heuristic", Label: "代码识别：启发式", Severity: SeverityNeutral},
 	CodeDetectionUnavailable: {Value: "unavailable", Label: "代码识别：不可用", Severity: SeverityWarn},
 }
 
@@ -436,7 +436,7 @@ var SourceTypeValues = []SourceType{
 }
 
 var SourceTypeMeta = map[SourceType]EnumMeta{
-	SourceTypeSource: {Value: "source", Label: "原文", Severity: SeverityNeutral},
+	SourceTypeSource:    {Value: "source", Label: "原文", Severity: SeverityNeutral},
 	SourceTypeGenerated: {Value: "generated", Label: "生成理解", Severity: SeverityWarn},
 }
 
@@ -485,14 +485,14 @@ var BlockTypeValues = []BlockType{
 }
 
 var BlockTypeMeta = map[BlockType]EnumMeta{
-	BlockTypeText: {Value: "text", Label: "正文", Severity: SeverityNeutral},
-	BlockTypeTitle: {Value: "title", Label: "标题", Severity: SeverityNeutral},
-	BlockTypeCode: {Value: "code", Label: "代码", Severity: SeverityNeutral},
-	BlockTypeTable: {Value: "table", Label: "表格", Severity: SeverityNeutral},
-	BlockTypeFigure: {Value: "figure", Label: "图", Severity: SeverityNeutral},
+	BlockTypeText:     {Value: "text", Label: "正文", Severity: SeverityNeutral},
+	BlockTypeTitle:    {Value: "title", Label: "标题", Severity: SeverityNeutral},
+	BlockTypeCode:     {Value: "code", Label: "代码", Severity: SeverityNeutral},
+	BlockTypeTable:    {Value: "table", Label: "表格", Severity: SeverityNeutral},
+	BlockTypeFigure:   {Value: "figure", Label: "图", Severity: SeverityNeutral},
 	BlockTypeEquation: {Value: "equation", Label: "公式", Severity: SeverityNeutral},
-	BlockTypeList: {Value: "list", Label: "列表", Severity: SeverityNeutral},
-	BlockTypeOther: {Value: "other", Label: "其它", Severity: SeverityNeutral},
+	BlockTypeList:     {Value: "list", Label: "列表", Severity: SeverityNeutral},
+	BlockTypeOther:    {Value: "other", Label: "其它", Severity: SeverityNeutral},
 }
 
 // Valid 报告 s 是不是一个已知的 block_type 取值。
@@ -537,14 +537,14 @@ var UsageKindValues = []UsageKind{
 }
 
 var UsageKindMeta = map[UsageKind]EnumMeta{
-	UsageKindParse: {Value: "parse", Label: "解析", Severity: SeverityNeutral},
-	UsageKindChat: {Value: "chat", Label: "对话", Severity: SeverityNeutral},
-	UsageKindEmbeddings: {Value: "embeddings", Label: "向量化", Severity: SeverityNeutral},
-	UsageKindMcp: {Value: "mcp", Label: "MCP 调用", Severity: SeverityNeutral},
-	UsageKindQa: {Value: "qa", Label: "问答", Severity: SeverityNeutral},
-	UsageKindEmbed: {Value: "embed", Label: "索引向量化", Severity: SeverityNeutral},
+	UsageKindParse:         {Value: "parse", Label: "解析", Severity: SeverityNeutral},
+	UsageKindChat:          {Value: "chat", Label: "对话", Severity: SeverityNeutral},
+	UsageKindEmbeddings:    {Value: "embeddings", Label: "向量化", Severity: SeverityNeutral},
+	UsageKindMcp:           {Value: "mcp", Label: "MCP 调用", Severity: SeverityNeutral},
+	UsageKindQa:            {Value: "qa", Label: "问答", Severity: SeverityNeutral},
+	UsageKindEmbed:         {Value: "embed", Label: "索引向量化", Severity: SeverityNeutral},
 	UsageKindCompileVision: {Value: "compile_vision", Label: "视觉理解", Severity: SeverityNeutral},
-	UsageKindExtract: {Value: "extract", Label: "结构化抽取", Severity: SeverityNeutral},
+	UsageKindExtract:       {Value: "extract", Label: "结构化抽取", Severity: SeverityNeutral},
 }
 
 // Valid 报告 s 是不是一个已知的 usage_kind 取值。
@@ -574,8 +574,8 @@ var ActorKindValues = []ActorKind{
 }
 
 var ActorKindMeta = map[ActorKind]EnumMeta{
-	ActorKindUser: {Value: "user", Label: "用户", Severity: SeverityNeutral},
-	ActorKindApiKey: {Value: "api_key", Label: "API Key", Severity: SeverityNeutral},
+	ActorKindUser:    {Value: "user", Label: "用户", Severity: SeverityNeutral},
+	ActorKindApiKey:  {Value: "api_key", Label: "API Key", Severity: SeverityNeutral},
 	ActorKindService: {Value: "service", Label: "服务", Severity: SeverityNeutral},
 }
 
@@ -609,10 +609,10 @@ var RoleValues = []Role{
 }
 
 var RoleMeta = map[Role]EnumMeta{
-	RoleViewer: {Value: "viewer", Label: "只读成员", Severity: SeverityNeutral},
+	RoleViewer:      {Value: "viewer", Label: "只读成员", Severity: SeverityNeutral},
 	RoleContributor: {Value: "contributor", Label: "贡献者", Severity: SeverityNeutral},
-	RoleReviewer: {Value: "reviewer", Label: "复核员", Severity: SeverityNeutral},
-	RoleAdmin: {Value: "admin", Label: "管理员", Severity: SeverityNeutral},
+	RoleReviewer:    {Value: "reviewer", Label: "复核员", Severity: SeverityNeutral},
+	RoleAdmin:       {Value: "admin", Label: "管理员", Severity: SeverityNeutral},
 }
 
 // Valid 报告 s 是不是一个已知的 role 取值。
@@ -649,11 +649,11 @@ var TaskStatusValues = []TaskStatus{
 }
 
 var TaskStatusMeta = map[TaskStatus]EnumMeta{
-	TaskStatusQueued: {Value: "queued", Label: "排队中", Severity: SeverityNeutral, Active: true},
-	TaskStatusClaimed: {Value: "claimed", Label: "已领取", Severity: SeverityProgress, Active: true},
-	TaskStatusRunning: {Value: "running", Label: "执行中", Severity: SeverityProgress, Active: true},
+	TaskStatusQueued:    {Value: "queued", Label: "排队中", Severity: SeverityNeutral, Active: true},
+	TaskStatusClaimed:   {Value: "claimed", Label: "已领取", Severity: SeverityProgress, Active: true},
+	TaskStatusRunning:   {Value: "running", Label: "执行中", Severity: SeverityProgress, Active: true},
 	TaskStatusSucceeded: {Value: "succeeded", Label: "已完成", Severity: SeverityOk},
-	TaskStatusFailed: {Value: "failed", Label: "失败", Severity: SeverityError},
+	TaskStatusFailed:    {Value: "failed", Label: "失败", Severity: SeverityError},
 }
 
 // Valid 报告 s 是不是一个已知的 task_status 取值。
@@ -692,11 +692,11 @@ var TaskKindValues = []TaskKind{
 
 var TaskKindMeta = map[TaskKind]EnumMeta{
 	TaskKindParsePoll: {Value: "parse_poll", Label: "解析归档", Severity: SeverityNeutral},
-	TaskKindCompile: {Value: "compile", Label: "版面编译", Severity: SeverityNeutral},
-	TaskKindIndex: {Value: "index", Label: "建立索引", Severity: SeverityNeutral},
-	TaskKindExtract: {Value: "extract", Label: "结构化抽取", Severity: SeverityNeutral},
+	TaskKindCompile:   {Value: "compile", Label: "版面编译", Severity: SeverityNeutral},
+	TaskKindIndex:     {Value: "index", Label: "建立索引", Severity: SeverityNeutral},
+	TaskKindExtract:   {Value: "extract", Label: "结构化抽取", Severity: SeverityNeutral},
 	TaskKindKnowledge: {Value: "knowledge", Label: "知识生成", Severity: SeverityNeutral},
-	TaskKindGc: {Value: "gc", Label: "对象回收", Severity: SeverityNeutral},
+	TaskKindGc:        {Value: "gc", Label: "对象回收", Severity: SeverityNeutral},
 }
 
 // Valid 报告 s 是不是一个已知的 task_kind 取值。
@@ -735,12 +735,12 @@ var UploadStatusValues = []UploadStatus{
 }
 
 var UploadStatusMeta = map[UploadStatus]EnumMeta{
-	UploadStatusCreated: {Value: "created", Label: "待上传", Severity: SeverityNeutral, Active: true},
+	UploadStatusCreated:   {Value: "created", Label: "待上传", Severity: SeverityNeutral, Active: true},
 	UploadStatusUploading: {Value: "uploading", Label: "上传中", Severity: SeverityProgress, Active: true},
 	UploadStatusVerifying: {Value: "verifying", Label: "校验中", Severity: SeverityProgress, Active: true},
-	UploadStatusReady: {Value: "ready", Label: "已就绪", Severity: SeverityOk},
-	UploadStatusFailed: {Value: "failed", Label: "失败", Severity: SeverityError},
-	UploadStatusExpired: {Value: "expired", Label: "已过期", Severity: SeverityWarn},
+	UploadStatusReady:     {Value: "ready", Label: "已就绪", Severity: SeverityOk},
+	UploadStatusFailed:    {Value: "failed", Label: "失败", Severity: SeverityError},
+	UploadStatusExpired:   {Value: "expired", Label: "已过期", Severity: SeverityWarn},
 }
 
 // Valid 报告 s 是不是一个已知的 upload_status 取值。
