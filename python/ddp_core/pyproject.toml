@@ -4,6 +4,8 @@ version = "1.0.0"
 description = "DeepDocParse 语料核心逻辑：分块 / 裁图 / 分词 / 检索 / 抽取 schema —— 只此一份"
 requires-python = ">=3.11"
 dependencies = [
+    # 契约生成物（枚举 + 用户文案）。零依赖，是依赖图最底下那一层
+    "ddp-contracts",
     "httpx>=0.27",       # rerank.py 调上游交叉编码器
     "pypdfium2>=4.30",   # crops.py 渲染裁图（PDF 库，不是模型运行时）
     # crops.py 的 `.to_pil()` 要它。**不是可选的**：漏装的表现曾经是

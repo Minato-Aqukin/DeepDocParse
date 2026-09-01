@@ -1,0 +1,24 @@
+{
+  "name": "@deepdocparse/contracts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DeepDocParse 契约：OpenAPI、DDP-* 格式、MCP 工具签名，以及三语言共用的枚举",
+  "type": "module",
+  "main": "generated/ts/enums.ts",
+  "types": "generated/ts/enums.ts",
+  "exports": {
+    ".": "./generated/ts/enums.ts",
+    "./enums": "./generated/ts/enums.ts"
+  },
+  "files": [
+    "generated",
+    "openapi",
+    "ddp",
+    "mcp",
+    "enums.yaml"
+  ],
+  "scripts": {
+    "generate": "python3 scripts/generate.py",
+    "check": "python3 scripts/generate.py --check"
+  }
+}

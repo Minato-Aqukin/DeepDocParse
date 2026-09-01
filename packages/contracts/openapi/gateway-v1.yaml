@@ -1,20 +1,21 @@
 openapi: 3.1.0
 info:
-  title: DeepDocParse API
-  version: 1.0.0
+  title: DeepDocParse Model Gateway API
+  version: 1.1.0
   description: |
-    DeepDocParse 对外契约。DeepDocParse-Web/backend 只依赖本文件。
+    模型网关（`services/model-gateway`）的契约。语料侧（`services/corpus-api`）
+    与 MCP 只依赖本文件，不得依赖网关的内部实现。
     鉴权：所有请求携带 `Authorization: Bearer <SERVICE_TOKEN>`（内网 service token，非用户 key）。
 
-    **v1.0 已冻结（M5）**：此后只允许向后兼容的新增（新增可选字段/新增端点），
+    **v1.0 已冻结**：此后只允许向后兼容的新增（新增可选字段/新增端点），
     不得删改既有字段语义。最后一次不兼容变更是 `/v1/parse` 增加可选 `doc_id`（ADR #11）。
 
     **v1.1（2026-08-23）新增**：`/v1/extract*` 抽取平面、`/v1/rerank`。
     两者都是纯新增端点，既有调用方一字不用改。版面结果 `layout_json` 同步把
-    `para_blocks[].type` 升进承诺字段（见 docs/layout-format.md），也是向后兼容的加法。
+    `para_blocks[].type` 升进承诺字段（见 packages/contracts/ddp/layout-format.md），也是向后兼容的加法。
 
 servers:
-  - url: http://DeepDocParse:9000
+  - url: http://model-gateway:9000
 
 paths:
   /v1/parse:
@@ -107,7 +108,7 @@ paths:
                     type: object
                     description: >
                       版面结构（DDP-Layout v1）：页码 + bbox + 块文本，出处定位与
-                      v2 分块索引的数据源。字段清单与坐标系见 docs/layout-format.md ——
+                      v2 分块索引的数据源。字段清单与坐标系见 packages/contracts/ddp/layout-format.md ——
                       **只有那份文档里列出的字段才在契约内**，引擎附带的其它字段
                       （type/index/angle 等）不保证跨引擎存在。
                   images:
@@ -167,7 +168,7 @@ paths:
       summary: 结构化抽取平面（异步任务，v1.1 新增）
       description: |
         给一份文档 + 一个受限 JSON Schema，抽出符合 schema 的结构化数据，
-        **每个字段带页码 + bbox + 稳定定位键的出处**。格式见 docs/extract-format.md。
+        **每个字段带页码 + bbox + 稳定定位键的出处**。格式见 packages/contracts/ddp/extract-format.md。
 
         与问答平面的关系：问答是「问题进、自然语言答案出」，抽取是「schema 进、记录出」。
         两者共用同一条定位链路（检索 -> 定位 -> 裁剪 -> 视觉核对），因此出处形状完全一致。
@@ -200,7 +201,7 @@ paths:
                   description: |
                     受限 JSON Schema。支持顶层 object（单记录）或 array（多记录/表格）；
                     叶子字段必须带 description（它同时是检索 query）。
-                    不支持嵌套 object / oneOf / $ref，详见 docs/extract-format.md
+                    不支持嵌套 object / oneOf / $ref，详见 packages/contracts/ddp/extract-format.md
                 engine:
                   type: string
                   description: 需要触发解析时用哪个引擎，缺省取注册表 default
@@ -257,7 +258,7 @@ paths:
           description: |
             DDP-Extract v1。字段三态 found / not_found / error 必须区分对待：
             not_found 表示"文档里确实没有"，是正确答案的一种；error 才是系统问题。
-            完整字段清单见 docs/extract-format.md
+            完整字段清单见 packages/contracts/ddp/extract-format.md
           content:
             application/json:
               schema:

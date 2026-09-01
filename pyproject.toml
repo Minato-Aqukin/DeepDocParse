@@ -2,6 +2,7 @@
 # pyproject.toml，这里只放跨包共用的工具配置与 workspace 声明。
 [tool.uv.workspace]
 members = [
+    "python/ddp_contracts",
     "python/ddp_core",
     "services/model-gateway",
     "services/corpus-api",
@@ -13,6 +14,7 @@ members = [
 # 装错顺序的表现是 ModuleNotFoundError（好的那种）或**导入错包**（坏的那种）。
 # 现在由 workspace 显式声明，pip/uv 都能解。
 [tool.uv.sources]
+ddp-contracts = { workspace = true }
 ddp-core = { workspace = true }
 
 # 仓库根的 pytest：只跑跨服务的架构守卫（tests/）。

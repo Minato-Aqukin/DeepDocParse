@@ -1,20 +1,38 @@
+import { DEGRADED_META, DEGRADED_VALUES } from '@deepdocparse/contracts'
 import { describe, expect, it } from 'vitest'
 
-import { DEGRADED_LABEL, degradedLabelOf } from '../status'
+import { DEGRADED_LABEL, DEGRADED_TAG, degradedLabelOf } from '../status'
 
 /**
  * 用例 4 的一半：**后端返回降级标记时界面必须显示原因，不许静默。**
- * 对应 plan.md §9 不变式 2「任何降级都必须可见」。
+ * 对应不变式 2「任何降级都必须可见」。
  *
- * 这条守的是文案层：**未知的降级值也要给出可读文案**。
- * 后端加一种降级、前端忘了加标签时，用户至少要看到"已降级（xxx）"，
- * 而不是一片空白 —— 空白与"一切正常"在界面上是分不出来的。
+ * 合仓后取值与文案都由 `packages/contracts/enums.yaml` 生成，所以
+ * 「前端漏加一个降级值」这件事已经在结构上不可能了 —— 原来那条
+ * 手抄 17 个值再比对的用例因此变成了**第四份复制品**，删掉。
+ * 「Python 里出现契约外的取值」由 `scripts/check_enum_usage.py` 守
+ * （它在合仓当天就扫出两个：`empty_query` / `answer_unavailable`）。
+ *
+ * 这里剩下的是**映射层**的守卫：契约到 UI 之间那一小段仍是手写的。
  */
 describe('降级文案', () => {
-  it('已知降级值给出中文说明', () => {
-    // 抽取平面第十种降级（2026-08-26 加的），前端必须认得
-    expect(degradedLabelOf('no_instruct_model')).toBe(DEGRADED_LABEL.no_instruct_model)
-    expect(degradedLabelOf('embedding_unavailable')).toBeTruthy()
+  it('每个契约取值都有非空中文文案与标签色', () => {
+    // 反哨兵：契约是空的时候下面的 forEach 一次都不跑，会假绿
+    expect(DEGRADED_VALUES.length).toBeGreaterThan(15)
+    for (const value of DEGRADED_VALUES) {
+      expect(DEGRADED_LABEL[value], `${value} 没有文案`).toBeTruthy()
+      // 文案不能就是枚举名本身 —— 那等于把英文原样丢给用户
+      expect(DEGRADED_LABEL[value]).not.toBe(value)
+      expect(DEGRADED_TAG[value], `${value} 没有标签色`).toBeTruthy()
+    }
+  })
+
+  it('语义色映射覆盖契约里出现过的每一种 severity', () => {
+    const used = new Set(Object.values(DEGRADED_META).map((m) => m.severity))
+    expect(used.size).toBeGreaterThan(1)
+    for (const value of DEGRADED_VALUES) {
+      expect(['info', 'warning', 'danger', 'success', 'primary']).toContain(DEGRADED_TAG[value])
+    }
   })
 
   it('未知降级值也要有可读文案，绝不返回空，也不许把原始枚举丢给用户', () => {
@@ -31,21 +49,5 @@ describe('降级文案', () => {
   it('没有降级才返回 null', () => {
     expect(degradedLabelOf(null)).toBeNull()
     expect(degradedLabelOf('')).toBeNull()
-  })
-
-  it('service 契约与 Web 并发路径的降级值前端全都认得', () => {
-    // 前十种与 DeepDocParse/gateway/app/services/extract_format.py 的 DEGRADED_VALUES 同源；
-    // index_changed_during_answer 是 Web 流式落库与重建并发时独有。
-    // 漏一个的话，界面上会退化成"已降级（英文枚举）"——不算静默，但很难看懂
-    const contract = [
-      'no_hits', 'embedding_unavailable', 'vision_unavailable', 'crop_unsupported',
-      'crop_failed', 'parse_mismatch', 'upstream_error', 'schema_violation',
-      'rerank_unavailable', 'no_instruct_model', 'index_changed_during_answer',
-      'decision_unavailable', 'no_evidence_in_turn', 'inherited_evidence_incomplete',
-      'gate_rejected_all', 'citation_persist_failed',
-      'verification_unavailable',
-    ]
-    const missing = contract.filter((v) => !(v in DEGRADED_LABEL))
-    expect(missing).toEqual([])
   })
 })

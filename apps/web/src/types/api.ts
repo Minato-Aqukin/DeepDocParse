@@ -1,9 +1,38 @@
-/** 后端返回体的类型。与 backend/app/routers/*.py 的 response_model 一一对应。 */
+/**
+ * 后端返回体的类型。与 `services/corpus-api/ddp_corpus/routers/*.py` 的
+ * response_model 一一对应。
+ *
+ * **枚举不在这里定义**：`ParseStatus` / `IndexStatus` / `Degraded` / `SourceType` …
+ * 全部从 `@deepdocparse/contracts` 再导出，取值由
+ * `packages/contracts/enums.yaml` 生成。以前它们在这里手写一份、
+ * 在 `constants/status.ts` 手写一份文案、后端再写一份字面量 —— 三处漂开的表现是
+ * 界面上出现原始英文枚举，或者某条降级在 UI 上干脆不存在。
+ */
+export type {
+  CodeDetection,
+  CompileStatus,
+  Degraded,
+  FieldStatus,
+  IndexStatus,
+  ParseStatus,
+  RunStatus,
+  SourceType,
+} from '@deepdocparse/contracts'
 
-export type ParseStatus = 'pending' | 'running' | 'archiving' | 'succeeded' | 'failed'
-export type IndexStatus = 'none' | 'pending' | 'indexing' | 'ready' | 'failed'
-export type CompileStatus = 'none' | 'pending' | 'compiling' | 'ready' | 'partial' | 'failed'
-export type CodeDetection = 'native' | 'heuristic' | 'unavailable'
+// `export type { ... } from` 只是转发，不会把名字带进本文件的作用域，
+// 而下面的接口定义要用它们 —— 所以再 import 一次
+import type {
+  CodeDetection,
+  CompileStatus,
+  Degraded,
+  FieldStatus,
+  IndexStatus,
+  ParseStatus,
+  RunStatus,
+  SourceType,
+} from '@deepdocparse/contracts'
+
+/** 下载格式不是后端枚举，是前端拼 URL 用的字面量集合，故留在本文件。 */
 export type DownloadFormat = 'md' | 'json' | 'zip' | 'source'
 
 export interface DocumentInfo {
@@ -99,7 +128,7 @@ export interface DocumentStats {
 
 export interface Citation {
   evidence_id: string | null
-  source_type: 'source' | 'generated'
+  source_type: SourceType
   derived_from?: string | null
   /**
    * 当前索引里对应的块。**接不回来时是 null**（阶段 3 起）——
@@ -203,7 +232,7 @@ export interface EvidenceDetail {
   page_size: [number, number] | null
   kind: string
   content: string
-  source_type: 'source' | 'generated'
+  source_type: SourceType
   derived_from: string | null
   crop_url: string | null
   review_state: 'unreviewed' | 'passed' | 'rejected' | 'questioned'
@@ -358,8 +387,6 @@ export interface EngineChoice {
 
 /* ---------- 结构化抽取（DDP-Extract v1） ---------- */
 
-export type FieldStatus = 'found' | 'not_found' | 'error'
-export type RunStatus = 'pending' | 'running' | 'succeeded' | 'partial' | 'failed'
 export type SchemaKind = 'object' | 'array'
 export type LeafType = 'string' | 'number' | 'integer' | 'boolean'
 

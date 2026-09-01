@@ -1,0 +1,356 @@
+# DeepDocParse 契约枚举 —— **语言中立的唯一真相。**
+#
+# Go / TypeScript / Python 三侧的枚举常量、类型与**用户可见文案**全部由
+# `scripts/generate.py` 从这里生成。合仓前它们各写一份：
+#   Python  ddp_corpus/models.py 的注释 + qa.py/extraction.py 里的字符串字面量
+#   TS      apps/web/src/constants/{status,compilation}.ts
+#   契约    openapi.yaml 的 enum 列表
+# 三处漂开的表现是**加了一种降级但界面显示原始英文枚举**，或者更糟：
+# 后端打了降级、前端的表里没有这一项，于是那条降级在 UI 上等于不存在 ——
+# 而"降级必须可见"是这个项目的第二条不变式。
+#
+# ## 每个取值必须写全四样
+#
+#   value        枚举值本身（snake_case，跨语言一致）
+#   summary      给开发者的一句话：什么情况下会打这个值
+#   label        给用户的一句话（中文）。**不是把枚举名翻译一遍** ——
+#                要说清"发生了什么、对你意味着什么"
+#   severity     neutral | progress | ok | warn | error
+#                语义色，**不是 UI 框架的颜色名**。前端在一处把它映射成
+#                Element Plus 的 tag type（neutral->info、progress->warning、
+#                ok->success、warn->warning、error->danger），
+#                换 UI 框架只改那一处，不必回来动契约。
+#
+# 缺任何一样，生成器直接报错退出（`scripts/generate.py` 里有断言）。
+# 这是刻意的：一个没有 label 的降级值等于一个用户看不懂的降级值。
+
+version: 1
+
+enums:
+
+  # ------------------------------------------------------------------
+  degraded:
+    description: |
+      问答 / 检索 / 抽取平面的降级原因。落在 `messages.degraded`、
+      DDP-Extract 的 `degraded`、以及检索响应里。
+
+      **一次只报一个**（最先命中的那个）。需要同时报多个的场合请用
+      `compile_degraded` 那种列表形状，不要往这里塞逗号分隔串。
+    applies_to: [qa, search, extract]
+    values:
+      - value: no_hits
+        summary: 检索一条都没命中
+        label: 未在本文档中检索到相关内容
+        severity: neutral
+      - value: parse_mismatch
+        summary: |
+          裁图上的文字与解析出的块文本对不上（相似度低于
+          QA_PARSE_MISMATCH_THRESHOLD / EXTRACT_MISMATCH_THRESHOLD，实测标定 0.55）。
+          它是**假出处**的主要探测手段，不是小问题。
+        label: 出处存疑（图上内容与解析文本对不上）
+        severity: warn
+      - value: embedding_unavailable
+        summary: |
+          向量化服务不可达，只走了关键词路。**这条是本项目吃过最大亏的地方**：
+          M4a 时向量检索静默退回 BM25，没人发现。必须可见。
+        label: 仅关键词检索（向量化服务不可用）
+        severity: warn
+      - value: vision_unavailable
+        summary: 视觉模型不可用，本轮没做视觉核对
+        label: 未做视觉验证（视觉模型不可用）
+        severity: warn
+      - value: crop_unsupported
+        summary: 该文件类型不支持按 bbox 裁图（例如非 PDF 原件）
+        label: 未做视觉验证（该文件不支持区域截图）
+        severity: neutral
+      - value: crop_failed
+        summary: 裁图渲染失败。**注意**：依赖缺失不走这条，见 ddp_core/crops.py 的 _DEP_NOTE
+        label: 未做视觉验证（区域截图失败）
+        severity: warn
+      - value: client_aborted
+        summary: 客户端在流式回答途中断开
+        label: 回答被中断
+        severity: neutral
+      - value: upstream_error
+        summary: 上游模型服务返回错误
+        label: 问答服务异常
+        severity: error
+      - value: upstream_interrupted
+        summary: 上游在流式输出中途断流（拿到的是半截答案）
+        label: 回答生成中途断流
+        severity: error
+      - value: index_changed_during_answer
+        summary: 回答生成期间索引 generation 变了，本轮出处已标失效
+        label: 回答生成期间索引版本已变化，出处已标为失效
+        severity: warn
+      - value: decision_unavailable
+        summary: "「这轮要不要检索」的判定模型不可用，已保守地执行检索"
+        label: 是否检索判定不可用，已保守执行检索
+        severity: neutral
+      - value: no_evidence_in_turn
+        summary: 本轮既没检索到证据也没有可继承证据，拒绝脱离文档作答
+        label: 本轮没有可继承证据，已拒绝脱离文档作答
+        severity: warn
+      - value: inherited_evidence_incomplete
+        summary: 上一轮的证据部分失效，不能直接沿用
+        label: 上一轮证据已部分失效，需重新检索后再回答
+        severity: warn
+      - value: gate_rejected_all
+        summary: 候选全部没通过逐篇质量门控（有候选但都不够格，与 no_hits 不同）
+        label: 检索候选均未通过逐篇质量门控
+        severity: warn
+      - value: citation_persist_failed
+        summary: 出处写库失败，相关结论已标为无证据支持
+        label: 出处保存失败，相关结论已标为无证据支持
+        severity: error
+      - value: verification_unavailable
+        summary: 原文自动核对没得出结论
+        label: 原文自动核对未得出结论，请人工复核
+        severity: warn
+      - value: schema_violation
+        summary: |
+          模型输出反复不合 schema（已按 EXTRACT_MAX_RETRIES 重试仍失败）。
+          **绝不能被静默当成 not_found** —— 那会把系统故障伪装成"文档里没有"。
+        label: 模型输出不符合 schema（已重试仍失败）
+        severity: error
+      - value: rerank_unavailable
+        summary: 配了精排但上游没注册 rerank 模型，本轮没重排
+        label: 未做精排（重排序服务不可用）
+        severity: neutral
+      - value: no_instruct_model
+        summary: |
+          注册表里只有 OCR 专用模型（`capabilities` 含 `no_instruct`），
+          抽值无处可调。同样绝不能伪装成 not_found。
+        label: 未抽取（后端没有可用的指令模型）
+        severity: error
+      # 下面两个是 MCP 平面独有的（`ddp_mcp/corpus.py`）。合仓时由
+      # scripts/check_enum_usage.py 扫出来 —— 它们此前从没进过任何枚举清单，
+      # 于是 MCP 返回它们时，任何按枚举分支渲染的消费方都当作"没有降级"。
+      - value: empty_query
+        summary: MCP `search` 收到空查询串，直接返回空结果
+        label: 查询词为空
+        severity: neutral
+      - value: answer_unavailable
+        summary: MCP `ask` 调上游生成时非 200，本轮没有答案（证据仍然返回）
+        label: 生成服务不可用（证据已返回，结论未生成）
+        severity: error
+
+  # ------------------------------------------------------------------
+  compile_degraded:
+    description: |
+      版面编译（DDP-Compile v1）的降级。与 `degraded` 分开是因为它是
+      **列表**：一次编译可以同时有好几种降级，而且它落在
+      `documents.compile_degraded`（JSON 数组）上。
+    applies_to: [compile]
+    values:
+      - value: code_detection_unavailable
+        summary: 当前版面引擎报不出代码块
+        label: 当前版面引擎不能识别代码块
+        severity: neutral
+      - value: crop_unsupported
+        summary: 部分视觉原子没有可定位的裁图
+        label: 部分视觉原子没有可定位裁图
+        severity: neutral
+      - value: crop_failed
+        summary: 部分视觉原子裁图失败
+        label: 部分视觉原子裁图失败
+        severity: warn
+      - value: vision_unavailable
+        summary: 视觉理解模型不可用
+        label: 视觉理解模型不可用
+        severity: warn
+      - value: vision_invalid_output
+        summary: 视觉模型返回的结构不合规
+        label: 视觉理解模型返回的结构不合规
+        severity: warn
+      - value: provider_unresolved
+        summary: 上游实际模型没解析出来，本次编译版本不可比较
+        label: 上游实际模型未解析，当前编译版本不可比较
+        severity: warn
+      - value: reindex_validation_required
+        summary: 存在历史出处，需先校验并人工确认后才能重建
+        label: 存在历史出处，需先校验并确认后重建
+        severity: warn
+      - value: compile_failed
+        summary: 版面编译整体失败
+        label: 版面编译失败
+        severity: error
+
+  # ------------------------------------------------------------------
+  parse_status:
+    description: |
+      解析任务状态。契约（`/v1/parse/{id}`）只承诺四态；
+      `archiving` 是**产品层**多出来的一态：网关已完成但归档还没落地，
+      对用户是"还在动"。
+    applies_to: [parse]
+    values:
+      - {value: pending,   summary: 已受理，排队中,               label: 排队中,   severity: neutral,  active: true}
+      - {value: running,   summary: 引擎正在解析,                 label: 解析中,   severity: progress,  active: true}
+      - {value: archiving, summary: 引擎已完成，产品层正在归档结果, label: 归档中,   severity: progress,  active: true}
+      - {value: succeeded, summary: 解析完成且结果已可取,          label: 已完成,   severity: ok}
+      - {value: failed,    summary: 解析失败，error 里有原因,       label: 失败,     severity: error}
+    contract_subset:
+      # 契约只承诺这四个，`archiving` 不出现在 /v1/* 响应里
+      openapi_v1: [pending, running, succeeded, failed]
+
+  index_status:
+    description: 向量索引状态。索引失败必须能在 UI 上看到，不许静默。
+    applies_to: [document]
+    values:
+      - {value: none,     summary: 还没建过索引,           label: 未索引,   severity: neutral}
+      - {value: pending,  summary: 已排队等待索引,         label: 待索引,   severity: neutral, active: true}
+      - {value: indexing, summary: 正在建索引,             label: 索引中,   severity: progress, active: true}
+      - {value: ready,    summary: 索引可用，可以问答,     label: 可问答,   severity: ok}
+      - {value: failed,   summary: 索引失败，index_error 里有原因, label: 索引失败, severity: error}
+
+  compile_status:
+    description: |
+      版面编译状态。**索引 ready 不代表视觉理解完整** —— 编译状态与降级
+      必须单列并在前端展示。
+    applies_to: [document]
+    values:
+      - {value: none,      summary: 还没编译,               label: 未编译,     severity: neutral}
+      - {value: pending,   summary: 已排队等待编译,         label: 待编译,     severity: neutral, active: true}
+      - {value: compiling, summary: 正在编译,               label: 编译中,     severity: progress, active: true}
+      - {value: ready,     summary: 编译完整、无降级,       label: 编译完整,   severity: ok}
+      - {value: partial,   summary: 编译完成但有降级，见 compile_degraded, label: 编译有降级, severity: warn}
+      - {value: failed,    summary: 编译失败,               label: 编译失败,   severity: error}
+
+  run_status:
+    description: |
+      抽取批次状态。`partial` **不是"有点问题"的委婉说法**：它明确表示
+      必填字段没抽全，或批次里个别文档失败。一批 200 份里有 3 份失败
+      报成"成功"，会让人直接拿去用。
+    applies_to: [extract]
+    values:
+      - {value: pending,   summary: 已受理，排队中,         label: 排队中,     severity: neutral, active: true}
+      - {value: running,   summary: 正在抽取,               label: 抽取中,     severity: progress, active: true}
+      - {value: succeeded, summary: 全部文档全部字段都完成, label: 已完成,     severity: ok}
+      - {value: partial,   summary: 部分文档或部分字段失败, label: 部分完成,   severity: warn}
+      - {value: failed,    summary: 整批失败,               label: 失败,       severity: error}
+
+  field_status:
+    description: |
+      DDP-Extract 的字段三态。**必须分开对待**：`not_found` 是"我们看过了，
+      文档里确实没有"，是一种正确答案；`error` 才是系统问题。
+      界面上 not_found 绝不能显示成空白或 "—"（那让人以为是没渲染出来），
+      error 也绝不能显示成"未提及"（那是把系统故障伪装成事实）。
+    applies_to: [extract]
+    values:
+      - {value: found,     summary: 抽到了值，且有出处,     label: 已抽取,         severity: ok}
+      - {value: not_found, summary: 文档里确实没有这个字段, label: 文档中未提及,   severity: neutral}
+      - {value: error,     summary: 抽取过程本身出错,       label: 抽取失败,       severity: error}
+
+  code_detection:
+    description: 代码块识别的来源。启发式与原生要分开，因为它决定了代码检索的可信度。
+    applies_to: [compile]
+    values:
+      - {value: native,      summary: 版面引擎直接报出了 code 块, label: "代码识别：原生",   severity: ok}
+      - {value: heuristic,   summary: 靠启发式规则判出来的,       label: "代码识别：启发式", severity: neutral}
+      - {value: unavailable, summary: 当前引擎识别不了代码块,     label: "代码识别：不可用", severity: warn}
+
+  source_type:
+    description: |
+      证据是原文还是生成物。**第三条不变式**：生成物与原文必须可区分，
+      且生成物的引用最终仍要指回原始原子 bbox（`derived_from`）。
+      判据是 `evidence.derived_from` 是否为空 —— 不要在别处另立标志位。
+    applies_to: [evidence, citation]
+    values:
+      - {value: source,    summary: 直接来自版面的原子（derived_from 为空）, label: 原文,     severity: neutral}
+      - {value: generated, summary: 模型生成的理解（derived_from 指向原子）, label: 生成理解, severity: warn}
+
+  block_type:
+    description: |
+      DDP-Layout v1.1 的块类型词汇表 —— **契约的一部分**。
+      每个引擎的 normalizer 都必须产出这八个值之一；认不出来的归 `other`
+      （不是丢弃 —— 丢弃会让新引擎的块凭空消失）。
+      规范实现在 `ddp_core.blocks.normalize_type`，守卫在
+      `scripts/check_blocktype_parity.py`。
+    applies_to: [layout]
+    values:
+      - {value: text,     summary: 正文段落。也是"压根没有 type"时的默认, label: 正文,   severity: neutral}
+      - {value: title,    summary: 各级标题,                            label: 标题,   severity: neutral}
+      - {value: code,     summary: 代码块,                              label: 代码,   severity: neutral}
+      - {value: table,    summary: 表格（table_html 可能有值）,          label: 表格,   severity: neutral}
+      - {value: figure,   summary: 图。**无 caption 也要产出原子**，否则视觉链路没输入, label: 图, severity: neutral}
+      - {value: equation, summary: 行间公式,                            label: 公式,   severity: neutral}
+      - {value: list,     summary: 列表,                                label: 列表,   severity: neutral}
+      - value: other
+        summary: 有 type 但不在映射表里 —— 与「压根没有 type」要分开，后者归 text
+        label: 其它
+        severity: neutral
+
+  usage_kind:
+    description: |
+      计量流水的种类。`extract` 按**字段数**计 requests：一次抽取 = N 次检索
+      + N 次模型调用，按"一次请求"计费会让 60 字段的 schema 和 1 字段的一样便宜。
+    applies_to: [metering]
+    values:
+      - {value: parse,          summary: 文档解析，按页计,       label: 解析,       severity: neutral}
+      - {value: chat,           summary: 对外 chat 代理，按次计, label: 对话,       severity: neutral}
+      - {value: embeddings,     summary: 对外向量化代理,         label: 向量化,     severity: neutral}
+      - {value: mcp,            summary: MCP 工具调用,           label: MCP 调用,   severity: neutral}
+      - {value: qa,             summary: 站内问答,               label: 问答,       severity: neutral}
+      - {value: embed,          summary: 索引时的向量化,         label: 索引向量化, severity: neutral}
+      - {value: compile_vision, summary: 编译期的视觉理解调用,   label: 视觉理解,   severity: neutral}
+      - {value: extract,        summary: 结构化抽取，按字段数计, label: 结构化抽取, severity: neutral}
+
+  # ---------------- 以下是企业化重构新增（control-api / 持久任务） ----------
+
+  actor_kind:
+    description: |
+      调用者身份类型。corpus-api **不自己验用户凭据**，它只信任 control-api
+      在内部调用里下发的 `X-DDP-Actor-Kind` + `X-DDP-Actor`。
+    applies_to: [control, corpus]
+    values:
+      - {value: user,    summary: 浏览器会话（JWT / OIDC）, label: 用户,     severity: neutral}
+      - {value: api_key, summary: sk- 开头的对外 key,       label: API Key,  severity: neutral}
+      - {value: service, summary: 服务间调用（服务凭据）,   label: 服务,     severity: neutral}
+
+  role:
+    description: |
+      组织内角色（RBAC）。**首发是单组织独占部署**，一次部署 = 一份语料，
+      组织内成员共享语料；角色控制的是"能做什么"，不是"能看见什么"。
+    applies_to: [control]
+    values:
+      - {value: viewer,      summary: 只读：检索、问答、看证据,               label: 只读成员,   severity: neutral}
+      - {value: contributor, summary: viewer + 上传、重解析、发起抽取,        label: 贡献者,     severity: neutral}
+      - {value: reviewer,    summary: contributor + 复核队列、确认/驳回知识条目, label: 复核员,   severity: neutral}
+      - {value: admin,       summary: 全部 + 成员管理、API key、配额、删除,   label: 管理员,     severity: neutral}
+
+  task_status:
+    description: |
+      持久任务的状态机（§10）。**领取必须带 generation fencing**：
+      lease 只解决"谁可以接管"，最终写入还要比 generation —— 否则被判死的
+      旧 worker 迟到写入会覆盖新结果。
+    applies_to: [worker]
+    values:
+      - {value: queued,    summary: 已落库等待领取,                       label: 排队中, severity: neutral, active: true}
+      - {value: claimed,   summary: 已被某个 worker 领取（带 lease_until）, label: 已领取, severity: progress, active: true}
+      - {value: running,   summary: 正在执行，靠 heartbeat 续租,           label: 执行中, severity: progress, active: true}
+      - {value: succeeded, summary: 完成,                                 label: 已完成, severity: ok}
+      - {value: failed,    summary: 失败，失败原因必须持久化并在 UI 可见,   label: 失败,   severity: error}
+
+  task_kind:
+    description: 持久任务的种类。每种**分别设并发与队列**，不共用一个无量纲总并发。
+    applies_to: [worker]
+    values:
+      - {value: parse_poll, summary: 轮询解析引擎并归档结果, label: 解析归档, severity: neutral}
+      - {value: compile,    summary: 版面编译（含视觉理解）, label: 版面编译, severity: neutral}
+      - {value: index,      summary: 分块 + 向量化 + 写索引, label: 建立索引, severity: neutral}
+      - {value: extract,    summary: 结构化抽取批次,         label: 结构化抽取, severity: neutral}
+      - {value: knowledge,  summary: 图谱 / wiki 生成,       label: 知识生成, severity: neutral}
+      - {value: gc,         summary: 对象回收（带宽限期）,   label: 对象回收, severity: neutral}
+
+  upload_status:
+    description: |
+      直传上传会话的状态（§9.1）。**`verifying` 不能跳过**：服务端没校验完
+      对象大小与摘要之前，文档不得进入解析 —— 否则等于信任客户端声明的哈希。
+    applies_to: [control]
+    values:
+      - {value: created,   summary: 会话已创建，预签名已下发,       label: 待上传,   severity: neutral, active: true}
+      - {value: uploading, summary: 客户端正在分片上传,             label: 上传中,   severity: progress, active: true}
+      - {value: verifying, summary: 已 finalize，服务端正在校验摘要, label: 校验中,   severity: progress, active: true}
+      - {value: ready,     summary: 校验通过，已发出 DocumentSubmitted, label: 已就绪, severity: ok}
+      - {value: failed,    summary: 校验失败或客户端放弃,           label: 失败,     severity: error}
+      - {value: expired,   summary: 预签名过期未完成,               label: 已过期,   severity: warn}

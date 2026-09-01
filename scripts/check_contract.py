@@ -19,7 +19,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-SPEC = ROOT / "packages" / "contracts" / "openapi" / "corpus-v1.yaml"
+SPEC = ROOT / "packages" / "contracts" / "openapi" / "gateway-v1.yaml"
 
 # 契约只覆盖对外端点。这些是 FastAPI / instrumentator 自带的，不属于契约
 IGNORED = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc", "/metrics"}

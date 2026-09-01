@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     # MCP 是**语料消费方**（铁律 6），所以装的是带 ORM 的那一层
     "ddp-core[db]",
+    "ddp-contracts",
     "fastmcp>=2.0",
     "httpx>=0.27",
     "pillow>=10.0",

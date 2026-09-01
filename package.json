@@ -8,11 +8,11 @@
     "packages/*"
   ],
   "scripts": {
-    "contracts:gen": "node packages/contracts/scripts/generate.mjs",
-    "contracts:check": "node packages/contracts/scripts/generate.mjs --check",
-    "web:dev": "npm run dev --workspace @deepdocparse/web",
-    "web:build": "npm run build --workspace @deepdocparse/web",
-    "web:test": "npm run test:unit --workspace @deepdocparse/web"
+    "contracts:gen": "python3 packages/contracts/scripts/generate.py",
+    "contracts:check": "python3 packages/contracts/scripts/generate.py --check",
+    "web:dev": "npm run dev --workspace deepdocparse-web-frontend",
+    "web:build": "npm run build --workspace deepdocparse-web-frontend",
+    "web:test": "npm run test:unit --workspace deepdocparse-web-frontend"
   },
   "engines": {
     "node": ">=22"

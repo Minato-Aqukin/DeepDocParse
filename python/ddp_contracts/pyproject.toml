@@ -1,0 +1,15 @@
+[project]
+name = "ddp-contracts"
+version = "1.0.0"
+description = "DeepDocParse 契约生成物（Python 侧）—— 枚举、类型与用户文案"
+requires-python = ">=3.11"
+# **零依赖，且必须保持零依赖。** 它是依赖图最底下那一层：
+# ddp_core 依赖它，四个服务都依赖它。往这里加一个依赖等于给全仓加一个依赖。
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ddp_contracts"]

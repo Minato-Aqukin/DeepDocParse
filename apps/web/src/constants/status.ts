@@ -1,12 +1,34 @@
 /**
- * 状态与降级的文案表 —— 全站唯一来源。
+ * 状态与降级的文案表 —— **全部由契约生成，这里只做 UI 映射。**
  *
- * 后端新增一种状态或降级值时**只改这个文件**：以前要在 DocumentsView 补标签、
- * 在 AskPanel 补文案、在工作台再补一次，漏一处用户就看到一个原始英文枚举。
+ * 合仓前这个文件是手写的：后端每加一种降级，就要有人记得回来补一句中文，
+ * 漏一处用户就看到一个原始英文枚举 —— 或者更糟，那条降级在 UI 上等于不存在，
+ * 而"降级必须可见"是第二条不变式。
  *
- * 这里同时是将来上 i18n 的收口：换成 t('status.parse.running') 只动本文件。
+ * 现在取值与文案都住在 `packages/contracts/enums.yaml`，
+ * Go / TypeScript / Python 三侧同源生成。本文件剩下的职责只有两件：
+ *   1. 把语义色 `severity` 映射成 Element Plus 的 tag type（换 UI 框架只改这一处）
+ *   2. 提供筛选下拉之类的派生数据
+ *
+ * 将来上 i18n 的收口也在这里：`label` 换成 `t('status.parse.running')` 只动本文件。
  */
-import type { FieldStatus, IndexStatus, ParseStatus, RunStatus } from '@/types/api'
+import {
+  COMPILE_STATUS_META,
+  DEGRADED_META,
+  FIELD_STATUS_META,
+  INDEX_STATUS_META,
+  PARSE_STATUS_META,
+  RUN_STATUS_META,
+  type CompileStatus,
+  type Degraded,
+  type EnumMeta,
+  type FieldStatus,
+  type IndexStatus,
+  type ParseStatus,
+  type RunStatus,
+  type Severity,
+  degradedLabelOf as contractDegradedLabelOf,
+} from '@deepdocparse/contracts'
 
 export type TagType = 'success' | 'info' | 'warning' | 'danger' | 'primary'
 
@@ -17,50 +39,45 @@ export interface StatusMeta {
   active?: boolean
 }
 
-export const PARSE_STATUS: Record<ParseStatus, StatusMeta> = {
-  pending: { label: '排队中', type: 'info', active: true },
-  running: { label: '解析中', type: 'warning', active: true },
-  archiving: { label: '归档中', type: 'warning', active: true },
-  succeeded: { label: '已完成', type: 'success' },
-  failed: { label: '失败', type: 'danger' },
-}
-
-export const INDEX_STATUS: Record<IndexStatus, StatusMeta> = {
-  none: { label: '未索引', type: 'info' },
-  pending: { label: '待索引', type: 'info', active: true },
-  indexing: { label: '索引中', type: 'warning', active: true },
-  ready: { label: '可问答', type: 'success' },
-  failed: { label: '索引失败', type: 'danger' },
-}
-
 /**
- * 问答/检索的降级说明。
+ * 语义色 -> Element Plus 的 tag type。**全站唯一一处**。
  *
- * 降级必须让用户看见——这个项目吃过静默降级的大亏（向量检索悄悄退回 BM25 无人发现），
- * 所以后端每加一个 degraded 值，这里就要有一句人话。
+ * 契约里存的是语义（`neutral` / `progress` / `ok` / `warn` / `error`），
+ * 不是颜色名 —— 否则换 UI 框架就得回去改契约，而契约是三种语言共用的。
  */
-export const DEGRADED_LABEL: Record<string, string> = {
-  no_hits: '未在本文档中检索到相关内容',
-  parse_mismatch: '出处存疑（图上内容与解析文本对不上）',
-  embedding_unavailable: '仅关键词检索（向量化服务不可用）',
-  vision_unavailable: '未做视觉验证（视觉模型不可用）',
-  crop_unsupported: '未做视觉验证（该文件不支持区域截图）',
-  crop_failed: '未做视觉验证（区域截图失败）',
-  client_aborted: '回答被中断',
-  upstream_error: '问答服务异常',
-  upstream_interrupted: '回答生成中途断流',
-  index_changed_during_answer: '回答生成期间索引版本已变化，出处已标为失效',
-  decision_unavailable: '是否检索判定不可用，已保守执行检索',
-  no_evidence_in_turn: '本轮没有可继承证据，已拒绝脱离文档作答',
-  inherited_evidence_incomplete: '上一轮证据已部分失效，需重新检索后再回答',
-  gate_rejected_all: '检索候选均未通过逐篇质量门控',
-  citation_persist_failed: '出处保存失败，相关结论已标为无证据支持',
-  verification_unavailable: '原文自动核对未得出结论，请人工复核',
-  // v1.1 新增两种
-  schema_violation: '模型输出不符合 schema（已重试仍失败）',
-  rerank_unavailable: '未做精排（重排序服务不可用）',
-  no_instruct_model: '未抽取（后端没有可用的指令模型）',
+const TAG_OF_SEVERITY: Record<Severity, TagType> = {
+  neutral: 'info',
+  progress: 'warning',
+  ok: 'success',
+  warn: 'warning',
+  error: 'danger',
 }
+
+function toStatusMeta(meta: EnumMeta): StatusMeta {
+  return { label: meta.label, type: TAG_OF_SEVERITY[meta.severity], active: meta.active }
+}
+
+function mapMeta<K extends string>(source: Record<K, EnumMeta>): Record<K, StatusMeta> {
+  return Object.fromEntries(
+    Object.entries(source).map(([k, v]) => [k, toStatusMeta(v as EnumMeta)]),
+  ) as Record<K, StatusMeta>
+}
+
+export const PARSE_STATUS = mapMeta<ParseStatus>(PARSE_STATUS_META)
+export const INDEX_STATUS = mapMeta<IndexStatus>(INDEX_STATUS_META)
+export const RUN_STATUS = mapMeta<RunStatus>(RUN_STATUS_META)
+export const FIELD_STATUS = mapMeta<FieldStatus>(FIELD_STATUS_META)
+export const COMPILE_STATUS = mapMeta<CompileStatus>(COMPILE_STATUS_META)
+
+/** 问答/检索的降级说明。取值与文案都来自契约，这里不许再手写一份。 */
+export const DEGRADED_LABEL: Record<string, string> = Object.fromEntries(
+  Object.entries(DEGRADED_META).map(([k, v]) => [k, (v as EnumMeta).label]),
+)
+
+/** 降级的语义色 —— AskPanel 用它决定提示条是灰是黄还是红。 */
+export const DEGRADED_TAG: Record<string, TagType> = Object.fromEntries(
+  Object.entries(DEGRADED_META).map(([k, v]) => [k, TAG_OF_SEVERITY[(v as EnumMeta).severity]]),
+)
 
 /**
  * 检索可信度的文案。
@@ -68,8 +85,11 @@ export const DEGRADED_LABEL: Record<string, string> = {
  * 设计取向（借自 kotaemon）：**把"我有多确信"交给用户判断，而不是替用户决定**。
  * 所以低相关时不拦着不给答案，只是把话说明白。
  *
- * 判定线在后端（`backend/app/config.py::qa_low_similarity`，那里写着实测分布），
+ * 判定线在后端（`ddp_corpus/config.py::qa_low_similarity`，那里写着实测分布），
  * 前端只负责显示 —— 校准值放两处一定会漂。
+ *
+ * 这一组**不在契约里**：它不是后端返回的枚举，而是前端按 `similarity` 与
+ * `warn_below` 现算出来的三档展示状态。放进契约反而会让人以为后端会返回它。
  */
 export const CONFIDENCE_META: Record<string, StatusMeta & { hint: string }> = {
   high: { label: '相关度高', type: 'success', hint: '' },
@@ -114,8 +134,7 @@ export function indexStatusOf(status: IndexStatus): StatusMeta {
 
 /** 未知的降级值也要给出可读文案，不能把枚举原样丢给用户。 */
 export function degradedLabelOf(value: string | null): string | null {
-  if (!value) return null
-  return DEGRADED_LABEL[value] ?? `已降级（${value}）`
+  return contractDegradedLabelOf(value as Degraded | null)
 }
 
 /** 筛选下拉的选项，直接由文案表派生，加状态不用改筛选器。 */
@@ -129,46 +148,20 @@ export const INDEX_STATUS_OPTIONS = (Object.keys(INDEX_STATUS) as IndexStatus[])
   label: INDEX_STATUS[value].label,
 }))
 
-
-/* ---------- 结构化抽取 ---------- */
-
-/**
- * 抽取任务的状态。
- *
- * `partial` 不是"有点问题"的委婉说法：它明确表示**必填字段没抽全，或个别文档失败**。
- * 与 succeeded 分开是刻意的 —— 一批 200 份文档里有 3 份失败，
- * 报成"成功"会让人直接拿去用。
- */
-export const RUN_STATUS: Record<RunStatus, StatusMeta> = {
-  pending: { label: '排队中', type: 'info', active: true },
-  running: { label: '抽取中', type: 'warning', active: true },
-  succeeded: { label: '已完成', type: 'success' },
-  partial: { label: '部分完成', type: 'warning' },
-  failed: { label: '失败', type: 'danger' },
-}
-
 export function runStatusOf(status: RunStatus): StatusMeta {
   return RUN_STATUS[status] ?? { label: status, type: 'info' }
-}
-
-/**
- * 字段三态的文案。
- *
- * **"文档中未提及"绝不能写成"—"或空白**：空白让人以为是界面没渲染出来，
- * 而这里表达的是一个确定的结论（我们看过了，文档里没有）。
- * 反过来 error 也不能显示成"未提及"—— 那是把系统故障伪装成事实。
- */
-export const FIELD_STATUS: Record<FieldStatus, StatusMeta> = {
-  found: { label: '已抽取', type: 'success' },
-  not_found: { label: '文档中未提及', type: 'info' },
-  error: { label: '抽取失败', type: 'danger' },
 }
 
 export function fieldStatusOf(status: FieldStatus): StatusMeta {
   return FIELD_STATUS[status] ?? { label: status, type: 'info' }
 }
 
-/** schema 叶子类型的中文名，编辑器下拉用。 */
+/**
+ * schema 叶子类型的中文名，编辑器下拉用。
+ *
+ * **不在契约里**：这是 JSON Schema 自己的类型词汇，不是 DeepDocParse 定义的枚举。
+ * 受限子集的边界见 `packages/contracts/ddp/extract-format.md`。
+ */
 export const LEAF_TYPE_OPTIONS = [
   { value: 'string', label: '文本' },
   { value: 'number', label: '数字' },

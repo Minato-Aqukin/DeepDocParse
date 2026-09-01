@@ -19,7 +19,11 @@
 # 表格被拆散揉进相邻段落、标题被并成正文，而这正是"结构化信息提取"最需要的信号。
 # 升进契约的代价是**每个引擎的 normalizer 都必须产出这八个值之一**，
 # 认不出来的一律归 other（不是丢弃——丢弃会让新引擎的块凭空消失）。
-BLOCK_TYPES = ("text", "title", "code", "table", "figure", "equation", "list", "other")
+#
+# 取值本身住在 `packages/contracts/enums.yaml`，Go / TS / Python 三侧同源生成。
+# 这里**只是再导出**：以前这张表在 Python、TS、openapi.yaml 各写一份，
+# 漂开的表现是前端把某个块类型显示成原始英文枚举。
+from ddp_contracts import BLOCK_TYPE_VALUES as BLOCK_TYPES
 
 # mineru 原生类型 -> 契约词汇表。mineru 的类型体系比这里细
 # （image_body / table_caption / interline_equation …），归一化只保留下游真正会分支的那几类。

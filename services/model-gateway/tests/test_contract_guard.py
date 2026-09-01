@@ -13,7 +13,7 @@ import yaml
 from ddp_paths import CONTRACTS, REPO_ROOT
 
 ROOT = REPO_ROOT
-OPENAPI = CONTRACTS / "openapi" / "corpus-v1.yaml"
+OPENAPI = CONTRACTS / "openapi" / "gateway-v1.yaml"
 
 
 def _load_guard():

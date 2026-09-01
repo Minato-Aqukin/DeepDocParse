@@ -21,6 +21,12 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url)),
+        // 契约生成物。走别名而不是 npm workspace 依赖：生成物本来就在仓库里，
+        // 别名让 vite / vitest / vue-tsc 三处指向同一个文件，不必先跑 npm install。
+        // 将来要发 npm 包时把别名换成真依赖即可，import 语句一个字不用改。
+        '@deepdocparse/contracts': fileURLToPath(
+          new URL('../../packages/contracts/generated/ts/enums.ts', import.meta.url),
+        ),
       },
     },
     server: {
