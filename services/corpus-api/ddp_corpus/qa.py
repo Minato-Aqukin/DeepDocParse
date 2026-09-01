@@ -23,16 +23,16 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import rerank_config, settings
-from app.crops import get_or_create_crop
-from app.models import Chunk, Document, Evidence, ParseJob
+from ddp_corpus.config import rerank_config, settings
+from ddp_corpus.crops import get_or_create_crop
+from ddp_corpus.models import Chunk, Document, Evidence, ParseJob
 from ddp_core.agent import CandidateDecision, QueryDecision, gate_candidates
 from ddp_core.anchor import same_content
 from ddp_core.rerank import rerank_hits
 from ddp_core.search import Hit, SearchIndex
-from app.storage import Storage
+from ddp_corpus.storage import Storage
 from ddp_core.tokenize import backend as tokenize_backend
-from app.upstream import chat_request, embed_one
+from ddp_corpus.upstream import chat_request, embed_one
 
 SYSTEM_PROMPT = (
     "你是文档问答助手。只依据【资料】回答问题；资料中没有的信息，"

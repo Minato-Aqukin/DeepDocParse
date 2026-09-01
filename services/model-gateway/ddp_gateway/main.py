@@ -19,13 +19,13 @@ from arq import create_pool
 from arq.connections import RedisSettings
 from fastapi import FastAPI
 
-from app.config import (
+from ddp_gateway.config import (
     assert_secrets_configured, assert_thresholds_sane, load_registry, settings,
 )
-from app.errors import install_error_handlers
-from app.routers import chat, embeddings, extract, health, parse, rerank
-from app.services.mineru_client import MineruClient
-from app.services.task_store import TaskStore
+from ddp_gateway.errors import install_error_handlers
+from ddp_gateway.routers import chat, embeddings, extract, health, parse, rerank
+from ddp_gateway.services.mineru_client import MineruClient
+from ddp_gateway.services.task_store import TaskStore
 
 
 @asynccontextmanager

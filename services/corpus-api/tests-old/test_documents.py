@@ -17,11 +17,11 @@ import pytest
 import respx
 from sqlalchemy import select
 
-import app.db as db
-from app.archive import archive_job
-from app.config import settings
-from app.models import Chunk, Document, FileToken, ParseJob, UsageRecord, utcnow
-from app.reconcile import reconcile_once
+import ddp_corpus.db as db
+from ddp_corpus.archive import archive_job
+from ddp_corpus.config import settings
+from ddp_corpus.models import Chunk, Document, FileToken, ParseJob, UsageRecord, utcnow
+from ddp_corpus.reconcile import reconcile_once
 from tests.conftest import EMBEDDINGS, SERVICE, register
 
 PDF = b"%PDF-1.4 fake content for tests"
@@ -181,7 +181,7 @@ async def test_list_documents_does_not_scale_queries_with_rows(auth_client):
 
     from sqlalchemy import event
 
-    import app.db as db
+    import ddp_corpus.db as db
 
     for rows in (1, 6):
         while len((await auth_client.get("/api/documents")).json()) < rows:
@@ -493,7 +493,7 @@ async def test_late_archive_cannot_revive_deleted_document(
     assert row.deleted_at is not None
     assert row.index_status == "none"
 
-    from app.indexing import index_document
+    from ddp_corpus.indexing import index_document
     assert await index_document(
         session, app_state.storage, app_state.http, document["id"]
     ) == 0
@@ -586,7 +586,7 @@ async def test_second_uploader_reuses_the_parse_and_is_recorded(auth_client, cli
     """
     from sqlalchemy import func, select as sa_select
 
-    from app.models import Document, DocumentUpload, ParseJob
+    from ddp_corpus.models import Document, DocumentUpload, ParseJob
 
     _mock_service()
     document_id = (await _upload(auth_client))["id"]
@@ -618,7 +618,7 @@ async def test_only_uploader_or_admin_can_delete(auth_client, client, session):
     非上传者删不掉（403，不是 404 —— 文档本来就是全员可见的，
     装作不存在只会让人以为自己找错了 id）。管理员可以。
     """
-    from app.models import User
+    from ddp_corpus.models import User
 
     _mock_service()
     document_id = (await _upload(auth_client))["id"]
@@ -854,7 +854,7 @@ async def test_reparse_bills_the_person_who_asked_not_the_uploader(
 
     # **embed 那半同样要钉住。** 建索引也是花钱的，而它走的是另一处
     # record_usage（indexing.py），退回按上传者记账时上面那些断言一条都不会红
-    from app.indexing import index_document
+    from ddp_corpus.indexing import index_document
 
     document_row = await session.get(Document, document["id"])
     document_row.current_job_id = new_job.id

@@ -14,8 +14,8 @@ import respx
 from httpx import Response
 from sqlalchemy import select
 
-from app.evidence import record_evidence
-from app.models import Assertion, Chunk, Document, Message, ParseJob
+from ddp_corpus.evidence import record_evidence
+from ddp_corpus.models import Assertion, Chunk, Document, Message, ParseJob
 from ddp_core.models import Citation, Evidence, digest_of
 from ddp_core.tokenize import tokenized
 
@@ -24,7 +24,7 @@ from tests.test_qa import _ask, _conversation, _ready_document
 
 
 async def _a_user(session) -> str:
-    from app.models import User
+    from ddp_corpus.models import User
     user = User(username="ev", password_hash="x")
     session.add(user)
     await session.flush()
@@ -138,7 +138,7 @@ async def test_citations_without_a_locator_are_skipped(session):
     造一行"证据"出来反而更糟：它指不到任何块，却在新表里长得像一条真证据。
     """
     document, job = await _seed(session, texts=["一段"])
-    from app import evidence as mod
+    from ddp_corpus import evidence as mod
 
     bad = [_citation(job.id, 0) | {"parse_job_id": None},
            _citation(job.id, 0) | {"seq": None}]
@@ -169,9 +169,9 @@ async def test_evidence_write_failure_does_not_lose_the_answer(session, monkeypa
     只是 try/except 吞掉是不够的：session 已经被 IntegrityError 之类污染，
     接下来老路径那次 commit 照样会炸。savepoint 才能真的把影响圈住。
     """
-    from app import evidence as mod
+    from ddp_corpus import evidence as mod
 
-    from app.models import Conversation
+    from ddp_corpus.models import Conversation
 
     document, job = await _seed(session, texts=["一段"])
     # 单测的 SQLite 是**开着外键约束**的，随手编一个 conversation_id 会撞 FK ——
@@ -248,8 +248,8 @@ async def test_extraction_citations_are_stored_per_field(auth_client, session):
     """
     import asyncio
 
-    from app.models import ExtractionItem, ExtractionRun
-    from app.routers.extractions import _BACKGROUND_TASKS
+    from ddp_corpus.models import ExtractionItem, ExtractionRun
+    from ddp_corpus.routers.extractions import _BACKGROUND_TASKS
 
     document = await _ready_document(auth_client)
     respx.post(CHAT).mock(return_value=Response(200, json={"choices": [
@@ -318,7 +318,7 @@ async def test_two_citations_of_one_block_across_a_reindex_are_judged_separately
     于是三月那次刚问完就显示"出处已失效" —— 而它明明指得好好的。
     反过来一月那次必须失效：它当时作证的那段内容已经不在了。
     """
-    from app.evidence import load_citations
+    from ddp_corpus.evidence import load_citations
 
     document, job = await _seed(session, texts=["一月的内容"])
     await record_evidence(session, [_citation(job.id, 0, snippet="一月的内容")],

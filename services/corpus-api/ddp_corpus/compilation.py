@@ -9,11 +9,11 @@ from dataclasses import dataclass
 
 import httpx
 
-from app.config import settings
-from app.crops import get_or_create_crops
-from app.models import Document, ParseJob
-from app.storage import Storage
-from app.upstream import chat_request
+from ddp_corpus.config import settings
+from ddp_corpus.crops import get_or_create_crops
+from ddp_corpus.models import Document, ParseJob
+from ddp_corpus.storage import Storage
+from ddp_corpus.upstream import chat_request
 from ddp_core.compilation import VISUAL_KINDS, code_detection_of, compile_chunks, provider_of
 
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)

@@ -7,12 +7,12 @@ import pytest
 import respx
 from sqlalchemy import select
 
-from app.config import settings
-from app.errors import APIError
-from app.gc import collect_deleted_objects
-from app.metering import MemoryRateLimiter, RedisRateLimiter
-from app.models import Document, utcnow
-import app.db as db
+from ddp_corpus.config import settings
+from ddp_corpus.errors import APIError
+from ddp_corpus.gc import collect_deleted_objects
+from ddp_corpus.metering import MemoryRateLimiter, RedisRateLimiter
+from ddp_corpus.models import Document, utcnow
+import ddp_corpus.db as db
 from tests.test_documents import PDF, _callback, _mock_service, _upload
 
 
@@ -103,7 +103,7 @@ async def test_gc_handles_migrated_job_whose_prefix_differs(auth_client, session
     对象永久留在存储里再也不会被重试。而 crops 又是按 job.id 写的，
     所以两个前缀都得列。
     """
-    from app.models import ParseJob
+    from ddp_corpus.models import ParseJob
 
     _mock_service()
     document = await _upload(auth_client)
@@ -185,7 +185,7 @@ def test_placeholder_secrets_refuse_to_start(monkeypatch, field):
     service_token 是 change-me = /internal/* 对全世界敞开。
     两者在运行时都不会报任何错，只会安静地把鉴权变成摆设。
     """
-    from app.config import assert_secrets_configured
+    from ddp_corpus.config import assert_secrets_configured
 
     monkeypatch.setattr(settings, field, "change-me")
     with pytest.raises(RuntimeError, match=field.upper()):
@@ -199,7 +199,7 @@ def test_placeholder_secrets_refuse_to_start(monkeypatch, field):
 def test_real_secrets_pass_the_check(monkeypatch):
     monkeypatch.setattr(settings, "jwt_secret", "s3Kr3t-random-value")
     monkeypatch.setattr(settings, "service_token", "another-random-value")
-    from app.config import assert_secrets_configured
+    from ddp_corpus.config import assert_secrets_configured
 
     assert_secrets_configured()
 
@@ -241,7 +241,7 @@ def test_rerank_config_falls_back_to_service_token(monkeypatch):
     看起来只是"没部署 rerank"，实际是配置装配错了（不变式 2：降级必须可见，
     但这里降级的原因会指向错误的方向）。
     """
-    from app.config import rerank_config
+    from ddp_corpus.config import rerank_config
 
     monkeypatch.setattr(settings, "service_token", "svc-token")
 
@@ -260,7 +260,7 @@ def test_rerank_config_carries_the_rest_of_the_settings(monkeypatch):
     `endpoint` 不是直传而是走 `rerank_endpoint` 那个计算属性：
     留空回落到 `{service_url}/v1/rerank`，配了就用配的。这条一并钉住。
     """
-    from app.config import rerank_config
+    from ddp_corpus.config import rerank_config
 
     monkeypatch.setattr(settings, "rerank_enabled", True)
     monkeypatch.setattr(settings, "rerank_model", "BAAI/bge-reranker-v2-m3")

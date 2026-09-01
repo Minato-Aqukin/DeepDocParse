@@ -22,12 +22,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ddp_core.anchor import digest_of
 from ddp_core.compilation import code_detection_of, fingerprint, source_anchor
-from app.compilation import CompileOutput, compile_document
-from app.config import settings
-from app.metering import record_usage
-from app.models import Chunk, Document, Evidence, ParseJob, new_id, utcnow
-from app.storage import Storage
-from app.upstream import embed_texts
+from ddp_corpus.compilation import CompileOutput, compile_document
+from ddp_corpus.config import settings
+from ddp_corpus.metering import record_usage
+from ddp_corpus.models import Chunk, Document, Evidence, ParseJob, new_id, utcnow
+from ddp_corpus.storage import Storage
+from ddp_corpus.upstream import embed_texts
 
 
 def _lease_deadline():

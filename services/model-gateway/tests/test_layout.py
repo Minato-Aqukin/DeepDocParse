@@ -4,17 +4,17 @@
 只有一个引擎时，"格式是契约"这句话是没法证伪的。
 """
 import json
-from pathlib import Path
 
 import httpx
 import pytest
 import respx
 from httpx import Response
 
-from app.services import borndigital, layout
-from app.services.engines import BORNDIGITAL_RUNTIME, BornDigitalEngine, MineruEngine, resolve
+from ddp_gateway.services import borndigital, layout
+from ddp_gateway.services.engines import BORNDIGITAL_RUNTIME, BornDigitalEngine, MineruEngine, resolve
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
+from ddp_paths import FIXTURES, REGISTRY, REPO_ROOT
+
 LONG_DOC = FIXTURES / "long-doc.pdf"
 
 # make_fixtures.py 埋进第 3 页（page_idx=2）的唯一事实
@@ -213,8 +213,8 @@ async def test_borndigital_runs_the_whole_registry_path(client, worker_ctx, app_
     只有 mineru 一个解析引擎 —— 这句话从来没有被第二个引擎验证过。
     这条用例走完整条链：受理 -> worker 归档 -> 取结果，并断言结果是**归一化后**的版面。
     """
-    from app.config import settings as cfg
-    from app.worker.tasks import poll_and_archive
+    from ddp_gateway.config import settings as cfg
+    from ddp_gateway.worker.tasks import poll_and_archive
 
     monkeypatch.setattr(cfg, "poll_initial_delay", 0.01)
     file_url = "https://files.example.com/long-doc.pdf"
@@ -250,8 +250,8 @@ async def test_borndigital_fails_loudly_on_a_scanned_pdf(client, worker_ctx, app
 
     import pypdfium2 as pdfium
 
-    from app.config import settings as cfg
-    from app.worker.tasks import poll_and_archive
+    from ddp_gateway.config import settings as cfg
+    from ddp_gateway.worker.tasks import poll_and_archive
 
     monkeypatch.setattr(cfg, "poll_initial_delay", 0.01)
     blank = pdfium.PdfDocument.new()
@@ -477,7 +477,7 @@ def test_table_never_merges_with_surrounding_text():
     ([0.1, 0.2, 0.9, 0.3], [61.2, 158.4, 550.8, 237.6]),      # 0~1 归一化
 ])
 def test_vlm_bbox_denormalization(raw, expected):
-    from app.services import vlm_ocr
+    from ddp_gateway.services import vlm_ocr
 
     assert vlm_ocr.denormalize_bbox(raw, 612, 792) == expected
 
@@ -489,7 +489,7 @@ def test_vlm_bad_bbox_becomes_none_not_a_guess(raw):
     契约里 bbox=None 是"不能裁剪"，下游会如实打降级标记；
     而一个错的框会裁出不相干的图，还带着"已验证"标记 —— 这个项目定义的最恶劣错误。
     """
-    from app.services import vlm_ocr
+    from ddp_gateway.services import vlm_ocr
 
     assert vlm_ocr.denormalize_bbox(raw, 612, 792) is None
 
@@ -500,7 +500,7 @@ def test_vlm_plain_text_fallback_leaves_bbox_empty():
     编一个整页框会让每条出处都"命中"整页：指标上好看、实际毫无定位价值，
     用户点开还会看到一整页图。
     """
-    from app.services import vlm_ocr
+    from ddp_gateway.services import vlm_ocr
 
     page = vlm_ocr.plain_text_page("一段没有结构的识别结果", 0, 612, 792)
     assert page["para_blocks"][0]["bbox"] is None
@@ -508,7 +508,7 @@ def test_vlm_plain_text_fallback_leaves_bbox_empty():
 
 
 def test_vlm_blocks_normalize_through_the_contract():
-    from app.services import vlm_ocr
+    from ddp_gateway.services import vlm_ocr
 
     page = vlm_ocr.blocks_to_page([
         {"type": "标题", "bbox": [0, 0, 1000, 50], "text": "合同"},
@@ -549,7 +549,7 @@ $E = mc^2$"""
 
 def test_dsocr2_full_page_maps_through_the_contract():
     """一页真实形状的 grounding 输出 -> 合规的 DDP-Layout。"""
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     page = dsocr2.page_from_output(DSOCR2_PAGE, 0, 612, 792)
     built = layout.build_pages([page], engine="vlm-ocr")
@@ -571,7 +571,7 @@ def test_dsocr2_table_keeps_both_html_and_searchable_text():
     只存 HTML 的话分块与检索读不到内容 —— "表里那个数"永远检索不到，
     全程无报错。这正是 layout.block_text 注释里记着的那个洞。
     """
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     page = dsocr2.page_from_output(DSOCR2_PAGE, 0, 612, 792)
     table = [b for b in page["para_blocks"] if b["type"] == "table"][0]
@@ -585,7 +585,7 @@ def test_dsocr2_table_keeps_both_html_and_searchable_text():
 
 def test_dsocr2_coordinates_use_999_not_1000():
     """官方换算是 `x / 999 * width`。整幅框要正好落在整页上。"""
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     assert dsocr2.to_bbox("[[0, 0, 999, 999]]", 612, 792) == [0.0, 0.0, 612.0, 792.0]
     assert dsocr2.to_bbox("[[100, 120, 890, 300]]", 612, 792) == pytest.approx(
@@ -598,7 +598,7 @@ def test_dsocr2_multiple_boxes_become_their_union():
     只取第一个框会裁到半句话，出处指向一个不含证据的区域 ——
     那比框大一点恶劣得多。
     """
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     assert dsocr2.to_bbox("[[100, 100, 200, 200], [300, 400, 500, 600]]",
                           999, 999) == [100.0, 100.0, 500.0, 600.0]
@@ -615,7 +615,7 @@ def test_dsocr2_multiple_boxes_become_their_union():
 ])
 def test_dsocr2_bad_det_becomes_none_not_a_guess(det):
     """**宁可 None 也不要凑合的框** —— 与 vlm_ocr.denormalize_bbox 同一条铁律。"""
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     assert dsocr2.to_bbox(det, 612, 792) is None
 
@@ -633,7 +633,7 @@ def test_dsocr2_det_is_not_evaluated_as_python(tmp_path):
     """
     import inspect
 
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     # ① 副作用：eval 会真的把文件写出来，解析路径不可能
     probe = tmp_path / "pwned.txt"
@@ -666,14 +666,14 @@ def test_dsocr2_block_without_any_tag_returns_none_not_empty():
 
     两者必须分开：前者要退回整页纯文本，后者是真的空页。
     """
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     assert dsocr2.page_from_output("就是一段普通的识别结果", 0, 612, 792) is None
     assert dsocr2.blocks_from_output("", 612, 792) is None
 
 
 def test_dsocr2_strip_tags_leaves_clean_markdown():
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     cleaned = dsocr2.strip_tags(DSOCR2_PAGE)
     assert "<|ref|>" not in cleaned and "<|det|>" not in cleaned
@@ -698,7 +698,7 @@ async def _recognize(content: str, options: dict):
 
 
 def vlm_ocr_module():
-    from app.services import vlm_ocr
+    from ddp_gateway.services import vlm_ocr
     return vlm_ocr
 
 
@@ -769,7 +769,7 @@ def test_dsocr2_strips_the_stop_string_from_the_last_block():
     `<｜end▁of▁sentence｜>` 就成了正文的一部分，跟着进检索索引和出处文本，
     而且**不会有任何报错**。官方脚本也是先 replace 掉再解析的。
     """
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     raw = (DSOCR2_PAGE + "<｜end▁of▁sentence｜>")
     page = dsocr2.page_from_output(raw, 0, 612, 792)
@@ -787,7 +787,7 @@ def test_dsocr2_keeps_text_that_appears_before_the_first_tag():
     下游只会看到"这段原文检索不到"，全程无报错。
     位置确实不知道，所以 bbox 留 None（不编一个）。
     """
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     raw = "这是模型多说的一句开场白\n" + DSOCR2_PAGE
     blocks = dsocr2.blocks_from_output(raw, 612, 792)
@@ -805,7 +805,7 @@ async def test_dsocr2_max_tokens_leaves_room_for_the_prompt():
     走 OpenAI 接口照抄的话，加上视觉 token（一页 256~1120 个）必然越界，
     **每个请求都 400** —— 而错误信息只说"上下文超了"，看不出是这里抄错了。
     """
-    from app.services import vlm_ocr
+    from ddp_gateway.services import vlm_ocr
 
     _, body = await _recognize(DSOCR2_PAGE, {"dialect": "deepseek-ocr2"})
     # 模型 config 的 max_position_embeddings = 8192；给视觉 token 留够余量
@@ -829,8 +829,7 @@ def test_dsocr2_chat_template_emits_bos():
 
     这条守的是"以后有人来精简这个模板"。理由写在模板自己的注释里。
     """
-    tpl = (Path(__file__).resolve().parent.parent
-           / "deploy" / "autodl" / "chat-template-deepseek-ocr2.jinja")
+    tpl = REPO_ROOT / "infra" / "autodl" / "chat-template-deepseek-ocr2.jinja"
     assert tpl.exists(), f"部署模板不见了：{tpl}"
     body = tpl.read_text(encoding="utf-8")
     # 注释块里也会提到 BOS，所以要断言的是**真的输出语句**
@@ -860,7 +859,7 @@ REAL_OUTPUT = FIXTURES / "dsocr2-real-output.json"
 @pytest.mark.skipif(not REAL_OUTPUT.exists(), reason="缺真模型输出夹具")
 def test_dsocr2_parses_real_model_output():
     """真实输出 -> 合规版面，且内容与 contract.truth.json 对得上。"""
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     captured = json.loads(REAL_OUTPUT.read_text(encoding="utf-8"))
     truth = json.loads((FIXTURES / "contract.truth.json").read_text(encoding="utf-8"))
@@ -891,7 +890,7 @@ def test_dsocr2_parses_real_model_output():
 @pytest.mark.skipif(not REAL_OUTPUT.exists(), reason="缺真模型输出夹具")
 def test_dsocr2_real_table_keeps_structure_and_text():
     """真实输出里的表格：HTML 结构与标准答案一致，同时留得下可检索文本。"""
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     captured = json.loads(REAL_OUTPUT.read_text(encoding="utf-8"))
     truth = json.loads((FIXTURES / "contract.truth.json").read_text(encoding="utf-8"))
@@ -918,7 +917,7 @@ async def test_free_ocr_mode_does_not_cry_wolf():
     于是这条路**每次解析**都会往归档的版面里写一条"静默失效"告警。
     狼来了会毁掉这个信号本身 —— 而它是"任何降级都必须可见"在这条链路上的唯一落点。
     """
-    from app.services import layout as layout_mod
+    from ddp_gateway.services import layout as layout_mod
 
     built, body = await _recognize(
         "整页纯文本，没有任何 grounding 标签",
@@ -965,7 +964,7 @@ def test_truncated_output_does_not_leak_half_a_tag_into_a_block():
     而**截断处必然是半个标签**。`strip_tags` 的两遍剥离只覆盖兜底路径，
     正常 grounding 路径的块正文走的是另一条代码路。
     """
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     raw = ("<|ref|>text<|/ref|><|det|>[[10,10,200,50]]<|/det|>\n第一段正文\n"
            "<|ref|>text<|/ref|><|det|>[[10,60,200,90]]<|/det|>\n尾段 <|ref|>text compa")
@@ -994,7 +993,7 @@ def test_strip_tags_also_removes_half_a_tag():
     （连 `<|/ref|>` 都配不齐）。只剥完整四元组的话这半个标签原样穿透，
     跟着进检索索引和出处文本，全程无报错。
     """
-    from app.services import dsocr2
+    from ddp_gateway.services import dsocr2
 
     raw = "<|ref|>text compared with in 45 c"
     assert dsocr2.strip_tags(raw) == "text compared with in 45 c"
@@ -1010,7 +1009,7 @@ def test_strip_tags_also_removes_half_a_tag():
 # 在这之前 conftest 只加载 models.yaml，另外三份**从没被任何测试碰过**，
 # 连能不能 parse 都没人验过。这一组补上那道网。
 
-REGISTRIES = sorted((Path(__file__).resolve().parent.parent).glob("models*.yaml"))
+REGISTRIES = sorted(REGISTRY.glob("models*.yaml"))
 
 # OCR 专用模型：只会把图上的字抄出来，不会遵循指令。判据是名字里带 ocr。
 # 认得出来就必须标 no_instruct + 给 transcribe_prompt。
@@ -1024,7 +1023,7 @@ def test_every_shipped_registry_parses(path):
     不是凑数：三份注册表此前从没被加载过，一个 YAML 手误就能让
     "换个部署档位"在真机上第一步就炸，而本机测试一片绿。
     """
-    from app.config import load_registry
+    from ddp_gateway.config import load_registry
 
     registry = load_registry(path)
     assert registry.parse_engines, f"{path.name} 一个解析引擎都没注册"
@@ -1071,8 +1070,8 @@ def test_capability_labels_are_internally_consistent(path):
       不听指令的模型**按定义**就需要原生 prompt -> no_instruct ⇒ transcribe_prompt
       声明了怎么问它抄字的，**按定义**就得看得见图 -> transcribe_prompt ⇒ vision
     """
-    from app.config import load_registry
-    from app.services.extraction import NO_INSTRUCT, VISION
+    from ddp_gateway.config import load_registry
+    from ddp_gateway.services.extraction import NO_INSTRUCT, VISION
 
     registry = load_registry(path)
     for name, entry in registry.vqa_models.items():
@@ -1095,8 +1094,8 @@ def test_ocr_only_entries_are_labelled_in_every_registry(path):
 
     这条守的是"改了三份漏了第四份"。两个漏标后果都不报错，见本节开头。
     """
-    from app.config import load_registry
-    from app.services.extraction import NO_INSTRUCT
+    from ddp_gateway.config import load_registry
+    from ddp_gateway.services.extraction import NO_INSTRUCT
 
     registry = load_registry(path)
     if not registry.vqa_models:
@@ -1122,8 +1121,8 @@ def test_vqa_section_can_always_do_visual_verification(path):
     整段全是纯文本时视觉核对无从做起，而那条路只会静默地退成
     vision_unavailable —— 部署时就该发现，不该等到线上。
     """
-    from app.config import load_registry
-    from app.services.extraction import VISION
+    from ddp_gateway.config import load_registry
+    from ddp_gateway.services.extraction import VISION
 
     registry = load_registry(path)
     if not registry.vqa_models:

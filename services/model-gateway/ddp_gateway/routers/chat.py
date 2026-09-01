@@ -12,8 +12,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
-from app.auth import require_service_token
-from app.errors import APIError
+from ddp_gateway.auth import require_service_token
+from ddp_gateway.errors import APIError
 
 router = APIRouter(tags=["vqa"], dependencies=[Depends(require_service_token)])
 

@@ -15,13 +15,13 @@ import httpx
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.archive import archive_job, fail_job
-from app.config import settings
-from app.gc import collect_deleted_objects
-from app.indexing import index_document
-from app.models import Document, ParseJob, as_aware, utcnow
-from app.service_client import ServiceClient
-from app.storage import Storage
+from ddp_corpus.archive import archive_job, fail_job
+from ddp_corpus.config import settings
+from ddp_corpus.gc import collect_deleted_objects
+from ddp_corpus.indexing import index_document
+from ddp_corpus.models import Document, ParseJob, as_aware, utcnow
+from ddp_corpus.service_client import ServiceClient
+from ddp_corpus.storage import Storage
 
 ACTIVE_STATES = ("pending", "running", "archiving")
 

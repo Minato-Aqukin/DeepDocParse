@@ -16,7 +16,7 @@ from typing import Protocol
 
 from minio import Minio
 
-from app.config import settings
+from ddp_corpus.config import settings
 
 
 class Storage(Protocol):

@@ -26,17 +26,17 @@ from dataclasses import dataclass, field as dc_field
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import rerank_config, settings
-from app.crops import get_or_create_crop
+from ddp_corpus.config import rerank_config, settings
+from ddp_corpus.crops import get_or_create_crop
 from ddp_core.extract_format import (
     CoerceError, FieldSpec, SchemaSpec, coerce_value, field_result, overall_status,
     parse_json_object,
 )
-from app.models import Document, ParseJob
-from app.qa import verify_parse_consistency
+from ddp_corpus.models import Document, ParseJob
+from ddp_corpus.qa import verify_parse_consistency
 from ddp_core.search import Hit, SearchIndex
-from app.storage import Storage
-from app.upstream import chat_request, embed_one
+from ddp_corpus.storage import Storage
+from ddp_corpus.upstream import chat_request, embed_one
 from ddp_core.rerank import rerank_hits
 
 _SYSTEM = (

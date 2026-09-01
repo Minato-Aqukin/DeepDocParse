@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 import json
 
-from app.storage import Storage, crop_key
+from ddp_corpus.storage import Storage, crop_key
 from ddp_core.crops import CROP_MARGIN, RENDER_SCALE, render_crop, render_crops  # noqa: F401
 
 __all__ = [

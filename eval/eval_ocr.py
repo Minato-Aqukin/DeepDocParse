@@ -262,7 +262,7 @@ def recognize_inproc(engine: str, pdf: Path) -> dict | None:
     """
     if engine != "borndigital":
         return None
-    from app.services import borndigital, layout
+    from ddp_gateway.services import borndigital, layout
 
     pages = borndigital.extract_pages(pdf.read_bytes())
     return layout.build(pages, engine="borndigital") if pages else None
@@ -344,7 +344,7 @@ def load_omnidocbench(root: Path, manifest: dict | None = None) -> list[dict]:
 # --------------------------------------------------------------------------- 判定
 
 def judge(sample: dict, layout_json: dict | None) -> list[PageOutcome]:
-    from app.services import layout as layout_mod
+    from ddp_gateway.services import layout as layout_mod
 
     outcomes: list[PageOutcome] = []
     pages = (layout_json or {}).get("pdf_info") or []
@@ -505,7 +505,7 @@ def render(outcomes: list[PageOutcome], engine: str, source: str,
 
 def layout_markdown(layout_json: dict | None) -> str:
     """DDP-Layout -> OmniDocBench 官方 end-to-end evaluator 的 Markdown 输入。"""
-    from app.services import layout as layout_mod
+    from ddp_gateway.services import layout as layout_mod
 
     parts = []
     for page in (layout_json or {}).get("pdf_info") or []:

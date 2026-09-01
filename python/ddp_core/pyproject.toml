@@ -1,0 +1,46 @@
+[project]
+name = "ddp-core"
+version = "1.0.0"
+description = "DeepDocParse 语料核心逻辑：分块 / 裁图 / 分词 / 检索 / 抽取 schema —— 只此一份"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",       # rerank.py 调上游交叉编码器
+    "pypdfium2>=4.30",   # crops.py 渲染裁图（PDF 库，不是模型运行时）
+    # crops.py 的 `.to_pil()` 要它。**不是可选的**：漏装的表现曾经是
+    # 每一页都"渲染不出来"，而不是报错（见 crops.py 的 _DEP_NOTE）
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+# **这个切分不是包装技巧，是服务边界的物理体现。**
+#
+# model-gateway 是无状态的 HTTP 适配层，一行 ORM 都不该 import；
+# corpus-api / corpus-worker / mcp 是有状态的语料侧，它们要 ORM。
+# 合仓前这条线靠 `gateway[corpus]` extra 表达，合仓后靠这里。
+#
+# 丢掉这条线的表现不会是报错，而是几个月后某次 docker build 变大、没人察觉，
+# 直到 gateway 镜像里出现 asyncpg 才发现无状态原则名存实亡。
+# `services/model-gateway/tests/test_minimal_deps.py` 钉着它。
+db = [
+    "sqlalchemy[asyncio]>=2.0",
+    "pgvector>=0.3",
+]
+# jieba 是**软依赖**：装不上时 tokenize.py 退回二元组，`backend()` 如实报出来
+# 并进 model_meta。检索质量突然变差时先看这个值。
+cjk = ["jieba>=0.42"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21",
+       "ddp-core[db,cjk]"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# 共享夹具定位器（仓库根 tests/ddp_paths.py）。各包 rootdir 不同，
+# 靠这一行统一，不要在测试里数 parents[N]
+pythonpath = ["../../tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ddp_core"]

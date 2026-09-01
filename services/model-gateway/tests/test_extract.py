@@ -14,9 +14,9 @@ import respx
 from httpx import Response
 
 from ddp_core import extract_format as fmt
-from app.services import extraction
-from app.services.task_store import TaskStore
-from app.worker.tasks import run_extraction
+from ddp_gateway.services import extraction
+from ddp_gateway.services.task_store import TaskStore
+from ddp_gateway.worker.tasks import run_extraction
 
 # 抽值走的是**指令模型**的端点（见 models.yaml 的 qwen3-4b-instruct）。
 # OCR 专用模型标了 no_instruct，抽值路径会跳过它 —— 拿它硬抽只会
@@ -280,7 +280,7 @@ async def test_rerank_404_when_not_registered(client, app_state):
 
 @respx.mock
 async def test_rerank_passthrough_sorts_and_trims(client, app_state):
-    from app.config import ModelEntry
+    from ddp_gateway.config import ModelEntry
 
     app_state.registry.rerank_models = {
         "r": ModelEntry(endpoint="http://rerank:8080", default=True)}

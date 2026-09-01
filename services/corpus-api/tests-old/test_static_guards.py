@@ -9,7 +9,7 @@
 
 ---
 
-§1 **为什么需要这条**：阶段 1 把 `app/tokenize.py` 等模块搬进了 `ddp_core`，
+§1 **为什么需要这条**：阶段 1 把 `ddp_corpus/tokenize.py` 等模块搬进了 `ddp_core`，
 但 `alembic/versions/0005_*.py:128` 里那句 `from app.tokenize import tokenized`
 没跟着改。已有库早就过了 0005，所以升级路径上看不见 —— 而**任何全新部署
 都会死在那里并停在 0004**（`deploy/docker.bash`、CI 接真库、灾备重建）。
@@ -34,7 +34,7 @@ REPO = BACKEND.parent
 SCAN_DIRS = [BACKEND / "alembic" / "versions", REPO / "scripts"]
 
 # 只查这两个顶层包 —— 第三方依赖由安装环节保证，不该在这里重复校验
-OWNED_PREFIXES = ("app.", "ddp_core.")
+OWNED_PREFIXES = ("ddp_corpus.", "ddp_core.")
 
 
 def _local_imports(path: pathlib.Path) -> set[str]:
@@ -145,7 +145,7 @@ FLOOR = "qa_min_similarity"
 
 
 def _search_calls() -> list[tuple[pathlib.Path, ast.Call]]:
-    """`app/` 下所有 `<...>index.search(...)` 调用。"""
+    """`ddp_corpus/` 下所有 `<...>index.search(...)` 调用。"""
     out: list[tuple[pathlib.Path, ast.Call]] = []
     for path in sorted(APP.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -206,7 +206,7 @@ def test_the_search_scan_actually_finds_the_call_sites():
     files = {p.relative_to(BACKEND).as_posix() for p, _ in calls}
     assert len(calls) >= 3, f"只扫到 {len(calls)} 处 index.search，匹配逻辑可能坏了"
     # 三条检索路各一处：问答、抽取、跨文档检索。少了任何一条都说明扫漏了
-    assert files >= {"app/qa.py", "app/extraction.py", "app/routers/search.py"}, \
+    assert files >= {"app/qa.py", "app/extraction.py", "ddp_corpus/routers/search.py"}, \
         f"三条检索路没扫全，实际扫到 {sorted(files)}"
 
 
@@ -227,8 +227,8 @@ def test_every_anchor_judgement_is_the_same_function():
     而同一个对象是结构性的，改不掉。
     """
     from ddp_core import anchor
-    import app.backfill as backfill
-    import app.evidence as evidence
+    import ddp_corpus.backfill as backfill
+    import ddp_corpus.evidence as evidence
 
     assert evidence.same_content is anchor.same_content
     assert backfill.same_content is anchor.same_content
@@ -290,7 +290,7 @@ def test_fresh_is_an_assertion_not_a_default():
     写成 `setdefault("resolved", True)` 的话，任何漏算 resolved 的路径都会被
     判成有效出处。阶段 3 抓到的抽取平面 bug 就是这么来的。
     """
-    from app.evidence import citation_out
+    from ddp_corpus.evidence import citation_out
 
     plain = citation_out("d1", {"seq": 0, "crop_key": None})
     assert "resolved" not in plain, "没人给 resolved，却被兜底成了有效"
@@ -309,7 +309,7 @@ QA_PATH = (
     BACKEND / "app" / "routers" / "conversations.py",
     BACKEND / "app" / "routers" / "search.py",
 )
-KNOWLEDGE_MODULES = ("app.knowledge", "app.review_export", "app.routers.knowledge",
+KNOWLEDGE_MODULES = ("ddp_corpus.knowledge", "ddp_corpus.review_export", "ddp_corpus.routers.knowledge",
                      "ddp_core.knowledge")
 
 
@@ -321,7 +321,7 @@ def test_the_existing_qa_path_does_not_import_the_knowledge_layer():
     而人很容易顺手把基线也改了（`agent_baseline` 就在仓库里）。
     这条守卫改成机械可判的：这几个文件里出现任何一个知识层模块就红。
 
-    反过来说，`app/routers/knowledge.py` 依赖问答侧的东西（evidence / metering）
+    反过来说，`ddp_corpus/routers/knowledge.py` 依赖问答侧的东西（evidence / metering）
     是允许的 —— 依赖方向只许从新到旧，关掉新的那头不影响旧的。
     """
     offenders = []

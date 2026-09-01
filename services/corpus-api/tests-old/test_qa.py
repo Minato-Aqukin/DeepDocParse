@@ -12,7 +12,7 @@ import pytest
 import respx
 from sqlalchemy import delete, select
 
-from app.models import (
+from ddp_corpus.models import (
     AgentTurn, Assertion, Chunk, Conversation, Document, EvidenceVerification, Message,
     RetrievalCandidate,
 )
@@ -155,9 +155,9 @@ async def test_ask_streams_answer_with_citations(auth_client, session):
 async def test_stream_reindex_race_preserves_explicit_evidence_and_marks_invalid(
         auth_client, session, monkeypatch):
     """检索后、核对通过、流结束前重建：旧出处仍不得成为已验证支持。"""
-    from app.db import get_sessionmaker
+    from ddp_corpus.db import get_sessionmaker
     from ddp_core.models import Citation
-    from app.evidence import load_citations
+    from ddp_corpus.evidence import load_citations
 
     document = await _ready_document(auth_client)
     cid = await _conversation(auth_client, document["id"])
@@ -340,7 +340,7 @@ async def test_keyword_only_match_below_floor_is_not_a_citation(auth_client, ses
     chunks = (await session.execute(select(Chunk).order_by(Chunk.seq))).scalars().all()
     texts = [c.text for c in chunks]
 
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
     from ddp_core.search import MemoryIndex, _cosine, _query_tokens
 
     question = "的"
@@ -388,7 +388,7 @@ async def test_similarity_floor_also_filters_the_keyword_path(auth_client, sessi
     cid = await _conversation(auth_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("文档中未找到"))
 
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
     from ddp_core.search import MemoryIndex, _cosine, _query_tokens
     from ddp_core.tokenize import tokenized
 
@@ -525,8 +525,8 @@ async def test_generator_close_marks_client_aborted_and_persists(auth_client, se
     绕开 ASGI 传输才测得到这个标记——真实 uvicorn 下 Starlette 检测到断开会取消流任务，
     异常是会到的；测不到只是进程内传输的局限。
     """
-    from app.qa import Retrieval
-    from app.routers.conversations import _stream_answer
+    from ddp_corpus.qa import Retrieval
+    from ddp_corpus.routers.conversations import _stream_answer
 
     document = await _ready_document(auth_client)
     cid = await _conversation(auth_client, document["id"])
@@ -794,7 +794,7 @@ async def test_answer_records_model_and_retrieval_snapshot(auth_client, session)
     respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
     await _ask(auth_client, cid)
 
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
 
     message = (await session.execute(
         select(Message).where(Message.role == "assistant"))).scalars().one()
@@ -815,7 +815,7 @@ async def test_confidence_is_reported_and_separates_strong_from_marginal(auth_cl
     不能用 citation 里的 score —— 那是 RRF 名次分，两路都排第一就恒为 0.0328，
     两种情况长得一模一样。要看的是有校准量纲的余弦相似度。
     """
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
 
     document = await _ready_document(auth_client)
     # side_effect 而不是 return_value：一个 httpx 流式响应只能被消费一次，
@@ -935,8 +935,8 @@ async def test_no_mismatch_when_image_text_matches_chunk(auth_client, session):
 
 async def test_decision_timeout_conservatively_retrieves_and_reports_degradation(monkeypatch):
     """判定调用超时不能卡住问答，也不能擅自跳过检索。"""
-    from app.config import settings as cfg
-    from app.qa import decide_retrieval
+    from ddp_corpus.config import settings as cfg
+    from ddp_corpus.qa import decide_retrieval
 
     class SlowClient:
         def build_request(self, *args, **kwargs):
@@ -985,7 +985,7 @@ async def test_refusal_style_short_transcript_does_not_trigger_mismatch(auth_cli
 @respx.mock
 async def test_parse_verification_can_be_switched_off(auth_client, monkeypatch):
     """核对多打一次视觉模型。不想付这个成本的部署要能关掉，且关掉后不打标。"""
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
 
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
     document = await _ready_document(auth_client)
@@ -1000,7 +1000,7 @@ async def test_parse_verification_can_be_switched_off(auth_client, monkeypatch):
 @respx.mock
 async def test_agent_refuses_no_retrieval_without_inherited_evidence(
         auth_client, session, monkeypatch):
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
     document = await _ready_document(auth_client)
@@ -1022,7 +1022,7 @@ async def test_agent_refuses_no_retrieval_without_inherited_evidence(
 @respx.mock
 async def test_agent_persists_typed_assertion_candidates_and_assertion_citation(
         auth_client, session, monkeypatch):
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
     from ddp_core.models import Citation
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
@@ -1057,7 +1057,7 @@ async def test_agent_persists_typed_assertion_candidates_and_assertion_citation(
 async def test_agent_never_attaches_retrieved_evidence_without_explicit_reference(
         auth_client, session, monkeypatch):
     """候选进入 prompt 不等于模型引用；没写 [n] 的断言必须显式 unsupported。"""
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
     from ddp_core.models import Citation
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
@@ -1081,8 +1081,8 @@ async def test_agent_never_attaches_retrieved_evidence_without_explicit_referenc
 async def test_citation_persist_failure_is_unsupported_in_the_first_sse(
         auth_client, session, monkeypatch):
     """Citation 写失败时不能先向客户端报 supported、刷新后才改口。"""
-    from app.config import settings as cfg
-    from app.routers import conversations as mod
+    from ddp_corpus.config import settings as cfg
+    from ddp_corpus.routers import conversations as mod
     from ddp_core.models import Citation
 
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
@@ -1113,7 +1113,7 @@ async def test_citation_persist_failure_is_unsupported_in_the_first_sse(
 @respx.mock
 async def test_follow_up_without_retrieval_inherits_previous_evidence(
         auth_client, monkeypatch):
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
@@ -1144,7 +1144,7 @@ async def test_follow_up_without_retrieval_inherits_previous_evidence(
 async def test_follow_up_refuses_when_inherited_evidence_no_longer_resolves(
         auth_client, session, monkeypatch):
     """判定拿到旧 ID 后索引已变：不能用空资料继续调用回答模型。"""
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
@@ -1172,7 +1172,7 @@ async def test_follow_up_refuses_when_inherited_evidence_no_longer_resolves(
 async def test_follow_up_refuses_when_any_inherited_evidence_is_missing(
         auth_client, session, monkeypatch):
     """部分失效也不能静默缩减上下文；模型的“不检索”决定基于原完整证据集。"""
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
     from ddp_core.models import Evidence
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
@@ -1208,7 +1208,7 @@ async def test_follow_up_refuses_when_any_inherited_evidence_is_missing(
 async def test_context_budget_cannot_leave_hidden_citation_numbers(
         auth_client, session, monkeypatch):
     """模型没看到的候选即使猜中编号，也不能暗挂成 Citation。"""
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
     from ddp_core.models import Citation
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
@@ -1232,7 +1232,7 @@ async def test_context_budget_cannot_leave_hidden_citation_numbers(
 @respx.mock
 async def test_gate_rejections_are_retained_without_becoming_citations(
         auth_client, session, monkeypatch):
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
     from ddp_core.models import Citation
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
@@ -1256,7 +1256,7 @@ async def test_gate_rejections_are_retained_without_becoming_citations(
 @respx.mock
 async def test_human_verification_uses_same_record_type_and_updates_assertion(
         auth_client, session, monkeypatch):
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
@@ -1286,7 +1286,7 @@ async def test_human_verification_uses_same_record_type_and_updates_assertion(
 async def test_evidence_detail_does_not_attach_unrelated_same_seq_chunk(
         auth_client, session, monkeypatch):
     """(parse_job, seq) 槽位复用时，历史 Evidence 不能跳到新内容的块。"""
-    from app.config import settings as cfg
+    from ddp_corpus.config import settings as cfg
 
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
     document = await _ready_document(auth_client)

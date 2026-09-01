@@ -12,9 +12,9 @@ import uuid
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
-from app.auth import require_service_token
-from app.config import settings
-from app.errors import APIError
+from ddp_gateway.auth import require_service_token
+from ddp_gateway.config import settings
+from ddp_gateway.errors import APIError
 from ddp_core import extract_format as fmt
 
 router = APIRouter(tags=["extract"], dependencies=[Depends(require_service_token)])

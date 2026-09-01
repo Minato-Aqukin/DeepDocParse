@@ -8,7 +8,7 @@ import secrets
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.config import settings
+from ddp_gateway.config import settings
 
 _bearer = HTTPBearer(auto_error=False)
 

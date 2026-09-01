@@ -41,7 +41,7 @@ import httpx
 WEB = os.environ.get("WEB_URL", "http://127.0.0.1:8080")
 FIXTURE = os.environ.get(
     "FIXTURE",
-    str(Path(__file__).resolve().parents[2] / "DeepDocParse" / "tests" / "fixtures" / "long-doc.pdf"),
+    str(Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "long-doc.pdf"),
 )
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql+asyncpg://ddp:ddp@127.0.0.1:15432/deepdocparse")

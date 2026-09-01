@@ -6,14 +6,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import get_session
-from app.config import settings
-from app.deps import current_user
-from app.errors import APIError
-from app.evidence import citation_out, load_citations
-from app.knowledge import generate as generate_knowledge
-from app.metering import record_usage
-from app.models import (
+from ddp_corpus.db import get_session
+from ddp_corpus.config import settings
+from ddp_corpus.deps import current_user
+from ddp_corpus.errors import APIError
+from ddp_corpus.evidence import citation_out, load_citations
+from ddp_corpus.knowledge import generate as generate_knowledge
+from ddp_corpus.metering import record_usage
+from ddp_corpus.models import (
     Assertion, Citation, Evidence, ExtractionItem, GraphEdge, KnowledgeEntity,
     KnowledgeReview, User, WikiEntry, WikiSection, WikiSentence,
 )

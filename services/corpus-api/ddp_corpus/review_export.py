@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import (
+from ddp_corpus.models import (
     Citation, ExtractionItem, GraphEdge, KnowledgeEntity, KnowledgeReview, WikiSentence,
 )
 

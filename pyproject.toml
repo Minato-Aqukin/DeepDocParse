@@ -15,6 +15,12 @@ members = [
 [tool.uv.sources]
 ddp-core = { workspace = true }
 
+# 仓库根的 pytest：只跑跨服务的架构守卫（tests/）。
+# 各包有自己的 rootdir 与 testpaths，互不干扰。
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

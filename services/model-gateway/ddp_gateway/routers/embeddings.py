@@ -9,8 +9,8 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from app.auth import require_service_token
-from app.errors import APIError
+from ddp_gateway.auth import require_service_token
+from ddp_gateway.errors import APIError
 
 router = APIRouter(tags=["embeddings"], dependencies=[Depends(require_service_token)])
 

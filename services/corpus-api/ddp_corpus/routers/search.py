@@ -6,12 +6,12 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.db import get_session
-from app.deps import current_user
-from app.errors import APIError
-from app.models import Document, User
-from app.upstream import embed_one
+from ddp_corpus.config import settings
+from ddp_corpus.db import get_session
+from ddp_corpus.deps import current_user
+from ddp_corpus.errors import APIError
+from ddp_corpus.models import Document, User
+from ddp_corpus.upstream import embed_one
 
 router = APIRouter()
 

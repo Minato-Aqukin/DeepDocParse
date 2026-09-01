@@ -15,8 +15,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.auth import require_service_token
-from app.errors import APIError
+from ddp_gateway.auth import require_service_token
+from ddp_gateway.errors import APIError
 
 router = APIRouter(tags=["rerank"], dependencies=[Depends(require_service_token)])
 

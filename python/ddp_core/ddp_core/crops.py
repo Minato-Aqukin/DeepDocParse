@@ -39,6 +39,16 @@ def _pdfium_serialized(fn):
             return fn(*args, **kwargs)
     return wrapper
 
+# **依赖缺失是部署错误，不是"这一页渲染不出来"。**
+# 三个入口原来都是 `except Exception: return None`，于是**没装 Pillow**
+# 与**这页真的裁不出来**长得一模一样：调用方把它记成 crop_failed，
+# 界面上如实显示"没能裁出图"，而真实原因是镜像少装了一个包。
+# 2026-09-01 合仓时踩到：新 venv 没有 pillow，`render_page` 对所有 5 页
+# 都返回 None，守卫报的却是"并发渲染有页面返回空"（指向线程安全，完全指错了方向）。
+# 现在 ImportError 单独放行 —— 让它带着 traceback 炸在启动/首次调用，
+# 而不是变成一条可见但归因错误的降级。
+_DEP_NOTE = "ImportError 不吞：渲染依赖缺失是部署错误，必须炸而不是退化成 None"
+
 CROP_MARGIN = 12        # bbox 外扩，避免把边缘文字切掉（页面坐标单位）
 RENDER_SCALE = 2.0      # 72dpi 基准 x2 = 144dpi，够视觉模型看清小字
 
@@ -104,6 +114,8 @@ def render_crops(
                     continue
         finally:
             doc.close()
+    except ImportError:
+        raise           # 见 _DEP_NOTE
     except Exception:
         return [None] * len(requests)
     return out
@@ -124,6 +136,8 @@ def render_page(pdf_bytes: bytes, page_idx: int, scale: float = RENDER_SCALE) ->
             return buf.getvalue()
         finally:
             doc.close()
+    except ImportError:
+        raise           # 见 _DEP_NOTE
     except Exception:
         return None
 
@@ -139,5 +153,7 @@ def page_sizes(pdf_bytes: bytes) -> list[tuple[float, float]]:
             return [(doc[i].get_width(), doc[i].get_height()) for i in range(len(doc))]
         finally:
             doc.close()
+    except ImportError:
+        raise           # 见 _DEP_NOTE
     except Exception:
         return []

@@ -24,8 +24,8 @@ from typing import Protocol
 
 import httpx
 
-from app.services import borndigital, layout, vlm_ocr
-from app.services.mineru_client import MineruClient
+from ddp_gateway.services import borndigital, layout, vlm_ocr
+from ddp_gateway.services.mineru_client import MineruClient
 
 # born-digital 下载 PDF 的字节上限。**必须有**：它跑在 worker 进程内，
 # 整份文件要进内存，没有上限时一份超大文件就能把 worker 打爆 ——

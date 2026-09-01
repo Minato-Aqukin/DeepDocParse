@@ -40,11 +40,9 @@ import statistics
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "gateway"))
+import httpx
 
-import httpx  # noqa: E402
-
-from app.services import borndigital, crops, extraction, layout  # noqa: E402
+from ddp_gateway.services import borndigital, crops, extraction, layout
 
 # **直接从 extraction 里取，不复制一份。**
 # 标定的全部意义在于"复现线上那条路径"：prompt 换个说法、下限差两个字，
@@ -63,7 +61,7 @@ def transcribe_prompt_for(models_config: str | None) -> str:
     """
     if not models_config:
         return extraction._TRANSCRIBE_PROMPT
-    from app.config import load_registry
+    from ddp_gateway.config import load_registry
     registry = load_registry(Path(models_config))
     if not registry.vqa_models:
         return extraction._TRANSCRIBE_PROMPT

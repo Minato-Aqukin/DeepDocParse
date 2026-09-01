@@ -8,7 +8,7 @@
 """
 import httpx
 
-from app.config import settings
+from ddp_corpus.config import settings
 
 
 class UpstreamError(RuntimeError):

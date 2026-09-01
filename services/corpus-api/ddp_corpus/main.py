@@ -16,19 +16,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.config import assert_secrets_configured, settings
-from app.db import get_engine, get_sessionmaker
-from app.errors import install_error_handlers
-from app.metering import MemoryRateLimiter, RedisRateLimiter
-from app.reconcile import reconcile_loop
-from app.routers import (
+from ddp_corpus.config import assert_secrets_configured, settings
+from ddp_corpus.db import get_engine, get_sessionmaker
+from ddp_corpus.errors import install_error_handlers
+from ddp_corpus.metering import MemoryRateLimiter, RedisRateLimiter
+from ddp_corpus.reconcile import reconcile_loop
+from ddp_corpus.routers import (
     apikeys, auth, conversations, documents, extractions, files, internal, knowledge,
     proxy, search, usage,
 )
 from ddp_core.search import PgVectorIndex
 from ddp_core.tokenize import backend as tokenize_backend
-from app.service_client import ServiceClient, new_http_client
-from app.storage import MinioStorage
+from ddp_corpus.service_client import ServiceClient, new_http_client
+from ddp_corpus.storage import MinioStorage
 
 
 @asynccontextmanager

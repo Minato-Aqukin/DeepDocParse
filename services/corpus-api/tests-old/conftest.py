@@ -12,8 +12,8 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-import app.db as db
-from app.config import settings
+import ddp_corpus.db as db
+from ddp_corpus.config import settings
 
 # bcrypt 成本因子降到最低：默认 12 时一次 hash+verify 要 0.37s，而几乎每个用例都要
 # 过 auth_client 注册一个用户 —— 光这一项就占掉整个套件大半时间。
@@ -28,12 +28,12 @@ settings.chat_model = "test-vision"
 # 避免每条旧用例都被迫 mock 第二种 JSON chat 响应。
 settings.qa_decision_enabled = False
 
-from app.main import app  # noqa: E402
-from app.metering import MemoryRateLimiter
-from app.models import Base
+from ddp_corpus.main import app  # noqa: E402
+from ddp_corpus.metering import MemoryRateLimiter
+from ddp_corpus.models import Base
 from ddp_core.search import MemoryIndex
-from app.service_client import ServiceClient
-from app.storage import MemoryStorage
+from ddp_corpus.service_client import ServiceClient
+from ddp_corpus.storage import MemoryStorage
 
 SERVICE = "http://127.0.0.1:9000"       # 与 settings.service_url 默认值一致
 MCP = "http://127.0.0.1:9100"

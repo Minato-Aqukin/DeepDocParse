@@ -1,10 +1,11 @@
-# DeepDocParse（service 层）配置参考
+# DeepDocParse 模型网关配置参考
 
-gateway 的全部配置项。取自 `gateway/app/config.py`，**本文件由脚本生成，不要手改**——
-改注释请改源码，然后重跑 `python scripts/gen_config_docs.py`。
+模型网关的全部配置项。取自 `services/model-gateway/ddp_gateway/config.py`，
+**本文件由脚本生成，不要手改** —— 改注释请改源码，然后重跑
+`python scripts/gen_config_docs.py`。
 
 环境变量名 = 字段名大写（pydantic-settings 默认规则，未设前缀）。
-配置来源优先级：环境变量 > `gateway/.env` > 下表默认值。
+配置来源优先级：环境变量 > 服务自己的 `.env` > 下表默认值。
 
 共 **21** 项。
 

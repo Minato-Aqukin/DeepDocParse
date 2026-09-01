@@ -8,10 +8,10 @@ import httpx
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import (
+from ddp_corpus.models import (
     Citation, Evidence, GraphEdge, KnowledgeEntity, WikiEntry, WikiSection, WikiSentence,
 )
-from app.upstream import chat_request
+from ddp_corpus.upstream import chat_request
 from ddp_core.knowledge import EntityMention, edge_result, merge_mentions, normalize_entity_name
 
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)

@@ -13,8 +13,8 @@ from dataclasses import dataclass, field as dc_field
 
 import httpx
 
-from app.config import settings
-from app.services.task_store import TaskStore
+from ddp_gateway.config import settings
+from ddp_gateway.services.task_store import TaskStore
 from ddp_core.tokenize import whole_text_bigrams
 
 

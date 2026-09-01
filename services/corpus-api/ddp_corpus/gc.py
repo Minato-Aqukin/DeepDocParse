@@ -20,9 +20,9 @@ from datetime import timedelta
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.config import settings
-from app.models import Document, ParseJob, as_aware, utcnow
-from app.storage import Storage, job_result_prefix, prefix_of
+from ddp_corpus.config import settings
+from ddp_corpus.models import Document, ParseJob, as_aware, utcnow
+from ddp_corpus.storage import Storage, job_result_prefix, prefix_of
 
 
 async def _claim(session, document: Document, object_key: str) -> bool:

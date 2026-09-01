@@ -16,10 +16,10 @@ from httpx import Response
 
 from ddp_core.chunking import layout_to_chunks
 from ddp_core.extract_format import parse_schema, validate_schema
-from app.extraction import ExtractContext, run as run_extraction
-from app.models import Chunk, Document, ParseJob
-from app.routers.extractions import _csv_safe
-from app.config import settings
+from ddp_corpus.extraction import ExtractContext, run as run_extraction
+from ddp_corpus.models import Chunk, Document, ParseJob
+from ddp_corpus.routers.extractions import _csv_safe
+from ddp_corpus.config import settings
 from ddp_core.search import MemoryIndex
 from ddp_core.tokenize import tokenized
 
@@ -188,7 +188,7 @@ async def test_embedding_down_is_visible_on_the_field(session, app_state):
 
 
 async def _a_user(session, username: str = "ex") -> str:
-    from app.models import User
+    from ddp_corpus.models import User
 
     user = User(username=username, password_hash="x")
     session.add(user)
@@ -240,7 +240,7 @@ async def test_soft_deleted_template_name_can_be_reused(auth_client):
 async def test_run_rejects_documents_without_index(auth_client, session):
     """索引没就绪的文档抽不了。**当场说清楚**，别让它们跑完变成一堆空结果 ——
     空值看起来像"文档里没有"，那是抽取里最危险的误导。"""
-    from app.models import User
+    from ddp_corpus.models import User
 
     user = (await session.execute(__import__("sqlalchemy").select(User))).scalars().first()
     document = Document(uploaded_by=user.id, doc_id="z" * 64, filename="未索引.pdf",
@@ -423,9 +423,9 @@ async def test_vision_model_down_is_visible_not_just_unverified(session, app_sta
         "buyer": {"type": "string", "description": "买方单位全称"}}}
 
     # 裁图成功、但视觉核对返回 None（模型不可达）
-    with patch("app.extraction.get_or_create_crop", return_value="results/x/crops/0_a.png"), \
+    with patch("ddp_corpus.extraction.get_or_create_crop", return_value="results/x/crops/0_a.png"), \
          patch.object(app_state.storage, "get", return_value=b"png"), \
-         patch("app.extraction.verify_parse_consistency", return_value=None):
+         patch("ddp_corpus.extraction.verify_parse_consistency", return_value=None):
         outcome = await run_extraction(ctx, parse_schema(schema))
 
     field = outcome.fields["buyer"]
@@ -487,7 +487,7 @@ async def test_stale_citation_is_marked_unresolved_not_pointed_at_the_wrong_bloc
     """
     from sqlalchemy import select
 
-    from app.evidence import load_citations, record_evidence
+    from ddp_corpus.evidence import load_citations, record_evidence
 
     document, job = await _seed_document(session, (await _a_user(session)))
     chunks = (await session.execute(
@@ -533,8 +533,8 @@ async def test_hard_deleted_document_does_not_break_the_whole_run(session, app_s
     from sqlalchemy import select as sa_select
 
     from ddp_core.extract_format import parse_schema as ps
-    from app.models import ExtractionItem, ExtractionRun
-    from app.routers.extractions import _extract_one
+    from ddp_corpus.models import ExtractionItem, ExtractionRun
+    from ddp_corpus.routers.extractions import _extract_one
 
     user_id = await _a_user(session)
     run = ExtractionRun(user_id=user_id, name="t", schema_json=SCHEMA, kind="object",
@@ -576,8 +576,8 @@ async def test_extract_one_runs_against_a_real_document(session, app_state):
     from sqlalchemy import select as sa_select
 
     from ddp_core.extract_format import parse_schema as ps
-    from app.models import ExtractionItem, ExtractionRun, UsageRecord
-    from app.routers.extractions import _extract_one
+    from ddp_corpus.models import ExtractionItem, ExtractionRun, UsageRecord
+    from ddp_corpus.routers.extractions import _extract_one
 
     document, _job = await _seed_document(session, await _a_user(session))
     initiator = await _a_user(session, username="initiator")

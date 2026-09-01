@@ -4,7 +4,7 @@ import httpx
 import respx
 from sqlalchemy import delete, select
 
-from app.models import (
+from ddp_corpus.models import (
     Chunk, Citation, ExtractionItem, ExtractionRun, GraphEdge, KnowledgeEntity,
     KnowledgeReview, WikiEntry, WikiSection, WikiSentence,
 )
@@ -13,7 +13,7 @@ from tests.test_qa import _ask, _chat_sse, _conversation, _ready_document
 
 
 async def _seed_knowledge(auth_client, session, monkeypatch):
-    from app.config import settings
+    from ddp_corpus.config import settings
 
     monkeypatch.setattr(settings, "qa_verify_parse", False)
     document = await _ready_document(auth_client)
@@ -45,7 +45,7 @@ async def _seed_knowledge(auth_client, session, monkeypatch):
                             unsupported=False, provider={"model": "fixture"})
     session.add(sentence)
     await session.flush()
-    from app.models import Evidence
+    from ddp_corpus.models import Evidence
     evidence = await session.get(Evidence, evidence_id)
     session.add_all([
         Citation(evidence_id=evidence_id, source_kind="graph_edge", source_id=edge.id,
@@ -96,7 +96,7 @@ async def test_review_queue_is_annotation_only_and_uncertain_merge_can_split(
         auth_client, session, monkeypatch):
     document, source, _, edge, _, sentence, _ = await _seed_knowledge(
         auth_client, session, monkeypatch)
-    from app.models import User
+    from ddp_corpus.models import User
     user = (await session.execute(select(User))).scalars().first()
     run = ExtractionRun(user_id=user.id, name="review fixture", schema_json={},
                         status="succeeded")
@@ -146,7 +146,7 @@ async def test_review_queue_is_annotation_only_and_uncertain_merge_can_split(
 async def test_build_runs_relation_then_storm_outline_and_sentence_with_citations(
         auth_client, session):
     document = await _ready_document(auth_client)
-    from app.models import Evidence
+    from ddp_corpus.models import Evidence
     evidence = (await session.execute(select(Evidence).where(
         Evidence.document_id == document["id"], Evidence.content != ""
     ).order_by(Evidence.seq))).scalars().first()
@@ -196,7 +196,7 @@ async def test_build_runs_relation_then_storm_outline_and_sentence_with_citation
 async def test_build_negative_sample_returns_not_found_without_inventing_edge(
         auth_client, session):
     document = await _ready_document(auth_client)
-    from app.models import Evidence
+    from ddp_corpus.models import Evidence
     evidence = (await session.execute(select(Evidence).where(
         Evidence.document_id == document["id"], Evidence.content != ""
     ).order_by(Evidence.seq))).scalars().first()
@@ -223,7 +223,7 @@ async def test_build_negative_sample_returns_not_found_without_inventing_edge(
 async def test_rebuild_replaces_graph_edge_evidence_instead_of_leaving_stale_citation(
         auth_client, session):
     document = await _ready_document(auth_client)
-    from app.models import Evidence
+    from ddp_corpus.models import Evidence
     evidence = (await session.execute(select(Evidence).where(
         Evidence.document_id == document["id"], Evidence.content != ""
     ).order_by(Evidence.seq))).scalars().first()
@@ -259,7 +259,7 @@ async def test_rebuild_replaces_graph_edge_evidence_instead_of_leaving_stale_cit
 
 
 async def test_knowledge_switch_disables_only_the_new_surface(auth_client, monkeypatch):
-    from app.config import settings
+    from ddp_corpus.config import settings
 
     monkeypatch.setattr(settings, "knowledge_enabled", False)
     disabled = await auth_client.get("/api/knowledge/graph")
@@ -277,7 +277,7 @@ async def test_rejected_review_is_exported_to_fixed_eval_set(
         "action": "reject", "reason_code": "relation_wrong", "reason_text": "连边不成立"})
     assert response.status_code == 201
 
-    from app.review_export import export_reviews
+    from ddp_corpus.review_export import export_reviews
     output = tmp_path / "reviewed.jsonl"
     count, revision = await export_reviews(session, output)
     assert count == 1 and len(revision) == 64

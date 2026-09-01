@@ -10,7 +10,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-ROOT = Path(__file__).resolve().parent.parent
+from ddp_paths import CONTRACTS, REPO_ROOT
+
+ROOT = REPO_ROOT
+OPENAPI = CONTRACTS / "openapi" / "corpus-v1.yaml"
 
 
 def _load_guard():
@@ -31,13 +34,13 @@ def test_openapi_yaml_is_parseable():
     flow mapping 里没加引号，`[` 被当成流式序列的开头 —— 任何按 OpenAPI 读它的
     工具（代码生成、mock server、校验器）都会在这里炸。
     """
-    spec = yaml.safe_load((ROOT / "openapi.yaml").read_text(encoding="utf-8"))
+    spec = yaml.safe_load((OPENAPI).read_text(encoding="utf-8"))
     assert spec["openapi"].startswith("3.")
     assert spec["paths"], "契约里一个端点都没有"
 
 
 def test_gateway_endpoints_match_contract():
-    declared = guard.contract_endpoints(ROOT / "openapi.yaml")
+    declared = guard.contract_endpoints(OPENAPI)
     implemented = guard.gateway_endpoints()
     assert implemented - declared == set(), "gateway 暴露了契约外的端点（铁律 4）"
     assert declared - implemented == set(), "契约声明了 gateway 没实现的端点"
@@ -50,7 +53,7 @@ def test_guard_is_not_vacuous(tmp_path):
     取到的是空集合 —— 那一版守卫任何时候都在报"契约声明了但没实现"。
     这条用例把"守卫能分辨对错"钉住。
     """
-    spec = yaml.safe_load((ROOT / "openapi.yaml").read_text(encoding="utf-8"))
+    spec = yaml.safe_load((OPENAPI).read_text(encoding="utf-8"))
     spec["paths"]["/v1/not-implemented"] = {"get": {"responses": {"200": {"description": "x"}}}}
     forged = tmp_path / "openapi.yaml"
     forged.write_text(yaml.safe_dump(spec, allow_unicode=True), encoding="utf-8")
@@ -62,5 +65,5 @@ def test_guard_is_not_vacuous(tmp_path):
 @pytest.mark.parametrize("path", ["/v1/parse", "/v1/chat/completions", "/v1/embeddings"])
 def test_frozen_v1_endpoints_are_still_declared(path):
     """契约冻结 v1.0 之后，这三个端点只许向后兼容地新增，不许消失。"""
-    declared = {p for p, _ in guard.contract_endpoints(ROOT / "openapi.yaml")}
+    declared = {p for p, _ in guard.contract_endpoints(OPENAPI)}
     assert path in declared

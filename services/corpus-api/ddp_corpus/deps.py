@@ -12,11 +12,11 @@ from fastapi import Depends, Header, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.db import get_session
-from app.errors import APIError
-from app.models import ApiKey, User, as_aware
-from app.security import KEY_PREFIX, constant_time_equals, decode_access_token, hash_api_key
+from ddp_corpus.config import settings
+from ddp_corpus.db import get_session
+from ddp_corpus.errors import APIError
+from ddp_corpus.models import ApiKey, User, as_aware
+from ddp_corpus.security import KEY_PREFIX, constant_time_equals, decode_access_token, hash_api_key
 
 
 def _bearer(authorization: str | None) -> str:

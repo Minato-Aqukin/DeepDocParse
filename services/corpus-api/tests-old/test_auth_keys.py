@@ -1,8 +1,8 @@
 """用户与 API key 的契约：注册/登录/JWT、key 签发与吊销、错误体形态。"""
 import pytest
 
-from app.models import ApiKey
-from app.security import hash_api_key
+from ddp_corpus.models import ApiKey
+from ddp_corpus.security import hash_api_key
 from tests.conftest import register
 
 

@@ -4,7 +4,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Document, ParseJob
+from ddp_corpus.models import Document, ParseJob
 
 
 _UNSET = object()

@@ -21,15 +21,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.db import get_session, get_sessionmaker
-from app.deps import current_user, get_storage
-from app.errors import APIError
+from ddp_corpus.config import settings
+from ddp_corpus.db import get_session, get_sessionmaker
+from ddp_corpus.deps import current_user, get_storage
+from ddp_corpus.errors import APIError
 from ddp_core.extract_format import SchemaError, parse_schema, validate_schema
-from app.extraction import ExtractContext, extraction_model_meta, run as run_extraction
-from app.evidence import citation_out, load_citations, record_evidence
-from app.metering import record_usage
-from app.models import (
+from ddp_corpus.extraction import ExtractContext, extraction_model_meta, run as run_extraction
+from ddp_corpus.evidence import citation_out, load_citations, record_evidence
+from ddp_corpus.metering import record_usage
+from ddp_corpus.models import (
     Document, ExtractionItem, ExtractionRun, ExtractionTemplate, ParseJob, User, as_aware, utcnow,
 )
 

@@ -4,7 +4,7 @@ import asyncio
 import httpx
 from fastapi import APIRouter, Request, Response
 
-from app.services.engines import is_inprocess
+from ddp_gateway.services.engines import is_inprocess
 
 router = APIRouter(tags=["health"])
 

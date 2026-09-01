@@ -22,11 +22,11 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_core.chunking import page_count_of
-from app.metering import record_usage
-from app.models import Document, ParseJob, utcnow
-from app.service_client import ServiceClient
-from app.storage import Storage, job_result_prefix
-from app.versions import advance_index_generation
+from ddp_corpus.metering import record_usage
+from ddp_corpus.models import Document, ParseJob, utcnow
+from ddp_corpus.service_client import ServiceClient
+from ddp_corpus.storage import Storage, job_result_prefix
+from ddp_corpus.versions import advance_index_generation
 
 # markdown 图片引用：![alt](target "title")
 _IMG_REF = re.compile(r"(!\[[^\]]*\]\()(<[^>]*>|[^)\s]+)(\s*(?:\"[^\"]*\")?\))")

@@ -92,7 +92,7 @@ def _as_json(value):
 
 def _locators(citations) -> dict:
     """与 `app.evidence.locators_of` **同一条规则**（有守卫钉着）。"""
-    from app.evidence import locators_of
+    from ddp_corpus.evidence import locators_of
 
     return locators_of(citations if isinstance(citations, list) else [])
 
@@ -189,7 +189,7 @@ def _one_source(conn, report: BackfillReport, source_kind: str, source_id: str,
 
 def _counted(raw: list, locators: dict) -> int:
     """`locators` 去过重，所以不能直接用它的长度反推"有定位键的条数"。"""
-    from app.evidence import _locator
+    from ddp_corpus.evidence import _locator
 
     return sum(1 for c in raw if isinstance(c, dict) and _locator(c) is not None)
 

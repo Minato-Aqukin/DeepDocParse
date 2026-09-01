@@ -42,7 +42,7 @@ OpenAI 接口的 `skip_special_tokens` 缺省是 **true**，
 """
 import re
 
-from app.services import layout
+from ddp_gateway.services import layout
 
 # 官方 prompt（README 的 Main Prompts 一节）。
 # **不带 `<image>` 前缀**：我们走 OpenAI chat 协议，图片是 content 里的

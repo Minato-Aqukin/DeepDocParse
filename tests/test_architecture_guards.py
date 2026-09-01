@@ -1,28 +1,32 @@
-"""铁律 7 的机械保障：`ddp_core` 是叶子，且分成两层。
+"""跨服务的架构守卫 —— 全部是**静态**检查（AST），不装任何东西就能跑。
 
-两条都是**静态**检查（AST），不需要装任何东西 —— 正因为它们要防的事
-恰恰是"某个环境里装不上"。
+正因为它们要防的事恰恰是"某个环境里装不上"、"某个 cwd 下解析到别的包"，
+所以判据不能依赖运行时环境。这些用例住在仓库根的 `tests/`，
+因为它们横跨 `python/ddp_core`、`services/model-gateway`、`services/mcp`
+三个包 —— 放进任何一个包里都会变成"只在那个包的 CI 里跑"。
 
-## 为什么需要
+## 三条守卫
 
-`ddp_core` 住在本仓库，却被 DeepDocParse-Web 安装并 import。两个仓库
-**各有一个叫 `app` 的顶层包**，所以 `ddp_core` 里任何一句 `import app.*`
-都是错的：在本仓库解析成 gateway 的应用层，在 Web 那边解析成 Web 的，
-而两者都不是作者想要的那个。
-
-第二层是依赖切分：`ddp_core` 里碰数据库的模块要 SQLAlchemy，在 `[corpus]`
-extra 里；**gateway 自己一行 ORM 都不 import，venv 里压根没装**。阶段 7 起
-MCP 随语料部署，正是 corpus 消费方，因此只禁止 gateway 越界。
-（阶段 2a 搬模型时就是被这个 ModuleNotFoundError 撞出来的。）
+1. **`ddp_core` 是叶子**：不得 import 任何服务包（`ddp_gateway` / `ddp_corpus` / `ddp_mcp`）。
+   反向依赖会把服务的应用层（config / task_store / FastAPI）拖进别人的进程。
+2. **依赖切分**：`ddp_core` 里碰数据库的模块要 SQLAlchemy，在 `[db]` extra 里；
+   **model-gateway 一行 ORM 都不 import，venv 里压根没装**。
+   MCP 与 corpus-api 是语料消费方，允许越界。
+3. **所有 httpx 客户端必须 `trust_env=False`**：带代理变量的机器上，
+   内网调用会被塞进代理并**卡住而不是报错**。
 """
 import ast
 import pathlib
 
-CORE = pathlib.Path(__file__).resolve().parent.parent / "gateway" / "ddp_core"
-GATEWAY = pathlib.Path(__file__).resolve().parent.parent / "gateway" / "app"
-MCP = pathlib.Path(__file__).resolve().parent.parent / "mcp_server"
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+CORE = ROOT / "python" / "ddp_core" / "ddp_core"
+GATEWAY = ROOT / "services" / "model-gateway" / "ddp_gateway"
+MCP = ROOT / "services" / "mcp" / "ddp_mcp"
+CORPUS = ROOT / "services" / "corpus-api" / "ddp_corpus"
 
-# 装在 [corpus] extra 里、gateway 的 venv 没有的东西
+# 服务包名 —— ddp_core 不得 import 其中任何一个
+SERVICE_PACKAGES = ("ddp_gateway", "ddp_corpus", "ddp_mcp", "ddp_worker")
+# 装在 [db] extra 里、model-gateway 的 venv 没有的东西
 CORPUS_DEPS = ("sqlalchemy", "pgvector")
 
 
@@ -42,22 +46,49 @@ def _core_modules() -> list[pathlib.Path]:
     return sorted(CORE.glob("*.py"))
 
 
-def test_ddp_core_never_imports_app():
-    """`ddp_core` 不得 import 任何 `app.*` —— 它是叶子。
+def test_ddp_core_never_imports_a_service_package():
+    """`ddp_core` 不得 import 任何服务包 —— 它是叶子。
 
-    反向依赖会把 gateway 的应用层（config / task_store / FastAPI）
-    整个拖进 Web 的进程，而 Web 那边的 `app` 是另一个包。
+    反向依赖会把某个服务的应用层（config / task_store / FastAPI）
+    整个拖进另一个服务的进程。合仓前这条守的是顶层包名 `app`
+    （两个发行包同名，import 谁都是错的）；包名分开之后守的是同一件事。
     """
     offenders = []
     for path in _core_modules():
         # 连函数体内的惰性 import 一起查：藏进函数里不会让它变得正确，
         # 只会让它在第一次调用时才崩
         for module in _imports(path, top_level_only=False):
-            if module == "app" or module.startswith("app."):
+            head = module.split(".")[0]
+            if head in SERVICE_PACKAGES or head == "app":
                 offenders.append(f"{path.name} -> {module}")
     assert not offenders, (
-        "ddp_core 反向依赖了 app：" + "; ".join(offenders)
-        + "。两个仓库各有一个 app 顶层包，import 谁都是错的")
+        "ddp_core 反向依赖了服务包：" + "; ".join(offenders)
+        + "。ddp_core 是叶子，服务可以 import 它，反过来不行")
+
+
+def test_service_packages_do_not_share_a_top_level_name():
+    """四个 Python 服务的顶层包名必须互不相同。
+
+    这是旧系统的头号静默陷阱：两个发行包都叫 `app`，装进同一个环境后
+    `import app` 解析到哪一个**取决于 cwd 与 .pth 的字母序**。
+    在有环境变量的机器上会当场报 pydantic extra_forbidden，
+    在**没有**那些变量的地方（容器 / CI / 干净 checkout）却会完全正常地
+    加载成功，直到第一次访问某个字段才以 AttributeError 爆掉。
+    """
+    names = []
+    for svc in sorted((ROOT / "services").iterdir()):
+        pyproject = svc / "pyproject.toml"
+        if not pyproject.exists():
+            continue
+        text = pyproject.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("packages = ["):
+                names += [p.strip().strip('"\'') for p in
+                          line.split("[", 1)[1].rstrip("]").split(",") if p.strip()]
+    assert names, "一个服务包名都没解析出来，探测逻辑坏了"
+    assert "app" not in names, "又出现了顶层包名 app —— 这是旧系统的头号静默陷阱"
+    assert len(names) == len(set(names)), f"服务包名撞车：{names}"
 
 
 def test_ddp_core_init_stays_import_free():
@@ -65,7 +96,7 @@ def test_ddp_core_init_stays_import_free():
 
     有一句 `from ddp_core.models import Base` 就够了：gateway 那边
     `import ddp_core.chunking` 会连带执行 `__init__`，于是缺 sqlalchemy 直接崩。
-    这个包的"最小集 / [corpus]"切分全靠它是空的。
+    这个包的"最小集 / [db]"切分全靠它是空的。
     """
     init = CORE / "__init__.py"
     tree = ast.parse(init.read_text(encoding="utf-8"))
@@ -89,10 +120,11 @@ def _corpus_modules() -> set[str]:
 
 
 def test_gateway_does_not_reach_into_the_corpus_layer():
-    """gateway 不得 import 需要 SQLAlchemy 的 core 模块。
+    """model-gateway 不得 import 需要 SQLAlchemy 的 core 模块。
 
-    它们的 venv 里没有 sqlalchemy（无状态适配层，plan.md §2 的边界）。
-    违反的表现是**容器起不来**，而开发机上单测全绿。
+    它的 venv 里没有 sqlalchemy（无状态适配层）。
+    违反的表现是**容器起不来**，而开发机上单测全绿 ——
+    因为开发机的共享 venv 里什么都装了。
     """
     corpus = _corpus_modules()
     assert corpus, "一个 corpus 模块都没识别出来，探测逻辑坏了"
@@ -109,22 +141,27 @@ def test_gateway_does_not_reach_into_the_corpus_layer():
         + "。gateway 的 venv 没有 sqlalchemy，容器会起不来")
 
 
-def test_mcp_image_installs_and_copies_the_corpus_layer():
-    """MCP 已是语料服务：镜像必须安装 ORM 依赖并复制 ddp_core。"""
-    pyproject = (MCP / "pyproject.toml").read_text(encoding="utf-8")
-    dockerfile = (MCP / "Dockerfile").read_text(encoding="utf-8")
-    assert "sqlalchemy[asyncio]" in pyproject and "pgvector" in pyproject
-    assert "COPY gateway/ddp_core /app/ddp_core" in dockerfile
-    assert "COPY mcp_server/server.py mcp_server/corpus.py /app/" in dockerfile
+def test_mcp_declares_the_corpus_layer():
+    """MCP 是语料服务：必须显式依赖带 ORM 的那一层。
+
+    漏了的表现是镜像起来直接 ModuleNotFoundError（好的那种），
+    但**只在生产**：开发共享 venv 里 sqlalchemy 一直在。
+    """
+    pyproject = (MCP.parent / "pyproject.toml").read_text(encoding="utf-8")
+    assert "ddp-core[db]" in pyproject, "MCP 没声明 ddp-core[db]"
 
 
 def test_the_boundary_scan_actually_covers_something():
-    """防止上面三条因为扫不到文件而恒真。"""
+    """反哨兵：防止上面几条因为扫不到文件而恒真。
+
+    路径写错的表现是**全绿**，而不是报错 —— 这条就是那个报错。
+    """
     files = _core_modules()
     assert len(files) >= 8, f"只扫到 {len(files)} 个 core 模块，路径可能写错了"
     assert _corpus_modules() >= {"models", "search", "types"}, \
-        f"corpus 层识别结果不对：{_corpus_modules()}"
-    assert any(GATEWAY.rglob("*.py")) and any(MCP.rglob("*.py"))
+        f"[db] 层识别结果不对：{_corpus_modules()}"
+    for root in (GATEWAY, MCP, CORPUS):
+        assert any(root.rglob("*.py")), f"{root} 下一个 .py 都没有，路径写错了"
 
 
 def test_every_httpx_client_disables_proxy_env():
@@ -142,7 +179,7 @@ def test_every_httpx_client_disables_proxy_env():
     import ast
 
     offenders = []
-    for root in (GATEWAY, MCP):
+    for root in (GATEWAY, MCP, CORPUS):
         for path in sorted(root.rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
@@ -166,7 +203,7 @@ def test_the_httpx_scan_actually_finds_clients():
     import ast
 
     total = 0
-    for root in (GATEWAY, MCP):
+    for root in (GATEWAY, MCP, CORPUS):
         for path in sorted(root.rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             total += sum(

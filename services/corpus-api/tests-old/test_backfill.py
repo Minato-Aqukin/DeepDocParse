@@ -19,8 +19,8 @@ plan.md 把阶段 3 标成**全重构最容易出假出处的一步**，验收�
 import pytest
 from sqlalchemy import select
 
-from app.backfill import backfill
-from app.models import Chunk, Conversation, Document, ExtractionItem, Message, ParseJob, User
+from ddp_corpus.backfill import backfill
+from ddp_corpus.models import Chunk, Conversation, Document, ExtractionItem, Message, ParseJob, User
 from ddp_core.anchor import digest_of
 from ddp_core.models import Citation, Evidence
 from ddp_core.tokenize import tokenized
@@ -128,7 +128,7 @@ async def test_mismatching_snippet_is_kept_but_never_anchored(session):
     assert evidence.content_digest == "", "对不上的出处被写了指纹 —— 等于凭空造证"
 
     # 而且读出来必须是失效的
-    from app.evidence import load_citations
+    from ddp_corpus.evidence import load_citations
 
     message = (await session.execute(select(Message))).scalars().one()
     out = await load_citations(session, source_kind="message", source_ids=[message.id])
@@ -150,7 +150,7 @@ async def test_missing_snippet_stays_unanchored_and_is_not_wrongly_invalidated(s
     assert (report.anchored, report.unanchored) == (0, 1), str(report)
     assert (await session.execute(select(Evidence))).scalars().one().content_digest == ""
 
-    from app.evidence import load_citations
+    from ddp_corpus.evidence import load_citations
 
     message = (await session.execute(select(Message))).scalars().one()
     out = await load_citations(session, source_kind="message", source_ids=[message.id])
@@ -227,7 +227,7 @@ async def test_rank_preserves_the_old_list_order(session):
                            _old(job.id, 1, TEXTS[1][:20], score=0.0328)])
     await _run(session)
 
-    from app.evidence import load_citations
+    from ddp_corpus.evidence import load_citations
 
     message = (await session.execute(select(Message))).scalars().one()
     out = await load_citations(session, source_kind="message", source_ids=[message.id])
@@ -236,7 +236,7 @@ async def test_rank_preserves_the_old_list_order(session):
 
 async def test_extraction_fields_are_backfilled_per_field(session):
     """抽取的出处是字段级的 —— 回填不能把它压回 item 级。"""
-    from app.models import ExtractionRun
+    from ddp_corpus.models import ExtractionRun
 
     document, job, conversation = await _seed(session)
     user_id = document.uploaded_by
@@ -268,7 +268,7 @@ async def test_backfill_never_overwrites_a_digest_written_by_the_dual_write(sess
     从此报告 resolved=True —— 一条明明已经指不上原文的出处，
     被回填**制造**成了"已验证"。这是这一阶段最隐蔽的假出处来源。
     """
-    from app.evidence import load_citations, record_evidence
+    from ddp_corpus.evidence import load_citations, record_evidence
 
     document, job, conversation = await _seed(session)
     citation = _old(job.id, 0, TEXTS[0][:20])
@@ -295,7 +295,7 @@ async def test_backfill_never_overwrites_a_digest_written_by_the_dual_write(sess
 
 async def test_report_counts_are_not_decorative(session):
     """对账恒等式必须真的会抛 —— 它是"一条不丢"唯一的机械保障。"""
-    from app.backfill import BackfillReport
+    from ddp_corpus.backfill import BackfillReport
 
     bad = BackfillReport(total=5, anchored=2, unanchored=1)
     with pytest.raises(RuntimeError, match="回填计数对不上"):

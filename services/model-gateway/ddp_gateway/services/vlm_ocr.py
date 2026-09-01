@@ -47,7 +47,7 @@ import re
 
 import httpx
 
-from app.services import dsocr2, layout
+from ddp_gateway.services import dsocr2, layout
 from ddp_core import crops
 
 logger = logging.getLogger(__name__)

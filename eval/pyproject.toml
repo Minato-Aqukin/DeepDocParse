@@ -1,0 +1,8 @@
+# 评测套件。**不是发行包** —— 这里的脚本各自独立运行，
+# 这份 pyproject 只是给 pytest 一个 rootdir，让评测器自己的回归用例跑得起来。
+#
+# 「指标代码往好里错，比没有指标更糟」：评测脚本报出的数字会被当成
+# 质量证据写进报告，所以它们自己也要有回归用例。
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["../tests", "."]

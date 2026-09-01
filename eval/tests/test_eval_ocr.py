@@ -8,14 +8,16 @@ from PIL import Image
 import pypdfium2 as pdfium
 import pytest
 
-from app.services import borndigital
+from ddp_gateway.services import borndigital
 
 
-ROOT = Path(__file__).resolve().parents[1]
+from ddp_paths import FIXTURES
+
+EVAL_DIR = Path(__file__).resolve().parents[1]
 
 
 def _load_eval():
-    spec = importlib.util.spec_from_file_location("eval_ocr_metrics", ROOT / "scripts" / "eval_ocr.py")
+    spec = importlib.util.spec_from_file_location("eval_ocr_metrics", EVAL_DIR / "eval_ocr.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -27,7 +29,7 @@ ev = _load_eval()
 
 def _load_prepare():
     spec = importlib.util.spec_from_file_location(
-        "prepare_eval_corpus", ROOT / "scripts" / "prepare_eval_corpus.py")
+        "prepare_eval_corpus", EVAL_DIR / "prepare_eval_corpus.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -173,7 +175,7 @@ def test_export_official_writes_markdown_ground_truth_and_config(tmp_path):
 
 def test_domain_manifest_has_four_disjoint_real_slices_and_code_corpus():
     manifest = json.loads(
-        (ROOT / "eval" / "omnidocbench-v1.6-slices.json").read_text(encoding="utf-8"))
+        (EVAL_DIR / "datasets" / "omnidocbench-v1.6-slices.json").read_text(encoding="utf-8"))
     source = manifest["source"]
     assert "/resolve/main/" not in source["annotation_url"]
     assert "d386947f7fc3bafdcd756c8485845a2f43a19875" in source["annotation_url"]
@@ -236,9 +238,9 @@ def test_prepare_combines_a_slice_into_one_multi_page_pdf(tmp_path):
 
 def test_code_corpus_keeps_all_exact_identifiers_in_the_pdf_text_layer():
     truth = json.loads(
-        (ROOT / "tests" / "fixtures" / "code-corpus.truth.json").read_text(encoding="utf-8"))
+        (FIXTURES / "code-corpus.truth.json").read_text(encoding="utf-8"))
     pages = borndigital.extract_pages(
-        (ROOT / "tests" / "fixtures" / "code-corpus.pdf").read_bytes())
+        (FIXTURES / "code-corpus.pdf").read_bytes())
     assert len(pages) == len(truth["pages"]) == 24
     for page, expected in zip(pages, truth["pages"]):
         text = "\n".join(block["text"] for block in page["blocks"])

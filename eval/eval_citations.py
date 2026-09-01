@@ -237,7 +237,7 @@ def run_offline(samples: list[dict], any_citation: bool) -> list[Outcome]:
     没有 GPU 的机器上这是唯一跑得动的部分。数字要和 live 分开看 ——
     它是"关键词路单打独斗"的下界，不是产品实际表现。
     """
-    from app.config import settings
+    from ddp_corpus.config import settings
 
     layouts: dict[str, dict] = {}
     outcomes: list[Outcome] = []

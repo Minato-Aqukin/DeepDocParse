@@ -9,8 +9,8 @@ import httpx
 import respx
 from sqlalchemy import select
 
-from app.config import settings
-from app.models import ApiKey, Document, ParseJob, UsageRecord, utcnow
+from ddp_corpus.config import settings
+from ddp_corpus.models import ApiKey, Document, ParseJob, UsageRecord, utcnow
 from tests.conftest import MCP, SERVICE
 
 LAYOUT = {"pdf_info": [{"page_idx": i} for i in range(3)]}
@@ -211,7 +211,7 @@ async def _second_key(session, username: str = "second") -> dict:
     import hashlib
     import secrets
 
-    from app.models import User, new_id
+    from ddp_corpus.models import User, new_id
 
     user = User(id=new_id(), username=username, password_hash="x")
     session.add(user)
@@ -295,7 +295,7 @@ async def test_external_submitter_can_delete_their_own_document(client, api_key,
     给包括 external 在内的全部**存量**文档都补了归属，变成
     "老的删得掉、新的删不掉"。
     """
-    from app.models import DocumentUpload
+    from ddp_corpus.models import DocumentUpload
 
     respx.post(f"{SERVICE}/v1/parse").mock(
         return_value=httpx.Response(202, json={"task_id": "s-own"}))

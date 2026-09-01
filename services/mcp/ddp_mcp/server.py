@@ -28,7 +28,7 @@ import redis.asyncio as redis
 from fastmcp import FastMCP
 from rank_bm25 import BM25Okapi
 
-from corpus import (
+from ddp_mcp.corpus import (
     ask_impl, get_evidence_impl, graph_neighbors_impl, read_wiki_impl, search_impl,
 )
 
@@ -109,11 +109,9 @@ def _doc_hash(file_url: str) -> str:
     return hashlib.sha256(file_url.encode()).hexdigest()
 
 
-def chunk_index_name(dim: int) -> str:
-    """索引名带维度：换 embedding 模型（维度变化）会走新索引，
-    而不是往旧索引里写维度不符的向量被 RediSearch 静默丢弃（M4 验收发现）。
-    同维度换模型仍无法区分——那种情况需手动 FT.DROPINDEX。"""
-    return f"chunks_idx_d{dim}"
+# 与写入侧（model-gateway 的 task_store）共用 ddp_core 里的同一份命名规则。
+# 两边各写一遍的后果是永久零命中且不报错 —— 见 ddp_core/vector_index.py
+from ddp_core.vector_index import chunk_index_name  # noqa: E402,F401
 
 
 async def _record_retrieval(mode: str) -> None:

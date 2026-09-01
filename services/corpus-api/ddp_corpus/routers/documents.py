@@ -20,21 +20,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.archive import fail_job, image_base_url
+from ddp_corpus.archive import fail_job, image_base_url
 from ddp_core.chunking import layout_to_chunks
-from app.config import settings
-from app.db import get_session
-from app.deps import current_user, get_service_client, get_storage
-from app.errors import APIError
-from app.indexing import index_document
-from app.models import (
+from ddp_corpus.config import settings
+from ddp_corpus.db import get_session
+from ddp_corpus.deps import current_user, get_service_client, get_storage
+from ddp_corpus.errors import APIError
+from ddp_corpus.indexing import index_document
+from ddp_corpus.models import (
     Assertion, Chunk, Citation, Conversation, Document, DocumentUpload, Evidence, FileToken, Message,
     ParseJob, User,
     as_aware, new_id, utcnow,
 )
-from app.service_client import ServiceClient, ServiceError
-from app.storage import Storage, prefix_of, source_key
-from app.versions import advance_index_generation, next_document_version
+from ddp_corpus.service_client import ServiceClient, ServiceError
+from ddp_corpus.storage import Storage, prefix_of, source_key
+from ddp_corpus.versions import advance_index_generation, next_document_version
 from ddp_core.anchor import digest_of, same_content
 from ddp_core.compilation import (
     code_detection_of, compile_chunks, fingerprint, provider_of, source_anchor,
@@ -787,7 +787,7 @@ def _schedule_index(tasks: BackgroundTasks, request: Request, document_id: str) 
     state = request.app.state
 
     async def run() -> None:
-        from app.db import get_sessionmaker
+        from ddp_corpus.db import get_sessionmaker
         async with get_sessionmaker()() as session:
             try:
                 await index_document(session, state.storage, state.http, document_id)

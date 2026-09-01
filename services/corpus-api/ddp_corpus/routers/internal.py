@@ -11,13 +11,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.archive import archive_job, fail_job
-from app.db import get_session
-from app.deps import get_service_client, get_storage, require_service_token
-from app.indexing import index_document
-from app.models import Document, ParseJob
-from app.service_client import ServiceClient
-from app.storage import Storage
+from ddp_corpus.archive import archive_job, fail_job
+from ddp_corpus.db import get_session
+from ddp_corpus.deps import get_service_client, get_storage, require_service_token
+from ddp_corpus.indexing import index_document
+from ddp_corpus.models import Document, ParseJob
+from ddp_corpus.service_client import ServiceClient
+from ddp_corpus.storage import Storage
 
 router = APIRouter(dependencies=[Depends(require_service_token)])
 
@@ -68,7 +68,7 @@ def _schedule_index(tasks: BackgroundTasks, request: Request, document_id: str) 
     state = request.app.state
 
     async def run() -> None:
-        from app.db import get_sessionmaker
+        from ddp_corpus.db import get_sessionmaker
         async with get_sessionmaker()() as session:
             try:
                 await index_document(session, state.storage, state.http, document_id)

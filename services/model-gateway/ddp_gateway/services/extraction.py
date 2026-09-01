@@ -22,11 +22,11 @@ import re
 
 import httpx
 
-from app.config import settings
+from ddp_gateway.config import settings
 from ddp_core import extract_format as fmt
 from ddp_core import crops
 from ddp_core.extract_format import CoerceError, FieldSpec, SchemaSpec, coerce_value
-from app.services.retrieval import retrieve
+from ddp_gateway.services.retrieval import retrieve
 
 _SYSTEM = (
     "你是文档信息抽取器。只依据【资料】抽取，资料里没有的信息必须如实报告没有，"

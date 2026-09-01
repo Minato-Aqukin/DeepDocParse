@@ -12,11 +12,11 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
-from app.auth import require_service_token
-from app.config import settings
-from app.errors import APIError
-from app.services.engines import resolve as resolve_engine
-from app.services.mineru_client import MineruTaskNotFound
+from ddp_gateway.auth import require_service_token
+from ddp_gateway.config import settings
+from ddp_gateway.errors import APIError
+from ddp_gateway.services.engines import resolve as resolve_engine
+from ddp_gateway.services.mineru_client import MineruTaskNotFound
 
 router = APIRouter(tags=["parse"], dependencies=[Depends(require_service_token)])
 

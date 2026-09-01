@@ -36,11 +36,9 @@ import redis.asyncio as redis
 QUEUE_INFLIGHT_KEY = "queue:inflight"
 
 
-def chunk_index_name(dim: int) -> str:
-    """索引名带维度：换 embedding 模型（维度变化）会走新索引，而不是往旧索引里
-    写维度不符的向量被 RediSearch 静默丢弃、导致永久零命中（M4 验收发现）。
-    检索侧 mcp_server.chunk_index_name 必须与此保持同一命名规则。"""
-    return f"chunks_idx_d{dim}"
+# 命名规则住在 ddp_core —— 写入侧（这里）与检索侧（MCP）共用同一份，
+# 物理上不可能再漂。原地再导出，调用方一字不用改
+from ddp_core.vector_index import chunk_index_name  # noqa: E402,F401
 
 
 def _pack_vector(vec: list[float]) -> bytes:

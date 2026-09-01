@@ -22,23 +22,23 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.db import get_session, get_sessionmaker
-from app.deps import current_user, get_storage
-from app.errors import APIError
-from app.evidence import citation_out, load_citations, record_evidence
-from app.metering import record_usage
-from app.models import (
+from ddp_corpus.config import settings
+from ddp_corpus.db import get_session, get_sessionmaker
+from ddp_corpus.deps import current_user, get_storage
+from ddp_corpus.errors import APIError
+from ddp_corpus.evidence import citation_out, load_citations, record_evidence
+from ddp_corpus.metering import record_usage
+from ddp_corpus.models import (
     AgentTurn, Assertion, Chunk, Citation, Conversation, Document, Evidence,
     EvidenceVerification, Message, ParseJob, RetrievalCandidate, User, utcnow,
 )
-from app.qa import (
+from ddp_corpus.qa import (
     Retrieval, answer_model_meta, attach_crops, build_messages, decide_retrieval,
     inherited_retrieval, retrieval_confidence, retrieve, trim_hits_to_context,
     verify_parse_consistency,
 )
-from app.storage import Storage, crop_key as build_crop_key
-from app.upstream import chat_request
+from ddp_corpus.storage import Storage, crop_key as build_crop_key
+from ddp_corpus.upstream import chat_request
 from ddp_core.agent import CandidateDecision, QueryDecision, assertions_from_text
 
 router = APIRouter()

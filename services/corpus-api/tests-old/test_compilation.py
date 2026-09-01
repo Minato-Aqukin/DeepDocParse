@@ -9,16 +9,16 @@ import httpx
 import respx
 from sqlalchemy import select
 
-from app.config import settings
-from app.crops import get_or_create_crops
-from app.evidence import load_citations
-from app.compilation import CompileOutput
-from app.indexing import index_document
-from app.models import (
+from ddp_corpus.config import settings
+from ddp_corpus.crops import get_or_create_crops
+from ddp_corpus.evidence import load_citations
+from ddp_corpus.compilation import CompileOutput
+from ddp_corpus.indexing import index_document
+from ddp_corpus.models import (
     Chunk, Citation, Document, Evidence, ParseJob, UsageRecord, User, as_aware, utcnow,
 )
-from app.qa import Retrieval, build_messages
-from app.storage import MemoryStorage
+from ddp_corpus.qa import Retrieval, build_messages
+from ddp_corpus.storage import MemoryStorage
 from ddp_core.compilation import provider_of
 from ddp_core.search import MemoryIndex, exact_identifiers
 from ddp_core.tokenize import code_tokenized, tokenized
@@ -57,7 +57,7 @@ async def test_compile_crops_read_pdf_once_and_reuse_object_cache(monkeypatch):
         calls.append((pdf, requests))
         return [f"png-{index}".encode() for index, _ in enumerate(requests)]
 
-    monkeypatch.setattr("app.crops.render_crops", fake_render)
+    monkeypatch.setattr("ddp_corpus.crops.render_crops", fake_render)
     atoms = [
         {"seq": 0, "page_idx": 0, "bbox": [0, 0, 10, 10], "page_size": [100, 100]},
         {"seq": 1, "page_idx": 0, "bbox": [20, 20, 30, 30], "page_size": [100, 100]},
@@ -415,8 +415,8 @@ async def test_reindex_refuses_second_worker_while_build_is_active(auth_client, 
 @respx.mock
 async def test_reconcile_recovers_expired_index_lease(
         auth_client, session, app_state):
-    from app import db
-    from app.reconcile import reconcile_once
+    from ddp_corpus import db
+    from ddp_corpus.reconcile import reconcile_once
 
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
@@ -442,7 +442,7 @@ async def test_reconcile_recovers_expired_index_lease(
 @respx.mock
 async def test_old_generation_cannot_commit_while_successor_is_indexing(
         auth_client, session, app_state, monkeypatch):
-    from app.indexing import _index_claimed
+    from ddp_corpus.indexing import _index_claimed
 
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
@@ -470,7 +470,7 @@ async def test_old_generation_cannot_commit_while_successor_is_indexing(
             "provider_fingerprint": "stale",
         }], crop_keys={}, degraded=[], provider=provider, vision_requests=0)
 
-    monkeypatch.setattr("app.indexing.compile_document", stale_compile)
+    monkeypatch.setattr("ddp_corpus.indexing.compile_document", stale_compile)
     assert await _index_claimed(
         session, app_state.storage, app_state.http,
         document_id=document["id"], generation=stale_generation) == 0
@@ -483,9 +483,9 @@ async def test_old_generation_cannot_commit_while_successor_is_indexing(
 
 async def test_stale_sessions_cannot_reuse_fencing_generation(session):
     """陈旧 ORM identity map 不能把 generation 写回旧值并复用 worker token。"""
-    from app import db
-    from app.indexing import _fail_if_current, claim_for_indexing
-    from app.versions import advance_index_generation
+    from ddp_corpus import db
+    from ddp_corpus.indexing import _fail_if_current, claim_for_indexing
+    from ddp_corpus.versions import advance_index_generation
 
     user = User(username="fencing-owner", password_hash="x")
     session.add(user)
@@ -537,7 +537,7 @@ async def test_stale_sessions_cannot_reuse_fencing_generation(session):
 
 
 async def test_active_index_worker_renews_lease(session, monkeypatch):
-    from app.indexing import _heartbeat_lease
+    from ddp_corpus.indexing import _heartbeat_lease
 
     user = User(username="heartbeat", password_hash="x")
     session.add(user)
@@ -610,7 +610,7 @@ async def test_stale_index_worker_cannot_overwrite_new_current_job(
             "provider_fingerprint": "fp",
         }], crop_keys={}, degraded=[], provider=provider, vision_requests=0)
 
-    monkeypatch.setattr("app.indexing.compile_document", delayed_compile)
+    monkeypatch.setattr("ddp_corpus.indexing.compile_document", delayed_compile)
     assert await index_document(session, app_state.storage, app_state.http, document_id) == 0
     remaining = (await session.execute(select(Chunk).where(
         Chunk.document_id == document_id))).scalars().all()

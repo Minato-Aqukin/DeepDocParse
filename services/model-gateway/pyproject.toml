@@ -1,47 +1,40 @@
 [project]
-name = "deepdocparse-gateway"
-version = "0.1.0"
-description = "DeepDocParse 薄网关：协议转换 / 鉴权 / 结果归档 / metrics"
+name = "ddp-model-gateway"
+version = "1.0.0"
+description = "DeepDocParse 模型网关：注册表驱动的协议适配 / 鉴权 / metrics"
 requires-python = ">=3.11"
 dependencies = [
+    "ddp-core",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "httpx>=0.27",
     "redis>=5.0",
-    "arq>=0.26",
     "pydantic-settings>=2.4",
     "pyyaml>=6.0",
     "prometheus-fastapi-instrumentator>=7.0",
+    # TODO(阶段 worker)：任务真相搬到 PG job 表后删掉 arq（见 INVENTORY.md §4）。
+    # 现在还留着，是为了让重组后的树先有一个可验证的绿基线
+    "arq>=0.26",
     # born-digital 兜底解析引擎（无 GPU 时抽 PDF 文字层 + 坐标）。
     # 不是模型，是 PDF 库 —— 铁律 3 禁的是 import 模型代码，不是禁止解析 PDF 结构
     "pypdfium2>=4.30",
 ]
 
 [project.optional-dependencies]
-# `ddp_core` 里碰数据库的那部分（models / 后续的 search、indexing…）需要 SQLAlchemy，
-# 而 **gateway 自己不需要** —— 它是无状态的 HTTP 适配层，一行 ORM 都不 import。
-# 所以做成 extra：gateway 装最小集，语料侧（DeepDocParse-Web）装 `[corpus]`。
-#
-# 这个划分不是包装技巧，是 plan.md §2 那条边界的物理体现：
-# core 内部拆成**无状态算力 worker**（gateway 侧，只要纯函数）与
-# **有状态语料服务**（要 ORM）。哪天 core 真的长出自己的语料进程，
-# 它装的就是 `[corpus]`。
-corpus = [
-    "sqlalchemy[asyncio]>=2.0",
-    "pgvector>=0.3",
-]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21", "fakeredis>=2.26"]
+
+# **这里故意没有 `ddp-core[db]`。** 网关是无状态适配层，一行 ORM 都不该 import；
+# 理由与失守后的表现见 python/ddp_core/pyproject.toml 里那段说明。
+# `tests/test_minimal_deps.py` 用导入图静态钉着它，CI 另有一个真装最小集的 job。
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["../tests"]
+testpaths = ["tests"]
+pythonpath = ["../../tests"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# **两个包，不是一个。** `ddp_core` 是与 Web 共享的语料核心逻辑，
-# 单独占一个顶层包名 —— 因为 web backend 的发行包也声明了 `packages = ["app"]`，
-# 两个 `app` 装进同一个环境会直接撞车（见 ddp_core/__init__.py 的说明）。
-packages = ["app", "ddp_core"]
+packages = ["ddp_gateway"]
