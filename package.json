@@ -1,0 +1,20 @@
+{
+  "name": "deepdocparse",
+  "private": true,
+  "version": "0.0.0",
+  "description": "DeepDocParse monorepo — 面向技术手册与论文的多模态 PDF 检索工作台",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "contracts:gen": "node packages/contracts/scripts/generate.mjs",
+    "contracts:check": "node packages/contracts/scripts/generate.mjs --check",
+    "web:dev": "npm run dev --workspace @deepdocparse/web",
+    "web:build": "npm run build --workspace @deepdocparse/web",
+    "web:test": "npm run test:unit --workspace @deepdocparse/web"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

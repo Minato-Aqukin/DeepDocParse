@@ -1,0 +1,27 @@
+# monorepo 的 Python 工具入口。**不是发行包** —— 四个 Python 包各有自己的
+# pyproject.toml，这里只放跨包共用的工具配置与 workspace 声明。
+[tool.uv.workspace]
+members = [
+    "python/ddp_core",
+    "services/model-gateway",
+    "services/corpus-api",
+    "services/corpus-worker",
+    "services/mcp",
+]
+
+# 合仓前这层依赖靠"先装 gateway 再装 backend"的口头约定表达，
+# 装错顺序的表现是 ModuleNotFoundError（好的那种）或**导入错包**（坏的那种）。
+# 现在由 workspace 显式声明，pip/uv 都能解。
+[tool.uv.sources]
+ddp-core = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["B008"]   # FastAPI 的 Depends() 就是默认参数里调用函数
+
+[tool.ruff.lint.per-file-ignores]
+"docs/refactor/_rewrite-ref-*.py" = ["ALL"]   # 重写参照物，落地后删除

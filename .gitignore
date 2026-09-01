@@ -1,0 +1,36 @@
+# 环境与密钥
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+.ruff_cache/
+
+# Node / 前端
+node_modules/
+dist/
+.quickstart/
+
+# 前端测试产物（Playwright）。**必须忽略**：失败用例的 trace 里带着
+# 完整页面快照与网络记录，体积大且可能含本机路径
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# Go
+/services/control-api/bin/
+*.test
+
+# 评测与迁移产物
+.eval-cache/
+/eval/out/
+/database/migrator/out/
+
+# 运行日志
+.dev-logs/
