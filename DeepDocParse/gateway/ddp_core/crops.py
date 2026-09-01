@@ -17,7 +17,27 @@ Web 层在这之上还有一层**对象存储缓存**（裁剪很贵：渲染整
 
 渲染是 CPU 密集的同步代码，调用方一律 `asyncio.to_thread`。
 """
+import functools
 import io
+import threading
+
+# **PDFium 不是线程安全的。** 下面三个入口都会被 `asyncio.to_thread` 并发调用
+# （vlm_ocr.py 对整篇文档的每一页 gather 一次），两个线程同时开文档/渲染就段错误。
+# 段错误杀掉的是整个 arq worker 进程：没有 traceback、任务永远停在 pending，
+# 界面上表现为"一直在解析" —— 又一个静默出错。2026-09-01 在 4090D 上必现，
+# 5 页文档串行渲染全好、并发渲染 100% core dump（tests 里有守卫钉着）。
+# 渲染是 CPU 密集的，串行化不损失什么；GPU 推理那一段仍然是并发的。
+_PDFIUM_LOCK = threading.RLock()
+
+
+def _pdfium_serialized(fn):
+    """把 PDFium 调用串起来。装饰的是"自己开 PdfDocument"的函数，
+    委托型的 render_crop 不要加 —— 它会再进 render_crops。"""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _PDFIUM_LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
 
 CROP_MARGIN = 12        # bbox 外扩，避免把边缘文字切掉（页面坐标单位）
 RENDER_SCALE = 2.0      # 72dpi 基准 x2 = 144dpi，够视觉模型看清小字
@@ -33,6 +53,7 @@ def render_crop(pdf_bytes: bytes, page_idx: int, bbox: list,
     return render_crops(pdf_bytes, [(page_idx, bbox, page_size)])[0]
 
 
+@_pdfium_serialized
 def render_crops(
     pdf_bytes: bytes, requests: list[tuple[int, list, list | None]],
 ) -> list[bytes | None]:
@@ -88,6 +109,7 @@ def render_crops(
     return out
 
 
+@_pdfium_serialized
 def render_page(pdf_bytes: bytes, page_idx: int, scale: float = RENDER_SCALE) -> bytes | None:
     """整页渲染成 PNG —— vlm-ocr 引擎的输入（见 services/vlm_ocr.py）。"""
     try:
@@ -106,6 +128,7 @@ def render_page(pdf_bytes: bytes, page_idx: int, scale: float = RENDER_SCALE) ->
         return None
 
 
+@_pdfium_serialized
 def page_sizes(pdf_bytes: bytes) -> list[tuple[float, float]]:
     """每页的 [宽, 高]（PDF 点）。vlm-ocr 要用它把归一化坐标还原成 bbox。"""
     try:
