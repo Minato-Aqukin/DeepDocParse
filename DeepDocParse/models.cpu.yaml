@@ -1,0 +1,56 @@
+# 无 GPU 注册表 —— 配合 docker/compose.cpu.yml 使用（B2：CPU quickstart）
+#
+# 与 models.yaml 的差别只有三处，且都在这一个文件里说清楚：
+#   1. 解析默认走 borndigital（进程内、不下模型、不要 GPU），mineru 留着按需启用
+#   2. embedding 指向 TEI 的 CPU 容器
+#   3. **没有 vqa_models**：视觉验证在这套环境里做不了。
+#      这不是残缺，是既有降级路径的正常使用 —— 问答会照常回答并打上
+#      degraded="vision_unavailable"，用户看得见"这条回答没做视觉验证"。
+#
+# 用法：MODELS_CONFIG=/app/models.cpu.yaml（compose.cpu.yml 已挂好）
+
+parse_engines:
+  # 有文字层的 PDF（论文、报告、合同）走这条：pypdfium2 抽文字层 + 坐标，
+  # 出处三件套（页码/bbox/截图）一样齐全。不覆盖扫描件、表格结构、公式、分栏顺序。
+  borndigital:
+    endpoint: "inproc://borndigital"    # 进程内引擎，没有远端地址
+    runtime: borndigital
+    default: true
+    capabilities: [parse]
+
+  # 需要 OCR / 表格 / 公式时启用（compose.cpu.yml 里的 mineru 服务同时打开）。
+  # CPU 上很慢（比 GPU 慢一到两个数量级），适合小批量试用而不是日常迭代。
+  # mineru:
+  #   endpoint: "http://mineru:8000"
+  #   runtime: mineru-api
+  #   options:
+  #     backend: pipeline
+
+  # v1.1：视觉语言模型整页识别。**这套无 GPU 环境里跑不动**
+  # （VLM 在 CPU 上一页要几分钟），注册了也只会让人等到超时。
+  # 有 GPU 时连同 compose 的 vqa 服务一起打开：
+  # vlm-ocr:
+  #   endpoint: "http://vqa-dsocr:8000"
+  #   runtime: vlm-ocr
+  #   options: { model: deepseek-ocr-2, dialect: deepseek-ocr2 }
+
+embedding_models:
+  bge-m3:
+    endpoint: "http://embed:8080"
+    default: true
+    runtime: tei
+    capabilities: [dense]
+
+# v1.1 rerank：CPU 上交叉编码器比双塔慢得多（每个候选一次前向），
+# 但候选只有 20~30 条，实测可接受。要用就把 compose.cpu.yml 里的 rerank 服务一起打开。
+# rerank_models:
+#   bge-reranker-v2-m3:
+#     endpoint: "http://rerank:8080"
+#     default: true
+#     runtime: tei
+
+# vqa_models: 故意留空 —— 见文件头。
+# 影响抽取平面：没有 vqa_models 时 /v1/extract 的字段抽值无处可调，会整体判 error。
+# 抽取平面**必须**有一个 OpenAI 兼容的 chat 端点；纯 CPU 部署请注册一个本地
+# llama.cpp / Ollama 的 endpoint 到 vqa_models（它不必真是视觉模型 ——
+# 抽值只用文本，视觉核对是可选的 extract_verify）。

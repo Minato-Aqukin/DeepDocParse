@@ -1,0 +1,129 @@
+{
+  "attributes": [
+    "代码密集",
+    "born-digital",
+    "自建代码基准"
+  ],
+  "pages": [
+    {
+      "page_idx": 0,
+      "text": "// DeepDocParse code benchmark page 01\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"HttpRequestParser\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # HttpRequestParser",
+      "identifier": "HttpRequestParser"
+    },
+    {
+      "page_idx": 1,
+      "text": "// DeepDocParse code benchmark page 02\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"parse_job_id\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # parse_job_id",
+      "identifier": "parse_job_id"
+    },
+    {
+      "page_idx": 2,
+      "text": "// DeepDocParse code benchmark page 03\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"registry.default_of\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # registry.default_of",
+      "identifier": "registry.default_of"
+    },
+    {
+      "page_idx": 3,
+      "text": "// DeepDocParse code benchmark page 04\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"DDP_CORE_PATH\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # DDP_CORE_PATH",
+      "identifier": "DDP_CORE_PATH"
+    },
+    {
+      "page_idx": 4,
+      "text": "// DeepDocParse code benchmark page 05\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"std::vector<Result>\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # std::vector<Result>",
+      "identifier": "std::vector<Result>"
+    },
+    {
+      "page_idx": 5,
+      "text": "// DeepDocParse code benchmark page 06\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"com.example.deepdoc.Indexer\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # com.example.deepdoc.Indexer",
+      "identifier": "com.example.deepdoc.Indexer"
+    },
+    {
+      "page_idx": 6,
+      "text": "// DeepDocParse code benchmark page 07\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"--skip-special-tokens\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # --skip-special-tokens",
+      "identifier": "--skip-special-tokens"
+    },
+    {
+      "page_idx": 7,
+      "text": "// DeepDocParse code benchmark page 08\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"QA_PARSE_MISMATCH_THRESHOLD\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # QA_PARSE_MISMATCH_THRESHOLD",
+      "identifier": "QA_PARSE_MISMATCH_THRESHOLD"
+    },
+    {
+      "page_idx": 8,
+      "text": "// DeepDocParse code benchmark page 09\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"loadCitationTargets\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # loadCitationTargets",
+      "identifier": "loadCitationTargets"
+    },
+    {
+      "page_idx": 9,
+      "text": "// DeepDocParse code benchmark page 10\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"evidence.content_digest\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # evidence.content_digest",
+      "identifier": "evidence.content_digest"
+    },
+    {
+      "page_idx": 10,
+      "text": "// DeepDocParse code benchmark page 11\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"asyncio.to_thread\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # asyncio.to_thread",
+      "identifier": "asyncio.to_thread"
+    },
+    {
+      "page_idx": 11,
+      "text": "// DeepDocParse code benchmark page 12\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"DocumentUpload.uploaded_by\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # DocumentUpload.uploaded_by",
+      "identifier": "DocumentUpload.uploaded_by"
+    },
+    {
+      "page_idx": 12,
+      "text": "// DeepDocParse code benchmark page 13\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"uq_documents_doc_origin\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # uq_documents_doc_origin",
+      "identifier": "uq_documents_doc_origin"
+    },
+    {
+      "page_idx": 13,
+      "text": "// DeepDocParse code benchmark page 14\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"VLLM_USE_FLASHINFER_SAMPLER\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # VLLM_USE_FLASHINFER_SAMPLER",
+      "identifier": "VLLM_USE_FLASHINFER_SAMPLER"
+    },
+    {
+      "page_idx": 14,
+      "text": "// DeepDocParse code benchmark page 15\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"SearchIndex.min_similarity\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # SearchIndex.min_similarity",
+      "identifier": "SearchIndex.min_similarity"
+    },
+    {
+      "page_idx": 15,
+      "text": "// DeepDocParse code benchmark page 16\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"layout_to_chunks\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # layout_to_chunks",
+      "identifier": "layout_to_chunks"
+    },
+    {
+      "page_idx": 16,
+      "text": "// DeepDocParse code benchmark page 17\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"code_detection_unavailable\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # code_detection_unavailable",
+      "identifier": "code_detection_unavailable"
+    },
+    {
+      "page_idx": 17,
+      "text": "// DeepDocParse code benchmark page 18\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"CitationRole.REJECTED\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # CitationRole.REJECTED",
+      "identifier": "CitationRole.REJECTED"
+    },
+    {
+      "page_idx": 18,
+      "text": "// DeepDocParse code benchmark page 19\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"graph_neighbors\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # graph_neighbors",
+      "identifier": "graph_neighbors"
+    },
+    {
+      "page_idx": 19,
+      "text": "// DeepDocParse code benchmark page 20\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"WikiSentence.evidence_ids\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # WikiSentence.evidence_ids",
+      "identifier": "WikiSentence.evidence_ids"
+    },
+    {
+      "page_idx": 20,
+      "text": "// DeepDocParse code benchmark page 21\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"RRF_K\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # RRF_K",
+      "identifier": "RRF_K"
+    },
+    {
+      "page_idx": 21,
+      "text": "// DeepDocParse code benchmark page 22\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"EXTRACT_MAX_RECORD_BLOCKS\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # EXTRACT_MAX_RECORD_BLOCKS",
+      "identifier": "EXTRACT_MAX_RECORD_BLOCKS"
+    },
+    {
+      "page_idx": 22,
+      "text": "// DeepDocParse code benchmark page 23\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"get_evidence\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # get_evidence",
+      "identifier": "get_evidence"
+    },
+    {
+      "page_idx": 23,
+      "text": "// DeepDocParse code benchmark page 24\nfrom __future__ import annotations\n\nTARGET_IDENTIFIER = \"entity_merge_uncertain\"\n\nasync def resolve_document(document_id: str, *, min_score: float = 0.55):\n    candidates = await index.search(document_id, min_similarity=min_score)\n    for candidate in candidates:\n        if candidate.evidence_id and candidate.bbox:\n            yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}\n\nclass EvidenceCompiler(Generic[T]):\n    def compile_atom(self, atom: T) -> tuple[str, list[float]]:\n        provider = f\"{self.engine.name}:{self.engine.version}\"\n        return provider, [atom.x0, atom.y0, atom.x1, atom.y1]\n\n# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags.\nassert normalize_identifier(TARGET_IDENTIFIER)  # entity_merge_uncertain",
+      "identifier": "entity_merge_uncertain"
+    }
+  ]
+}

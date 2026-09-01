@@ -1,0 +1,43 @@
+# dev 联调用注册表 —— deepseek-ocr.rs 以 Windows 原生二进制跑在宿主机时使用
+# （v0.6.0 无 Linux CUDA 预编译产物，dev 机不进容器；prod 用 compose.prod-nvidia.yml 的 vLLM 容器）
+#
+# 用法（gateway 本地跑，cwd 需在 gateway/ 下）：
+#   MODELS_CONFIG=../models.dev-host.yaml uvicorn app.main:app --port 9000
+# 用法（gateway 容器跑）：把 compose 里 MODELS_CONFIG 挂载指到本文件，
+#   endpoint 改 http://host.docker.internal:18001
+#
+# 注意端口：Windows 保留段 7964-8063 覆盖 8000/8001，宿主机服务一律避开（用 18001）。
+
+vqa_models:
+  deepseek-ocr:
+    endpoint: "http://127.0.0.1:18001"
+    default: true
+    # 与 models.yaml / models.autodl.yaml 的 OCR 条目**必须打一样的标**。
+    # 这份注册表漏标过一轮，后果是两个 bug 在这条路上原封不动地活着：
+    #   no_instruct 缺失      -> 抽值挑中 OCR 专用模型，抽出**假的 not_found**
+    #                            （系统能力缺失伪装成"文档里没有"）
+    #   transcribe_prompt 缺失 -> 视觉核对拿中文指令去问它，它回应指令而不是抄写，
+    #                            于是**每条出处都被误判 parse_mismatch**
+    # 两者都不报错。tests/test_layout.py 现在有一条形状守卫覆盖全部随仓库
+    # 发布的注册表，漏标会红。
+    capabilities: [vision, no_instruct]
+    options:
+      transcribe_prompt: "Free OCR."
+
+  # **这份注册表里没有指令模型**，所以 /v1/extract 会逐字段报 no_instruct_model。
+  # 那是对的（如实报错，而不是拿 OCR 模型硬抽出一堆假的 not_found），
+  # 但也意味着这套 dev 部署的抽取平面等于没有。要用就照 models.yaml 的
+  # qwen3-4b-instruct 补一个纯文本条目（capabilities: [instruct]）。
+
+parse_engines:
+  mineru:
+    endpoint: "http://localhost:18000"   # docker run -p 18000:8000 mineru:3.4.4 时
+    default: true
+    options:
+      backend: pipeline   # dev 镜像只内置 pipeline 模型
+
+embedding_models:
+  bge-m3:
+    endpoint: "http://localhost:18080"   # TEI CPU 容器映射 18080:8080（避开保留段）
+    default: true
+

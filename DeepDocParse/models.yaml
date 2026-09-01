@@ -1,0 +1,110 @@
+# 模型注册表 —— service 扩展模型的唯一入口
+# 原则：gateway 不 import 任何模型代码，只查此表转发。
+# 加模型 = 在 docker compose 加一个容器 + 在这里加一行。
+#
+# 内部只认两种标准协议：
+#   1. OpenAI 协议（vqa_models / embedding_models）
+#   2. mineru-api 任务协议（parse_engines）
+# endpoint 主机名 = docker compose 服务名。
+
+vqa_models:
+  # DeepSeek-OCR-2（2026-01 发布，3B，DeepEncoder V2 + DeepSeek-V2 MoE）。
+  # 名字必须与运行时的 --served-model-name 一致，否则 model 字段对不上（404）。
+  deepseek-ocr-2:
+    endpoint: "http://vqa-dsocr:8000"
+    default: true
+    # **no_instruct 不能省**：它只会把图上的字抄出来，不会遵循抽取指令。
+    # 少了这个词，/v1/extract 会拿它硬抽，抽出一堆假的 not_found（详见
+    # docs/extract-format.md 的 no_instruct_model 一节）。
+    # 抽取平面要能干活，得再注册一个通用对话模型到本段。
+    capabilities: [vision, no_instruct]
+    options:
+      # **该怎么问它"把图上的字抄出来"。** OCR 专用模型只认自己的官方 prompt：
+      # 拿一句中文指令去问，它会**回应那句指令**而不是抄写
+      # （真机实测：原文 "PURCHASE AGREEMENT" -> 抄写 "例如，如果问题涉及…"）。
+      # 后果是每条出处都被误判成 parse_mismatch —— 核对功能变成纯噪声。
+      # 通用视觉模型不用填这一项。见 services/extraction.py 的 _transcribe_prompt。
+      transcribe_prompt: "Free OCR."
+
+  # ---- 抽取平面用的通用指令模型 ----
+  # **不是可选项**：抽取平面「复用 VQA 平面的模型」这个设计，在 VQA 位上是
+  # OCR 专用模型时会塌掉 —— OCR-2 只会抄字，给它抽取指令抽不出东西，
+  # 而抽不出来会被记成 not_found（"文档里没有"），一个看起来像结论的空值。
+  # 没有这一条时 /v1/extract 会如实报 no_instruct_model 而不是硬抽（这是好事，
+  # 但抽取平面等于没有）。
+  #
+  # 选 4B 是因为它要和 OCR-2 挤同一张卡：两者权重合计约 15G，24G 卡放得下
+  # （显存怎么分见 deploy/autodl/README.md）。这个活是"从给定的几个块里挑出字段值"，
+  # 上下文已经由检索限定住了，不需要大模型。
+  qwen3-4b-instruct:
+    endpoint: "http://chat-instruct:8000"
+    # **纯文本模型，没有 vision** —— 抽值只用文字（检索已经把上下文限定住了），
+    # 视觉核对那条路仍然走 OCR-2。没有 no_instruct 就是这里的关键：
+    # 抽取平面挑模型时只会挑中它。
+    capabilities: [instruct]
+  # 扩展示例（去注释 + compose 加容器即可）：
+  # qwen3-vl:
+  #   endpoint: "http://vqa-qwen:8000"
+  # paddleocr-vl:                       # deepseek-ocr.rs 多后端本身支持
+  #   endpoint: "http://vqa-paddle:8000"
+
+parse_engines:
+  mineru:
+    # dev: 直连单个 mineru-api worker；prod: 指向 mineru-router（接口完全兼容，只改 URL）
+    endpoint: "http://mineru:8000"
+    default: true
+    runtime: mineru-api          # 用哪个适配器说话（见 gateway/app/services/engines.py）
+    # 引擎默认选项（请求方 options 可覆盖）：
+    # dev 镜像只内置 pipeline 模型（8GB 卡）；prod vlm 后端时改 backend 并删本行注释
+    options:
+      backend: pipeline
+
+  # 无 GPU 兜底：有文字层的 PDF 直接用 pypdfium2 抽文字层 + 坐标，进程内跑，
+  # 不需要容器也不需要下模型。**不覆盖**扫描件/表格结构/公式/分栏顺序 —— 那是 mineru 的活。
+  # 它同时是"加引擎 = 加容器 + 一行配置"的第一个真实验证（在此之前只有 mineru 一个引擎）。
+  borndigital:
+    endpoint: "inproc://borndigital"    # 进程内引擎，没有远端地址
+    runtime: borndigital
+    capabilities: [parse]
+
+  # v1.1：用视觉语言模型做整页识别（「基于大语言模型的文字识别」这条线）。
+  # endpoint **就是 vqa_models 那个容器** —— 同一个 endpoint 可以同时出现在两个段里，
+  # 不需要为解析再起一个。加这个引擎没有改动 engines.py 的任何既有代码。
+  # 定位：扫描件兜底 + LLM 识别路线的对照组，不是 mineru 的替代
+  #   （一页一次模型调用，长文档很贵；bbox 靠模型自报，精度不如版面模型）
+  vlm-ocr:
+    endpoint: "http://vqa-dsocr:8000"
+    runtime: vlm-ocr
+    capabilities: [parse, vision]
+    options:
+      model: deepseek-ocr-2   # **必填**：缺它时运行时会自己挑一个，识别质量无从复现
+
+      # v1.2：方言。deepseek-ocr2 = 走官方 prompt + grounding 标签解析。
+      # 缺省是 generic-json（让模型按我们的 schema 吐 JSON），那是给通用视觉模型的用法；
+      # 对只在两个官方 prompt 上训练过的 OCR 专用模型，换 prompt 会掉识别质量，
+      # bbox 也会从"原生输出"退化成"模型现编"。见 services/dsocr2.py。
+      dialect: deepseek-ocr2
+
+      scale: 2.0              # 页面渲染倍率（72dpi 基准，2.0 = 144dpi，与官方脚本一致）
+      concurrency: 2          # 同时打几页，受显存约束
+
+# ---- v2（M4）：注册即启用分块索引链与向量检索；删除本段则全链路回退 BM25 ----
+embedding_models:
+  bge-m3:
+    endpoint: "http://embed:8080"     # TEI (text-embeddings-inference) 容器
+    default: true
+    runtime: tei                      # 决定取得到哪些头：TEI 只给 dense
+    capabilities: [dense]             # bge-m3 本身还有 sparse/colbert 头，但 TEI 取不到
+
+# ---- v1.1：交叉编码器重排（/v1/rerank）。**删掉本段 = 不重排**，
+# 调用方会拿到 404 并打一个可见的降级标记（不是静默跳过）。
+# TEI 原生支持 /rerank，与上面的 embed 是同一类容器换个 model —— 几乎零新增运维面。
+# **缺省注释掉**：/readyz 是 all(up)，注册了却没起对应容器会让探针恒 503，
+# 而 compose.dev.yml 里没有 rerank 服务（只有 compose.prod-nvidia.yml 有）。
+# 上精排时把这段和 compose 里的 rerank 服务一起打开。
+# rerank_models:
+#   bge-reranker-v2-m3:
+#     endpoint: "http://rerank:8080"    # TEI 容器，--model-id BAAI/bge-reranker-v2-m3
+#     default: true
+#     runtime: tei
+#     capabilities: [rerank]

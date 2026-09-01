@@ -1,0 +1,57 @@
+{#-
+  DeepSeek-OCR-2 的 chat template —— **必须显式提供，模型自己没有带**。
+
+  为什么需要它
+  ------------
+  `deepseek-ai/DeepSeek-OCR-2` 的 tokenizer_config.json 里没有 chat_template
+  （2026-08-25 核对官方仓库文件清单确认）。而我们整个 VQA 平面走的是
+  OpenAI `/v1/chat/completions` 协议 —— vLLM 渲染不出 prompt 就直接报错，
+  **服务能起来、每个请求都 400**。这是接入这个模型最容易踩的一脚。
+
+  为什么是"原样拼接"而不是加角色标记
+  ----------------------------------
+  这不是聊天模型，是 OCR 专用模型。官方推理脚本（DeepSeek-OCR2-vllm/config.py）
+  喂给它的就是一句裸 prompt：
+
+      <image>\n<|grounding|>Convert the document to markdown.
+
+  没有 system、没有 `<|User|>`/`<|Assistant|>` 角色标记。vLLM 官方 recipe 也写着
+  "Plain prompts perform better than instruction formats"。
+  套一层聊天格式等于喂它训练时没见过的东西，识别质量会掉。
+
+  `<image>` 从哪来
+  ----------------
+  不在这个模板里。vLLM 按消息 content 里 image_url 部件出现的位置，
+  用模型类的 `get_placeholder_str()`（对本模型返回 `<image>`）插入占位符，
+  再把各部件用 `\n` 连成一个字符串交给本模板。
+  gateway 侧发的 content 顺序是 [image_url, text]，于是渲染结果正好是
+  `<image>\n<|grounding|>Convert the document to markdown.` —— 与官方逐字一致。
+
+  **所以模板里绝不能自己再写一个 `<image>`**：会变成两个占位符，
+  与实际图片数量对不上，vLLM 会直接报错。
+
+  配套要求：启动时必须带 `--chat-template-content-format string`，
+  让 vLLM 先把多部件 content 拍平成字符串再套模板（见 ocr.bash）。
+
+  开头那个 BOS 不能删
+  ------------------
+  **2026-08-25 在 4090D 上实测：少了它，模型输出的是彻底的垃圾。**
+  没有 BOS 时 `Free OCR.` 会吐出 `PUBLIC DATA / ## 10 10 10 10 ...` 一路复读到
+  max_tokens；加上 BOS 之后同一张图 143 个 token 就把整页准确转写完。
+  grounding 模式同理：没有 BOS 时标签七零八落（`<|ref|>text compared with in 45 c`，
+  连 `<|/ref|>` 都配不齐），有 BOS 时是标准的
+  `<|ref|>text<|/ref|><|det|>[[94, 50, 339, 68]]<|/det|>` + 正文。
+
+  原因：官方推理脚本 tokenize 时是 `bos=True`（`tokenize_with_images(..., bos=True, eos=True)`），
+  而 vLLM 渲染 chat template 之后是用 `add_special_tokens=False` 去分词的
+  —— 它假定模板自己会把特殊 token 写进去。模板不写，BOS 就彻底丢了。
+
+  **这个故障没有任何报错**：服务健康、请求 200、token 数正常，只是内容是垃圾。
+  排查时极容易怀疑到显存、量化、图像预处理上去（我们逐个排除过：
+  视觉 token 数 1125 = 6×144+256 与模型卡一致、dtype 是 bfloat16、
+  FLASH_ATTN 后端正常）—— 真正的原因只是模板少了一个 token。
+-#}
+{{- '<｜begin▁of▁sentence｜>' -}}
+{%- for message in messages -%}
+{{- message['content'] -}}
+{%- endfor -%}

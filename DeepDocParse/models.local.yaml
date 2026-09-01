@@ -1,0 +1,23 @@
+# 本机（无 GPU、无 TEI）用的注册表 —— 宿主机混合模式专用。
+# 与 DeepDocParse/models.cpu.yaml 的差别只有一处：去掉 embedding_models。
+#   models.cpu.yaml 的 embed 端点是 http://embed:8080（compose 内部 DNS），
+#   宿主机上跑的 gateway 解析不了这个名字；而本机既没有 bge-m3 权重也没起 TEI，
+#   留着它只会让 /readyz 恒 503。
+# 代价：DeepDocParse-Web 的文档索引会失败并显式标 index_error，问答走不通。
+#
+# **抽取平面（/v1/extract）在这套配置下也用不了**：它要在 vqa_models 段里找一个
+# OpenAI 兼容的 chat 端点来抽值，没有就每个字段都判 error/upstream_error。
+# 想在本机试抽取，起一个 Ollama 再把下面这段的注释去掉即可
+# （抽值只用文本，它不必真是视觉模型 —— 视觉核对是可选项 EXTRACT_VERIFY）：
+#
+# vqa_models:
+#   local-chat:
+#     endpoint: "http://127.0.0.1:11434"    # Ollama 的 OpenAI 兼容端口
+#     default: true
+
+parse_engines:
+  borndigital:
+    endpoint: "inproc://borndigital"
+    runtime: borndigital
+    default: true
+    capabilities: [parse]
