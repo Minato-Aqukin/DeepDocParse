@@ -1,0 +1,4687 @@
+{
+  "layout_version": "ddp-layout/1",
+  "engine": "borndigital",
+  "code_detection": "heuristic",
+  "pdf_info": [
+    {
+      "page_idx": 0,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.44793701171875,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 01"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            105.03997802734375,
+            338.5439453125,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"HttpRequestParser\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # HttpRequestParser"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 1,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.3999328613281,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 02"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            302.5439453125,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"parse_job_id\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # parse_job_id"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 2,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.3399353027344,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 03"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            352.9439697265625,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"registry.default_of\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # registry.default_of"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 3,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.53192138671875,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 04"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            105.03997802734375,
+            309.7439270019531,
+            113.48797607421875
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"DDP_CORE_PATH\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.4880065917969
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # DDP_CORE_PATH"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 4,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.4239196777344,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 05"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.4520263671875,
+            352.9439697265625,
+            113.48797607421875
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"std::vector<Result>\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.4880065917969
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # std::vector<Result>"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 5,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.3759460449219,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 06"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.4520263671875,
+            410.5440673828125,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"com.example.deepdoc.Indexer\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # com.example.deepdoc.Indexer"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 6,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.3999328613281,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 07"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            367.343994140625,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"--skip-special-tokens\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # --skip-special-tokens"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 7,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.3759460449219,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 08"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            105.03997802734375,
+            410.5440673828125,
+            113.64398193359375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"QA_PARSE_MISMATCH_THRESHOLD\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.6440124511719
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # QA_PARSE_MISMATCH_THRESHOLD"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 8,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.32794189453125,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 09"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            352.9439697265625,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"loadCitationTargets\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # loadCitationTargets"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 9,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.32794189453125,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 10"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            381.7440185546875,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"evidence.content_digest\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # evidence.content_digest"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 10,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.44793701171875,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 11"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            338.5439453125,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"asyncio.to_thread\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # asyncio.to_thread"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 11,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.3999328613281,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 12"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.4520263671875,
+            403.34405517578125,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"DocumentUpload.uploaded_by\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # DocumentUpload.uploaded_by"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 12,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.3399353027344,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 13"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            381.7440185546875,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"uq_documents_doc_origin\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # uq_documents_doc_origin"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 13,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.53192138671875,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 14"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            105.03997802734375,
+            410.5440673828125,
+            113.48797607421875
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"VLLM_USE_FLASHINFER_SAMPLER\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.4880065917969
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # VLLM_USE_FLASHINFER_SAMPLER"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 14,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.4239196777344,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 15"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            403.34405517578125,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"SearchIndex.min_similarity\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # SearchIndex.min_similarity"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 15,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.3759460449219,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 16"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.4520263671875,
+            331.34393310546875,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"layout_to_chunks\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # layout_to_chunks"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 16,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.3999328613281,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 17"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            403.34405517578125,
+            113.48797607421875
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"code_detection_unavailable\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.4880065917969
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # code_detection_unavailable"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 17,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.3759460449219,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 18"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            367.343994140625,
+            113.48797607421875
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"CitationRole.REJECTED\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.4880065917969
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # CitationRole.REJECTED"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 18,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.32794189453125,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 19"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            324.1439208984375,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"graph_neighbors\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # graph_neighbors"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 19,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.32794189453125,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 20"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            396.14404296875,
+            113.48797607421875
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"WikiSentence.evidence_ids\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.4880065917969
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # WikiSentence.evidence_ids"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 20,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.44793701171875,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 21"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            105.03997802734375,
+            252.14395141601562,
+            113.48797607421875
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"RRF_K\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.4880065917969
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # RRF_K"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 21,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.3999328613281,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 22"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            105.03997802734375,
+            396.14404296875,
+            113.48797607421875
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"EXTRACT_MAX_RECORD_BLOCKS\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.4880065917969
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # EXTRACT_MAX_RECORD_BLOCKS"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 22,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.3399353027344,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 23"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            302.5439453125,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"get_evidence\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # get_evidence"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 23,
+      "page_size": [
+        612.0,
+        792.0
+      ],
+      "para_blocks": [
+        {
+          "type": "text",
+          "bbox": [
+            61.5,
+            44.4520263671875,
+            332.53192138671875,
+            53.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "// DeepDocParse code benchmark page 24"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            61.09199905395508,
+            64.11602783203125,
+            303.79193115234375,
+            73.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "from __future__ import annotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.444000244140625,
+            104.11602783203125,
+            374.54400634765625,
+            113.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "TARGET_IDENTIFIER = \"entity_merge_uncertain\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            144.11602783203125,
+            590.2323608398438,
+            173.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "async def resolve_document(document_id: str, *, min_score: float = 0.55):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "candidates = await index.search(document_id, min_similarity=min_score)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [
+            60.0,
+            184.11602783203125,
+            287.65191650390625,
+            192.1920166015625
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "for candidate in candidates:"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            204.11602783203125,
+            569.1243286132812,
+            234.7239990234375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "if candidate.evidence_id and candidate.bbox:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "yield {\"id\": candidate.evidence_id, \"bbox\": candidate.bbox}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.0,
+            264.11602783203125,
+            510.85223388671875,
+            333.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "class EvidenceCompiler(Generic[T]):"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "def compile_atom(self, atom: T) -> tuple[str, list[float]]:"
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "provider = f\"{self.engine.name}:{self.engine.version}\""
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "return provider, [atom.x0, atom.y0, atom.x1, atom.y1]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "bbox": [
+            60.56399917602539,
+            364.4519958496094,
+            618.8524169921875,
+            393.87200927734375
+          ],
+          "lines": [
+            {
+              "spans": [
+                {
+                  "content": "# Exact lookup must preserve snake_case, CamelCase, dotted.names, and --flags."
+                }
+              ]
+            },
+            {
+              "spans": [
+                {
+                  "content": "assert normalize_identifier(TARGET_IDENTIFIER) # entity_merge_uncertain"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

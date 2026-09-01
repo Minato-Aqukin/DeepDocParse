@@ -1,0 +1,156 @@
+/* ==========================================================================
+   Element Plus 映射  ·  依赖 ddp-tokens.css
+   EP 默认偏圆、偏彩、带投影，这个文件把它压到本规范上。
+   引入顺序必须在 element-plus/dist/index.css 之后。
+   ========================================================================== */
+
+:root,
+:root.dark,
+:root[data-theme="dark"] {
+  /* 主色＝墨色，不是红。准则一：红只留给出处与出错 */
+  --el-color-primary: var(--ddp-ink);
+  --el-color-primary-light-3: var(--ddp-ink-2);
+  --el-color-primary-light-5: var(--ddp-ink-3);
+  --el-color-primary-light-7: var(--ddp-line-2);
+  /* light-8 / dark-2 漏了的话，主按钮 :active 会闪一下 EP 原生蓝 #337ecc ——
+     那是这个界面里的第三种重音色，直接违反准则一 */
+  --el-color-primary-light-8: var(--ddp-line);
+  /* light-9 不能和 --el-fill-color-light 指到同一个值：问答面板靠这两个变量
+     区分"谁在说话"（AskPanel 的 .bubble / .bubble.user），同值＝分不出来 */
+  --el-color-primary-light-9: var(--ddp-accent-soft);
+  /* hover 用 ink-2（比静息浅一档），active 回到满墨 —— 两者必须不同值，
+     否则按下去和悬停长得一模一样，等于没有按压反馈（§4：换底色 + 换描边）。 */
+  --el-color-primary-dark-2:  var(--ddp-ink);
+
+  --el-color-success: var(--ddp-ok);
+  --el-color-warning: var(--ddp-warn);
+  --el-color-danger:  var(--ddp-danger);
+  --el-color-error:   var(--ddp-danger);
+  --el-color-info:    var(--ddp-info);
+
+  --el-bg-color:                var(--ddp-panel);
+  --el-bg-color-page:           var(--ddp-ground);
+  --el-bg-color-overlay:        var(--ddp-panel);
+  --el-fill-color:              var(--ddp-panel-3);
+  --el-fill-color-light:        var(--ddp-panel-2);
+  --el-fill-color-lighter:      var(--ddp-panel);
+  --el-fill-color-blank:        var(--ddp-panel);
+
+  --el-text-color-primary:   var(--ddp-ink);
+  --el-text-color-regular:   var(--ddp-ink-2);
+  --el-text-color-secondary: var(--ddp-ink-3);
+  --el-text-color-placeholder: var(--ddp-ink-3);
+  --el-text-color-disabled:  var(--ddp-ink-3);
+
+  --el-border-color:         var(--ddp-line-2);
+  --el-border-color-light:   var(--ddp-line);
+  --el-border-color-lighter: var(--ddp-line);
+  --el-border-color-extra-light: var(--ddp-line);
+
+  --el-border-radius-base:  var(--ddp-r);
+  --el-border-radius-small: var(--ddp-r-sm);
+  --el-border-radius-round: var(--ddp-r-pill);
+
+  /* alert / message 的柔和底色。不覆盖的话是 EP 原生的 #fef0f0 / #fdf6ec，
+     偏冷偏粉，和这套暖灰不同源 */
+  --el-color-success-light-9: var(--ddp-ok-soft);
+  --el-color-warning-light-9: var(--ddp-warn-soft);
+  --el-color-danger-light-9:  var(--ddp-danger-soft);
+  --el-color-error-light-9:   var(--ddp-danger-soft);
+  --el-color-info-light-9:    var(--ddp-info-soft);
+
+  --el-font-family: var(--ddp-font);
+  --el-font-size-base: 14px;
+
+  /* 准则五：投影只表示"浮起来"。
+     **不要把 --el-box-shadow-light 置成 none** —— 它的名字有误导性，EP 拿它给
+     几乎所有 popper（el-select / el-dropdown / el-menu--popup / el-message /
+     el-notification）画影，置 none 会把浮层的影一起干掉：深色档下拉面板浮在页面上
+     只剩一条发丝边，等于看不见。静态卡片的影由下面 .el-card 那条 !important 负责。 */
+  --el-box-shadow-light: var(--ddp-shadow-pop);
+  --el-box-shadow:       var(--ddp-shadow-pop);
+  --el-box-shadow-dark:  var(--ddp-shadow-pop);
+
+  --el-transition-duration: var(--ddp-dur);
+}
+
+/* 卡片、表格：拆掉 EP 自带的投影与斑马纹 */
+.el-card { box-shadow: none !important; border: var(--ddp-bw) solid var(--ddp-line); }
+.el-table { --el-table-border-color: var(--ddp-line); background: transparent; }
+.el-table th.el-table__cell { background: transparent; color: var(--ddp-ink-3); font-weight: 500; }
+.el-table td.el-table__cell { border-bottom-color: var(--ddp-line); }
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell { background: transparent; }
+
+/* 标签：准则三要求状态用点 + 文字，不要彩色药丸。
+   状态请改用 .ddp-status；这里只把残留的 el-tag 压得安静一些 */
+.el-tag { background: transparent; border-color: var(--ddp-line); color: var(--ddp-ink-2); }
+
+/* 按钮：主按钮墨色；hover 不位移不发光。
+   必须覆写**变量**而不是 color —— EP 的 .el-button:hover 特异性 (0,2,0) 高于
+   .el-button--primary (0,1,0)，写 color: 只治得住静息态，hover 时又会被
+   --el-button-hover-text-color（EP 写死 var(--el-color-white)）打回白字。
+   深色档主色是近白，于是 hover 变成白字白底，对比度 2.56:1。 */
+.el-button--primary {
+  --el-button-text-color: var(--ddp-accent-ink);
+  --el-button-hover-text-color: var(--ddp-accent-ink);
+  --el-button-active-text-color: var(--ddp-accent-ink);
+}
+/* 禁用态要单独提特异性：EP 深色档把它写在 `html.dark .el-button` (0,2,1) 上，
+   裸 .el-button--primary (0,1,0) 压不住 —— 写了也是空转。
+   EP 默认是 #ffffff80，落在禁用底色上只有 2.35:1，读不清。 */
+.el-button--primary,
+html.dark .el-button--primary,
+:root[data-theme="dark"] .el-button--primary {
+  --el-button-disabled-text-color: color-mix(in srgb, var(--ddp-accent-ink) 72%, transparent);
+}
+.el-button:not(.is-disabled):hover { transform: none; box-shadow: none; }
+
+/* 输入框：focus 时描边转墨色，不用主题色光晕 */
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus { box-shadow: 0 0 0 1px var(--ddp-ink) inset !important; }
+
+/* --------------------------------------------------------------------------
+   深色档的白字白底问题。
+
+   EP 给"主色填充"的控件把文字色写成 var(--el-color-white)。主色现在是墨色，
+   而墨色在深色档翻成近白 —— 白字落在近白底上，整个控件消失。
+   实测踩到的：登录页的登录/注册、用量页的近 7/30/90 天。
+
+   **注意这些变量声明在组件选择器上（`.el-radio-button` / `.el-checkbox`），
+   不在 :root 上**，所以必须在同名选择器上重新声明才压得住 —— 写在 :root 里
+   会被组件自己的声明盖掉（第一版就是这么写的，没生效）。
+   用 --ddp-accent-ink：浅色档是白，深色档是近黑，跟着主题翻。
+   -------------------------------------------------------------------------- */
+.el-radio-button {
+  --el-radio-button-checked-bg-color: var(--ddp-ink);
+  --el-radio-button-checked-text-color: var(--ddp-accent-ink);
+  --el-radio-button-checked-border-color: var(--ddp-ink);
+}
+.el-checkbox {
+  --el-checkbox-checked-bg-color: var(--ddp-ink);
+  --el-checkbox-checked-icon-color: var(--ddp-accent-ink);
+  --el-checkbox-checked-input-border-color: var(--ddp-ink);
+  --el-checkbox-checked-text-color: var(--ddp-ink);
+  --el-checkbox-input-border-color-hover: var(--ddp-ink-3);
+}
+.el-radio {
+  --el-radio-input-border-color-hover: var(--ddp-ink-3);
+}
+.el-switch {
+  --el-switch-on-color: var(--ddp-ink);
+  --el-switch-off-color: var(--ddp-line-2);
+}
+.el-switch.is-checked .el-switch__core .el-switch__action {
+  background: var(--ddp-accent-ink);
+}
+.el-pagination.is-background .el-pager li.is-active {
+  background: var(--ddp-ink);
+  color: var(--ddp-accent-ink);
+}
+
+/* 菜单选中态：浅底 + 左侧 2px 竖条，不用红也不用色块 */
+.el-menu-item.is-active {
+  background: color-mix(in srgb, var(--ddp-ink) 7%, transparent);
+  color: var(--ddp-ink);
+  border-left: 2px solid var(--ddp-ink);
+}

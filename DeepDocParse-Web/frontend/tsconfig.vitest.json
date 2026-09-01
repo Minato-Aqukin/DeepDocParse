@@ -1,0 +1,14 @@
+{
+  // 测试文件的类型检查。**不能只靠 tsconfig.app.json** —— 它把
+  // `src/**/__tests__/*` 排除在外（构建产物不该包含测试），于是测试代码
+  // 会完全脱离 vue-tsc。而在这个项目里类型检查曾经是前端**唯一**的质量门禁，
+  // 让新加的这一层自己不被检查是说不过去的。
+  "extends": "./tsconfig.app.json",
+  "include": ["src/**/__tests__/**/*", "src/__tests__/**/*", "env.d.ts", "src/**/*", "src/**/*.vue"],
+  "exclude": ["e2e/**"],
+  "compilerOptions": {
+    "types": ["node"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.vitest.tsbuildinfo"
+  }
+}

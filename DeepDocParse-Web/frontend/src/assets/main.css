@@ -1,0 +1,36 @@
+/* 布局交给 Element Plus，这里只留最小重置（脚手架默认样式会把 #app 变成两栏网格）。 */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+/* 字体、字色、底色由 assets/ddp/ddp-base.css 接管，这里不再定义第二份。 */
+
+.markdown-body {
+  line-height: 1.7;
+  word-break: break-word;
+}
+.markdown-body img {
+  max-width: 100%;
+}
+.markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--el-border-color);
+  padding: 6px 10px;
+}
+.markdown-body pre {
+  background: var(--el-fill-color-light);
+  padding: 12px;
+  overflow-x: auto;
+}

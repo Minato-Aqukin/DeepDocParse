@@ -1,0 +1,131 @@
+# DeepDocParse-Web 开发指南
+
+## 必读上下文
+- 总体架构：`../ARCHITECTURE.md`（ADR #11–#16 是本层的设计前提）；本仓库说明：`README.md`
+- 对 DeepDocParse 的调用**只依赖** `../DeepDocParse/openapi.yaml` 契约，禁止依赖其内部实现
+- **下一轮设计已定稿在 `docs/DESIGN.md`**（M6：Web 端问答、Document/ParseJob 拆分、多副本）。
+  改数据模型、加检索、动前端结构之前先读它——尤其 §2.5（pgvector 与 SQLite 单测并存）
+
+## 职责边界
+- 用户/API key/额度限流/计量全在本层；对 service 统一用 SERVICE_TOKEN，service 不感知用户
+- 文件与解析结果的**永久存储**仍由本层 API 写入 PostgreSQL/MinIO；数据库模型与
+  检索/知识逻辑属于共享 `ddp_core`，阶段 7 的 MCP 直接连接同一语料库读取。
+- `/v1/*` 对外 API 与 `/mcp` 反代：验 key → 限速 → 额度 → 转发 → 记 usage
+
+## 铁律
+1. **共享的是同一份实现，不是复制品**（2026-08-26 修订，原文是「不 import service 的代码」）。
+   原铁律的本意是防止两层耦合，实践下来换到的却是**两份逐字复制品靠注释同步**，
+   已经静默出错三次（`plan.md` §1）：关键词路 AND/OR 语义、重建索引指错块、
+   抽取平面从不打 `vision_unavailable`。分块判据两边漂一点点，同一份版面就切出
+   不同的块，而出处的稳定定位键 `seq` 按块序算 —— **历史出处会指到错误的块**。
+
+   现在的划法（`plan.md` §2）：**语料核心逻辑住在 service 仓库的 `ddp_core` 顶层包**，
+   两侧 import 同一份。本层已迁出的有 `chunking` / `crops`（渲染部分）/ `tokenize` /
+   `extract_format`。**仍然不 import service 的 `app.*`** —— 那是 gateway 自己的应用层，
+   只有 `ddp_core` 是对外共享面。
+
+   耦合面因此是三处：解析契约 `openapi.yaml`、OpenAI 兼容的 embedding/chat 端点、
+   以及 `ddp_core` 包。**装的时候要先装 gateway 再装 backend**，
+   理由与替代方案写在 `backend/pyproject.toml` 末尾。
+
+   仍然各写一份的：OpenAI 错误体、SSE 逐跳头过滤 —— 那些是**协议层适配**，
+   不是承重逻辑，各写一份的成本低于耦合成本。
+2. **数据留在本层**。分块、向量索引、问答会话全在 Postgres；分块的输入是本层归档的
+   `layout.json`，不依赖 service 的 24h 暂存窗口
+3. **降级必须可见**。检索零命中/视觉模型不可用/不能裁剪，都要落到 `messages.degraded`
+   并在 UI 上打标——静默降级是这个项目吃过大亏的地方（M4a 悄悄退回 BM25）
+4. **回调不可信**。归档必须同时有回调路径与对账路径，且 `archive_job` / `index_document`
+   都用 claim 做成幂等（多副本天然安全）
+5. **流式响应里不能用请求作用域的 DB session**。它在响应体开始流之前就关了——
+   问答落库、计量都必须另开 session（`get_sessionmaker()`），这条踩过两次
+6. **给 service 的 URL 必须稳定**（`/files/{token}`），不用预签名——URL 一变，
+   service 的幂等与向量索引全部失效。另注意 `/files` 要按 MIME 白名单决定 inline/attachment，
+   否则上传 text/html 就是本站同源 XSS
+7. **httpx 一律 `trust_env=False`**，本机 SOCKS 代理会污染 localhost 调用
+8. **相似度下限对向量路与关键词路都生效**。RRF 是并集融合，只卡向量路的话，
+   语义上完全不相关的问题仍会靠共现词捞出"出处"，而 `verified` 只看有没有裁剪图 ——
+   假出处还会被打上"已做视觉验证"。唯一豁免是向量化本身挂了（那时无从测量，
+   且已标 `degraded=embedding_unavailable`）
+9. **删对象前必须 claim**。`gc.py` 是全项目唯一会不可逆毁数据的地方：
+   宽限期（`GC_GRACE_SECONDS`）+ 条件 UPDATE 两道防护，缺一就会把
+   "删了又传回来"的文档原件删掉
+10. **占位密钥拒绝启动**（`config.assert_secrets_configured`）：`JWT_SECRET`
+    是 change-me 等于任何人可伪造任意用户的会话。CI 可用 `ALLOW_INSECURE_DEFAULTS=true`
+
+## 技术约定
+- backend：FastAPI + SQLAlchemy 2.0(async) + asyncpg + Alembic；JWT 用 jose，密码 bcrypt，
+  API key 用 sha256（每请求都要验，bcrypt 会压垮代理路径）
+- 模型只用可移植类型（String/JSON/DateTime），不用 PG 专有的 UUID/JSONB —— 单测因此能跑 SQLite。
+  **向量列走 `ddp_core/types.py::Vector`**（PG 上是 pgvector，其它方言退回 JSON），
+  检索本身抽在 `ddp_core/search.py::SearchIndex` 协议后面：生产 `PgVectorIndex`，单测 `MemoryIndex`。
+  这两处是"单测不需要任何外部依赖"的命门，别绕过去直接写 SQL。
+  **这两个模块（连同 models / chunking / tokenize / rerank / blocks / crops / extract_format）
+  自阶段 2a 起住在 `DeepDocParse/gateway/ddp_core/`，两个仓库共用同一份**——
+  `app/` 下再也没有它们的副本，别照着旧路径新建一个
+- 库里读出的时间要过 `models.as_aware()` 再和 `utcnow()` 比（SQLite 存 naive，PG 存 aware）
+- frontend：Vue3 + TS + Router + Pinia + Element Plus；解析结果渲染**必须过 DOMPurify**
+  （文档内容是不可信输入）
+
+## 本机陷阱
+
+0. **两个仓库的顶层包都叫 `app`，装到一个 venv 里会互相遮蔽**（2026-08-26 起）。
+   本层装了 service 的 gateway 包（为了 `ddp_core`），而**两个发行包都声明
+   `packages = ["app"]`**。editable 安装的 `.pth` 按字母序加载，
+   `_editable_impl_deepdocparse_gateway.pth` 排在 backend 那个前面，于是：
+
+   | cwd | `import app` 解析到 |
+   |---|---|
+   | `backend/` | ✅ 本层的 `backend/app/` |
+   | 其它任何目录 | ⚠️ **gateway 的** `DeepDocParse/gateway/app/` |
+
+   本层的一切本来就都在 `backend/` 下跑（pytest、alembic、uvicorn、两个 eval
+   脚本、`start.sh local`），所以今天不出事。
+
+   **别指望它会拦你。** 从 `backend/` 以外的目录 import，本机会当场报
+   pydantic `extra_forbidden`（因为本机 `.env` 里有 Web 专属键，而 gateway 的
+   `Settings` 是 `extra="forbid"`）—— **但那是本机才有的运气**。
+   在**没有那些环境变量的地方（容器 / CI / 干净 checkout / systemd 不带 .env）**，
+   gateway 的 `Settings` 会**完全正常地加载成功**，你拿到一个错的 settings 对象，
+   直到第一次访问 `database_url` 才以 `AttributeError` 爆掉 ——
+   报错位置离病根十万八千里。实测（`env -i` 清空环境变量后从 `/tmp` 跑）：
+
+       app.config -> DeepDocParse/gateway/app/config.py
+       LOADED SILENTLY.  service_token=True  database_url=False
+
+   也就是说这是个**静默**陷阱，而且静默恰恰发生在最可能有人从别的 cwd
+   起进程的地方。所以：**一切都必须在 `backend/` 下跑。**
+
+   根治要给本层的包改名（`app` → `ddp_web`），那会动 alembic / start.sh local /
+   eval 脚本 / pytest 路径，是独立的一次改名，**留给阶段 2**。
+   在那之前：**别在仓库根目录直接 `python -c "import app..."`**。
+
+1. **端口**：MinIO 用 19000/19001（9000 被 gateway 占），PG 15432，Redis 16379，前端 5173。
+   **Windows 保留段会漂移**——重启 WSL 后重新分配，实测出现过 8079–8178 覆盖 8080，
+   uvicorn 直接 `WinError 10013`。先查 `netsh interface ipv4 show excludedportrange protocol=tcp`，
+   落在段里就换端口（真机验证时用过 18888），同时改 `PUBLIC_BASE_URL` 与前端的
+   `VITE_API_TARGET`，否则 service 回访与前端代理都会断
+2. **内存装不下所有运行时**：mineru(GPU 常驻) + TEI + VQA(CPU) 同时开会把 Docker 引擎压挂
+   （`docker ps` 卡住 / API 500）。真机 e2e 要分两段跑：
+   `e2e_web.py --phase parse --user X`（要 mineru+TEI）→ 停 mineru、起 VQA →
+   `--phase qa --user X`（要 VQA+TEI）。
+   WSL 停容器后不还内存，必要时 `wsl --shutdown` 强制回收（实测能收回 ~6GB）
+2. **`alembic.ini` 必须纯 ASCII** —— configparser 用系统 locale(GBK) 读它，中文注释直接崩
+3. **改了 backend 代码要重启 uvicorn**，否则真机验证会验到旧代码。
+   注意 `--reload` 模式下杀父进程**不会**释放端口：真正 listen 的是那个
+   `multiprocessing.spawn` 子进程，父进程一死它就不再热重载，却继续用旧代码服务 8080。
+   按命令行找 `python.exe ... spawn_main(parent_pid=<被杀的 pid>)` 一并杀掉。
+4. Docker Desktop 偶尔会把 Linux 引擎跑挂（API 返回 500 / `docker ps` 卡住），
+   重启 `D:\Docker\Docker Desktop.exe` 后轮询 `docker info` 等就绪
+5. Git Bash 会把 `docker run` 里的 `/data/xxx` 改写成 Windows 路径，
+   容器内路径要加 `MSYS_NO_PATHCONV=1`
+
+## 验证
+```bash
+cd backend && ../.venv/bin/python -m pytest            # 107 例，纯进程内，~5s（Windows 用 .venv/Scripts/）
+cd frontend && npm run build                            # 含 vue-tsc 类型检查
+python scripts/gen_config_docs.py --check               # 配置文档有没有过期
+python scripts/eval_citations.py --mode offline         # 出处评测（不需要模型/服务）
+env REDIS_URL=redis://localhost:6379/0 .venv/bin/python scripts/e2e_web.py   # 真环境全链路
+```
+- **pytest 必须在 `backend/` 下跑**：传 rootdir 之外的路径参数会让 `asyncio_mode` 退回 strict
+- 出处评测的指标定义见 `docs/EVAL.md`；**offline 模式的数字不能代表产品表现**（没有向量路）

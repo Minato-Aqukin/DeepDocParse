@@ -1,0 +1,128 @@
+# 后端单测（SQLite in-memory + respx，不需要 PG/MinIO）+ 前端类型检查与构建。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # backend 会 import service 仓库的 `ddp_core`（分块/裁图/分词/抽取 schema
+      # 的唯一一份实现），所以 CI 必须把那个仓库也拉下来。
+      #
+      # ⚠️ **它是私有仓库，需要一个有读权限的 token 存成 `SERVICE_REPO_TOKEN`。
+      #    这个 secret 还没有配 —— 配好之前本 job 会红在这一步。**
+      #    （红在 checkout、信息明确，好过红在一堆 ModuleNotFoundError 上。）
+      #
+      # 路径**故意与本地布局不同**：本地两个仓库是同级目录，
+      # 而 GitHub Actions 的 checkout 只能落在 workspace 内，所以放子目录。
+      # 这不影响什么 —— 下面是按显式路径装的，不依赖同级假设。
+      # 缺 secret 时 actions/checkout 报的是 `Repository not found`，
+      # **不会说"你忘了配 secret"**。先自己给一句说得清的错。
+      - name: 检查 SERVICE_REPO_TOKEN 是否已配
+        run: |
+          [ -n "${{ secrets.SERVICE_REPO_TOKEN }}" ] || {
+            echo "::error::缺 secret SERVICE_REPO_TOKEN（对 Minato-Aqukin/DeepDocParse 有读权限的 PAT）。"
+            echo "::error::backend 现在 import service 仓库的 ddp_core，CI 必须能 checkout 它。"
+            exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Minato-Aqukin/DeepDocParse
+          path: .service-repo
+          token: ${{ secrets.SERVICE_REPO_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          # **顺序不能反**：ddp_core 没写在 backend 的 dependencies 里
+          # （路径依赖没有可移植写法，uv.sources 只有 uv 读、pip 不读），
+          # 靠显式先装。理由见 backend/pyproject.toml 末尾
+          pip install -e ".service-repo/gateway[corpus]"
+          pip install -e "backend[dev]"
+          # 漏装就当场红，别拖到用例里。**验的是 models 不是 chunking** ——
+          # chunking 不需要 sqlalchemy，`[corpus]` 漏了它照样能 import，
+          # 于是这一步会绿着放过正要验的那件事（阶段 2a 二次验收指出）
+          python -c "import ddp_core.models, ddp_core.search, ddp_core.chunking"
+
+      - name: 单测
+        working-directory: backend
+        env:
+          # CI 是一次性容器，没有 .env。不开这个开关，任何走 lifespan 的用例
+          # 都会被 assert_secrets_configured 拦下（那正是它该做的事）
+          ALLOW_INSECURE_DEFAULTS: "true"
+        run: pytest -q
+
+      - name: 配置参考文档与 config.py 同步
+        env:
+          ALLOW_INSECURE_DEFAULTS: "true"
+        run: python scripts/gen_config_docs.py --check
+
+      # 单测跑 SQLite，迁移的真实目标是 PG（pgvector / HNSW / GIN 都只在那儿生效），
+      # 所以这一步必须连真库。downgrade 到 base 再上来，回滚路径才算验过
+      - name: 迁移双向可跑
+        working-directory: backend
+        env:
+          ALLOW_INSECURE_DEFAULTS: "true"
+          DATABASE_URL: postgresql+asyncpg://ddp:ddp@127.0.0.1:5432/deepdocparse
+        run: |
+          python -m alembic upgrade head
+          python -m alembic downgrade base
+          python -m alembic upgrade head
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ddp
+          POSTGRES_PASSWORD: ddp
+          POSTGRES_DB: deepdocparse
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ddp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # package-lock.json 的 resolved 全部指向 registry.npmmirror.com（仓库文件，不重生成）。
+      # npm 会把跨 host 的 tarball 当成 "remote" 类型直接拒掉（EALLOWREMOTE），
+      # 所以这里必须显式带上原 registry —— 与本机安装是同一条命令。
+      - name: 安装依赖
+        run: npm ci --registry=https://registry.npmmirror.com
+
+      - name: 类型检查 + 构建
+        run: npm run build
+
+      # 阶段 0b 建的组件单测。它抓的是类型检查够不着的那一类：
+      # 卸载后定时器还在跑、blob URL 没回收、ResizeObserver 没断。
+      - name: 组件单测
+        run: npm run test:unit
+
+      # 阶段 8 §3 的门禁全在 e2e 里：零 console error/warn · 全路由可达 ·
+      # 两套主题 · 零投影零字距 · 不破版 · 键盘可达。
+      # **必须进 CI** —— 一次性检查挡不住下一个 commit 的退化。
+      - name: 装 Playwright 浏览器
+        run: npx playwright install --with-deps chromium
+
+      - name: 端到端门禁
+        run: npm run test:e2e

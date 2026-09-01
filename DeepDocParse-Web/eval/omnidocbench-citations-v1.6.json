@@ -1,0 +1,907 @@
+{
+  "description": "OmniDocBench v1.6 五域重建中的四个真实域；每域固定 10 个互斥单页问题。原图与标注不随仓库分发。",
+  "samples": [
+    {
+      "id": "论文双栏/01-scientific-method",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-bd9166d9-2c1a-4e3c-87f3-717e2474c77e.png",
+        "slice": "论文双栏"
+      },
+      "question": "How does psychology generate answers to questions that matter to students?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 0,
+        "text_anchor": "psychology applies the scientific method",
+        "answer_contains": [
+          "scientific method"
+        ]
+      },
+      "attributes": [
+        "论文双栏",
+        "英文",
+        "正文"
+      ]
+    },
+    {
+      "id": "论文双栏/02-exist-benchmarks",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-83587fc3-fe55-4e51-a3c5-f0664edba743.png",
+        "slice": "论文双栏"
+      },
+      "question": "How many exact invariants did EXIST synthesize within the 300-second timeout?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 1,
+        "text_anchor": "generate these 14 invariants",
+        "answer_contains": [
+          "14"
+        ]
+      },
+      "attributes": [
+        "论文双栏",
+        "英文",
+        "短事实"
+      ]
+    },
+    {
+      "id": "论文双栏/03-mpox-age-group",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-232d386f-6c9d-4b50-9463-89dedce995e5.png",
+        "slice": "论文双栏"
+      },
+      "question": "Which age group's transmission-rate reduction was most effective for mpox control?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 2,
+        "text_anchor": "45-55 years old is the most effective",
+        "answer_contains": [
+          "45-55"
+        ]
+      },
+      "attributes": [
+        "论文双栏",
+        "英文",
+        "短事实"
+      ]
+    },
+    {
+      "id": "论文双栏/04-python-projects",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-49746735-505c-442d-b3f6-c55b1bf9e48b.png",
+        "slice": "论文双栏"
+      },
+      "question": "How many Python projects were extracted from the GitHub Archive database?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 3,
+        "text_anchor": "749609 projects in total",
+        "answer_contains": [
+          "749609"
+        ]
+      },
+      "attributes": [
+        "论文双栏",
+        "英文",
+        "短事实"
+      ]
+    },
+    {
+      "id": "论文双栏/05-body-fat-method",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "docstructbench_llm-raw-scihub-o.O-ajhb.10190.pdf_5.jpg",
+        "slice": "论文双栏"
+      },
+      "question": "How was percent body fat estimated in Figure 1?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 4,
+        "text_anchor": "Percent fat was estimated from seven skinfolds",
+        "answer_contains": [
+          "seven skinfolds"
+        ]
+      },
+      "attributes": [
+        "论文双栏",
+        "英文",
+        "图注"
+      ]
+    },
+    {
+      "id": "论文双栏/06-atypical-cis",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "docstructbench_llm-raw-scihub-o.O-ana.20363.pdf_5.jpg",
+        "slice": "论文双栏"
+      },
+      "question": "How many patients had an initial attack different from classical CISs?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 5,
+        "text_anchor": "only 30 patients ( 9.4% )",
+        "answer_contains": [
+          "30",
+          "9.4%"
+        ]
+      },
+      "attributes": [
+        "论文双栏",
+        "英文",
+        "短事实"
+      ]
+    },
+    {
+      "id": "论文双栏/07-bolus-recording",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "docstructbench_llm-raw-scihub-o.O-bf00326833.pdf_3.jpg",
+        "slice": "论文双栏"
+      },
+      "question": "In the time-distance diagram, how much recording time do 30 frames represent?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 6,
+        "text_anchor": "30 frames = 2 sec",
+        "answer_contains": [
+          "2 sec"
+        ]
+      },
+      "attributes": [
+        "论文双栏",
+        "英文",
+        "图注"
+      ]
+    },
+    {
+      "id": "论文双栏/08-reactor-volume",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "docstructbench_llm-raw-scihub-o.O-ceat.200600266.pdf_2.jpg",
+        "slice": "论文双栏"
+      },
+      "question": "What was the effective volume of the membrane bioreactor?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 7,
+        "text_anchor": "effective volume was 40.5 L",
+        "answer_contains": [
+          "40.5 L"
+        ]
+      },
+      "attributes": [
+        "论文双栏",
+        "英文",
+        "短事实"
+      ]
+    },
+    {
+      "id": "论文双栏/09-hf-shift",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "docstructbench_llm-raw-scihub-o.O-chem.200700118.pdf_7.jpg",
+        "slice": "论文双栏"
+      },
+      "question": "What experimental HF wavenumber shift is reported for the complex?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 8,
+        "text_anchor": "experimental (HF) shift of",
+        "answer_contains": [
+          "- 4 3 5. 3"
+        ]
+      },
+      "attributes": [
+        "论文双栏",
+        "英文",
+        "公式行内"
+      ]
+    },
+    {
+      "id": "论文双栏/10-dichlorosilane-caution",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "docstructbench_llm-raw-scihub-o.O-chem.200701412.pdf_10.jpg",
+        "slice": "论文双栏"
+      },
+      "question": "Why does the experimental section warn that dichlorosilane handling is not trivial?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 9,
+        "text_anchor": "low boiling point of",
+        "answer_contains": [
+          "8. 4",
+          "oxidative and hydrolytic sensitivity"
+        ]
+      },
+      "attributes": [
+        "论文双栏",
+        "英文",
+        "正文"
+      ]
+    },
+    {
+      "id": "公式密集/01-cochain-case",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-cdb92c2f-f43f-45ef-ace7-91d4664a7834.png",
+        "slice": "公式密集"
+      },
+      "question": "Locate equation (12), the piecewise nth-cochain conformal antilinearity condition.",
+      "expect": {
+        "answerable": true,
+        "page_idx": 0,
+        "text_anchor": "\\tag{12}",
+        "answer_contains": [
+          "i = n"
+        ]
+      },
+      "attributes": [
+        "公式密集",
+        "英文",
+        "独立公式"
+      ]
+    },
+    {
+      "id": "公式密集/02-hom-leibniz",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-d5c82c0e-2a7d-4573-9dce-bff939504367.png",
+        "slice": "公式密集"
+      },
+      "question": "Where is the Hom-Leibniz conformal identity checked?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 1,
+        "text_anchor": "(c) Hom-Leibniz conformal identity:",
+        "answer_contains": [
+          "Hom-Leibniz"
+        ]
+      },
+      "attributes": [
+        "公式密集",
+        "英文",
+        "独立公式"
+      ]
+    },
+    {
+      "id": "公式密集/03-inverse-metric",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-21967f5d-667d-488e-a5b3-76b9d6f53656.png",
+        "slice": "公式密集"
+      },
+      "question": "Find equation (2.4) defining H^{mu nu} to first order in h.",
+      "expect": {
+        "answerable": true,
+        "page_idx": 2,
+        "text_anchor": "\\tag{2.4}",
+        "answer_contains": [
+          "(2.4)"
+        ]
+      },
+      "attributes": [
+        "公式密集",
+        "英文",
+        "独立公式"
+      ]
+    },
+    {
+      "id": "公式密集/04-bound-A",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-4009495f-1a7c-46dc-9f52-7f80f5f0cc5c.png",
+        "slice": "公式密集"
+      },
+      "question": "Which displayed bound ends with one hundredth of A?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 3,
+        "text_anchor": "\\frac{1}{100}A",
+        "answer_contains": [
+          "1/100"
+        ]
+      },
+      "attributes": [
+        "公式密集",
+        "英文",
+        "独立公式"
+      ]
+    },
+    {
+      "id": "公式密集/05-young-e4",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-617783f8-bbd6-4faf-bca6-a05222c29314.png",
+        "slice": "公式密集"
+      },
+      "question": "Locate the application of Young's inequality labelled E.4.",
+      "expect": {
+        "answerable": true,
+        "page_idx": 4,
+        "text_anchor": "\\tag{E.4}",
+        "answer_contains": [
+          "E.4"
+        ]
+      },
+      "attributes": [
+        "公式密集",
+        "英文",
+        "独立公式"
+      ]
+    },
+    {
+      "id": "公式密集/06-young-a3",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-404e0471-bd71-426a-8e5a-81b8327f88e5.png",
+        "slice": "公式密集"
+      },
+      "question": "Locate the matrix Young's inequality labelled A.3.",
+      "expect": {
+        "answerable": true,
+        "page_idx": 5,
+        "text_anchor": "\\tag{A.3}",
+        "answer_contains": [
+          "A.3"
+        ]
+      },
+      "attributes": [
+        "公式密集",
+        "英文",
+        "独立公式"
+      ]
+    },
+    {
+      "id": "公式密集/07-second-derivative",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-e4053f20-e6e6-430e-83ef-db298a3199aa.png",
+        "slice": "公式密集"
+      },
+      "question": "Find the displayed expression for the second derivative D² phi_{tau,j}(x).",
+      "expect": {
+        "answerable": true,
+        "page_idx": 6,
+        "text_anchor": "D^{2}\\varphi_{\\tau,j}(x)",
+        "answer_contains": [
+          "D^{2}"
+        ]
+      },
+      "attributes": [
+        "公式密集",
+        "英文",
+        "独立公式"
+      ]
+    },
+    {
+      "id": "公式密集/08-r-sharp",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-8524b54d-6372-4f9e-a662-5254349cfda3.png",
+        "slice": "公式密集"
+      },
+      "question": "Where is R_n sharp defined using the inverse of Psi_n?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 7,
+        "text_anchor": "{R}_{n}^{\\# } \\mathrel:=",
+        "answer_contains": [
+          "Psi"
+        ]
+      },
+      "attributes": [
+        "公式密集",
+        "英文",
+        "独立公式"
+      ]
+    },
+    {
+      "id": "公式密集/09-conditional-expectation",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-a6d06208-475c-4c6e-9d84-858f7e2ecf72.png",
+        "slice": "公式密集"
+      },
+      "question": "Find the conditional expectation of the squared norm C(X_{k+1}) minus Y_{k+1}.",
+      "expect": {
+        "answerable": true,
+        "page_idx": 8,
+        "text_anchor": "C(X_{k+1})-Y_{k+1}",
+        "answer_contains": [
+          "mathcal{F}"
+        ]
+      },
+      "attributes": [
+        "公式密集",
+        "英文",
+        "独立公式"
+      ]
+    },
+    {
+      "id": "公式密集/10-alpha-moment",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-c7fec126-2adb-4094-8110-5d81a92e05b0.png",
+        "slice": "公式密集"
+      },
+      "question": "Locate the alpha moment bound labelled A.52.",
+      "expect": {
+        "answerable": true,
+        "page_idx": 9,
+        "text_anchor": "\\tag{A.52}",
+        "answer_contains": [
+          "A.52"
+        ]
+      },
+      "attributes": [
+        "公式密集",
+        "英文",
+        "独立公式"
+      ]
+    },
+    {
+      "id": "图表引用/01-spline-curvature",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-bb98165a-8033-4ea4-a527-58ac974f2c32.png",
+        "slice": "图表引用"
+      },
+      "question": "What two endpoint second derivatives are shown for the curvature-adjusted cubic spline in Figure 5.16?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 0,
+        "bbox": [333.7542807416051, 780.6969408350645, 832.4366622937622, 1166.977917047568],
+        "text_anchor": "Figure 5.16 The curvature adjusted cubic spline",
+        "answer_contains": [
+          "0.3",
+          "3.3"
+        ]
+      },
+      "attributes": [
+        "图表引用",
+        "英文",
+        "图注"
+      ]
+    },
+    {
+      "id": "图表引用/02-adaptive-step",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-8c21f73a-b849-4f71-9573-57d50fbcc180.png",
+        "slice": "图表引用"
+      },
+      "question": "To what value is the step size reduced in the adaptive method shown in Figure 9.11?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 1,
+        "bbox": [333.0795, 333.0736, 1245.0396, 443.00660000000005],
+        "text_anchor": "Reduction of the step size to",
+        "answer_contains": [
+          "h/2"
+        ]
+      },
+      "attributes": [
+        "图表引用",
+        "英文",
+        "图注"
+      ]
+    },
+    {
+      "id": "图表引用/03-circle-method",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-0c8b5994-685d-4b1b-816a-74f43aff8a53.png",
+        "slice": "图表引用"
+      },
+      "question": "含根式分式的值域题在图中被转换成什么几何量的范围问题？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 2,
+        "bbox": [1005.8829625340323, 886.351543233656, 1397.6950046288111, 1245.0772787319413],
+        "text_anchor": "最后作图分析求出AB斜率范围即可",
+        "answer_contains": [
+          "AB斜率范围"
+        ]
+      },
+      "attributes": [
+        "图表引用",
+        "中文",
+        "示意图"
+      ]
+    },
+    {
+      "id": "图表引用/04-chord-minimum",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-374e9c4b-6fdb-4176-8ac7-519b86d97e40.png",
+        "slice": "图表引用"
+      },
+      "question": "图中圆与直线相交时，弦 AB 的最小长度是多少？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 3,
+        "bbox": [149.0254, 1009.0446000000001, 437.9792, 1359.8946],
+        "text_anchor": "此时$\\left| A B \\right| = 2",
+        "answer_contains": [
+          "4"
+        ]
+      },
+      "attributes": [
+        "图表引用",
+        "中文",
+        "几何图"
+      ]
+    },
+    {
+      "id": "图表引用/05-logistics-domains",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-4254323d-8940-46fc-8cbb-b255c26b9693.png",
+        "slice": "图表引用"
+      },
+      "question": "多院区智慧后勤图将管理分成哪三个领域？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 4,
+        "bbox": [783.0312000000004, 370.841552734375, 1679.4041212059146, 1025.1413347374735],
+        "text_anchor": "全面预算管理，全成本核算",
+        "answer_contains": [
+          "安全管理",
+          "能源管理",
+          "运维管理"
+        ]
+      },
+      "attributes": [
+        "图表引用",
+        "中文",
+        "信息图"
+      ]
+    },
+    {
+      "id": "图表引用/06-rope-spring",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-d5f79be0-5d57-4849-9897-6106dd32117a.png",
+        "slice": "图表引用"
+      },
+      "question": "右侧胡克定律图像的斜率表示哪个物理量？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 5,
+        "bbox": [1186.0275000000001, 1230.0801000000001, 1405.05, 1426.0883000000001],
+        "text_anchor": "其斜率 $\\tan \\alpha = { \\frac { F } { x } } = k$",
+        "answer_contains": [
+          "劲度系数",
+          "k"
+        ]
+      },
+      "attributes": [
+        "图表引用",
+        "中文",
+        "物理图像"
+      ]
+    },
+    {
+      "id": "图表引用/07-mortgage-npl",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-f8fad378-8ee9-4bb0-b195-35a4d55f3113.png",
+        "slice": "图表引用"
+      },
+      "question": "图9所述银行中，哪家个人住房按揭贷款不良率最高，数值是多少？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 6,
+        "bbox": [343.0396, 351.0839, 1539.047, 1159.9101],
+        "text_anchor": "浦发银行的不良率最高，为 0.58%",
+        "answer_contains": [
+          "浦发银行",
+          "0.58%"
+        ]
+      },
+      "attributes": [
+        "图表引用",
+        "中文",
+        "统计图"
+      ]
+    },
+    {
+      "id": "图表引用/08-jinzhongzi-eps",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-7bfad9a4-c5b7-40f3-8600-be513d1b1aaa.png",
+        "slice": "图表引用"
+      },
+      "question": "该页右侧走势图的标题是什么？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 7,
+        "bbox": [1138.9444, 496.1019, 1582.051, 755.0292],
+        "text_anchor": "相对大盘走势",
+        "answer_contains": [
+          "相对大盘走势"
+        ]
+      },
+      "attributes": [
+        "图表引用",
+        "中文",
+        "走势图"
+      ]
+    },
+    {
+      "id": "图表引用/09-pharma-models",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-b4d4cf5b-0a0e-454b-8220-8c7f58402791.png",
+        "slice": "图表引用"
+      },
+      "question": "表4第一行的配图对应哪一种中国医药电商模式？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 8,
+        "bbox": [1029.7911724884593, 1184.6373550150977, 1389.5069940197598, 1434.1901976753804],
+        "text_anchor": "B2B 医药电商",
+        "answer_contains": [
+          "B2B"
+        ]
+      },
+      "attributes": [
+        "图表引用",
+        "中文",
+        "表内配图"
+      ]
+    },
+    {
+      "id": "图表引用/10-water-splitting",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-dbed9c07-e155-4ba1-92f9-a2962dc9a8f9.png",
+        "slice": "图表引用"
+      },
+      "question": "Which panel in Figure 4 shows the LSV of the CW@Cu electrode?",
+      "expect": {
+        "answerable": true,
+        "page_idx": 9,
+        "bbox": [130.20101037032043, 181.48606601354265, 604.0642343654923, 534.4982566152385],
+        "text_anchor": "the LSV of CW@Cu",
+        "answer_contains": [
+          "a"
+        ]
+      },
+      "attributes": [
+        "图表引用",
+        "英文",
+        "多子图"
+      ]
+    },
+    {
+      "id": "扫描版老手册/01-materials-manual",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-9d14b692-a01c-45bd-9726-929bd3c4b726.png",
+        "slice": "扫描版老手册"
+      },
+      "question": "《紧固件材料手册》的公英制常用单位及换算表位于哪个附录？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 0,
+        "text_anchor": "附录 A 公英制常用单位及换算表",
+        "answer_contains": [
+          "附录 A"
+        ]
+      },
+      "attributes": [
+        "扫描版老手册",
+        "中文",
+        "技术手册"
+      ]
+    },
+    {
+      "id": "扫描版老手册/02-chassis-volume",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-422d6037-0834-47e5-932a-408286b37ec5.png",
+        "slice": "扫描版老手册"
+      },
+      "question": "《汽车底盘设计》这本技术手册是哪一卷？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 1,
+        "text_anchor": "（下卷）系统设计",
+        "answer_contains": [
+          "下卷"
+        ]
+      },
+      "attributes": [
+        "扫描版老手册",
+        "中英混排",
+        "技术手册"
+      ]
+    },
+    {
+      "id": "扫描版老手册/03-oscillator-types",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "docstructbench_dianzishu_zhongwenzaixian-o.O-61465568.pdf_186.jpg",
+        "slice": "扫描版老手册"
+      },
+      "question": "手册列出的正弦波振荡电路包括哪一种三点式振荡电路？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 2,
+        "text_anchor": "电感三点式振荡电路、电容三点式振荡电路",
+        "answer_contains": [
+          "电感三点式",
+          "电容三点式"
+        ]
+      },
+      "attributes": [
+        "扫描版老手册",
+        "中文",
+        "技术手册"
+      ]
+    },
+    {
+      "id": "扫描版老手册/04-keyboard-lock",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "docstructbench_dianzishu_zhongwenzaixian-o.O-61522126.pdf_206.jpg",
+        "slice": "扫描版老手册"
+      },
+      "question": "终端手册说明如何开启或关闭键盘锁？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 3,
+        "text_anchor": "按“键盘锁”快捷键开启或关闭键盘锁",
+        "answer_contains": [
+          "键盘锁",
+          "快捷键"
+        ]
+      },
+      "attributes": [
+        "扫描版老手册",
+        "中文",
+        "操作表格"
+      ]
+    },
+    {
+      "id": "扫描版老手册/05-mtbf",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "book_zh_DLT10902008_extracted_page_8.png",
+        "slice": "扫描版老手册"
+      },
+      "question": "DL/T 1090—2008 中 MTBF 用可用小时数除以什么？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 4,
+        "text_anchor": "串联补偿装置的强迫停运的次数",
+        "answer_contains": [
+          "强迫停运",
+          "FOT"
+        ]
+      },
+      "attributes": [
+        "扫描版老手册",
+        "中文",
+        "旧标准"
+      ]
+    },
+    {
+      "id": "扫描版老手册/06-dcs-availability",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "book_zh_DLT10562007_extracted_page_17.png",
+        "slice": "扫描版老手册"
+      },
+      "question": "DL/T 1056—2007 对非 DCS 机组的可用率统计有何规定？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 5,
+        "text_anchor": "非DCS机组可不统计可用率",
+        "answer_contains": [
+          "可不统计可用率"
+        ]
+      },
+      "attributes": [
+        "扫描版老手册",
+        "中文",
+        "旧标准"
+      ]
+    },
+    {
+      "id": "扫描版老手册/07-mill-alignment",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "book_zh_GBT 50744-2011_extracted_page_67.png",
+        "slice": "扫描版老手册"
+      },
+      "question": "连轧机相邻机架平行度测量宜以哪台轧机为基准？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 6,
+        "bbox": [80, 276, 536, 393.3333333333333],
+        "text_anchor": "宜以中间 轧机为基准向两侧轧机延伸测量",
+        "answer_contains": [
+          "中间轧机"
+        ]
+      },
+      "attributes": [
+        "扫描版老手册",
+        "中文",
+        "旧规范"
+      ]
+    },
+    {
+      "id": "扫描版老手册/08-acid-method",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "book_zh_GB149361994_extracted_page_7.png",
+        "slice": "扫描版老手册"
+      },
+      "question": "GB 14936-94 的盐酸可溶物操作方法取多少 B 液？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 7,
+        "text_anchor": "取 B 液 5 mL",
+        "answer_contains": [
+          "5 mL"
+        ]
+      },
+      "attributes": [
+        "扫描版老手册",
+        "中文",
+        "旧标准"
+      ]
+    },
+    {
+      "id": "扫描版老手册/09-sealant-gap",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "book_zh_JGJ1022003_extracted_page_27.png",
+        "slice": "扫描版老手册"
+      },
+      "question": "JGJ 102—2003 规定胶缝厚度不应小于多少？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 8,
+        "text_anchor": "并不应小于\n6mm",
+        "answer_contains": [
+          "6mm"
+        ]
+      },
+      "attributes": [
+        "扫描版老手册",
+        "中文",
+        "旧规范"
+      ]
+    },
+    {
+      "id": "扫描版老手册/10-esd-voltage",
+      "source": {
+        "kind": "omnidocbench",
+        "image_path": "page-fe0bca35-a6c4-4591-a6dc-c5649c01ba6d.png",
+        "slice": "扫描版老手册"
+      },
+      "question": "静电放电试验等级 4 的接触放电试验电压是多少？",
+      "expect": {
+        "answerable": true,
+        "page_idx": 9,
+        "text_anchor": "1a—接触放电 1b—空气放电",
+        "answer_contains": [
+          "8",
+          "kV"
+        ]
+      },
+      "attributes": [
+        "扫描版老手册",
+        "中文",
+        "技术手册"
+      ]
+    }
+  ]
+}

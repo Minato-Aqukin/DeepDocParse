@@ -1,0 +1,10 @@
+/** API 层统一出口。加新域 = 新建一个模块并在这里挂上。 */
+export { http, downloadAs, TOKEN_KEY } from './http'
+export { authApi } from './auth'
+export { documentsApi, type DocumentQuery } from './documents'
+export { conversationsApi, askStream, type AskHandlers } from './conversations'
+export { searchApi } from './search'
+export { extractionsApi, buildSchema, readSchema } from './extractions'
+export { keysApi, type CreateKeyPayload } from './keys'
+export { usageApi } from './usage'
+export { knowledgeApi } from './knowledge'

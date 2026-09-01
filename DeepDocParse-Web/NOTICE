@@ -1,0 +1,42 @@
+DeepDocParse-Web
+Copyright 2026 The DeepDocParse Authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+MinerU attribution (required -- do not remove)
+--------------------------------------------------------------------------------
+
+Document parsing in DeepDocParse-Web is performed by the DeepDocParse service
+layer, and is powered by MinerU
+(https://github.com/opendatalab/MinerU).
+
+MinerU adds terms on top of Apache-2.0. Section 2 requires that any product
+providing an online service built on MinerU state clearly and prominently, in
+the product UI or in public documentation, that it uses MinerU; section 3
+terminates the license automatically -- without notice -- on violation.
+DeepDocParse-Web is exactly such a service -- it is the user-facing product --
+so this attribution appears in:
+
+  - this NOTICE file
+  - README.md, at the top of the page
+  - the product UI, in a footer shown on every page (AppShell.vue)
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+This repository stores user data and proxies the DeepDocParse service layer over
+HTTP. It imports no engine code and no service code (see CLAUDE.md, rule 1), so
+the components below are dependencies of a deployment, not derivative works.
+
+  MinerU (OpenDataLab)         Apache-2.0 + additional terms
+                               https://github.com/opendatalab/MinerU
+  DeepSeek-OCR                 MIT
+                               https://github.com/deepseek-ai/DeepSeek-OCR
+  deepseek-ocr.rs              Apache-2.0
+                               https://github.com/TimmyOVO/deepseek-ocr.rs
+  Text Embeddings Inference    Apache-2.0
+                               https://github.com/huggingface/text-embeddings-inference
+  BAAI/bge-m3 (FlagEmbedding)  MIT
+                               https://huggingface.co/BAAI/bge-m3

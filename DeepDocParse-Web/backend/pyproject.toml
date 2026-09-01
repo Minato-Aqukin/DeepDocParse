@@ -1,0 +1,67 @@
+[project]
+name = "deepdocparse-web-backend"
+version = "0.1.0"
+description = "OCR Web 后端：用户/APIkey/额度/归档/代理"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "pydantic-settings>=2.4",
+    "python-jose[cryptography]>=3.3",   # JWT
+    "bcrypt>=4.1",                      # 直接用官方库（passlib 已停更且与 bcrypt 4.x 冲突）
+    "minio>=7.2",
+    "python-multipart>=0.0.9",          # FastAPI 接收 multipart 上传的前提
+    "pgvector>=0.3",                    # 向量列与 <=> 检索（仅 PostgreSQL 生效）
+    "pypdfium2>=4.30",                  # 出处区域裁剪（service 侧 mcp_server 同款）
+    "pillow>=10.0",                     # 同上：裁剪后的位图处理
+    "redis>=5.0",                       # 多副本：限速令牌桶与对账选主
+    "prometheus-fastapi-instrumentator>=7.0",
+    # D2 中文分词。**软依赖**：装不上时 ddp_core/tokenize.py 退回 CJK 二元组并
+    # 在启动日志与 model_meta 里说明，不静默用一个更差的分词器
+    "jieba>=0.42",
+]
+
+# ---------------------------------------------------------------------------
+# ⚠️ 本层依赖 service 仓库的 `ddp_core` 包（分块 / 裁图 / 分词 / 抽取 schema
+#    的**唯一一份**实现），但它**不写在上面的 dependencies 里**。
+#
+# 为什么不写：它只能用路径依赖表达，而路径依赖没有可移植的写法 ——
+#   · `[tool.uv.sources]` 只有 uv 的 project 接口读，**pip 从不读**，
+#     而本项目全程用 pip（deploy/docker.bash 与 CI 都是 `pip install -e`）。
+#     写上去的效果是 `pip install -e backend` 直接失败：
+#     `No matching distribution found for deepdocparse-gateway`（实测）
+#   · PEP 508 的 direct reference 要求绝对 URL，写死路径不可移植
+#
+# 所以约定是**显式按顺序装**，先 gateway 再 backend：
+#
+#     pip install -e "../DeepDocParse/gateway[corpus]"
+#     pip install -e "backend[dev]"
+#
+# **注意那个 `[corpus]`**：`ddp_core` 里碰数据库的部分（models 等）需要
+# SQLAlchemy，而 gateway 自己是无状态的、不装 ORM。本层要的是全套。
+#
+# deploy/docker.bash 与 .github/workflows/ci.yml 都已按这个顺序来。
+# 漏装的表现是 import 期 `ModuleNotFoundError: No module named 'ddp_core'`，
+# 响亮且指向明确，不会静默。
+# ---------------------------------------------------------------------------
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21", "aiosqlite>=0.20",
+    "redis>=5.0",   # 仅 scripts/e2e_web.py 用：核对 service 侧的检索路径计数
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
