@@ -74,16 +74,18 @@ f95d06201425d8290bbed910af1833e799025f85c48d3d3f604cd77fd4571ddb  models.local.y
 
 ## 5. 对象存储清单
 
-**未采集。** 本机 docker 未运行，MinIO 里没有可用数据；旧生产快照也不在本机。
+**未采集。** 本机 MinIO 里没有可用数据，旧生产快照也不在本机。
 
-> ⛔ 这是一个**未关闭的前置条件**：`§11.4` 要求迁移器至少做三次全量演练
-> （空库 / 生产快照 / 对抗数据集），其中生产快照那一轮需要真实的
-> PostgreSQL dump 与 MinIO 清单。切换窗口开始前必须补齐：
+> ⛔ 这是一个**未关闭的前置条件**。切换窗口开始前必须补齐：
 >
 > ```bash
 > pg_dump  --format=custom deepdocparse > baseline/pg.dump
 > mc ls --recursive --json localmin/deepdocparse > baseline/minio.jsonl
 > ```
+
+**数据库那一半已经补上了**：三轮迁移演练（空库 / 本机 dev 库快照 /
+对抗数据集）已于 2026-09-02 跑完，记录在 `docs/refactor/MIGRATION-DRILLS.md`。
+对象存储那一半仍然欠着 —— `ObjectChecker` 写好了但没有数据可验。
 
 ## 6. 运行环境基线
 

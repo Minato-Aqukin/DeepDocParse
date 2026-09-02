@@ -1,7 +1,7 @@
 """持久任务队列、outbox、事件去重，以及账号层剥离后的 actor 边界。
 
-Revision ID: 0013_persistent_tasks
-Revises: 0012_knowledge_layer
+Revision ID: 0013
+Revises: 0012
 
 ## 这一版做了两件事
 
@@ -34,8 +34,10 @@ control schema（Go 拥有）。语料侧因此：
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0013_persistent_tasks"
-down_revision = "0012_knowledge_layer"
+# 编号与既有迁移保持同一形状（纯数字字符串）——
+# 混用两种命名的表现是 alembic 直接 KeyError，第一次演练就撞到了
+revision = "0013"
+down_revision = "0012"
 branch_labels = None
 depends_on = None
 

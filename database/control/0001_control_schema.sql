@@ -218,9 +218,11 @@ CREATE INDEX outbox_pending_idx ON control.control_outbox (next_attempt_at)
     WHERE delivered_at IS NULL;
 
 -- ------------------------------------------------------------ 迁移账本
-
-CREATE TABLE control.schema_migrations (
-    version    TEXT PRIMARY KEY,
-    applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    checksum   TEXT NOT NULL
-);
+--
+-- **不在这里建。** 账本必须先于第一个迁移存在（否则第一次跑时查不到账本，
+-- 0001 会被重复执行），所以它由迁移器的 bootstrap 建
+-- （`internal/migrate/migrate.go` 的 bootstrapSQL）。
+--
+-- 在这里再建一次的表现是：全新库上 `control-migrate up` 直接
+-- `relation "schema_migrations" already exists` —— 2026-09-02 的第一次
+-- 迁移演练当场撞到。

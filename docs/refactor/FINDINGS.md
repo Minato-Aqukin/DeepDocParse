@@ -132,3 +132,46 @@ channel 上让 `httptest.Server.Close()` 一直等在途请求；守卫红的时
 
 **这条的教训比它本身大**：守卫的名单如果只列"现在有什么"，
 它就抓不到"以前有、现在没有"的引用 —— 而改名恰恰只产生后一类残留。
+
+## F-7 · `control.schema_migrations` 建了两次，全新库跑不起来
+
+**严重度**：高（从零部署直接失败）
+**发现方式**：第一轮空库迁移演练。
+
+`0001_control_schema.sql` 里建了 `control.schema_migrations`，而迁移器的
+bootstrap 已经建过它（账本必须先于第一个迁移存在，否则第一次跑时查不到账本、
+0001 会被重复执行）。全新库上 `control-migrate up` 直接
+`relation "schema_migrations" already exists`。
+
+**这是"从零部署"路径独有的缺陷**：任何已有库都不会撞到它，而开发机上
+从来没有"全新库"—— 这正是空库演练存在的理由。
+
+**处理**：从 0001 里删掉建表，账本归 bootstrap 独有。
+
+## F-8 · 迁移 revision id 混用两种命名，alembic 直接 KeyError
+
+**严重度**：高（迁移根本跑不起来）
+**发现方式**：第二轮生产快照演练。
+
+`0013` 的 revision id 写成 `"0013_persistent_tasks"`、down_revision 写成
+`"0012_knowledge_layer"`，而既有迁移用的是纯数字（`revision = "0012"`）。
+alembic 解析版本图时 `KeyError: '0012_knowledge_layer'`。
+
+**本机单测碰不到它**：单测走 `Base.metadata.create_all`，一行 alembic 都不跑。
+只有真的对着一个库执行迁移才会发现 —— 而那正是演练存在的理由。
+
+**处理**：改成纯数字，并在文件里写清"与既有迁移保持同一形状"。
+
+## F-9 · dry-run 必然报 4 条 FAIL
+
+**严重度**：中（会训练人忽略红色）
+**发现方式**：第二轮演练。
+
+迁移器第一版的 dry-run 会跑完整的 12 项对账，而 dry-run 一行都没写 ——
+4 条行数对账**必然**失败。
+
+**必然失败的检查比没有检查更糟**：它会让人学会"dry-run 红是正常的"，
+而那一刻真正的问题就再也看不见了。
+
+**处理**：dry-run 只做**源侧预检**（数据本身有没有问题，必须通过才允许进入
+切换窗口），完整对账留给 `--apply`。
