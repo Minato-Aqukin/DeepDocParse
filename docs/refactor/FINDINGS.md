@@ -113,3 +113,22 @@ channel 上让 `httptest.Server.Close()` 一直等在途请求；守卫红的时
 **改法**：老老实实做成结构断言（读 `up.Transport().Proxy`），
 并在用例注释里写清"为什么这里不能做行为测试"。
 **测不出来的东西不要假装在测。**
+
+## F-6 · 包改名后，迁移里残留的 `from app.*` 没有任何守卫抓得到
+
+**严重度**：高（全新部署会死在迁移这一步）
+**发现方式**：写 0013 迁移时顺手 grep `from app\.`，在
+`0008_citation_rank_and_backfill.py` 里发现一处残留。
+
+`test_migrations_and_scripts_import_modules_that_exist` 只查
+"**本项目的包**存不存在"，而它的名单是 `("ddp_corpus.", "ddp_core.")` ——
+改名之后 `app` 压根不在名单里，于是残留的 `from app.backfill import backfill`
+**一条守卫都碰不到**：单测不 import 迁移，本机跑迁移时那一句在函数体内
+（只有真跑到那一步才执行），于是它会一路绿到全新部署。
+
+**处理**：加 `DEAD_PREFIXES` 与
+`test_migrations_and_scripts_do_not_import_the_dead_app_package`，
+把"引用已经不存在的顶层包"变成一条独立的守卫。做过变异确认。
+
+**这条的教训比它本身大**：守卫的名单如果只列"现在有什么"，
+它就抓不到"以前有、现在没有"的引用 —— 而改名恰恰只产生后一类残留。

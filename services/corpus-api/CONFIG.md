@@ -16,7 +16,7 @@
 **`VITE_DEFAULT_ENGINE` 要与 `DEFAULT_PARSE_ENGINE`、`infra/registry/models.yaml`
 三者对齐** —— 任一处对不上，上传会在网关侧收 404 unknown_engine。
 
-共 **63** 项。
+共 **70** 项。
 
 ## 本层资源
 
@@ -67,7 +67,19 @@
 | `COMPILE_VISION_ENABLED` | `bool` | `True` | DDP-Compile v1：视觉原子在入库时裁图并由视觉模型生成派生理解。 关掉不是“等价的轻量模式”：文档仍可索引，但 compile_degraded 会明确记录 vision_unavailable，图表类问题不会假装已获得视觉理解。 |
 | `COMPILE_VISION_CONCURRENCY` | `int` | `2` | 单文档同时调用 VLM 的原子数 |
 | `COMPILE_VISION_TIMEOUT` | `float` | `120.0` | 每个原子的 VLM 超时（秒） |
-| `INDEX_LEASE_SECONDS` | `int` | `300` | 索引 worker 租约：heartbeat 续租，进程崩溃后 reconcile 才能安全接管。 heartbeat 必须显著短于 lease；generation fencing 保证旧 worker 复活也写不进去。 worker 无 heartbeat 后多久允许接管 |
+
+## 持久任务队列
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `TASK_LEASE_SECONDS` | `int` | `300` | 领取后多久没续租就允许被接管。**太短会让慢任务被反复抢**（每次接管 generation +1，旧的那次算完也写不进去，纯浪费）；太长会让崩溃后的 恢复变慢。取值应当明显大于单个任务的心跳周期 |
+| `TASK_HEARTBEAT_SECONDS` | `int` | `30` | worker 的续租周期。必须显著小于 lease，否则一次 GC 停顿就够超时 |
+| `TASK_CONCURRENCY_INDEX` | `int` | `2` | 每种任务各自的并发。**不能共用一个无量纲总并发**（§10）： embedding 是网络等待、编译要打视觉模型、抽取是 N 次串行调用， 三者的合理并发差一个数量级 索引：分块 + 批量向量化，主要是网络等待 |
+| `TASK_CONCURRENCY_COMPILE` | `int` | `1` | 编译：每个视觉原子打一次 VLM。**默认 1** —— 显存是硬约束， 两份编译并发很容易把 GPU 打满，而排队比 OOM 好 |
+| `TASK_CONCURRENCY_EXTRACT` | `int` | `2` | 抽取：一次 = N 个字段 × (检索 + 模型调用)，本身已经是串行的长任务 |
+| `TASK_CONCURRENCY_DEFAULT` | `int` | `2` | 其它种类（知识生成、GC、解析轮询）的并发 |
+| `TASK_POLL_INTERVAL` | `float` | `1.0` | 空转时的轮询间隔。调大省数据库连接，调小降低任务延迟 |
+| `INDEX_LEASE_SECONDS` | `int` | `300` | worker 无 heartbeat 后多久允许接管 |
 | `INDEX_HEARTBEAT_SECONDS` | `int` | `30` | 活 worker 的续租周期 |
 | `QA_TOP_K` | `int` | `4` | 进 prompt 的 chunk 数 |
 | `QA_CANDIDATES` | `int` | `8` | 每路检索的候选数（融合前） |

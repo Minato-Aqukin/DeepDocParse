@@ -125,15 +125,25 @@ async def _upload(client, content: bytes = PDF, filename: str = "sample.pdf",
         return _doc_info(document, job).model_dump()
 
 
-async def _callback(client, status: str = "succeeded", task_id: str = "s-1"):
+async def _callback(client, status: str = "succeeded", task_id: str = "s-1",
+                    drain: bool = True):
     """网关的解析回调。**必须带服务身份头**，不是只带服务凭据 ——
-    `/internal/*` 现在要求 `X-DDP-Actor-Kind: service`（见 ddp_corpus/deps.py）。"""
-    from tests.conftest import actor_headers
+    `/internal/*` 现在要求 `X-DDP-Actor-Kind: service`（见 ddp_corpus/deps.py）。
 
-    return await client.post("/internal/parse-callback",
+    回调会把索引排进持久队列。合仓前那是进程内的 BackgroundTask，
+    客户端返回时已经跑完了；现在要显式把队列跑一轮（`drain=False` 可关掉，
+    用来验"任务确实排上了但还没跑"）。
+    """
+    from ddp_corpus.main import app
+    from tests.conftest import actor_headers, drain_tasks
+
+    resp = await client.post("/internal/parse-callback",
                              json={"task_id": task_id, "status": status},
                              headers=actor_headers("model-gateway", role="admin",
                                                    kind="service"))
+    if drain:
+        await drain_tasks(app.state)
+    return resp
 
 
 @respx.mock

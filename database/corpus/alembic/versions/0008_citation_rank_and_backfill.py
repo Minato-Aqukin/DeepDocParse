@@ -45,7 +45,7 @@ def upgrade() -> None:
                   sa.Column("content_digest", sa.String(64), nullable=False,
                             server_default=""))
 
-    from app.backfill import backfill
+    from ddp_corpus.backfill import backfill
 
     report = backfill(op.get_bind())
     # 迁移的输出会进 alembic 日志。**这几个数字要留痕** ——

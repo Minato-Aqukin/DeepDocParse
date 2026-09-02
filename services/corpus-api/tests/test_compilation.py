@@ -22,7 +22,7 @@ from ddp_corpus.storage import MemoryStorage
 from ddp_core.compilation import provider_of
 from ddp_core.search import MemoryIndex, exact_identifiers
 from ddp_core.tokenize import code_tokenized, tokenized
-from tests.conftest import CHAT, usage_events
+from tests.conftest import CHAT, usage_events, drain_tasks
 from tests.test_documents import _callback, _mock_service, _upload
 from tests.test_qa import _real_pdf
 
@@ -220,6 +220,7 @@ async def test_generated_citation_requires_explicit_reindex_acknowledgement(
     accepted = await actor_client.post(
         f"/api/documents/{document['id']}/reindex?acknowledge_invalidations=true")
     assert accepted.status_code == 202
+    await drain_tasks(app_state)     # 重建索引排在持久队列里，跑一轮
     session.expire_all()
     loaded = await load_citations(session, source_kind="message", source_ids=["m1"])
     assert loaded["m1"][0]["source_type"] == "generated"

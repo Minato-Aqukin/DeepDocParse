@@ -16,7 +16,7 @@
 """
 import json
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -27,8 +27,8 @@ from ddp_corpus.control_client import ControlClient
 from ddp_corpus.db import get_session
 from ddp_corpus.deps import Actor, get_service_client, get_storage, require_service_actor
 from ddp_corpus.errors import APIError
-from ddp_corpus.indexing import index_document
 from ddp_corpus.ingest import ingest_document
+from ddp_corpus.queue import enqueue
 from ddp_corpus.models import Document, ParseJob, ProcessedEvent
 from ddp_corpus.service_client import ServiceClient
 from ddp_corpus.storage import Storage
@@ -42,7 +42,7 @@ class ParseCallback(BaseModel):
 
 
 @router.post("/internal/parse-callback")
-async def parse_callback(body: ParseCallback, request: Request, tasks: BackgroundTasks,
+async def parse_callback(body: ParseCallback, request: Request,
                          _: Actor = Depends(require_service_actor),
                          session: AsyncSession = Depends(get_session),
                          storage: Storage = Depends(get_storage),
@@ -74,7 +74,7 @@ async def parse_callback(body: ParseCallback, request: Request, tasks: Backgroun
             continue
         if await archive_job(session, storage, service, job.id):
             archived += 1
-            _schedule_index(tasks, request, document.id)
+            await _schedule_index(session, document.id)
 
     return {"ok": True, "archived": archived}
 
@@ -87,7 +87,7 @@ class InboundEvent(BaseModel):
 
 
 @router.post("/internal/events")
-async def consume_event(event: InboundEvent, request: Request, tasks: BackgroundTasks,
+async def consume_event(event: InboundEvent, request: Request,
                         _: Actor = Depends(require_service_actor),
                         session: AsyncSession = Depends(get_session),
                         storage: Storage = Depends(get_storage),
@@ -119,7 +119,7 @@ async def consume_event(event: InboundEvent, request: Request, tasks: Background
                 "reason": "本服务不认识这个事件类型（可能是 control 先升级了）"}
 
     result_id = await handler(session, storage, service,
-                              ControlClient(request.app.state.http), tasks, request, event)
+                              ControlClient(request.app.state.http), event)
     processed = await session.get(ProcessedEvent, event.event_id)
     if processed is not None:
         processed.result_id = result_id
@@ -127,7 +127,7 @@ async def consume_event(event: InboundEvent, request: Request, tasks: Background
     return {"ok": True, "result_id": result_id}
 
 
-async def _on_document_submitted(session, storage, service, control, tasks, request,
+async def _on_document_submitted(session, storage, service, control,
                                  event: InboundEvent) -> str:
     p = event.payload
     options = p.get("options") or {}
@@ -151,11 +151,11 @@ async def _on_document_submitted(session, storage, service, control, tasks, requ
     # pending 状态的 job，自愈不了 —— 只能等用户自己发现去点"重建索引"。
     # 同参数重传会在 ingest 里命中已有 job 直接返回，正是这条路径。
     if document.index_status == "pending" and document.current_job_id:
-        _schedule_index(tasks, request, document.id)
+        await _schedule_index(session, document.id, event.organization_id)
     return document.id
 
 
-async def _on_document_deleted(session, storage, service, control, tasks, request,
+async def _on_document_deleted(session, storage, service, control,
                                event: InboundEvent) -> str | None:
     """control 侧删了文档（例如整个组织被清理）。
 
@@ -177,21 +177,9 @@ _HANDLERS = {
 }
 
 
-def _schedule_index(tasks: BackgroundTasks, request: Request, document_id: str) -> None:
-    """排一次索引。
-
-    TODO(阶段 worker)：搬进 services/corpus-worker 的持久任务表。
-    进程内的后台任务在滚动发布时会**静默丢失**（不变式 7），
-    现在靠 `reconcile.py` 兜底捞回来。
-    """
-    state = request.app.state
-
-    async def run() -> None:
-        from ddp_corpus.db import get_sessionmaker
-        async with get_sessionmaker()() as session:
-            try:
-                await index_document(session, state.storage, state.http, document_id)
-            except Exception as exc:        # noqa: BLE001 —— 已在 index_document 里落 failed
-                print(f"[index] {document_id} failed: {exc}")
-
-    tasks.add_task(run)
+async def _schedule_index(session: AsyncSession, document_id: str,
+                          organization_id: str = "") -> None:
+    """排一次索引任务（持久队列，见 routers/documents.py 里同名函数的说明）。"""
+    await enqueue(session, kind="index", payload={"document_id": document_id},
+                  organization_id=organization_id,
+                  dedupe_key=f"index:{document_id}")

@@ -95,6 +95,28 @@ class Settings(BaseSettings):
     compile_vision_timeout: float = 120.0      # 每个原子的 VLM 超时（秒）
     # 索引 worker 租约：heartbeat 续租，进程崩溃后 reconcile 才能安全接管。
     # heartbeat 必须显著短于 lease；generation fencing 保证旧 worker 复活也写不进去。
+    # ---- 持久任务队列 ----
+    # 领取后多久没续租就允许被接管。**太短会让慢任务被反复抢**（每次接管
+    # generation +1，旧的那次算完也写不进去，纯浪费）；太长会让崩溃后的
+    # 恢复变慢。取值应当明显大于单个任务的心跳周期
+    task_lease_seconds: int = 300
+    # worker 的续租周期。必须显著小于 lease，否则一次 GC 停顿就够超时
+    task_heartbeat_seconds: int = 30
+    # 每种任务各自的并发。**不能共用一个无量纲总并发**（§10）：
+    # embedding 是网络等待、编译要打视觉模型、抽取是 N 次串行调用，
+    # 三者的合理并发差一个数量级
+    # 索引：分块 + 批量向量化，主要是网络等待
+    task_concurrency_index: int = 2
+    # 编译：每个视觉原子打一次 VLM。**默认 1** —— 显存是硬约束，
+    # 两份编译并发很容易把 GPU 打满，而排队比 OOM 好
+    task_concurrency_compile: int = 1
+    # 抽取：一次 = N 个字段 × (检索 + 模型调用)，本身已经是串行的长任务
+    task_concurrency_extract: int = 2
+    # 其它种类（知识生成、GC、解析轮询）的并发
+    task_concurrency_default: int = 2
+    # 空转时的轮询间隔。调大省数据库连接，调小降低任务延迟
+    task_poll_interval: float = 1.0
+
     index_lease_seconds: int = 300          # worker 无 heartbeat 后多久允许接管
     index_heartbeat_seconds: int = 30       # 活 worker 的续租周期
     qa_top_k: int = 4                   # 进 prompt 的 chunk 数

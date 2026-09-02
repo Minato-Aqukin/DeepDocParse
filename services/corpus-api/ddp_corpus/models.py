@@ -178,6 +178,78 @@ class ExtractionItem(Base):
     )
 
 
+class Task(Base):
+    """持久任务 —— **进程重启不得让已受理任务丢失或永远停在运行态**（企业边界 7）。
+
+    ## 为什么不能继续用 BackgroundTasks
+
+    合仓前索引、编译、抽取都跑在 FastAPI 的 `BackgroundTasks` 里，也就是
+    **进程内存**。滚动发布把进程换掉的那一刻，在途任务**静默消失** ——
+    没有报错、没有日志，文档就一直停在 indexing，而对账只捞 pending，
+    自愈不了。抽取更糟：它连对账都没有，只能靠启动时把孤儿 run 标成失败。
+
+    ## 状态机
+
+        queued → claimed(generation, lease_until) → running → succeeded / failed
+                        │
+                        └─ lease 过期后可被新 worker 接管
+
+    ## 领取必须带 generation fencing
+
+    lease 只解决"谁**可以**接管"。它解决不了"被判死的旧 worker 其实还活着"：
+    那个 worker 醒过来之后照样会写结果，把新 worker 算出来的东西覆盖掉。
+    所以最终写入还要比 `generation` —— 每次接管 +1，写入时带上自己领取时
+    看到的值，对不上就整条丢弃。**只有 lease 没有 fencing 的队列是不安全的**，
+    而不安全的表现是"偶尔出现一份旧结果"，几乎查不出来。
+    """
+
+    __tablename__ = "tasks"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+    # 契约 task_kind：parse_poll | compile | index | extract | knowledge | gc
+    kind: Mapped[str] = mapped_column(String(24), index=True)
+    # 契约 task_status
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    # 幂等键。同一个 (kind, dedupe_key) 只排一次队 —— 用户连点三次"重建索引"
+    # 不该跑三遍。**唯一约束只在未完成的任务上有意义**，所以完成时清空它
+    dedupe_key: Mapped[str | None] = mapped_column(String(128), default=None)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # ---- 领取与租约 ----
+    # fencing token：每次被接管 +1。写结果时必须与领取时看到的值一致
+    generation: Mapped[int] = mapped_column(Integer, default=0)
+    # 领取者的身份，只用于排查（"是哪个副本卡住了"）
+    claimed_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    # 租约到期时间。worker 靠 heartbeat 续租；崩溃后到期即可被接管
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),
+                                                         default=None, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    # 到期后不再自动重试的次数上限。**超了要落 failed 并可见**，
+    # 不能无限重试 —— 那会让一个必然失败的任务永远占着 worker
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+
+    # ---- 结果 ----
+    # 失败原因必须持久化并在 UI 可见（§10）。只写日志的话，用户看到的是
+    # "一直在处理中"，而运维看到的是一堆没人关联得起来的报错
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    degraded: Mapped[str | None] = mapped_column(String(32), default=None)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 onupdate=utcnow)
+    # 可延迟执行（退避重试用）
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    __table_args__ = (
+        UniqueConstraint("kind", "dedupe_key", name="uq_tasks_kind_dedupe"),
+        Index("ix_tasks_pickup", "status", "run_after"),
+    )
+
+
 class CorpusOutbox(Base):
     """出站事件。**跨服务边界的唯一正确姿势。**
 

@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ddp_corpus.config import settings
 from ddp_corpus.db import get_session, get_sessionmaker
 from ddp_corpus.deps import Actor, current_actor, get_storage
+from ddp_corpus.queue import enqueue
 from ddp_corpus.errors import APIError
 from ddp_core.extract_format import SchemaError, parse_schema, validate_schema
 from ddp_corpus.extraction import ExtractContext, extraction_model_meta, run as run_extraction
@@ -37,7 +38,6 @@ router = APIRouter()
 
 # 后台抽取任务的强引用集合。事件循环只对运行中的 task 保持弱引用，
 # 不持有的话它可能被 GC 掉 —— 而那是静默的（run 永远停在 running）
-_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
 # ---------- 模板 ----------
@@ -261,21 +261,27 @@ async def create_run(body: RunIn, request: Request, actor: Actor = Depends(curre
     session.add(row)
     await session.commit()
 
-    # 后台跑。**自己开 session**（铁律 5）：请求作用域的这个在响应返回后就关了。
-    # **必须持有强引用**：事件循环只对运行中的 task 保持弱引用，
-    # 不存着的话它可能在中途被 GC 掉，而那是静默的（run 停在 running）
-    task = asyncio.create_task(_execute_run(
-        row.id, [d.id for d in ready], schema,
-        storage=get_storage(request), http=request.app.state.http,
-        index=request.app.state.search_index, verify=body.verify))
-    _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    # 排进持久队列，由 services/corpus-worker 领。
+    #
+    # 合仓前这里是 `asyncio.create_task` —— 也就是 API 进程的内存。
+    # 滚动发布把进程换掉，run 就永远停在 running；那时唯一的兜底是启动时
+    # 把孤儿 run 标成失败（`reset_orphaned_runs`），而那意味着**用户白等一场**。
+    # 现在它落进 corpus.tasks，进程换掉之后会被别的 worker 接管。
+    await enqueue(session, kind="extract", payload={
+        "run_id": row.id, "document_ids": [d.id for d in ready],
+        "schema": schema, "verify": body.verify,
+    }, organization_id=actor.organization_id, dedupe_key=f"extract:{row.id}")
+    await session.commit()
     return _run_out(row)
 
 
-async def _execute_run(run_id: str, document_ids: list[str], schema: dict, *,
-                       storage, http, index, verify: bool | None) -> None:
-    """后台执行一次 run。**任何异常都要落终态**，否则 run 永远停在 running。"""
+async def execute_run(run_id: str, document_ids: list[str], schema: dict, *,
+                      storage, http, index, verify: bool | None) -> None:
+    """执行一次抽取 run。**任何异常都要落终态**，否则 run 永远停在 running。
+
+    由 `services/corpus-worker` 调用（`ddp_worker.handlers.run_extraction`）。
+    **实现留在这里**：worker 是薄壳，不重新实现业务逻辑。
+    """
     sessionmaker = get_sessionmaker()
     try:
         spec = parse_schema(schema)
@@ -412,21 +418,16 @@ async def _fail_run(session: AsyncSession, run_id: str, reason: str) -> None:
     await session.commit()
 
 
-async def reset_orphaned_runs() -> None:
-    """启动时把卡在 pending/running 的 run 标成 failed。
-
-    后台任务活在进程内存里，进程一重启它们就没了 —— 而 run 会永远停在 running，
-    界面上转圈转到天荒地老。**如实标成失败并说明原因**，用户可以重跑。
-    这与 reconcile 处理解析回调丢失是同一类问题，只是抽取没有远端可对账
-    （抽取的中间状态不在 service 侧），所以只能这样兜。
-    """
-    async with get_sessionmaker()() as session:
-        await session.execute(
-            update(ExtractionRun)
-            .where(ExtractionRun.status.in_(("pending", "running")))
-            .values(status="failed", updated_at=utcnow(),
-                    error="服务重启，抽取中断。结果可能不完整，请重新发起"))
-        await session.commit()
+# ---------------------------------------------------------------------------
+# **`reset_orphaned_runs()` 已删除。**
+#
+# 它是"后台任务活在进程内存里"这个缺陷的兜底：进程一重启在途 run 就没了，
+# 只能启动时把它们如实标成失败让用户重跑 —— 用户白等一场。
+#
+# 现在抽取排在持久队列里（`corpus.tasks`），进程换掉之后由别的 worker
+# 按租约接管（企业边界 7）。**不需要收尸，因为没有尸体。**
+# 真正跑不完的任务由 `max_attempts` 兜底落 failed，原因写在任务行上。
+# ---------------------------------------------------------------------------
 
 
 # ---------- 结果 ----------

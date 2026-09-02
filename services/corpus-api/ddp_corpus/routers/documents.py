@@ -14,7 +14,7 @@ from datetime import datetime
 
 import httpx
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select, update
@@ -28,10 +28,10 @@ from ddp_corpus.config import settings
 from ddp_corpus.control_client import ControlClient
 from ddp_corpus.directory import display_names
 from ddp_corpus.ingest import options_hash, submit_parse
+from ddp_corpus.queue import enqueue
 from ddp_corpus.db import get_session
 from ddp_corpus.deps import Actor, current_actor, get_service_client, get_storage
 from ddp_corpus.errors import APIError
-from ddp_corpus.indexing import index_document
 from ddp_corpus.models import (
     Assertion, Chunk, Citation, Conversation, Document, DocumentUpload, Evidence, Message,
     ParseJob,
@@ -371,7 +371,7 @@ def _index_lease_active(document: Document) -> bool:
 
 
 @router.put("/{document_id}/current-job", response_model=DocumentInfo)
-async def set_current_job(document_id: str, req: CurrentJobRequest, tasks: BackgroundTasks,
+async def set_current_job(document_id: str, req: CurrentJobRequest,
                           request: Request,
                           actor: Actor = Depends(current_actor),
                           session: AsyncSession = Depends(get_session),
@@ -406,12 +406,13 @@ async def set_current_job(document_id: str, req: CurrentJobRequest, tasks: Backg
                        "invalid_request_error", "index_version_changed")
     await session.refresh(document)
     await session.commit()
-    _schedule_index(tasks, request, document.id)
+    await _schedule_index(session, document.id, actor.organization_id)
+    await session.commit()
     return _doc_info(document, job)
 
 
 @router.post("/{document_id}/reindex", response_model=DocumentInfo, status_code=202)
-async def reindex(document_id: str, tasks: BackgroundTasks, request: Request,
+async def reindex(document_id: str, request: Request,
                   acknowledge_invalidations: bool = False,
                   actor: Actor = Depends(current_actor),
                   session: AsyncSession = Depends(get_session),
@@ -455,7 +456,8 @@ async def reindex(document_id: str, tasks: BackgroundTasks, request: Request,
                        "invalid_request_error", "index_version_changed")
     await session.refresh(document)
     await session.commit()
-    _schedule_index(tasks, request, document.id)
+    await _schedule_index(session, document.id, actor.organization_id)
+    await session.commit()
     return _doc_info(document, job)
 
 
@@ -579,22 +581,21 @@ async def _resolved_citation_count(session: AsyncSession, job_id: str) -> int:
     return total
 
 
-def _schedule_index(tasks: BackgroundTasks, request: Request, document_id: str) -> None:
-    """索引在请求返回后跑（分块+向量化对长文档要几十秒，不能让用户等）。
+async def _schedule_index(session: AsyncSession, document_id: str,
+                          organization_id: str = "") -> None:
+    """排一次索引任务。
 
-    进程内后台任务在多副本下也安全：index_document 自己 claim。
+    合仓前这里是 `BackgroundTasks.add_task` —— 也就是**API 进程的内存**。
+    滚动发布把进程换掉的那一刻，在途索引静默消失（企业边界 7），
+    文档一直停在 indexing，而对账只捞 pending，自愈不了。
+
+    现在它落进 `corpus.tasks`，由 `services/corpus-worker` 领。
+    `dedupe_key` 让"连点三次重建索引"只排一次队。
+    **不 commit** —— 与业务写入同一个事务提交。
     """
-    state = request.app.state
-
-    async def run() -> None:
-        from ddp_corpus.db import get_sessionmaker
-        async with get_sessionmaker()() as session:
-            try:
-                await index_document(session, state.storage, state.http, document_id)
-            except Exception as exc:      # 已在 index_document 里落 failed
-                print(f"[index] {document_id} failed: {exc}")
-
-    tasks.add_task(run)
+    await enqueue(session, kind="index", payload={"document_id": document_id},
+                  organization_id=organization_id,
+                  dedupe_key=f"index:{document_id}")
 
 
 @router.get("/{document_id}/result")

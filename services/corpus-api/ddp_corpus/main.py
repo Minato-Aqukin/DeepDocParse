@@ -62,9 +62,9 @@ async def lifespan(app: FastAPI):
           f"（换实现后必须 reindex，否则关键词检索会静默失效）")
 
     await app.state.storage.ensure_bucket()
-    # 抽取的后台任务活在进程内存里，重启就没了 —— 把卡住的 run 如实标成失败，
-    # 否则界面上会永远转圈（抽取没有远端可对账，只能这样兜）
-    await extractions.reset_orphaned_runs()
+    # **没有"启动时给孤儿任务收尸"这一步了。** 索引与抽取都排在持久队列里
+    # （corpus.tasks），进程换掉之后由别的 worker 按租约接管 —— 不需要收尸，
+    # 因为没有尸体（企业边界 7）。
     # 对账：启动即跑一次，补上停机期间丢掉的完成回调与索引投递
     app.state.reconciler = asyncio.create_task(
         reconcile_loop(get_sessionmaker(), app.state.storage, app.state.service_client,

@@ -23,6 +23,11 @@ dependencies = [
 dev = [
     "pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21",
     "aiosqlite>=0.20",          # 单测走 SQLite in-memory，不需要 PG
+    # **只在 dev 里依赖 worker**（运行时依赖方向是 worker -> api，不成环）。
+    # 理由：索引与抽取现在排在持久队列里，测试要能把队列跑干净。
+    # 用 worker 真正的 handler 表而不是在 conftest 里另抄一份 ——
+    # 抄一份的话，worker 少注册一种任务时测试照样绿
+    "ddp-corpus-worker",
 ]
 
 # **这里没有 python-jose / bcrypt / passlib。** 用户凭据的校验整体迁去

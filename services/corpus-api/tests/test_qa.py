@@ -16,7 +16,7 @@ from ddp_corpus.models import (
     AgentTurn, Assertion, Chunk, Conversation, Document, EvidenceVerification, Message,
     RetrievalCandidate,
 )
-from tests.conftest import ORG, CHAT, EMBEDDINGS
+from tests.conftest import ORG, CHAT, EMBEDDINGS, drain_tasks
 from tests.test_documents import _callback, _embed_response, _mock_service, _upload
 
 
@@ -440,7 +440,7 @@ async def test_keyword_path_still_works_when_embedding_is_down(actor_client, ses
 
 
 @respx.mock
-async def test_ask_marks_embedding_outage_instead_of_faking_it(actor_client, session):
+async def test_ask_marks_embedding_outage_instead_of_faking_it(actor_client, session, app_state):
     """向量化挂掉时只能走关键词路，并且必须打标。
 
     早先的实现是回落成全零向量——检索照跑、结果照返，用户以为是语义命中，
@@ -454,6 +454,7 @@ async def test_ask_marks_embedding_outage_instead_of_faking_it(actor_client, ses
     if doc_row.index_status != "ready":
         respx.post(EMBEDDINGS).mock(side_effect=_embed_response)
         await actor_client.post(f"/api/documents/{document['id']}/reindex")
+        await drain_tasks(app_state)
         respx.post(EMBEDDINGS).mock(return_value=httpx.Response(503, text="embedding down"))
     await session.refresh(doc_row)
     if doc_row.index_status != "ready":
@@ -615,7 +616,7 @@ async def test_search_across_documents(actor_client, session):
 
 
 @respx.mock
-async def test_reupload_after_delete_restores_askability(actor_client, session):
+async def test_reupload_after_delete_restores_askability(actor_client, session, app_state):
     """删了再传回来：文档必须重新可问答。
 
     删除会清空 chunks 并把 index_status 置回 none；复活时如果不重新排队建索引，
@@ -627,6 +628,7 @@ async def test_reupload_after_delete_restores_askability(actor_client, session):
 
     again = await _upload(actor_client, PDF)
     assert again["id"] == document["id"]
+    await drain_tasks(app_state)     # 复活会把索引重新排进队列
 
     detail = (await actor_client.get(f"/api/documents/{document['id']}")).json()
     assert detail["index_status"] == "ready", detail
@@ -657,7 +659,7 @@ async def test_deleted_document_is_not_searchable(actor_client, session):
 
 
 @respx.mock
-async def test_citations_survive_reindex(actor_client, session):
+async def test_citations_survive_reindex(actor_client, session, app_state):
     """P0 回归：重建索引会重铸全部 chunk_id，历史出处必须还接得回原文。
 
     `Chunk.id` 是随机 UUID，而 indexing.py 先 DELETE 再 add_all —— 只存 chunk_id 的话，
@@ -677,6 +679,7 @@ async def test_citations_survive_reindex(actor_client, session):
 
     resp = await actor_client.post(f"/api/documents/{document['id']}/reindex")
     assert resp.status_code == 202, resp.text
+    await drain_tasks(app_state)     # 重建索引排在持久队列里，跑一轮
     session.expire_all()
     new_ids = {c.id for c in (await session.execute(select(Chunk))).scalars().all()}
     assert new_ids and new_ids.isdisjoint(old_ids), "前提不成立：reindex 应当重铸 chunk_id"

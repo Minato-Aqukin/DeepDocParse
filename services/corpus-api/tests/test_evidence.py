@@ -19,7 +19,7 @@ from ddp_corpus.models import Assertion, Chunk, Document, Message, ParseJob
 from ddp_core.models import Citation, Evidence, digest_of
 from ddp_core.tokenize import tokenized
 
-from tests.conftest import CHAT, EMBEDDINGS
+from tests.conftest import CHAT, EMBEDDINGS, drain_tasks
 from tests.test_qa import _ask, _conversation, _ready_document
 
 
@@ -239,16 +239,13 @@ async def test_qa_citations_come_back_from_the_new_tables(actor_client, session)
 
 
 @respx.mock
-async def test_extraction_citations_are_stored_per_field(actor_client, session):
+async def test_extraction_citations_are_stored_per_field(actor_client, session, app_state):
     """抽取的出处是**字段级**的，存储不能把它压回 item 级。
 
     "这个字段的值是从哪一块抽出来的"正是本产品相对"字段 + 置信度"那类
     抽取产品的差异点。source_id 丢了字段名，这个差异点就没了。
     """
-    import asyncio
-
     from ddp_corpus.models import ExtractionItem, ExtractionRun
-    from ddp_corpus.routers.extractions import _BACKGROUND_TASKS
 
     document = await _ready_document(actor_client)
     respx.post(CHAT).mock(return_value=Response(200, json={"choices": [
@@ -265,10 +262,10 @@ async def test_extraction_citations_are_stored_per_field(actor_client, session):
             "topic": {"type": "string", "description": "第二页的表格数据"}}}})
     assert resp.status_code == 202, resp.text
 
-    # run 是后台 asyncio task（202 就返回了）。等它跑完再看结果 ——
-    # 不等的话既拿不到 item，还会在 fixture 拆到一半时撞上仍在用 session 的后台任务
-    if _BACKGROUND_TASKS:
-        await asyncio.gather(*list(_BACKGROUND_TASKS))
+    # run 排在持久队列里（202 就返回了）。把队列跑一轮再看结果。
+    # 这比合仓前"等后台 asyncio task"更贴近生产：真的走了一遍
+    # 领取 / 心跳 / generation fencing / 落终态
+    await drain_tasks(app_state)
 
     run = (await session.execute(select(ExtractionRun))).scalars().one()
     items = (await session.execute(select(ExtractionItem))).scalars().all()

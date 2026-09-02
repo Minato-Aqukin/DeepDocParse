@@ -34,8 +34,15 @@ REPO = SERVICE.parent.parent
 # 迁移住在 database/corpus（与 control 侧并列），脚本住在仓库根 scripts/
 SCAN_DIRS = [REPO / "database" / "corpus" / "alembic" / "versions", REPO / "scripts"]
 
-# 只查这两个顶层包 —— 第三方依赖由安装环节保证，不该在这里重复校验
-OWNED_PREFIXES = ("ddp_corpus.", "ddp_core.")
+# 只查本项目的顶层包 —— 第三方依赖由安装环节保证，不该在这里重复校验
+OWNED_PREFIXES = ("ddp_corpus.", "ddp_core.", "ddp_contracts.", "ddp_worker.")
+
+#: **已经不存在的顶层包。** 合仓前两个发行包都叫 `app`；改名之后残留的
+#: `from app.x import y` 不会被上面那条守卫抓到（它只查"本项目的包存不存在"，
+#: 而 `app` 压根不在名单里），于是漏改会一路绿到全新部署时才炸。
+#: 合仓当天就有一处残留：`0008_citation_rank_and_backfill.py` 里的
+#: `from app.backfill import backfill`。
+DEAD_PREFIXES = ("app.",)
 
 
 def _local_imports(path: pathlib.Path) -> set[str]:
@@ -49,6 +56,21 @@ def _local_imports(path: pathlib.Path) -> set[str]:
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name.startswith(OWNED_PREFIXES):
+                    found.add(alias.name)
+    return found
+
+
+def _dead_imports(path: pathlib.Path) -> set[str]:
+    """指向已经不存在的顶层包的 import。"""
+    found: set[str] = set()
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            if node.module.startswith(DEAD_PREFIXES) or node.module == "app":
+                found.add(node.module)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith(DEAD_PREFIXES) or alias.name == "app":
                     found.add(alias.name)
     return found
 
@@ -80,6 +102,22 @@ def test_migrations_and_scripts_import_modules_that_exist(path):
         f"搬家之后忘了改这里 —— 迁移与脚本都不被单测 import，漏改不会红，"
         f"但全新部署会死在这一步"
     )
+
+
+@pytest.mark.parametrize("path", _files(), ids=lambda p: f"{p.parent.name}/{p.name}")
+def test_migrations_and_scripts_do_not_import_the_dead_app_package(path):
+    """不许再出现 `app.*`。
+
+    合仓前两个发行包都叫 `app`。改名之后，上一条守卫**抓不到残留**：
+    它只查"本项目的包存不存在"，而 `app` 压根不在名单里，
+    于是 `from app.backfill import backfill` 一路绿到全新部署时才炸
+    （合仓当天 0008 里就有一处）。
+    """
+    dead = sorted(_dead_imports(path))
+    assert not dead, (
+        f"{path.relative_to(REPO)} 还在 import 已经不存在的顶层包：{dead}。"
+        f"合仓时四个 Python 服务的包名都改了（ddp_gateway / ddp_corpus /"
+        f" ddp_worker / ddp_mcp），这里漏改了")
 
 
 def test_the_scan_actually_covers_something():

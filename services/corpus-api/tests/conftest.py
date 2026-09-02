@@ -224,3 +224,38 @@ def as_actor(actor_id: str, *, role: str = "contributor") -> dict[str, str]:
     生产：入口验完身份之后，语料侧看到的**只有**这几个字符串。
     """
     return actor_headers(actor_id, role=role)
+
+
+# ---------------------------------------------------------------- 任务队列
+
+async def drain_tasks(app_state, *, max_rounds: int = 5) -> int:
+    """把持久队列里的任务跑干净，返回跑掉的条数。
+
+    合仓前索引与抽取跑在 `BackgroundTasks` 里，测试客户端返回时它们已经
+    执行完了 —— 于是用例可以直接断言结果。现在它们排在 `corpus.tasks` 里，
+    要显式跑一轮。
+
+    **这让测试更接近生产**：它真的走了一遍领取（claim）、心跳、
+    generation fencing 与落终态，而不是绕过队列直接调实现。
+
+    用 worker 真正的 `HANDLERS` 表，不在这里另抄一份 —— 抄一份的话，
+    worker 少注册一种任务时这些用例照样绿。
+    """
+    from ddp_corpus.db import get_sessionmaker
+    from ddp_corpus.queue import claim
+    from ddp_worker.handlers import HANDLERS
+    from ddp_worker.runner import Pool, WorkerState, run_one
+
+    state = WorkerState(http=app_state.http, storage=app_state.storage,
+                        search_index=app_state.search_index)
+    sessionmaker = get_sessionmaker()
+    done = 0
+    for _ in range(max_rounds):
+        async with sessionmaker() as session:
+            tasks = await claim(session, list(HANDLERS), limit=20)
+        if not tasks:
+            break
+        for task in tasks:
+            await run_one(task, Pool(task.kind, HANDLERS[task.kind], 1), state)
+            done += 1
+    return done
