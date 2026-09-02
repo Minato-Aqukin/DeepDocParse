@@ -12,7 +12,9 @@ import mimetypes
 import secrets
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request, UploadFile
+import httpx
+
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select, update
@@ -23,13 +25,16 @@ from sqlalchemy.orm import aliased
 from ddp_corpus.archive import fail_job, image_base_url
 from ddp_core.chunking import layout_to_chunks
 from ddp_corpus.config import settings
+from ddp_corpus.control_client import ControlClient
+from ddp_corpus.directory import display_names
+from ddp_corpus.ingest import options_hash, submit_parse
 from ddp_corpus.db import get_session
-from ddp_corpus.deps import current_user, get_service_client, get_storage
+from ddp_corpus.deps import Actor, current_actor, get_service_client, get_storage
 from ddp_corpus.errors import APIError
 from ddp_corpus.indexing import index_document
 from ddp_corpus.models import (
-    Assertion, Chunk, Citation, Conversation, Document, DocumentUpload, Evidence, FileToken, Message,
-    ParseJob, User,
+    Assertion, Chunk, Citation, Conversation, Document, DocumentUpload, Evidence, Message,
+    ParseJob,
     as_aware, new_id, utcnow,
 )
 from ddp_corpus.service_client import ServiceClient, ServiceError
@@ -44,11 +49,6 @@ router = APIRouter()
 
 TERMINAL = ("succeeded", "failed")
 
-
-def options_hash(engine: str, options: dict) -> str:
-    """同参数重解析幂等命中已有 job；换参数才建新行。"""
-    canonical = json.dumps(options or {}, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(f"{engine}|{canonical}".encode()).hexdigest()
 
 
 class JobInfo(BaseModel):
@@ -118,53 +118,29 @@ def _doc_info(document: Document, job: ParseJob | None, *,
     )
 
 
-async def _uploaders_of(session: AsyncSession, document_ids: list[str]) -> dict[str, list[str]]:
-    """document_id -> 上传者用户名列表。**一次查完，别在循环里查**。"""
+async def _uploaders_of(session: AsyncSession, document_ids: list[str],
+                        http: httpx.AsyncClient | None = None) -> dict[str, list[str]]:
+    """document_id -> 上传者显示名列表。**一次查完，别在循环里查**。
+
+    用户住在 control schema（Go 拥有），所以名字要问 control-api ——
+    理由与代价见 `ddp_corpus/directory.py`。拿不到名字时退回占位名，
+    不会让整个列表失败。
+    """
     if not document_ids:
         return {}
     rows = (await session.execute(
-        select(DocumentUpload.document_id, User.username)
-        .join(User, User.id == DocumentUpload.user_id)
+        select(DocumentUpload.document_id, DocumentUpload.user_id)
         .where(DocumentUpload.document_id.in_(document_ids))
         .order_by(DocumentUpload.created_at)
     )).all()
+    names = {}
+    if http is not None:
+        names = await display_names(http, [actor_id for _, actor_id in rows])
     out: dict[str, list[str]] = {}
-    for doc_id, username in rows:
-        out.setdefault(doc_id, []).append(username)
+    for doc_id, actor_id in rows:
+        out.setdefault(doc_id, []).append(names.get(actor_id) or f"用户 {actor_id[:8]}")
     return out
 
-
-def _too_large() -> APIError:
-    limit = settings.max_upload_bytes
-    mib = limit / (1024 * 1024)
-    shown = f"{mib:.0f} MiB" if mib >= 1 else f"{limit} bytes"
-    return APIError(413, f"file exceeds the {shown} upload limit",
-                    "invalid_request_error", "file_too_large")
-
-
-async def _read_capped(file: UploadFile) -> bytes:
-    """分片读取并卡上限。
-
-    **不能用 `await file.read()`**：那会把整个上传体一次性拉进内存，而后续还要
-    再持有一份（sha256 + put 到 MinIO）。没有上限时一个大文件就能 OOM 掉进程。
-
-    两道判断：
-    1. `file.size` 由 multipart 解析器按**实际落盘字节**累计，不是客户端的
-       content-length —— 伪造请求头绕不过去，所以可以放心当快速失败用。
-    2. 逐片累计是兜底：解析器没设 size 时（自定义 UploadFile / 别的解析路径）
-       仍然卡得住，且超限当场中断，不把剩下的字节读完。
-    """
-    if file.size is not None and file.size > settings.max_upload_bytes:
-        raise _too_large()
-
-    parts: list[bytes] = []
-    total = 0
-    while chunk := await file.read(settings.upload_chunk_bytes):
-        total += len(chunk)
-        if total > settings.max_upload_bytes:
-            raise _too_large()
-        parts.append(chunk)
-    return b"".join(parts)
 
 
 async def _visible(document_id: str, session: AsyncSession) -> Document:
@@ -183,18 +159,18 @@ async def _visible(document_id: str, session: AsyncSession) -> Document:
     return document
 
 
-async def _may_delete(document: Document, user: User, session: AsyncSession) -> bool:
+async def _may_delete(document: Document, actor: Actor, session: AsyncSession) -> bool:
     """**全站唯一一处授权判断**：谁能删这份文档。
 
     判据是"传过它的人，或管理员"。注意判的是 `document_uploads` 整张表而不是
     `uploaded_by` 那一个字段 —— 全局去重之后，第二个传同一份文件的人不会产生
     新的 Document，但他确实也传过，凭什么不让他删。
     """
-    if user.is_admin:
+    if actor.can_delete_document:
         return True
     return bool(await session.scalar(
         select(DocumentUpload.id).where(DocumentUpload.document_id == document.id,
-                                        DocumentUpload.user_id == user.id).limit(1)))
+                                        DocumentUpload.user_id == actor.id).limit(1)))
 
 
 async def _latest_job(session: AsyncSession, document: Document) -> ParseJob | None:
@@ -226,194 +202,16 @@ async def _archived_job(session: AsyncSession, document: Document, job_id: str |
     return job
 
 
-async def _submit(session: AsyncSession, service: ServiceClient, document: Document,
-                  job: ParseJob) -> None:
-    """建/复用稳定文件 URL 并提交给 service。"""
-    token = (await session.execute(
-        select(FileToken).where(FileToken.document_id == document.id,
-                                FileToken.scope == "source",
-                                FileToken.revoked.is_(False))
-    )).scalars().first()
-    if token is None:
-        token = FileToken(token=secrets.token_urlsafe(32), document_id=document.id)
-        session.add(token)
-    file_url = f"{settings.public_base_url}/files/{token.token}"
-    # 重新提交失败的 job 时必须刷新提交时刻：对账按它判"是否已过 service 的 24h 暂存窗口"，
-    # 沿用旧时间会让隔天重传的文档一提交就被判死
-    job.created_at = utcnow()
-    # 必须先落库：service 收到请求后会**立刻**回头下载这个 URL，
-    # 令牌还在未提交的事务里就会吃 404（M5 真机 e2e 抓到过）
-    await session.commit()
-
-    try:
-        job.service_task_id = await service.submit_parse(
-            file_url=file_url, doc_id=document.doc_id,
-            callback_url=f"{settings.public_base_url}/internal/parse-callback",
-            engine=job.engine, options=job.options,
-        )
-    except ServiceError as exc:
-        await fail_job(session, job, f"service rejected the task: {exc}")
-        if exc.status_code == 429:
-            raise APIError(429, "parse queue is full, retry later", "rate_limit_error",
-                           "queue_full")
-        raise APIError(502, f"parse service unavailable: {exc}", "upstream_error",
-                       "service_unavailable")
-    job.status = "pending"
-    job.error = None
-    await session.commit()
-
-
-@router.post("", response_model=DocumentInfo, status_code=202)
-async def upload(
-    request: Request,
-    tasks: BackgroundTasks,
-    file: UploadFile,
-    engine: str = Form(""),      # 留空取 settings.default_parse_engine（下方兜底）
-    options: str = Form("{}"),
-    user: User = Depends(current_user),
-    session: AsyncSession = Depends(get_session),
-    storage: Storage = Depends(get_storage),
-    service: ServiceClient = Depends(get_service_client),
-):
-    engine = engine or settings.default_parse_engine
-    data = await _read_capped(file)
-    if not data:
-        raise APIError(400, "uploaded file is empty", "invalid_request_error", "empty_file")
-    try:
-        parsed_options = json.loads(options) if options else {}
-        if not isinstance(parsed_options, dict):
-            raise ValueError
-    except ValueError:
-        raise APIError(400, "options must be a JSON object", "invalid_request_error",
-                       "bad_options")
-
-    # doc_id = 文件内容 sha256：本层去重键，同时作为契约 doc_id 传给 service，
-    # 让 service 的幂等与向量索引分块键不受 URL 变化影响
-    doc_id = hashlib.sha256(data).hexdigest()
-    filename = file.filename or "document.pdf"
-    mime = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-
-    document = (await session.execute(
-        select(Document).where(Document.doc_id == doc_id, Document.origin == "web")
-        .with_for_update().execution_options(populate_existing=True)
-    )).scalar_one_or_none()
-
-    if document is None:
-        # id 显式生成而不是等 INSERT 的默认值：object_key 要在**第一次 commit 之前**
-        # 就填好。先落一行 object_key 为空的 Document、再补写的话，中途崩溃就会留下
-        # 一行"看着像外部提交"的 web 文档（空 object_key 是外部任务的标记），
-        # reparse 会拒绝它且无从恢复。
-        document = Document(id=new_id(), uploaded_by=user.id, doc_id=doc_id, origin="web",
-                            filename=filename, mime=mime, size_bytes=len(data))
-        # 键里带 document.id 而不是内容哈希：按内容哈希拼的话，两个用户传同一份文件
-        # 会共用一个对象，其中一方删除就会把另一方的原件也删掉
-        document.object_key = source_key(document.id, filename)
-        # 对象先落：行提交成功时它指向的对象一定已经存在
-        await storage.put(document.object_key, data, mime)
-        session.add(document)
-        try:
-            await session.commit()
-        except IntegrityError:
-            # 并发上传同一文件：另一边先插入了，回退到复用分支
-            await session.rollback()
-            orphan = document.object_key      # 这一行没落库，它指向的对象无人引用
-            document = (await session.execute(
-                select(Document).where(Document.doc_id == doc_id,
-                                       Document.origin == "web")
-                .with_for_update().execution_options(populate_existing=True)
-            )).scalar_one_or_none()
-            if document is None:
-                raise
-            # GC 只扫库里的行，扫不到这个孤儿对象，只能就地清掉
-            try:
-                await storage.delete(orphan)
-            except Exception:       # noqa: BLE001 - 清不掉只是留个孤儿，不该让上传失败
-                pass
-    elif document.deleted_at is not None:       # 删过又传回来：复活这一行
-        object_key = document.object_key or source_key(document.id, filename)
-        await storage.put(object_key, data, mime)
-        # 删除时把 chunks 清空并置 index_status='none'。复活后如果解析结果还在，
-        # 必须重新排队建索引 —— 否则文档看着好好的却永远不可问答，
-        # 而对账只捞 pending，自愈不了，只能等用户自己发现去点"重建索引"
-        if document.current_job_id:
-            has_citations = bool(await session.scalar(
-                select(func.count(Citation.id)).join(
-                    Evidence, Citation.evidence_id == Evidence.id
-                ).where(Evidence.document_id == document.id)
-            ))
-            if has_citations:
-                index_status = "failed"
-                index_error = (
-                    "文档已复活且存在历史出处；请先执行版本校验，确认后再重建索引")
-                compile_status = "failed"
-                compile_degraded = ["reindex_validation_required"]
-            else:
-                index_status = "pending"
-                index_error = None
-                compile_status = "pending"
-                compile_degraded = []
-            generation = await advance_index_generation(
-                session, document.id, deleted=True,
-                values={
-                    "deleted_at": None, "object_key": object_key,
-                    "index_status": index_status, "index_error": index_error,
-                    "compile_status": compile_status,
-                    "compile_degraded": compile_degraded,
-                    "index_lease_until": None, "updated_at": utcnow(),
-                })
-            if generation is None:
-                raise APIError(409, "document revival raced with another request; retry",
-                               "invalid_request_error", "document_state_changed")
-        else:
-            revived = await session.execute(
-                update(Document).where(Document.id == document.id,
-                                       Document.deleted_at.is_not(None)).values(
-                    deleted_at=None, object_key=object_key, updated_at=utcnow()))
-            if revived.rowcount == 0:
-                raise APIError(409, "document revival raced with another request; retry",
-                               "invalid_request_error", "document_state_changed")
-        await session.refresh(document)
-        await session.commit()
-
-    # **归属：谁传过都记一笔。** 全局去重之后第二个人传同一份文件不会产生新的
-    # Document，但"他也传过"这件事不能丢 —— 删除权限判它，界面上也要说得清
-    # 这份语料从哪来（§11 已定 6「合并并保留全部归属」）。
-    # 用 SAVEPOINT + 唯一约束兜并发：同一个人重复传不该报错，也不该多记一行。
-    if not await session.scalar(
-            select(DocumentUpload.id).where(DocumentUpload.document_id == document.id,
-                                            DocumentUpload.user_id == user.id).limit(1)):
-        try:
-            async with session.begin_nested():
-                session.add(DocumentUpload(id=new_id(), document_id=document.id,
-                                           user_id=user.id))
-        except IntegrityError:
-            pass        # 并发下另一边先记上了，正是想要的结果
-        await session.commit()
-
-    digest = options_hash(engine, parsed_options)
-    job = (await session.execute(
-        select(ParseJob).where(ParseJob.document_id == document.id,
-                               ParseJob.options_hash == digest)
-    )).scalar_one_or_none()
-    if job is not None and job.status != "failed":
-        # 同文件同参数：直接复用，不再打 service。
-        # 但复活的文档索引被清过，这里要把它推回去，否则永远不可问答
-        if document.index_status == "pending":
-            _schedule_index(tasks, request, document.id)
-        return _doc_info(document, job)
-
-    if job is None:
-        job = ParseJob(document_id=document.id, engine=engine, options=parsed_options,
-                       initiated_by=user.id,
-                       options_hash=digest,
-                       document_version=await next_document_version(session, document.id))
-        session.add(job)
-    else:
-        job.status, job.error = "pending", None
-    await session.commit()
-
-    await _submit(session, service, document, job)
-    return _doc_info(document, job)
+# ---------------------------------------------------------------------------
+# **旧的 `POST /api/documents` multipart 上传端点已删除。**
+#
+# 它把整份文件读进一个 `bytes` 再 put 到对象存储 —— 200MB 的文件就是 200MB
+# 的常驻内存，而扩容应用等于放大对象存储的带宽中转（违反不变式 6）。
+#
+# 新链路见 `ddp_corpus/ingest.py` 的模块说明：浏览器凭预签名直传对象存储，
+# control-api 校验后发 DocumentSubmitted 事件，本服务在
+# `routers/internal.py` 里消费它。**字节流不再经过任何应用进程。**
+# ---------------------------------------------------------------------------
 
 
 def _latest_job_id():
@@ -435,7 +233,7 @@ def _latest_job_id():
 
 
 @router.get("", response_model=list[DocumentInfo])
-async def list_documents(user: User = Depends(current_user),
+async def list_documents(request: Request, actor: Actor = Depends(current_actor),
                          session: AsyncSession = Depends(get_session),
                          q: str = "", status: str = "", limit: int = 50, offset: int = 0):
     """列表页。
@@ -465,8 +263,8 @@ async def list_documents(user: User = Depends(current_user),
     stmt = stmt.order_by(Document.created_at.desc()).limit(min(limit, 200)).offset(offset)
 
     rows = (await session.execute(stmt)).all()
-    uploaders = await _uploaders_of(session, [d.id for d, _, _ in rows])
-    mine = {d.id for d, _, _ in rows if user.is_admin or user.username in uploaders.get(d.id, [])}
+    uploaders = await _uploaders_of(session, [d.id for d, _, _ in rows], request.app.state.http)
+    mine = {d.id for d, _, _ in rows if actor.can_delete_document or actor.id in uploaders.get(d.id, [])}
     return [_doc_info(document, current_job or fallback_job,
                       uploaders=uploaders.get(document.id, []),
                       can_delete=document.id in mine)
@@ -474,7 +272,8 @@ async def list_documents(user: User = Depends(current_user),
 
 
 @router.get("/{document_id}", response_model=DocumentInfo)
-async def get_document(document_id: str, user: User = Depends(current_user),
+async def get_document(document_id: str, request: Request,
+                       actor: Actor = Depends(current_actor),
                        session: AsyncSession = Depends(get_session),
                        service: ServiceClient = Depends(get_service_client)):
     """非终态时实时问一次 service，避免"库里还 pending 但 service 早跑完了"。"""
@@ -492,12 +291,12 @@ async def get_document(document_id: str, user: User = Depends(current_user),
             await session.commit()
         # succeeded 不在这里改：必须等归档完成才对外称 succeeded（结果要能立刻取）
     return _doc_info(document, job,
-                     uploaders=(await _uploaders_of(session, [document.id])).get(document.id, []),
-                     can_delete=await _may_delete(document, user, session))
+                     uploaders=(await _uploaders_of(session, [document.id], request.app.state.http)).get(document.id, []),
+                     can_delete=await _may_delete(document, actor, session))
 
 
 @router.get("/{document_id}/jobs", response_model=list[JobInfo])
-async def list_jobs(document_id: str, user: User = Depends(current_user),
+async def list_jobs(document_id: str, actor: Actor = Depends(current_actor),
                     session: AsyncSession = Depends(get_session)):
     document = await _visible(document_id, session)
     jobs = (await session.execute(
@@ -516,7 +315,8 @@ class ReparseRequest(BaseModel):
 
 
 @router.post("/{document_id}/reparse", response_model=JobInfo, status_code=202)
-async def reparse(document_id: str, req: ReparseRequest, user: User = Depends(current_user),
+async def reparse(document_id: str, req: ReparseRequest, request: Request,
+                  actor: Actor = Depends(current_actor),
                   session: AsyncSession = Depends(get_session),
                   service: ServiceClient = Depends(get_service_client)):
     """换引擎/参数重新解析。同参数命中已有 job 直接返回（幂等）。"""
@@ -546,14 +346,14 @@ async def reparse(document_id: str, req: ReparseRequest, user: User = Depends(cu
 
     if job is None:
         job = ParseJob(document_id=document.id, engine=engine, options=req.options,
-                       initiated_by=user.id,
+                       initiated_by=actor.id,
                        options_hash=digest,
                        document_version=await next_document_version(session, document.id))
         session.add(job)
     else:
         job.status, job.error = "pending", None
     await session.commit()
-    await _submit(session, service, document, job)
+    await submit_parse(session, ControlClient(request.app.state.http), service, document, job)
     return JobInfo(id=job.id, engine=job.engine, options=job.options, status=job.status,
                    error=job.error, page_count=job.page_count, is_current=False,
                    created_at=job.created_at, archived_at=job.archived_at,
@@ -573,7 +373,7 @@ def _index_lease_active(document: Document) -> bool:
 @router.put("/{document_id}/current-job", response_model=DocumentInfo)
 async def set_current_job(document_id: str, req: CurrentJobRequest, tasks: BackgroundTasks,
                           request: Request,
-                          user: User = Depends(current_user),
+                          actor: Actor = Depends(current_actor),
                           session: AsyncSession = Depends(get_session),
                           storage: Storage = Depends(get_storage)):
     """切换生效的解析版本。索引跟着换版本重建——否则问答会引用到旧版本的块。"""
@@ -613,7 +413,7 @@ async def set_current_job(document_id: str, req: CurrentJobRequest, tasks: Backg
 @router.post("/{document_id}/reindex", response_model=DocumentInfo, status_code=202)
 async def reindex(document_id: str, tasks: BackgroundTasks, request: Request,
                   acknowledge_invalidations: bool = False,
-                  user: User = Depends(current_user),
+                  actor: Actor = Depends(current_actor),
                   session: AsyncSession = Depends(get_session),
                   storage: Storage = Depends(get_storage)):
     document = await _visible(document_id, session)
@@ -661,7 +461,7 @@ async def reindex(document_id: str, tasks: BackgroundTasks, request: Request,
 
 @router.post("/{document_id}/validate-index", response_model=IndexValidation)
 async def validate_index(document_id: str, job_id: str = "",
-                         user: User = Depends(current_user),
+                         actor: Actor = Depends(current_actor),
                          session: AsyncSession = Depends(get_session),
                          storage: Storage = Depends(get_storage)):
     """只读校验 provider 与老出处回接；绝不在背后触发重建。"""
@@ -798,7 +598,7 @@ def _schedule_index(tasks: BackgroundTasks, request: Request, document_id: str) 
 
 
 @router.get("/{document_id}/result")
-async def get_result(document_id: str, job: str = "", user: User = Depends(current_user),
+async def get_result(document_id: str, job: str = "", actor: Actor = Depends(current_actor),
                      session: AsyncSession = Depends(get_session),
                      storage: Storage = Depends(get_storage)):
     document = await _visible(document_id, session)
@@ -811,7 +611,7 @@ async def get_result(document_id: str, job: str = "", user: User = Depends(curre
 
 
 @router.get("/{document_id}/pages")
-async def get_pages(document_id: str, job: str = "", user: User = Depends(current_user),
+async def get_pages(document_id: str, job: str = "", actor: Actor = Depends(current_actor),
                     session: AsyncSession = Depends(get_session),
                     storage: Storage = Depends(get_storage)):
     """按页分组的块 —— 前端左右栏对齐与 bbox 高亮的数据源。
@@ -846,7 +646,7 @@ async def get_pages(document_id: str, job: str = "", user: User = Depends(curren
 
 
 @router.get("/{document_id}/layout")
-async def get_layout(document_id: str, job: str = "", user: User = Depends(current_user),
+async def get_layout(document_id: str, job: str = "", actor: Actor = Depends(current_actor),
                      session: AsyncSession = Depends(get_session),
                      storage: Storage = Depends(get_storage)):
     document = await _visible(document_id, session)
@@ -856,29 +656,30 @@ async def get_layout(document_id: str, job: str = "", user: User = Depends(curre
 
 
 @router.get("/{document_id}/source-url")
-async def source_url(document_id: str, user: User = Depends(current_user),
+async def source_url(document_id: str, request: Request,
+                     actor: Actor = Depends(current_actor),
                      session: AsyncSession = Depends(get_session)):
-    """原件的稳定 URL。
+    """原件的**稳定** URL。
 
-    前端 iframe/PDF 渲染与 MCP 调用方都拿它 —— <img>/<iframe>/fetch(no-auth) 发不出
-    Authorization 头，而这个 URL 的凭证就是 token 本身（可撤销、不过期、每次都一样）。
+    凭证住在 control schema（`file_grants`，Go 拥有），所以这里问 control-api 要。
+    **不要换成预签名**：URL 一变，模型网关的幂等与向量索引分块键全部失效
+    （ADR #11/#12，这个项目踩过两次）。浏览器要的短期 URL 是另一条
+    （control-api 的 `/api/documents/{id}/download-url`），两者刻意分开。
     """
     document = await _visible(document_id, session)
-    token = (await session.execute(
-        select(FileToken).where(FileToken.document_id == document.id,
-                                FileToken.scope == "source",
-                                FileToken.revoked.is_(False))
-    )).scalars().first()
-    if token is None:
+    if not document.object_key:
         raise APIError(404, "no active file link for this document", "invalid_request_error",
                        "file_token_missing")
-    return {"url": f"{settings.public_base_url}/files/{token.token}",
-            "path": f"/files/{token.token}", "mime": document.mime}
+    url = await ControlClient(request.app.state.http).stable_file_url(
+        organization_id=document.organization_id, document_id=document.id,
+        object_key=document.object_key, mime=document.mime)
+    return {"url": url, "path": url[url.find("/files/"):] if "/files/" in url else url,
+            "mime": document.mime}
 
 
 @router.get("/{document_id}/jobs/{job_id}/images/{name}")
 async def get_image(document_id: str, job_id: str, name: str,
-                    user: User = Depends(current_user),
+                    actor: Actor = Depends(current_actor),
                     session: AsyncSession = Depends(get_session),
                     storage: Storage = Depends(get_storage)):
     """归档后的 markdown 里的图片引用指向这里（受 JWT 保护，不用预签名，不会过期）。"""
@@ -898,7 +699,7 @@ async def get_image(document_id: str, job_id: str, name: str,
 
 @router.get("/{document_id}/download")
 async def download(document_id: str, format: str = "md", job: str = "",
-                   user: User = Depends(current_user),
+                   actor: Actor = Depends(current_actor),
                    session: AsyncSession = Depends(get_session),
                    storage: Storage = Depends(get_storage)):
     document = await _visible(document_id, session)
@@ -952,7 +753,7 @@ async def _bundle_zip(storage: Storage, job: ParseJob) -> bytes:
 
 
 @router.delete("/{document_id}", status_code=204)
-async def delete_document(document_id: str, user: User = Depends(current_user),
+async def delete_document(document_id: str, actor: Actor = Depends(current_actor),
                           session: AsyncSession = Depends(get_session)):
     """软删除：对象由 GC 任务回收。
 
@@ -970,14 +771,14 @@ async def delete_document(document_id: str, user: User = Depends(current_user),
     if document is None:
         raise APIError(404, f"document not found: {document_id}",
                        "invalid_request_error", "document_not_found")
-    if not await _may_delete(document, user, session):
+    if not await _may_delete(document, actor, session):
         # 403 而不是 404：文档本来就是全员可见的，装作不存在没有任何意义，
         # 只会让人以为自己找错了 id
         raise APIError(403, "只有上传过这份文档的人或管理员能删除它",
                        "invalid_request_error", "not_uploader")
     deleted_at = utcnow()
-    await session.execute(update(FileToken).where(FileToken.document_id == document.id)
-                          .values(revoked=True))
+    # 文件凭证住在 control schema，本服务无权写 —— 由 DocumentDeleted 事件
+    # 通知 control-api 撤销（本函数末尾写 outbox）
     await session.execute(delete(Chunk).where(Chunk.document_id == document.id))
     # 先删消息再删会话：messages 有指向 conversations 的外键，反过来会被 PG 拒掉
     message_ids = select(Message.id).where(Message.conversation_id.in_(
@@ -1001,7 +802,7 @@ async def delete_document(document_id: str, user: User = Depends(current_user),
 
 
 @router.get("/stats/summary")
-async def summary(user: User = Depends(current_user),
+async def summary(actor: Actor = Depends(current_actor),
                   session: AsyncSession = Depends(get_session)):
     total, pages = (await session.execute(
         select(func.count(Document.id), func.coalesce(func.sum(Document.page_count), 0))

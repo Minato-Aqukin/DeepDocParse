@@ -49,15 +49,16 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+EVAL_DIR = Path(__file__).resolve().parent
+ROOT = EVAL_DIR.parent
 sys.path.insert(0, str(ROOT / "backend"))
 
-DATASET = ROOT / "eval" / "citations.json"
+DATASET = EVAL_DIR / "datasets" / "citations.json"
 OMNIDOCBENCH_ROOT = Path(os.environ.get(
     "EVAL_OMNIDOCBENCH_ROOT",
     ROOT.parent / "DeepDocParse" / ".eval-cache" / "omnidocbench-v1.6",
 ))
-OMNIDOCBENCH_MANIFEST = ROOT.parent / "DeepDocParse" / "eval" / "omnidocbench-v1.6-slices.json"
+OMNIDOCBENCH_MANIFEST = EVAL_DIR / "datasets" / "omnidocbench-v1.6-slices.json"
 REFUSAL_MARKERS = ("未找到", "没有找到", "文档中未", "not found", "no information")
 
 
@@ -292,8 +293,12 @@ def run_offline(samples: list[dict], any_citation: bool) -> list[Outcome]:
 
 
 def _layout_for(pdf_path: Path) -> Path | None:
-    """本地样本对应的真实版面产物（`backend/tests/fixtures/layout-<stem>.json`）。"""
-    candidate = ROOT / "backend" / "tests" / "fixtures" / f"layout-{pdf_path.stem}.json"
+    """本地样本对应的真实版面产物（`tests/fixtures/layout-<stem>.json`）。
+
+    与 PDF 夹具住在同一个目录：合仓后全仓共享一份冻结夹具，
+    评测与单测用的是同一批样本 —— 否则"评测跑的是哪份文件"要靠猜。
+    """
+    candidate = ROOT / "tests" / "fixtures" / f"layout-{pdf_path.stem}.json"
     return candidate if candidate.exists() else None
 
 
@@ -478,7 +483,7 @@ def _ground_truth_layout(source: dict) -> dict | None:
 
 async def _upload_and_wait(http, web: str, headers: dict, source: dict) -> str | None:
     if source["kind"] == "local":
-        content = (ROOT / source["path"]).resolve().read_bytes()
+        content = Path(source["path"]).resolve().read_bytes()
         name = Path(source["path"]).name
     elif source["kind"] == "omnidocbench":
         path = OMNIDOCBENCH_ROOT / "slice-documents" / f"{source['slice']}.pdf"

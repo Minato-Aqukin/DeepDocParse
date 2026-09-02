@@ -16,7 +16,7 @@ from ddp_corpus.models import (
     AgentTurn, Assertion, Chunk, Conversation, Document, EvidenceVerification, Message,
     RetrievalCandidate,
 )
-from tests.conftest import CHAT, EMBEDDINGS
+from tests.conftest import ORG, CHAT, EMBEDDINGS
 from tests.test_documents import _callback, _embed_response, _mock_service, _upload
 
 
@@ -49,26 +49,26 @@ def _chat_sse(*texts: str, cited: bool = False) -> httpx.Response:
     return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=frames())
 
 
-async def _ready_document(auth_client) -> dict:
+async def _ready_document(actor_client) -> dict:
     _mock_service()
-    document = await _upload(auth_client, PDF)
-    await _callback(auth_client)
-    detail = (await auth_client.get(f"/api/documents/{document['id']}")).json()
+    document = await _upload(actor_client, PDF)
+    await _callback(actor_client)
+    detail = (await actor_client.get(f"/api/documents/{document['id']}")).json()
     assert detail["index_status"] == "ready", detail
     return detail
 
 
-async def _conversation(auth_client, document_id: str) -> str:
-    resp = await auth_client.post(f"/api/documents/{document_id}/conversations")
+async def _conversation(actor_client, document_id: str) -> str:
+    resp = await actor_client.post(f"/api/documents/{document_id}/conversations")
     assert resp.status_code == 201
     return resp.json()["id"]
 
 
 # 默认问题与第 1 页 chunk（"第二页的表格数据"）字面高度重合：字符袋假向量下余弦约 0.87，
 # 远高于 qa_min_similarity。正例不能贴着阈值走，否则调阈值就会连带弄翻一堆用例。
-async def _ask(auth_client, cid: str, question: str = "第二页的表格") -> list[tuple[str, dict]]:
+async def _ask(actor_client, cid: str, question: str = "第二页的表格") -> list[tuple[str, dict]]:
     events: list[tuple[str, dict]] = []
-    async with auth_client.stream("POST", f"/api/conversations/{cid}/ask",
+    async with actor_client.stream("POST", f"/api/conversations/{cid}/ask",
                                   json={"question": question}) as resp:
         assert resp.status_code == 200, (await resp.aread())[:300]
         assert resp.headers["content-type"].startswith("text/event-stream")
@@ -111,12 +111,12 @@ def _agent_chat(*, need_retrieval: bool, answer: str,
 
 
 @respx.mock
-async def test_ask_streams_answer_with_citations(auth_client, session):
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+async def test_ask_streams_answer_with_citations(actor_client, session):
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("第二页", "讲的是表格数据。", cited=True))
 
-    events = await _ask(auth_client, cid)
+    events = await _ask(actor_client, cid)
     names = [name for name, _ in events]
     assert names[0] == "meta" and names[-1] == "done"
     assert names.count("delta") == 2, "必须逐帧流式返回，不能攒完一次性给"
@@ -153,14 +153,14 @@ async def test_ask_streams_answer_with_citations(auth_client, session):
 
 @respx.mock
 async def test_stream_reindex_race_preserves_explicit_evidence_and_marks_invalid(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     """检索后、核对通过、流结束前重建：旧出处仍不得成为已验证支持。"""
     from ddp_corpus.db import get_sessionmaker
     from ddp_core.models import Citation
     from ddp_corpus.evidence import load_citations
 
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
 
     async def answer_then_reindex():
         yield (f'data: {json.dumps({"choices": [{"delta": {"content": "旧索引答案。[1]"}}]})}'
@@ -186,7 +186,7 @@ async def test_stream_reindex_race_preserves_explicit_evidence_and_marks_invalid
             content=answer_then_reindex())
 
     respx.post(CHAT).mock(side_effect=handler)
-    events = dict(await _ask(auth_client, cid))
+    events = dict(await _ask(actor_client, cid))
     assert events["done"]["verified"] is False
     assert events["done"]["degraded"] == "index_changed_during_answer"
     assert events["citations"]["citations"][0]["resolved"] is False
@@ -213,10 +213,10 @@ async def test_stream_reindex_race_preserves_explicit_evidence_and_marks_invalid
 
 
 @respx.mock
-async def test_ask_degrades_visibly_when_vision_runtime_is_down(auth_client, session):
+async def test_ask_degrades_visibly_when_vision_runtime_is_down(actor_client, session):
     """VQA 起不来是 dev 常态。要能回答，但必须标出"没做视觉验证"。"""
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
 
     # 分开数两种调用：回答用的，与出处一致性核对用的（A4 的抄写请求）。
     # 只数总数的话，加一个并发的核对请求就会让这条用例莫名其妙变红
@@ -235,7 +235,7 @@ async def test_ask_degrades_visibly_when_vision_runtime_is_down(auth_client, ses
 
     respx.post(CHAT).mock(side_effect=handler)
 
-    events = await _ask(auth_client, cid)
+    events = await _ask(actor_client, cid)
     done = dict(events)["done"]
     assert done["verified"] is False
     assert done["degraded"] == "vision_unavailable", "降级必须可见"
@@ -250,12 +250,12 @@ async def test_ask_degrades_visibly_when_vision_runtime_is_down(auth_client, ses
 
 
 @respx.mock
-async def test_ask_reports_upstream_failure_instead_of_hanging(auth_client, session):
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+async def test_ask_reports_upstream_failure_instead_of_hanging(actor_client, session):
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=httpx.Response(500, json={"error": {"message": "boom"}}))
 
-    events = await _ask(auth_client, cid)
+    events = await _ask(actor_client, cid)
     assert "error" in [n for n, _ in events]
     assert dict(events)["done"]["degraded"] == "upstream_error"
     message = (await session.execute(
@@ -264,14 +264,14 @@ async def test_ask_reports_upstream_failure_instead_of_hanging(auth_client, sess
 
 
 @respx.mock
-async def test_ask_survives_midstream_upstream_failure(auth_client, session):
+async def test_ask_survives_midstream_upstream_failure(actor_client, session):
     """上游吐了一半断了：已产出的文本要留住，并如实报"上游中断"。
 
     不处理的话异常会冒到 StreamingResponse，响应体截断在半路，
     客户端只看到连接莫名断开，库里还被记成"客户端主动中断"（真机 e2e 上遇到过）。
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
 
     async def half_then_die():
         yield f'data: {json.dumps({"choices": [{"delta": {"content": "开头"}}]})}\n\n'.encode()
@@ -280,7 +280,7 @@ async def test_ask_survives_midstream_upstream_failure(auth_client, session):
     respx.post(CHAT).mock(return_value=httpx.Response(
         200, headers={"content-type": "text/event-stream"}, content=half_then_die()))
 
-    events = await _ask(auth_client, cid)
+    events = await _ask(actor_client, cid)
     names = [n for n, _ in events]
     assert "error" in names and names[-1] == "done", f"帧序列={names}"
     assert dict(events)["error"]["code"] == "upstream_interrupted"
@@ -292,17 +292,17 @@ async def test_ask_survives_midstream_upstream_failure(auth_client, session):
 
 
 @respx.mock
-async def test_ask_reports_no_hits_for_unrelated_question(auth_client, session):
+async def test_ask_reports_no_hits_for_unrelated_question(actor_client, session):
     """与文档完全无关的问题：必须零出处 + 标 no_hits。
 
     没有相似度下限的话 top-k 永远返回东西——用户会拿到几条不相干的"出处"，
     裁剪成功时还标着"已做视觉验证"。那样出处就成了假证据，比不给更糟。
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("文档中未找到相关内容"))
 
-    events = await _ask(auth_client, cid, question="量子纠缠退相干时间")
+    events = await _ask(actor_client, cid, question="量子纠缠退相干时间")
     done = dict(events)["done"]
     assert done["degraded"] == "gate_rejected_all", f"done={done}"
     assert done["verified"] is False
@@ -318,7 +318,7 @@ async def test_ask_reports_no_hits_for_unrelated_question(auth_client, session):
 
 
 @respx.mock
-async def test_keyword_only_match_below_floor_is_not_a_citation(auth_client, session):
+async def test_keyword_only_match_below_floor_is_not_a_citation(actor_client, session):
     """回归：相似度下限必须同时管住关键词路。
 
     RRF 是并集融合。下限只加在向量路上时，向量路已判定"全都不相关"的问题，
@@ -333,8 +333,8 @@ async def test_keyword_only_match_below_floor_is_not_a_citation(auth_client, ses
     滤掉 -> `terms` 为空 -> 关键词路压根产不出候选 -> 那个过滤器从未被执行。
     下面那条 `..._keyword_path...` 才是关键词路的守卫。
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("文档中未找到"))
 
     chunks = (await session.execute(select(Chunk).order_by(Chunk.seq))).scalars().all()
@@ -361,14 +361,14 @@ async def test_keyword_only_match_below_floor_is_not_a_citation(auth_client, ses
                                       limit=cfg.qa_top_k, candidates=cfg.qa_candidates)
     assert hits == [], f"低于相似度下限的词面命中不得成为出处，实际返回 {hits}"
 
-    events = await _ask(auth_client, cid, question=question)
+    events = await _ask(actor_client, cid, question=question)
     done = dict(events)["done"]
     assert done["degraded"] == "gate_rejected_all" and done["verified"] is False
     assert dict(events)["citations"]["citations"] == []
 
 
 @respx.mock
-async def test_similarity_floor_also_filters_the_keyword_path(auth_client, session):
+async def test_similarity_floor_also_filters_the_keyword_path(actor_client, session):
     """回归：下限对**关键词路**同样生效 —— 上一条用例覆盖不到的那一半。
 
     RRF 是并集融合，两条腿各自出候选。下限只管住向量路的话，
@@ -384,8 +384,8 @@ async def test_similarity_floor_also_filters_the_keyword_path(auth_client, sessi
     不是裸子串 —— 裸子串命中与检索里的词面命中不是一回事，
     上一条用例正是栽在这里（阶段 2a 二次验收抓到）。
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("文档中未找到"))
 
     from ddp_corpus.config import settings as cfg
@@ -414,24 +414,24 @@ async def test_similarity_floor_also_filters_the_keyword_path(auth_client, sessi
     assert hits == [], \
         f"关键词路绕过了相似度下限：{[h['text'] for h in hits]} 成了出处，而它们全都不相关"
 
-    events = await _ask(auth_client, cid, question=question)
+    events = await _ask(actor_client, cid, question=question)
     done = dict(events)["done"]
     assert done["degraded"] == "gate_rejected_all" and done["verified"] is False
     assert dict(events)["citations"]["citations"] == []
 
 
 @respx.mock
-async def test_keyword_path_still_works_when_embedding_is_down(auth_client, session):
+async def test_keyword_path_still_works_when_embedding_is_down(actor_client, session):
     """但向量化挂掉时不能连带把关键词路也关掉 —— 那时无从测量，只能放行。
 
     降级本身已经由 degraded=embedding_unavailable 标出来了。
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(EMBEDDINGS).mock(return_value=httpx.Response(503))
     respx.post(CHAT).mock(return_value=_chat_sse("表格在第二页", cited=True))
 
-    events = await _ask(auth_client, cid, question="表格")
+    events = await _ask(actor_client, cid, question="表格")
     done = dict(events)["done"]
     assert done["degraded"] == "embedding_unavailable"
     citations = dict(events)["citations"]["citations"]
@@ -440,28 +440,28 @@ async def test_keyword_path_still_works_when_embedding_is_down(auth_client, sess
 
 
 @respx.mock
-async def test_ask_marks_embedding_outage_instead_of_faking_it(auth_client, session):
+async def test_ask_marks_embedding_outage_instead_of_faking_it(actor_client, session):
     """向量化挂掉时只能走关键词路，并且必须打标。
 
     早先的实现是回落成全零向量——检索照跑、结果照返，用户以为是语义命中，
     实际是一堆噪声还挤掉了关键词命中。这正是铁律 3 要杜绝的静默降级。
     """
     _mock_service(embed=httpx.Response(503, text="embedding down"))
-    document = await _upload(auth_client, PDF)
-    await _callback(auth_client)
+    document = await _upload(actor_client, PDF)
+    await _callback(actor_client)
     # 先让索引建好，再让 embedding 挂掉
     doc_row = await session.get(Document, document["id"])
     if doc_row.index_status != "ready":
         respx.post(EMBEDDINGS).mock(side_effect=_embed_response)
-        await auth_client.post(f"/api/documents/{document['id']}/reindex")
+        await actor_client.post(f"/api/documents/{document['id']}/reindex")
         respx.post(EMBEDDINGS).mock(return_value=httpx.Response(503, text="embedding down"))
     await session.refresh(doc_row)
     if doc_row.index_status != "ready":
         pytest.skip("索引未就绪，本例只验降级标记")
 
-    cid = await _conversation(auth_client, document["id"])
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("基于关键词的回答", cited=True))
-    events = await _ask(auth_client, cid, question="表格")
+    events = await _ask(actor_client, cid, question="表格")
 
     assert dict(events)["done"]["degraded"] == "embedding_unavailable", f"events={events}"
     message = (await session.execute(
@@ -470,29 +470,29 @@ async def test_ask_marks_embedding_outage_instead_of_faking_it(auth_client, sess
 
 
 @respx.mock
-async def test_ask_marks_crop_unsupported_for_non_pdf(auth_client, session):
+async def test_ask_marks_crop_unsupported_for_non_pdf(actor_client, session):
     """非 PDF 裁不出区域图 -> 不能声称做了视觉验证。"""
     _mock_service()
-    document = await _upload(auth_client, b"\x89PNG fake image bytes", "scan.png", "image/png")
-    await _callback(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _upload(actor_client, b"\x89PNG fake image bytes", "scan.png", "image/png")
+    await _callback(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("看起来是一张图", cited=True))
 
-    events = await _ask(auth_client, cid, question="第二页的表格数据")
+    events = await _ask(actor_client, cid, question="第二页的表格数据")
     done = dict(events)["done"]
     assert done["verified"] is False
     assert done["degraded"] == "crop_unsupported", f"done={done}"
 
 
 @respx.mock
-async def test_ask_persists_partial_answer_when_client_disconnects(auth_client, session):
+async def test_ask_persists_partial_answer_when_client_disconnects(actor_client, session):
     """用户关页面：已产出的部分回答要落库并标 client_aborted。
 
     落库跑在生成器的 finally 里，而那时作用域已被取消 —— 不 shield 就根本写不进去，
     用户回来只会看到一条有问无答的会话。
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
 
     async def slow():
         yield f'data: {json.dumps({"choices": [{"delta": {"content": "开头"}}]})}\n\n'.encode()
@@ -504,7 +504,7 @@ async def test_ask_persists_partial_answer_when_client_disconnects(auth_client, 
     respx.post(CHAT).mock(return_value=httpx.Response(
         200, headers={"content-type": "text/event-stream"}, content=slow()))
 
-    async with auth_client.stream("POST", f"/api/conversations/{cid}/ask",
+    async with actor_client.stream("POST", f"/api/conversations/{cid}/ask",
                                   json={"question": "第二页的表格"}) as resp:
         async for _chunk in resp.aiter_bytes():
             break                   # 读到第一帧就掉头走人
@@ -519,7 +519,7 @@ async def test_ask_persists_partial_answer_when_client_disconnects(auth_client, 
 
 
 @respx.mock
-async def test_generator_close_marks_client_aborted_and_persists(auth_client, session):
+async def test_generator_close_marks_client_aborted_and_persists(actor_client, session):
     """直接驱动生成器验 client_aborted：aclose() 会把 GeneratorExit 投到挂起的 yield 处。
 
     绕开 ASGI 传输才测得到这个标记——真实 uvicorn 下 Starlette 检测到断开会取消流任务，
@@ -528,8 +528,8 @@ async def test_generator_close_marks_client_aborted_and_persists(auth_client, se
     from ddp_corpus.qa import Retrieval
     from ddp_corpus.routers.conversations import _stream_answer
 
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
 
     async def never_ends():
         yield f'data: {json.dumps({"choices": [{"delta": {"content": "半句"}}]})}\n\n'.encode()
@@ -538,10 +538,11 @@ async def test_generator_close_marks_client_aborted_and_persists(auth_client, se
     respx.post(CHAT).mock(return_value=httpx.Response(
         200, headers={"content-type": "text/event-stream"}, content=never_ends()))
 
-    user_id = (await session.get(Document, document["id"])).uploaded_by
-    gen = _stream_answer(auth_client._transport.app.state.http,  # type: ignore[attr-defined]
+    actor_id = (await session.get(Document, document["id"])).uploaded_by
+    gen = _stream_answer(actor_client._transport.app.state.http,  # type: ignore[attr-defined]
                          [{"role": "user", "content": "问题"}], Retrieval(),
-                         conversation_id=cid, document_id=document["id"], user_id=user_id,
+                         conversation_id=cid, document_id=document["id"], actor_id=actor_id,
+                         organization_id=ORG,
                          has_image=False)
     assert b"event: meta" in await anext(gen)
     await anext(gen)                 # 收到第一帧 delta，此时生成器挂在 yield 上
@@ -558,56 +559,55 @@ async def test_generator_close_marks_client_aborted_and_persists(auth_client, se
 
 
 @respx.mock
-async def test_ask_rejects_when_index_not_ready(auth_client, session):
+async def test_ask_rejects_when_index_not_ready(actor_client, session):
     _mock_service()
-    document = await _upload(auth_client, PDF)      # 没走回调 -> 没归档也没索引
-    cid = await _conversation(auth_client, document["id"])
+    document = await _upload(actor_client, PDF)      # 没走回调 -> 没归档也没索引
+    cid = await _conversation(actor_client, document["id"])
 
-    resp = await auth_client.post(f"/api/conversations/{cid}/ask", json={"question": "在吗"})
+    resp = await actor_client.post(f"/api/conversations/{cid}/ask", json={"question": "在吗"})
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "index_not_ready"
 
 
 @respx.mock
-async def test_index_failure_is_visible_and_blocks_ask(auth_client, session):
+async def test_index_failure_is_visible_and_blocks_ask(actor_client, session):
     """索引失败不能静默：状态与原因都要能在 UI 上看到，且问答明确拒绝。"""
     _mock_service(embed=httpx.Response(503, text="embedding runtime down"))
-    document = await _upload(auth_client, PDF)
-    await _callback(auth_client)
+    document = await _upload(actor_client, PDF)
+    await _callback(actor_client)
 
-    detail = (await auth_client.get(f"/api/documents/{document['id']}")).json()
+    detail = (await actor_client.get(f"/api/documents/{document['id']}")).json()
     assert detail["index_status"] == "failed"
     assert "向量化失败" in detail["index_error"]
 
-    cid = await _conversation(auth_client, document["id"])
-    resp = await auth_client.post(f"/api/conversations/{cid}/ask", json={"question": "在吗"})
+    cid = await _conversation(actor_client, document["id"])
+    resp = await actor_client.post(f"/api/conversations/{cid}/ask", json={"question": "在吗"})
     assert resp.status_code == 409 and "索引建立失败" in resp.json()["error"]["message"]
 
 
 @respx.mock
-async def test_conversation_isolation_and_history(auth_client, client, session):
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+async def test_conversation_isolation_and_history(actor_client, client, session):
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
-    await _ask(auth_client, cid)
+    await _ask(actor_client, cid)
 
-    listed = (await auth_client.get(f"/api/conversations?document={document['id']}")).json()
+    listed = (await actor_client.get(f"/api/conversations?document={document['id']}")).json()
     assert [c["id"] for c in listed] == [cid]
-    history = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    history = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
     assert [m["role"] for m in history] == ["user", "assistant"]
     assert "crop_url" in history[1]["citations"][0]
 
-    from tests.conftest import register
-    other = await register(client, username="bob")
-    headers = {"Authorization": f"Bearer {other['access_token']}"}
+    from tests.conftest import as_actor
+    headers = as_actor("actor-bob")
     assert (await client.get(f"/api/conversations/{cid}/messages",
                              headers=headers)).status_code == 404
 
 
 @respx.mock
-async def test_search_across_documents(auth_client, session):
-    document = await _ready_document(auth_client)
-    resp = await auth_client.get("/api/search?q=表格")
+async def test_search_across_documents(actor_client, session):
+    document = await _ready_document(actor_client)
+    resp = await actor_client.get("/api/search?q=表格")
     assert resp.status_code == 200
     groups = resp.json()["groups"]
     assert groups and groups[0]["document_id"] == document["id"]
@@ -615,41 +615,40 @@ async def test_search_across_documents(auth_client, session):
 
 
 @respx.mock
-async def test_reupload_after_delete_restores_askability(auth_client, session):
+async def test_reupload_after_delete_restores_askability(actor_client, session):
     """删了再传回来：文档必须重新可问答。
 
     删除会清空 chunks 并把 index_status 置回 none；复活时如果不重新排队建索引，
     文档看着好好的却永远问不了，而对账只捞 pending，自愈不了。
     """
-    document = await _ready_document(auth_client)
-    await auth_client.delete(f"/api/documents/{document['id']}")
+    document = await _ready_document(actor_client)
+    await actor_client.delete(f"/api/documents/{document['id']}")
     assert (await session.execute(select(Chunk))).scalars().all() == []
 
-    again = await auth_client.post("/api/documents",
-                                   files={"file": ("sample.pdf", PDF, "application/pdf")})
-    assert again.status_code == 202 and again.json()["id"] == document["id"]
+    again = await _upload(actor_client, PDF)
+    assert again["id"] == document["id"]
 
-    detail = (await auth_client.get(f"/api/documents/{document['id']}")).json()
+    detail = (await actor_client.get(f"/api/documents/{document['id']}")).json()
     assert detail["index_status"] == "ready", detail
     assert (await session.execute(select(Chunk))).scalars().all(), "索引必须重建"
 
 
 @respx.mock
-async def test_deleted_document_is_not_searchable(auth_client, session):
+async def test_deleted_document_is_not_searchable(actor_client, session):
     """删文档要连会话一起清掉。
 
     顺序很关键：messages 有指向 conversations 的外键，先删会话会被数据库拒掉。
     （真机 e2e 上这里 500 过一次——当时 SQLite 没开 PRAGMA foreign_keys，单测放行了。）
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("有答案", cited=True))
-    await _ask(auth_client, cid)
+    await _ask(actor_client, cid)
     assert (await session.execute(select(Message))).scalars().all(), "先造出消息再删"
 
-    resp = await auth_client.delete(f"/api/documents/{document['id']}")
+    resp = await actor_client.delete(f"/api/documents/{document['id']}")
     assert resp.status_code == 204, resp.text
-    assert (await auth_client.get("/api/search?q=表格")).json()["groups"] == []
+    assert (await actor_client.get("/api/search?q=表格")).json()["groups"] == []
     assert (await session.execute(select(Message))).scalars().all() == []
 
     row = await session.get(Document, document["id"])
@@ -658,31 +657,31 @@ async def test_deleted_document_is_not_searchable(auth_client, session):
 
 
 @respx.mock
-async def test_citations_survive_reindex(auth_client, session):
+async def test_citations_survive_reindex(actor_client, session):
     """P0 回归：重建索引会重铸全部 chunk_id，历史出处必须还接得回原文。
 
     `Chunk.id` 是随机 UUID，而 indexing.py 先 DELETE 再 add_all —— 只存 chunk_id 的话，
     一次 reindex 之后"这个回答当时基于哪段原文"就永久还原不回来（citations 里
     只剩 160 字 snippet）。稳定定位键是 `(parse_job_id, seq)`。
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
-    await _ask(auth_client, cid)
+    await _ask(actor_client, cid)
 
-    before = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    before = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
     cited = before[1]["citations"][0]
     assert cited["parse_job_id"] and cited["seq"] is not None, "落库时就要带上定位键"
     old_ids = {c.id for c in (await session.execute(select(Chunk))).scalars().all()}
     assert cited["chunk_id"] in old_ids
 
-    resp = await auth_client.post(f"/api/documents/{document['id']}/reindex")
+    resp = await actor_client.post(f"/api/documents/{document['id']}/reindex")
     assert resp.status_code == 202, resp.text
     session.expire_all()
     new_ids = {c.id for c in (await session.execute(select(Chunk))).scalars().all()}
     assert new_ids and new_ids.isdisjoint(old_ids), "前提不成立：reindex 应当重铸 chunk_id"
 
-    after = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    after = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
     refreshed = after[1]["citations"][0]
     assert refreshed["resolved"] is True, "重建索引后出处必须还能接回当前 chunk"
     assert refreshed["chunk_id"] in new_ids, "chunk_id 要刷新成当前值，否则前端点不开"
@@ -694,7 +693,7 @@ async def test_citations_survive_reindex(auth_client, session):
 
 
 @respx.mock
-async def test_unresolvable_citation_is_marked_not_silently_dropped(auth_client, session):
+async def test_unresolvable_citation_is_marked_not_silently_dropped(actor_client, session):
     """块没了 —— 出处必须显式标 resolved=False，且**不给 chunk_id**。
 
     静默把它当成好的，用户会点开一个空高亮；静默丢掉，回答就成了无出处的断言。
@@ -705,10 +704,10 @@ async def test_unresolvable_citation_is_marked_not_silently_dropped(auth_client,
     """
     from ddp_core.models import Citation, Evidence
 
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
-    await _ask(auth_client, cid)
+    await _ask(actor_client, cid)
 
     # 先造出历史上确实显示过“已验证”的消息；随后让出处失效，验证兼容字段
     # 会随断言真相收紧，而不是继续沿用旧布尔值。
@@ -721,7 +720,7 @@ async def test_unresolvable_citation_is_marked_not_silently_dropped(auth_client,
     stored_assertion.verification_state = "passed"
     stored_assertion.verification_mode = "auto"
     await session.commit()
-    before = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    before = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
     assert before[1]["verified"] is True
 
     evidence = (await session.execute(
@@ -734,7 +733,7 @@ async def test_unresolvable_citation_is_marked_not_silently_dropped(auth_client,
                                        Chunk.seq == evidence.seq))
     await session.commit()
 
-    after = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    after = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
     citation = after[1]["citations"][0]
     assert citation["resolved"] is False
     assert citation["chunk_id"] is None, "接不回去却给了 chunk_id —— 前端会把高亮指到错块"
@@ -747,7 +746,7 @@ async def test_unresolvable_citation_is_marked_not_silently_dropped(auth_client,
 
 
 @respx.mock
-async def test_changed_block_content_invalidates_the_citation(auth_client, session):
+async def test_changed_block_content_invalidates_the_citation(actor_client, session):
     """**负样本**：块还在、seq 也对，但内容被改了 —— 必须标失效。
 
     这是 plan.md 给阶段 3 定的核心验收：`seq` 是块在文档里的序号，分块规则一变
@@ -759,12 +758,12 @@ async def test_changed_block_content_invalidates_the_citation(auth_client, sessi
     阶段 2b 之后写的出处有 content_digest，走的是**指纹**比对 ——
     比老的 snippet 包含判据严格得多：块尾被改掉也会被抓到。
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
-    await _ask(auth_client, cid)
+    await _ask(actor_client, cid)
 
-    before = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    before = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
     assert before[1]["citations"][0]["resolved"] is True, "前提不成立：这条出处本该是好的"
 
     from ddp_core.models import Citation, Evidence
@@ -780,19 +779,19 @@ async def test_changed_block_content_invalidates_the_citation(auth_client, sessi
     chunk.text = chunk.text + "（后来被人改掉的一段）"
     await session.commit()
 
-    after = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    after = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
     citation = after[1]["citations"][0]
     assert citation["resolved"] is False, "块内容变了却仍标成有效 —— 这是假出处"
     assert citation["chunk_id"] is None, "不许刷新指向：刷了就等于把高亮指到错块"
 
 
 @respx.mock
-async def test_answer_records_model_and_retrieval_snapshot(auth_client, session):
+async def test_answer_records_model_and_retrieval_snapshot(actor_client, session):
     """回答要带模型戳：不记下用了哪个模型/哪套检索参数，换模型后历史无法分组对比。"""
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
-    await _ask(auth_client, cid)
+    await _ask(actor_client, cid)
 
     from ddp_corpus.config import settings as cfg
 
@@ -804,12 +803,12 @@ async def test_answer_records_model_and_retrieval_snapshot(auth_client, session)
     assert meta["retrieval"]["min_similarity"] == cfg.qa_min_similarity
     assert meta["retrieval"]["top_k"] == cfg.qa_top_k
     # 历史接口也要吐出来，否则前端/评测脚本拿不到分组依据
-    listed = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    listed = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
     assert listed[1]["model_meta"]["retrieval"]["candidates"] == cfg.qa_candidates
 
 
 @respx.mock
-async def test_confidence_is_reported_and_separates_strong_from_marginal(auth_client):
+async def test_confidence_is_reported_and_separates_strong_from_marginal(actor_client):
     """A2：出处要带"有多相关"，而且勉强及格的必须和绝佳命中区分开。
 
     不能用 citation 里的 score —— 那是 RRF 名次分，两路都排第一就恒为 0.0328，
@@ -817,50 +816,50 @@ async def test_confidence_is_reported_and_separates_strong_from_marginal(auth_cl
     """
     from ddp_corpus.config import settings as cfg
 
-    document = await _ready_document(auth_client)
+    document = await _ready_document(actor_client)
     # side_effect 而不是 return_value：一个 httpx 流式响应只能被消费一次，
     # 这个用例要问两轮
     respx.post(CHAT).mock(side_effect=lambda _request: _chat_sse("答案", cited=True))
 
-    strong = await _conversation(auth_client, document["id"])
-    done = dict(await _ask(auth_client, strong, question="表格数据"))["done"]
+    strong = await _conversation(actor_client, document["id"])
+    done = dict(await _ask(actor_client, strong, question="表格数据"))["done"]
     assert done["confidence"]["level"] == "high"
     assert done["confidence"]["top_similarity"] >= cfg.qa_low_similarity
 
-    marginal = await _conversation(auth_client, document["id"])
-    done = dict(await _ask(auth_client, marginal, question="表格"))["done"]
+    marginal = await _conversation(actor_client, document["id"])
+    done = dict(await _ask(actor_client, marginal, question="表格"))["done"]
     assert done["confidence"]["level"] == "low", done["confidence"]
     top = done["confidence"]["top_similarity"]
     assert cfg.qa_min_similarity < top < cfg.qa_low_similarity, top
 
 
 @respx.mock
-async def test_confidence_is_unknown_not_high_when_similarity_cannot_be_measured(auth_client):
+async def test_confidence_is_unknown_not_high_when_similarity_cannot_be_measured(actor_client):
     """向量化挂了 -> 只有关键词路 -> 相似度无从测量。
 
     这时必须说"不知道"，不能默认成 high —— 那就是又一次静默降级：
     用户会以为这条出处经过了语义确认。
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(EMBEDDINGS).mock(return_value=httpx.Response(503))
     respx.post(CHAT).mock(return_value=_chat_sse("关键词回答", cited=True))
 
-    done = dict(await _ask(auth_client, cid, question="表格"))["done"]
+    done = dict(await _ask(actor_client, cid, question="表格"))["done"]
     assert done["degraded"] == "embedding_unavailable"
     assert done["confidence"]["level"] == "unknown"
     assert done["confidence"]["top_similarity"] is None
 
 
 @respx.mock
-async def test_history_carries_similarity_and_confidence(auth_client):
+async def test_history_carries_similarity_and_confidence(actor_client):
     """历史消息也要带可信度，否则翻回去看旧回答时这个信息就丢了。"""
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
-    await _ask(auth_client, cid, question="表格数据")
+    await _ask(actor_client, cid, question="表格数据")
 
-    listed = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()
+    listed = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
     answer = listed[1]
     assert answer["confidence"]["level"] == "high"
     assert answer["citations"][0]["similarity"] > 0.5
@@ -888,18 +887,18 @@ def _verify_aware_chat(transcript: str | None, answer: str = "回答"):
 
 
 @respx.mock
-async def test_parse_mismatch_when_image_text_contradicts_chunk(auth_client, session):
+async def test_parse_mismatch_when_image_text_contradicts_chunk(actor_client, session):
     """A4：图上的字与 chunk 文本严重不符 -> 标 parse_mismatch，且不许再说"已验证"。
 
     这是七种降级里唯一没被覆盖的洞。解析错了的时候 chunk 文本是错的，
     但语义相似度照样过阈值、照样裁图、照样标 verified —— 产出这个类别最恶劣的
     错误：**带着"已做视觉验证"标记的假出处**。
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(side_effect=_verify_aware_chat("完全无关的另一段文字与库存报表"))
 
-    done = dict(await _ask(auth_client, cid))["done"]
+    done = dict(await _ask(actor_client, cid))["done"]
     assert done["degraded"] == "parse_mismatch", done
     assert done["verified"] is False, "对不上就不能再声称做过视觉验证"
 
@@ -914,14 +913,14 @@ async def test_parse_mismatch_when_image_text_contradicts_chunk(auth_client, ses
 
 
 @respx.mock
-async def test_no_mismatch_when_image_text_matches_chunk(auth_client, session):
+async def test_no_mismatch_when_image_text_matches_chunk(actor_client, session):
     """抄写结果与 chunk 文本一致时不许打标 —— 误报比不报更伤信任。"""
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(side_effect=_verify_aware_chat(
         "第二页的表格数据第二页的表格数据"))
 
-    done = dict(await _ask(auth_client, cid))["done"]
+    done = dict(await _ask(actor_client, cid))["done"]
     assert done["degraded"] is None, done
     assert done["verified"] is True
     verification = (await session.execute(
@@ -956,59 +955,59 @@ async def test_decision_timeout_conservatively_retrieves_and_reports_degradation
 
 
 @respx.mock
-async def test_unverifiable_parse_is_not_reported_as_mismatch(auth_client):
+async def test_unverifiable_parse_is_not_reported_as_mismatch(actor_client):
     """核对本身做不了（视觉模型抄写失败）时判"没测出来"，不是"对不上"。
 
     把"不知道"说成"有问题"是另一种撒谎，而且会让用户不再相信这个标记。
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(side_effect=_verify_aware_chat(None))
 
-    done = dict(await _ask(auth_client, cid))["done"]
+    done = dict(await _ask(actor_client, cid))["done"]
     assert done["degraded"] == "verification_unavailable"
     assert done["verified"] is False
 
 
 @respx.mock
-async def test_refusal_style_short_transcript_does_not_trigger_mismatch(auth_client):
+async def test_refusal_style_short_transcript_does_not_trigger_mismatch(actor_client):
     """模型答"我看不清这张图"这种短回复不能被当成分歧证据。"""
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(side_effect=_verify_aware_chat("看不清"))
 
-    done = dict(await _ask(auth_client, cid))["done"]
+    done = dict(await _ask(actor_client, cid))["done"]
     assert done["degraded"] == "verification_unavailable", done
     assert done["verified"] is False
 
 
 @respx.mock
-async def test_parse_verification_can_be_switched_off(auth_client, monkeypatch):
+async def test_parse_verification_can_be_switched_off(actor_client, monkeypatch):
     """核对多打一次视觉模型。不想付这个成本的部署要能关掉，且关掉后不打标。"""
     from ddp_corpus.config import settings as cfg
 
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     route = respx.post(CHAT).mock(side_effect=_verify_aware_chat("完全无关的另一段文字"))
 
-    done = dict(await _ask(auth_client, cid))["done"]
+    done = dict(await _ask(actor_client, cid))["done"]
     assert done["degraded"] is None and done["verified"] is False
     assert route.call_count == 1, "关掉之后不该再有抄写请求"
 
 
 @respx.mock
 async def test_agent_refuses_no_retrieval_without_inherited_evidence(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     from ddp_corpus.config import settings as cfg
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     handler, calls = _agent_chat(need_retrieval=False, answer="不应调用回答模型")
     respx.post(CHAT).mock(side_effect=handler)
 
-    events = dict(await _ask(auth_client, cid, question="把刚才答案改成表格"))
+    events = dict(await _ask(actor_client, cid, question="把刚才答案改成表格"))
     assert events["meta"]["query_decision"]["need_retrieval"] is False
     assert events["done"]["degraded"] == "no_evidence_in_turn"
     assert calls == {"decision": 1, "answer": 0, "verify": 0}
@@ -1021,19 +1020,19 @@ async def test_agent_refuses_no_retrieval_without_inherited_evidence(
 
 @respx.mock
 async def test_agent_persists_typed_assertion_candidates_and_assertion_citation(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     from ddp_corpus.config import settings as cfg
     from ddp_core.models import Citation
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     handler, calls = _agent_chat(
         need_retrieval=True, answer="设备表格位于第二页。[1]")
     respx.post(CHAT).mock(side_effect=handler)
 
-    events = dict(await _ask(auth_client, cid))
+    events = dict(await _ask(actor_client, cid))
     assertion = events["assertions"]["assertions"][0]
     assert assertion["text"] == "设备表格位于第二页。"
     assert assertion["unsupported"] is False
@@ -1055,19 +1054,19 @@ async def test_agent_persists_typed_assertion_candidates_and_assertion_citation(
 
 @respx.mock
 async def test_agent_never_attaches_retrieved_evidence_without_explicit_reference(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     """候选进入 prompt 不等于模型引用；没写 [n] 的断言必须显式 unsupported。"""
     from ddp_corpus.config import settings as cfg
     from ddp_core.models import Citation
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     handler, _ = _agent_chat(need_retrieval=True, answer="设备表格位于第二页。")
     respx.post(CHAT).mock(side_effect=handler)
 
-    events = dict(await _ask(auth_client, cid))
+    events = dict(await _ask(actor_client, cid))
     assertion = events["assertions"]["assertions"][0]
     assert assertion["unsupported"] is True
     assert assertion["evidence_ids"] == [] and assertion["citations"] == []
@@ -1079,22 +1078,22 @@ async def test_agent_never_attaches_retrieved_evidence_without_explicit_referenc
 
 @respx.mock
 async def test_citation_persist_failure_is_unsupported_in_the_first_sse(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     """Citation 写失败时不能先向客户端报 supported、刷新后才改口。"""
     from ddp_corpus.config import settings as cfg
     from ddp_corpus.routers import conversations as mod
     from ddp_core.models import Citation
 
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
 
     async def lose_all_citations(*_args, **_kwargs):
         return 0
 
     monkeypatch.setattr(mod, "record_evidence", lose_all_citations)
     respx.post(CHAT).mock(return_value=_chat_sse("表格在第二页。", cited=True))
-    events = dict(await _ask(auth_client, cid))
+    events = dict(await _ask(actor_client, cid))
     assertion = events["assertions"]["assertions"][0]
     assert assertion["unsupported"] is True
     assert assertion["evidence_ids"] == [] and assertion["citations"] == []
@@ -1112,18 +1111,18 @@ async def test_citation_persist_failure_is_unsupported_in_the_first_sse(
 
 @respx.mock
 async def test_follow_up_without_retrieval_inherits_previous_evidence(
-        auth_client, monkeypatch):
+        actor_client, monkeypatch):
     from ddp_corpus.config import settings as cfg
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
 
     first_handler, _ = _agent_chat(
         need_retrieval=True, answer="第二页记录了表格数据。[1]")
     route = respx.post(CHAT).mock(side_effect=first_handler)
-    first = dict(await _ask(auth_client, cid))
+    first = dict(await _ask(actor_client, cid))
     inherited = first["assertions"]["assertions"][0]["evidence_ids"]
     embedding_calls = len([call for call in respx.calls
                            if str(call.request.url) == EMBEDDINGS])
@@ -1131,7 +1130,7 @@ async def test_follow_up_without_retrieval_inherits_previous_evidence(
     second_handler, calls = _agent_chat(
         need_retrieval=False, answer="换句话说，表格数据在第二页。[1]")
     route.side_effect = second_handler
-    second = dict(await _ask(auth_client, cid, question="换一种更简短的说法"))
+    second = dict(await _ask(actor_client, cid, question="换一种更简短的说法"))
     assert second["meta"]["query_decision"]["need_retrieval"] is False
     assert second["meta"]["query_decision"]["inherited_evidence_ids"] == inherited
     assert second["assertions"]["assertions"][0]["evidence_ids"] == inherited
@@ -1142,18 +1141,18 @@ async def test_follow_up_without_retrieval_inherits_previous_evidence(
 
 @respx.mock
 async def test_follow_up_refuses_when_inherited_evidence_no_longer_resolves(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     """判定拿到旧 ID 后索引已变：不能用空资料继续调用回答模型。"""
     from ddp_corpus.config import settings as cfg
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     first_handler, _ = _agent_chat(
         need_retrieval=True, answer="第二页记录了表格数据。[1]")
     route = respx.post(CHAT).mock(side_effect=first_handler)
-    first = dict(await _ask(auth_client, cid))
+    first = dict(await _ask(actor_client, cid))
     assert first["assertions"]["assertions"][0]["evidence_ids"]
 
     await session.execute(delete(Chunk).where(Chunk.document_id == document["id"]))
@@ -1161,7 +1160,7 @@ async def test_follow_up_refuses_when_inherited_evidence_no_longer_resolves(
     second_handler, calls = _agent_chat(
         need_retrieval=False, answer="不应调用回答模型")
     route.side_effect = second_handler
-    second = dict(await _ask(auth_client, cid, question="换一种说法"))
+    second = dict(await _ask(actor_client, cid, question="换一种说法"))
     assert second["meta"]["query_decision"]["degraded"] == "no_evidence_in_turn"
     assert second["done"]["degraded"] == "no_evidence_in_turn"
     assert second["assertions"]["assertions"][0]["unsupported"] is True
@@ -1170,18 +1169,18 @@ async def test_follow_up_refuses_when_inherited_evidence_no_longer_resolves(
 
 @respx.mock
 async def test_follow_up_refuses_when_any_inherited_evidence_is_missing(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     """部分失效也不能静默缩减上下文；模型的“不检索”决定基于原完整证据集。"""
     from ddp_corpus.config import settings as cfg
     from ddp_core.models import Evidence
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     first_handler, _ = _agent_chat(
         need_retrieval=True, answer="第一项有依据，第二项也有依据。[1][2]")
     route = respx.post(CHAT).mock(side_effect=first_handler)
-    first = dict(await _ask(auth_client, cid))
+    first = dict(await _ask(actor_client, cid))
     inherited = first["assertions"]["assertions"][0]["evidence_ids"]
     assert len(inherited) == 2, "前提不成立：必须先造出两条可继承证据"
     verification_count = len((await session.execute(select(EvidenceVerification))).scalars().all())
@@ -1193,7 +1192,7 @@ async def test_follow_up_refuses_when_any_inherited_evidence_is_missing(
     second_handler, calls = _agent_chat(
         need_retrieval=False, answer="不应调用回答模型")
     route.side_effect = second_handler
-    second = dict(await _ask(auth_client, cid, question="只重述第二项"))
+    second = dict(await _ask(actor_client, cid, question="只重述第二项"))
     assert second["meta"]["query_decision"]["degraded"] == \
         "inherited_evidence_incomplete"
     assert second["done"]["degraded"] == "inherited_evidence_incomplete"
@@ -1206,7 +1205,7 @@ async def test_follow_up_refuses_when_any_inherited_evidence_is_missing(
 
 @respx.mock
 async def test_context_budget_cannot_leave_hidden_citation_numbers(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     """模型没看到的候选即使猜中编号，也不能暗挂成 Citation。"""
     from ddp_corpus.config import settings as cfg
     from ddp_core.models import Citation
@@ -1214,12 +1213,12 @@ async def test_context_budget_cannot_leave_hidden_citation_numbers(
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
     monkeypatch.setattr(cfg, "qa_context_chars", 5)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     handler, _ = _agent_chat(need_retrieval=True, answer="我猜第二条。[2]")
     respx.post(CHAT).mock(side_effect=handler)
 
-    events = dict(await _ask(auth_client, cid))
+    events = dict(await _ask(actor_client, cid))
     assert len(events["meta"]["retrieval"]["chunk_ids"]) == 1
     assert sum(candidate["accepted"] for candidate in
                events["meta"]["retrieval"]["candidates"]) >= 2
@@ -1231,18 +1230,18 @@ async def test_context_budget_cannot_leave_hidden_citation_numbers(
 
 @respx.mock
 async def test_gate_rejections_are_retained_without_becoming_citations(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     from ddp_corpus.config import settings as cfg
     from ddp_core.models import Citation
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     handler, _ = _agent_chat(need_retrieval=True, answer="文档中未找到相关内容。")
     respx.post(CHAT).mock(side_effect=handler)
 
-    events = dict(await _ask(auth_client, cid, question="量子纠缠退相干时间"))
+    events = dict(await _ask(actor_client, cid, question="量子纠缠退相干时间"))
     candidates = events["meta"]["retrieval"]["candidates"]
     assert candidates and all(not candidate["accepted"] for candidate in candidates)
     assert {candidate["reason"] for candidate in candidates} == {
@@ -1255,23 +1254,23 @@ async def test_gate_rejections_are_retained_without_becoming_citations(
 
 @respx.mock
 async def test_human_verification_uses_same_record_type_and_updates_assertion(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     from ddp_corpus.config import settings as cfg
 
     monkeypatch.setattr(cfg, "qa_decision_enabled", True)
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     handler, _ = _agent_chat(need_retrieval=True, answer="表格在第二页。[1]")
     respx.post(CHAT).mock(side_effect=handler)
-    events = dict(await _ask(auth_client, cid))
+    events = dict(await _ask(actor_client, cid))
     evidence_id = events["assertions"]["assertions"][0]["evidence_ids"][0]
 
-    response = await auth_client.post(f"/api/evidence/{evidence_id}/verification", json={
+    response = await actor_client.post(f"/api/evidence/{evidence_id}/verification", json={
         "verdict": "pass", "reason_code": "source_checked",
         "reason_text": "已对照原页"})
     assert response.status_code == 201, response.text
-    detail = (await auth_client.get(f"/api/evidence/{evidence_id}")).json()
+    detail = (await actor_client.get(f"/api/evidence/{evidence_id}")).json()
     assert detail["review_state"] == "passed"
     assert detail["verifications"][-1]["mode"] == "human"
     verification = (await session.execute(select(EvidenceVerification))).scalars().one()
@@ -1284,17 +1283,17 @@ async def test_human_verification_uses_same_record_type_and_updates_assertion(
 
 @respx.mock
 async def test_evidence_detail_does_not_attach_unrelated_same_seq_chunk(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     """(parse_job, seq) 槽位复用时，历史 Evidence 不能跳到新内容的块。"""
     from ddp_corpus.config import settings as cfg
 
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("表格在第二页。", cited=True))
-    events = dict(await _ask(auth_client, cid))
+    events = dict(await _ask(actor_client, cid))
     evidence_id = events["assertions"]["assertions"][0]["evidence_ids"][0]
-    before = (await auth_client.get(f"/api/evidence/{evidence_id}")).json()
+    before = (await actor_client.get(f"/api/evidence/{evidence_id}")).json()
     assert before["chunk_id"] is not None
 
     replacement = await session.get(Chunk, before["chunk_id"])
@@ -1303,26 +1302,26 @@ async def test_evidence_detail_does_not_attach_unrelated_same_seq_chunk(
     replacement.text = "重建后同 seq 的另一段内容"
     await session.commit()
 
-    after = (await auth_client.get(f"/api/evidence/{evidence_id}")).json()
+    after = (await actor_client.get(f"/api/evidence/{evidence_id}")).json()
     assert after["parse_job_id"] == before["parse_job_id"] and after["seq"] == before["seq"]
     assert after["chunk_id"] is None
 
 
 @respx.mock
 async def test_deleting_conversation_preserves_evidence_verification_audit(
-        auth_client, session):
+        actor_client, session):
     """删聊天不是删语料；核对记录必须保留，只把 assertion FK 置空。"""
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(side_effect=_verify_aware_chat(
         "第二页的表格数据第二页的表格数据"))
-    done = dict(await _ask(auth_client, cid))["done"]
+    done = dict(await _ask(actor_client, cid))["done"]
     assert done["verified"] is True
     verification = (await session.execute(
         select(EvidenceVerification))).scalars().one()
     assert verification.assertion_id is not None
 
-    response = await auth_client.delete(f"/api/conversations/{cid}")
+    response = await actor_client.delete(f"/api/conversations/{cid}")
     assert response.status_code == 204
     session.expire_all()
     preserved = (await session.execute(

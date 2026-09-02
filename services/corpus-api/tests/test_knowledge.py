@@ -12,14 +12,14 @@ from tests.conftest import CHAT
 from tests.test_qa import _ask, _chat_sse, _conversation, _ready_document
 
 
-async def _seed_knowledge(auth_client, session, monkeypatch):
+async def _seed_knowledge(actor_client, session, monkeypatch):
     from ddp_corpus.config import settings
 
     monkeypatch.setattr(settings, "qa_verify_parse", False)
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_chat_sse("系统使用模型。", cited=True))
-    events = dict(await _ask(auth_client, cid))
+    events = dict(await _ask(actor_client, cid))
     evidence_id = events["assertions"]["assertions"][0]["evidence_ids"][0]
 
     source = KnowledgeEntity(
@@ -61,11 +61,11 @@ async def _seed_knowledge(auth_client, session, monkeypatch):
 
 @respx.mock
 async def test_graph_wiki_and_backlinks_share_the_same_evidence_truth(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     document, source, target, edge, entry, sentence, evidence_id = await _seed_knowledge(
-        auth_client, session, monkeypatch)
+        actor_client, session, monkeypatch)
 
-    graph = (await auth_client.get(
+    graph = (await actor_client.get(
         f"/api/knowledge/graph?entity={source.id}&depth=1")).json()
     assert graph["graph_version"] == "ddp-graph/1"
     assert {row["id"] for row in graph["entities"]} == {source.id, target.id}
@@ -73,32 +73,31 @@ async def test_graph_wiki_and_backlinks_share_the_same_evidence_truth(
     assert graph["edges"][0]["evidence_ids"] == [evidence_id]
     assert graph["edges"][0]["citations"][0]["bbox"] is not None
 
-    wiki = (await auth_client.get(f"/api/wiki/{entry.id}")).json()
+    wiki = (await actor_client.get(f"/api/wiki/{entry.id}")).json()
     payload = wiki["sections"][0]["sentences"][0]
     assert payload["unsupported"] is False and payload["evidence_ids"] == [evidence_id]
-    backlinks = (await auth_client.get(f"/api/evidence/{evidence_id}/backlinks")).json()
+    backlinks = (await actor_client.get(f"/api/evidence/{evidence_id}/backlinks")).json()
     assert {row["source_kind"] for row in backlinks["backlinks"]} >= {
         "assertion", "graph_edge", "wiki_sentence"}
 
     # 同一知识产物的证据失效后，审计 Citation 还在，但不能继续支持边/wiki 句。
     await session.execute(delete(Chunk).where(Chunk.document_id == document["id"]))
     await session.commit()
-    stale_graph = (await auth_client.get(
+    stale_graph = (await actor_client.get(
         f"/api/knowledge/graph?entity={source.id}&depth=1")).json()["edges"][0]
     assert stale_graph["unsupported"] is True and stale_graph["evidence_ids"] == []
     assert stale_graph["citations"][0]["resolved"] is False
-    stale_wiki = (await auth_client.get(f"/api/wiki/{entry.id}")).json()
+    stale_wiki = (await actor_client.get(f"/api/wiki/{entry.id}")).json()
     assert stale_wiki["sections"][0]["sentences"][0]["unsupported"] is True
 
 
 @respx.mock
 async def test_review_queue_is_annotation_only_and_uncertain_merge_can_split(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     document, source, _, edge, _, sentence, _ = await _seed_knowledge(
-        auth_client, session, monkeypatch)
-    from ddp_corpus.models import User
-    user = (await session.execute(select(User))).scalars().first()
-    run = ExtractionRun(user_id=user.id, name="review fixture", schema_json={},
+        actor_client, session, monkeypatch)
+    actor_id = "actor-knowledge"
+    run = ExtractionRun(actor_id=actor_id, name="review fixture", schema_json={},
                         status="succeeded")
     session.add(run)
     await session.flush()
@@ -108,14 +107,14 @@ async def test_review_queue_is_annotation_only_and_uncertain_merge_can_split(
     session.add(extracted)
     await session.commit()
 
-    queue = (await auth_client.get("/api/reviews")).json()["items"]
+    queue = (await actor_client.get("/api/reviews")).json()["items"]
     assert {row["target_kind"] for row in queue} == {
         "graph_edge", "wiki_sentence", "entity_merge", "extract_field"}
-    limited = (await auth_client.get("/api/reviews?limit=2")).json()
+    limited = (await actor_client.get("/api/reviews?limit=2")).json()
     assert len(limited["items"]) == 2 and limited["truncated"] is True
     assert limited["limit"] == 2
 
-    response = await auth_client.post(f"/api/reviews/graph_edge/{edge.id}", json={
+    response = await actor_client.post(f"/api/reviews/graph_edge/{edge.id}", json={
         "action": "reject", "reason_code": "relation_wrong", "reason_text": "原文不支持"})
     assert response.status_code == 201 and response.json()["review_state"] == "rejected"
     await session.refresh(edge)
@@ -124,13 +123,13 @@ async def test_review_queue_is_annotation_only_and_uncertain_merge_can_split(
         KnowledgeReview.target_id == edge.id))).scalars().one()
     assert review.action == "reject" and review.reason_code == "relation_wrong"
 
-    response = await auth_client.post(
+    response = await actor_client.post(
         f"/api/reviews/extract_field/{extracted.id}:version", json={"action": "pass"})
     assert response.status_code == 201
     await session.refresh(extracted)
     assert extracted.fields["version"]["review_state"] == "passed"
 
-    response = await auth_client.post(f"/api/knowledge/entities/{source.id}/split",
+    response = await actor_client.post(f"/api/knowledge/entities/{source.id}/split",
                                       json={"alias": "DDP"})
     assert response.status_code == 201, response.text
     separated = response.json()
@@ -144,8 +143,8 @@ async def test_review_queue_is_annotation_only_and_uncertain_merge_can_split(
 
 @respx.mock
 async def test_build_runs_relation_then_storm_outline_and_sentence_with_citations(
-        auth_client, session):
-    document = await _ready_document(auth_client)
+        actor_client, session):
+    document = await _ready_document(actor_client)
     from ddp_corpus.models import Evidence
     evidence = (await session.execute(select(Evidence).where(
         Evidence.document_id == document["id"], Evidence.content != ""
@@ -172,30 +171,30 @@ async def test_build_runs_relation_then_storm_outline_and_sentence_with_citation
             "role": "assistant", "content": json.dumps(value, ensure_ascii=False)}}]})
 
     route = respx.post(CHAT).mock(side_effect=handler)
-    response = await auth_client.post("/api/knowledge/build",
+    response = await actor_client.post("/api/knowledge/build",
                                       json={"evidence_ids": [evidence.id]})
     assert response.status_code == 201, response.text
     assert response.json() == {"status": "ok", "entities": 2, "edges": 1,
                                "relation_status": "ok",
                                "wiki_entries": 1}
     assert route.call_count == 3
-    second = await auth_client.post("/api/knowledge/build",
+    second = await actor_client.post("/api/knowledge/build",
                                     json={"evidence_ids": [evidence.id]})
     assert second.status_code == 201, second.text
     assert route.call_count == 6
     assert len((await session.execute(select(GraphEdge))).scalars().all()) == 1
     assert len((await session.execute(select(WikiSection))).scalars().all()) == 1
     assert len((await session.execute(select(WikiSentence))).scalars().all()) == 1
-    graph = (await auth_client.get("/api/knowledge/graph?entity=DeepDocParse")).json()
+    graph = (await actor_client.get("/api/knowledge/graph?entity=DeepDocParse")).json()
     assert graph["edges"][0]["evidence_ids"] == [evidence.id]
-    wiki = (await auth_client.get("/api/wiki/DeepDocParse")).json()
+    wiki = (await actor_client.get("/api/wiki/DeepDocParse")).json()
     assert wiki["sections"][0]["sentences"][0]["evidence_ids"] == [evidence.id]
 
 
 @respx.mock
 async def test_build_negative_sample_returns_not_found_without_inventing_edge(
-        auth_client, session):
-    document = await _ready_document(auth_client)
+        actor_client, session):
+    document = await _ready_document(actor_client)
     from ddp_corpus.models import Evidence
     evidence = (await session.execute(select(Evidence).where(
         Evidence.document_id == document["id"], Evidence.content != ""
@@ -210,7 +209,7 @@ async def test_build_negative_sample_returns_not_found_without_inventing_edge(
             "content": json.dumps(value)}}]})
 
     route = respx.post(CHAT).mock(side_effect=handler)
-    response = await auth_client.post("/api/knowledge/build",
+    response = await actor_client.post("/api/knowledge/build",
                                       json={"evidence_ids": [evidence.id]})
     assert response.status_code == 201, response.text
     assert response.json() == {"status": "ok", "entities": 0, "edges": 0,
@@ -221,8 +220,8 @@ async def test_build_negative_sample_returns_not_found_without_inventing_edge(
 
 @respx.mock
 async def test_rebuild_replaces_graph_edge_evidence_instead_of_leaving_stale_citation(
-        auth_client, session):
-    document = await _ready_document(auth_client)
+        actor_client, session):
+    document = await _ready_document(actor_client)
     from ddp_corpus.models import Evidence
     evidence = (await session.execute(select(Evidence).where(
         Evidence.document_id == document["id"], Evidence.content != ""
@@ -248,9 +247,9 @@ async def test_rebuild_replaces_graph_edge_evidence_instead_of_leaving_stale_cit
 
     respx.post(CHAT).mock(side_effect=handler)
     body = {"evidence_ids": [evidence.id]}
-    assert (await auth_client.post("/api/knowledge/build", json=body)).status_code == 201
-    assert (await auth_client.post("/api/knowledge/build", json=body)).status_code == 201
-    graph = (await auth_client.get("/api/knowledge/graph?entity=A")).json()
+    assert (await actor_client.post("/api/knowledge/build", json=body)).status_code == 201
+    assert (await actor_client.post("/api/knowledge/build", json=body)).status_code == 201
+    graph = (await actor_client.get("/api/knowledge/graph?entity=A")).json()
     assert graph["edges"][0]["evidence_ids"] == []
     assert graph["edges"][0]["unsupported"] is True
     assert (await session.execute(select(Citation).where(
@@ -258,22 +257,22 @@ async def test_rebuild_replaces_graph_edge_evidence_instead_of_leaving_stale_cit
     assert graph["edges"][0]["unsupported"] is True
 
 
-async def test_knowledge_switch_disables_only_the_new_surface(auth_client, monkeypatch):
+async def test_knowledge_switch_disables_only_the_new_surface(actor_client, monkeypatch):
     from ddp_corpus.config import settings
 
     monkeypatch.setattr(settings, "knowledge_enabled", False)
-    disabled = await auth_client.get("/api/knowledge/graph")
+    disabled = await actor_client.get("/api/knowledge/graph")
     assert disabled.status_code == 404
     assert disabled.json()["error"]["code"] == "knowledge_disabled"
     # 旧 API 不引用知识层开关；关图谱不能拖坏既有文档指标与路径。
-    assert (await auth_client.get("/api/documents")).status_code == 200
+    assert (await actor_client.get("/api/documents")).status_code == 200
 
 
 @respx.mock
 async def test_rejected_review_is_exported_to_fixed_eval_set(
-        auth_client, session, monkeypatch, tmp_path):
-    _, _, _, edge, _, _, _ = await _seed_knowledge(auth_client, session, monkeypatch)
-    response = await auth_client.post(f"/api/reviews/graph_edge/{edge.id}", json={
+        actor_client, session, monkeypatch, tmp_path):
+    _, _, _, edge, _, _, _ = await _seed_knowledge(actor_client, session, monkeypatch)
+    response = await actor_client.post(f"/api/reviews/graph_edge/{edge.id}", json={
         "action": "reject", "reason_code": "relation_wrong", "reason_text": "连边不成立"})
     assert response.status_code == 201
 

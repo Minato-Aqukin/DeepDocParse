@@ -10,54 +10,22 @@ from sqlalchemy import select
 from ddp_corpus.config import settings
 from ddp_corpus.errors import APIError
 from ddp_corpus.gc import collect_deleted_objects
-from ddp_corpus.metering import MemoryRateLimiter, RedisRateLimiter
 from ddp_corpus.models import Document, utcnow
 import ddp_corpus.db as db
 from tests.test_documents import PDF, _callback, _mock_service, _upload
 
 
-async def test_memory_limiter_blocks_after_limit():
-    limiter = MemoryRateLimiter()
-    await limiter.check("k", 2)
-    await limiter.check("k", 2)
-    with pytest.raises(APIError) as exc:
-        await limiter.check("k", 2)
-    assert exc.value.status_code == 429 and int(exc.value.headers["Retry-After"]) >= 1
-    await limiter.check("other-key", 2)     # 不同 key 互不影响
-
-
-class _Script:
-    """替身：模拟 Redis 端 Lua 脚本的返回。"""
-
-    def __init__(self, allowed: int, retry_after: str = "3.0", boom: bool = False):
-        self.allowed, self.retry_after, self.boom = allowed, retry_after, boom
-
-    async def __call__(self, keys, args):
-        if self.boom:
-            raise ConnectionError("redis down")
-        return [self.allowed, self.retry_after]
-
-
-class _Redis:
-    def __init__(self, script):
-        self._script = script
-
-    def register_script(self, _src):
-        return self._script
-
-
-async def test_redis_limiter_denies_and_reports_retry_after():
-    limiter = RedisRateLimiter(_Redis(_Script(allowed=0, retry_after="2.4")))
-    with pytest.raises(APIError) as exc:
-        await limiter.check("k", 60)
-    assert exc.value.status_code == 429
-    assert exc.value.headers["Retry-After"] == "3"
-
-
-async def test_redis_limiter_fails_open():
-    """Redis 抖动不能把正常请求挡在门外 —— 限速是保护，不是鉴权。"""
-    limiter = RedisRateLimiter(_Redis(_Script(allowed=0, boom=True)))
-    await limiter.check("k", 60)
+# ---------------------------------------------------------------------------
+# **限速的三条用例已迁去 services/control-api。**
+#
+# 合仓前这里有 memory/redis 两种限速器的用例（含"Redis 抖动时放行"那条）。
+# 限速整体归了控制面：入口按 key 限，再按路由类别做领域限速（问答/图谱/抽取）。
+# 语料侧一条限速都不做 —— 两处各限一次会让"到底是谁把我限了"没人答得上。
+#
+# 等价覆盖在 Go 侧：
+#   internal/ratelimit  固定窗口计数、跨副本共享、Redis 不可用时退回内存并明说
+#   internal/api        按 key 限速 + 领域限速（domainThrottle）
+# ---------------------------------------------------------------------------
 
 
 async def _delete_and_age(client, session, document_id: str) -> None:
@@ -72,19 +40,22 @@ async def _delete_and_age(client, session, document_id: str) -> None:
 
 
 @respx.mock
-async def test_gc_removes_objects_of_deleted_documents(auth_client, session, app_state):
+async def test_gc_removes_objects_of_deleted_documents(actor_client, session, app_state):
     _mock_service()
-    document = await _upload(auth_client)
-    await _callback(auth_client)
+    document = await _upload(actor_client)
+    await _callback(actor_client)
 
     storage = app_state.storage
-    assert any(k.startswith("sources/") for k in storage.objects)
+    # 对象键现在由 control-api 在**签发预签名时**生成（`uploads/{org}/{日期}/{随机}`）——
+    # 那时还没有 document.id，所以键不再带文档 id。GC 不受影响：它按
+    # `document.object_key` 逐个删，从不按前缀猜
+    assert any(k.startswith("uploads/") for k in storage.objects)
     assert any(k.startswith("results/") for k in storage.objects)
 
-    await _delete_and_age(auth_client, session, document["id"])
+    await _delete_and_age(actor_client, session, document["id"])
     cleaned = await collect_deleted_objects(db.get_sessionmaker(), storage)
     assert cleaned == 1
-    assert not [k for k in storage.objects if k.startswith("sources/")]
+    assert not [k for k in storage.objects if k.startswith("uploads/")]
     assert not [k for k in storage.objects if k.startswith("results/")]
 
     row = await session.get(Document, document["id"])
@@ -96,7 +67,7 @@ async def test_gc_removes_objects_of_deleted_documents(auth_client, session, app
 
 
 @respx.mock
-async def test_gc_handles_migrated_job_whose_prefix_differs(auth_client, session, app_state):
+async def test_gc_handles_migrated_job_whose_prefix_differs(actor_client, session, app_state):
     """M5 迁移过来的 job：id 是新 uuid，归档产物却还在 results/{原 task_id}/ 下。
 
     GC 只按 job.id 拼前缀的话会列到空集，然后把 object_key 置空标成"已回收"——
@@ -106,8 +77,8 @@ async def test_gc_handles_migrated_job_whose_prefix_differs(auth_client, session
     from ddp_corpus.models import ParseJob
 
     _mock_service()
-    document = await _upload(auth_client)
-    await _callback(auth_client)
+    document = await _upload(actor_client)
+    await _callback(actor_client)
 
     job = (await session.execute(select(ParseJob))).scalars().one()
     storage = app_state.storage
@@ -119,28 +90,28 @@ async def test_gc_handles_migrated_job_whose_prefix_differs(auth_client, session
     await session.commit()
     await storage.put(f"results/{job.id}/crops/0_abc.png", b"crop", "image/png")
 
-    await _delete_and_age(auth_client, session, document["id"])
+    await _delete_and_age(actor_client, session, document["id"])
     assert await collect_deleted_objects(db.get_sessionmaker(), storage) == 1
     assert not [k for k in storage.objects if k.startswith(legacy_prefix)], "归档产物要清掉"
     assert not [k for k in storage.objects if k.startswith(f"results/{job.id}/")], "crops 也要清掉"
-    assert not [k for k in storage.objects if k.startswith("sources/")]
+    assert not [k for k in storage.objects if k.startswith("uploads/")]
 
 
 @respx.mock
-async def test_gc_respects_the_grace_period(auth_client, app_state):
+async def test_gc_respects_the_grace_period(actor_client, app_state):
     """刚删掉的文档不回收 —— 删对象不可逆，而"误删后马上重传"是常见操作。"""
     _mock_service()
-    document = await _upload(auth_client)
-    await _callback(auth_client)
+    document = await _upload(actor_client)
+    await _callback(actor_client)
     before = set(app_state.storage.objects)
 
-    await auth_client.delete(f"/api/documents/{document['id']}")
+    await actor_client.delete(f"/api/documents/{document['id']}")
     assert await collect_deleted_objects(db.get_sessionmaker(), app_state.storage) == 0
     assert set(app_state.storage.objects) == before, "宽限期内一个对象都不许动"
 
 
 @respx.mock
-async def test_gc_does_not_delete_a_revived_documents_source(auth_client, session, app_state):
+async def test_gc_does_not_delete_a_revived_documents_source(actor_client, session, app_state):
     """回归：删了又传回来的文档，其原件不得被 GC 删掉。
 
     旧实现先 SELECT 出待回收的行，再无条件删对象并清 object_key —— 期间用户
@@ -149,13 +120,13 @@ async def test_gc_does_not_delete_a_revived_documents_source(auth_client, sessio
     已提交的复活会让 claim 落空。
     """
     _mock_service()
-    document = await _upload(auth_client)
-    await _callback(auth_client)
+    document = await _upload(actor_client)
+    await _callback(actor_client)
     storage = app_state.storage
 
-    await _delete_and_age(auth_client, session, document["id"])
+    await _delete_and_age(actor_client, session, document["id"])
     # 复活：同一份文件重新上传
-    revived = await _upload(auth_client, content=PDF)
+    revived = await _upload(actor_client, content=PDF)
     assert revived["id"] == document["id"], "同内容重传应复活同一行"
 
     assert await collect_deleted_objects(db.get_sessionmaker(), storage) == 0, \
@@ -167,23 +138,27 @@ async def test_gc_does_not_delete_a_revived_documents_source(auth_client, sessio
 
 
 @respx.mock
-async def test_gc_leaves_live_documents_alone(auth_client, app_state):
+async def test_gc_leaves_live_documents_alone(actor_client, app_state):
     _mock_service()
-    await _upload(auth_client)
-    await _callback(auth_client)
+    await _upload(actor_client)
+    await _callback(actor_client)
     before = set(app_state.storage.objects)
 
     assert await collect_deleted_objects(db.get_sessionmaker(), app_state.storage) == 0
     assert set(app_state.storage.objects) == before
 
 
-@pytest.mark.parametrize("field", ["jwt_secret", "service_token"])
+@pytest.mark.parametrize("field", ["service_token"])
 def test_placeholder_secrets_refuse_to_start(monkeypatch, field):
     """占位密钥必须启动即失败。
 
-    jwt_secret 是 change-me = 任何人都能给任意 user_id 伪造会话；
-    service_token 是 change-me = /internal/* 对全世界敞开。
-    两者在运行时都不会报任何错，只会安静地把鉴权变成摆设。
+    service_token 是 change-me = 本服务的唯一门禁形同虚设。而 actor 上下文头
+    之所以可信，前提正是"只有持有它的调用方能进来"—— 门禁没了，
+    任何能连到本端口的人都能自称 admin。
+
+    **jwt_secret 那条迁去了 Go**（control-api 拥有会话签发）：
+    见 services/control-api/internal/config/config_test.go 的
+    TestPlaceholderSecretsAreRejected。
     """
     from ddp_corpus.config import assert_secrets_configured
 
@@ -197,7 +172,6 @@ def test_placeholder_secrets_refuse_to_start(monkeypatch, field):
 
 
 def test_real_secrets_pass_the_check(monkeypatch):
-    monkeypatch.setattr(settings, "jwt_secret", "s3Kr3t-random-value")
     monkeypatch.setattr(settings, "service_token", "another-random-value")
     from ddp_corpus.config import assert_secrets_configured
 

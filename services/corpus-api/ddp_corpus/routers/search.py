@@ -8,9 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_corpus.config import settings
 from ddp_corpus.db import get_session
-from ddp_corpus.deps import current_user
+from ddp_corpus.deps import Actor, current_actor
 from ddp_corpus.errors import APIError
-from ddp_corpus.models import Document, User
+from ddp_corpus.models import Document
 from ddp_corpus.upstream import embed_one
 
 router = APIRouter()
@@ -18,7 +18,7 @@ router = APIRouter()
 
 @router.get("/search")
 async def search(request: Request, q: str = "", doc: str = "", limit: int = 20,
-                 user: User = Depends(current_user),
+                 actor: Actor = Depends(current_actor),
                  session: AsyncSession = Depends(get_session)):
     if not q.strip():
         return {"query": q, "groups": []}

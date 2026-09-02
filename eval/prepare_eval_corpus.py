@@ -15,8 +15,9 @@ import urllib.request
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_MANIFEST = ROOT / "eval" / "omnidocbench-v1.6-slices.json"
+EVAL_DIR = Path(__file__).resolve().parent
+ROOT = EVAL_DIR.parent
+DEFAULT_MANIFEST = EVAL_DIR / "datasets" / "omnidocbench-v1.6-slices.json"
 DEFAULT_OUTPUT = ROOT / ".eval-cache" / "omnidocbench-v1.6"
 HF_IMAGES = ("https://huggingface.co/datasets/opendatalab/OmniDocBench/resolve/"
              "d386947f7fc3bafdcd756c8485845a2f43a19875/images/")

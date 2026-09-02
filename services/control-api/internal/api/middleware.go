@@ -176,3 +176,63 @@ func requireRole(a *identity.Actor, ok func(rbac.Role) bool, what string) error 
 	}
 	return nil
 }
+
+// domainThrottle 是**按操作代价**的限速，与按 key 的通用限速是两回事。
+//
+// 问答、图谱生成、批量抽取都会打模型，一次调用的成本远高于一次列表查询 ——
+// 按同一个 per-minute 数字限它们，要么把便宜的操作卡死，要么给贵的操作
+// 开了绿灯。合仓前这三道闸散在语料侧的三个 router 里，各自读一个配置项；
+// 现在统一在入口做：**限速只有一处，"到底是谁把我限了"才答得上来**。
+//
+// 匹配按前缀 + 方法。加一条贵操作就往 domainLimits 里加一行。
+type domainLimit struct {
+	method string
+	prefix string
+	suffix string // 非空时还要求路径以它结尾（区分 /ask 这种子资源）
+	bucket string
+	limit  int
+}
+
+func (s *Server) domainLimits() []domainLimit {
+	return []domainLimit{
+		{http.MethodPost, "/api/conversations/", "/ask", "qa", s.cfg.QARatePerMin},
+		{http.MethodPost, "/api/knowledge/build", "", "knowledge", s.cfg.KnowledgeRatePerMin},
+		{http.MethodPost, "/api/extractions/runs", "", "extract", s.cfg.ExtractRatePerMin},
+	}
+}
+
+func (s *Server) domainThrottle(next http.Handler) http.Handler {
+	limits := s.domainLimits()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor := identity.From(r.Context())
+		if actor == nil {
+			apierr.Write(w, r, apierr.Internal("限速中间件挂在了鉴权之前"))
+			return
+		}
+		for _, l := range limits {
+			if r.Method != l.method || !strings.HasPrefix(r.URL.Path, l.prefix) {
+				continue
+			}
+			if l.suffix != "" && !strings.HasSuffix(r.URL.Path, l.suffix) {
+				continue
+			}
+			allowed, remaining, err := s.limiter.Allow(r.Context(),
+				l.bucket+":"+actor.ID, l.limit, time.Minute)
+			if err != nil {
+				// 与按 key 的限速同一个取舍：限速器坏了放行并记日志，
+				// 而不是让 Redis 抖动变成全站不可用
+				slogWarn("domain rate limiter unavailable, failing open", err)
+				break
+			}
+			w.Header().Set("X-RateLimit-Limit", itoa(l.limit))
+			w.Header().Set("X-RateLimit-Remaining", itoa(remaining))
+			if !allowed {
+				apierr.Write(w, r, apierr.TooMany("rate_limited",
+					"这类操作很贵，请求过于频繁（"+l.bucket+"）"))
+				return
+			}
+			break
+		}
+		next.ServeHTTP(w, r)
+	})
+}

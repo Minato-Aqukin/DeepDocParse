@@ -27,11 +27,12 @@ import pathlib
 
 import pytest
 
-BACKEND = pathlib.Path(__file__).resolve().parent.parent
-REPO = BACKEND.parent
+SERVICE = pathlib.Path(__file__).resolve().parent.parent
+REPO = SERVICE.parent.parent
 
-# 扫这些地方的 import：它们都不会被单测 import 到，因此漏改不会红
-SCAN_DIRS = [BACKEND / "alembic" / "versions", REPO / "scripts"]
+# 扫这些地方的 import：它们都不会被单测 import 到，因此漏改不会红。
+# 迁移住在 database/corpus（与 control 侧并列），脚本住在仓库根 scripts/
+SCAN_DIRS = [REPO / "database" / "corpus" / "alembic" / "versions", REPO / "scripts"]
 
 # 只查这两个顶层包 —— 第三方依赖由安装环节保证，不该在这里重复校验
 OWNED_PREFIXES = ("ddp_corpus.", "ddp_core.")
@@ -86,7 +87,9 @@ def test_the_scan_actually_covers_something():
     files = _files()
     assert len(files) >= 6, f"扫到的文件太少（{len(files)}），SCAN_DIRS 是不是写错了"
     total = sum(len(_local_imports(f)) for f in files)
-    assert total >= 5, f"一条本项目的 import 都没扫到（{total}），解析逻辑可能坏了"
+    # 3 是合仓后的实际值（迁移里 import ddp_core 的那几处）。
+    # **不要把它调低到 0 附近**：这条的全部意义就是"扫到的东西不能为零"
+    assert total >= 3, f"一条本项目的 import 都没扫到（{total}），解析逻辑可能坏了"
 
 
 CORPUS_MCP_KEYS = {
@@ -101,7 +104,7 @@ def test_quickstart_passes_corpus_credentials_to_the_mcp_service():
     只写 Web `.env` 时所有容器都会健康，直到第一次 MCP 调用才报数据库认证失败；
     这是部署脚本特有的静默错位，常规 API 单测与 compose config 都抓不到。
     """
-    text = (REPO / "deploy/docker.bash").read_text(encoding="utf-8")
+    text = (REPO / "infra" / "docker.bash").read_text(encoding="utf-8")
     start = text.index("write_service_env()")
     end = text.index("write_frontend_env()", start)
     body = text[start:end]
@@ -123,7 +126,7 @@ def test_corpus_keys_stay_out_of_the_file_gateway_reads():
 
     compose 侧要两份 `--env-file` 才能做变量替换，一并钉住。
     """
-    text = (REPO / "deploy/docker.bash").read_text(encoding="utf-8")
+    text = (REPO / "infra" / "docker.bash").read_text(encoding="utf-8")
     leaked = sorted(key for key in CORPUS_MCP_KEYS
                     if f'set_env "$SERVICE_ENV" {key}' in text)
     assert not leaked, (
@@ -137,7 +140,7 @@ def test_corpus_keys_stay_out_of_the_file_gateway_reads():
 # §2 每一次检索都必须带相似度下限
 # ---------------------------------------------------------------------------
 
-APP = BACKEND / "app"
+APP = SERVICE / "ddp_corpus"
 
 # 下限的唯一来源。写死成字面量（哪怕数值一样）也算违规：
 # 阈值要能被一处配置改掉，散落的字面量会让"调阈值"变成一次全仓库搜索
@@ -173,7 +176,7 @@ def test_every_retrieval_passes_the_similarity_floor():
     """
     violations = []
     for path, call in _search_calls():
-        where = f"{path.relative_to(BACKEND)}:{call.lineno}"
+        where = f"{path.relative_to(SERVICE)}:{call.lineno}"
         kw = next((k for k in call.keywords if k.arg == "min_similarity"), None)
         if kw is None:
             violations.append(f"{where} 没传 min_similarity")
@@ -203,10 +206,11 @@ def test_qa_deferred_gate_uses_the_configured_floor():
 def test_the_search_scan_actually_finds_the_call_sites():
     """防止上面那条因为匹配不到调用而恒真（改个变量名就能让它静默失效）。"""
     calls = _search_calls()
-    files = {p.relative_to(BACKEND).as_posix() for p, _ in calls}
+    files = {p.relative_to(SERVICE).as_posix() for p, _ in calls}
     assert len(calls) >= 3, f"只扫到 {len(calls)} 处 index.search，匹配逻辑可能坏了"
     # 三条检索路各一处：问答、抽取、跨文档检索。少了任何一条都说明扫漏了
-    assert files >= {"app/qa.py", "app/extraction.py", "ddp_corpus/routers/search.py"}, \
+    assert files >= {"ddp_corpus/qa.py", "ddp_corpus/extraction.py",
+                     "ddp_corpus/routers/search.py"}, \
         f"三条检索路没扫全，实际扫到 {sorted(files)}"
 
 
@@ -237,7 +241,7 @@ def test_every_anchor_judgement_is_the_same_function():
     import pathlib
 
     reimplemented = []
-    for path in sorted((BACKEND / "app").rglob("*.py")):
+    for path in sorted((SERVICE / "ddp_corpus").rglob("*.py")):
         text = path.read_text(encoding="utf-8")
         if 'rstrip("…")' in text:
             reimplemented.append(path.name)
@@ -275,12 +279,12 @@ def test_citation_shape_has_exactly_one_implementation():
     import ast
 
     hits = []
-    for path in sorted((BACKEND / "app").rglob("*.py")):
+    for path in sorted((SERVICE / "ddp_corpus").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name.endswith("citation_out"):
-                hits.append(f"{path.relative_to(BACKEND)}::{node.name}")
-    assert hits == ["app/evidence.py::citation_out"], \
+                hits.append(f"{path.relative_to(SERVICE)}::{node.name}")
+    assert hits == ["ddp_corpus/evidence.py::citation_out"], \
         f"出处形状又出现了第二份实现：{hits}"
 
 
@@ -303,11 +307,11 @@ def test_fresh_is_an_assertion_not_a_default():
 
 # 阶段 7 之前就存在、且被 `eval_agent` 那张表衡量的生产路径
 QA_PATH = (
-    BACKEND / "app" / "qa.py",
-    BACKEND / "app" / "extraction.py",
-    BACKEND / "app" / "indexing.py",
-    BACKEND / "app" / "routers" / "conversations.py",
-    BACKEND / "app" / "routers" / "search.py",
+    SERVICE / "ddp_corpus" / "qa.py",
+    SERVICE / "ddp_corpus" / "extraction.py",
+    SERVICE / "ddp_corpus" / "indexing.py",
+    SERVICE / "ddp_corpus" / "routers" / "conversations.py",
+    SERVICE / "ddp_corpus" / "routers" / "search.py",
 )
 KNOWLEDGE_MODULES = ("ddp_corpus.knowledge", "ddp_corpus.review_export", "ddp_corpus.routers.knowledge",
                      "ddp_core.knowledge")
@@ -330,8 +334,49 @@ def test_the_existing_qa_path_does_not_import_the_knowledge_layer():
         for module in sorted(_local_imports(path)):
             if any(module == name or module.startswith(name + ".")
                    for name in KNOWLEDGE_MODULES):
-                offenders.append(f"{path.relative_to(BACKEND)} -> {module}")
+                offenders.append(f"{path.relative_to(SERVICE)} -> {module}")
     assert not offenders, (
         f"既有问答链引用了知识层：{offenders}。"
         f"知识层必须能被 knowledge_enabled=False 整体关掉而不动既有指标；"
         f"真要挂进去，先改 plan.md 的验收标准并重跑 eval_agent 定新基线")
+
+
+# ---------------------------------------------------------------------------
+# §5 字节流不得经过本服务
+# ---------------------------------------------------------------------------
+
+def test_corpus_api_accepts_no_file_bodies():
+    """**没有任何端点收文件体。**
+
+    不变式 6：大文件不得完整进入应用进程内存，也不得由应用进程长期中转
+    下载流量。合仓前 `POST /api/documents` 用 `UploadFile` 收 multipart，
+    再 `_read_capped` 把整份文件读进一个 `bytes` —— 200MB 的文件就是 200MB
+    的常驻内存，而扩容应用等于放大对象存储的带宽中转。
+
+    现在字节流由浏览器凭预签名直传对象存储，本服务只收元数据。
+    这条守卫钉住那件事：**任何人想把 `UploadFile` 加回来，这里立刻红**。
+
+    静态扫而不是跑起来查路由：跑起来查只能发现"已经加上去的"，
+    而静态扫连"import 了但还没用"都拦得住。
+    """
+    import ast
+
+    offenders = []
+    for path in sorted((SERVICE / "ddp_corpus").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "fastapi":
+                for alias in node.names:
+                    if alias.name in ("UploadFile", "File"):
+                        offenders.append(f"{path.relative_to(SERVICE)} -> {alias.name}")
+            if isinstance(node, ast.Name) and node.id == "UploadFile":
+                offenders.append(f"{path.relative_to(SERVICE)}:{node.lineno} 用到 UploadFile")
+    assert not offenders, (
+        "语料 API 里出现了文件上传参数：" + "; ".join(sorted(set(offenders)))
+        + "。字节流必须直传对象存储，见 ddp_corpus/ingest.py 的模块说明")
+
+
+def test_the_upload_scan_actually_looks_at_files():
+    """反哨兵：扫不到文件时上一条恒真。"""
+    files = list((SERVICE / "ddp_corpus").rglob("*.py"))
+    assert len(files) >= 20, f"只扫到 {len(files)} 个文件，路径可能写错了"

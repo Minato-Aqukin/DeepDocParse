@@ -22,7 +22,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_core.chunking import page_count_of
-from ddp_corpus.metering import record_usage
+from ddp_corpus.usage import record_usage
 from ddp_corpus.models import Document, ParseJob, utcnow
 from ddp_corpus.service_client import ServiceClient
 from ddp_corpus.storage import Storage, job_result_prefix
@@ -197,7 +197,8 @@ async def archive_job(session: AsyncSession, storage: Storage, service: ServiceC
             document.updated_at = utcnow()
 
     # 记在发起这次解析的人头上；老 job 没这个信息时退回上传者
-    await record_usage(session, user_id=job.initiated_by or document.uploaded_by,
+    await record_usage(session, actor_id=job.initiated_by or document.uploaded_by,
+                       organization_id=document.organization_id,
                        api_key_id=job.api_key_id,
                        parse_job_id=job.id, kind="parse", pages=page_count)
     await session.commit()

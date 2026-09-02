@@ -11,13 +11,15 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
+from ddp_paths import FIXTURES
+
+EVAL_DIR = Path(__file__).resolve().parents[1]
+FIXTURES = FIXTURES
 
 
 def _load_eval():
     spec = importlib.util.spec_from_file_location(
-        "eval_citations", ROOT / "scripts" / "eval_citations.py")
+        "eval_citations", EVAL_DIR / "eval_citations.py")
     module = importlib.util.module_from_spec(spec)
     # 必须先进 sys.modules 再 exec：@dataclass 会用 sys.modules[cls.__module__]
     # 去解析类型注解，模块不在表里就直接 AttributeError
@@ -28,7 +30,7 @@ def _load_eval():
 
 def _load_extraction_eval():
     spec = importlib.util.spec_from_file_location(
-        "eval_extraction_metrics", ROOT / "scripts" / "eval_extraction.py")
+        "eval_extraction_metrics", EVAL_DIR / "eval_extraction.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -37,7 +39,7 @@ def _load_extraction_eval():
 
 def _load_agent_eval():
     spec = importlib.util.spec_from_file_location(
-        "eval_agent_metrics", ROOT / "scripts" / "eval_agent.py")
+        "eval_agent_metrics", EVAL_DIR / "eval_agent.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -98,7 +100,7 @@ def test_bbox_metric_passes_on_the_right_block():
 
 def test_live_ground_truth_loader_keeps_text_anchor_bbox_measurable():
     layout = ev._ground_truth_layout({
-        "kind": "local", "path": "../DeepDocParse/tests/fixtures/long-doc.pdf",
+        "kind": "local", "path": str(FIXTURES / "long-doc.pdf"),
     })
     assert layout is not None
     assert ev._anchor_bbox(layout, "launch code of project Zephyr") is not None
@@ -150,9 +152,9 @@ def test_wrong_page_never_counts_as_a_bbox_hit():
 
 def test_omnidocbench_citation_slices_are_disjoint_and_ten_pages_each():
     dataset = json.loads(
-        (ROOT / "eval" / "omnidocbench-citations-v1.6.json").read_text(encoding="utf-8"))
+        (EVAL_DIR / "datasets" / "omnidocbench-citations-v1.6.json").read_text(encoding="utf-8"))
     manifest = json.loads(
-        (ROOT.parent / "DeepDocParse" / "eval" / "omnidocbench-v1.6-slices.json")
+        (EVAL_DIR / "datasets" / "omnidocbench-v1.6-slices.json")
         .read_text(encoding="utf-8"))
     by_slice = {}
     for sample in dataset["samples"]:
@@ -172,7 +174,7 @@ def test_omnidocbench_citation_slices_are_disjoint_and_ten_pages_each():
 def test_code_layout_golden_matches_all_generated_identifiers():
     layout = json.loads((FIXTURES / "layout-code-corpus.json").read_text(encoding="utf-8"))
     truth = json.loads(
-        (ROOT.parent / "DeepDocParse" / "tests" / "fixtures" / "code-corpus.truth.json")
+        (FIXTURES / "code-corpus.truth.json")
         .read_text(encoding="utf-8"))
     assert len(layout["pdf_info"]) == len(truth["pages"]) == 24
     assert layout["code_detection"] == "heuristic"
@@ -362,7 +364,7 @@ def test_stage5_atom_hit_rates_are_always_reported_separately():
 
 
 def test_stage6_agent_metrics_are_separate_and_unsupported_is_invariant():
-    dataset = json.loads((ROOT / "eval" / "agent.json").read_text(encoding="utf-8"))
+    dataset = json.loads((EVAL_DIR / "datasets" / "agent.json").read_text(encoding="utf-8"))
     metrics = agent_ev.evaluate(dataset)
     assert metrics.retrieval_misses == (1, 6)
     assert metrics.redundant_retrievals == (1, 6)

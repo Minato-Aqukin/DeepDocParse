@@ -44,10 +44,11 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+EVAL_DIR = Path(__file__).resolve().parent
+ROOT = EVAL_DIR.parent
 sys.path.insert(0, str(ROOT / "backend"))
 
-DATASET = ROOT / "eval" / "extractions.json"
+DATASET = EVAL_DIR / "datasets" / "extractions.json"
 
 
 @dataclass

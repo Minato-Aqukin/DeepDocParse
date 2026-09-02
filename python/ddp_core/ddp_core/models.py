@@ -7,8 +7,14 @@
 
     这里（core）   Document · DocumentUpload · ParseJob · Chunk · Evidence · Citation
                    AgentTurn · Assertion · RetrievalCandidate · EvidenceVerification
-    留在 web 层    User · ApiKey · UsageRecord（账号层）
-                   Conversation · Message · Extraction*（HTTP 产品壳；断言/核对已在 core）
+                   KnowledgeEntity · GraphEdge · Wiki* · KnowledgeReview
+    corpus-api     Conversation · Message · Extraction* · CorpusOutbox · ProcessedEvent
+    control（Go）  Organization · User · Membership · ApiKey · UsageLedger · AuditEvent
+
+**跨 schema 没有任何外键。** 用户与组织住在 control schema，由 Go 拥有；
+这里只存 `actor_id` / `organization_id` 这样的裸标识。理由与对账方式见
+`docs/refactor/DATA-OWNERSHIP.md` §3 —— 简单说：硬外键会把两个服务的
+发布顺序绑死，也让"Python 不得修改组织成员"失去数据库层保障。
 
 **`Base` 也在这里**，两侧共用同一份 metadata —— 否则 `create_all` 与 alembic
 只看得见一半的表。web 层的模型 import 这个 Base 定义自己的表，
@@ -95,8 +101,15 @@ class Document(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     # 首个上传者，**仅归属署名** —— 不是可见性边界，也不是授权依据。
-    # 全部上传者见 DocumentUpload；删除权限判的是"在不在那张表里，或是不是管理员"
-    uploaded_by: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
+    # 全部上传者见 DocumentUpload；删除权限判的是"在不在那张表里，或角色够不够"。
+    #
+    # **无外键**：用户住在 control schema，由 Go 拥有。跨 schema 硬外键会把
+    # 两个服务的发布顺序绑死，也让"Python 不得修改组织成员"失去数据库层保障。
+    # 引用完整性由 scripts/reconcile_actors.py 对账兜底（只报告，不删语料）
+    uploaded_by: Mapped[str] = mapped_column(String(32), index=True)
+    # 组织边界。**单组织部署也必须带** —— 将来上多组织 SaaS 时要补的是
+    # 隔离与 RLS，而不是给几十张表加列（企业边界 8）
+    organization_id: Mapped[str] = mapped_column(String(32), default="", index=True)
     doc_id: Mapped[str] = mapped_column(String(64), index=True)
     origin: Mapped[str] = mapped_column(String(8), default="web")   # web | external
     filename: Mapped[str] = mapped_column(String(255))
@@ -145,7 +158,8 @@ class DocumentUpload(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     document_id: Mapped[str] = mapped_column(String(32), ForeignKey("documents.id"), index=True)
-    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
+    # 无外键：用户在 control schema（见 Document.uploaded_by 的说明）
+    user_id: Mapped[str] = mapped_column(String(32), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     __table_args__ = (
@@ -163,8 +177,9 @@ class ParseJob(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     document_id: Mapped[str] = mapped_column(String(32), ForeignKey("documents.id"), index=True)
-    api_key_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("api_keys.id"),
-                                                   default=None)
+    # 哪把对外 key 触发的这次解析。**无外键**：API key 住在 control schema
+    # （Go 拥有），见模块 docstring。计量按它归集，靠事件对账而不是外键
+    api_key_id: Mapped[str | None] = mapped_column(String(32), default=None)
     # 不给默认值：漏传就该在插入时炸，而不是悄悄记成 mineru —— 无 GPU 部署上
     # 那个名字在 service 注册表里根本不存在（三处构造点都显式传 engine）。
     # **光去掉这里的 default= 只在 SQLite 上生效**：PG 上 SQLAlchemy 会把整列从
@@ -452,8 +467,8 @@ class EvidenceVerification(Base):
     verdict: Mapped[str] = mapped_column(String(16))    # pass | reject | question
     reason_code: Mapped[str | None] = mapped_column(String(64), default=None)
     reason_text: Mapped[str | None] = mapped_column(Text, default=None)
-    reviewer_id: Mapped[str | None] = mapped_column(
-        String(32), ForeignKey("users.id"), default=None, index=True)
+    # 无外键：用户在 control schema
+    reviewer_id: Mapped[str | None] = mapped_column(String(32), default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
                                                   index=True)
 
@@ -566,7 +581,8 @@ class KnowledgeReview(Base):
     action: Mapped[str] = mapped_column(String(16), index=True)
     reason_code: Mapped[str | None] = mapped_column(String(64), default=None)
     reason_text: Mapped[str | None] = mapped_column(Text, default=None)
-    reviewer_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
+    # 无外键：用户在 control schema
+    reviewer_id: Mapped[str] = mapped_column(String(32), index=True)
     exported_revision: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
                                                   index=True)

@@ -154,13 +154,21 @@ def collect(source_path: Path, class_name: str) -> list[tuple[str, list[dict]]]:
 
 # --------------------------------------------------------------- Go 源码
 
-#: `env("KEY", "default")` / envInt / envBool / envList
+#: `env("KEY", "default")` / envInt / envBool / envList，允许外面套一层
+#: 类型转换或单位换算（`int32(...)`、`time.Duration(...) * time.Minute`）。
+#: **不要收窄这个正则**：漏匹配的字段会被下面那条反哨兵报成"没有 env 调用"，
+#: 而它其实有 —— 假红比假绿好，但都不该有。
 GO_CALL_RE = re.compile(
-    r'(?P<field>\w+):\s*(?:int32\()?env(?P<kind>Int|Bool|List)?\('
+    r'(?P<field>\w+):\s*(?:[\w.]+\()?env(?P<kind>Int|Bool|List)?\('
     r'"(?P<key>[A-Z0-9_]+)"\s*,\s*(?P<default>[^\n]*?)\)')
 GO_SECTION_RE = re.compile(r"^\s*//\s*-+\s*(.+?)\s*-+\s*$")
 
 GO_TYPES = {None: "string", "Int": "int", "Bool": "bool", "List": "list[str]"}
+
+#: 字段名后缀 -> 展示单位。`JWT_TTL_MINUTES` 的默认值是 `60*24*7`，
+#: 不标单位的话读文档的人会以为是秒
+GO_UNIT_HINT = {"TTL_MINUTES": "分钟", "TTL_SECONDS": "秒", "_SECONDS": "秒",
+                "_BYTES": "字节", "_PER_MIN": "次/分钟"}
 
 
 def collect_go(source_path: Path) -> list[tuple[str, list[dict]]]:
@@ -207,13 +215,28 @@ def collect_go(source_path: Path) -> list[tuple[str, list[dict]]]:
     for m in GO_CALL_RE.finditer(body):
         field = m.group("field")
         default = m.group("default").strip().rstrip(")").strip()
+        key = m.group("key")
+        unit = next((u for suffix, u in GO_UNIT_HINT.items() if key.endswith(suffix)), "")
+        doc = docs.get(field, "")
+        if unit:
+            doc = f"{doc}（单位：{unit}）" if doc else f"单位：{unit}"
         found[field] = {
             "name": field,
-            "env": m.group("key"),
+            "env": key,
             "type": GO_TYPES[m.group("kind")],
             "default": default,
-            "doc": docs.get(field, ""),
+            "doc": doc,
         }
+
+    # **反哨兵**：结构体里声明了、Load() 里却没有对应 env 调用的字段，
+    # 运行时永远是零值 —— 而"配了没生效"是最难查的一类问题。
+    # 生成器只是不把它列出来，那等于帮忙把问题藏起来，所以这里直接报错。
+    declared = [f for _, fields in sections for f in fields]
+    orphans = [f for f in declared if f not in found]
+    if orphans:
+        raise SystemExit(
+            f"::error::{source_path.name} 的这些字段没有对应的 env(...) 调用，"
+            f"运行时会永远是零值：{', '.join(orphans)}")
 
     out: list[tuple[str, list[dict]]] = []
     for title, fields in sections:

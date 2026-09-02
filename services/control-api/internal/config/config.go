@@ -109,6 +109,12 @@ type Config struct {
 	// 登录/注册这类未鉴权端点的限速（次/分钟/IP）。
 	// 目的不是精确公平，是让暴力破解从"几分钟"变成"几个月"
 	LoginRatePerMin int
+	// 问答限速（次/分钟/actor）。它会打一次 chat 模型 + 若干次视觉核对
+	QARatePerMin int
+	// 图谱/wiki 生成限速（次/分钟/actor）。**很贵**：一次要把几十条证据送进模型
+	KnowledgeRatePerMin int
+	// 批量抽取限速（次/分钟/actor）。一次 = N 个字段 × (检索 + 模型调用)
+	ExtractRatePerMin int
 
 	// ---- 其它 ----
 	// 允许的浏览器来源。**不要用 `*`**：配合 credentials 时浏览器会直接拒绝，
@@ -158,6 +164,9 @@ func Load() (*Config, error) {
 		RedisURL:              env("REDIS_URL", ""),
 		DefaultRatePerMin:     envInt("DEFAULT_RATE_LIMIT_PER_MIN", 60),
 		LoginRatePerMin:       envInt("LOGIN_RATE_LIMIT_PER_MIN", 10),
+		QARatePerMin:          envInt("QA_RATE_PER_MIN", 20),
+		KnowledgeRatePerMin:   envInt("KNOWLEDGE_RATE_PER_MIN", 2),
+		ExtractRatePerMin:     envInt("EXTRACT_RATE_PER_MIN", 6),
 		CORSOrigins:           envList("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
 		PublicBaseURL:         env("PUBLIC_BASE_URL", "http://127.0.0.1:8080"),
 		AllowInsecureDefaults: envBool("ALLOW_INSECURE_DEFAULTS", false),

@@ -218,3 +218,38 @@ func TestProxyIgnoresProxyEnv(t *testing.T) {
 			"内网调用会被塞进代理并卡住而不是报错")
 	}
 }
+
+// TestProxyPassesMCPSessionHeaderBothWays：MCP 的会话头必须双向透传，
+// 否则客户端建不起会话（表现是每次调用都像新会话，工具状态全丢）。
+func TestProxyPassesMCPSessionHeaderBothWays(t *testing.T) {
+	var seen string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("mcp-session-id")
+		w.Header().Set("mcp-session-id", "sess-1")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
+	}))
+	defer upstream.Close()
+
+	up, _ := proxy.New("mcp", upstream.URL, "svc-token")
+	front := httptest.NewServer(withActor(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		up.ServeHTTP(w, r, "/mcp")
+	})))
+	defer front.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, front.URL+"/mcp", strings.NewReader(`{}`))
+	req.Header.Set("mcp-session-id", "sess-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+
+	if seen != "sess-1" {
+		t.Fatalf("请求侧会话头没透传：%q", seen)
+	}
+	if got := resp.Header.Get("mcp-session-id"); got != "sess-1" {
+		t.Fatalf("响应侧会话头没带回：%q", got)
+	}
+}

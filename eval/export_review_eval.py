@@ -7,13 +7,14 @@ import asyncio
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+EVAL_DIR = Path(__file__).resolve().parent
+ROOT = EVAL_DIR.parent
 sys.path.insert(0, str(ROOT / "backend"))
 
 from ddp_corpus.db import get_sessionmaker  # noqa: E402
 from ddp_corpus.review_export import export_reviews  # noqa: E402
 
-DEFAULT_OUTPUT = ROOT / "eval" / "reviewed-knowledge.jsonl"
+DEFAULT_OUTPUT = EVAL_DIR / "datasets" / "reviewed-knowledge.jsonl"
 
 
 async def run(output: Path) -> int:

@@ -13,13 +13,14 @@ from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+EVAL_DIR = Path(__file__).resolve().parent
+ROOT = EVAL_DIR.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import eval_agent  # noqa: E402
 
-DATASET = ROOT / "eval" / "graph.json"
-AGENT_DATASET = ROOT / "eval" / "agent.json"
+DATASET = EVAL_DIR / "datasets" / "graph.json"
+AGENT_DATASET = EVAL_DIR / "datasets" / "agent.json"
 
 
 def ratio(hit: int, total: int) -> str:

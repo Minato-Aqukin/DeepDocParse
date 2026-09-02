@@ -24,7 +24,7 @@ from ddp_core.anchor import digest_of
 from ddp_core.compilation import code_detection_of, fingerprint, source_anchor
 from ddp_corpus.compilation import CompileOutput, compile_document
 from ddp_corpus.config import settings
-from ddp_corpus.metering import record_usage
+from ddp_corpus.usage import record_usage
 from ddp_corpus.models import Chunk, Document, Evidence, ParseJob, new_id, utcnow
 from ddp_corpus.storage import Storage
 from ddp_corpus.upstream import embed_texts
@@ -96,9 +96,11 @@ async def _index_claimed(session: AsyncSession, storage: Storage, http: httpx.As
             f"编译版面失败：{type(exc).__name__}: {exc}", compile_failed=True)
         return 0
 
-    user_id = job.initiated_by or document.uploaded_by
+    actor_id = job.initiated_by or document.uploaded_by
+    organization_id = document.organization_id
     if compiled.vision_requests:
-        await record_usage(session, user_id=user_id, parse_job_id=job.id,
+        await record_usage(session, actor_id=actor_id, organization_id=organization_id,
+                           parse_job_id=job.id,
                            kind="compile_vision", requests=compiled.vision_requests)
         # VLM 已经产生真实成本；后续 embedding/落库失败也不能把流水回滚掉。
         await session.commit()
@@ -118,7 +120,8 @@ async def _index_claimed(session: AsyncSession, storage: Storage, http: httpx.As
         return 0
 
 
-    await record_usage(session, user_id=user_id, parse_job_id=job.id, kind="embed",
+    await record_usage(session, actor_id=actor_id, organization_id=organization_id,
+                       parse_job_id=job.id, kind="embed",
                        requests=_batch_count(sum(bool((c.get("search_text") or "").strip())
                                                  for c in chunks)))
     # 与 VLM 同理：向量已经算完，之后若版本切换或 DB 落库失败，成本仍须可审计。

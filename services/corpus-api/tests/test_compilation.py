@@ -15,14 +15,14 @@ from ddp_corpus.evidence import load_citations
 from ddp_corpus.compilation import CompileOutput
 from ddp_corpus.indexing import index_document
 from ddp_corpus.models import (
-    Chunk, Citation, Document, Evidence, ParseJob, UsageRecord, User, as_aware, utcnow,
+    Chunk, Citation, Document, Evidence, ParseJob, as_aware, utcnow,
 )
 from ddp_corpus.qa import Retrieval, build_messages
 from ddp_corpus.storage import MemoryStorage
 from ddp_core.compilation import provider_of
 from ddp_core.search import MemoryIndex, exact_identifiers
 from ddp_core.tokenize import code_tokenized, tokenized
-from tests.conftest import CHAT
+from tests.conftest import CHAT, usage_events
 from tests.test_documents import _callback, _mock_service, _upload
 from tests.test_qa import _real_pdf
 
@@ -72,14 +72,14 @@ async def test_compile_crops_read_pdf_once_and_reuse_object_cache(monkeypatch):
 
 
 @respx.mock
-async def test_compile_materializes_source_and_generated_evidence(auth_client, session):
+async def test_compile_materializes_source_and_generated_evidence(actor_client, session):
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
-    document = await _upload(auth_client, _real_pdf())
-    callback = await _callback(auth_client)
+    document = await _upload(actor_client, _real_pdf())
+    callback = await _callback(actor_client)
     assert callback.status_code == 200
 
-    detail = (await auth_client.get(f"/api/documents/{document['id']}")).json()
+    detail = (await actor_client.get(f"/api/documents/{document['id']}")).json()
     assert detail["index_status"] == "ready"
     assert detail["compile_status"] == "ready"
     assert detail["code_detection"] == "native"
@@ -96,79 +96,73 @@ async def test_compile_materializes_source_and_generated_evidence(auth_client, s
     assert chunk.evidence_id == source.id and chunk.derived_evidence_id == derived.id
     assert source.crop_key and source.crop_key == derived.crop_key
     assert source.provider_fingerprint == chunk.provider_fingerprint
-    usage = (await session.execute(
-        select(UsageRecord).where(UsageRecord.kind == "compile_vision")
-    )).scalars().one()
-    assert usage.requests == 1 and usage.parse_job_id == chunk.parse_job_id
+    usage = await usage_events(session, "compile_vision")
+    assert len(usage) == 1
+    assert usage[0]["requests"] == 1 and usage[0]["parse_job_id"] == chunk.parse_job_id
 
 
 @respx.mock
-async def test_vision_failure_is_partial_not_silent_or_total_failure(auth_client, session):
+async def test_vision_failure_is_partial_not_silent_or_total_failure(actor_client, session):
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=httpx.Response(503, text="down"))
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
-    detail = (await auth_client.get(f"/api/documents/{document['id']}")).json()
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
+    detail = (await actor_client.get(f"/api/documents/{document['id']}")).json()
     assert detail["index_status"] == "ready", "图注原文仍可索引，不应整份作废"
     assert detail["compile_status"] == "partial"
     assert "vision_unavailable" in detail["compile_degraded"]
-    assert (await session.execute(
-        select(UsageRecord.requests).where(UsageRecord.kind == "compile_vision")
-    )).scalar_one() == 1
+    assert [e["requests"] for e in await usage_events(session, "compile_vision")] == [1]
 
 
 @respx.mock
-async def test_vision_usage_survives_later_embedding_failure(auth_client, session):
+async def test_vision_usage_survives_later_embedding_failure(actor_client, session):
     _mock_service(result=VISUAL_RESULT, embed=httpx.Response(503, text="embed down"))
     respx.post(CHAT).mock(return_value=_vision())
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
-    detail = (await auth_client.get(f"/api/documents/{document['id']}")).json()
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
+    detail = (await actor_client.get(f"/api/documents/{document['id']}")).json()
     assert detail["index_status"] == "failed" and "向量化失败" in detail["index_error"]
-    usage = (await session.execute(
-        select(UsageRecord).where(UsageRecord.kind == "compile_vision")
-    )).scalars().one()
-    assert usage.requests == 1
+    usage = await usage_events(session, "compile_vision")
+    assert len(usage) == 1 and usage[0]["requests"] == 1
 
 
 @respx.mock
-async def test_visual_atom_without_crop_does_not_invent_vision_usage(auth_client, session):
+async def test_visual_atom_without_crop_does_not_invent_vision_usage(actor_client, session):
     _mock_service(result=VISUAL_RESULT)
-    document = await _upload(auth_client, b"not-a-pdf", "figure.png", "image/png")
-    await _callback(auth_client)
-    detail = (await auth_client.get(f"/api/documents/{document['id']}")).json()
+    document = await _upload(actor_client, b"not-a-pdf", "figure.png", "image/png")
+    await _callback(actor_client)
+    detail = (await actor_client.get(f"/api/documents/{document['id']}")).json()
     assert detail["index_status"] == "ready"
     assert "crop_unsupported" in detail["compile_degraded"]
-    assert (await session.scalar(select(UsageRecord.id).where(
-        UsageRecord.kind == "compile_vision"))) is None
+    assert (await usage_events(session, "compile_vision") or [None])[0] is None
 
 
 @respx.mock
 async def test_unresolved_default_models_are_visible_and_never_current(
-        auth_client, monkeypatch):
+        actor_client, monkeypatch):
     monkeypatch.setattr(settings, "embedding_model", "")
     monkeypatch.setattr(settings, "chat_model", "")
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
-    detail = (await auth_client.get(f"/api/documents/{document['id']}")).json()
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
+    detail = (await actor_client.get(f"/api/documents/{document['id']}")).json()
     assert detail["compile_status"] == "partial"
     assert "provider_unresolved" in detail["compile_degraded"]
-    validation = (await auth_client.post(
+    validation = (await actor_client.post(
         f"/api/documents/{document['id']}/validate-index")).json()
     assert validation["status"] == "unresolved"
     assert "provider_unresolved" in validation["reasons"]
 
 
 @respx.mock
-async def test_invalid_code_detection_fails_compilation_visibly(auth_client):
+async def test_invalid_code_detection_fails_compilation_visibly(actor_client):
     result = copy.deepcopy(VISUAL_RESULT)
     result["layout_json"]["code_detection"] = "best-effort"
     _mock_service(result=result)
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
-    detail = (await auth_client.get(f"/api/documents/{document['id']}")).json()
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
+    detail = (await actor_client.get(f"/api/documents/{document['id']}")).json()
     assert detail["index_status"] == "failed"
     assert detail["compile_status"] == "failed"
     assert detail["compile_degraded"] == ["compile_failed"]
@@ -177,18 +171,18 @@ async def test_invalid_code_detection_fails_compilation_visibly(auth_client):
 
 @respx.mock
 async def test_version_validation_is_read_only_and_detects_provider_drift(
-        auth_client, session, monkeypatch):
+        actor_client, session, monkeypatch):
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
 
-    current = (await auth_client.post(
+    current = (await actor_client.post(
         f"/api/documents/{document['id']}/validate-index")).json()
     assert current["status"] == "current" and current["safe_to_reindex"] is True
 
     monkeypatch.setattr(settings, "embedding_model", "replacement-model")
-    stale = (await auth_client.post(
+    stale = (await actor_client.post(
         f"/api/documents/{document['id']}/validate-index")).json()
     assert stale["status"] == "stale"
     assert "embedding_model_changed" in stale["reasons"]
@@ -199,11 +193,11 @@ async def test_version_validation_is_read_only_and_detects_provider_drift(
 
 @respx.mock
 async def test_generated_citation_requires_explicit_reindex_acknowledgement(
-        auth_client, session, app_state):
+        actor_client, session, app_state):
     _mock_service(result=VISUAL_RESULT)
     vision = respx.post(CHAT).mock(return_value=_vision())
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
     chunk = (await session.execute(select(Chunk))).scalars().one()
     session.add(Citation(
         evidence_id=chunk.derived_evidence_id, source_kind="message", source_id="m1",
@@ -212,18 +206,18 @@ async def test_generated_citation_requires_explicit_reindex_acknowledgement(
     ))
     await session.commit()
 
-    validation = (await auth_client.post(
+    validation = (await actor_client.post(
         f"/api/documents/{document['id']}/validate-index")).json()
     assert validation["citation_invalidations"] == 1
     assert validation["safe_to_reindex"] is False
-    refused = await auth_client.post(f"/api/documents/{document['id']}/reindex")
+    refused = await actor_client.post(f"/api/documents/{document['id']}/reindex")
     assert refused.status_code == 409
     assert refused.json()["error"]["code"] == "index_version_unsafe"
 
     # 用户明确确认后才能重建；VLM 生成物变了就保留老 Evidence，
     # 并把老引用显式标成 resolved=false，绝不悄悄接到新描述。
     vision.return_value = _vision("延迟在 120ms 后才趋于平稳")
-    accepted = await auth_client.post(
+    accepted = await actor_client.post(
         f"/api/documents/{document['id']}/reindex?acknowledge_invalidations=true")
     assert accepted.status_code == 202
     session.expire_all()
@@ -237,11 +231,11 @@ async def test_generated_citation_requires_explicit_reindex_acknowledgement(
 
 @respx.mock
 async def test_unchanged_source_citation_reconnects_after_reindex(
-        auth_client, session, app_state):
+        actor_client, session, app_state):
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
     chunk = (await session.execute(select(Chunk))).scalars().one()
     source = await session.get(Evidence, chunk.evidence_id)
     session.add(Citation(
@@ -250,11 +244,11 @@ async def test_unchanged_source_citation_reconnects_after_reindex(
     ))
     await session.commit()
 
-    validation = (await auth_client.post(
+    validation = (await actor_client.post(
         f"/api/documents/{document['id']}/validate-index")).json()
     assert validation["citation_reconnectable"] == 1
     assert validation["citation_invalidations"] == 0
-    assert (await auth_client.post(
+    assert (await actor_client.post(
         f"/api/documents/{document['id']}/reindex")).status_code == 202
     session.expire_all()
     loaded = await load_citations(session, source_kind="message", source_ids=["m-source"])
@@ -265,11 +259,11 @@ async def test_unchanged_source_citation_reconnects_after_reindex(
 
 @respx.mock
 async def test_same_text_with_changed_bbox_is_not_reported_reconnectable(
-        auth_client, session, app_state):
+        actor_client, session, app_state):
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
     chunk = (await session.execute(select(Chunk))).scalars().one()
     source = await session.get(Evidence, chunk.evidence_id)
     session.add(Citation(
@@ -282,7 +276,7 @@ async def test_same_text_with_changed_bbox_is_not_reported_reconnectable(
     job = await session.get(ParseJob, chunk.parse_job_id)
     await app_state.storage.put(f"{job.result_prefix}layout.json",
                                 json.dumps(layout).encode(), "application/json")
-    validation = (await auth_client.post(
+    validation = (await actor_client.post(
         f"/api/documents/{document['id']}/validate-index")).json()
     assert validation["citation_reconnectable"] == 0
     assert validation["citation_invalidations"] == 1
@@ -291,11 +285,11 @@ async def test_same_text_with_changed_bbox_is_not_reported_reconnectable(
 
 @respx.mock
 async def test_validation_does_not_compare_other_job_same_seq_citation(
-        auth_client, session):
+        actor_client, session):
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
     doc = await session.get(Document, document["id"])
     other = ParseJob(document_id=doc.id, engine="borndigital", options={},
                      options_hash="other-job", status="succeeded", result_prefix="other/",
@@ -315,7 +309,7 @@ async def test_validation_does_not_compare_other_job_same_seq_citation(
         role="primary", snippet=row.content, content_digest=row.content_digest))
     await session.commit()
 
-    validation = (await auth_client.post(
+    validation = (await actor_client.post(
         f"/api/documents/{doc.id}/validate-index")).json()
     assert validation["citation_reconnectable"] == 0
     assert validation["citation_invalidations"] == 0
@@ -323,11 +317,11 @@ async def test_validation_does_not_compare_other_job_same_seq_citation(
 
 @respx.mock
 async def test_switch_version_requires_ack_for_current_resolved_citations(
-        auth_client, session, app_state):
+        actor_client, session, app_state):
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
     chunk = (await session.execute(select(Chunk))).scalars().one()
     source = await session.get(Evidence, chunk.evidence_id)
     session.add(Citation(
@@ -343,14 +337,14 @@ async def test_switch_version_requires_ack_for_current_resolved_citations(
                                 json.dumps(VISUAL_RESULT["layout_json"]).encode(),
                                 "application/json")
 
-    validation = (await auth_client.post(
+    validation = (await actor_client.post(
         f"/api/documents/{document['id']}/validate-index?job_id={target.id}")).json()
     assert validation["citation_invalidations"] == 1
-    refused = await auth_client.put(
+    refused = await actor_client.put(
         f"/api/documents/{document['id']}/current-job", json={"job_id": target.id})
     assert refused.status_code == 409
     assert refused.json()["error"]["code"] == "index_version_unsafe"
-    accepted = await auth_client.put(
+    accepted = await actor_client.put(
         f"/api/documents/{document['id']}/current-job",
         json={"job_id": target.id, "acknowledge_invalidations": True})
     assert accepted.status_code == 200
@@ -358,29 +352,28 @@ async def test_switch_version_requires_ack_for_current_resolved_citations(
 
 @respx.mock
 async def test_revived_document_with_history_waits_for_validation(
-        auth_client, session, app_state):
+        actor_client, session, app_state):
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
     pdf = _real_pdf()
-    document = await _upload(auth_client, pdf)
-    await _callback(auth_client)
+    document = await _upload(actor_client, pdf)
+    await _callback(actor_client)
     chunk = (await session.execute(select(Chunk))).scalars().one()
     source = await session.get(Evidence, chunk.evidence_id)
     session.add(Citation(
         evidence_id=source.id, source_kind="message", source_id="before-delete",
         role="primary", snippet=source.content, content_digest=source.content_digest))
     await session.commit()
-    assert (await auth_client.delete(f"/api/documents/{document['id']}")).status_code == 204
+    assert (await actor_client.delete(f"/api/documents/{document['id']}")).status_code == 204
 
-    revived = await _upload(auth_client, pdf)
+    revived = await _upload(actor_client, pdf)
     assert revived["index_status"] == "failed"
     assert "版本校验" in revived["index_error"]
     assert revived["compile_status"] == "failed"
     assert revived["compile_degraded"] == ["reindex_validation_required"]
 
     # 删除前已经排队、复活后才到达的 worker 不得绕过版本校验闸门，也不得产生新费用。
-    usage_before = set((await session.execute(select(UsageRecord.id).where(
-        UsageRecord.kind.in_(("compile_vision", "embed"))))).scalars())
+    usage_before = {e["_event_id"] for e in (await usage_events(session, "compile_vision")) + (await usage_events(session, "embed"))}
     vision_calls_before = len(respx.calls)
     assert await index_document(
         session, app_state.storage, app_state.http, document["id"]
@@ -389,8 +382,7 @@ async def test_revived_document_with_history_waits_for_validation(
     assert row.index_status == "failed"
     assert row.compile_status == "failed"
     assert row.compile_degraded == ["reindex_validation_required"]
-    usage_after = set((await session.execute(select(UsageRecord.id).where(
-        UsageRecord.kind.in_(("compile_vision", "embed"))))).scalars())
+    usage_after = {e["_event_id"] for e in (await usage_events(session, "compile_vision")) + (await usage_events(session, "embed"))}
     assert usage_after == usage_before
     assert len(respx.calls) == vision_calls_before
     assert (await session.scalar(select(Chunk.id).where(
@@ -398,30 +390,30 @@ async def test_revived_document_with_history_waits_for_validation(
 
 
 @respx.mock
-async def test_reindex_refuses_second_worker_while_build_is_active(auth_client, session):
+async def test_reindex_refuses_second_worker_while_build_is_active(actor_client, session):
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
     row = await session.get(Document, document["id"])
     row.index_status = "indexing"
     row.index_lease_until = utcnow() + timedelta(minutes=5)
     await session.commit()
-    response = await auth_client.post(f"/api/documents/{document['id']}/reindex")
+    response = await actor_client.post(f"/api/documents/{document['id']}/reindex")
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "index_in_progress"
 
 
 @respx.mock
 async def test_reconcile_recovers_expired_index_lease(
-        auth_client, session, app_state):
+        actor_client, session, app_state):
     from ddp_corpus import db
     from ddp_corpus.reconcile import reconcile_once
 
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
     row = await session.get(Document, document["id"])
     old_generation = row.index_generation
     row.index_status = "indexing"
@@ -441,13 +433,13 @@ async def test_reconcile_recovers_expired_index_lease(
 
 @respx.mock
 async def test_old_generation_cannot_commit_while_successor_is_indexing(
-        auth_client, session, app_state, monkeypatch):
+        actor_client, session, app_state, monkeypatch):
     from ddp_corpus.indexing import _index_claimed
 
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
-    document = await _upload(auth_client, _real_pdf())
-    await _callback(auth_client)
+    document = await _upload(actor_client, _real_pdf())
+    await _callback(actor_client)
     row = await session.get(Document, document["id"])
     existing_ids = set((await session.execute(select(Chunk.id))).scalars().all())
     stale_generation = row.index_generation
@@ -487,11 +479,12 @@ async def test_stale_sessions_cannot_reuse_fencing_generation(session):
     from ddp_corpus.indexing import _fail_if_current, claim_for_indexing
     from ddp_corpus.versions import advance_index_generation
 
-    user = User(username="fencing-owner", password_hash="x")
-    session.add(user)
-    await session.flush()
+    # 用户住在 control schema（Go 拥有），语料侧只存裸 actor id
+
+
+    actor_id = "actor-fencing-owner"
     document = Document(
-        uploaded_by=user.id, doc_id="f" * 64, origin="web", filename="fence.pdf",
+        uploaded_by=actor_id, doc_id="f" * 64, origin="web", filename="fence.pdf",
         mime="application/pdf", size_bytes=1, index_status="pending", index_generation=5)
     session.add(document)
     await session.flush()
@@ -539,11 +532,12 @@ async def test_stale_sessions_cannot_reuse_fencing_generation(session):
 async def test_active_index_worker_renews_lease(session, monkeypatch):
     from ddp_corpus.indexing import _heartbeat_lease
 
-    user = User(username="heartbeat", password_hash="x")
-    session.add(user)
-    await session.flush()
+    # 用户住在 control schema（Go 拥有），语料侧只存裸 actor id
+
+
+    actor_id = "actor-heartbeat"
     document = Document(
-        uploaded_by=user.id, doc_id="h" * 64, origin="web", filename="heartbeat.pdf",
+        uploaded_by=actor_id, doc_id="h" * 64, origin="web", filename="heartbeat.pdf",
         mime="application/pdf", size_bytes=1, index_status="indexing",
         index_generation=7, index_lease_until=utcnow() + timedelta(milliseconds=20))
     session.add(document)
@@ -566,11 +560,11 @@ async def test_active_index_worker_renews_lease(session, monkeypatch):
 async def test_stale_index_worker_cannot_overwrite_new_current_job(
         session, app_state, monkeypatch):
     _mock_service()
-    user = User(username="race", password_hash="x")
-    session.add(user)
-    await session.flush()
+    # 用户住在 control schema（Go 拥有），语料侧只存裸 actor id
+
+    actor_id = "actor-race"
     document = Document(
-        uploaded_by=user.id, doc_id="d" * 64, origin="web", filename="race.pdf",
+        uploaded_by=actor_id, doc_id="d" * 64, origin="web", filename="race.pdf",
         mime="application/pdf", size_bytes=1, object_key="source.pdf",
         index_status="pending")
     session.add(document)
@@ -620,10 +614,10 @@ async def test_stale_index_worker_cannot_overwrite_new_current_job(
 
 
 async def test_exact_identifier_query_gives_code_keyword_route_extra_weight(session):
-    user = User(username="coder", password_hash="x")
-    session.add(user)
-    await session.flush()
-    document = Document(uploaded_by=user.id, doc_id="c" * 64, origin="web",
+    # 用户住在 control schema（Go 拥有），语料侧只存裸 actor id
+
+    actor_id = "actor-coder"
+    document = Document(uploaded_by=actor_id, doc_id="c" * 64, origin="web",
                         filename="code.pdf", mime="application/pdf", size_bytes=1)
     session.add(document)
     await session.flush()

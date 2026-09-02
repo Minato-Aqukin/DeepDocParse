@@ -1,27 +1,28 @@
-# DeepDocParse-Web（产品层）配置参考
+# DeepDocParse 语料 API 配置参考
 
-后端的全部配置项。取自 `backend/app/config.py`，**本文件由脚本生成，不要手改**——
-改注释请改源码，然后重跑 `python scripts/gen_config_docs.py`。
+语料 API 的全部配置项。取自 `services/corpus-api/ddp_corpus/config.py`，
+**本文件由脚本生成，不要手改** —— 改注释请改源码，然后重跑
+`python scripts/gen_config_docs.py`。
 
 环境变量名 = 字段名大写（pydantic-settings 默认规则，未设前缀）。
-配置来源优先级：环境变量 > `backend/.env` > 仓库根 `.env` > 下表默认值。
+配置来源优先级：环境变量 > 服务自己的 `.env` > 下表默认值。
 
-前端另有三个构建期变量（`frontend/.env*`，不在下表）：
-`VITE_API_TARGET`（dev server 代理到的后端地址）、`VITE_API_BASE`（打包后请求的前缀），
+账号、API key、配额、限速那一层的配置**不在这里** —— 它们属于
+`services/control-api`（Go），见 `services/control-api/CONFIG.md`。
+
+前端另有构建期变量（`apps/web/.env*`，不在下表）：`VITE_API_TARGET`
+（dev server 代理到的后端地址）、`VITE_API_BASE`（打包后请求的前缀），
 以及 `VITE_DEFAULT_ENGINE`（上传对话框预选的解析引擎，留空取 `ENGINES` 第一条）。
-**`VITE_DEFAULT_ENGINE` 要与后端 `DEFAULT_PARSE_ENGINE`、service 的 `models.yaml` 三者对齐**——
-任一处对不上，上传会在 service 侧收 404 unknown_engine。
+**`VITE_DEFAULT_ENGINE` 要与 `DEFAULT_PARSE_ENGINE`、`infra/registry/models.yaml`
+三者对齐** —— 任一处对不上，上传会在网关侧收 404 unknown_engine。
 
-共 **72** 项。
+共 **63** 项。
 
 ## 本层资源
 
 | 环境变量 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `DATABASE_URL` | `str` | `'postgresql+asyncpg://ddp:ddp@127.0.0.1:15432/deepdocparse'` | PostgreSQL（必须带 pgvector 扩展；单测走 SQLite in-memory，不读这一项）。 端口 15432 是为了不和别处的 PG 撞车 |
-| `JWT_SECRET` | `str` | `'change-me'` | 签发/校验用户会话的密钥。**占位值会被拒绝启动**：它是 change-me 等于任何人都能给任意 user_id 伪造一个有效会话，且运行时不报任何错 |
-| `JWT_TTL_MINUTES` | `int` | `60 * 24 * 7` | 登录态有效期（分钟），默认 7 天 |
-| `BCRYPT_ROUNDS` | `int` | `12` | bcrypt 成本因子。**生产不要调低** —— 它就是抗离线爆破的全部本钱。 单测把它降到 4：默认 12 时一次 hash+verify 要 0.37s，而几乎每个用例都要注册一个 用户，光这一项就占掉整个套件大半时间（见 tests/conftest.py） |
 | `MINIO_INTERNAL_ENDPOINT` | `str` | `'127.0.0.1:19000'` | MinIO：service 与浏览器走不同 endpoint —— 预签名 URL 的签名覆盖 host， 两边 host 不同则签名不同，必须分开生成（见 CLAUDE.md 部署陷阱）。 端口 19000/19001：9000 被 gateway 占用，且要避开 Windows 保留段 7964-8063。 service / 本进程可达 |
 | `MINIO_PUBLIC_ENDPOINT` | `str` | `'127.0.0.1:19000'` | 浏览器可达 |
 | `MINIO_ACCESS_KEY` | `str` | `'minioadmin'` | 对象存储凭据（生产必须改） |
@@ -34,8 +35,8 @@
 | 环境变量 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `SERVICE_URL` | `str` | `'http://127.0.0.1:9000'` | DeepDocParse gateway 的地址。解析平面必须走它，embedding/chat 缺省也回落到它 |
-| `MCP_URL` | `str` | `'http://127.0.0.1:9100'` | service 的 MCP 平面，/mcp 反代的上游 |
-| `SERVICE_TOKEN` | `str` | `'change-me'` | 与 service 之间的内网令牌，**必须与 DeepDocParse/.env 的 SERVICE_TOKEN 一致**。 它同时也是 /internal/* 回调端点的凭据 —— 占位值会被拒绝启动 |
+| `CONTROL_URL` | `str` | `'http://127.0.0.1:8080'` | 控制面（services/control-api）。本服务向它要两样东西： 稳定文件 URL 的凭证、actor 显示名 —— 两者都住在 control schema， 而 corpus 对那个 schema 没有任何权限（企业边界 5） |
+| `SERVICE_TOKEN` | `str` | `'change-me'` | 内网服务凭据，**三个服务必须一致**（control-api / model-gateway / 本服务）。 它是本服务唯一的门禁：actor 上下文头之所以可信，前提就是 "只有持有它的调用方能进来"。占位值会被拒绝启动 |
 | `DEFAULT_PARSE_ENGINE` | `str` | `'mineru'` | 上传/重解析没有显式指定引擎时用哪个。**名字必须在 service 的 models.yaml 里存在**， 否则 service 返回 404 unknown_engine —— 这正是无 GPU 环境踩到的： models.cpu.yaml 只注册了 borndigital，本层却按名字写死 mineru，第一步就断。 与注册表驱动一致：换引擎 = 改这一行配置，不改代码 |
 | `EMBEDDING_URL` | `str` | `''` | 解析平面必须走 service（那是它的本职）；但 embedding 与 chat 只要求 OpenAI 兼容， 留独立配置以免把本层绑死在 DeepDocParse 的部署形态上（ADR #17）。 留空则回落到 {service_url}/v1/...，dev 下什么都不用配。 如直连 TEI：http://127.0.0.1:18080/v1/embeddings |
 | `EMBEDDING_TOKEN` | `str` | `''` | 留空用 service_token |
@@ -43,9 +44,9 @@
 | `CHAT_URL` | `str` | `''` | 如直连 vLLM：http://.../v1/chat/completions |
 | `CHAT_TOKEN` | `str` | `''` | 留空用 service_token |
 | `CHAT_MODEL` | `str` | `''` | 留空由上游注册表选 default |
-| `PUBLIC_BASE_URL` | `str` | `'http://127.0.0.1:8080'` | 本服务对 service 可达的外部地址：稳定文件 URL 与解析回调都用它拼。 宿主机混合模式用 127.0.0.1:8080，全容器模式用服务名（http://web-backend:8080）。 |
-| `REDIS_URL` | `str` | `''` | 多副本部署必须配：限速计数与对账选主都靠它。留空 = 单实例模式（进程内计数） |
-| `MAX_UPLOAD_BYTES` | `int` | `200 * 1024 * 1024` | 单次上传的字节上限。**必须有**：上传体要整个进内存（算内容 sha256 当 doc_id， 再原样 put 进 MinIO），没有上限时任意登录用户传个大文件就能把进程打爆 ——dev 机 WSL 只有 ~7.7GB，门槛极低。超限返回 413。 |
+| `PUBLIC_BASE_URL` | `str` | `'http://127.0.0.1:8081'` | 本服务对模型网关可达的地址：解析回调用它拼。 宿主机混合模式用 127.0.0.1:8081，全容器模式用服务名（http://corpus-api:8081） |
+| `REDIS_URL` | `str` | `''` | 多副本部署必须配：对账选主靠它。留空 = 单实例模式。 **限速不在这里** —— 整体迁去了 control-api |
+| `MAX_UPLOAD_BYTES` | `int` | `200 * 1024 * 1024` | 单文件上限。**真正的把关在 control-api**（它签发预签名前就校验）， 这里保留是给"外部提交"路径与展示用 —— 两处的值应当一致。 字节流不再经过本进程（不变式 6），所以它不再是 OOM 防线 |
 | `UPLOAD_CHUNK_BYTES` | `int` | `1024 * 1024` | 分片读取的粒度：边读边累计，超限立刻中断，不等整个文件落地 |
 
 ## 归档与对账
@@ -80,9 +81,7 @@
 | `QA_VERIFY_PARSE` | `bool` | `True` | 出处一致性核对（A4）：把裁出来的区域图让视觉模型原样抄一遍，与 chunk 文本比对。 补的是七种降级里唯一的洞 ——「解析本身错了」。那时 chunk 文本是错的， 但语义相似度照样过阈值、照样裁图、照样标 verified，产出这个类别最恶劣的错误： **带着"已做视觉验证"标记的假出处**。核对与回答并发跑，不增加首字延迟。 |
 | `QA_PARSE_MISMATCH_THRESHOLD` | `float` | `0.55` | 相似度低于它就判定解析与原图对不上（difflib 比值，0~1）。  **2026-08-25 在 4090D + DeepSeek-OCR-2 上标定过**（此前是没有依据的 0.35）： 一致组（块图 vs 自己的文本）  n=10，全部 1.000 不一致组（块图 vs 别人的文本）n=90，p95=0.382，max=0.643 旧的 0.35 会放过 5/90 个该报的不一致。标定脚本在 service 仓库： `DeepDocParse/scripts/calibrate_verify_threshold.py`。  取 0.55 而不是脚本建议的中点 0.69：标定样本是 born-digital 英文单栏， 是最容易的一类；扫描件/中文上抄写保真度会掉。仍然**宁可漏报不要误报**： 误报会把好出处打成"存疑"，比不报更伤信任。  **这个数字的来源与本层的实际用法并不完全对得上，用之前先读这段。** 标定跑的是 service 侧：DeepSeek-OCR-2 + 它的原生 prompt `Free OCR.`。 而本层 qa.TRANSCRIBE_PROMPT 写死的是一句**中文指令**，模型由 CHAT_MODEL 决定 （quickstart 缺省引导用户填一个通用文本/视觉模型）—— service 侧那套 "按注册表 options.transcribe_prompt 换成模型听得懂的话"**没有移植到本层**。 也就是说：把阈值从 0.35 提到 0.55 在本层是朝着**误报**方向动的， 而上面刚说过本层的既定取向是宁可漏报。之所以仍然跟着提，是因为两处同源、 分叉会更难解释；但**本层至今没有自己的标定数据**。 拿到 GPU 机器后要做的是：用本层真实的 CHAT_MODEL + 中文 prompt 重跑一次 calibrate_verify_threshold.py，按那个分布定本层自己的值 （或者把 transcribe_prompt 那套移植过来，让两层真的同源）。 |
 | `QA_VERIFY_TIMEOUT` | `float` | `20.0` | 等核对结果的上限（秒）。核对与回答并发跑，正常情况下回答先结束、这里几乎不等； 但视觉模型在 CPU 上抄一段文字可能要几分钟（read 超时是 900s）， **没有上限的话 done 帧会被硬生生拖后几分钟**，用户看着答案已经出完却迟迟不落定。 超时就当"没测出来"——宁可不打标，也不能让核对拖垮体验 |
-| `QA_RATE_PER_MIN` | `int` | `20` | 每用户问答限速 |
 | `KNOWLEDGE_ENABLED` | `bool` | `True` | 可整体关掉知识层，旧检索/问答路径不受影响 |
-| `KNOWLEDGE_RATE_PER_MIN` | `int` | `2` | 图谱/wiki 生成很贵，单独限速 |
 | `KNOWLEDGE_MAX_EVIDENCE` | `int` | `50` | 单次生成送入模型的证据原子上限 |
 
 ## 重排序（D1）
@@ -109,16 +108,7 @@
 | `EXTRACT_MAX_DOCUMENTS` | `int` | `200` | 一次批量最多多少份文档。没有上限时"全选"就能提交几千份 |
 | `EXTRACT_VERIFY` | `bool` | `True` | 出处一致性核对：裁出区域图让视觉模型原样抄一遍（沿用问答平面 A4 的做法）。 抽取默认**开**（与 service 侧默认关相反）：产品层有原件、有裁剪管线， 而抽取结果是要被当数据用的，核对的价值比问答那边更高 |
 | `EXTRACT_VERIFY_FIELDS` | `int` | `3` | 核对的字段数上限。每个字段核对一次 = 一次渲染 + 一次视觉模型调用， 全量核对会让一次 30 字段的抽取变成 60 次模型调用 |
-| `EXTRACT_RATE_PER_MIN` | `int` | `6` | 每用户批量抽取限速（次/分钟） |
 | `CHAT_READ_TIMEOUT` | `float` | `900.0` | 视觉模型在 CPU 上出第一个 token 可能要几分钟（dev 机常态），读超时要留够 |
-
-## 额度默认值（新建 key 时的初值）
-
-| 环境变量 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `DEFAULT_QUOTA_PAGES` | `int | None` | `1000` | None = 不限 |
-| `DEFAULT_RATE_LIMIT_PER_MIN` | `int` | `60` | 新建 key 的默认限速（次/分钟） |
 | `ALLOW_INSECURE_DEFAULTS` | `bool` | `False` | 只有明确知道自己在做什么才打开（一次性容器、CI）。生产打开等于没有鉴权 |
-| `CORS_ORIGINS` | `str` | `'http://localhost:5173,http://127.0.0.1:5173'` | 允许跨源访问的前端地址，逗号分隔。默认是 dev 的 Vite（5173）—— 换部署形态时必须能改配置而不是改代码 |
 
 <!-- 由 scripts/gen_config_docs.py 生成，请勿手改 -->

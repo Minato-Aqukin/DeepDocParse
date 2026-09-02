@@ -159,3 +159,44 @@ Go 侧落地后从工作树删除（§19.3：最终工作树不得存在未使�
 > `usage_records`，其中三张表本身要迁去 control）。这些必须在同一次改动里
 > 改成不带 FK 约束的 `actor_id`，否则 `create_all` 与 alembic 会在
 > mapper 配置期爆炸。详见 `docs/refactor/DATA-OWNERSHIP.md`。
+
+---
+
+## 6. 执行记录：账号层剥离与外部平面归位（2026-09-02）
+
+### 6.1 实际删除
+
+| 删除项 | 替代实现 | 等价覆盖 |
+|---|---|---|
+| `backend/app/routers/{auth,apikeys,usage,proxy,files}.py` | control-api 的 `/api/auth/*` `/api/keys/*` `/api/usage` `/files/{token}` 与统一入口 | Go 的 config/auth/rbac/proxy 用例 |
+| `backend/app/{security,metering}.py` | control-api 的 `internal/auth`、`internal/ratelimit`、`usage_ledger` | 同上 |
+| `POST /api/documents`（multipart 上传） | 预签名直传 + `DocumentSubmitted` 事件（`ddp_corpus/ingest.py`） | `test_corpus_api_accepts_no_file_bodies`（静态守卫，变异确认过） |
+| `tests/test_{auth_keys,usage,proxy}.py` | 见下表 | |
+| `User` / `ApiKey` / `UsageRecord` / `FileToken` 四张表 | control schema | `scripts/check_data_ownership.py` |
+| corpus 侧的三处领域限速 | control-api 的 `domainThrottle` | Go 的 `internal/ratelimit` |
+
+### 6.2 测试搬迁对照（§12.1：下降必须有等价覆盖证明）
+
+| 原用例 | 去向 |
+|---|---|
+| `test_auth_keys.py`（5） | Go：`TestSessionRejectsNoneAlgorithm` `TestVerifyPasswordAlwaysDoesWork` `TestAPIKeyShape` `TestViewerCannotEscalateViaAPIKey` 等 |
+| `test_usage.py`（2） | Go：`store.UsageSeries` + `handleUsage`（按天/种类聚合、scope=organization 需 admin） |
+| `test_proxy.py` 的鉴权/限速/额度/SSE/MCP（8） | Go：`TestProxyReplacesClientAuthorization` `TestProxyStreamsWithoutBuffering` `TestProxyPassesMCPSessionHeaderBothWays` + `requireAPIKey` |
+| `test_proxy.py` 的**计量归集五条** | **保留**，搬到 `tests/test_external_plane.py` —— 那是语料侧真正拥有的语义 |
+| `test_ops.py` 的限速三条 | Go：`internal/ratelimit` |
+| `test_documents.py` 的上传体积两条 | control-api 在签发预签名前把关 + 静态守卫 |
+| `test_documents.py` 的 `/files` 两条 | control-api（302 到短期签名 URL） |
+| `test_eval_metrics.py` / `test_eval_graph.py`（27） | 搬到 `eval/tests/`（它们验的是评测器，不是语料 API） |
+
+### 6.3 一个**没有**被删的东西
+
+`/v1/parse*` **不是**直接代给网关的。它会在语料里留下 Document 与 ParseJob
+（调用方的历史在 Web 端也看得到，按页计量也需要锚点），而那两张表 Go 一个字
+都写不了。所以入口把 `POST /v1/parse` 与 `GET /v1/parse/*` 路由到 corpus-api，
+其余 `/v1/*`（chat / embeddings / models / rerank）才直接代给网关。
+
+**对外契约一个字没变**（非目标 §3.2）。那五条计量回归用例
+（第二个用户不能白嫖 / 跨用户取结果不能记错人 / 三方共享时中间那位也要计费 /
+共享任务不 500 / 外部提交者要记归属）随实现一起保留，判重锚点从
+`UsageRecord` 换成语料侧的 `usage_claims` 表 —— 理由写在
+`models.UsageClaim` 的 docstring 里。

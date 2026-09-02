@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy import select
 
 from ddp_corpus.backfill import backfill
-from ddp_corpus.models import Chunk, Conversation, Document, ExtractionItem, Message, ParseJob, User
+from ddp_corpus.models import Chunk, Conversation, Document, ExtractionItem, Message, ParseJob
 from ddp_core.anchor import digest_of
 from ddp_core.models import Citation, Evidence
 from ddp_core.tokenize import tokenized
@@ -31,10 +31,9 @@ TEXTS = ["第一段：设备额定电压为 380V，允许偏差正负百分之�
 
 
 async def _seed(session) -> tuple[Document, ParseJob, Conversation]:
-    user = User(username="bf", password_hash="x")
-    session.add(user)
-    await session.flush()
-    document = Document(uploaded_by=user.id, doc_id="b" * 64, filename="manual.pdf",
+    # 用户住在 control schema（Go 拥有），语料侧只存裸 actor id
+    actor_id = "actor-backfill"
+    document = Document(uploaded_by=actor_id, doc_id="b" * 64, filename="manual.pdf",
                         mime="application/pdf", object_key="", index_status="ready")
     session.add(document)
     await session.flush()
@@ -48,7 +47,7 @@ async def _seed(session) -> tuple[Document, ParseJob, Conversation]:
                           page_idx=seq, bbox=[72, 100, 500, 130], page_size=[595, 842],
                           text=text, char_len=len(text), block_type="text",
                           text_tokenized=tokenized(text)))
-    conversation = Conversation(document_id=document.id, user_id=user.id, title="c")
+    conversation = Conversation(document_id=document.id, actor_id=actor_id, title="c")
     session.add(conversation)
     await session.flush()
     await session.commit()
@@ -240,7 +239,7 @@ async def test_extraction_fields_are_backfilled_per_field(session):
 
     document, job, conversation = await _seed(session)
     user_id = document.uploaded_by
-    run = ExtractionRun(user_id=user_id, name="r", schema_json={}, kind="object")
+    run = ExtractionRun(actor_id=user_id, name="r", schema_json={}, kind="object")
     session.add(run)
     await session.flush()
     item = ExtractionItem(run_id=run.id, document_id=document.id, parse_job_id=job.id,

@@ -24,13 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_corpus.config import settings
 from ddp_corpus.db import get_session, get_sessionmaker
-from ddp_corpus.deps import current_user, get_storage
+from ddp_corpus.deps import Actor, current_actor, get_storage
 from ddp_corpus.errors import APIError
 from ddp_corpus.evidence import citation_out, load_citations, record_evidence
-from ddp_corpus.metering import record_usage
+from ddp_corpus.usage import record_usage
 from ddp_corpus.models import (
     AgentTurn, Assertion, Chunk, Citation, Conversation, Document, Evidence,
-    EvidenceVerification, Message, ParseJob, RetrievalCandidate, User, utcnow,
+    EvidenceVerification, Message, ParseJob, RetrievalCandidate, utcnow,
 )
 from ddp_corpus.qa import (
     Retrieval, answer_model_meta, attach_crops, build_messages, decide_retrieval,
@@ -69,7 +69,7 @@ def _sse(event: str, payload: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
 
 
-async def _owned_document(document_id: str, user: User, session: AsyncSession) -> Document:
+async def _owned_document(document_id: str, actor: Actor, session: AsyncSession) -> Document:
     """取文档。**不判归属**（1b）—— 语料整个部署共享，谁都能对任一文档发起问答。
 
     名字保留是为了少改调用点；判据只剩"存在且未删"。
@@ -80,19 +80,20 @@ async def _owned_document(document_id: str, user: User, session: AsyncSession) -
     return document
 
 
-async def _owned_conversation(cid: str, user: User, session: AsyncSession) -> Conversation:
+async def _owned_conversation(cid: str, actor: Actor, session: AsyncSession) -> Conversation:
     conversation = await session.get(Conversation, cid)
-    if conversation is None or conversation.user_id != user.id:
+    if conversation is None or conversation.actor_id != actor.id:
         raise APIError(404, "conversation not found", "invalid_request_error",
                        "conversation_not_found")
     return conversation
 
 
 @router.post("/documents/{document_id}/conversations", status_code=201)
-async def create_conversation(document_id: str, user: User = Depends(current_user),
+async def create_conversation(document_id: str, actor: Actor = Depends(current_actor),
                               session: AsyncSession = Depends(get_session)):
-    document = await _owned_document(document_id, user, session)
-    conversation = Conversation(user_id=user.id, document_id=document.id, title="新会话")
+    document = await _owned_document(document_id, actor, session)
+    conversation = Conversation(actor_id=actor.id, organization_id=actor.organization_id,
+                                document_id=document.id, title="新会话")
     session.add(conversation)
     await session.commit()
     return {"id": conversation.id, "document_id": document.id, "title": conversation.title,
@@ -100,9 +101,9 @@ async def create_conversation(document_id: str, user: User = Depends(current_use
 
 
 @router.get("/conversations")
-async def list_conversations(document: str = "", user: User = Depends(current_user),
+async def list_conversations(document: str = "", actor: Actor = Depends(current_actor),
                              session: AsyncSession = Depends(get_session)):
-    stmt = select(Conversation).where(Conversation.user_id == user.id)
+    stmt = select(Conversation).where(Conversation.actor_id == actor.id)
     if document:
         stmt = stmt.where(Conversation.document_id == document)
     rows = (await session.execute(stmt.order_by(Conversation.updated_at.desc()))).scalars().all()
@@ -229,9 +230,9 @@ def _ordered_citation_union(assertions: list[dict]) -> list[dict]:
 
 
 @router.get("/conversations/{cid}/messages")
-async def list_messages(cid: str, user: User = Depends(current_user),
+async def list_messages(cid: str, actor: Actor = Depends(current_actor),
                         session: AsyncSession = Depends(get_session)):
-    conversation = await _owned_conversation(cid, user, session)
+    conversation = await _owned_conversation(cid, actor, session)
     rows = (await session.execute(
         select(Message).where(Message.conversation_id == cid).order_by(Message.created_at)
     )).scalars().all()
@@ -262,9 +263,9 @@ async def list_messages(cid: str, user: User = Depends(current_user),
 
 
 @router.delete("/conversations/{cid}", status_code=204)
-async def delete_conversation(cid: str, user: User = Depends(current_user),
+async def delete_conversation(cid: str, actor: Actor = Depends(current_actor),
                               session: AsyncSession = Depends(get_session)):
-    conversation = await _owned_conversation(cid, user, session)
+    conversation = await _owned_conversation(cid, actor, session)
     message_ids = select(Message.id).where(Message.conversation_id == conversation.id)
     assertion_ids = select(Assertion.id).where(Assertion.message_id.in_(message_ids))
     turn_ids = select(AgentTurn.id).where(AgentTurn.message_id.in_(message_ids))
@@ -282,13 +283,13 @@ async def delete_conversation(cid: str, user: User = Depends(current_user),
 
 
 @router.get("/documents/{document_id}/crops/{job_id}/{name}")
-async def get_crop(document_id: str, job_id: str, name: str, user: User = Depends(current_user),
+async def get_crop(document_id: str, job_id: str, name: str, actor: Actor = Depends(current_actor),
                    session: AsyncSession = Depends(get_session),
                    storage: Storage = Depends(get_storage)):
     """出处区域截图。名字里已含 bbox 摘要，路径只做归属校验。"""
     from fastapi.responses import Response
 
-    document = await _owned_document(document_id, user, session)
+    document = await _owned_document(document_id, actor, session)
     if "/" in name or ".." in name:
         raise APIError(400, "invalid crop name", "invalid_request_error", "invalid_name")
     # job 也要校验归属：不然路径里的 job_id 会被原样拼进对象键
@@ -314,12 +315,12 @@ def _crop_url(document_id: str, crop_key: str | None) -> str | None:
 
 
 @router.get("/evidence/{evidence_id}")
-async def get_evidence_detail(evidence_id: str, user: User = Depends(current_user),
+async def get_evidence_detail(evidence_id: str, actor: Actor = Depends(current_actor),
                               session: AsyncSession = Depends(get_session)):
     evidence = await session.get(Evidence, evidence_id)
     if evidence is None:
         raise APIError(404, "evidence not found", "invalid_request_error", "evidence_not_found")
-    document = await _owned_document(evidence.document_id, user, session)
+    document = await _owned_document(evidence.document_id, actor, session)
     verifications = (await session.execute(
         select(EvidenceVerification).where(
             EvidenceVerification.evidence_id == evidence.id)
@@ -382,7 +383,7 @@ async def _refresh_assertion_review_state(session: AsyncSession,
 
 @router.post("/evidence/{evidence_id}/verification", status_code=201)
 async def verify_evidence_human(evidence_id: str, req: HumanVerificationRequest,
-                                user: User = Depends(current_user),
+                                actor: Actor = Depends(current_actor),
                                 session: AsyncSession = Depends(get_session)):
     """人工只提交核对标注；没有任何修改 Evidence 内容/bbox 的入口。"""
     evidence = (await session.execute(
@@ -391,12 +392,12 @@ async def verify_evidence_human(evidence_id: str, req: HumanVerificationRequest,
     )).scalar_one_or_none()
     if evidence is None:
         raise APIError(404, "evidence not found", "invalid_request_error", "evidence_not_found")
-    await _owned_document(evidence.document_id, user, session)
+    await _owned_document(evidence.document_id, actor, session)
     state = {"pass": "passed", "reject": "rejected", "question": "questioned"}[
         req.verdict]
     verification = EvidenceVerification(
         evidence_id=evidence.id, mode="human", verdict=req.verdict,
-        reason_code=req.reason_code, reason_text=req.reason_text, reviewer_id=user.id)
+        reason_code=req.reason_code, reason_text=req.reason_text, reviewer_id=actor.id)
     session.add(verification)
     evidence.review_state = state
     assertion_ids = list(dict.fromkeys((await session.execute(
@@ -413,12 +414,12 @@ async def verify_evidence_human(evidence_id: str, req: HumanVerificationRequest,
 
 
 @router.post("/conversations/{cid}/ask")
-async def ask(cid: str, req: AskRequest, request: Request, user: User = Depends(current_user),
+async def ask(cid: str, req: AskRequest, request: Request, actor: Actor = Depends(current_actor),
               session: AsyncSession = Depends(get_session),
               storage: Storage = Depends(get_storage)):
-    conversation = await _owned_conversation(cid, user, session)
-    document = await _owned_document(conversation.document_id, user, session)
-    await request.app.state.rate_limiter.check(f"qa:{user.id}", settings.qa_rate_per_min)
+    conversation = await _owned_conversation(cid, actor, session)
+    document = await _owned_document(conversation.document_id, actor, session)
+    # 限速在 control-api（见 routers/knowledge.py 里同一条说明）
 
     if document.index_status != "ready":
         raise APIError(409, {
@@ -476,7 +477,8 @@ async def ask(cid: str, req: AskRequest, request: Request, user: User = Depends(
 
     return StreamingResponse(
         _stream_answer(http, messages, retrieval, decision=decision, conversation_id=cid,
-                       document_id=document.id, user_id=user.id, has_image=bool(image_uris),
+                       document_id=document.id, actor_id=actor.id,
+                       organization_id=actor.organization_id, has_image=bool(image_uris),
                        expected_job_id=job.id,
                        expected_generation=document.index_generation,
                        # 图与文本必须成对取，不能一个取 image_uris[0] 一个取 hits[0]
@@ -489,7 +491,8 @@ async def ask(cid: str, req: AskRequest, request: Request, user: User = Depends(
 
 async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieval: Retrieval, *,
                          decision: QueryDecision | None = None,
-                         conversation_id: str, document_id: str, user_id: str, has_image: bool,
+                         conversation_id: str, document_id: str, actor_id: str,
+                         organization_id: str, has_image: bool,
                          verify_pair: tuple[str, str, str | None] | None = None,
                          expected_job_id: str | None = None,
                          expected_generation: int | None = None):
@@ -590,7 +593,8 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
             verified, verify_verdict = False, None
         (message_id, verified, degraded, index_changed,
          assertion_payload) = await asyncio.shield(_persist(
-            conversation_id=conversation_id, user_id=user_id, content="".join(chunks),
+            conversation_id=conversation_id, actor_id=actor_id,
+            organization_id=organization_id, content="".join(chunks),
             citations=retrieval.citations, verified=verified and not error, degraded=degraded,
             model_meta=answer_model_meta(), document_id=document_id,
             expected_job_id=expected_job_id, expected_generation=expected_generation,
@@ -649,7 +653,8 @@ async def _verdict(task: asyncio.Task) -> bool | None:
         raise
 
 
-async def _persist(*, conversation_id: str, user_id: str, content: str, citations: list,
+async def _persist(*, conversation_id: str, actor_id: str, organization_id: str,
+                   content: str, citations: list,
                    verified: bool, degraded: str | None, model_meta: dict | None = None,
                    document_id: str | None = None, expected_job_id: str | None = None,
                    expected_generation: int | None = None,
@@ -789,7 +794,8 @@ async def _persist(*, conversation_id: str, user_id: str, content: str, citation
                 assertion_id=linked_assertion.id if linked_assertion else None,
                 mode="auto", verdict="pass" if verify_verdict else "question",
                 reason_code=None if verify_verdict else "parse_mismatch"))
-        await record_usage(db, user_id=user_id, kind="qa", requests=1)
+        await record_usage(db, actor_id=actor_id, organization_id=organization_id,
+                           kind="qa", requests=1)
         await db.commit()
         return message.id, verified, degraded, index_changed, payloads
 

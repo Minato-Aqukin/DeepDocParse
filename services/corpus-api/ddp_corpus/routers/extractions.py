@@ -23,14 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_corpus.config import settings
 from ddp_corpus.db import get_session, get_sessionmaker
-from ddp_corpus.deps import current_user, get_storage
+from ddp_corpus.deps import Actor, current_actor, get_storage
 from ddp_corpus.errors import APIError
 from ddp_core.extract_format import SchemaError, parse_schema, validate_schema
 from ddp_corpus.extraction import ExtractContext, extraction_model_meta, run as run_extraction
 from ddp_corpus.evidence import citation_out, load_citations, record_evidence
-from ddp_corpus.metering import record_usage
+from ddp_corpus.usage import record_usage
 from ddp_corpus.models import (
-    Document, ExtractionItem, ExtractionRun, ExtractionTemplate, ParseJob, User, as_aware, utcnow,
+    Document, ExtractionItem, ExtractionRun, ExtractionTemplate, ParseJob, as_aware, utcnow,
 )
 
 router = APIRouter()
@@ -92,11 +92,11 @@ def _validate_or_400(schema: dict) -> None:
 
 
 @router.get("/extractions/templates", response_model=list[TemplateOut])
-async def list_templates(user: User = Depends(current_user),
+async def list_templates(actor: Actor = Depends(current_actor),
                          session: AsyncSession = Depends(get_session)):
     rows = (await session.execute(
         select(ExtractionTemplate)
-        .where(ExtractionTemplate.user_id == user.id,
+        .where(ExtractionTemplate.actor_id == actor.id,
                ExtractionTemplate.deleted_at.is_(None))
         .order_by(ExtractionTemplate.updated_at.desc())
     )).scalars().all()
@@ -104,11 +104,11 @@ async def list_templates(user: User = Depends(current_user),
 
 
 @router.post("/extractions/templates", response_model=TemplateOut, status_code=201)
-async def create_template(body: TemplateIn, user: User = Depends(current_user),
+async def create_template(body: TemplateIn, actor: Actor = Depends(current_actor),
                           session: AsyncSession = Depends(get_session)):
     _validate_or_400(body.doc_schema)
     existing = (await session.execute(
-        select(ExtractionTemplate).where(ExtractionTemplate.user_id == user.id,
+        select(ExtractionTemplate).where(ExtractionTemplate.actor_id == actor.id,
                                          ExtractionTemplate.name == body.name)
     )).scalar_one_or_none()
     if existing is not None and existing.deleted_at is None:
@@ -124,7 +124,8 @@ async def create_template(body: TemplateIn, user: User = Depends(current_user),
         await session.commit()
         return _template_out(existing)
 
-    row = ExtractionTemplate(user_id=user.id, name=body.name, description=body.description,
+    row = ExtractionTemplate(actor_id=actor.id, organization_id=actor.organization_id,
+                             name=body.name, description=body.description,
                              schema_json=body.doc_schema)
     session.add(row)
     await session.commit()
@@ -133,10 +134,10 @@ async def create_template(body: TemplateIn, user: User = Depends(current_user),
 
 @router.put("/extractions/templates/{template_id}", response_model=TemplateOut)
 async def update_template(template_id: str, body: TemplateIn,
-                          user: User = Depends(current_user),
+                          actor: Actor = Depends(current_actor),
                           session: AsyncSession = Depends(get_session)):
     _validate_or_400(body.doc_schema)
-    row = await _owned_template(template_id, user, session)
+    row = await _owned_template(template_id, actor, session)
     row.name, row.description, row.schema_json = body.name, body.description, body.doc_schema
     row.updated_at = utcnow()
     await session.commit()
@@ -144,19 +145,19 @@ async def update_template(template_id: str, body: TemplateIn,
 
 
 @router.delete("/extractions/templates/{template_id}", status_code=204)
-async def delete_template(template_id: str, user: User = Depends(current_user),
+async def delete_template(template_id: str, actor: Actor = Depends(current_actor),
                           session: AsyncSession = Depends(get_session)):
-    row = await _owned_template(template_id, user, session)
+    row = await _owned_template(template_id, actor, session)
     # 软删：历史 run 的 template_id 还指着它，硬删会让"这批结果是哪个模板跑的"永久失答。
     # run 本身不受影响 —— 它存的是 schema 快照，不取模板当前值
     row.deleted_at = utcnow()
     await session.commit()
 
 
-async def _owned_template(template_id: str, user: User,
+async def _owned_template(template_id: str, actor: Actor,
                           session: AsyncSession) -> ExtractionTemplate:
     row = await session.get(ExtractionTemplate, template_id)
-    if row is None or row.user_id != user.id or row.deleted_at is not None:
+    if row is None or row.actor_id != actor.id or row.deleted_at is not None:
         raise APIError(404, "模板不存在", "invalid_request_error", "template_not_found")
     return row
 
@@ -204,7 +205,7 @@ def _run_out(row: ExtractionRun) -> RunOut:
 
 
 @router.post("/extractions/runs", response_model=RunOut, status_code=202)
-async def create_run(body: RunIn, request: Request, user: User = Depends(current_user),
+async def create_run(body: RunIn, request: Request, actor: Actor = Depends(current_actor),
                      session: AsyncSession = Depends(get_session)):
     if len(body.document_ids) > settings.extract_max_documents:
         raise APIError(400,
@@ -212,13 +213,12 @@ async def create_run(body: RunIn, request: Request, user: User = Depends(current
                        f"（收到 {len(body.document_ids)} 份）",
                        "invalid_request_error", "too_many_documents")
 
-    await request.app.state.rate_limiter.check(f"extract:{user.id}",
-                                               settings.extract_rate_per_min)
+    # 限速在 control-api（见 knowledge.py 里同一条说明）
 
     schema = body.doc_schema
     template_id = body.template_id
     if template_id:
-        template = await _owned_template(template_id, user, session)
+        template = await _owned_template(template_id, actor, session)
         # **快照，不是引用**：模板改了之后历史 run 的列会对不上号
         # （同一条教训在 Message.model_meta 上吃过一次）
         schema = template.schema_json
@@ -253,7 +253,8 @@ async def create_run(body: RunIn, request: Request, user: User = Depends(current
                     + "、".join(not_ready[:5])
                     + ("…" if len(not_ready) > 5 else "")) if not_ready else ""
     row = ExtractionRun(
-        user_id=user.id, template_id=template_id, name=body.name or "未命名抽取",
+        actor_id=actor.id, organization_id=actor.organization_id,
+        template_id=template_id, name=body.name or "未命名抽取",
         schema_json=schema, kind=spec.kind, status="pending",
         document_count=len(ready), error=skipped_note.lstrip("；") or None,
         model_meta=extraction_model_meta())
@@ -357,12 +358,13 @@ async def _extract_one(session: AsyncSession, run_id: str, document_id: str, spe
     # **记在发起这次抽取的人头上，不是上传者头上。**
     # 语料共享之后（plan.md §2 已定 2）任何人都能对任一文档发起抽取，
     # 而抽取是 N 次检索 + N 次模型调用 —— 按上传者计费等于"谁传的谁买单"，
-    # 别人可以随意花掉他的额度。run 的发起人就在 ExtractionRun.user_id 上。
-    initiator = await session.scalar(
-        select(ExtractionRun.user_id).where(ExtractionRun.id == run_id))
+    # 别人可以随意花掉他的额度。run 的发起人就在 ExtractionRun.actor_id 上。
+    initiator, organization_id = (await session.execute(
+        select(ExtractionRun.actor_id, ExtractionRun.organization_id)
+        .where(ExtractionRun.id == run_id))).one()
 
     ctx = ExtractContext(session=session, index=index, http=http, storage=storage,
-                         document=document, job=job, user_id=initiator, verify=verify)
+                         document=document, job=job, actor_id=initiator, verify=verify)
     outcome = await run_extraction(ctx, spec)
 
     records = outcome.records or [{"fields": outcome.fields}]
@@ -391,7 +393,8 @@ async def _extract_one(session: AsyncSession, run_id: str, document_id: str, spe
 
     # 按**字段数**计量：一次抽取 = N 次检索 + N 次模型调用，
     # 按"一次请求"计费会让 60 字段的 schema 和 1 字段的一样便宜
-    await record_usage(session, user_id=initiator, kind="extract",
+    await record_usage(session, actor_id=initiator, organization_id=organization_id,
+                       kind="extract",
                        requests=max(outcome.usage.get("fields", 0), 1))
     await _bump_done(session, run_id)
     await session.commit()
@@ -429,19 +432,19 @@ async def reset_orphaned_runs() -> None:
 # ---------- 结果 ----------
 
 @router.get("/extractions/runs", response_model=list[RunOut])
-async def list_runs(limit: int = 50, user: User = Depends(current_user),
+async def list_runs(limit: int = 50, actor: Actor = Depends(current_actor),
                     session: AsyncSession = Depends(get_session)):
     rows = (await session.execute(
-        select(ExtractionRun).where(ExtractionRun.user_id == user.id)
+        select(ExtractionRun).where(ExtractionRun.actor_id == actor.id)
         .order_by(ExtractionRun.created_at.desc()).limit(min(limit, 200))
     )).scalars().all()
     return [_run_out(r) for r in rows]
 
 
 @router.get("/extractions/runs/{run_id}")
-async def get_run(run_id: str, user: User = Depends(current_user),
+async def get_run(run_id: str, actor: Actor = Depends(current_actor),
                   session: AsyncSession = Depends(get_session)):
-    run = await _owned_run(run_id, user, session)
+    run = await _owned_run(run_id, actor, session)
     items, filenames, citations = await _load_items(session, run_id)
     return {
         # by_alias：线上字段名必须是 schema_json（前端与库里都用这个名），
@@ -452,17 +455,17 @@ async def get_run(run_id: str, user: User = Depends(current_user),
 
 
 @router.delete("/extractions/runs/{run_id}", status_code=204)
-async def delete_run(run_id: str, user: User = Depends(current_user),
+async def delete_run(run_id: str, actor: Actor = Depends(current_actor),
                      session: AsyncSession = Depends(get_session)):
-    run = await _owned_run(run_id, user, session)
+    run = await _owned_run(run_id, actor, session)
     await session.execute(delete(ExtractionItem).where(ExtractionItem.run_id == run.id))
     await session.delete(run)
     await session.commit()
 
 
-async def _owned_run(run_id: str, user: User, session: AsyncSession) -> ExtractionRun:
+async def _owned_run(run_id: str, actor: Actor, session: AsyncSession) -> ExtractionRun:
     run = await session.get(ExtractionRun, run_id)
-    if run is None or run.user_id != user.id:
+    if run is None or run.actor_id != actor.id:
         raise APIError(404, "抽取任务不存在", "invalid_request_error", "run_not_found")
     return run
 
@@ -554,14 +557,14 @@ def _csv_safe(value) -> str:
 
 
 @router.get("/extractions/runs/{run_id}/export.csv")
-async def export_run_csv(run_id: str, user: User = Depends(current_user),
+async def export_run_csv(run_id: str, actor: Actor = Depends(current_actor),
                          session: AsyncSession = Depends(get_session)):
     """导出成 CSV：行 = 记录，列 = schema 字段（每个字段附一列出处页码）。
 
     出处那一列不是装饰：抽取结果拿去做决策之前，"这个数从第几页来的"
     是唯一能快速复核的线索。导出丢掉它，可验证出处就只活在界面上。
     """
-    run = await _owned_run(run_id, user, session)
+    run = await _owned_run(run_id, actor, session)
     spec = parse_schema(run.schema_json or {})
     items, filenames, citations = await _load_items(session, run_id)
 

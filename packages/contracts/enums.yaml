@@ -294,6 +294,11 @@ enums:
       - {value: embed,          summary: 索引时的向量化,         label: 索引向量化, severity: neutral}
       - {value: compile_vision, summary: 编译期的视觉理解调用,   label: 视觉理解,   severity: neutral}
       - {value: extract,        summary: 结构化抽取，按字段数计, label: 结构化抽取, severity: neutral}
+      # 合仓时由 scripts/check_enum_usage.py 扫出来：`routers/knowledge.py`
+      # 一直在记这个种类，而它从没出现在任何枚举清单里（旧的 UsageRecord.kind
+      # 注释也没列）。于是 control 侧的账目会出现一个没人认识的分类，
+      # 对账时表现为"总数对不上"
+      - {value: knowledge,      summary: 图谱 / wiki 生成，按次计, label: 知识生成, severity: neutral}
 
   # ---------------- 以下是企业化重构新增（control-api / 持久任务） ----------
 

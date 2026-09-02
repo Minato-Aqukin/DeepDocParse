@@ -522,6 +522,8 @@ const (
 	UsageKindCompileVision UsageKind = "compile_vision"
 	// 结构化抽取，按字段数计
 	UsageKindExtract UsageKind = "extract"
+	// 图谱 / wiki 生成，按次计
+	UsageKindKnowledge UsageKind = "knowledge"
 )
 
 // UsageKindValues 保持 enums.yaml 里的声明顺序。
@@ -534,6 +536,7 @@ var UsageKindValues = []UsageKind{
 	UsageKindEmbed,
 	UsageKindCompileVision,
 	UsageKindExtract,
+	UsageKindKnowledge,
 }
 
 var UsageKindMeta = map[UsageKind]EnumMeta{
@@ -545,6 +548,7 @@ var UsageKindMeta = map[UsageKind]EnumMeta{
 	UsageKindEmbed:         {Value: "embed", Label: "索引向量化", Severity: SeverityNeutral},
 	UsageKindCompileVision: {Value: "compile_vision", Label: "视觉理解", Severity: SeverityNeutral},
 	UsageKindExtract:       {Value: "extract", Label: "结构化抽取", Severity: SeverityNeutral},
+	UsageKindKnowledge:     {Value: "knowledge", Label: "知识生成", Severity: SeverityNeutral},
 }
 
 // Valid 报告 s 是不是一个已知的 usage_kind 取值。

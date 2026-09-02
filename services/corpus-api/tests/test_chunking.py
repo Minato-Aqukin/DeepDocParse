@@ -12,7 +12,9 @@ from pathlib import Path
 
 from ddp_core.chunking import layout_to_chunks, page_count_of
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
+from ddp_paths import FIXTURES
+
+FIXTURES = FIXTURES
 
 
 def _page(page_idx: int, blocks: list[tuple[str, list]]) -> dict:

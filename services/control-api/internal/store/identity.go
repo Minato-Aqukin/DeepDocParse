@@ -335,3 +335,32 @@ func (s *Store) AddMember(ctx context.Context, orgID, username string, role rbac
 	}
 	return &m, nil
 }
+
+// ActorNames 把 actor_id 批量渲染成显示名。
+//
+// actor 可能是用户，也可能是 API key（对外调用产生的语料就挂在 key 上）。
+// **两种都要认**，否则界面上会出现一半有名字一半没有的列表。
+func (s *Store) ActorNames(ctx context.Context, ids []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, username FROM control.users WHERE id = ANY($1)
+		UNION ALL
+		SELECT k.id, u.username || '（' || k.name || '）'
+		FROM control.api_keys k JOIN control.users u ON u.id = k.user_id
+		WHERE k.id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out[id] = name
+	}
+	return out, rows.Err()
+}

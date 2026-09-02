@@ -8,14 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_corpus.db import get_session
 from ddp_corpus.config import settings
-from ddp_corpus.deps import current_user
+from ddp_corpus.deps import Actor, current_actor
 from ddp_corpus.errors import APIError
 from ddp_corpus.evidence import citation_out, load_citations
 from ddp_corpus.knowledge import generate as generate_knowledge
-from ddp_corpus.metering import record_usage
+from ddp_corpus.usage import record_usage
 from ddp_corpus.models import (
     Assertion, Citation, Evidence, ExtractionItem, GraphEdge, KnowledgeEntity,
-    KnowledgeReview, User, WikiEntry, WikiSection, WikiSentence,
+    KnowledgeReview, WikiEntry, WikiSection, WikiSentence,
 )
 from ddp_core.knowledge import neighbor_ids, normalize_entity_name
 
@@ -34,10 +34,11 @@ class BuildIn(BaseModel):
 
 @router.post("/knowledge/build", status_code=201)
 async def build_knowledge(body: BuildIn, request: Request,
-                          user: User = Depends(current_user),
+                          actor: Actor = Depends(current_actor),
                           session: AsyncSession = Depends(get_session)):
-    await request.app.state.rate_limiter.check(
-        f"knowledge:{user.id}", settings.knowledge_rate_per_min)
+    # **限速不在这里。** 图谱/wiki 生成很贵，但那道闸在 control-api 的
+    # 领域限速里（按路由类别 + actor 计数，跨副本共享）。两处各限一次
+    # 只会让"到底是谁把我限了"变成一个没人答得上的问题
     evidence_ids = list(dict.fromkeys(body.evidence_ids))
     if not evidence_ids:
         evidence_ids = list((await session.execute(
@@ -56,7 +57,8 @@ async def build_knowledge(body: BuildIn, request: Request,
         await session.rollback()
         raise APIError(502, f"知识生成失败：{type(exc).__name__}", "upstream_error",
                        "knowledge_generation_failed")
-    await record_usage(session, user_id=user.id, kind="knowledge", requests=1)
+    await record_usage(session, actor_id=actor.id, organization_id=actor.organization_id,
+                       kind="knowledge", requests=1)
     await session.commit()
     return result
 
@@ -84,7 +86,7 @@ async def _knowledge_citations(session: AsyncSession, kind: str,
 @router.get("/knowledge/entities")
 async def list_entities(q: str = "", entity_type: str = "",
                         uncertain: bool | None = None,
-                        user: User = Depends(current_user),
+                        actor: Actor = Depends(current_actor),
                         session: AsyncSession = Depends(get_session)):
     stmt = select(KnowledgeEntity)
     if q:
@@ -113,7 +115,7 @@ async def _resolve_entity(value: str, session: AsyncSession) -> KnowledgeEntity:
 
 @router.get("/knowledge/graph")
 async def graph(entity: str = "", depth: int = 1,
-                user: User = Depends(current_user),
+                actor: Actor = Depends(current_actor),
                 session: AsyncSession = Depends(get_session)):
     if not 1 <= depth <= 3:
         raise APIError(400, "depth must be between 1 and 3", "invalid_request_error",
@@ -145,7 +147,7 @@ async def graph(entity: str = "", depth: int = 1,
 
 
 @router.get("/wiki")
-async def list_wiki(user: User = Depends(current_user),
+async def list_wiki(actor: Actor = Depends(current_actor),
                     session: AsyncSession = Depends(get_session)):
     rows = (await session.execute(
         select(WikiEntry, KnowledgeEntity).join(
@@ -157,7 +159,7 @@ async def list_wiki(user: User = Depends(current_user),
 
 
 @router.get("/wiki/{entry_id_or_title}")
-async def read_wiki(entry_id_or_title: str, user: User = Depends(current_user),
+async def read_wiki(entry_id_or_title: str, actor: Actor = Depends(current_actor),
                     session: AsyncSession = Depends(get_session)):
     entry = await session.get(WikiEntry, entry_id_or_title)
     if entry is None:
@@ -193,7 +195,7 @@ async def read_wiki(entry_id_or_title: str, user: User = Depends(current_user),
 
 
 @router.get("/evidence/{evidence_id}/backlinks")
-async def backlinks(evidence_id: str, user: User = Depends(current_user),
+async def backlinks(evidence_id: str, actor: Actor = Depends(current_actor),
                     session: AsyncSession = Depends(get_session)):
     rows = (await session.execute(select(Citation).where(
         Citation.evidence_id == evidence_id).order_by(Citation.created_at, Citation.id)
@@ -221,7 +223,7 @@ async def backlinks(evidence_id: str, user: User = Depends(current_user),
 
 @router.get("/reviews")
 async def review_queue(limit: int = Query(default=200, ge=1, le=500),
-                       user: User = Depends(current_user),
+                       actor: Actor = Depends(current_actor),
                        session: AsyncSession = Depends(get_session)):
     edges = (await session.execute(select(GraphEdge).where(
         GraphEdge.review_state.in_(["unreviewed", "questioned"]))
@@ -273,7 +275,7 @@ class ReviewIn(BaseModel):
 @router.post("/reviews/{target_kind}/{target_id}", status_code=201)
 async def review(target_kind: Literal["graph_edge", "wiki_sentence", "entity_merge",
                                       "extract_field"], target_id: str, body: ReviewIn,
-                 user: User = Depends(current_user),
+                 actor: Actor = Depends(current_actor),
                  session: AsyncSession = Depends(get_session)):
     model = {"graph_edge": GraphEdge, "wiki_sentence": WikiSentence,
              "entity_merge": KnowledgeEntity}.get(target_kind)
@@ -299,7 +301,7 @@ async def review(target_kind: Literal["graph_edge", "wiki_sentence", "entity_mer
         item.fields = fields
     row = KnowledgeReview(target_kind=target_kind, target_id=target_id,
                           action=body.action, reason_code=body.reason_code,
-                          reason_text=body.reason_text, reviewer_id=user.id)
+                          reason_text=body.reason_text, reviewer_id=actor.id)
     session.add(row)
     await session.commit()
     return {"id": row.id, "target_kind": target_kind, "target_id": target_id,
@@ -311,7 +313,7 @@ class SplitIn(BaseModel):
 
 
 @router.post("/knowledge/entities/{entity_id}/split", status_code=201)
-async def split_entity(entity_id: str, body: SplitIn, user: User = Depends(current_user),
+async def split_entity(entity_id: str, body: SplitIn, actor: Actor = Depends(current_actor),
                        session: AsyncSession = Depends(get_session)):
     entity = await session.get(KnowledgeEntity, entity_id)
     if entity is None or body.alias not in (entity.aliases or []):
@@ -345,6 +347,6 @@ async def split_entity(entity_id: str, body: SplitIn, user: User = Depends(curre
             rewired += 1
     session.add(KnowledgeReview(target_kind="entity_merge", target_id=entity.id,
                                 action="split_merge", reason_code="manual_split",
-                                reason_text=body.alias, reviewer_id=user.id))
+                                reason_text=body.alias, reviewer_id=actor.id))
     await session.commit()
     return {**_entity_out(separated), "rewired_edges": rewired}

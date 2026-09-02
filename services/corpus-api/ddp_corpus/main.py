@@ -1,29 +1,33 @@
-"""DeepDocParse-Web backend 入口。
+"""语料 API 入口。
 
-鉴权边界在本层（ARCHITECTURE.md 决策 #2/#3）：
-- Web 用户：JWT session
-- 第三方开发者：API key（sk-xxx）
-- 对 DeepDocParse：统一以 SERVICE_TOKEN 转发，service 不感知用户
+## 它不做鉴权
 
-对 service 的耦合面只有两处：解析契约（openapi.yaml）与 OpenAI 兼容的 embedding/chat
-端点（后者可配置成任意兼容服务，见 ADR #17）。检索索引、分块、问答编排全在本层。
+账号、API key、配额、限速全在 `services/control-api`（Go）。本服务只信任
+入口下发的 actor 上下文头，且要求服务凭据 —— 见 `ddp_corpus/deps.py`。
+**只对内网开放**：暴露到公网等于任何人都能自称 admin。
+
+## 对外的三个耦合面
+
+1. 模型网关的契约 `packages/contracts/openapi/gateway-v1.yaml`
+2. OpenAI 兼容的 embedding / chat 端点（可配成任意兼容服务）
+3. control-api 的两个内部端点（稳定文件 URL、actor 显示名）
+
+检索索引、分块、证据、问答编排全在本服务 —— **evidence/citation 的唯一实现
+留在 Python**（风险台账：Go 重写证据规则 -> 假出处）。
 """
 import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from ddp_corpus.config import assert_secrets_configured, settings
 from ddp_corpus.db import get_engine, get_sessionmaker
 from ddp_corpus.errors import install_error_handlers
-from ddp_corpus.metering import MemoryRateLimiter, RedisRateLimiter
 from ddp_corpus.reconcile import reconcile_loop
 from ddp_corpus.routers import (
-    apikeys, auth, conversations, documents, extractions, files, internal, knowledge,
-    proxy, search, usage,
+    conversations, documents, external, extractions, internal, knowledge, search,
 )
 from ddp_core.search import PgVectorIndex
 from ddp_core.tokenize import backend as tokenize_backend
@@ -41,14 +45,14 @@ async def lifespan(app: FastAPI):
     app.state.storage = MinioStorage()
     app.state.search_index = PgVectorIndex()
 
-    # 多副本：限速计数与对账选主都要跨进程共享，否则每个副本各限各的（等于限速×副本数）
+    # 多副本：对账选主要跨进程共享。
+    # **限速不在这里** —— 它整体迁去了 control-api（入口按 key 限速 +
+    # 按路由类别的领域限速）。两处各限一次只会让"到底是谁把我限了"
+    # 变成一个没人答得上的问题
     app.state.redis = None
     if settings.redis_url:
         import redis.asyncio as aioredis
         app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
-        app.state.rate_limiter = RedisRateLimiter(app.state.redis)
-    else:
-        app.state.rate_limiter = MemoryRateLimiter()
 
     # 分词器实现进启动日志。**换 tokenizer 会静默毁掉关键词路**：
     # text_tokenized 是索引时用当时的 backend 切好存的，查询用现在的 backend 切；
@@ -77,32 +81,27 @@ async def lifespan(app: FastAPI):
         await app.state.redis.aclose()
 
 
-app = FastAPI(title="DeepDocParse-Web backend", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="DeepDocParse Corpus API", version="1.0.0", lifespan=lifespan)
 
 install_error_handlers(app)
 
-# dev：Vite 跑在 5173，前后端不同源。生产换域名只改 CORS_ORIGINS，不动代码。
-# 不用 allow_origins=["*"]：配合 allow_credentials=True 时浏览器会直接拒绝，
-# 而且那等于放弃同源保护
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# **没有 CORS 中间件。** 浏览器不直接访问本服务 —— 它只对内网开放，
+# 前端一律经 control-api。加了 CORS 反而是个信号，说明有人打算把它暴露出去。
 
-app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-app.include_router(apikeys.router, prefix="/api/keys", tags=["apikeys"])
 app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
 app.include_router(conversations.router, prefix="/api", tags=["qa"])
 app.include_router(search.router, prefix="/api", tags=["search"])
 app.include_router(extractions.router, prefix="/api", tags=["extractions"])
 app.include_router(knowledge.router, prefix="/api", tags=["knowledge"])
-app.include_router(usage.router, prefix="/api/usage", tags=["usage"])
-app.include_router(files.router, tags=["files"])       # /files/{token} 稳定文件 URL（token 即凭证）
-app.include_router(internal.router, tags=["internal"]) # /internal/* service 回调
-app.include_router(proxy.router, tags=["proxy"])       # /v1/* 对外 API + /mcp 反代
+app.include_router(internal.router, tags=["internal"]) # /internal/* 回调与事件
+# 对外解析平面在语料侧的那一半：它会在语料里留下 Document 与 ParseJob，
+# 而那两张表 Go 一个字都写不了。**只有 /v1/parse\*** —— 其余 /v1/* 是纯算力，
+# 入口直接代给模型网关（见 routers/external.py 的模块说明）
+app.include_router(external.router, tags=["external"])
+
+# **没有 /api/auth、/api/keys、/api/usage、/files、/mcp。**
+# 它们全在 control-api：账号与计量归控制面，稳定文件 URL 的凭证住在
+# control schema，MCP 由入口统一鉴权后反代。
 
 
 Instrumentator().instrument(app).expose(app)   # /metrics，与 service 侧口径一致

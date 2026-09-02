@@ -96,6 +96,12 @@ func (s *Server) Routes() http.Handler {
 	// **路径必须永远稳定** —— 见 store.FileGrant 的注释
 	mux.Handle("GET /files/{token}", httpx.Wrap(s.handleFileByToken))
 
+	// ---- 内网服务面（只认服务凭据，**不读 actor 上下文头**）----
+	svc := s.requireServiceCredentials
+	mux.Handle("POST /internal/file-grants", svc(httpx.Wrap(s.handleInternalFileGrant)))
+	mux.Handle("GET /internal/actors", svc(httpx.Wrap(s.handleInternalActors)))
+	mux.Handle("POST /internal/usage", svc(httpx.Wrap(s.handleInternalUsage)))
+
 	// ---- 会话鉴权（/api/*）----
 	session := s.requireSession
 	mux.Handle("GET /api/auth/me", session(httpx.Wrap(s.handleMe)))
@@ -120,17 +126,30 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /api/documents/{document_id}/download-url",
 		session(httpx.Wrap(s.handleDownloadURL)))
 
-	// ---- 语料面：会话鉴权后整段转发给 corpus-api ----
+	// ---- 语料面：会话鉴权 + 领域限速后整段转发给 corpus-api ----
 	// **注意顺序**：上面那条更具体的 download-url 必须先注册。
 	// ServeMux 按最长模式匹配，所以其实与注册顺序无关 —— 但读代码的人
 	// 会按顺序理解，所以还是按具体到宽泛排
+	forward := session(s.domainThrottle(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.corpus.ServeHTTP(w, r, "")
+	})))
 	for _, prefix := range corpusPrefixes {
-		mux.Handle(prefix, session(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			s.corpus.ServeHTTP(w, r, "")
-		})))
+		mux.Handle(prefix, forward)
 	}
 
 	// ---- 对外 API：key 鉴权 + 配额 + 限速 + 计量 ----
+	//
+	// **`/v1/parse*` 走语料 API，不是网关。** 它会在语料里留下 Document 与
+	// ParseJob，而那两张表 Go 一个字都写不了（企业边界 5）。其余 `/v1/*`
+	// 是纯算力，直接代给网关。对外契约一个字没变（非目标 §3.2）。
+	mux.Handle("POST /v1/parse", s.requireAPIKey(rbac.ScopeParse, http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			s.corpus.ServeHTTP(w, r, "")
+		})))
+	mux.Handle("GET /v1/parse/{rest...}", s.requireAPIKey(rbac.ScopeParse, http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			s.corpus.ServeHTTP(w, r, "")
+		})))
 	mux.Handle("/v1/", s.requireAPIKey(rbac.ScopeParse, http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			s.gateway.ServeHTTP(w, r, "")

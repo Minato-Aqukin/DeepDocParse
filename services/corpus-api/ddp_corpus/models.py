@@ -1,12 +1,19 @@
-"""数据模型（PostgreSQL 生产 / SQLite 单测）。
+"""语料 API 自己的表（PostgreSQL 生产 / SQLite 单测）。
 
 除向量列外只用可移植类型（String / JSON / DateTime），不用 PG 专有的 UUID、JSONB：
-单测因此能在 SQLite in-memory 里跑完，不必为跑测试起一套 PG。向量列见 `ddp_core/types.py`。
+单测因此能在 SQLite in-memory 里跑完，不必为跑测试起一套 PG。向量列见 `ddp_core.types`。
 
-模型的核心是 Document 与 ParseJob 分离（ADR #15）：
-  Document = 用户的一份文件（内容 sha256 唯一）
-  ParseJob = 对它的一次解析（换引擎/参数就是一条新 job）
-问答、检索、分享都绑 Document；换参数重解析、版本对比才有地方安放。
+## 这里放什么，不放什么
+
+    ddp_core       Document · ParseJob · Chunk · Evidence · Citation · 知识层
+                   （两侧共用的语料模型与 Base）
+    这里           Conversation · Message · Extraction*（HTTP 产品壳）
+                   CorpusOutbox · ProcessedEvent（跨边界事件）
+    control（Go）  Organization · User · Membership · ApiKey · UsageLedger · AuditEvent
+
+**账号层已整体迁出。** 合仓前这里有 `User` / `ApiKey` / `UsageRecord` / `FileToken`
+四张表，现在它们住在 control schema，由 Go 独占写入（企业边界 5）。
+本文件里因此**一个指向 `users.id` 的外键都没有** —— 只有裸的 `actor_id`。
 """
 from datetime import datetime
 
@@ -16,7 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 # 语料模型与 Base 都在 core（两侧共用同一份 metadata）。
-# **这里原样再导出**，让既有的 `from app.models import Document` 一字不用改。
+# **这里原样再导出**，让既有的 `from ddp_corpus.models import Document` 一字不用改。
 from ddp_core.models import (  # noqa: F401
     AgentTurn, Assertion, Base, Chunk, Citation, Document, DocumentUpload, Evidence,
     EvidenceVerification, GraphEdge, KnowledgeEntity, KnowledgeReview, ParseJob,
@@ -25,52 +32,15 @@ from ddp_core.models import (  # noqa: F401
 )
 
 
-class User(Base):
-    __tablename__ = "users"
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
-    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    email: Mapped[str | None] = mapped_column(String(255), unique=True, default=None)
-    password_hash: Mapped[str] = mapped_column(String(128))
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    # 语料不隔离之后，**全站只剩一处授权判断**：谁能删文档（上传者或管理员）。
-    # 除此之外账号层只管认证、计量、限速，不管授权（plan.md §2 已定 2）。
-    # 目前没有提升管理员的界面 —— 需要时直接改库。这是有意的：
-    # 加一套权限管理 UI 远超本阶段范围，而唯一用途只有"删别人传的文档"。
-    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class ApiKey(Base):
-    """sk- 开头的对外 key。明文只在创建时返回一次，库里只有 sha256。
-
-    用 sha256 而非 bcrypt：每个对外请求都要验一次 key，bcrypt 的成本函数
-    会直接压垮代理路径；key 本身是 32 字节随机串，不存在弱口令问题。
-    """
-
-    __tablename__ = "api_keys"
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
-    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
-    name: Mapped[str] = mapped_column(String(64), default="default")
-    key_prefix: Mapped[str] = mapped_column(String(16))            # 展示用，如 sk-AbCdEfGh
-    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    quota_pages: Mapped[int | None] = mapped_column(Integer, default=None)  # None = 不限
-    used_pages: Mapped[int] = mapped_column(Integer, default=0)
-    rate_limit_per_min: Mapped[int] = mapped_column(Integer, default=60)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
 class Conversation(Base):
     """问答会话，绑 Document 而不是某次解析——换解析版本不该丢历史对话。"""
 
     __tablename__ = "conversations"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
-    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
+    # 发起人。**无外键**：用户在 control schema（见模块 docstring）
+    actor_id: Mapped[str] = mapped_column(String(32), index=True)
+    organization_id: Mapped[str] = mapped_column(String(32), default="", index=True)
     document_id: Mapped[str] = mapped_column(String(32), ForeignKey("documents.id"), index=True)
     title: Mapped[str] = mapped_column(String(200), default="新会话")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -83,10 +53,12 @@ class Message(Base):
 
     verified / degraded 是**降级可见性**的落点：静默降级是这个项目吃过大亏的地方
     （M4a 的向量检索静默退回 BM25），回答没做视觉验证必须让用户看得见。
+    取值由 `packages/contracts/enums.yaml` 的 `degraded` 生成，
+    `scripts/check_enum_usage.py` 反向扫描代码里出现的字面量。
 
     model_meta 是**可比较性**的落点：不记下这一轮用了哪个 chat / embedding 模型、
     哪套检索参数，换模型之后历史数据就无法分组对比——而那正是判断
-    "新配置有没有变好"的唯一依据。见 app/qa.py::answer_model_meta。
+    "新配置有没有变好"的唯一依据。见 ddp_corpus/qa.py::answer_model_meta。
     """
 
     __tablename__ = "messages"
@@ -96,17 +68,13 @@ class Message(Base):
                                                   index=True)
     role: Mapped[str] = mapped_column(String(16))                  # user | assistant
     content: Mapped[str] = mapped_column(Text, default="")
-    # 出处**不在这里**（阶段 4 起）：它住在 evidence / citations 两张表，
-    # 由 `app.evidence.load_citations` 接回当前索引。
-    # 这里曾经有一个 JSON 列，与新表并存了两个阶段（2b 双写 / 3 读切换）——
+    # 出处**不在这里**：它住在 evidence / citations 两张表，
+    # 由 `ddp_corpus.evidence.load_citations` 接回当前索引。
+    # 这里曾经有一个 JSON 列，与新表并存了两个阶段——
     # 留着两个真相的代价是：其中一份没人维护、没人读，却长得跟真的一模一样
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
-    # no_hits | embedding_unavailable | vision_unavailable | crop_unsupported | crop_failed
-    # | parse_mismatch | client_aborted | upstream_error | upstream_interrupted
-    # | schema_violation（抽取平面）| rerank_unavailable（配了精排但上游没注册）
-    # | no_instruct_model（上游只有 OCR 专用模型，抽值无处可调）
     degraded: Mapped[str | None] = mapped_column(String(32), default=None)
-    # {chat_model, embedding_model, embedding_dim, retrieval:{...}}，见 qa.answer_model_meta
+    # {chat_model, embedding_model, embedding_dim, retrieval:{...}}
     model_meta: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
@@ -119,13 +87,15 @@ class ExtractionTemplate(Base):
     写一次、跑很多批，模板才让这件事成立。
 
     schema 只做**受限子集**（顶层 object 或 array，叶子必须带 description，
-    不支持嵌套/oneOf/$ref）—— 边界与理由见 ../DeepDocParse/docs/extract-format.md。
+    不支持嵌套/oneOf/$ref）—— 边界与理由见
+    `packages/contracts/ddp/extract-format.md`。
     """
 
     __tablename__ = "extraction_templates"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
-    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
+    actor_id: Mapped[str] = mapped_column(String(32), index=True)
+    organization_id: Mapped[str] = mapped_column(String(32), default="", index=True)
     name: Mapped[str] = mapped_column(String(128))
     description: Mapped[str] = mapped_column(Text, default="")
     schema_json: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -135,7 +105,7 @@ class ExtractionTemplate(Base):
                                                  onupdate=utcnow)
 
     __table_args__ = (
-        UniqueConstraint("user_id", "name", name="uq_extraction_templates_user_name"),
+        UniqueConstraint("actor_id", "name", name="uq_extraction_templates_actor_name"),
     )
 
 
@@ -150,13 +120,14 @@ class ExtractionRun(Base):
     __tablename__ = "extraction_runs"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
-    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
+    actor_id: Mapped[str] = mapped_column(String(32), index=True)
+    organization_id: Mapped[str] = mapped_column(String(32), default="", index=True)
     # 模板可以被删，run 不该跟着消失 —— 所以是可空的弱引用，真正的依据是 schema_json
     template_id: Mapped[str | None] = mapped_column(String(32), default=None)
     name: Mapped[str] = mapped_column(String(128), default="")
     schema_json: Mapped[dict] = mapped_column(JSON, default=dict)
     kind: Mapped[str] = mapped_column(String(8), default="object")   # object | array
-    # pending | running | succeeded | partial | failed
+    # pending | running | succeeded | partial | failed（契约 run_status）
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     document_count: Mapped[int] = mapped_column(Integer, default=0)
     done_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -180,7 +151,7 @@ class ExtractionItem(Base):
 
     fields 的形状是 DDP-Extract v1 的字段表：
       {"字段名": {status, value, verified, degraded, confidence}}
-    **出处不在这份 JSON 里**（阶段 4 起）：它住在 evidence / citations 两张表，
+    **出处不在这份 JSON 里**：它住在 evidence / citations 两张表，
     来源键是 `{item_id}:{字段名}` —— 抽取的出处是字段级的，
     "这个字段的值是从哪一块抽出来的"正是本产品相对"字段 + 置信度"那类
     抽取产品的差异点。对外响应仍然带 citations，由 `_fields_out` 现拼。
@@ -207,42 +178,93 @@ class ExtractionItem(Base):
     )
 
 
-class FileToken(Base):
-    """稳定文件 URL 的凭证：/files/{token} -> 原件。
+class CorpusOutbox(Base):
+    """出站事件。**跨服务边界的唯一正确姿势。**
 
-    存在的理由：service 要能下载文件，而 MinIO 预签名 URL 会过期且每次签名不同
-    （MCP 平面的 ask_document 只有 file_url、传不了 doc_id，URL 一变检索缓存就失效）。
-    token 本身即凭证（32 字节随机），可撤销、可设过期。
+    业务数据与事件在同一个本地事务里提交，再由投递器发给 control-api。
+    分两次写（先改状态、再发请求）的话，进程在中间崩溃会留下一个
+    "状态已变但没人知道"的洞 —— 用量记不上、配额扣不掉。
+
+    投递是**至少一次**的，所以消费端必须按 id 幂等（control 侧
+    `usage_ledger.event_id` 上有唯一约束）。
     """
 
-    __tablename__ = "file_tokens"
-
-    token: Mapped[str] = mapped_column(String(64), primary_key=True)
-    document_id: Mapped[str] = mapped_column(String(32), ForeignKey("documents.id"), index=True)
-    scope: Mapped[str] = mapped_column(String(8), default="source")   # source | share
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class UsageRecord(Base):
-    """计量流水：按页（解析）与按次（所有平面）。用量图表与额度扣减的唯一数据源。"""
-
-    __tablename__ = "usage_records"
+    __tablename__ = "corpus_outbox"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
-    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), index=True)
-    api_key_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("api_keys.id"),
-                                                    default=None)
-    parse_job_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("parse_jobs.id"),
-                                                      default=None)
-    # parse | chat | embeddings | mcp | qa | embed | compile_vision | extract
-    # extract 按**字段数**计 requests：一次抽取 = N 次检索 + N 次模型调用，
-    # 按"一次请求"计费会让 60 字段的 schema 和 1 字段的一样便宜
-    kind: Mapped[str] = mapped_column(String(16))
-    pages: Mapped[int] = mapped_column(Integer, default=0)
-    requests: Mapped[int] = mapped_column(Integer, default=1)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    organization_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+    type: Mapped[str] = mapped_column(String(64), index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    # 失败原因必须持久化：只写日志的话，运维看到的是"账目不对"
+    # 而不是"事件投了 7 次都是 502"
+    last_error: Mapped[str | None] = mapped_column(Text, default=None)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                      index=True)
 
 
-Index("ix_usage_user_created", UsageRecord.user_id, UsageRecord.created_at)
+class UsageClaim(Base):
+    """"这个人已经为这个 job 付过费了" —— **按 (actor, job) 判重的锚点。**
+
+    ## 为什么需要一张表
+
+    计量的真相在 control schema（Go 出账单），语料侧查不到它。而"同一个
+    解析任务被多个用户共享时，每个人各记一次"这条计费语义**必须在发事件
+    之前判**，否则会重复记账。
+
+    ## 为什么是按 (用户, job) 而不是按 job
+
+    全局去重之前，每个用户各有一份 Document 与 ParseJob，`job.page_count == 0`
+    就是"这次任务还没记过账"的锚点。全局去重之后一个 job 被多个用户共享，
+    那个锚点从**按任务**变成了**按语料**：第二个用户拿到的 job 早就
+    `page_count != 0`，于是**完全不计费**，可以无限白嫖解析并绕过配额
+    （实测：B used_pages=0）。
+
+    按 (用户, job) 判重**恰好还原去重之前的计费行为**。不是新政策，
+    是在新数据模型下把老语义保住。
+
+    ## 为什么不是"算力只花了一次所以第二个人免费"
+
+    三条理由，第二条最硬：
+
+    1. 这里的计量是**产品配额**不是成本核算。配额是对单个客户的授权额度；
+       去重让页数免费的话，客户的额度就取决于**别的客户碰巧传没传过同一份
+       文件** —— 不可预测、不可对账。
+    2. **它会变成一条侧信道。** "这次收费了没有"直接泄露"这份文档在本部署里
+       是不是已经有人传过"。拿一批候选文件挨个提交、看哪些不扣费，就能反推出
+       别人的语料构成 —— 等于把计费口径做成了探测接口。
+    3. 省下来的算力钱本来就归运营方（GPU 只跑一次，边际成本真降了）。
+       这份收益不必靠给用户打折来兑现。
+    """
+
+    __tablename__ = "usage_claims"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    actor_id: Mapped[str] = mapped_column(String(32), index=True)
+    parse_job_id: Mapped[str] = mapped_column(String(32), ForeignKey("parse_jobs.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("actor_id", "parse_job_id", name="uq_usage_claims_actor_job"),
+    )
+
+
+class ProcessedEvent(Base):
+    """已消费的入站事件 —— **幂等消费的落点**。
+
+    control 侧的投递器是"至少一次"的，所以同一个 `DocumentSubmitted`
+    可能到达好几次。没有这张表的话，一次网络抖动就会让同一份上传
+    变成两个 Document、两次解析、两次计费。
+    """
+
+    __tablename__ = "processed_events"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    type: Mapped[str] = mapped_column(String(64), index=True)
+    organization_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+    # 处理结果的引用（如新建的 document_id），便于重投时直接返回同一个结果
+    result_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

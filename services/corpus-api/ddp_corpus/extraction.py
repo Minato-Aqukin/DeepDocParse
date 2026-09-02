@@ -89,14 +89,14 @@ class ExtractOutcome:
 class ExtractContext:
     def __init__(self, *, session: AsyncSession, index: SearchIndex, http: httpx.AsyncClient,
                  storage: Storage, document: Document, job: ParseJob | None,
-                 user_id: str, verify: bool | None = None):
+                 actor_id: str, verify: bool | None = None):
         self.session = session
         self.index = index
         self.http = http
         self.storage = storage
         self.document = document
         self.job = job
-        self.user_id = user_id
+        self.actor_id = actor_id
         self.verify = settings.extract_verify if verify is None else verify
         self.usage = {"fields": 0, "retrievals": 0, "chat_calls": 0, "verifications": 0}
         # 核对是有预算的：每次核对 = 一次渲染 + 一次视觉模型调用。

@@ -23,7 +23,7 @@ from ddp_corpus.config import settings
 from ddp_core.search import MemoryIndex
 from ddp_core.tokenize import tokenized
 
-from tests.conftest import CHAT, EMBEDDINGS
+from tests.conftest import CHAT, EMBEDDINGS, usage_events
 
 SCHEMA = {
     "type": "object",
@@ -139,7 +139,7 @@ async def test_found_and_not_found_are_distinguished(session, app_state):
 
     ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
-                         user_id=document.uploaded_by, verify=False)
+                         actor_id=document.uploaded_by, verify=False)
     outcome = await run_extraction(ctx, parse_schema(SCHEMA))
 
     assert outcome.fields["buyer"]["status"] == "found"
@@ -164,7 +164,7 @@ async def test_garbage_model_output_is_schema_violation_not_not_found(session, a
 
     ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
-                         user_id=document.uploaded_by, verify=False)
+                         actor_id=document.uploaded_by, verify=False)
     outcome = await run_extraction(ctx, parse_schema(SCHEMA))
     assert outcome.fields["buyer"]["status"] == "error"
     assert outcome.fields["buyer"]["degraded"] == "schema_violation"
@@ -181,31 +181,27 @@ async def test_embedding_down_is_visible_on_the_field(session, app_state):
 
     ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
-                         user_id=document.uploaded_by, verify=False)
+                         actor_id=document.uploaded_by, verify=False)
     outcome = await run_extraction(ctx, parse_schema(SCHEMA))
     degraded = [f.get("degraded") for f in outcome.fields.values()]
     assert "embedding_unavailable" in degraded, degraded
 
 
 async def _a_user(session, username: str = "ex") -> str:
-    from ddp_corpus.models import User
-
-    user = User(username=username, password_hash="x")
-    session.add(user)
-    await session.flush()
-    return user.id
+    """"一个用户"现在就是一个 actor id —— 用户住在 control schema。"""
+    return f"actor-{username}"
 
 
 # --------------------------------------------------------------------- API
 
-async def test_template_crud_and_schema_guard(auth_client):
-    bad = await auth_client.post("/api/extractions/templates", json={
+async def test_template_crud_and_schema_guard(actor_client):
+    bad = await actor_client.post("/api/extractions/templates", json={
         "name": "坏模板", "description": "", "schema_json": {
             "type": "object", "properties": {"a": {"type": "string"}}}})
     assert bad.status_code == 400, "缺 description 的 schema 必须当场被拒"
     assert bad.json()["error"]["code"] == "invalid_schema"
 
-    created = await auth_client.post("/api/extractions/templates", json={
+    created = await actor_client.post("/api/extractions/templates", json={
         "name": "采购合同", "description": "关键条款", "schema_json": SCHEMA})
     assert created.status_code == 201, created.text
     body = created.json()
@@ -213,44 +209,42 @@ async def test_template_crud_and_schema_guard(auth_client):
     # 线上字段名必须是 schema_json（pydantic 属性名换了，别名不能漏）
     assert "schema_json" in body and "doc_schema" not in body
 
-    listed = (await auth_client.get("/api/extractions/templates")).json()
+    listed = (await actor_client.get("/api/extractions/templates")).json()
     assert len(listed) == 1
 
-    duplicate = await auth_client.post("/api/extractions/templates", json={
+    duplicate = await actor_client.post("/api/extractions/templates", json={
         "name": "采购合同", "description": "", "schema_json": SCHEMA})
     assert duplicate.status_code == 409
 
-    assert (await auth_client.delete(
+    assert (await actor_client.delete(
         f"/api/extractions/templates/{body['id']}")).status_code == 204
-    assert (await auth_client.get("/api/extractions/templates")).json() == []
+    assert (await actor_client.get("/api/extractions/templates")).json() == []
 
 
-async def test_soft_deleted_template_name_can_be_reused(auth_client):
-    """回归：唯一约束是 (user_id, name) 且不含 deleted_at ——
+async def test_soft_deleted_template_name_can_be_reused(actor_client):
+    """回归：唯一约束是 (actor_id, name) 且不含 deleted_at ——
     软删后重建同名模板直接插会撞约束报 500。"""
-    first = (await auth_client.post("/api/extractions/templates", json={
+    first = (await actor_client.post("/api/extractions/templates", json={
         "name": "同名", "description": "", "schema_json": SCHEMA})).json()
-    await auth_client.delete(f"/api/extractions/templates/{first['id']}")
-    again = await auth_client.post("/api/extractions/templates", json={
+    await actor_client.delete(f"/api/extractions/templates/{first['id']}")
+    again = await actor_client.post("/api/extractions/templates", json={
         "name": "同名", "description": "复活", "schema_json": SCHEMA})
     assert again.status_code == 201, again.text
     assert again.json()["id"] == first["id"], "应该复活原行，而不是插一条新的"
 
 
-async def test_run_rejects_documents_without_index(auth_client, session):
+async def test_run_rejects_documents_without_index(actor_client, session):
     """索引没就绪的文档抽不了。**当场说清楚**，别让它们跑完变成一堆空结果 ——
     空值看起来像"文档里没有"，那是抽取里最危险的误导。"""
-    from ddp_corpus.models import User
-
-    user = (await session.execute(__import__("sqlalchemy").select(User))).scalars().first()
-    document = Document(uploaded_by=user.id, doc_id="z" * 64, filename="未索引.pdf",
+    
+    document = Document(uploaded_by="actor-ex", doc_id="z" * 64, filename="未索引.pdf",
                         mime="application/pdf", index_status="none")
     session.add(document)
     await session.commit()
 
-    template = (await auth_client.post("/api/extractions/templates", json={
+    template = (await actor_client.post("/api/extractions/templates", json={
         "name": "t", "description": "", "schema_json": SCHEMA})).json()
-    resp = await auth_client.post("/api/extractions/runs", json={
+    resp = await actor_client.post("/api/extractions/runs", json={
         "document_ids": [document.id], "template_id": template["id"]})
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "index_not_ready"
@@ -418,7 +412,7 @@ async def test_vision_model_down_is_visible_not_just_unverified(session, app_sta
 
     ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
-                         user_id=document.uploaded_by, verify=True)
+                         actor_id=document.uploaded_by, verify=True)
     schema = {"type": "object", "properties": {
         "buyer": {"type": "string", "description": "买方单位全称"}}}
 
@@ -457,7 +451,7 @@ async def test_one_field_blowing_up_does_not_lose_the_others(session, app_state)
 
     ctx = ExtractContext(session=session, index=ExplodingIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
-                         user_id=document.uploaded_by, verify=False)
+                         actor_id=document.uploaded_by, verify=False)
     schema = {"type": "object", "properties": {
         "buyer": {"type": "string", "description": "买方单位全称"},
         "boom": {"type": "string", "description": "boom 会炸的字段"},
@@ -537,7 +531,7 @@ async def test_hard_deleted_document_does_not_break_the_whole_run(session, app_s
     from ddp_corpus.routers.extractions import _extract_one
 
     user_id = await _a_user(session)
-    run = ExtractionRun(user_id=user_id, name="t", schema_json=SCHEMA, kind="object",
+    run = ExtractionRun(actor_id=user_id, name="t", schema_json=SCHEMA, kind="object",
                         status="running", document_count=1)
     session.add(run)
     await session.commit()
@@ -576,14 +570,14 @@ async def test_extract_one_runs_against_a_real_document(session, app_state):
     from sqlalchemy import select as sa_select
 
     from ddp_core.extract_format import parse_schema as ps
-    from ddp_corpus.models import ExtractionItem, ExtractionRun, UsageRecord
+    from ddp_corpus.models import ExtractionItem, ExtractionRun
     from ddp_corpus.routers.extractions import _extract_one
 
     document, _job = await _seed_document(session, await _a_user(session))
     initiator = await _a_user(session, username="initiator")
     assert initiator != document.uploaded_by, "发起人要与上传者不同才测得出归属"
 
-    run = ExtractionRun(user_id=initiator, name="t", schema_json=SCHEMA, kind="object",
+    run = ExtractionRun(actor_id=initiator, name="t", schema_json=SCHEMA, kind="object",
                         status="running", document_count=1)
     session.add(run)
     await session.commit()
@@ -599,7 +593,6 @@ async def test_extract_one_runs_against_a_real_document(session, app_state):
         sa_select(ExtractionItem).where(ExtractionItem.run_id == run.id))).scalars().all()
     assert items, "至少要落一条结果（哪怕是 not_found）"
 
-    billed = (await session.execute(
-        sa_select(UsageRecord.user_id).where(UsageRecord.kind == "extract"))).scalars().all()
+    billed = [e["actor_id"] for e in await usage_events(session, "extract")]
     assert billed == [initiator], \
         f"抽取要记在发起人头上，不是上传者（{document.uploaded_by}）头上，实际 {billed}"

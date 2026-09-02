@@ -15,14 +15,9 @@ class Settings(BaseSettings):
     # PostgreSQL（必须带 pgvector 扩展；单测走 SQLite in-memory，不读这一项）。
     # 端口 15432 是为了不和别处的 PG 撞车
     database_url: str = "postgresql+asyncpg://ddp:ddp@127.0.0.1:15432/deepdocparse"
-    # 签发/校验用户会话的密钥。**占位值会被拒绝启动**：它是 change-me
-    # 等于任何人都能给任意 user_id 伪造一个有效会话，且运行时不报任何错
-    jwt_secret: str = "change-me"
-    jwt_ttl_minutes: int = 60 * 24 * 7          # 登录态有效期（分钟），默认 7 天
-    # bcrypt 成本因子。**生产不要调低** —— 它就是抗离线爆破的全部本钱。
-    # 单测把它降到 4：默认 12 时一次 hash+verify 要 0.37s，而几乎每个用例都要注册一个
-    # 用户，光这一项就占掉整个套件大半时间（见 tests/conftest.py）
-    bcrypt_rounds: int = 12
+    # **没有 jwt_secret / bcrypt_rounds。** 用户凭据的校验整体迁去了
+    # services/control-api（Go）—— 本服务只信任入口下发的 actor 上下文头。
+    # 少一份密码学实现就少一处出错面。
 
     # MinIO：service 与浏览器走不同 endpoint —— 预签名 URL 的签名覆盖 host，
     # 两边 host 不同则签名不同，必须分开生成（见 CLAUDE.md 部署陷阱）。
@@ -38,9 +33,13 @@ class Settings(BaseSettings):
     # ---- 对 service（DeepDocParse）----
     # DeepDocParse gateway 的地址。解析平面必须走它，embedding/chat 缺省也回落到它
     service_url: str = "http://127.0.0.1:9000"
-    mcp_url: str = "http://127.0.0.1:9100"      # service 的 MCP 平面，/mcp 反代的上游
-    # 与 service 之间的内网令牌，**必须与 DeepDocParse/.env 的 SERVICE_TOKEN 一致**。
-    # 它同时也是 /internal/* 回调端点的凭据 —— 占位值会被拒绝启动
+    # 控制面（services/control-api）。本服务向它要两样东西：
+    # 稳定文件 URL 的凭证、actor 显示名 —— 两者都住在 control schema，
+    # 而 corpus 对那个 schema 没有任何权限（企业边界 5）
+    control_url: str = "http://127.0.0.1:8080"
+    # 内网服务凭据，**三个服务必须一致**（control-api / model-gateway / 本服务）。
+    # 它是本服务唯一的门禁：actor 上下文头之所以可信，前提就是
+    # "只有持有它的调用方能进来"。占位值会被拒绝启动
     service_token: str = "change-me"
     # 上传/重解析没有显式指定引擎时用哪个。**名字必须在 service 的 models.yaml 里存在**，
     # 否则 service 返回 404 unknown_engine —— 这正是无 GPU 环境踩到的：
@@ -56,16 +55,17 @@ class Settings(BaseSettings):
     chat_url: str = ""                 # 如直连 vLLM：http://.../v1/chat/completions
     chat_token: str = ""               # 留空用 service_token
     chat_model: str = ""               # 留空由上游注册表选 default
-    # 本服务对 service 可达的外部地址：稳定文件 URL 与解析回调都用它拼。
-    # 宿主机混合模式用 127.0.0.1:8080，全容器模式用服务名（http://web-backend:8080）。
-    public_base_url: str = "http://127.0.0.1:8080"
+    # 本服务对模型网关可达的地址：解析回调用它拼。
+    # 宿主机混合模式用 127.0.0.1:8081，全容器模式用服务名（http://corpus-api:8081）
+    public_base_url: str = "http://127.0.0.1:8081"
 
-    # 多副本部署必须配：限速计数与对账选主都靠它。留空 = 单实例模式（进程内计数）
+    # 多副本部署必须配：对账选主靠它。留空 = 单实例模式。
+    # **限速不在这里** —— 整体迁去了 control-api
     redis_url: str = ""
 
-    # 单次上传的字节上限。**必须有**：上传体要整个进内存（算内容 sha256 当 doc_id，
-    # 再原样 put 进 MinIO），没有上限时任意登录用户传个大文件就能把进程打爆
-    # ——dev 机 WSL 只有 ~7.7GB，门槛极低。超限返回 413。
+    # 单文件上限。**真正的把关在 control-api**（它签发预签名前就校验），
+    # 这里保留是给"外部提交"路径与展示用 —— 两处的值应当一致。
+    # 字节流不再经过本进程（不变式 6），所以它不再是 OOM 防线
     max_upload_bytes: int = 200 * 1024 * 1024
     # 分片读取的粒度：边读边累计，超限立刻中断，不等整个文件落地
     upload_chunk_bytes: int = 1024 * 1024
@@ -154,9 +154,7 @@ class Settings(BaseSettings):
     # **没有上限的话 done 帧会被硬生生拖后几分钟**，用户看着答案已经出完却迟迟不落定。
     # 超时就当"没测出来"——宁可不打标，也不能让核对拖垮体验
     qa_verify_timeout: float = 20.0
-    qa_rate_per_min: int = 20           # 每用户问答限速
     knowledge_enabled: bool = True      # 可整体关掉知识层，旧检索/问答路径不受影响
-    knowledge_rate_per_min: int = 2     # 图谱/wiki 生成很贵，单独限速
     knowledge_max_evidence: int = 50    # 单次生成送入模型的证据原子上限
 
     # ---- 重排序（D1）----
@@ -202,20 +200,17 @@ class Settings(BaseSettings):
     # 核对的字段数上限。每个字段核对一次 = 一次渲染 + 一次视觉模型调用，
     # 全量核对会让一次 30 字段的抽取变成 60 次模型调用
     extract_verify_fields: int = 3
-    extract_rate_per_min: int = 6       # 每用户批量抽取限速（次/分钟）
     # 视觉模型在 CPU 上出第一个 token 可能要几分钟（dev 机常态），读超时要留够
     chat_read_timeout: float = 900.0
 
-    # ---- 额度默认值（新建 key 时的初值）----
-    default_quota_pages: int | None = 1000   # None = 不限
-    default_rate_limit_per_min: int = 60     # 新建 key 的默认限速（次/分钟）
+    # **没有额度与限速默认值**：配额与限速归 control-api（见它的 CONFIG.md）。
+    # 两处各配一份的表现是"我明明把限速调大了"却没生效
 
     # 只有明确知道自己在做什么才打开（一次性容器、CI）。生产打开等于没有鉴权
     allow_insecure_defaults: bool = False
 
-    # 允许跨源访问的前端地址，逗号分隔。默认是 dev 的 Vite（5173）——
-    # 换部署形态时必须能改配置而不是改代码
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    # **没有 CORS 配置**：浏览器不直接访问本服务，它只对内网开放，
+    # 前端一律经 control-api
 
     @model_validator(mode="after")
     def _check_default_parse_engine(self):
@@ -268,10 +263,6 @@ class Settings(BaseSettings):
         return self
 
     @property
-    def cors_origin_list(self) -> list[str]:
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
-
-    @property
     def embeddings_endpoint(self) -> str:
         return self.embedding_url or f"{self.service_url}/v1/embeddings"
 
@@ -312,16 +303,16 @@ def rerank_config() -> "RerankConfig":
 def assert_secrets_configured() -> None:
     """启动即失败，而不是带着占位密钥安静地跑起来。
 
-    - jwt_secret 是占位值 = 任何人都能给任意 user_id 伪造一个有效会话
-    - service_token 是占位值 = 内网回调端点（/internal/*）对全世界敞开
+    service_token 是占位值 = 本服务的唯一门禁形同虚设，而 actor 上下文头
+    之所以可信，前提正是"只有持有它的调用方能进来"。任何人都能自称 admin。
 
-    这两条都不会在运行时报任何错，只会安静地把整套鉴权变成摆设 —— 正是
+    这不会在运行时报任何错，只会安静地把整套鉴权变成摆设 —— 正是
     必须在启动时拦下来的那类问题。
     """
     if settings.allow_insecure_defaults:
         print("[config] WARNING: ALLOW_INSECURE_DEFAULTS 已开启，占位密钥检查被跳过")
         return
-    bad = [name for name in ("jwt_secret", "service_token")
+    bad = [name for name in ("service_token",)
            if getattr(settings, name).strip().lower() in _PLACEHOLDER_SECRETS]
     if bad:
         raise RuntimeError(

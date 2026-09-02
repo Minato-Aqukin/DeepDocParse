@@ -13,12 +13,13 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+EVAL_DIR = Path(__file__).resolve().parent
+ROOT = EVAL_DIR.parent
 sys.path.insert(0, str(ROOT / "backend"))
 
 from ddp_core.agent import assertions_from_text, gate_candidates  # noqa: E402
 
-DATASET = ROOT / "eval" / "agent.json"
+DATASET = EVAL_DIR / "datasets" / "agent.json"
 
 
 @dataclass(frozen=True)

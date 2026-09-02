@@ -24,11 +24,10 @@ from tests.test_qa import _ask, _conversation, _ready_document
 
 
 async def _a_user(session) -> str:
-    from ddp_corpus.models import User
-    user = User(username="ev", password_hash="x")
-    session.add(user)
-    await session.flush()
-    return user.id
+    # 用户住在 control schema（Go 拥有），语料侧只存裸 actor id
+
+    actor_id = "actor-ev"
+    return actor_id
 
 
 async def _seed(session, *, texts: list[str], page_size=None) -> tuple[Document, ParseJob]:
@@ -176,7 +175,7 @@ async def test_evidence_write_failure_does_not_lose_the_answer(session, monkeypa
     document, job = await _seed(session, texts=["一段"])
     # 单测的 SQLite 是**开着外键约束**的，随手编一个 conversation_id 会撞 FK ——
     # 那样测到的就不是 savepoint 而是我自己造的另一个错
-    conversation = Conversation(document_id=document.id, user_id=document.uploaded_by, title="c")
+    conversation = Conversation(document_id=document.id, actor_id=document.uploaded_by, title="c")
     session.add(conversation)
     await session.flush()
     message = Message(conversation_id=conversation.id, role="assistant", content="答案")
@@ -211,18 +210,18 @@ async def test_evidence_write_failure_does_not_lose_the_answer(session, monkeypa
 # ------------------------------------------------------------------ 端到端对拍
 
 @respx.mock
-async def test_qa_citations_come_back_from_the_new_tables(auth_client, session):
+async def test_qa_citations_come_back_from_the_new_tables(actor_client, session):
     """问答走完一遍：接口返回的出处与 evidence/citations 两张表逐条相同。
 
     阶段 4 删掉 `messages.citations` 之后，**新表是唯一真相** ——
     这条用例因此从"对拍老 JSON"变成了"对拍接口返回"：
     表里有什么，用户就该看到什么，不多不少。
     """
-    document = await _ready_document(auth_client)
-    cid = await _conversation(auth_client, document["id"])
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=_sse_answer())
 
-    await _ask(auth_client, cid)
+    await _ask(actor_client, cid)
 
     message = (await session.execute(
         select(Message).where(Message.role == "assistant"))).scalars().one()
@@ -234,13 +233,13 @@ async def test_qa_citations_come_back_from_the_new_tables(auth_client, session):
     )).all())
     assert rows, "前提不成立：这一问应当给出出处"
 
-    shown = (await auth_client.get(f"/api/conversations/{cid}/messages")).json()[1]["citations"]
+    shown = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()[1]["citations"]
     assert sorted((c["parse_job_id"], c["seq"]) for c in shown) == rows, \
         f"接口返回的出处与表里对不上：接口 {shown}，表 {rows}"
 
 
 @respx.mock
-async def test_extraction_citations_are_stored_per_field(auth_client, session):
+async def test_extraction_citations_are_stored_per_field(actor_client, session):
     """抽取的出处是**字段级**的，存储不能把它压回 item 级。
 
     "这个字段的值是从哪一块抽出来的"正是本产品相对"字段 + 置信度"那类
@@ -251,13 +250,13 @@ async def test_extraction_citations_are_stored_per_field(auth_client, session):
     from ddp_corpus.models import ExtractionItem, ExtractionRun
     from ddp_corpus.routers.extractions import _BACKGROUND_TASKS
 
-    document = await _ready_document(auth_client)
+    document = await _ready_document(actor_client)
     respx.post(CHAT).mock(return_value=Response(200, json={"choices": [
         {"message": {"content": json.dumps(
             {"found": True, "value": "第二页的表格数据", "source": 1},
             ensure_ascii=False)}}]}))
 
-    resp = await auth_client.post("/api/extractions/runs", json={
+    resp = await actor_client.post("/api/extractions/runs", json={
         "document_ids": [document["id"]], "name": "t",
         # 描述要与第 2 页那一块字面高度重合：夹具用的是字符袋假向量，
         # 描述写"主题"的话余弦远低于 qa_min_similarity -> 零命中 -> not_found，
@@ -294,7 +293,7 @@ async def test_extraction_citations_are_stored_per_field(auth_client, session):
     assert checked, "前提不成立：一条字段级出处都没有，这条用例什么都没验到"
 
     # 接口仍然按字段给出处 —— 存储换了，对外形状不变
-    detail = (await auth_client.get(f"/api/extractions/runs/{run.id}")).json()
+    detail = (await actor_client.get(f"/api/extractions/runs/{run.id}")).json()
     shown = [c for i in detail["items"] for f in i["fields"].values()
              for c in f["citations"]]
     assert len(shown) == checked, f"接口给了 {len(shown)} 条出处，表里有 {checked} 条"
