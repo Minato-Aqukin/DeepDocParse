@@ -5,7 +5,9 @@
 
 > 本仓库由原 `DeepDocParse`（GPU 服务层）与 `DeepDocParse-Web`（产品层）
 > 两个仓库合并而成，两段 Git 历史完整保留。合仓与企业化重构方案见
-> `MERGE-REFACTOR-PROPOSAL.md`，执行记录见 `docs/refactor/`。
+> `MERGE-REFACTOR-PROPOSAL.md`。
+>
+> **重构做到哪一步、还欠什么，看 `docs/refactor/STATUS.md`。**
 
 ## 目录
 
@@ -48,27 +50,35 @@ tests/fixtures/           全仓共享的冻结夹具
 见 `docs/DEPLOY.md`。本机开发：
 
 ```bash
-scripts/dev.sh up          # 数据面 + 各服务
+scripts/dev.sh secrets     # 生成 infra/env/dev.env（三个密钥随机填好，chmod 600）
+scripts/dev.sh up          # 数据面 + 五个服务 + 两套迁移
 scripts/dev.sh status
 scripts/dev.sh logs corpus-api
+
+cd apps/web && npm run dev # 前端 http://localhost:5173
 ```
+
+入口是 http://127.0.0.1:8080 —— **只有它映射端口**。其余服务不做用户鉴权，
+只信任入口下发的 actor 上下文头（有守卫钉着这件事）。
 
 ## 验证
 
 ```bash
-scripts/check.sh            # 全量门禁：契约 + 三套 pytest + Go + 前端 + 守卫
+./scripts/check.sh          # 全量门禁 20 项，与 CI 同一套判据
+./scripts/check.sh guards   # 只跑守卫
 ```
 
 单项：
 
 ```bash
-cd python/ddp_core        && pytest -q
-cd services/model-gateway && pytest -q
-cd services/corpus-api    && pytest -q
-cd services/control-api   && go test ./... && go vet ./...
-cd apps/web               && npm run test:unit && npm run build
-python scripts/check_contract.py
-python scripts/check_data_ownership.py
+cd python/ddp_core        && pytest -q      # 27
+cd services/model-gateway && pytest -q      # 149 + 6 skip
+cd services/corpus-api    && pytest -q      # 265
+cd services/corpus-worker && pytest -q      # 10
+cd services/mcp           && pytest -q      # 12
+cd eval                   && pytest -q      # 45
+cd services/control-api   && go test ./...  # 36
+cd apps/web && npm run test:unit && npm run test:e2e   # 26 + 72
 ```
 
 ## 许可
