@@ -319,8 +319,46 @@ async def main() -> int:
                 run.fail("签名 URL 支持 Range",
                          f"{part.status_code}，{len(part.content)} 字节")
 
-        # ------------------------------------------------------ 6 索引与问答
-        print("\n[6] 索引与问答")
+        # ------------------------------------------------- 6 actor 写得进语料
+        print("\n[6] 新架构的用户写得进语料表")
+
+        # **这一条是 F-28 的直接回归。** 建会话不需要 embedding —— 只有"提问"
+        # 才需要。而 e2e 此前跳过整个 [6] 段，于是**一条会话都没插过**，
+        # 迁移 0013 漏删的那三条外键（`actor_id` 仍指向遗留 public.users）
+        # 就一路绿到了第三次验收。
+        #
+        # 它验的是：经 control-api 注册的用户（id 只在 control.users 里，
+        # 不在旧表里）能不能写进语料表。答案曾经是不能。
+        created = await http.post(f"/api/documents/{document['id']}/conversations")
+        if created.status_code == 201:
+            run.ok("新注册的用户能建会话",
+                   f"conversation={created.json()['id'][:8]}… "
+                   f"（actor 只在 control.users 里，不在遗留 users 里）")
+        else:
+            run.fail("新注册的用户能建会话",
+                     f"{created.status_code} {created.text[:200]} —— "
+                     f"外键指着遗留 public.users 的话就是这个症状（F-28）")
+
+        # 抽取模板走的是同一条 actor_id 路径，一并验
+        template = await http.post("/api/extractions/templates", json={
+            "name": f"e2e-{nonce[:6]}",
+            "description": "e2e 用的最小模板",
+            # 字段名是 `schema_json`（TemplateIn 的 alias），不是 fields
+            "schema_json": {
+                "type": "object",
+                "properties": {"标题": {"type": "string", "description": "文档标题"}},
+            },
+        })
+        if template.status_code in (200, 201):
+            run.ok("新注册的用户能建抽取模板", f"{template.status_code}")
+        elif template.status_code == 404:
+            run.skip("新注册的用户能建抽取模板", "这个部署没有抽取模板端点")
+        else:
+            run.fail("新注册的用户能建抽取模板",
+                     f"{template.status_code} {template.text[:200]}")
+
+        # ------------------------------------------------------ 7 索引与问答
+        print("\n[7] 索引与问答")
         if not args.with_embeddings:
             run.skip("分块索引与问答",
                      "本机没有 embedding 端点（无 GPU）。索引会显式标 "
@@ -357,7 +395,7 @@ async def main() -> int:
                          f"error={indexed and indexed.get('index_error')}")
 
         # ------------------------------------------------------ 7 计量与审计
-        print("\n[7] 计量与审计")
+        print("\n[8] 计量与审计")
         # 缺省只看**调用者自己**的用量，所以上面那份文档必须是这次跑新传的
         usage = (await http.get("/api/usage", params={"days": 1})).json()
         points = usage.get("points") or []
@@ -386,7 +424,7 @@ async def main() -> int:
             run.fail("审计日志", f"{audit.status_code} {audit.text[:200]}")
 
         # ---------------------------------------------- 8 内部头不可伪造
-        print("\n[8] 客户端不能伪造身份")
+        print("\n[9] 客户端不能伪造身份")
         forged = await http.get("/api/auth/me", headers={
             "X-DDP-Role": "admin", "X-DDP-Actor": "someone-else",
             "X-DDP-Organization": "other-org",
