@@ -53,7 +53,7 @@ GRANT SELECT ON control.organizations, control.users TO ddp_corpus;
 | 守卫 | 判据 | 它管什么 |
 |---|---|---|
 | `scripts/check_data_ownership.py` | 静态扫源码里的表名 | 有没有人**写了**越界的 SQL |
-| `scripts/check_db_boundary.sh` | 对着真库跑 21 条断言 | 越界的 SQL **会不会被数据库拒绝** |
+| `scripts/check_db_boundary.sh` | 对着真库跑 23 条断言 | 越界的 SQL **会不会被数据库拒绝** |
 
 前者防意图，后者防疏漏。F-20 正是"前者全绿而后者不存在"的那段时间里
 发生的：源码干干净净，而数据库权限从来没生效过。

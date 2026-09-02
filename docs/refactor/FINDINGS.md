@@ -572,3 +572,66 @@ F-16 补了三种形状（元组解包 / `.add()` / 容器字面量），用法�
 三种拆 scan 的变异对 v3 全红，而且报的是**具体哪几个取值掉了覆盖**。
 唯一没有写点的 `upstream_interrupted` 登记在 `KNOWN_UNPRODUCED` 里并写清
 理由（它是 SSE error 帧的 code，不是 degraded 字段的取值，有测试钉着）。
+
+## F-28 · 迁移 0013 按改名**之后**的列名去删外键，`IF EXISTS` 把失败变成静默
+
+**严重度**：高（主链路不通 —— 迁移之后注册的用户开不了会话）
+**发现方式**：第三次独立验收在核对删表工具的前置条件时，
+查 `DROP ... CASCADE` 会连带删掉什么，顺着连带项查到的根因。
+
+0013 先把 `user_id` 改名成 `actor_id`，然后按**改名后**的列名拼约束名去删：
+
+```python
+op.execute(f'ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_{column}_fkey')
+#  column 已经是 "actor_id"  ->  conversations_actor_id_fkey
+```
+
+而 **PostgreSQL 改列名不会改约束名** —— 真实约束仍叫
+`conversations_user_id_fkey`。`IF EXISTS` 于是静默匹配不到、静默成功。
+同一个循环里那些没改过名的（`documents.uploaded_by`、`parse_jobs.api_key_id`…）
+名字对得上，全删掉了；**只有三张改过名的没删掉**，正好印证根因。
+
+## 后果不是不整洁
+
+`conversations` / `extraction_templates` / `extraction_runs` 三张**活语料表**
+仍然要求 `actor_id` 存在于遗留的 `public.users` 里。而账号已经搬去
+`control.users` —— 迁移之后经 control-api 注册的用户，id 根本不在旧表里：
+
+```
+ERROR:  insert or update on table "conversations"
+        violates foreign key constraint "conversations_user_id_fkey"
+DETAIL: Key (actor_id)=(...) is not present in table "users".
+```
+
+**开不了会话、建不了抽取模板、跑不了抽取批次** —— 而那正是新架构的常态用户。
+在当天由 `scripts/dev.sh up` 全新建出来的库上一样复现。
+
+## 为什么六道防线一条都没拦住
+
+| 防线 | 为什么没拦住 |
+|---|---|
+| corpus-api 单测 | 走 `Base.metadata.create_all`，ORM 里没有这个外键 |
+| 0013 自己的测试 | 那段带 `if not is_sqlite`，单测连碰都不碰 |
+| `check_data_ownership.py` | 扫**源码**，而源码是干净的 |
+| `check_db_boundary.sh` | 验的是**权限**，不是**约束** |
+| `e2e_stack.py` | 没有 embedding 端点，跳过了问答 —— 一条会话都没插过 |
+| CI 的真库迁移作业 | 只验"upgrade/downgrade 跑得通"，不验**跑完之后库长什么样** |
+
+`models.py` 里那句"一个指向 users.id 的外键都没有"是**模型**的实情，
+不是**库**的实情 —— 这个区别就是这条缺陷藏身的地方。
+
+## 处理
+
+- 新增迁移 `0014_drop_legacy_user_fkeys.py`：**不猜名字，从 `pg_constraint`
+  查出来删**。名字可以被改过（手工建的库、pg_dump 恢复），而"指向
+  public.users 的外键"这个性质不会变。因为名字是查出来的，所以不需要
+  `IF EXISTS` —— 而不需要 `IF EXISTS` 意味着删不掉会报错而不是静默跳过。
+- `python.yml` 的真库迁移作业后面加断言：**跑完迁移之后**查 `pg_constraint`，
+  没有语料表指向 `public.users`（带反哨兵：旧表本身必须还在，
+  否则那条断言恒真）。
+- 删表工具补依赖检查：`CASCADE` 会连带删掉四张表之外的东西就拒绝 ——
+  它差一点用一次不可逆的 DROP 顺手"修好"这个缺陷，还不告诉任何人。
+
+**这一条是删表工具替我们照出来的**：写那个工具的时候去查"CASCADE 会连带
+删什么"，才看见三张活表挂在旧表上。不查的话，第一次真删就会同时发生
+"表没了"和"一个 schema 缺陷被无声修好了"。

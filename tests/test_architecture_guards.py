@@ -347,13 +347,45 @@ def test_dropping_legacy_tables_stays_hard_to_do_by_accident():
     assert script.exists(), "删表脚本不见了 —— 它是有意存在的，不是遗留物"
     source = script.read_text(encoding="utf-8")
 
-    # 1. 不在迁移链里
+    # 1. 迁移链里不许有 DROP 这四张表的动作。
+    #
+    # **判据是内容，不是文件名。** 第一版按文件名匹配（同时含 "drop" 与
+    # "account"），于是把 `op.drop_table("users")` 放进一个叫 `0014_cleanup.py`
+    # 的文件里就能整个绕过 —— 而这条守的偏偏是三条里最要紧的那条：
+    # 迁移链是**每次 `dev.sh up` 自动跑**的（`corpus-migrate` 一次性容器，
+    # 所有应用容器 depends_on 它跑完），进了链就等于每次起服务都删一次。
+    # 演练流程更糟：`pg_dump | psql` 复制一份 -> 跑迁移 -> 跑迁移器对账，
+    # 第二步就会把第四步要对账的源数据删掉。
     versions = ROOT / "database" / "corpus" / "alembic" / "versions"
-    in_chain = [p.name for p in versions.glob("*.py")
-                if "drop" in p.name.lower() and "account" in p.name.lower()]
-    assert not in_chain, (
-        f"删旧账号表进了 alembic 迁移链：{in_chain}。"
-        f"进了链就意味着每一次 upgrade head 都会执行它")
+    legacy = {"users", "api_keys", "usage_records", "file_tokens"}
+    # **只看 `upgrade()`。** `downgrade()` 里 drop 自己建的表是它的本分
+    # （`0001_initial` 的 downgrade 就 drop 这四张）—— 把那些也算上的话
+    # 守卫会对着正确的代码报红，然后被人加白名单加到失效。
+    offenders = []
+    for path in sorted(versions.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        upgrades = [n for n in ast.walk(tree)
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and n.name == "upgrade"]
+        for node in (c for fn in upgrades for c in ast.walk(fn)):
+            # op.drop_table("users")
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "drop_table"
+                    and node.args and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value in legacy):
+                offenders.append(f"{path.name}: op.drop_table({node.args[0].value!r})")
+            # 裸 SQL 里的 DROP TABLE users
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                upper = node.value.upper()
+                if "DROP TABLE" in upper:
+                    for table in legacy:
+                        if table.upper() in upper:
+                            offenders.append(f"{path.name}: SQL 里 DROP TABLE {table}")
+    assert not offenders, (
+        f"alembic 迁移链里出现了删旧账号表的动作：{offenders}。"
+        f"迁移链是每次 dev.sh up 自动跑的 —— 进了链就等于每次起服务都删一次，"
+        f"而演练流程会因此在对账之前就把源数据删掉。"
+        f"删表要走 database/migrator/drop_legacy_account_tables.py")
 
     # 2. DROP 之前必须有一道 args.apply 的闸。
     #
@@ -362,10 +394,17 @@ def test_dropping_legacy_tables_stays_hard_to_do_by_accident():
     # 于是对着写成后一种（而且更好读）的真脚本报红。
     # 守卫要验的是性质，不是某一种句法。
     tree = ast.parse(source)
+    # **别把文档字符串当代码。** 脚本的说明里就写着
+    # `DROP TABLE users CASCADE 会顺手删掉…`，按"文本里有没有这几个字"
+    # 找的话，第一个命中永远是第 2 行的模块 docstring ——
+    # 于是守卫报"DROP 前面没有闸门"，而它指的那个 DROP 根本不是代码。
+    # 这是同一个毛病第三次出现（前两次：只认一种 if 写法、按文本查 --force）。
+    docstrings = {id(n.value) for n in ast.walk(tree)
+                  if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)}
     drops = [n for n in ast.walk(tree)
              if isinstance(n, ast.Constant) and isinstance(n.value, str)
-             and "DROP TABLE" in n.value]
-    assert drops, "脚本里没有 DROP TABLE —— 判据失效了，先看它是不是改写过"
+             and "DROP TABLE" in n.value and id(n) not in docstrings]
+    assert drops, "脚本里没有 DROP TABLE（文档字符串不算）—— 判据失效了，先看它是不是改写过"
     first_drop = min(n.lineno for n in drops)
 
     gates = []
@@ -391,10 +430,14 @@ def test_dropping_legacy_tables_stays_hard_to_do_by_accident():
     # 3. 没有 --force。**判据是 argparse 里有没有这个选项，不是文本里
     #    有没有这五个字符** —— 脚本的说明里就写着"不提供 --force"，
     #    按文本查会把那句说明本身当成违规（第一版就是这么红的）。
+    # 名单不是"叫 --force 的选项"，是"**任何一个能跳过检查的开关**" ——
+    # 换个名字叫 --yes 一样能绕过。这一条守的是性质
+    escapes = {"--force", "-f", "--yes", "-y", "--skip-checks", "--no-verify",
+               "--ignore-checks", "--i-know-what-im-doing"}
     forced = [n for n in ast.walk(tree)
               if isinstance(n, ast.Call)
               and isinstance(n.func, ast.Attribute) and n.func.attr == "add_argument"
-              and any(isinstance(a, ast.Constant) and a.value in ("--force", "-f")
+              and any(isinstance(a, ast.Constant) and a.value in escapes
                       for a in n.args)]
     assert not forced, (
         "删表脚本加了 --force。前提不成立的时候要做的是查清楚，不是绕过 ——"

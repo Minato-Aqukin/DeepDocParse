@@ -81,7 +81,7 @@ cd services/control-api   && go test ./...  # 58（4 条要真 PostgreSQL）
 cd apps/web && npm run test:unit && npm run test:e2e   # 26 + 72
 
 # 端到端（要先 scripts/dev.sh up）——**这一条抓到过七个单测看不见的缺陷**
-scripts/check_db_boundary.sh      # 数据所有权，对着真库 21 条
+scripts/check_db_boundary.sh      # 数据所有权 + schema 实情，对着真库 23 条
 python scripts/e2e_stack.py       # 真实用户路径 22 条
 ```
 

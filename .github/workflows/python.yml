@@ -108,3 +108,39 @@ jobs:
           python -m alembic upgrade head
           python -m alembic downgrade base
           python -m alembic upgrade head
+
+      # 迁移**跑完之后查库的实情**，不查源码。
+      #
+      # 0013 想删掉几张语料表指向遗留 public.users 的外键，但它按改名**之后**
+      # 的列名去猜约束名，而 PostgreSQL 改列名不会改约束名 —— `IF EXISTS`
+      # 于是静默匹配不到、静默成功。后果是迁移之后经 control-api 注册的用户
+      # **开不了会话、建不了抽取模板**（他的 id 不在旧表里）。
+      #
+      # 为什么此前没人发现：单测走 create_all（ORM 里没这个外键）、
+      # 0013 那段 `if not is_sqlite` 单测碰都不碰、静态守卫扫的是源码、
+      # 边界检查验的是权限不是约束。**只有对着真库跑完迁移再查
+      # pg_constraint 才看得见** —— 所以这条断言在这里。
+      - name: 没有语料表指向遗留 public.users
+        env:
+          PGPASSWORD: ddp
+        run: |
+          left=$(psql -h 127.0.0.1 -U ddp -d deepdocparse -tAc "
+            SELECT coalesce(string_agg(c.conname || ' on ' || c.conrelid::regclass, ', '), '')
+            FROM pg_constraint c
+            WHERE c.contype = 'f'
+              AND c.confrelid = to_regclass('public.users')
+              AND c.conrelid::regclass::text NOT IN ('api_keys', 'usage_records')")
+          if [ -n "$left" ]; then
+            echo "::error::这些语料表还指着遗留的 public.users：$left"
+            echo "迁移之后注册的用户会因为 id 不在旧表里而无法写入这些表"
+            exit 1
+          fi
+          echo "没有语料表指向 public.users"
+          # 反哨兵：旧表本身还在（它由 drop_legacy_account_tables.py 删），
+          # 上面那条查询才有意义 —— 表都没了的话它恒真
+          psql -h 127.0.0.1 -U ddp -d deepdocparse -tAc \
+            "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='users'" \
+            | grep -q 1 || {
+              echo "::error::public.users 不在了 —— 上面那条断言变成了恒真，判据失效"
+              exit 1
+            }

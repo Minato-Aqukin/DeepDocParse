@@ -95,6 +95,36 @@ allowed ddp_control "INSERT INTO control.audit_events
                      VALUES ('boundary-probe','org','service','probe','{}')
                      ON CONFLICT DO NOTHING"                     "ddp_control 写得进审计"
 
+# ---- 语料表不许再指向遗留的 public.users。
+#
+# **这条不是权限，是 schema 的实情** —— 放在这个脚本里是因为它是本地唯一
+# 一处"对着真库看库长什么样"的检查，而这个缺陷恰恰只有那样才看得见：
+# 迁移 0013 按改名**之后**的列名去删外键，`IF EXISTS` 让失败变成静默，
+# 于是三张活语料表一直挂在旧 users 上。后果是迁移之后经 control-api
+# 注册的用户**开不了会话、建不了抽取模板**（他的 id 不在旧表里）。
+# 单测走 create_all、静态守卫扫源码、权限断言验的是权限 —— 全都看不见。
+echo ">>> 语料表不再指向遗留 public.users"
+LEFT=$(run_as ddp "SELECT coalesce(string_agg(c.conname || ' on ' || c.conrelid::regclass, ', '), '')
+                   FROM pg_constraint c
+                   WHERE c.contype = 'f'
+                     AND c.confrelid = to_regclass('public.users')
+                     AND c.conrelid::regclass::text NOT IN ('api_keys', 'usage_records')")
+if [ -z "$(printf '%s' "$LEFT" | tr -d '[:space:]')" ]; then
+  pass "没有语料表指向 public.users"
+else
+  fail "没有语料表指向 public.users" "还挂着：$(printf '%s' "$LEFT" | tr '\n' ' ')"
+fi
+
+# 反哨兵：旧表本身还在，上面那条才有意义 —— 表都没了的话它恒真。
+# （旧表由 database/migrator/drop_legacy_account_tables.py 整张删，
+#   真删掉之后这条反哨兵该跟着调整，而不是把上面那条留成恒真的绿。）
+if printf '%s' "$(run_as ddp "SELECT 1 FROM pg_tables
+                              WHERE schemaname='public' AND tablename='users'")" | grep -q 1; then
+  pass "public.users 还在（上一条不是恒真）"
+else
+  fail "public.users 还在" "旧表已经删了 —— 上一条断言变成恒真，判据要跟着改"
+fi
+
 # ---- 谁在用超级用户连库。**这条比上面所有断言都靠前** ——
 #      超级用户绕过全部 GRANT/REVOKE，上面每一条都对它无效。
 #      F-20 修了三个长跑客户端，漏掉第四个（MCP）就是这么发现的：
