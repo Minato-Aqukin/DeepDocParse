@@ -8,6 +8,7 @@ import StatCard from '@/components/common/StatCard.vue'
 import DocumentFilters from '@/components/document/DocumentFilters.vue'
 import DocumentTable from '@/components/document/DocumentTable.vue'
 import UploadDialog from '@/components/document/UploadDialog.vue'
+import { useAuthStore } from '@/stores/auth'
 import { usePolling } from '@/composables/usePolling'
 import { useDocumentsStore } from '@/stores/documents'
 import type { DocumentInfo, DownloadFormat } from '@/types/api'
@@ -17,6 +18,7 @@ import { validateAndReindex } from '@/utils/reindex'
 const router = useRouter()
 const store = useDocumentsStore()
 
+const auth = useAuthStore()
 const uploadVisible = ref(false)
 const selected = ref<DocumentInfo[]>([])
 
@@ -34,7 +36,7 @@ function open(doc: DocumentInfo) {
 }
 
 async function download(doc: DocumentInfo, format: DownloadFormat) {
-  await downloadAs(documentsApi.downloadUrl(doc.id, format), doc.filename)
+  await downloadAs(documentsApi.exportUrl(doc.id, format), doc.filename)
 }
 
 async function reindex(doc: DocumentInfo) {
@@ -112,7 +114,14 @@ onMounted(reload)
       />
       <div class="actions">
         <el-button :loading="store.loading" @click="reload">刷新</el-button>
-        <el-button type="primary" @click="uploadVisible = true">
+        <!-- 按**能力**显示，不按角色名。只读成员看不到这个按钮 ——
+             让他点进去再吃一个 403 也能工作，但那会让人以为是自己操作错了 -->
+        <el-tooltip v-if="!auth.canUpload" content="只读成员不能上传文档">
+          <span><el-button type="primary" disabled>
+            <el-icon><component is="Upload" /></el-icon> 上传
+          </el-button></span>
+        </el-tooltip>
+        <el-button v-else type="primary" @click="uploadVisible = true">
           <el-icon><component is="Upload" /></el-icon> 上传
         </el-button>
       </div>

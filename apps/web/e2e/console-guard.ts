@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import type { ConsoleMessage, Page } from '@playwright/test'
 
 /**
@@ -41,10 +44,32 @@ export function realErrors(errors: string[]): string[] {
   return errors.filter((e) => !IGNORED.some((re) => re.test(e)))
 }
 
-/** routes.ts 里的全部可达路径（含三条兼容重定向与一条兜底）。 */
-export const PATHS = [
-  '/', '/login', '/documents', '/documents/demo-id', '/documents/demo-id/versions',
-  '/extractions', '/search', '/keys', '/usage', '/settings',
-  '/wiki', '/graph',
-  '/dashboard', '/task/demo-id', '/no/such/path',
-]
+/**
+ * 全部可达路径 —— **从 routes.ts 现读，不手抄一份**。
+ *
+ * 手抄的清单会漂：加了一个页面却忘了加进这里，"全路由零 console error"
+ * 这条门禁就悄悄不覆盖它了 —— 而门禁漏掉的那一页，恰恰是最新、最可能出问题的。
+ * 合仓时加 `/members` 就撞到了这件事。
+ *
+ * 用正则读文件而不是 import：e2e 不在任何 tsconfig 的 include 里
+ * （Playwright 自己转译），走 `@/` 别名要额外配一套解析。
+ * 这里只需要路径字面量，正则够了，而且**读不到就当场报错**，不会静默变空。
+ */
+function discoverPaths(): string[] {
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/router/routes.ts', import.meta.url)), 'utf-8')
+  const paths = [...source.matchAll(/path:\s*'([^']+)'/g)].map((m) => m[1]!)
+  if (paths.length < 10) {
+    throw new Error(`只从 routes.ts 解析出 ${paths.length} 条路径 —— 解析逻辑坏了，` +
+      '而坏掉的表现是门禁静默地什么都不检查')
+  }
+  return [
+    // 动态段填一个固定 id：桩 API 按它返回演示数据。
+    // **带正则的段（catch-all 的 `:pathMatch(.*)*`）跳过** ——
+    // 它没有一个"具体路径"，由下面那条兜底用例覆盖
+    ...paths.filter((p) => !p.includes('(')).map((p) => p.replace(/:[A-Za-z_]+/g, 'demo-id')),
+    '/no/such/path',
+  ]
+}
+
+export const PATHS = discoverPaths()

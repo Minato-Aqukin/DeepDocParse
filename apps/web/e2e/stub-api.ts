@@ -80,9 +80,29 @@ export async function stubApi(page: Page): Promise<void> {
       if (path.endsWith('/auth/me')) {
         return route.fulfill({
           json: {
-            user_id: 'u-1', username: 'e2e', email: 'e2e@example.com',
+            id: 'u-1', username: 'e2e', email: 'e2e@example.com',
+            // **角色不能省**：整站的能力判断都看它，给 undefined 会让
+            // 所有 canXxx 变成 false，于是上传按钮、成员页全消失，
+            // 而用例只会报"找不到元素"，看不出根因
+            role: 'admin', organization_id: 'org-1',
             created_at: new Date().toISOString(),
           },
+        })
+      }
+      if (path.endsWith('/api/org')) {
+        return route.fulfill({
+          json: {
+            id: 'org-1', name: '默认组织', slug: 'default',
+            created_at: new Date().toISOString(), member_count: 1,
+          },
+        })
+      }
+      if (path.endsWith('/api/org/members')) {
+        return route.fulfill({
+          json: [{
+            user_id: 'u-1', username: 'e2e', email: 'e2e@example.com',
+            role: 'admin', joined_at: new Date().toISOString(), last_seen_at: null,
+          }],
         })
       }
       if (/\/documents\/[^/]+\/versions$/.test(path)) return route.fulfill({ json: [] })

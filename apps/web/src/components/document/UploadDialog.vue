@@ -2,7 +2,7 @@
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 
-import { documentsApi } from '@/api'
+import { uploadDirect, waitForVerification } from '@/api/uploads'
 import EngineOptionsForm from '@/components/engine/EngineOptionsForm.vue'
 import { DEFAULT_ENGINE, defaultOptions, pruneOptions } from '@/constants/engines'
 import { loadEnginePreference } from '@/utils/preferences'
@@ -22,6 +22,8 @@ const choice = ref<EngineChoice>(loadEnginePreference())
 const uploading = ref(false)
 const progress = ref<Record<string, number>>({})
 const failed = ref<Record<string, string>>({})
+/** 已经传完、正在等服务端校验摘要的文件。**这一段必须让用户看得见** */
+const verifying = ref<Record<string, boolean>>({})
 
 const CONCURRENCY = 3
 
@@ -44,7 +46,14 @@ function removeFile(index: number) {
   files.value.splice(index, 1)
 }
 
-/** 并发 3 上传；单个失败不影响整批，失败项留在列表里可重试。 */
+/**
+ * 并发 3 上传；单个失败不影响整批，失败项留在列表里可重试。
+ *
+ * **字节流直传对象存储**，不经过任何应用进程（不变式 6）：
+ * 拿预签名 -> 分片 PUT 到对象存储 -> finalize。finalize 之后还有一段
+ * 服务端摘要校验，那段显示"校验中" —— 它没通过之前文档不进解析，
+ * 假装已经好了会让用户以为自己传成功了。
+ */
 async function submit() {
   if (!files.value.length) return ElMessage.warning('先选几个文件')
   uploading.value = true
@@ -57,16 +66,28 @@ async function submit() {
       const file = queue.shift()
       if (!file) return
       try {
-        await documentsApi.upload(
-          file,
-          { engine: choice.value.engine, options: pruneOptions(choice.value.options) },
-          (percent) => (progress.value[file.name] = percent),
-        )
+        const session = await uploadDirect(file, {
+          engine: choice.value.engine,
+          options: pruneOptions(choice.value.options),
+          onProgress: (percent) => (progress.value[file.name] = percent),
+        })
+        // finalize 返回的是 verifying，不是 ready。等校验出结果再算这份成功 ——
+        // 摘要对不上的话整个会话会作废，那时说"已提交解析"就是骗人
+        verifying.value[file.name] = true
+        const settled = await waitForVerification(session.id)
+        verifying.value[file.name] = false
+        if (settled.status !== 'ready') {
+          failed.value[file.name] = settled.error || `上传未通过校验（${settled.status}）`
+          continue
+        }
         succeeded.push(file)
       } catch (error) {
+        verifying.value[file.name] = false
         failed.value[file.name] =
           (error as { response?: { data?: { error?: { message?: string } } } }).response?.data
-            ?.error?.message || '上传失败'
+            ?.error?.message ||
+          (error as Error).message ||
+          '上传失败'
       }
     }
   }
@@ -87,7 +108,8 @@ function resetOptions() {
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="上传文档" width="560px" @open="failed = {}">
+  <el-dialog v-model="visible" title="上传文档" width="560px"
+             @open="(failed = {}), (verifying = {})">
     <div class="dropzone" @drop.prevent="onDrop" @dragover.prevent>
       <input id="upload-input" type="file" multiple hidden
              accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.pptx,.xlsx" @change="pick" />
@@ -101,8 +123,11 @@ function resetOptions() {
     <div v-if="files.length" class="files">
       <div v-for="(file, i) in files" :key="`${file.name}-${i}`" class="file">
         <span class="name">{{ file.name }}</span>
-        <el-progress v-if="uploading" :percentage="progress[file.name] ?? 0" :show-text="false"
-                     class="bar" />
+        <el-progress v-if="uploading && !verifying[file.name]"
+                     :percentage="progress[file.name] ?? 0" :show-text="false" class="bar" />
+        <!-- **校验中要单独说出来**：字节已经传完了，但服务端还在重算摘要，
+             摘要对不上整个会话会作废。显示成"上传中"会让人以为还在传 -->
+        <span v-if="verifying[file.name]" class="verifying">已上传，校验中…</span>
         <span v-if="failed[file.name]" class="error">{{ failed[file.name] }}</span>
         <el-button v-if="!uploading" link @click="removeFile(i)">移除</el-button>
       </div>
@@ -167,5 +192,10 @@ function resetOptions() {
 .error {
   color: var(--el-color-danger);
   font-size: 12px;
+}
+.verifying {
+  color: var(--ddp-text-muted, #888);
+  font-size: 12px;
+  white-space: nowrap;
 }
 </style>

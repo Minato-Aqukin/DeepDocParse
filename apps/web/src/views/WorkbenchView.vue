@@ -81,11 +81,11 @@ async function load() {
     const [result, pageData, source] = await Promise.all([
       documentsApi.result(id),
       documentsApi.pages(id),
-      documentsApi.sourceUrl(id).catch(() => null),
+      documentsApi.sourceViewUrl(id).catch(() => null),
     ])
     markdown.value = result.data.markdown
     pages.value = pageData.data.pages
-    sourcePath.value = source?.data.path ?? ''
+    sourcePath.value = source?.data.url ?? ''
   } finally {
     loading.value = false
   }
@@ -129,7 +129,7 @@ function selectBlock(block: Block) {
 
 async function download(format: DownloadFormat) {
   const id = String(route.params.id)
-  await downloadAs(documentsApi.downloadUrl(id, format), document.value?.filename)
+  await downloadAs(documentsApi.exportUrl(id, format), document.value?.filename)
 }
 
 async function reindex() {

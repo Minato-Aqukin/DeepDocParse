@@ -77,6 +77,12 @@ export const routes: RouteRecordRaw[] = [
   },
 
   {
+    path: '/members',
+    name: 'members',
+    component: () => import('@/views/MembersView.vue'),
+    meta: { title: '成员与角色', icon: 'User', group: 'account', nav: true },
+  },
+  {
     path: '/keys',
     name: 'keys',
     component: () => import('@/views/KeysView.vue'),

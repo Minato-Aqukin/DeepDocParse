@@ -15,6 +15,7 @@ export type {
   FieldStatus,
   IndexStatus,
   ParseStatus,
+  Role,
   RunStatus,
   SourceType,
 } from '@deepdocparse/contracts'
@@ -28,6 +29,7 @@ import type {
   FieldStatus,
   IndexStatus,
   ParseStatus,
+  Role,
   RunStatus,
   SourceType,
 } from '@deepdocparse/contracts'
@@ -112,6 +114,17 @@ export interface DocumentPages {
   job_id: string
   page_count: number
   pages: PageBlocks[]
+}
+
+/**
+ * 浏览器用的短期下载 URL。**与稳定文件 URL 不是一回事**：
+ * 后者路径永远不变（doc_hash 幂等的命门），前者每次都换、TTL 很短。
+ */
+export interface DownloadUrl {
+  url: string
+  expires_at: string
+  /** 对象存储原生支持 Range —— PDF.js 因此可以只取要看的那一页 */
+  supports_range: boolean
 }
 
 export interface SourceUrl {
@@ -367,15 +380,43 @@ export interface UsageSummary {
 export interface AuthToken {
   access_token: string
   token_type: string
-  user_id: string
-  username: string
+  /** 秒 */
+  expires_in: number
+  user: Profile
 }
 
+/**
+ * 当前用户。
+ *
+ * **`role` 是每次都回查出来的，不是 token 里的。** 把角色写进 JWT 是常见做法，
+ * 但那意味着"降级一个管理员"要等他的 token 过期（默认 7 天）才生效 ——
+ * 而降权的场合往往正是最急的场合。
+ */
 export interface Profile {
+  id: string
+  username: string
+  email: string | null
+  role: Role
+  organization_id: string
+  created_at: string
+  last_seen_at?: string | null
+}
+
+export interface Organization {
+  id: string
+  name: string
+  slug: string
+  created_at: string
+  member_count: number
+}
+
+export interface Member {
   user_id: string
   username: string
   email: string | null
-  created_at: string
+  role: Role
+  joined_at: string
+  last_seen_at: string | null
 }
 
 /** 解析参数：engine + 引擎自己的透传选项（schema 见 constants/engines.ts）。 */

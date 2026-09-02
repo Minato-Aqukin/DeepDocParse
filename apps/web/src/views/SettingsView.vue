@@ -42,7 +42,7 @@ onMounted(loadProfile)
           <span class="ddp-num">{{ auth.profile ? new Date(auth.profile.created_at).toLocaleString('zh-CN') : '—' }}</span>
         </el-descriptions-item>
         <el-descriptions-item label="用户 ID">
-          <code>{{ auth.profile?.user_id ?? '—' }}</code>
+          <code>{{ auth.profile?.id ?? '—' }}</code>
         </el-descriptions-item>
       </el-descriptions>
     </el-card>
