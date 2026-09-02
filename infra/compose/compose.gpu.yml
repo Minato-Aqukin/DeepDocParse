@@ -1,57 +1,37 @@
-# prod profile —— RTX 6000 级（48GB+），单机多实例示例
-# 与 dev 的差异（gateway/mcp/redis 完全不变）：
-#   1. MinerU 换 vlm 后端（MinerU2.5-Pro on vLLM），mineru-router 统一入口
-#      -> models.yaml 里 parse_engines.mineru.endpoint 改指 router
-#   2. DeepSeek-OCR 换官方 vLLM 部署
-# 硬件再换（昇腾/AMD 等）= 复制本文件为 compose.prod-<hw>.yml 换镜像即可。
+# GPU 叠加层：在 compose.dev.yml 之上加模型运行时。
+#
+#   docker compose -f infra/compose/compose.dev.yml \
+#                  -f infra/compose/compose.gpu.yml \
+#                  --env-file infra/env/dev.env up -d
+#
+# 记得同时把注册表换成有 GPU 的那份：
+#   MODELS_CONFIG=models.yaml
+#
+# **只放模型运行时。** 应用侧五个服务（control-api / corpus-api /
+# corpus-worker / model-gateway / mcp）在 compose.dev.yml 里，
+# 换硬件不该动它们 —— 那正是"注册表驱动"这条铁律的意义：
+# 加模型 = 加容器 + 注册表加一行，网关从不 import 模型代码。
+#
+# 硬件再换（昇腾 / AMD 等）= 复制本文件为 compose.gpu-<hw>.yml 换镜像即可。
+#
+# **Arch 上的容器直通走 CDI**，不再是 `--gpus`：
+#   sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+name: ddp
 
-# 固定 compose 项目名。**不能省**：项目名缺省取 compose 文件所在目录名，
-# 而两个仓库的这个目录都叫 docker —— 于是两边算出同一个项目名 "docker"，
-# 同名服务（redis）会互相顶掉：起 service 的 redis 会把 Web 的 redis 容器直接换掉。
-name: ddp-service
+x-gpu: &gpu
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
 
 services:
-  gateway:
-    build: ../gateway
-    ports: ["9000:9000"]
+  # 换成注册表里带 GPU 的那份。**不改代码，只改这一行** ——
+  # 引擎选择由注册表的 default 决定，路由层不认识任何具体引擎（铁律 3）
+  model-gateway:
     environment:
-      SERVICE_TOKEN: ${SERVICE_TOKEN}
-      REDIS_URL: redis://redis:6379/0
-      MODELS_CONFIG: /app/models.yaml
-    volumes:
-      - ../models.yaml:/app/models.yaml:ro
-    depends_on: [redis]
-
-  arq-worker:
-    build: ../gateway
-    command: arq app.worker.tasks.WorkerSettings
-    environment:
-      SERVICE_TOKEN: ${SERVICE_TOKEN}
-      REDIS_URL: redis://redis:6379/0
-      MODELS_CONFIG: /app/models.yaml
-    volumes:
-      - ../models.yaml:/app/models.yaml:ro
-    depends_on: [redis]
-
-  mcp-server:
-    build:
-      context: ..
-      dockerfile: mcp_server/Dockerfile
-    environment:
-      GATEWAY_URL: http://gateway:9000
-      SERVICE_TOKEN: ${SERVICE_TOKEN}
-      REDIS_URL: redis://redis:6379/0   # v2 向量检索
-      CORPUS_DATABASE_URL: ${CORPUS_DATABASE_URL:-postgresql+asyncpg://ddp:ddp@host.docker.internal:15432/deepdocparse}
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://host.docker.internal:19000}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      MINIO_BUCKET: ${MINIO_BUCKET:-deepdocparse}
-    extra_hosts: ["host.docker.internal:host-gateway"]
-    depends_on: [gateway]
-
-  redis:
-    image: redis/redis-stack-server:7.4.0-v3
-    volumes: [redis-data:/data]
+      MODELS_CONFIG: /registry/models.yaml
 
   # ---- 解析平面：router + N 个 vlm worker ----
   mineru-router:
@@ -63,13 +43,7 @@ services:
     image: mineru:3.4.4
     command: mineru-api --host 0.0.0.0 --port 8000      # vlm 后端（vllm-engine）
     environment: { CUDA_VISIBLE_DEVICES: "0" }
-    deploy: &gpu
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    deploy: *gpu
 
   # 加卡 = 复制一段
   # mineru-worker-1:
@@ -79,7 +53,7 @@ services:
   #   deploy: *gpu
 
   # ---- VQA 平面：DeepSeek-OCR-2 官方 vLLM 部署 ----
-  # 参数与 deploy/autodl/ocr.bash **保持一致**（那份是裸进程版，这份是容器版，
+  # 参数与 infra/autodl/ocr.bash **保持一致**（那份是裸进程版，这份是容器版，
   # 同一套判据：vLLM 官方 recipe + 官方推理脚本）。改一处记得改另一处。
   #
   # **唯一有意的差异**：裸进程那边要 `VLLM_USE_FLASHINFER_SAMPLER=0`，这里没有。
@@ -114,7 +88,7 @@ services:
     volumes:
       # **不能省**：DeepSeek-OCR-2 的 tokenizer_config.json 里没有 chat_template，
       # 不给这个文件的话服务起得来、但每个 /v1/chat/completions 都 400。
-      - ../deploy/autodl/chat-template-deepseek-ocr2.jinja:/app/chat-template-deepseek-ocr2.jinja:ro
+      - ../autodl/chat-template-deepseek-ocr2.jinja:/app/chat-template-deepseek-ocr2.jinja:ro
       # 权重缓存。**加了 healthcheck 之后这个卷从"省事"变成"必需"**：
       # 没有它每次 --force-recreate 都要重下 ~7GB，而下载慢到超过 start_period
       # 就会被判 unhealthy —— 下面 chat-instruct 的 service_healthy 会把它
@@ -122,7 +96,7 @@ services:
       - hf-cache:/root/.cache/huggingface
     environment:
       CUDA_VISIBLE_DEVICES: "0"
-      # 与 deploy/autodl/env.bash 同一个理由：直连 HF 在国内很慢，
+      # 与 infra/autodl/env.bash 同一个理由：直连 HF 在国内很慢，
       # 而现在"慢"会通过 healthcheck 变成"失败"
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
     # **这个 healthcheck 是显存编排的一部分，不只是运维摆设。**
@@ -151,7 +125,7 @@ services:
   # **不能省**（除非不用 /v1/extract）：抽取平面「复用 VQA 平面的模型」这个设计，
   # 在 VQA 位上是 OCR 专用模型时会塌掉 —— DeepSeek-OCR-2 只会抄字，
   # 给它抽取指令抽不出东西，而抽不出来会被记成 not_found（"文档里没有"），
-  # 一个看起来像结论的空值。models.yaml 里 OCR-2 因此标了 no_instruct，
+  # 一个看起来像结论的空值。infra/registry/models.yaml 里 OCR-2 因此标了 no_instruct，
   # 抽值路径会跳过它；没有这个服务时 /v1/extract 会如实报 no_instruct_model。
   #
   # Qwen3 自带 chat_template，不像 OCR-2 那样要挂 --chat-template。
@@ -171,7 +145,7 @@ services:
   # 正解是给第二个服务 `--kv-cache-memory-bytes` **直接写死 KV 大小**
   # （官方 docstring：设了它就忽略 gpu_memory_utilization），util 只留着过
   # vLLM 那道启动前置检查（要求 空闲 >= util × 卡容量）。
-  # 数值与 deploy/autodl/env.bash 的 CHAT_GPU_MEMORY_UTILIZATION / CHAT_KV_CACHE_BYTES
+  # 数值与 infra/autodl/env.bash 的 CHAT_GPU_MEMORY_UTILIZATION / CHAT_KV_CACHE_BYTES
   # 一致（0.55 / 3 GiB），完整推导在那份文件的「两个服务共卡时」一节。
   #
   # **顺序重要**：vqa-dsocr 必须**先分配完显存**，否则两边都算不出预算。
@@ -219,7 +193,7 @@ services:
     #   modelscope download --model BAAI/bge-reranker-v2-m3 \
     #     --local_dir ../../models/bge-reranker-v2-m3
     # **注册表里没有 rerank_models 时这个容器白跑**，反过来注册了却不起这个容器
-    # 会让 /readyz 恒 503（探针是 all(up)）—— models.yaml 里那段缺省是注释掉的，
+    # 会让 /readyz 恒 503（探针是 all(up)）—— infra/registry/models.yaml 里那段缺省是注释掉的，
     # 用这份 compose 时要把它一起打开。
     image: ghcr.io/huggingface/text-embeddings-inference:1.9.3
     command: >
@@ -231,7 +205,6 @@ services:
     deploy: *gpu
 
 volumes:
-  redis-data:
   # 两个 vLLM 共用。**不是可选的**：见 vqa-dsocr 的 healthcheck 注释 ——
   # 没有它，每次重建都重下 ~15GB，而下载超时现在会让整个 up 中止
   hf-cache:

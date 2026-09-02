@@ -1,0 +1,66 @@
+# 全局门禁：与语言无关的守卫。**合并队列前必须绿**（§15.1）。
+#
+# 这些检查此前散在两个仓库、或者根本不在 CI 里 —— 分块回归守卫就因为
+# 不在任何 CI 里而红了四天没人看见（docs/refactor/FINDINGS.md F-2）。
+# 守卫不进 CI 等于没有守卫。
+name: guards
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: services/control-api/go.sum
+
+      - name: 安装 Python 包
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e python/ddp_contracts
+          pip install -e "python/ddp_core[db,cjk,dev]"
+          pip install -e "services/model-gateway[dev]"
+          pip install -e "services/corpus-api[dev]"
+          pip install -e services/corpus-worker
+          pip install -e "services/mcp[dev]"
+
+      # 契约生成物过期 = 三种语言的枚举开始漂。
+      # gofmt 要在 PATH 上，否则 Go 生成物会格式不一致
+      - name: 契约生成物是最新的
+        run: python packages/contracts/scripts/generate.py --check
+
+      - name: 契约守卫（契约 ←→ 网关端点）
+        run: python scripts/check_contract.py
+
+      - name: 数据所有权（企业边界 5）
+        run: python scripts/check_data_ownership.py
+
+      - name: 块类型判据只有一份且没变
+        run: python scripts/check_blocktype_parity.py
+
+      # **这一条以前不在任何 CI 里**，于是它红了四天没人知道
+      - name: 分块回归（出处的定位键按块序算）
+        run: python scripts/check_chunk_regression.py
+
+      - name: 枚举用法都在契约内
+        run: python scripts/check_enum_usage.py
+
+      - name: control 迁移的两份副本一致
+        run: python scripts/check_control_migrations.py
+
+      - name: 配置参考文档与源码同步
+        run: python scripts/gen_config_docs.py --check
+
+      - name: 跨服务架构守卫
+        run: python -m pytest -q

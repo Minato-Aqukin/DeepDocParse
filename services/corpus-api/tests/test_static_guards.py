@@ -130,48 +130,81 @@ def test_the_scan_actually_covers_something():
     assert total >= 3, f"一条本项目的 import 都没扫到（{total}），解析逻辑可能坏了"
 
 
+#: 语料 MCP 必须拿到的那几个键。少一个的表现是：所有容器都健康，
+#: 直到**第一次 MCP 调用**才报数据库认证失败 —— 部署脚本特有的静默错位，
+#: 常规 API 单测与 `compose config` 都抓不到。
 CORPUS_MCP_KEYS = {
     "CORPUS_DATABASE_URL", "MINIO_ENDPOINT", "MINIO_ACCESS_KEY",
-    "MINIO_SECRET_KEY", "MINIO_BUCKET", "MCP_PUBLIC_BASE_URL",
+    "MINIO_SECRET_KEY", "MINIO_BUCKET",
 }
 
+COMPOSE = REPO / "infra" / "compose" / "compose.dev.yml"
 
-def test_quickstart_passes_corpus_credentials_to_the_mcp_service():
-    """干净部署的随机 PG/MinIO 密钥必须同步给 service 侧 MCP。
 
-    只写 Web `.env` 时所有容器都会健康，直到第一次 MCP 调用才报数据库认证失败；
-    这是部署脚本特有的静默错位，常规 API 单测与 compose config 都抓不到。
+def _compose_service(name: str) -> dict:
+    import yaml
+
+    spec = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    return spec["services"][name]
+
+
+def _env_of(service: dict) -> dict:
+    """compose 的 environment 可能是 map 也可能是 list，两种都要认。"""
+    env = service.get("environment") or {}
+    if isinstance(env, list):
+        return dict(item.split("=", 1) for item in env if "=" in item)
+    return env
+
+
+def test_compose_passes_corpus_credentials_to_the_mcp_service():
+    """语料 MCP 必须拿到 PG 与对象存储的凭据。
+
+    合仓前这条查的是 quickstart 脚本有没有把随机密钥同步进 `.env.mcp`；
+    脚本删了（compose 给每个服务显式的 environment 列表，不再需要写 .env），
+    但**要守的事一件没少**：漏一个键 = 所有容器健康、第一次 MCP 调用才炸。
     """
-    text = (REPO / "infra" / "docker.bash").read_text(encoding="utf-8")
-    start = text.index("write_service_env()")
-    end = text.index("write_frontend_env()", start)
-    body = text[start:end]
-    missing = sorted(key for key in CORPUS_MCP_KEYS
-                     if f'set_env "$SERVICE_MCP_ENV" {key}' not in body)
-    assert not missing, f"quickstart 没把这些语料 MCP 配置写进 .env.mcp：{missing}"
-    assert "host.docker.internal:15432" in body
-    assert "host.docker.internal:19000" in body
+    env = _env_of(_compose_service("mcp"))
+    missing = sorted(CORPUS_MCP_KEYS - set(env))
+    assert not missing, f"compose 没把这些语料配置给 mcp 服务：{missing}"
 
 
-def test_corpus_keys_stay_out_of_the_file_gateway_reads():
-    """语料 MCP 的键**不许**写进 gateway 读的那份 `.env`。
+def test_corpus_keys_stay_out_of_the_model_gateway_environment():
+    """语料/控制面的键**不许**出现在网关的 environment 里。
 
-    gateway 的 Settings 是 `extra="forbid"`（故意的，用来抓拼错的键），
+    网关的 Settings 是 `extra="forbid"`（故意的，用来抓拼错的键），
     而 pydantic-settings 直接读 cwd 下的 `.env` 文件，不只是环境变量 ——
-    这几个键混进去，**裸进程起 gateway 会当场 `extra_forbidden` 拒绝启动**。
+    这几个键混进去，**裸进程起网关会当场 extra_forbidden 拒绝启动**。
     2026-08-29 在 AutoDL 上实测撞到：容器部署没事（compose 给每个服务
     显式的 environment 列表），而 AutoDL 跑不了 docker，只能裸进程。
 
-    compose 侧要两份 `--env-file` 才能做变量替换，一并钉住。
+    顺带钉住"网关不碰数据库"：它出现 DATABASE_URL 就说明无状态原则破了。
     """
-    text = (REPO / "infra" / "docker.bash").read_text(encoding="utf-8")
-    leaked = sorted(key for key in CORPUS_MCP_KEYS
-                    if f'set_env "$SERVICE_ENV" {key}' in text)
+    env = set(_env_of(_compose_service("model-gateway")))
+    leaked = sorted(env & (CORPUS_MCP_KEYS | {
+        "DATABASE_URL", "CONTROL_URL", "JWT_SECRET", "CONTROL_DATABASE_URL"}))
     assert not leaked, (
-        f"这些键被写进了 gateway 读的 .env：{leaked}。"
-        f"gateway 的 Settings 是 extra=forbid，裸进程部署会拒绝启动")
-    assert text.count('--env-file "$SERVICE_MCP_ENV"') >= 2, \
-        "compose 少了第二份 --env-file，那几个键的变量替换会退回开发占位默认值"
+        f"这些键出现在网关的 environment 里：{leaked}。"
+        f"网关的 Settings 是 extra=forbid，裸进程部署会拒绝启动；"
+        f"而 DATABASE_URL 一类的出现意味着无状态原则破了")
+
+
+def test_only_the_entry_publishes_ports():
+    """**只有入口映射端口。**
+
+    corpus-api / model-gateway / mcp 都不做用户鉴权，只信任入口下发的
+    actor 上下文头 —— 把它们暴露到公网等于任何人都能自称 admin。
+    数据面（PG / MinIO / Redis）在开发档位映射端口是有意的（要能用客户端连），
+    生产档位另有覆盖。
+    """
+    import yaml
+
+    spec = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    app_services = {"control-api", "corpus-api", "corpus-worker", "model-gateway", "mcp"}
+    published = {name for name, svc in spec["services"].items()
+                 if name in app_services and svc.get("ports")}
+    assert published == {"control-api"}, (
+        f"除入口外还有服务映射了端口：{sorted(published - {'control-api'})}。"
+        f"它们不做用户鉴权，暴露出去等于任何人都能自称 admin")
 
 
 # ---------------------------------------------------------------------------

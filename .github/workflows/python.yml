@@ -1,0 +1,110 @@
+# Python 侧：四个包各自的单测。全部纯进程内，不需要 PG / MinIO / GPU。
+name: python
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ddp_core
+            dir: python/ddp_core
+            install: 'pip install -e python/ddp_contracts -e "python/ddp_core[db,cjk,dev]"'
+          - name: model-gateway
+            dir: services/model-gateway
+            install: 'pip install -e python/ddp_contracts -e python/ddp_core -e "services/model-gateway[dev]"'
+          - name: corpus-api
+            dir: services/corpus-api
+            install: 'pip install -e python/ddp_contracts -e "python/ddp_core[db,cjk]" -e "services/corpus-api[dev]" -e services/corpus-worker'
+          - name: corpus-worker
+            dir: services/corpus-worker
+            install: 'pip install -e python/ddp_contracts -e "python/ddp_core[db]" -e services/corpus-api -e "services/corpus-worker[dev]"'
+          - name: mcp
+            dir: services/mcp
+            install: 'pip install -e python/ddp_contracts -e "python/ddp_core[db]" -e "services/mcp[dev]"'
+          - name: eval
+            dir: eval
+            install: 'pip install -e python/ddp_contracts -e "python/ddp_core[db,cjk,dev]" -e services/model-gateway -e services/corpus-api pytest'
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安装
+        run: |
+          python -m pip install --upgrade pip
+          ${{ matrix.install }}
+      - name: 单测
+        working-directory: ${{ matrix.dir }}
+        env:
+          # CI 是一次性容器，没有 .env。不开这个开关，任何走 lifespan 的用例
+          # 都会被 assert_secrets_configured 拦下（那正是它该做的事）
+          ALLOW_INSECURE_DEFAULTS: "true"
+        run: pytest -q
+
+  # **无状态网关不得依赖 ORM。** 失守的表现不是报错，而是几个月后某次
+  # docker build 变大、没人察觉，直到镜像里出现 asyncpg 才发现无状态原则
+  # 名存实亡。上面的矩阵装的是共享 venv，测不出这件事 —— 只有干净装一遍能。
+  gateway-minimal-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 只装网关的最小集
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e python/ddp_contracts -e python/ddp_core -e services/model-gateway
+      - name: 断言最小集里没有 sqlalchemy
+        run: |
+          python - <<'PY'
+          import importlib.util
+          assert importlib.util.find_spec("sqlalchemy") is None, \
+              "网关最小集里出现了 sqlalchemy —— [db] 的切分失效了"
+          import ddp_gateway.main            # 能起来才算数
+          import ddp_core.chunking, ddp_core.crops, ddp_core.blocks
+          print("最小集可加载，且确实没有 sqlalchemy")
+          PY
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ddp
+          POSTGRES_PASSWORD: ddp
+          POSTGRES_DB: deepdocparse
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ddp"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安装
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e python/ddp_contracts -e "python/ddp_core[db,cjk]" \
+                      -e "services/corpus-api[dev]" -e services/corpus-worker
+      # 单测跑 SQLite，迁移的真实目标是 PG（pgvector / HNSW / GIN 都只在那儿生效）。
+      # downgrade 到 base 再上来，回滚路径才算验过
+      - name: corpus 迁移双向可跑
+        working-directory: database/corpus
+        env:
+          ALLOW_INSECURE_DEFAULTS: "true"
+          DATABASE_URL: postgresql+asyncpg://ddp:ddp@127.0.0.1:5432/deepdocparse
+        run: |
+          python -m alembic upgrade head
+          python -m alembic downgrade base
+          python -m alembic upgrade head

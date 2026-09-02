@@ -1330,3 +1330,40 @@ async def test_deleting_conversation_preserves_evidence_verification_audit(
     preserved = (await session.execute(
         select(EvidenceVerification))).scalars().one()
     assert preserved.assertion_id is None
+
+
+@respx.mock
+async def test_crop_is_cached_immutably_and_revalidates_for_free(actor_client, session,
+                                                                 app_state):
+    """出处裁图必须能被浏览器长期缓存。
+
+    §9.2：**裁图键包含不可变 bbox 摘要，可设置长期 Cache-Control: immutable**。
+    同一条出处会被反复打开，而内容永不变 —— 每次都重传是纯浪费。
+
+    三条一起才算做到：
+    - `immutable` + 一年 max-age（键里有 bbox 摘要，内容不可能变）
+    - `private` 而不是 public（响应是鉴权后的，共享缓存不许存）
+    - `ETag` + `If-None-Match` -> 304（复访不传字节）
+    """
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+    respx.post(CHAT).mock(return_value=_chat_sse("第二页", "讲的是表格数据。", cited=True))
+    await _ask(actor_client, cid)
+
+    messages = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
+    crop_url = next((c.get("crop_url") for c in messages[1]["citations"] if c.get("crop_url")),
+                    None)
+    assert crop_url, "前提不成立：这一轮没有产出裁图，缓存头就无从验起"
+
+    first = await actor_client.get(crop_url)
+    assert first.status_code == 200 and first.headers["content-type"] == "image/png"
+    cache = first.headers["cache-control"]
+    assert "immutable" in cache and "max-age=31536000" in cache, cache
+    assert cache.startswith("private"), "鉴权后的响应不许进共享缓存：" + cache
+    etag = first.headers["etag"]
+    assert etag
+
+    again = await actor_client.get(crop_url, headers={"If-None-Match": etag})
+    assert again.status_code == 304, "复访应当是 304，不该重传字节"
+    assert again.headers["cache-control"] == cache, \
+        "304 上也要带缓存头 —— 漏了的话浏览器下一次又当成没缓存过"

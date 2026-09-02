@@ -212,3 +212,46 @@ def test_the_httpx_scan_actually_finds_clients():
                 and (node.func.attr if isinstance(node.func, ast.Attribute)
                      else getattr(node.func, "id", "")) in ("AsyncClient", "Client"))
     assert total >= 3, f"只扫到 {total} 个 httpx 客户端，扫描逻辑可能坏了"
+
+
+# ---------------------------------------------------------------------------
+# 密钥文件不得进 git
+# ---------------------------------------------------------------------------
+
+def test_generated_secret_files_are_gitignored():
+    """`scripts/dev.sh secrets` 生成的文件必须被 git 忽略。
+
+    **这是安全边界，不是整洁问题**：`infra/env/dev.env` 里有 JWT_SECRET、
+    SERVICE_TOKEN 与对象存储密钥，提交进去等于把整套鉴权公开。
+    而它是脚本生成的 —— 没人会记得每次都检查 `git status`。
+
+    用 `git check-ignore` 而不是读 .gitignore 的文本：真正生效的是 git 的
+    判断（还有 .git/info/exclude、全局 ignore），比对文本会漏。
+    """
+    import subprocess
+
+    generated = [
+        "infra/env/dev.env",
+        "infra/env/prod.env",
+        ".env",
+        "services/corpus-api/.env",
+    ]
+    not_ignored = []
+    for path in generated:
+        done = subprocess.run(["git", "check-ignore", "-q", path],
+                              cwd=ROOT, capture_output=True)
+        if done.returncode != 0:
+            not_ignored.append(path)
+    assert not not_ignored, (
+        f"这些文件会被 git 收进去：{not_ignored}。它们含 JWT_SECRET / "
+        f"SERVICE_TOKEN / 对象存储密钥")
+
+
+def test_example_env_files_are_still_tracked():
+    """反哨兵：把 `infra/env/` 整个忽略掉的话，样板文件也会消失，
+    而那会让"照着样板填"这条路径断掉，且没人会立刻发现。"""
+    import subprocess
+
+    done = subprocess.run(["git", "check-ignore", "-q", "infra/env/dev.env.example"],
+                          cwd=ROOT, capture_output=True)
+    assert done.returncode != 0, "样板文件 dev.env.example 被忽略了 —— 忽略规则写得太宽"

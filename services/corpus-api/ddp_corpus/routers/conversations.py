@@ -283,10 +283,27 @@ async def delete_conversation(cid: str, actor: Actor = Depends(current_actor),
 
 
 @router.get("/documents/{document_id}/crops/{job_id}/{name}")
-async def get_crop(document_id: str, job_id: str, name: str, actor: Actor = Depends(current_actor),
+async def get_crop(document_id: str, job_id: str, name: str, request: Request,
+                   actor: Actor = Depends(current_actor),
                    session: AsyncSession = Depends(get_session),
                    storage: Storage = Depends(get_storage)):
-    """出处区域截图。名字里已含 bbox 摘要，路径只做归属校验。"""
+    """出处区域截图。名字里已含 bbox 摘要，路径只做归属校验。
+
+    ## 为什么它**不**走预签名直读
+
+    §9.2 说大对象交给对象存储/CDN。裁图是个例外，理由是缓存命中率：
+    预签名 URL 每次签名都不同，浏览器眼里那是一个**新 URL**，
+    于是长缓存永远命中不了 —— 而裁图恰恰是最该被缓存的东西
+    （同一条出处会被反复打开，内容永不变）。
+
+    所以这条保持本进程直出，但把缓存做足：
+
+    - 键里带 bbox 摘要 ⇒ **内容不可变** ⇒ `immutable`
+    - `private`（不是 public）：响应是鉴权后的，共享缓存不许存
+    - `ETag` + `If-None-Match` ⇒ 复访是一次 304，不传字节
+
+    裁图是几十 KB 的 PNG，直出的内存代价与它带来的缓存收益不成比例。
+    """
     from fastapi.responses import Response
 
     document = await _owned_document(document_id, actor, session)
@@ -300,11 +317,27 @@ async def get_crop(document_id: str, job_id: str, name: str, actor: Actor = Depe
     page_part, _, digest = name.removesuffix(".png").partition("_")
     if not page_part.isdigit() or not digest:
         raise APIError(400, "invalid crop name", "invalid_request_error", "invalid_name")
+    # ETag 就是 bbox 摘要本身 —— 它已经唯一确定了这张图的内容
+    etag = f'"{digest}"'
+    if request.headers.get("if-none-match") == etag:
+        # 复访不传字节。**必须把缓存头一起带上** —— 304 上漏了它们，
+        # 浏览器下一次又会当成没缓存过
+        return Response(status_code=304, headers={
+            "ETag": etag, "Cache-Control": _CROP_CACHE_CONTROL})
+
     try:
         data = await storage.get(build_crop_key(job.id, int(page_part), digest))
     except Exception:
         raise APIError(404, "crop not found", "invalid_request_error", "crop_not_found")
-    return Response(content=data, media_type="image/png")
+    return Response(content=data, media_type="image/png", headers={
+        "ETag": etag,
+        "Cache-Control": _CROP_CACHE_CONTROL,
+    })
+
+
+#: 一年 + immutable。键里带 bbox 摘要，内容不可能变。
+#: **private 而不是 public**：响应是鉴权后的，共享缓存不许存它。
+_CROP_CACHE_CONTROL = "private, max-age=31536000, immutable"
 
 
 def _crop_url(document_id: str, crop_key: str | None) -> str | None:

@@ -1,107 +1,184 @@
-# dev profile —— RTX 4060 Laptop 8GB
-# MinerU 走 pipeline 后端（4GB 够用）；DeepSeek-OCR 用 deepseek-ocr.rs 量化版。
-# 显存有限：两模型不必同时驻留，M1 阶段可先注释 vqa-dsocr。
+# 本机开发的完整栈（无 GPU 版）。有 GPU 的加 compose.gpu.yml。
 #
-# 启动: docker compose -f compose.dev.yml --env-file ../.env up --build
+#   docker compose -f infra/compose/compose.dev.yml --env-file infra/env/dev.env up -d
+#
+# **项目名钉死**：compose 缺省取目录名，而两个 compose 目录同名会让
+# 同名服务互相顶掉（旧仓库实测发生过：起 service 侧的 redis 把 web 那个
+# 容器直接换掉，Web 后端随即失联）。
+name: ddp
 
-# 固定 compose 项目名。**不能省**：项目名缺省取 compose 文件所在目录名，
-# 而两个仓库的这个目录都叫 docker —— 于是两边算出同一个项目名 "docker"，
-# 同名服务（redis）会互相顶掉：起 service 的 redis 会把 Web 的 redis 容器直接换掉。
-name: ddp-service
+x-python-build: &python-build
+  context: ../..
+  dockerfile: infra/images/python-base.Dockerfile
+  args:
+    PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+
+x-corpus-env: &corpus-env
+  DATABASE_URL: postgresql+asyncpg://ddp_corpus:${CORPUS_DB_PASSWORD:-ddp}@postgres:5432/deepdocparse
+  SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
+  SERVICE_URL: http://model-gateway:9000
+  CONTROL_URL: http://control-api:8080
+  PUBLIC_BASE_URL: http://corpus-api:8081
+  MINIO_INTERNAL_ENDPOINT: minio:9000
+  MINIO_PUBLIC_ENDPOINT: ${OBJECT_PUBLIC_ENDPOINT:-127.0.0.1:19000}
+  MINIO_ACCESS_KEY: ${OBJECT_ACCESS_KEY:-minioadmin}
+  MINIO_SECRET_KEY: ${OBJECT_SECRET_KEY:?OBJECT_SECRET_KEY 必须显式设置}
+  MINIO_BUCKET: deepdocparse
+  REDIS_URL: redis://redis:6379/0
+  DEFAULT_PARSE_ENGINE: ${DEFAULT_PARSE_ENGINE:-borndigital}
 
 services:
-  gateway:
-    build:
-      context: ../gateway
-      args: { PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple" }
-    ports: ["9000:9000"]
+  # ------------------------------------------------------------ 数据面
+  postgres:
+    image: pgvector/pgvector:pg16
     environment:
-      SERVICE_TOKEN: ${SERVICE_TOKEN}
-      REDIS_URL: redis://redis:6379/0
-      MODELS_CONFIG: /app/models.yaml
-    volumes:
-      - ../models.yaml:/app/models.yaml:ro
-    depends_on: [redis]
+      POSTGRES_USER: ddp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ddp}
+      POSTGRES_DB: deepdocparse
+    ports: ["15432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ddp"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
-  arq-worker:
-    build:
-      context: ../gateway
-      args: { PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple" }
-    command: arq app.worker.tasks.WorkerSettings
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
     environment:
-      SERVICE_TOKEN: ${SERVICE_TOKEN}
-      REDIS_URL: redis://redis:6379/0
-      MODELS_CONFIG: /app/models.yaml
-    volumes:
-      - ../models.yaml:/app/models.yaml:ro
-    depends_on: [redis]
-
-  mcp-server:
-    build:
-      context: ..
-      dockerfile: mcp_server/Dockerfile
-      args: { PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple" }
-    ports: ["9100:9100"]   # 对外应由 backend 代理；dev 直开便于 Claude Desktop 实测
-    environment:
-      GATEWAY_URL: http://gateway:9000
-      SERVICE_TOKEN: ${SERVICE_TOKEN}
-      REDIS_URL: redis://redis:6379/0   # v2 向量检索（不配则纯 BM25）
-      CORPUS_DATABASE_URL: ${CORPUS_DATABASE_URL:-postgresql+asyncpg://ddp:ddp@host.docker.internal:15432/deepdocparse}
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://host.docker.internal:19000}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      MINIO_BUCKET: ${MINIO_BUCKET:-deepdocparse}
-    extra_hosts: ["host.docker.internal:host-gateway"]
-    depends_on: [gateway]
+      MINIO_ROOT_USER: ${OBJECT_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${OBJECT_SECRET_KEY:?OBJECT_SECRET_KEY 必须显式设置}
+    ports: ["19000:9000", "19001:9001"]
+    volumes: [miniodata:/data]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   redis:
-    # 用 redis-stack：v2 向量检索不换组件（版本 pin，禁止 latest）
     image: redis/redis-stack-server:7.4.0-v3
-    ports: ["6379:6379"]
-    volumes: [redis-data:/data]
+    ports: ["16379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
-  mineru:
-    # 官方组件，不重写。Dockerfile 改编自官方中国区版本并锁定 3.4.4，见 ./mineru/Dockerfile
-    # 官方部署文档：https://opendatalab.github.io/MinerU/quick_start/docker_deployment/
-    build: ./mineru
-    image: mineru:3.4.4
-    command: mineru-api --host 0.0.0.0 --port 8000   # dev 单 worker，gateway 直连
+  # ---------------------------------------------------------- 迁移（一次性）
+  # **两套迁移各管各的 schema**，互不依赖：control 由 Go 的迁移器跑，
+  # corpus 由 alembic 跑。谁先谁后都行 —— 因为没有跨 schema 外键
+  corpus-migrate:
+    build:
+      <<: *python-build
+      target: migrate
     environment:
-      MINERU_DEVICE_MODE: cuda   # pipeline 后端；纯 CPU 调试改 cpu
+      DATABASE_URL: postgresql+asyncpg://ddp:${POSTGRES_PASSWORD:-ddp}@postgres:5432/deepdocparse
+      ALLOW_INSECURE_DEFAULTS: "true"     # 一次性容器，不需要真凭据
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+
+  # ------------------------------------------------------------- 控制面
+  control-api:
+    build:
+      context: ../..
+      dockerfile: infra/images/control-api.Dockerfile
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+    environment:
+      CONTROL_DATABASE_URL: postgres://ddp:${POSTGRES_PASSWORD:-ddp}@postgres:5432/deepdocparse
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 必须显式设置且不短于 32 字节}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
+      CORPUS_URL: http://corpus-api:8081
+      GATEWAY_URL: http://model-gateway:9000
+      MCP_URL: http://mcp:9100
+      OBJECT_ENDPOINT: minio:9000
+      # **浏览器可达的地址**，预签名 URL 用它签。与内网地址用同一个的话，
+      # 签出来的 URL 里带着 `minio:9000`，浏览器一访问就是 DNS 失败 ——
+      # 而这只在真部署里才暴露
+      OBJECT_PUBLIC_ENDPOINT: ${OBJECT_PUBLIC_ENDPOINT:-127.0.0.1:19000}
+      OBJECT_ACCESS_KEY: ${OBJECT_ACCESS_KEY:-minioadmin}
+      OBJECT_SECRET_KEY: ${OBJECT_SECRET_KEY:?OBJECT_SECRET_KEY 必须显式设置}
+      OBJECT_BUCKET: deepdocparse
+      REDIS_URL: redis://redis:6379/1
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:8080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      minio: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # -------------------------------------------------------------- 语料面
+  corpus-api:
+    build:
+      <<: *python-build
+      target: corpus-api
+    environment: *corpus-env
+    # **不映射端口**：它只对内网开放。暴露出去等于任何人都能自称 admin
+    expose: ["8081"]
+    depends_on:
+      corpus-migrate: {condition: service_completed_successfully}
+      minio: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8081/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  corpus-worker:
+    build:
+      <<: *python-build
+      target: corpus-worker
+    environment: *corpus-env
+    depends_on:
+      corpus-migrate: {condition: service_completed_successfully}
+      minio: {condition: service_healthy}
+    # 多副本安全：领取走 FOR UPDATE SKIP LOCKED，写结果比 generation
     deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      replicas: ${WORKER_REPLICAS:-1}
 
-  # vqa-dsocr（M2 决策）：deepseek-ocr.rs v0.6.0 无 Linux CUDA 预编译产物，
-  # dev 机不进容器——用官方 Windows 原生二进制跑在宿主机（ModelScope 自动下权重），
-  # gateway 侧注册表用 ../models.dev-host.yaml（endpoint 指宿主机 18001，
-  # 容器内访问写 host.docker.internal:18001）。prod 用 compose.prod-nvidia.yml 的 vLLM 容器。
-  # 若将来官方发布 Linux CUDA 产物，再恢复本服务并 pin 版本：
-  # vqa-dsocr:
-  #   image: deepseek-ocr-rs:<PIN>
-  #   ports: ["18001:8000"]   # 宿主端口避开 Windows 保留段 7964-8063
-  #   deploy: ...gpu...
-
-  embed:
-    # v2（M4）：bge-m3 向量化，dev 用 CPU 版 TEI（无显存占用，可与 mineru 同跑）
-    #
-    # 前置（否则启动即失败，已实测）：
-    #   1. TEI 只认 safetensors，而 BAAI/bge-m3 官方只发 .bin ——
-    #      必须先跑 `python scripts/prepare_bge_m3.py` 把权重下好并转换到 ../../models/bge-m3
-    #   2. --pooling cls：本地权重缺 1_Pooling/config.json，须显式指定（bge 系用 CLS）
-    #   3. --max-batch-tokens：bge-m3 支持 8192 上下文，按最大长度预热会吃爆内存
-    #      （8GB 机器上实测 OOM 137），必须限住
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3
-    command: >
-      --model-id /data/bge-m3 --pooling cls --port 8080
-      --max-batch-tokens 4096 --max-client-batch-size 32
-    ports: ["18080:8080"]   # 宿主端口避开 Windows 保留段 7964-8063
+  # ------------------------------------------------------------ 模型面
+  model-gateway:
+    build:
+      <<: *python-build
+      target: model-gateway
+    environment:
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
+      REDIS_URL: redis://redis:6379/2
+      # 无 GPU 档位：只注册 borndigital。换档位 = 换这一行，不改代码
+      MODELS_CONFIG: /registry/${MODELS_CONFIG:-models.cpu.yaml}
     volumes:
-      - ../../models/bge-m3:/data/bge-m3:ro
+      - ../registry:/registry:ro
+    expose: ["9000"]
+    depends_on:
+      redis: {condition: service_healthy}
+
+  mcp:
+    build:
+      <<: *python-build
+      target: mcp
+    environment:
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
+      GATEWAY_URL: http://model-gateway:9000
+      CORPUS_DATABASE_URL: postgresql+asyncpg://ddp:${POSTGRES_PASSWORD:-ddp}@postgres:5432/deepdocparse
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${OBJECT_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${OBJECT_SECRET_KEY:?OBJECT_SECRET_KEY 必须显式设置}
+      MINIO_BUCKET: deepdocparse
+      REDIS_URL: redis://redis:6379/2
+    expose: ["9100"]
+    depends_on:
+      corpus-migrate: {condition: service_completed_successfully}
 
 volumes:
-  redis-data:
+  pgdata:
+  miniodata:
