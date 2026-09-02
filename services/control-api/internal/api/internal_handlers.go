@@ -2,11 +2,13 @@ package api
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/apierr"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/auth"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/contracts"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/httpx"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/store"
 )
@@ -40,6 +42,9 @@ func (s *Server) handleInternalFileGrant(w http.ResponseWriter, r *http.Request)
 		DocumentID     string `json:"document_id"`
 		ObjectKey      string `json:"object_key"`
 		MIME           string `json:"mime"`
+		// 原始文件名。语料侧知道它，control 侧不知道 —— 而签名 URL 的
+		// Content-Disposition 只能由 control 侧签（跨源 <a download> 不算数）
+		Filename string `json:"filename"`
 	}
 	if err := httpx.DecodeJSON(r, &body); err != nil {
 		return err
@@ -51,13 +56,16 @@ func (s *Server) handleInternalFileGrant(w http.ResponseWriter, r *http.Request)
 		body.OrganizationID = s.defaultOrg
 	}
 	grant, err := s.store.StableGrantFor(r.Context(), body.OrganizationID,
-		body.DocumentID, body.ObjectKey, body.MIME)
+		body.DocumentID, body.ObjectKey, body.MIME, body.Filename)
 	if err != nil {
 		return err
 	}
 	return httpx.JSON(w, http.StatusOK, map[string]any{
 		"token": grant.Token,
-		"url":   s.cfg.PublicBaseURL + "/files/" + grant.Token,
+		// **内网地址**：这条 URL 的消费者是 model-gateway（容器里的进程），
+		// 不是浏览器。用公网地址的话它下载不了原件，而表现是
+		// "解析失败：连接不上"，看着像模型服务挂了
+		"url": s.cfg.InternalBaseURL + "/files/" + grant.Token,
 	})
 }
 
@@ -126,10 +134,29 @@ func (s *Server) handleInternalUsage(w http.ResponseWriter, r *http.Request) err
 	if org == "" {
 		org = s.defaultOrg
 	}
+	// 计量种类必须在契约里。**不校验的后果是静默的**：
+	// 一个拼错的 kind 会被 usage_ledger 原样收下（那一列没有 CHECK），
+	// 于是它既不进任何按种类分组的报表，也不触发任何告警 ——
+	// 用量凭空少了一块，而所有请求都是 200
 	kind := body.Payload.Kind
-	actorKind := "user"
+	if !contracts.UsageKind(kind).Valid() {
+		// **与上面"未知事件类型"同样处理：2xx + 留痕，不是 4xx。**
+		// 理由一样 —— 投递器会一直重投 4xx/5xx，而"control 还没升级到
+		// 认识这个 kind"不是投递器能解决的问题。语料侧的投递器只把
+		// <300 与 409 当成功，且它没有死信队列，所以一个 400 会让那笔
+		// 用量**永远重投、永远不进账**，而只有一行 warning。
+		//
+		// 记 ERROR 是因为这确实是个部署顺序问题，需要有人看见 ——
+		// 但它不该表现为"这条事件卡死"
+		slog.ErrorContext(r.Context(), "未知的计量种类，已忽略",
+			"kind", kind, "event_id", body.EventID, "organization_id", org)
+		return httpx.JSON(w, http.StatusOK, map[string]any{
+			"ok": true, "ignored": "unknown_usage_kind:" + kind,
+		})
+	}
+	actorKind := string(contracts.ActorKindUser)
 	if body.Payload.APIKeyID != "" {
-		actorKind = "api_key"
+		actorKind = string(contracts.ActorKindApiKey)
 	}
 	if err := s.store.RecordUsage(r.Context(), org, body.Payload.ActorID, actorKind,
 		body.Payload.APIKeyID, kind, body.Payload.Pages, max(body.Payload.Requests, 1),

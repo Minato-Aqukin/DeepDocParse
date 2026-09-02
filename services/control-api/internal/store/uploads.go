@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/auth"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/contracts"
 )
 
 // UploadSession 是 §9.1 直传流程的服务端记录。
@@ -87,7 +88,9 @@ func (s *Store) FinalizeUpload(ctx context.Context, orgID, id, idempotencyKey st
 			WHERE id = $1 AND organization_id = $2 FOR UPDATE`, id, orgID).Scan(&status); err != nil {
 			return norows(err)
 		}
-		if status != "created" && status != "uploading" {
+		// 取值来自契约生成物，不手写字面量（铁律 1）
+		if contracts.UploadStatus(status) != contracts.UploadStatusCreated &&
+			contracts.UploadStatus(status) != contracts.UploadStatusUploading {
 			return nil // 幂等：已经 finalize 过了
 		}
 		var engineArg any

@@ -10,7 +10,9 @@ ENV GOPROXY=${GOPROXY} CGO_ENABLED=0
 WORKDIR /src
 # 先只拷 go.mod/go.sum：依赖没变时 `go mod download` 这一层能命中缓存
 COPY services/control-api/go.mod services/control-api/go.sum ./
-RUN go mod download
+# 国内镜像偶发 unexpected EOF（实测 goproxy.cn 拉 klauspost/compress 断过），
+# 一次失败就让整个镜像构建白跑几分钟 —— 重试三次
+RUN for i in 1 2 3; do go mod download && break || { echo "go mod download 第 $i 次失败，重试"; sleep 5; }; done && go mod download
 
 COPY services/control-api/ ./
 # 迁移文件由 //go:embed 打进二进制 —— 运行镜像里因此不需要它们，

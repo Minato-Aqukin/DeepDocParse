@@ -21,7 +21,7 @@
 | 理解任务队列 | `docs/refactor/TASK-QUEUE.md` |
 | 部署 | `docs/DEPLOY.md` |
 | 前端视觉 | `../design-previews/DESIGN-GUIDE.md`（REV.04） |
-| 避开已经踩过的坑 | `docs/refactor/FINDINGS.md`（9 条，每条都写了"为什么它是静默的"） |
+| 避开已经踩过的坑 | `docs/refactor/FINDINGS.md`（27 条，每条都写了"为什么它没被早点发现"） |
 
 ## 八条不变式
 
@@ -65,7 +65,7 @@ scripts/dev.sh up             # 起全栈（无 GPU 档位）
 scripts/dev.sh up --gpu       # 叠加模型运行时
 scripts/dev.sh logs corpus-api
 
-./scripts/check.sh            # 全量门禁（20 项），与 CI 同一套判据
+./scripts/check.sh            # 全量门禁（22 项），与 CI 同一套判据
 ./scripts/check.sh guards     # 只跑守卫
 ```
 
@@ -75,6 +75,8 @@ scripts/dev.sh logs corpus-api
 cd python/ddp_core        && ../../.venv/bin/python -m pytest -q
 cd services/corpus-api    && ../../.venv/bin/python -m pytest -q
 cd services/control-api   && go test ./... && go vet ./...
+scripts/check_db_boundary.sh                 # 数据所有权，对着真库
+.venv/bin/python scripts/e2e_stack.py        # 真实用户路径（先 dev.sh up）
 cd apps/web               && npm run test:unit && npm run test:e2e
 ```
 
@@ -110,6 +112,11 @@ cd apps/web               && npm run test:unit && npm run test:e2e
 （一条测不出 `FlushInterval`，一条在 loopback 上永远绿）。
 **测不出来的东西不要假装在测**：做成结构断言并写清为什么不能做行为测试。
 
+**变异本身也会写错，而写错的变异看起来就是"守卫是假的"。**
+实测踩过一次：往 YAML 里插一个重复键去改配置，`yaml.safe_load` 静默取
+最后一个，于是配置根本没变、守卫当然绿 —— 差点据此把一条好守卫改掉。
+判定"假守卫"之前先确认**变异真的生效了**（打印一下改完的值）。
+
 ## 提交与验收流程（用户硬性要求）
 
 **验收的触发点是 commit，不是里程碑。**
@@ -125,7 +132,10 @@ cd apps/web               && npm run test:unit && npm run test:e2e
 不提交的中间工作不验收。一次 commit 对应一次验收。
 
 **这一步有实打实的价值**：历次验收抓到过信号量泄漏、BM25 除零、镜像版本残留，
-以及多个**静默出错**。合仓这一轮自己抓到 9 条（`FINDINGS.md`）。
+以及多个**静默出错**。合仓这一轮抓到 27 条（`FINDINGS.md`），分三批：F-11..F-16 是**测试全绿时**由独立验收
+读出来的；F-17..F-23 是**第一次真起全栈**当场炸出来的（每一条都让主链路完全不通，
+而当时门禁 21/21 全绿）；F-24..F-27 是**修完前两批之后**二次验收抓的 ——
+包括一条守卫换个位置又变成假的、一条修复引入的用户可见回归。
 
 ## 本机环境
 
@@ -140,6 +150,25 @@ Go 1.27（装在 `~/.local/opt/go`）· locale `zh_CN.UTF-8` · 交互 shell 是
 npm 装依赖要带 `--registry=https://registry.npmmirror.com`（lockfile 的
 `resolved` 指向 npmmirror，跨 host 的 tarball 会被 npm 当成 remote 拒掉），
 Go 走 `GOPROXY=https://goproxy.cn,direct`。
+
+**镜像给坏包的时候，重试同一个源没有意义。** 实测 aliyun 在一次构建里
+连着给出三个不同的坏 wheel（`THESE PACKAGES DO NOT MATCH THE HASHES`：
+numpy / asyncpg / pillow）—— 坏的是那份缓存，不是网络抖动。
+所以 `pip-retry` 第一次失败就**换源**（`PIP_FALLBACK_INDEX_URL`，
+填成另一家），而不是原地重试。
+同类的还有 goproxy 的 `unexpected EOF`，那个是真抖动，原地重试有用 ——
+`scripts/dev.sh up` 会整体重试三次。
+
+**Docker Hub 解析 manifest 超时（`DeadlineExceeded`）重试也没用**，
+它是连不上而不是抖动。走镜像站拉下来再 tag 回原名：
+
+```bash
+docker pull docker.m.daocloud.io/library/golang:1.27-alpine
+docker tag  docker.m.daocloud.io/library/golang:1.27-alpine golang:1.27-alpine
+```
+
+tag 回原名之后 Dockerfile 一个字都不用改 —— **别把镜像站写进 Dockerfile**，
+那是这台机器的事，不是这个仓库的事。
 
 **跑迁移一律 `env DATABASE_URL=... alembic ...` 写在同一条命令里**：
 Claude Code 的 Bash 工具 cwd 跨调用持久、环境变量不持久，用 `export`

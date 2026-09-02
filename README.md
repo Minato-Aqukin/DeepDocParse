@@ -64,7 +64,7 @@ cd apps/web && npm run dev # 前端 http://localhost:5173
 ## 验证
 
 ```bash
-./scripts/check.sh          # 全量门禁 20 项，与 CI 同一套判据
+./scripts/check.sh          # 全量门禁 22 项，与 CI 同一套判据
 ./scripts/check.sh guards   # 只跑守卫
 ```
 
@@ -73,12 +73,16 @@ cd apps/web && npm run dev # 前端 http://localhost:5173
 ```bash
 cd python/ddp_core        && pytest -q      # 27
 cd services/model-gateway && pytest -q      # 149 + 6 skip
-cd services/corpus-api    && pytest -q      # 265
+cd services/corpus-api    && pytest -q      # 280
 cd services/corpus-worker && pytest -q      # 10
 cd services/mcp           && pytest -q      # 12
 cd eval                   && pytest -q      # 45
-cd services/control-api   && go test ./...  # 36
+cd services/control-api   && go test ./...  # 58（4 条要真 PostgreSQL）
 cd apps/web && npm run test:unit && npm run test:e2e   # 26 + 72
+
+# 端到端（要先 scripts/dev.sh up）——**这一条抓到过七个单测看不见的缺陷**
+scripts/check_db_boundary.sh      # 数据所有权，对着真库 21 条
+python scripts/e2e_stack.py       # 真实用户路径 22 条
 ```
 
 ## 许可

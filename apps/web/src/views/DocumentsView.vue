@@ -3,7 +3,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { documentsApi, downloadAs } from '@/api'
+import { documentsApi, downloadAs, downloadViaSignedUrl } from '@/api'
 import StatCard from '@/components/common/StatCard.vue'
 import DocumentFilters from '@/components/document/DocumentFilters.vue'
 import DocumentTable from '@/components/document/DocumentTable.vue'
@@ -36,6 +36,7 @@ function open(doc: DocumentInfo) {
 }
 
 async function download(doc: DocumentInfo, format: DownloadFormat) {
+  if (format === 'source') return downloadViaSignedUrl(doc.id, doc.filename)
   await downloadAs(documentsApi.exportUrl(doc.id, format), doc.filename)
 }
 

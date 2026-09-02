@@ -33,8 +33,14 @@ func (s *Server) handleFileByToken(w http.ResponseWriter, r *http.Request) error
 	// service 侧只做下载，一律 attachment：
 	// inline 打开一个上传上来的 text/html 就是本站同源 XSS
 	disposition := "attachment"
-	url, _, err := s.objects.PresignGet(r.Context(), grant.ObjectKey,
-		grant.DocumentID, grant.MIME, disposition)
+	// **内网 endpoint 签名**：这条 URL 的消费者是 model-gateway（容器里的进程），
+	// 不是浏览器。给浏览器的那条是 handleDownloadURL，用 PresignGet
+	name := grant.Filename
+	if name == "" {
+		name = grant.DocumentID
+	}
+	url, _, err := s.objects.PresignGetInternal(r.Context(), grant.ObjectKey,
+		name, grant.MIME, disposition)
 	if err != nil {
 		return apierr.New(http.StatusBadGateway, apierr.TypeUpstream, "presign_failed",
 			"签发下载地址失败").WithCause(err)
@@ -59,7 +65,7 @@ func (s *Server) handleDownloadURL(w http.ResponseWriter, r *http.Request) error
 	}
 	docID := r.PathValue("document_id")
 
-	grant, err := s.store.StableGrantFor(r.Context(), actor.OrganizationID, docID, "", "")
+	grant, err := s.store.StableGrantFor(r.Context(), actor.OrganizationID, docID, "", "", "")
 	if err != nil || grant.ObjectKey == "" {
 		// 还没有凭证说明这份文档不属于本组织，或者还没归档完
 		return apierr.NotFound("no_such_document", "文档不存在或尚未归档")
@@ -75,8 +81,15 @@ func (s *Server) handleDownloadURL(w http.ResponseWriter, r *http.Request) error
 		disposition = "attachment"
 	}
 
+	// **文件名用凭证里存的那个，不是 document id。**
+	// 这条 URL 跨源，浏览器忽略 <a download> 的提示 —— 服务端签的这个说了算。
+	// 拿 docID 当文件名的话，用户下到的是 `46250ceb…`（还没有扩展名）
+	filename := grant.Filename
+	if filename == "" {
+		filename = docID // 老凭证没存名字，退回旧行为而不是给个空名
+	}
 	url, expires, err := s.objects.PresignGet(r.Context(), grant.ObjectKey,
-		docID, grant.MIME, disposition)
+		filename, grant.MIME, disposition)
 	if err != nil {
 		return apierr.New(http.StatusBadGateway, apierr.TypeUpstream, "presign_failed",
 			"签发下载地址失败").WithCause(err)

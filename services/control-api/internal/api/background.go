@@ -11,6 +11,7 @@ import (
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/identity"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/obs"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/rbac"
 )
 
 // RunBackground 起三个后台循环，随 ctx 一起结束。
@@ -59,9 +60,22 @@ func (s *Server) deliverOutbox(ctx context.Context) {
 			}
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer "+s.cfg.ServiceToken)
-			req.Header.Set(identity.HeaderService, "control-api")
-			req.Header.Set(identity.HeaderOrganization, e.OrganizationID)
-			req.Header.Set(identity.HeaderActorKind, string(identity.KindService))
+			// **一整套 actor 上下文，不能只发两个头。** corpus 侧的
+			// `current_actor` 缺任何一个就 401，而且它是故意这样设计的
+			// （缺头给默认值的话，"入口挂错中间件"会表现为"这个人突然只读了"）。
+			// 之前这里只发了 Organization + ActorKind，于是**每一条事件
+			// 永远投不出去**：outbox 忠实地重试、如实记下 401、
+			// `/readyz` 也如实报 stale —— 一切都"正确地"坏着，
+			// 而产品的主链路（上传完 -> 文档入库）一次都没通过。
+			// 单测碰不到它：那边直接调消费函数，不经过 HTTP 头这一层。
+			(&identity.Actor{
+				Kind:           identity.KindService,
+				ID:             "control-api",
+				OrganizationID: e.OrganizationID,
+				// 服务身份用最高角色：corpus 侧只校验 kind，
+				// 但 role 必须是契约里的合法值，否则 403 unknown_role
+				Role: rbac.Admin,
+			}).Apply(req, "control-api")
 			// 幂等键就是事件 ID —— 消费端据此去重
 			req.Header.Set(identity.HeaderIdempotency, e.ID)
 

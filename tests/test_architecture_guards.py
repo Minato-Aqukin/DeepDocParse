@@ -255,3 +255,68 @@ def test_example_env_files_are_still_tracked():
     done = subprocess.run(["git", "check-ignore", "-q", "infra/env/dev.env.example"],
                           cwd=ROOT, capture_output=True)
     assert done.returncode != 0, "样板文件 dev.env.example 被忽略了 —— 忽略规则写得太宽"
+
+
+# ---------------------------------------------------------------------------
+# §4 部署清单：网关与它的 worker 必须看到同一份世界
+# ---------------------------------------------------------------------------
+
+def _compose_services(*names: str) -> dict:
+    """把一组 compose 文件按 docker compose 的语义合并（够用的近似）。"""
+    import yaml
+
+    merged: dict = {}
+    for name in names:
+        data = yaml.safe_load((ROOT / "infra" / "compose" / name).read_text(encoding="utf-8"))
+        for service, spec in (data.get("services") or {}).items():
+            target = merged.setdefault(service, {})
+            for key, value in spec.items():
+                if key == "environment" and isinstance(value, dict):
+                    target.setdefault("environment", {}).update(value)
+                else:
+                    target[key] = value
+    return merged
+
+
+def test_gateway_and_its_worker_share_redis_and_registry():
+    """**解析平面的两个进程必须看到同一个 Redis 库与同一份注册表。**
+
+    任务真相住在 arq（Redis）里，引擎清单住在注册表里：
+      * REDIS_URL 不一致 = 网关入队、worker 在另一个库里空等；
+      * MODELS_CONFIG 不一致 = 网关受理了一个 worker 不认识的引擎。
+
+    两种都表现为**任务卡住**，而网关那边一切正常、状态查得到、error 是 null。
+    合仓时这个 worker 整个漏掉过一次（FINDINGS F-21），补回来之后
+    GPU 档位又差点只换了网关那一半 —— 所以这条守卫盯的是**每一种档位组合**。
+    """
+    combos = {
+        "无 GPU": ("compose.dev.yml",),
+        "GPU": ("compose.dev.yml", "compose.gpu.yml"),
+    }
+    for label, files in combos.items():
+        services = _compose_services(*files)
+        assert "model-gateway-worker" in services, (
+            f"{label} 档位没有 model-gateway-worker —— 解析任务将永远没有消费者")
+        api = services["model-gateway"].get("environment") or {}
+        worker = services["model-gateway-worker"].get("environment") or {}
+        for key in ("REDIS_URL", "MODELS_CONFIG"):
+            assert api.get(key) == worker.get(key), (
+                f"{label} 档位下 model-gateway 与 model-gateway-worker 的 {key} 不一致："
+                f"{api.get(key)!r} vs {worker.get(key)!r}")
+
+
+def test_only_the_entry_publishes_a_port():
+    """**只有统一入口映射端口。** 其余服务不做用户鉴权，只信任入口下发的
+    actor 上下文头 —— 它们一旦直接可达，那份信任就变成了任何人都能自称 admin。
+    """
+    services = _compose_services("compose.dev.yml")
+    published = {name: spec["ports"] for name, spec in services.items()
+                 if spec.get("ports")}
+    # 数据面容器（PG / MinIO / Redis）映射端口是给开发机上的工具用的，
+    # 它们本来就有自己的凭据；应用服务则一个都不该映
+    app_services = {"control-api", "corpus-api", "corpus-worker",
+                    "model-gateway", "model-gateway-worker", "mcp"}
+    offenders = {n: p for n, p in published.items() if n in app_services and n != "control-api"}
+    assert not offenders, (
+        f"这些服务直接映射了端口：{offenders}。"
+        f"它们不校验用户身份，暴露出去等于绕过整个入口")

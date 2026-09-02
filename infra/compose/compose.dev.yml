@@ -12,6 +12,10 @@ x-python-build: &python-build
   dockerfile: infra/images/python-base.Dockerfile
   args:
     PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    # 换源重试用的第二个源。**必须是另一家**：坏的是镜像那一份缓存，
+    # 同一个源重试多少次都还是坏的（实测 aliyun 在一次构建里连着给出
+    # 三个不同的坏 wheel：numpy / asyncpg / pillow）
+    PIP_FALLBACK_INDEX_URL: ${PIP_FALLBACK_INDEX_URL:-https://pypi.org/simple}
 
 x-corpus-env: &corpus-env
   DATABASE_URL: postgresql+asyncpg://ddp_corpus:${CORPUS_DB_PASSWORD:-ddp}@postgres:5432/deepdocparse
@@ -26,6 +30,15 @@ x-corpus-env: &corpus-env
   MINIO_BUCKET: deepdocparse
   REDIS_URL: redis://redis:6379/0
   DEFAULT_PARSE_ENGINE: ${DEFAULT_PARSE_ENGINE:-borndigital}
+
+# 模型网关与它的 worker 共用这一份。**别复制成两份** ——
+# 它们必须看到同一个 Redis 库与同一份注册表，而"复制品靠人同步"
+# 是这个项目反复出错的形状（见 CLAUDE.md 铁律 4）。
+x-gateway-env: &gateway-env
+  SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
+  REDIS_URL: redis://redis:6379/2
+  # 无 GPU 档位：只注册 borndigital。换档位 = 换这一行，不改代码
+  MODELS_CONFIG: /registry/${MODELS_CONFIG:-models.cpu.yaml}
 
 services:
   # ------------------------------------------------------------ 数据面
@@ -80,6 +93,28 @@ services:
       postgres: {condition: service_healthy}
     restart: "no"
 
+  # control schema 的迁移 + 服务角色口令。**必须用属主身份跑**：
+  # 建表要 DDL 权限，设口令要 CREATEROLE —— 而长跑的 control-api
+  # 恰恰不该有这两样（企业边界 5：它只能读写 control 的表）。
+  control-migrate:
+    build:
+      context: ../..
+      dockerfile: infra/images/control-api.Dockerfile
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+    entrypoint: ["control-migrate"]
+    command: ["up"]
+    environment:
+      CONTROL_DATABASE_URL: postgres://ddp:${POSTGRES_PASSWORD:-ddp}@postgres:5432/deepdocparse
+      # 迁移只 `CREATE ROLE ... LOGIN`，不带口令 —— 口令是部署配置。
+      # 漏了这两个变量，全新部署的表现是：迁移成功、容器 healthy，
+      # 而服务进程连库时 InvalidPasswordError
+      CONTROL_DB_PASSWORD: ${CONTROL_DB_PASSWORD:-ddp}
+      CORPUS_DB_PASSWORD: ${CORPUS_DB_PASSWORD:-ddp}
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+
   # ------------------------------------------------------------- 控制面
   control-api:
     build:
@@ -88,7 +123,12 @@ services:
       args:
         GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
     environment:
-      CONTROL_DATABASE_URL: postgres://ddp:${POSTGRES_PASSWORD:-ddp}@postgres:5432/deepdocparse
+      # **用受限角色连库，不是超级用户。** 企业边界 5 说"一个数据对象只能有
+      # 一个写入所有者"，而那句话只有在数据库层面做得到才算数 ——
+      # 用 ddp 连的话，Go 想 UPDATE 语料表随时可以，静态守卫只是自觉。
+      CONTROL_DATABASE_URL: postgres://ddp_control:${CONTROL_DB_PASSWORD:-ddp}@postgres:5432/deepdocparse
+      # 迁移交给 control-migrate 那个一次性容器（它用属主身份）
+      CONTROL_AUTO_MIGRATE: "false"
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 必须显式设置且不短于 32 字节}
       SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
       CORPUS_URL: http://corpus-api:8081
@@ -104,10 +144,14 @@ services:
       OBJECT_BUCKET: deepdocparse
       REDIS_URL: redis://redis:6379/1
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:8080}
+      # 服务之间用的地址。稳定文件 URL 由 model-gateway 下载，
+      # 它在容器里，解析不了 127.0.0.1
+      INTERNAL_BASE_URL: http://control-api:8080
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
     ports: ["8080:8080"]
     depends_on:
       postgres: {condition: service_healthy}
+      control-migrate: {condition: service_completed_successfully}
       minio: {condition: service_healthy}
       redis: {condition: service_healthy}
     healthcheck:
@@ -152,15 +196,40 @@ services:
       <<: *python-build
       target: model-gateway
     environment:
-      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
-      REDIS_URL: redis://redis:6379/2
-      # 无 GPU 档位：只注册 borndigital。换档位 = 换这一行，不改代码
-      MODELS_CONFIG: /registry/${MODELS_CONFIG:-models.cpu.yaml}
+      <<: *gateway-env
     volumes:
       - ../registry:/registry:ro
     expose: ["9000"]
     depends_on:
       redis: {condition: service_healthy}
+
+  # 解析平面的 worker。**没有它，`POST /v1/parse` 会一直 202，
+  # 任务永远停在 progress 0.5** —— 网关只负责受理与转发，真正去调
+  # 引擎、轮询、归档的是这个进程。
+  #
+  # 合仓时它整个漏掉了（旧仓库的 compose 里叫 arq-worker）。
+  # 表现极难归因：网关健康、请求 200、状态查得到、`error` 是 null，
+  # 只是那个 running 永远不变 —— 看起来像"模型很慢"。
+  # 2026-09-02 第一次真起全栈时才发现（FINDINGS F-21）。
+  #
+  # 与 corpus-worker 是两回事：那个跑索引/抽取/GC（PG 队列），
+  # 这个跑解析轮询与归档（arq/Redis）。两个都不能少。
+  model-gateway-worker:
+    build:
+      <<: *python-build
+      target: model-gateway
+    command: ["arq", "ddp_gateway.worker.tasks.WorkerSettings"]
+    environment:
+      # **与 model-gateway 共用同一份环境**，用锚点而不是复制。
+      # 两处最要命的是 REDIS_URL 与 MODELS_CONFIG：
+      # 前者错了是"网关入队、worker 在另一个库里等"，后者错了是
+      # worker 不认识网关刚受理的引擎 —— 两个都表现为"任务卡住"
+      <<: *gateway-env
+    volumes:
+      - ../registry:/registry:ro
+    depends_on:
+      redis: {condition: service_healthy}
+      model-gateway: {condition: service_started}
 
   mcp:
     build:
@@ -169,7 +238,10 @@ services:
     environment:
       SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
       GATEWAY_URL: http://model-gateway:9000
-      CORPUS_DATABASE_URL: postgresql+asyncpg://ddp:${POSTGRES_PASSWORD:-ddp}@postgres:5432/deepdocparse
+      # **受限角色，不是超级用户。** MCP 是长跑的语料消费方，与 corpus-api
+      # 同一个身份。用 ddp 连的话它能写 control.usage_ledger 与 api_keys ——
+      # 而 F-20 修的正是这件事，当时漏了这一处
+      CORPUS_DATABASE_URL: postgresql+asyncpg://ddp_corpus:${CORPUS_DB_PASSWORD:-ddp}@postgres:5432/deepdocparse
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${OBJECT_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${OBJECT_SECRET_KEY:?OBJECT_SECRET_KEY 必须显式设置}

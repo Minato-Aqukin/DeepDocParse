@@ -10,6 +10,8 @@
 Storage 是 Protocol：单测注入内存实现，不需要真 MinIO。
 """
 import asyncio
+from functools import partial
+from urllib.parse import quote
 import io
 from datetime import timedelta
 from typing import Protocol
@@ -25,7 +27,8 @@ class Storage(Protocol):
     async def exists(self, key: str) -> bool: ...
     async def delete(self, key: str) -> None: ...
     async def list_prefix(self, prefix: str) -> list[str]: ...
-    async def presigned_get(self, key: str, expires_seconds: int = 3600) -> str: ...
+    async def presigned_get(self, key: str, expires_seconds: int = 3600, *,
+                            filename: str = "", content_type: str = "") -> str: ...
 
 
 class MinioStorage:
@@ -35,13 +38,18 @@ class MinioStorage:
             access_key=settings.minio_access_key,
             secret_key=settings.minio_secret_key,
             secure=settings.minio_secure,
+            region=settings.minio_region,
         )
-        # 只用于生成浏览器可达的预签名 URL（host 不同 -> 签名不同）
+        # 只用于生成浏览器可达的预签名 URL（host 不同 -> 签名不同）。
+        # **region 必须给**：不给的话 SDK 会先向这个 endpoint 发一次
+        # `GET /{bucket}/?location=` 去问区域 —— 而这个 endpoint 是给浏览器用的，
+        # 容器里连不上。表现是签名接口 502，而其他走内网 client 的接口全正常
         self._public_client = Minio(
             settings.minio_public_endpoint,
             access_key=settings.minio_access_key,
             secret_key=settings.minio_secret_key,
             secure=settings.minio_secure,
+            region=settings.minio_region,
         )
         self._bucket = settings.minio_bucket
 
@@ -90,10 +98,26 @@ class MinioStorage:
 
         return await asyncio.to_thread(_list)
 
-    async def presigned_get(self, key: str, expires_seconds: int = 3600) -> str:
+    async def presigned_get(self, key: str, expires_seconds: int = 3600, *,
+                            filename: str = "", content_type: str = "") -> str:
+        # response_headers 让对象存储**替我们**发 Content-Disposition / Content-Type，
+        # 这样"字节不经过应用进程"与"下载下来文件名对"可以同时成立。
+        # 它们是被签名覆盖的，改一个字签名就不认 —— 不能被调用方篡改
+        headers: dict[str, str] = {}
+        if filename:
+            # **RFC 6266 的 `filename*`，不是裸 UTF-8。**
+            # 这个库面向中文技术手册，非 ASCII 文件名是常态不是边角：
+            # 裸 UTF-8 塞进 `filename="…"` 各家浏览器解读不一，
+            # 而名字里有个引号就能把这个头截断。
+            # 两个都发：`filename` 给只认它的老客户端（退化成 ASCII），
+            # `filename*` 给其余所有人
+            headers["response-content-disposition"] = _disposition(filename)
+        if content_type:
+            headers["response-content-type"] = content_type
         return await asyncio.to_thread(
-            self._public_client.presigned_get_object, self._bucket, key,
-            timedelta(seconds=expires_seconds),
+            partial(self._public_client.presigned_get_object, self._bucket, key,
+                    timedelta(seconds=expires_seconds),
+                    response_headers=headers or None),
         )
 
 
@@ -123,8 +147,23 @@ class MemoryStorage:
     async def list_prefix(self, prefix: str) -> list[str]:
         return sorted(k for k in self.objects if k.startswith(prefix))
 
-    async def presigned_get(self, key: str, expires_seconds: int = 3600) -> str:
-        return f"memory://{key}"
+    async def presigned_get(self, key: str, expires_seconds: int = 3600, *,
+                            filename: str = "", content_type: str = "") -> str:
+        # 单测靠这个形状断言"确实签了一条直读 URL"，参数原样带出来
+        query = f"?filename={filename}" if filename else ""
+        return f"memory://{key}{query}"
+
+
+def _disposition(filename: str) -> str:
+    """按 RFC 6266 拼 Content-Disposition。
+
+    `filename` 那半只留 ASCII 且转义引号与反斜杠（否则一个 `"` 就能截断这个头）；
+    非 ASCII 走 `filename*=UTF-8''<百分号编码>`。
+    """
+    ascii_name = filename.encode("ascii", "replace").decode("ascii")
+    ascii_name = ascii_name.replace("\\", "_").replace('"', "_")
+    quoted = quote(filename, safe="")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quoted}"
 
 
 def source_key(document_id: str, filename: str) -> str:

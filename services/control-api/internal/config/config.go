@@ -83,6 +83,10 @@ type Config struct {
 	ObjectBucket string
 	// 走 https 则置 true
 	ObjectSecure bool
+	// 对象存储的区域。**必须显式给** —— 不给的话 SDK 会在签名前先向
+	// 该 endpoint 问一次区域，而给浏览器签名用的 endpoint 在容器里连不上，
+	// 表现是 POST /api/uploads 502 而启动自检全绿。MinIO 用 us-east-1
+	ObjectRegion string
 	// 预签名有效期。**泄露一个签名 URL 的代价与它的 TTL 成正比**，
 	// 所以超过 2 小时会拒绝启动
 	PresignTTL time.Duration
@@ -122,6 +126,16 @@ type Config struct {
 	CORSOrigins []string
 	// 本服务对外可达的地址，拼稳定文件 URL 用
 	PublicBaseURL string
+	// 服务之间互相访问本服务时用的地址。
+	//
+	// **与 PublicBaseURL 必须分得开。** 稳定文件 URL（`/files/{token}`）
+	// 的消费者是 model-gateway —— 一个容器里的进程，它解析不了
+	// `127.0.0.1:8080`（那是给浏览器的）。用公网地址签的话，
+	// 表现是解析任务 `failed: All connection attempts failed`，
+	// 而上传、入库、状态查询全都正常。
+	//
+	// 缺省回落到 PublicBaseURL：单机部署两者本来就一样，不该多配一项。
+	InternalBaseURL string
 	// 显式跳过占位密钥检查。**只给一次性容器与 CI 用** ——
 	// 逃生口必须显式且留痕
 	AllowInsecureDefaults bool
@@ -156,6 +170,7 @@ func Load() (*Config, error) {
 		ObjectSecretKey:       env("OBJECT_SECRET_KEY", "minioadmin"),
 		ObjectBucket:          env("OBJECT_BUCKET", "deepdocparse"),
 		ObjectSecure:          envBool("OBJECT_SECURE", false),
+		ObjectRegion:          env("OBJECT_REGION", "us-east-1"),
 		PresignTTL:            time.Duration(envInt("PRESIGN_TTL_SECONDS", 900)) * time.Second,
 		MaxUploadBytes:        int64(envInt("MAX_UPLOAD_BYTES", 200*1024*1024)),
 		UploadPartSize:        int64(envInt("UPLOAD_PART_SIZE", 16*1024*1024)),
@@ -169,6 +184,7 @@ func Load() (*Config, error) {
 		ExtractRatePerMin:     envInt("EXTRACT_RATE_PER_MIN", 6),
 		CORSOrigins:           envList("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
 		PublicBaseURL:         env("PUBLIC_BASE_URL", "http://127.0.0.1:8080"),
+		InternalBaseURL:       env("INTERNAL_BASE_URL", env("PUBLIC_BASE_URL", "http://127.0.0.1:8080")),
 		AllowInsecureDefaults: envBool("ALLOW_INSECURE_DEFAULTS", false),
 		OutboxInterval:        time.Duration(envInt("OUTBOX_INTERVAL_SECONDS", 2)) * time.Second,
 	}

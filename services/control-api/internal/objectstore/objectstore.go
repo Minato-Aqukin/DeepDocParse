@@ -41,14 +41,24 @@ type Config struct {
 	SecretKey      string
 	Bucket         string
 	Secure         bool
+	Region         string
 	PresignTTL     time.Duration
 }
 
 func Open(ctx context.Context, c Config) (*Store, error) {
+	// **Region 必须显式给**。不给的话 minio-go 在签名前会先向该 endpoint
+	// 发一次 `GET /{bucket}/?location=` 去问区域 —— 而给浏览器签名用的那个
+	// client 指的是**浏览器可达**的地址（127.0.0.1:19000），
+	// 容器里根本连不上它。表现是 `POST /api/uploads` 502 objectstore_error，
+	// 而启动自检（走内网 client）一切正常。
+	//
+	// 这个坑只在"内外两个 endpoint"的部署形态下出现，本机单测与
+	// 进程内 e2e 都碰不到 —— 2026-09-02 第一次真起全栈时炸出来的。
 	mk := func(endpoint string) (*minio.Client, error) {
 		return minio.New(endpoint, &minio.Options{
 			Creds:  credentials.NewStaticV4(c.AccessKey, c.SecretKey, ""),
 			Secure: c.Secure,
+			Region: c.Region,
 		})
 	}
 	internal, err := mk(c.Endpoint)
@@ -195,7 +205,22 @@ func (s *Store) Digest(ctx context.Context, key string) (string, int64, error) {
 //
 // `disposition` 决定浏览器是内联预览还是下载。**MIME 白名单由调用方把关** ——
 // 上传 text/html 并 inline 打开就是本站同源 XSS（旧系统 `/files` 的铁律 6）。
-func (s *Store) PresignGet(ctx context.Context, key, filename, mime, disposition string) (string, time.Time, error) {
+// PresignGet 签给**浏览器**的下载地址（用浏览器可达的 endpoint）。
+func (s *Store) PresignGet(ctx context.Context, key, docID, mime, disposition string) (string, time.Time, error) {
+	return s.presignGetWith(s.publicClient, ctx, key, docID, mime, disposition)
+}
+
+// PresignGetInternal 签给**其它服务**的下载地址（用内网 endpoint）。
+//
+// 两条必须分开。稳定文件 URL（`/files/{token}`）的消费者是 model-gateway ——
+// 一个容器里的进程，它解析不了 `127.0.0.1:19000`（那是给浏览器的）。
+// 用公网地址签的话，表现是解析任务 `failed: All connection attempts failed`，
+// 而上传、入库、状态查询全都正常 —— 2026-09-02 真起全栈时炸出来的。
+func (s *Store) PresignGetInternal(ctx context.Context, key, docID, mime, disposition string) (string, time.Time, error) {
+	return s.presignGetWith(s.client, ctx, key, docID, mime, disposition)
+}
+
+func (s *Store) presignGetWith(client *minio.Client, ctx context.Context, key, filename, mime, disposition string) (string, time.Time, error) {
 	q := url.Values{}
 	if disposition != "" {
 		q.Set("response-content-disposition",
@@ -204,7 +229,7 @@ func (s *Store) PresignGet(ctx context.Context, key, filename, mime, disposition
 	if mime != "" {
 		q.Set("response-content-type", mime)
 	}
-	u, err := s.publicClient.PresignedGetObject(ctx, s.bucket, key, s.presignTTL, q)
+	u, err := client.PresignedGetObject(ctx, s.bucket, key, s.presignTTL, q)
 	if err != nil {
 		return "", time.Time{}, err
 	}

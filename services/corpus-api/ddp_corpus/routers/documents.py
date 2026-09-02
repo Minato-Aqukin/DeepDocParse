@@ -15,7 +15,7 @@ from datetime import datetime
 import httpx
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -673,7 +673,8 @@ async def source_url(document_id: str, request: Request,
                        "file_token_missing")
     url = await ControlClient(request.app.state.http).stable_file_url(
         organization_id=document.organization_id, document_id=document.id,
-        object_key=document.object_key, mime=document.mime)
+        object_key=document.object_key, mime=document.mime,
+        filename=document.filename)
     return {"url": url, "path": url[url.find("/files/"):] if "/files/" in url else url,
             "mime": document.mime}
 
@@ -707,16 +708,23 @@ async def download(document_id: str, format: str = "md", job: str = "",
     stem = document.filename.rsplit(".", 1)[0]
 
     if format == "source":
-        # 原件可能已被 GC 回收（软删除后重新可见的窗口、或对象存储侧被清理）
-        try:
-            data = await storage.get(document.object_key) if document.object_key else None
-        except Exception:
-            data = None
-        if data is None:
+        # **不变式 6**：原件不整份进应用进程内存，也不由应用进程中转下载流量。
+        # 这里只做鉴权与存在性判断（exists 是一次 HEAD，不取字节），
+        # 然后 302 到一条短期直读 URL —— 字节从对象存储直接到客户端。
+        #
+        # 与 `/source-url` 的**稳定** URL 刻意分开：那条的路径必须永远不变
+        # （模型网关的 doc_hash 幂等靠它，ADR #11/#12），这条每次都换。
+        # 前端不要用 XHR 跟这个跳转（Authorization 头会跟到对象存储去），
+        # 走 `/api/documents/{id}/download-url` 拿地址再直接导航。
+        exists = await storage.exists(document.object_key) if document.object_key else False
+        if not exists:
+            # 原件可能已被 GC 回收（软删除后重新可见的窗口、或对象存储侧被清理）
             raise APIError(404, "original file is no longer available",
                            "invalid_request_error", "source_missing")
-        return Response(content=data, media_type=document.mime, headers={
-            "Content-Disposition": f'attachment; filename="{document.filename}"'})
+        url = await storage.presigned_get(
+            document.object_key, expires_seconds=settings.source_url_ttl_seconds,
+            filename=document.filename, content_type=document.mime)
+        return RedirectResponse(url, status_code=302)
 
     parse_job = await _archived_job(session, document, job or None)
     if format == "md":

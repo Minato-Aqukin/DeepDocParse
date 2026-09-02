@@ -1,0 +1,76 @@
+# 全栈真实用户路径。
+#
+# **这条工作流存在的理由，是 2026-09-02 那一天。**
+#
+# 那天所有单测、所有守卫、四条 CI 工作流全绿，21/21 门禁通过 ——
+# 然后第一次真的 `docker compose up`，连着抓到**七个**让产品主链路完全不通
+# 的缺陷（见 docs/refactor/FINDINGS.md 的 F-17..F-23）：
+#
+#   * 给浏览器签名的 client 会先向那个 endpoint 问一次区域，容器里连不上
+#   * 迁移建的数据库角色没有口令，服务连不上库
+#   * outbox 投递只发了一半的 actor 上下文头，事件永远 401
+#   * 语料表在 public 而授权写的是 corpus schema —— 那段 SQL 从未执行过
+#   * 解析平面根本没有 worker（旧 compose 的 arq-worker 合仓时整个漏掉）
+#   * 稳定文件 URL 签的是浏览器地址，而下载它的是容器里的进程
+#   * 语料侧 outbox 只有写入端没有投递端，用量与账单永远是空的
+#
+# 四个的共同形状：**每个容器都 healthy，每一层都"正确地"报错，
+# 而端到端一次都没通过**。进程内测试看不见它们，因为它们全都住在
+# "两个进程之间"或"部署配置里"。
+#
+# 所以这里不 mock 任何东西：起真容器、真 PostgreSQL、真 MinIO，
+# 走一遍注册 → 直传 → 校验 → 入库 → 解析 → 出处 → 计量 → 审计。
+name: stack
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  real-user-path:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 装 e2e 脚本要的东西
+        run: pip install httpx
+
+      - name: 生成 dev.env
+        run: scripts/dev.sh secrets
+
+      - name: 起全栈
+        run: scripts/dev.sh up
+
+      # 起不来时日志比"超时"有用得多。always() 保证失败路径也能看到
+      - name: 服务状态
+        if: always()
+        run: docker compose -f infra/compose/compose.dev.yml --env-file infra/env/dev.env ps
+
+      # 企业边界 5 的**物理**验证。静态守卫（check_data_ownership.py）扫的是
+      # 源码里有没有越界的 SQL；这条验的是越界的 SQL 会不会被数据库拒绝。
+      # 两者缺一不可 —— F-20 就是静态守卫全绿而数据库权限从未生效
+      - name: 数据所有权边界
+        run: scripts/check_db_boundary.sh
+
+      - name: 真实用户路径
+        run: python scripts/e2e_stack.py
+
+      - name: 失败时导出各服务日志
+        if: failure()
+        run: |
+          for svc in control-api corpus-api corpus-worker model-gateway corpus-migrate; do
+            echo "::group::$svc"
+            docker compose -f infra/compose/compose.dev.yml --env-file infra/env/dev.env \
+              logs --tail=200 "$svc" || true
+            echo "::endgroup::"
+          done
+
+      - name: 收摊
+        if: always()
+        run: scripts/dev.sh down

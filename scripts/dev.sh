@@ -59,7 +59,21 @@ case "$cmd" in
     for arg in "$@"; do
       [ "$arg" = "--gpu" ] && files+=(-f infra/compose/compose.gpu.yml)
     done
-    "${files[@]}" --env-file "$ENV_FILE" up -d --build
+    # **构建重试三次。** 镜像构建在这台机器上被三类瞬时故障打断过：
+    # 国内 pip 镜像给出坏包（哈希对不上）、goproxy 断流（unexpected EOF）、
+    # Docker Hub 解析基础镜像 manifest 超时（DeadlineExceeded）。
+    # 三类都是重试就好，而一次失败要白等好几分钟。
+    # 前两类在 Dockerfile 里各自有重试，这一层管的是第三类与整体抖动。
+    for attempt in 1 2 3; do
+      "${files[@]}" --env-file "$ENV_FILE" build && break
+      if [ "$attempt" = 3 ]; then
+        echo "构建三次都失败了 —— 这次多半不是网络问题，看上面的报错" >&2
+        exit 1
+      fi
+      echo ">>> 构建第 $attempt 次失败，10 秒后重试" >&2
+      sleep 10
+    done
+    "${files[@]}" --env-file "$ENV_FILE" up -d
     echo
     echo "入口   http://127.0.0.1:8080   （/healthz /readyz /metrics）"
     echo "MinIO  http://127.0.0.1:19001"
@@ -86,8 +100,8 @@ case "$cmd" in
     # 两套迁移各管各的 schema，没有跨 schema 外键，所以顺序无关
     "${COMPOSE[@]}" --env-file "$ENV_FILE" up -d postgres
     "${COMPOSE[@]}" --env-file "$ENV_FILE" run --rm corpus-migrate
-    "${COMPOSE[@]}" --env-file "$ENV_FILE" run --rm --entrypoint control-migrate \
-        control-api -database "postgres://ddp:ddp@postgres:5432/deepdocparse" up
+    # 两套迁移都是独立的一次性容器，连接串与口令都从 .env 取
+    "${COMPOSE[@]}" --env-file "$ENV_FILE" run --rm control-migrate up
     ;;
 
   *)

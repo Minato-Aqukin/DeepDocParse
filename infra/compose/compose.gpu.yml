@@ -29,7 +29,14 @@ x-gpu: &gpu
 services:
   # 换成注册表里带 GPU 的那份。**不改代码，只改这一行** ——
   # 引擎选择由注册表的 default 决定，路由层不认识任何具体引擎（铁律 3）
+  # **网关与它的 worker 都要换。** 只换网关的话，worker 仍然只认识
+  # borndigital —— 网关受理一个 mineru 请求，worker 领到之后不认识那个引擎。
+  # 表现是任务卡住或 unknown_engine，而网关那边一切正常
   model-gateway:
+    environment:
+      MODELS_CONFIG: /registry/models.yaml
+
+  model-gateway-worker:
     environment:
       MODELS_CONFIG: /registry/models.yaml
 

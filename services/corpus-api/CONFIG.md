@@ -16,7 +16,7 @@
 **`VITE_DEFAULT_ENGINE` 要与 `DEFAULT_PARSE_ENGINE`、`infra/registry/models.yaml`
 三者对齐** —— 任一处对不上，上传会在网关侧收 404 unknown_engine。
 
-共 **70** 项。
+共 **72** 项。
 
 ## 本层资源
 
@@ -28,7 +28,9 @@
 | `MINIO_ACCESS_KEY` | `str` | `'minioadmin'` | 对象存储凭据（生产必须改） |
 | `MINIO_SECRET_KEY` | `str` | `'minioadmin'` | 同上 |
 | `MINIO_SECURE` | `bool` | `False` | 走 https 则置 true |
+| `MINIO_REGION` | `str` | `'us-east-1'` | 区域。**必须显式给** —— 不给的话 SDK 在签名前先向该 endpoint 问一次区域， 而 public endpoint 在容器里连不上，表现是签名接口 502 而其他一切正常 |
 | `MINIO_BUCKET` | `str` | `'deepdocparse'` | 桶名。原件、解析结果、出处裁剪图都在这一个桶里，靠对象键前缀分区 |
+| `SOURCE_URL_TTL_SECONDS` | `int` | `300` | `/download?format=source` 302 过去的那条直读 URL 的有效期。 **短**是有意的：它是一条带凭证的地址，转发出去就等于转发了原件。 别调到小时级 —— 那样它就变成了事实上的公开链接 |
 
 ## 对 service（DeepDocParse）
 

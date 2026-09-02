@@ -11,6 +11,7 @@ import (
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/apierr"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/auth"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/contracts"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/httpx"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/objectstore"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/obs"
@@ -146,7 +147,8 @@ func (s *Server) handleFinalizeUpload(w http.ResponseWriter, r *http.Request) er
 	}
 	// 幂等：已经 finalize 过的直接把当前状态返回去。
 	// **重试拿到 202 是对的** —— 那正是幂等的表现，不是错误
-	if sess.Status != "created" && sess.Status != "uploading" {
+	if contracts.UploadStatus(sess.Status) != contracts.UploadStatusCreated &&
+		contracts.UploadStatus(sess.Status) != contracts.UploadStatusUploading {
 		return httpx.JSON(w, http.StatusAccepted, uploadResponse(sess, nil, s.cfg.UploadPartSize))
 	}
 
@@ -200,6 +202,17 @@ func uploadResponse(u *store.UploadSession, parts []objectstore.Part, partSize i
 		"declared_size": u.DeclaredSize,
 		"part_size":     partSize,
 		"expires_at":    u.ExpiresAt,
+	}
+	// **服务端自己算出来的那个摘要要透出来。**
+	// 它是"文档身份不是客户端说了算"的唯一证据：客户端声明的 sha256 只是
+	// 一个声明，这个是服务端流式读完整个对象算出来的。
+	// 不透出来的话，"服务端到底算没算"从外面看不出来 ——
+	// 而那正是 e2e 想验的东西（真实用户路径里那条断言就卡在这儿）。
+	if u.VerifiedSHA256 != nil {
+		out["verified_sha256"] = *u.VerifiedSHA256
+	}
+	if u.ActualSize != nil {
+		out["actual_size"] = *u.ActualSize
 	}
 	if parts != nil {
 		out["parts"] = parts

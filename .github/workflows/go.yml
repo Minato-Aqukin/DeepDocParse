@@ -12,12 +12,39 @@ jobs:
     defaults:
       run:
         working-directory: services/control-api
+
+    # 计量聚合（按天/按种类、按人隔离、event_id 幂等、时间窗口）**全在 SQL 里**，
+    # 没有一处能用假 pool 测出来。所以这里起一个真 PostgreSQL：
+    # 本机可以跳过那几条，CI 必须真跑。
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ddp
+          POSTGRES_PASSWORD: ddp
+          POSTGRES_DB: deepdocparse
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ddp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      CONTROL_TEST_DATABASE_URL: postgres://ddp:ddp@127.0.0.1:5432/deepdocparse?sslmode=disable
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27"
           cache-dependency-path: services/control-api/go.sum
+
+      # go.mod / go.sum 少一条在**开发机上不一定红** —— 本机 module cache 里
+      # 已经有那个模块了。只有干净环境才会报 missing go.sum entry，
+      # 而 CI 恰好是干净环境，这一条必须在这里，不能只靠本机
+      - name: go.mod 已 tidy
+        run: go mod tidy -diff
 
       # 生成物也要 gofmt 干净 —— 不然 `gofmt -l` 会永远报那个文件，
       # 然后所有人学会忽略它
@@ -31,6 +58,21 @@ jobs:
 
       - name: vet
         run: go vet ./...
+
+      - name: 建 control schema
+        run: go run ./cmd/control-migrate -database "$CONTROL_TEST_DATABASE_URL" up
+
+      # 反哨兵：真库连不上时那几条会 t.Skip，而 skip 与 pass 在总结里长得一样。
+      # 这里显式确认它们真的跑了
+      - name: 确认计量用例没有被跳过
+        run: |
+          go test ./internal/store/ -count=1 -run 'Usage|RecordUsage' -v > /tmp/store.log
+          if grep -q -- '--- SKIP' /tmp/store.log; then
+            echo "::error::计量用例被跳过了 —— CONTROL_TEST_DATABASE_URL 没生效"
+            grep -- '--- SKIP' /tmp/store.log
+            exit 1
+          fi
+          grep -c -- '--- PASS' /tmp/store.log
 
       - name: test
         run: go test ./... -count=1

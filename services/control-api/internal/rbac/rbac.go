@@ -11,15 +11,24 @@ package rbac
 import (
 	"fmt"
 	"sort"
+
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/contracts"
 )
 
 type Role string
 
+// 四个取值**不在这里写字面量** —— 它们来自 packages/contracts/enums.yaml
+// 生成的 internal/contracts（铁律 1：枚举只写一次）。
+//
+// 手抄一份的后果不是编译错误：契约里加了一个角色、Go 这边不认识，
+// 于是数据库允许的角色在代码里判成"未知"，那个角色的人全部 403。
+// 这里不用类型别名是因为 Role 要挂 AtLeast 之类的方法，而别名挂不了。
+// `TestRankCoversContractRoles` 钉住"契约里有几个角色，这里就得有几个"。
 const (
-	Viewer      Role = "viewer"
-	Contributor Role = "contributor"
-	Reviewer    Role = "reviewer"
-	Admin       Role = "admin"
+	Viewer      = Role(contracts.RoleViewer)
+	Contributor = Role(contracts.RoleContributor)
+	Reviewer    = Role(contracts.RoleReviewer)
+	Admin       = Role(contracts.RoleAdmin)
 )
 
 // rank 必须与 database/control/0001_control_schema.sql 里的 control.roles 一致。

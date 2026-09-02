@@ -25,6 +25,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from ddp_corpus.config import assert_secrets_configured, settings
 from ddp_corpus.db import get_engine, get_sessionmaker
 from ddp_corpus.errors import install_error_handlers
+from ddp_corpus.outbox import deliver_loop
 from ddp_corpus.reconcile import reconcile_loop
 from ddp_corpus.routers import (
     conversations, documents, external, extractions, internal, knowledge, search,
@@ -70,12 +71,20 @@ async def lifespan(app: FastAPI):
         reconcile_loop(get_sessionmaker(), app.state.storage, app.state.service_client,
                        app.state.http, app.state.redis)
     )
+    # outbox 投递：`usage.py` 把用量与业务写入放在同一个事务里 —— 那一半一直
+    # 是对的，缺的是**把它们发出去**。少了这个循环，`corpus_outbox` 里的
+    # UsageRecorded 会永远躺着（attempts 一辈子是 0），而用量与账单永远是空的，
+    # 且每一层都不报错。见 ddp_corpus/outbox.py 的模块说明
+    app.state.outbox_deliverer = asyncio.create_task(
+        deliver_loop(get_sessionmaker(), app.state.http)
+    )
     yield
-    app.state.reconciler.cancel()
-    try:
-        await app.state.reconciler
-    except asyncio.CancelledError:
-        pass
+    for task in (app.state.reconciler, app.state.outbox_deliverer):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await app.state.http.aclose()
     if app.state.redis is not None:
         await app.state.redis.aclose()

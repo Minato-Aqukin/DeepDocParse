@@ -101,7 +101,7 @@ Go 侧落地后从工作树删除（§19.3：最终工作树不得存在未使�
 | `storage.py` | 151 | 保留并重构 | 加 multipart 预签名与 Range |
 | `main.py` | 148 | 保留并重构 | |
 | `compilation.py` | 133 | 保留 | |
-| `reconcile.py` | 124 | 保留并重构 | 对账循环迁入 corpus-worker |
+| `reconcile.py` | 124 | 保留并重构 | 对账逻辑。**循环本身仍挂在 corpus-api 的 lifespan 上**（`main.py`），没搬进 worker —— 它要的是「每隔一阵扫一遍」，不是一个可领取的任务 |
 | `config.py` | 332 | 保留并重构 | 62 项配置里账号/限速那部分迁去 Go |
 | `gc.py` | 87 | 保留 | 全项目唯一不可逆毁数据处，宽限期 + claim 两道防护不得动 |
 | `crops.py` | 84 | 保留 | 对象存储缓存层（渲染部分已在 ddp_core） |
@@ -180,10 +180,10 @@ Go 侧落地后从工作树删除（§19.3：最终工作树不得存在未使�
 | 原用例 | 去向 |
 |---|---|
 | `test_auth_keys.py`（5） | Go：`TestSessionRejectsNoneAlgorithm` `TestVerifyPasswordAlwaysDoesWork` `TestAPIKeyShape` `TestViewerCannotEscalateViaAPIKey` 等 |
-| `test_usage.py`（2） | Go：`store.UsageSeries` + `handleUsage`（按天/种类聚合、scope=organization 需 admin） |
-| `test_proxy.py` 的鉴权/限速/额度/SSE/MCP（8） | Go：`TestProxyReplacesClientAuthorization` `TestProxyStreamsWithoutBuffering` `TestProxyPassesMCPSessionHeaderBothWays` + `requireAPIKey` |
+| `test_usage.py`（2） | Go：`internal/store/usage_pg_test.go` 4 条（按天/按种类聚合、embed 也计量、按人隔离、event_id 幂等、时间窗口）。**跑真 PostgreSQL** —— 这些行为全在 SQL 里，假 pool 测不出来；CI 的 go job 起了 postgres 服务，并有反哨兵确认它们没被跳过 |
+| `test_proxy.py` 的鉴权/限速/额度/SSE/MCP（8） | Go：`TestProxyReplacesClientAuthorization` `TestProxyStreamsWithoutBuffering` `TestProxyPassesMCPSessionHeaderBothWays`，外加 `internal/api/apikey_gate_test.go` 的 10 条（缺凭证 / 拿 JWT 当 key / 未知 key / 撤销 / 过期 / 空作用域 / 越权 403 且留审计 / 429 与限速头 / 限速器坏掉放行 / 配额只在计费平面查 / 402 / 配额查询出错不当成 402）。为此给 `requireAPIKey` 抽了 `apiKeyStore` 接口做测试缝 |
 | `test_proxy.py` 的**计量归集五条** | **保留**，搬到 `tests/test_external_plane.py` —— 那是语料侧真正拥有的语义 |
-| `test_ops.py` 的限速三条 | Go：`internal/ratelimit` |
+| `test_ops.py` 的限速三条 | Go：`internal/ratelimit/ratelimit_test.go` 7 条（限额边界、按 key 隔离、窗口重置、limit<=0 是不限速而非全禁、并发计数精确、Kind 可见、无 Redis 退回内存）|
 | `test_documents.py` 的上传体积两条 | control-api 在签发预签名前把关 + 静态守卫 |
 | `test_documents.py` 的 `/files` 两条 | control-api（302 到短期签名 URL） |
 | `test_eval_metrics.py` / `test_eval_graph.py`（27） | 搬到 `eval/tests/`（它们验的是评测器，不是语料 API） |

@@ -28,8 +28,11 @@ playwright-report/
 blob-report/
 .playwright/
 
-# Go
+# Go。**两个二进制名与包目录同名**（`go build ./cmd/control-api` 缺省就
+# 落在仓库里），一次 `git add -A` 就是 35MB 进历史。有守卫钉着这三条
 /services/control-api/bin/
+/services/control-api/control-api
+/services/control-api/control-migrate
 *.test
 
 # 评测与迁移产物

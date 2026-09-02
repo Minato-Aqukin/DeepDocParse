@@ -3,7 +3,7 @@ import { ElMessage } from 'element-plus'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { documentsApi, downloadAs } from '@/api'
+import { documentsApi, downloadAs, downloadViaSignedUrl } from '@/api'
 import AskPanel from '@/components/ask/AskPanel.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import EvidencePreview from '@/components/evidence/EvidencePreview.vue'
@@ -129,6 +129,8 @@ function selectBlock(block: Block) {
 
 async function download(format: DownloadFormat) {
   const id = String(route.params.id)
+  // 原件走签名直读，产物走应用进程 —— 两条路刻意不同（不变式 6）
+  if (format === 'source') return downloadViaSignedUrl(id, document.value?.filename)
   await downloadAs(documentsApi.exportUrl(id, format), document.value?.filename)
 }
 

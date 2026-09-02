@@ -25,7 +25,7 @@ class ControlClient:
                 "X-DDP-Service": "corpus-api"}
 
     async def stable_file_url(self, *, organization_id: str, document_id: str,
-                              object_key: str, mime: str) -> str:
+                              object_key: str, mime: str, filename: str = "") -> str:
         """取（或建）这份文档的稳定文件 URL。
 
         **必须幂等**：同一份文档反复调用要拿到同一个 URL，否则每次重解析
@@ -36,7 +36,7 @@ class ControlClient:
             resp = await self._http.post(
                 f"{settings.control_url}/internal/file-grants",
                 json={"organization_id": organization_id, "document_id": document_id,
-                      "object_key": object_key, "mime": mime},
+                      "object_key": object_key, "mime": mime, "filename": filename},
                 headers=self._headers(), timeout=10.0,
             )
         except httpx.HTTPError as exc:

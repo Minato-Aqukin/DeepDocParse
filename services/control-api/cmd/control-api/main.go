@@ -64,6 +64,12 @@ func run() error {
 		if len(ran) > 0 {
 			slog.Info("已应用 control 迁移", "versions", ran)
 		}
+		// 迁移只 `CREATE ROLE ... LOGIN`，不带口令 —— 口令是部署配置。
+		// 漏了这一步，corpus-api 的每条查询都 InvalidPasswordError，
+		// 而它自己的 /healthz 照样 200（那条只证明进程活着）
+		if err := migrate.SetRolePasswords(ctx, db.Pool()); err != nil {
+			return err
+		}
 	}
 
 	objects, err := objectstore.Open(ctx, objectstore.Config{
@@ -73,6 +79,7 @@ func run() error {
 		SecretKey:      cfg.ObjectSecretKey,
 		Bucket:         cfg.ObjectBucket,
 		Secure:         cfg.ObjectSecure,
+		Region:         cfg.ObjectRegion,
 		PresignTTL:     cfg.PresignTTL,
 	})
 	if err != nil {

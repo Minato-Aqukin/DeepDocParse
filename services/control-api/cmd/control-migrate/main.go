@@ -46,10 +46,21 @@ func main() {
 		}
 		if len(ran) == 0 {
 			fmt.Println("没有待应用的迁移")
+			// **这里也要设** —— 第二次 up 什么都不迁，但换过口令的部署
+			// 正指望这一次把新口令写进去
+			if err := migrate.SetRolePasswords(ctx, pool); err != nil {
+				fail("%v", err)
+			}
 			return
 		}
 		for _, v := range ran {
 			fmt.Println("已应用", v)
+		}
+		// 迁移建了角色但不带口令 —— 口令是部署配置，走环境变量补上。
+		// 漏了这一步的表现不是报错，而是 corpus-api 每条查询都
+		// InvalidPasswordError，而它的 /healthz 照样 200
+		if err := migrate.SetRolePasswords(ctx, pool); err != nil {
+			fail("%v", err)
 		}
 	case "status":
 		rows, err := migrate.Check(ctx, pool)

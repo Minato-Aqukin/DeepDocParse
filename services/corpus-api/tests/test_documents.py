@@ -669,7 +669,10 @@ async def test_export_zip_contains_markdown_and_images(actor_client):
         assert "images/img_0.png" in zf.read("document.md").decode()
 
 
-@pytest.mark.parametrize("fmt,expected", [("md", 200), ("json", 200), ("source", 200),
+@pytest.mark.parametrize("fmt,expected", [("md", 200), ("json", 200),
+                                          # 原件是 302 到直读 URL，不是 200 ——
+                                          # 见 test_source_download_never_reads_bytes
+                                          ("source", 302),
                                           ("bogus", 400)])
 @respx.mock
 async def test_download_formats(actor_client, fmt, expected):
@@ -678,6 +681,63 @@ async def test_download_formats(actor_client, fmt, expected):
     await _callback(actor_client)
     resp = await actor_client.get(f"/api/documents/{document['id']}/download?format={fmt}")
     assert resp.status_code == expected
+
+
+@respx.mock
+async def test_source_download_never_reads_bytes(actor_client, app_state):
+    """**不变式 6 的行为守卫**：下载原件时字节一个都不许进本进程。
+
+    做法是把 `storage.get` 换成一颗地雷 —— 只要这条路径还想读字节就炸。
+    静态扫也能写，但静态扫拦不住"换个写法读"（`await storage.get` 改成
+    `async for chunk in storage.stream`）；地雷管的是**结果**，改写法也躲不掉。
+
+    **它的范围只有 `format=source`。** `format=zip` 走 `_bundle_zip`，
+    那条确实在内存里拼包 —— 但它拼的是解析产物（markdown + 图片 + 版面），
+    体量由版面决定而不是原件，且本来就是本进程生成的。那是一个
+    有意保留的取舍，不是这条守卫的盲区。
+
+    合仓前这条路径是 `storage.get(object_key)` 再整份返回：200MB 的原件
+    就是 200MB 的常驻内存，而且下载带宽由应用进程中转，扩容应用等于
+    放大对象存储的出口。上传方向早就直传了，下载方向漏在这里。
+    """
+    _mock_service()
+    document = await _upload(actor_client)
+    await _callback(actor_client)
+
+    async def landmine(key: str) -> bytes:
+        raise AssertionError(f"下载原件时读了字节：storage.get({key!r})")
+
+    original, app_state.storage.get = app_state.storage.get, landmine
+    try:
+        resp = await actor_client.get(
+            f"/api/documents/{document['id']}/download?format=source")
+    finally:
+        app_state.storage.get = original
+
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert location.startswith("memory://"), location
+    # 文件名要跟着直读 URL 走（对象存储替我们发 Content-Disposition），
+    # 否则用户下到的是一个对象键那样的名字
+    assert "filename=" in location
+
+
+@respx.mock
+async def test_source_download_404_when_object_is_gone(actor_client, app_state):
+    """原件被 GC 回收后必须是 404，而不是签一条指向空气的 URL。
+
+    签了也"成功"是最坏的结果：用户点下载，浏览器跳过去，对象存储回一段
+    XML 报错 —— 而我们这边一切正常。
+    """
+    _mock_service()
+    document = await _upload(actor_client)
+    await _callback(actor_client)
+    app_state.storage.objects.clear()
+
+    resp = await actor_client.get(
+        f"/api/documents/{document['id']}/download?format=source")
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "source_missing"
 
 
 @respx.mock

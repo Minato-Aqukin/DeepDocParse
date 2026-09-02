@@ -1,0 +1,12 @@
+-- file_grants 记住原始文件名。
+--
+-- 没有它的时候，`/api/documents/{id}/download-url` 拿 document_id 当文件名 ——
+-- 用户点"下载原件"，存到本地的是 `46250ceb…`，没有扩展名。
+--
+-- **为什么不能让前端补名字**：那条 URL 跨源（对象存储自己的域），
+-- 而浏览器按规范**忽略跨源 `<a download>` 的文件名提示** ——
+-- 只有服务端签在 `response-content-disposition` 里的那个说了算。
+--
+-- 合仓前"下载原件"走的是同源 blob（`downloadAs`），`a.download` 生效，
+-- 所以这个问题是把下载改成直读之后才出现的（不变式 6 的代价）。
+ALTER TABLE control.file_grants ADD COLUMN IF NOT EXISTS filename TEXT NOT NULL DEFAULT '';

@@ -67,11 +67,35 @@ if want python; then
   run "eval"           in_dir eval                   "$PY" -m pytest -q
 fi
 
+# 数据所有权的**物理**验证要有真库，本机 dev 库起着就顺手跑一遍。
+# 没起就说出来 —— 静默跳过与真的绿长得一模一样
+if want guards; then
+  if docker exec "${DDP_PG_CONTAINER:-ddp-postgres-1}" true 2>/dev/null; then
+    run "数据所有权（真库）" ./scripts/check_db_boundary.sh
+  else
+    printf '\033[33m    注意：dev 的 postgres 没起，check_db_boundary.sh 跳过\033[0m\n'
+    printf '\033[2m    它验的是"越界 SQL 会不会被数据库拒绝"，与静态守卫互补；CI 里是必跑的\033[0m\n'
+  fi
+fi
+
 if want go; then
   if command -v go >/dev/null; then
     run "go vet"   in_dir services/control-api go vet ./...
     run "go test"  in_dir services/control-api go test ./... -count=1
     run "gofmt"    bash -c 'cd services/control-api && [ -z "$(gofmt -l .)" ] || { gofmt -l .; false; }'
+    # go.mod/go.sum 少一条 **本机不一定红** —— 本机的 module cache 里已经有那个模块了。
+    # 只有干净环境（容器构建、CI）才会报 "missing go.sum entry"，而那时已经在部署路上了。
+    # 2026-09-02 就是这么发现少了 puddle/v2 的：本机 go build 绿，镜像构建第一步就炸
+    run "go mod tidy" in_dir services/control-api go mod tidy -diff
+    # 计量聚合只能对着真 PostgreSQL 验（SQL 里的 date_trunc / make_interval
+    # 没有可替代的假实现）。dev 库起着就连上去跑，没起就**说出来**——
+    # 那几条会 t.Skip，而 skip 与 pass 在 `go test` 的总结里长得一模一样
+    if [ -n "${CONTROL_TEST_DATABASE_URL:-}" ]; then
+      printf '\033[2m    （计量用例连着 %s）\033[0m\n' "${CONTROL_TEST_DATABASE_URL%%\?*}"
+    else
+      printf '\033[33m    注意：没有 CONTROL_TEST_DATABASE_URL，internal/store 的 4 条计量用例被跳过\033[0m\n'
+      printf '\033[2m    起 dev 库后：scripts/dev.sh up postgres 并导出该变量；CI 里是必跑的\033[0m\n'
+    fi
   else
     # **显式报缺，不静默跳过**：静默跳过的绿与真的绿长得一模一样
     printf '\033[33m>>> 跳过 Go：PATH 上没有 go\033[0m\n'

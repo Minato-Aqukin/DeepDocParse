@@ -166,7 +166,13 @@ async def ask_impl(question: str) -> dict:
         return {"assertions": [{"text": "语料中未找到可支持的证据。", "evidence_ids": [],
                                 "verification": {"state": "unverified", "mode": None},
                                 "unsupported": True, "citations": []}],
-                "degraded": found["degraded"] or "no_relevant_chunks"}
+                # **契约里的 `no_hits`，不是自己造一个同义词。**
+                # `no_relevant_chunks` 不在 enums.yaml 里，于是它没有用户可见
+                # 文案：界面上要么显示这个裸标识符，要么按枚举分支渲染时
+                # 干脆什么都不显示 —— 而那正是"降级不可见"（不变式 2）。
+                # 语料侧同样的情形用的就是 no_hits。
+                # 这一处是补上 `return`/`or` 两种形状之后被守卫抓出来的
+                "degraded": found["degraded"] or "no_hits"}
     sources = "\n\n".join(f"[{i}] {item['content']}" for i, item in enumerate(evidence, 1))
     response = await _http.post(f"{GATEWAY}/v1/chat/completions", headers=_headers(), json={
         "messages": [{"role": "system", "content": "只依据资料回答并用 [n] 引用。"},

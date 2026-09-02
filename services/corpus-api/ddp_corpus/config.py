@@ -27,8 +27,15 @@ class Settings(BaseSettings):
     minio_access_key: str = "minioadmin"                # 对象存储凭据（生产必须改）
     minio_secret_key: str = "minioadmin"                # 同上
     minio_secure: bool = False                          # 走 https 则置 true
+    # 区域。**必须显式给** —— 不给的话 SDK 在签名前先向该 endpoint 问一次区域，
+    # 而 public endpoint 在容器里连不上，表现是签名接口 502 而其他一切正常
+    minio_region: str = "us-east-1"
     # 桶名。原件、解析结果、出处裁剪图都在这一个桶里，靠对象键前缀分区
     minio_bucket: str = "deepdocparse"
+    # `/download?format=source` 302 过去的那条直读 URL 的有效期。
+    # **短**是有意的：它是一条带凭证的地址，转发出去就等于转发了原件。
+    # 别调到小时级 —— 那样它就变成了事实上的公开链接
+    source_url_ttl_seconds: int = 300
 
     # ---- 对 service（DeepDocParse）----
     # DeepDocParse gateway 的地址。解析平面必须走它，embedding/chat 缺省也回落到它

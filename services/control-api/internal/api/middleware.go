@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/apierr"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/auth"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/identity"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/ratelimit"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/rbac"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/store"
 )
@@ -79,12 +81,33 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 	})
 }
 
+// apiKeyStore 是 requireAPIKey 用到的那一小块 store 能力。
+//
+// **抽这个接口只有一个理由：让入口中间件可测。** 它是全站唯一同时做
+// key 校验、撤销/过期、作用域、限速、配额的地方 —— 也就是说
+// 越权、超额、免费用都在这一处拦住。合仓时它从 Python 搬到 Go，
+// 旧系统那 13 条用例一条都没跟过来，而它偏偏是最不能漏的一段。
+// 接口只列真正用到的四个方法，不要长成整个 Store 的镜像。
+type apiKeyStore interface {
+	AuthenticateAPIKey(ctx context.Context, plain string) (*store.APIKey, rbac.Role, error)
+	ReserveQuota(ctx context.Context, orgID string, pages int) error
+	TouchAPIKey(ctx context.Context, keyID string)
+	Audit(ctx context.Context, orgID, actorID, actorKind, action, target,
+		requestID string, detail map[string]any)
+}
+
 // requireAPIKey 校验对外 key，并在同一处做作用域、配额与限速。
 //
 // 四件事放在一起是刻意的：它们共同构成"这次调用能不能进来"，
 // 拆开会让某条路径漏掉其中一项 —— 而漏掉限速的表现是账单，
 // 漏掉作用域的表现是越权。
 func (s *Server) requireAPIKey(scope rbac.Scope, next http.Handler) http.Handler {
+	return apiKeyGate(s.store, s.limiter, scope, next)
+}
+
+func apiKeyGate(keys apiKeyStore, limiter ratelimit.Limiter, scope rbac.Scope,
+	next http.Handler) http.Handler {
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := bearer(r)
 		if token == "" {
@@ -96,7 +119,7 @@ func (s *Server) requireAPIKey(scope rbac.Scope, next http.Handler) http.Handler
 				"/v1/* 与 /mcp 需要 sk- 开头的 API key，浏览器会话请调 /api/*"))
 			return
 		}
-		key, role, err := s.store.AuthenticateAPIKey(r.Context(), token)
+		key, role, err := keys.AuthenticateAPIKey(r.Context(), token)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				apierr.Write(w, r, apierr.Unauthorized("invalid_api_key", "API key 无效"))
@@ -125,7 +148,7 @@ func (s *Server) requireAPIKey(scope rbac.Scope, next http.Handler) http.Handler
 
 		// 作用域：路由声明它需要哪个平面
 		if !actor.HasScope(scope) {
-			s.store.Audit(r.Context(), actor.OrganizationID, actor.ID, string(actor.Kind),
+			keys.Audit(r.Context(), actor.OrganizationID, actor.ID, string(actor.Kind),
 				"apikey.scope_denied", string(scope), actor.RequestID,
 				map[string]any{"path": r.URL.Path})
 			apierr.Write(w, r, apierr.Forbidden("scope_denied",
@@ -134,7 +157,7 @@ func (s *Server) requireAPIKey(scope rbac.Scope, next http.Handler) http.Handler
 		}
 
 		// 限速：按 key 计，跨副本共享计数
-		allowed, remaining, err := s.limiter.Allow(r.Context(),
+		allowed, remaining, err := limiter.Allow(r.Context(),
 			"key:"+key.ID, key.RateLimitPerMin, time.Minute)
 		if err != nil {
 			// 限速器坏了**放行**并记日志：把它做成硬失败等于让 Redis 抖动
@@ -152,7 +175,7 @@ func (s *Server) requireAPIKey(scope rbac.Scope, next http.Handler) http.Handler
 		// 配额：只在会消耗页数的平面上查（解析/抽取）。
 		// 查询类不查是因为它们不按页计费，多一次查询只是纯开销
 		if scope == rbac.ScopeParse || scope == rbac.ScopeExtract {
-			if err := s.store.ReserveQuota(r.Context(), actor.OrganizationID, 1); err != nil {
+			if err := keys.ReserveQuota(r.Context(), actor.OrganizationID, 1); err != nil {
 				if errors.Is(err, store.ErrQuotaExceeded) {
 					apierr.Write(w, r, apierr.PaymentRequired("quota_exceeded",
 						"组织配额已用尽"))
@@ -163,7 +186,7 @@ func (s *Server) requireAPIKey(scope rbac.Scope, next http.Handler) http.Handler
 			}
 		}
 
-		s.store.TouchAPIKey(r.Context(), key.ID)
+		keys.TouchAPIKey(r.Context(), key.ID)
 		next.ServeHTTP(w, r.WithContext(identity.With(r.Context(), actor)))
 	})
 }

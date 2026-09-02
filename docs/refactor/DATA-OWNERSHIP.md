@@ -8,28 +8,59 @@
 
 同一个 PostgreSQL 集群，两个 schema，两个 role。**隔离靠数据库权限，不靠自觉。**
 
+> ⚠️ **语料表在 `public`，不在名为 `corpus` 的 schema 里。**
+> 这是既有实现（alembic 从一开始就建在 public），合仓没有搬动它 ——
+> 搬 30 张表的 schema 需要一次独立的迁移与一轮对拍，不在本轮范围内。
+>
+> 这件事本身不影响所有权规则，但它**曾经让规则整个失效**：
+> `database/control/0002_roles.sql` 里的授权写成了"如果 corpus schema 存在
+> 就授权"，而那个 schema 从来不存在，于是那段 SQL 永远跳过。
+> 也就是说"Go 对语料一个字都写不了"这句话，在真部署里从未生效过 ——
+> 它只是一段读起来很像在做事的 SQL。2026-09-02 第一次真起全栈才发现
+> （FINDINGS F-20）。现在授权对着 `public` 写，见 `database/corpus/grants.sql`。
+
+实际生效的授权（`database/control/0002_roles.sql` + `database/corpus/grants.sql`）：
+
 ```sql
 CREATE SCHEMA control;   -- Go control-api 写
-CREATE SCHEMA corpus;    -- Python corpus-api / corpus-worker 写
+-- 语料表在 public（历史原因，见上面的警告）
 
-CREATE ROLE ddp_control LOGIN;
-CREATE ROLE ddp_corpus  LOGIN;
+CREATE ROLE ddp_control LOGIN;   -- 口令由 control-migrate 按环境变量设置
+CREATE ROLE ddp_corpus  LOGIN;   -- CREATE ROLE 不带口令，漏设的话服务连不上库
 
--- Go 拥有 control，对 corpus 一个字都写不了
-GRANT ALL       ON SCHEMA control TO ddp_control;
-GRANT USAGE     ON SCHEMA corpus  TO ddp_control;
+-- Go 拥有 control，对语料一个字都写不了
+GRANT USAGE, SELECT, INSERT, UPDATE, DELETE ON control.* TO ddp_control;
+REVOKE UPDATE, DELETE ON control.audit_events FROM ddp_control;  -- 审计只增不改
+GRANT USAGE ON SCHEMA public TO ddp_control;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ddp_control;
 -- ↑ 只给 USAGE，不给任何表权限：Go 想读语料只能走 corpus-api 的 HTTP
 
--- Python 拥有 corpus，对 control 只读它必须知道的那几张
-GRANT ALL       ON SCHEMA corpus  TO ddp_corpus;
-GRANT USAGE     ON SCHEMA control TO ddp_corpus;
-GRANT SELECT    ON control.organizations, control.users TO ddp_corpus;
+-- Python 拥有语料，对 control 只读它必须知道的那两张
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ddp_corpus;
+GRANT USAGE  ON SCHEMA control TO ddp_corpus;
+GRANT SELECT ON control.organizations, control.users TO ddp_corpus;
 ```
 
-> `GRANT SELECT` 只给 `organizations` 与 `users` 两张：corpus 侧要把
-> `actor_id` 渲染成用户名（上传者署名、复核人）。**再多一张都要在这份
-> 文件里写清理由** —— 每多一张只读依赖，就多一条把 Go 的 schema 变更
-> 传染到 Python 的路径。
+**服务进程必须用受限角色连库。** compose 里 control-api 连的是
+`ddp_control`，corpus-api / corpus-worker 连的是 `ddp_corpus`；
+只有两个**一次性迁移容器**用属主 `ddp`（建表要 DDL、设角色口令要 CREATEROLE，
+这两样长跑进程都不该有）。
+用超级用户连库的话，上面这些 GRANT/REVOKE 一条都不起作用 ——
+边界 5 就退化成一条静态守卫的自觉。
+
+**两条守卫，缺一不可**：
+
+| 守卫 | 判据 | 它管什么 |
+|---|---|---|
+| `scripts/check_data_ownership.py` | 静态扫源码里的表名 | 有没有人**写了**越界的 SQL |
+| `scripts/check_db_boundary.sh` | 对着真库跑 21 条断言 | 越界的 SQL **会不会被数据库拒绝** |
+
+前者防意图，后者防疏漏。F-20 正是"前者全绿而后者不存在"的那段时间里
+发生的：源码干干净净，而数据库权限从来没生效过。
+
+后者已做变异确认：给 `ddp_control` 开一次 `documents` 的写权限，当场变红。
+它还带一组**反哨兵**（该给的权限必须真的给了）—— 否则"角色连不上库"
+会让每一条拒绝断言都"通过"，而系统其实是坏的。
 
 ## 2. 表归属
 

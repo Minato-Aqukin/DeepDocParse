@@ -204,7 +204,8 @@ async def submit_parse(session: AsyncSession, control: ControlClient,
     """
     file_url = await control.stable_file_url(
         organization_id=document.organization_id, document_id=document.id,
-        object_key=document.object_key, mime=document.mime)
+        object_key=document.object_key, mime=document.mime,
+        filename=document.filename)
 
     # 重新提交失败的 job 时必须刷新提交时刻：对账按它判"是否已过网关的 24h
     # 暂存窗口"，沿用旧时间会让隔天重传的文档一提交就被判死

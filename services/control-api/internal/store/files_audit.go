@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/auth"
@@ -23,9 +24,13 @@ type FileGrant struct {
 	DocumentID     string
 	ObjectKey      string
 	MIME           string
-	Scope          string
-	ExpiresAt      *time.Time
-	Revoked        bool
+	// 原始文件名。**必须存下来** —— 直读 URL 是跨源的，浏览器忽略
+	// `<a download>` 的提示，只认服务端签在 response-content-disposition
+	// 里的那个。不存的话用户下到的是一个 document id
+	Filename  string
+	Scope     string
+	ExpiresAt *time.Time
+	Revoked   bool
 }
 
 func (s *Store) CreateFileGrant(ctx context.Context, g *FileGrant) error {
@@ -37,9 +42,10 @@ func (s *Store) CreateFileGrant(ctx context.Context, g *FileGrant) error {
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO control.file_grants
-		    (token, organization_id, document_id, object_key, mime, scope, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		g.Token, g.OrganizationID, g.DocumentID, g.ObjectKey, g.MIME, g.Scope, g.ExpiresAt)
+		    (token, organization_id, document_id, object_key, mime, filename, scope, expires_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		g.Token, g.OrganizationID, g.DocumentID, g.ObjectKey, g.MIME, g.Filename,
+		g.Scope, g.ExpiresAt)
 	return err
 }
 
@@ -62,14 +68,24 @@ func (s *Store) FileGrantByToken(ctx context.Context, token string) (*FileGrant,
 
 // StableGrantFor 取该文档的稳定凭证；没有就建一个。
 // **同一份文档只能有一个 source 凭证** —— 每次建新的等于每次换 URL。
-func (s *Store) StableGrantFor(ctx context.Context, orgID, documentID, objectKey, mime string) (*FileGrant, error) {
-	g := &FileGrant{OrganizationID: orgID, DocumentID: documentID, ObjectKey: objectKey, MIME: mime, Scope: "source"}
+func (s *Store) StableGrantFor(ctx context.Context, orgID, documentID, objectKey, mime, filename string) (*FileGrant, error) {
+	g := &FileGrant{OrganizationID: orgID, DocumentID: documentID, ObjectKey: objectKey,
+		MIME: mime, Filename: filename, Scope: "source"}
 	err := s.pool.QueryRow(ctx, `
-		SELECT token, object_key, mime FROM control.file_grants
+		SELECT token, object_key, mime, filename FROM control.file_grants
 		WHERE organization_id = $1 AND document_id = $2 AND scope = 'source' AND revoked = FALSE
 		ORDER BY created_at LIMIT 1`, orgID, documentID).
-		Scan(&g.Token, &g.ObjectKey, &g.MIME)
+		Scan(&g.Token, &g.ObjectKey, &g.MIME, &g.Filename)
 	if err == nil {
+		// 老凭证是在加 filename 那列之前建的（默认空串）。**就地补上** ——
+		// 不能因为缺个名字就换一个 token，那会换掉 doc_hash（ADR #11/#12）
+		if g.Filename == "" && filename != "" {
+			if _, e := s.pool.Exec(ctx,
+				`UPDATE control.file_grants SET filename = $1 WHERE token = $2`,
+				filename, g.Token); e == nil {
+				g.Filename = filename
+			}
+		}
 		return g, nil
 	}
 	// 只有"确实还没有"才去建；别的错误（连接断了、权限不对）必须原样上抛 ——
@@ -120,13 +136,17 @@ func (s *Store) Audit(ctx context.Context, orgID, actorID, actorKind, action, ta
 		payload = []byte(`{}`)
 	}
 	// 审计写失败不该让业务请求失败，但**必须留下日志** ——
-	// 静默丢审计比不做审计更糟（它让人以为有记录）
-	_, _ = s.pool.Exec(ctx, `
+	// 静默丢审计比不做审计更糟（它让人以为有记录）。
+	// detail 不进日志（见上面那段"绝不能放"的清单），只记 action/target 与错误
+	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO control.audit_events
 		    (id, organization_id, actor_id, actor_kind, action, target, request_id, detail)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		auth.NewID(), orgID, nullable(actorID), actorKind, action,
-		nullable(target), nullable(requestID), payload)
+		nullable(target), nullable(requestID), payload); err != nil {
+
+		s.auditFailed(ctx, action, target, requestID, err)
+	}
 }
 
 func (s *Store) AuditEvents(ctx context.Context, orgID, action string, before *time.Time, limit int) ([]AuditEvent, error) {
@@ -153,4 +173,12 @@ func (s *Store) AuditEvents(ctx context.Context, orgID, action string, before *t
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// auditFailed 是审计写失败的唯一出口。抽成方法是为了让守卫能钉住它 ——
+// `TestAuditLogsWriteFailures` 用一个必然失败的 pool 跑一次，
+// 断言日志里出现了 action。**不要改回 `_, _ =`**。
+func (s *Store) auditFailed(ctx context.Context, action, target, requestID string, err error) {
+	slog.ErrorContext(ctx, "审计事件写入失败",
+		"action", action, "target", target, "request_id", requestID, "err", err)
 }
