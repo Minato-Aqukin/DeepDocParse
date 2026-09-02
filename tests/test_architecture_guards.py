@@ -320,3 +320,82 @@ def test_only_the_entry_publishes_a_port():
     assert not offenders, (
         f"这些服务直接映射了端口：{offenders}。"
         f"它们不校验用户身份，暴露出去等于绕过整个入口")
+
+
+# ---------------------------------------------------------------------------
+# §5 唯一一处不可逆丢数据的脚本
+# ---------------------------------------------------------------------------
+
+def test_dropping_legacy_tables_stays_hard_to_do_by_accident():
+    """删旧账号表的脚本必须**难以被误触发**。
+
+    它是这个仓库里唯一一处不可逆地丢数据的地方（`gc.py` 至少还有宽限期），
+    所以三条性质要一直成立：
+
+    1. **不在 alembic 迁移链里** —— 进了链，任何一次 `upgrade head` 都会执行它，
+       包括在对账通过之前、包括在一台刚从生产快照恢复出来的库上；
+    2. **默认只检查**（DROP 必须挡在 `args.apply` 后面）；
+    3. **没有 --force** —— 前提不成立时该做的是查清楚，不是绕过。
+
+    第 3 条最容易在"急着上线"的时候被加回来，所以钉在这里。
+    行为侧的拒绝逻辑已做过变异确认（旧表行数灌到比新表多，
+    `--apply` 也拒绝，四张表一张不少）。
+    """
+    import ast
+
+    script = ROOT / "database" / "migrator" / "drop_legacy_account_tables.py"
+    assert script.exists(), "删表脚本不见了 —— 它是有意存在的，不是遗留物"
+    source = script.read_text(encoding="utf-8")
+
+    # 1. 不在迁移链里
+    versions = ROOT / "database" / "corpus" / "alembic" / "versions"
+    in_chain = [p.name for p in versions.glob("*.py")
+                if "drop" in p.name.lower() and "account" in p.name.lower()]
+    assert not in_chain, (
+        f"删旧账号表进了 alembic 迁移链：{in_chain}。"
+        f"进了链就意味着每一次 upgrade head 都会执行它")
+
+    # 2. DROP 之前必须有一道 args.apply 的闸。
+    #
+    # 两种写法都算数：`if args.apply:` 包住它，或者 `if not args.apply: return`
+    # 提前返回。**只认其中一种是不对的** —— 第一版守卫就只认了前一种，
+    # 于是对着写成后一种（而且更好读）的真脚本报红。
+    # 守卫要验的是性质，不是某一种句法。
+    tree = ast.parse(source)
+    drops = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Constant) and isinstance(n.value, str)
+             and "DROP TABLE" in n.value]
+    assert drops, "脚本里没有 DROP TABLE —— 判据失效了，先看它是不是改写过"
+    first_drop = min(n.lineno for n in drops)
+
+    gates = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or node.lineno >= first_drop:
+            continue
+        if "apply" not in ast.dump(node.test):
+            continue
+        # 包住 DROP，或者自己 return / raise 掉
+        covers = any(isinstance(c, ast.Constant) and isinstance(c.value, str)
+                     and "DROP TABLE" in c.value for c in ast.walk(node))
+        exits = any(isinstance(c, (ast.Return, ast.Raise)) for c in ast.walk(node))
+        if covers or exits:
+            gates.append(node.lineno)
+    assert gates, (
+        f"第 {first_drop} 行的 DROP TABLE 之前没有任何 args.apply 的闸门 ——"
+        f"默认跑一下就会删表")
+
+    # **这条是静态近似**：它证明"闸门在那儿"，不证明"闸门关得住"。
+    # 关得住是靠行为验的 —— 把旧表行数灌到比新表多，`--apply` 也必须拒绝、
+    # 四张表一张不少（2026-09-02 实测过）。静态判据挡的是"闸门被删掉"。
+
+    # 3. 没有 --force。**判据是 argparse 里有没有这个选项，不是文本里
+    #    有没有这五个字符** —— 脚本的说明里就写着"不提供 --force"，
+    #    按文本查会把那句说明本身当成违规（第一版就是这么红的）。
+    forced = [n for n in ast.walk(tree)
+              if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Attribute) and n.func.attr == "add_argument"
+              and any(isinstance(a, ast.Constant) and a.value in ("--force", "-f")
+                      for a in n.args)]
+    assert not forced, (
+        "删表脚本加了 --force。前提不成立的时候要做的是查清楚，不是绕过 ——"
+        "这条如果真要改，先改掉脚本开头那段说明并说清为什么")

@@ -295,6 +295,10 @@ async def precheck(source: asyncpg.Connection, target: asyncpg.Connection,
 
     **不查行数**：dry-run 一行都没写，行数当然对不上。把必然失败的检查放进
     dry-run 会训练人忽略红色，而那正是这套流程最不能出的事。
+
+    对象存在性抽样也算预检（它只读），由调用方在这之后跑 ——
+    给了 `--object-endpoint` 才有。判据是一样的：**只读的检查都该在
+    进窗口之前跑完**，窗口里只留那些非写不可的。
     """
     dangling = await source.fetchval(
         "SELECT count(*) FROM citations c WHERE NOT EXISTS ("
@@ -372,12 +376,20 @@ async def reconcile(source: asyncpg.Connection, target: asyncpg.Connection,
         " SELECT 1 FROM evidence e WHERE e.id = c.evidence_id)")
     report.check("citations 的 evidence 都在", dangling == 0, f"{dangling} 条悬空引用")
 
-    # 6) 对象存在性 + content digest 抽样
+    # 6) 对象存在性抽样。
+    #
+    # **跳过不是通过。** 这里原来把"没给凭据"记成 `passed=True`，
+    # 于是 `report.ok` 不变、退出码 0 —— 忘带一个参数就能让一次
+    # **一个对象都没验过**的迁移报"对账通过"，而那句 note 自己写着
+    # "切换窗口里必须跑这一项"。
+    #
+    # 现在 `--apply` 缺 `--object-endpoint` 会在动手之前就被拒（见 run()），
+    # 所以正常走不到这个 else；留着它是最后一道兜底，而且**记成失败**。
     if objects is not None:
         await objects.verify(target, report)
     else:
-        report.check("对象存在性抽样", True,
-                     "跳过（没给对象存储凭据）—— 切换窗口里**必须**跑这一项")
+        report.check("对象存在性抽样", False,
+                     "没给对象存储凭据，一个对象都没验过 —— 这不是通过")
 
 
 class ObjectChecker:
@@ -444,6 +456,14 @@ async def run(args: argparse.Namespace) -> int:
         await stamp_organization(target, org_id, report, not args.apply)
 
         objects = None
+        if args.apply and not args.object_endpoint:
+            # **在动手之前拒绝。** 一次性切换是不可回退的，而"对象到底在不在"
+            # 是唯一能发现桶名配错、前缀改过这类系统性缺失的检查。
+            # 不给逃生开关：真要跳过，说明前提没成立，那时候该做的是查清楚。
+            print("::error::--apply 必须带 --object-endpoint —— "
+                  "不验对象存在性的迁移不算对账通过（见 MIGRATION-DRILLS.md）",
+                  file=sys.stderr)
+            return 2
         if args.object_endpoint:
             objects = ObjectChecker(
                 args.object_endpoint, args.object_access_key, args.object_secret_key,
@@ -454,6 +474,17 @@ async def run(args: argparse.Namespace) -> int:
             # dry-run 跑源侧预检，**不跑行数对账** —— 一行都没写，
             # 那些检查必然失败，而必然失败的红会训练人忽略它
             await precheck(source, target, report)
+            # **对象抽样是只读的，所以它属于预检，不属于切换窗口。**
+            # 它要发现的是"桶名配错了""前缀改过了"这一类系统性缺失 ——
+            # 而那种问题必须在**进窗口之前**知道。放在 --apply 里的话，
+            # 你会在维护窗口开着的时候才发现对象根本不在那个桶里。
+            if objects is not None:
+                await objects.verify(target, report)
+            else:
+                # **静默是不行的。** 不报的话，"这次 dry-run 到底验没验对象"
+                # 从报告里看不出来 —— 而那正是进窗口前最该确认的一件事
+                print("  · 没给 --object-endpoint，本次未验对象存在性；"
+                      "进切换窗口之前必须补一次")
     finally:
         await source.close()
         await target.close()

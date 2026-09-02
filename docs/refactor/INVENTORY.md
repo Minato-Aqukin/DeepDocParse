@@ -65,7 +65,7 @@ evidence/citation 的唯一实现继续留在 Python。
 
 ### 3.1 账号与入口层 → **重写为 Go control-api**
 
-旧文件已移入 `docs/refactor/_rewrite-ref-*.py` 作为**重写参照物**，
+旧文件曾移入 `docs/refactor/_rewrite-ref-*.py` 作为**重写参照物**，控制面稳定后已删除（逐份核对过：七份里的每一条路由与关键函数在 Go 侧都指得到实现），
 Go 侧落地后从工作树删除（§19.3：最终工作树不得存在未使用的旧代码）。
 
 | 旧模块 | 行 | 判定 | 原调用方 | 替代实现 |
@@ -73,10 +73,10 @@ Go 侧落地后从工作树删除（§19.3：最终工作树不得存在未使�
 | `routers/auth.py` | 68 | 重写 | 前端 `api/auth.ts`、`stores/auth.ts` | `services/control-api` `/api/auth/*`（+ OIDC） |
 | `routers/apikeys.py` | 90 | 重写 | 前端 `api/keys.ts`、`KeysView.vue` | control-api `/api/keys/*`（加作用域、过期、最后使用时间） |
 | `routers/usage.py` | 41 | 重写 | 前端 `api/usage.ts`、`UsageView.vue` | control-api `/api/usage`（usage_ledger） |
-| `routers/proxy.py` | 309 | 重写 | 第三方 SDK 的 `/v1/*`、`/mcp` | control-api 统一入口 + SSE 字节级代理 |
+| `routers/proxy.py` | 309 | 重写 | 第三方 SDK 的 `/v1/*`、`/mcp` | **拆到两个语言**：鉴权 / SSE 字节级代理 / MCP 会话头 → control-api 统一入口；`/v1/parse*` 的**计量归集**（`_forward_headers` `_relay` `_submitted_it` 那一套）→ `corpus-api/routers/external.py`，`_already_billed` 换成 `uq_usage_claims_actor_job` 唯一约束 |
 | `routers/files.py` | 63 | 重写 | model-gateway 下载原件、前端预览 | control-api 签名下载：稳定 `/files/{token}` → 302 到短期对象 URL（§9.2） |
 | `security.py` | 67 | 重写 | 上面四个 router | Go：JWT、bcrypt、API key sha256 |
-| `metering.py` | 100 | 重写 | `proxy.py`、`documents.py`、`qa.py` | Go：配额、Redis 限速、usage_ledger |
+| `metering.py` | 100 | 重写 | `proxy.py`、`documents.py`、`qa.py` | Go：配额、Redis 限速、usage_ledger。**限速的实现换了，不是搬过去的**：旧的是 Lua 令牌桶，Go 的 `RedisLimiter` 是 INCR+EXPIRE 固定窗口，突发语义不同（`TestWindowResets` 钉的是新行为）—— 别再说「与旧系统行为一致」|
 
 > ⚠️ **`files.py` 的稳定 URL 语义是硬约束**：URL 一变，model-gateway 的
 > 幂等与向量索引分块键全部失效（ADR #11/#12，踩过两次）。Go 实现必须
