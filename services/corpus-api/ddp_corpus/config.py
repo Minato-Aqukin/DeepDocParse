@@ -3,8 +3,22 @@
 分三组：本层自有资源（PG/MinIO/JWT）、对 service 的调用参数、额度默认值。
 service 相关的一切只对应 ../DeepDocParse/openapi.yaml 的契约，不感知其内部实现。
 """
+from typing import TYPE_CHECKING
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+if TYPE_CHECKING:
+    # **只在类型检查时导入。** 运行期真 import 会把 ddp_core.rerank 拖进
+    # 本模块的导入图，而下面那个函数刻意在函数体里才 import。
+    #
+    # 加这一段之前，`-> "RerankConfig"` 这个注解在**任何**上下文都解析不了
+    # （ruff 报 F821，类型检查器也认不出来）。加了之后静态侧对了，
+    # 但**运行期仍然解析不了** —— `typing.get_type_hints()` 照样 NameError，
+    # 这是 TYPE_CHECKING 的固有代价，不是没修干净。
+    # 之所以可以接受：没有任何地方对这个函数做运行期类型解析
+    # （FastAPI 只对**端点**做，而它不是端点）。
+    from ddp_core.rerank import RerankConfig
 
 
 class Settings(BaseSettings):

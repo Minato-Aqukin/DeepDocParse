@@ -59,6 +59,18 @@ if want guards; then
 fi
 
 if want python; then
+  # ruff 只跑会抓 bug 的两族（理由写在 pyproject 的 [tool.ruff.lint] 上面）。
+  # 逐条 ignore 都有理由，不许无脑加：
+  #   F401 未使用导入   —— 大量是 __init__ 的再导出与 TYPE_CHECKING
+  #   B008 Depends()    —— FastAPI 的写法就是默认参数里调用函数
+  #   B905 zip strict   —— 3.10 才有，且这些 zip 长度本来就相等
+  #   B904 raise from   —— 值得收，但要逐个看清因果链，另起一次
+  #   （B023 闭包捕获**不在这里 ignore** —— 它按文件豁免在 pyproject 的
+  #    per-file-ignores 里，只放过已逐个核过的 chunking.py；
+  #    别处再出现延迟执行的闭包仍然会红）
+  #   B007 未用循环变量 —— 解包时占位，改名成 _ 是纯噪音
+  run "ruff（F,B）"   "$PY" -m ruff check . --select F,B \
+      --ignore F401,B008,B905,B904,B007
   run "ddp_core"       in_dir python/ddp_core        "$PY" -m pytest -q
   run "model-gateway"  in_dir services/model-gateway "$PY" -m pytest -q
   run "corpus-api"     in_dir services/corpus-api    "$PY" -m pytest -q

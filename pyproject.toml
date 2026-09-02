@@ -28,6 +28,28 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
+# **这份配置以前没人跑。** 门禁、五条工作流、各包 pyproject 里一次
+# `ruff` 调用都没有，而代码里有四十来处 `# noqa` 写给这个从不运行的
+# linter 看 —— 看起来 lint 有人管，实际没有。两轮独立验收都指出了这一点。
+#
+# 现在 `scripts/check.sh` 与 CI 真的跑它，但**只跑会抓 bug 的那两族**：
+#   F = pyflakes（未定义名、未使用变量这种真错误）
+#   B = bugbear（闭包捕获循环变量、blind except 这种真陷阱）
+#
+# `E`/`W`/`I`/`UP` 仍然留在 select 里给编辑器用，但**不进门禁**
+# （见 [tool.ruff] 下面那段）：全仓 183 处，绝大多数是导入顺序与行宽，
+# 一次性改完会把这次重构的 diff 淹掉，而它们一个 bug 都抓不到。
+# 要收的话另起一次提交，别混在功能改动里。
 select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["B008"]   # FastAPI 的 Depends() 就是默认参数里调用函数
+
+[tool.ruff.lint.per-file-ignores]
+# **B023 只在这一个文件豁免，不全局关。**
+# `layout_to_chunks` 的 `emit` 闭包捕获了 `page_idx` / `page_size` ——
+# 逐个核过：`emit` 每轮循环重新定义、只在本轮内被调用（`flush` 也是），
+# 不存在延迟执行，所以这里是真阳性模式、假告警。
+#
+# 全局 `--ignore B023` 的话，**别处真出现一个延迟执行的闭包就没人拦了** ——
+# 而那正是这条规则唯一值得存在的理由。按文件豁免保住了其余全仓的覆盖。
+"python/ddp_core/ddp_core/chunking.py" = ["B023"]
 

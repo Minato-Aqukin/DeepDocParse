@@ -30,8 +30,11 @@ db = [
 # jieba 是**软依赖**：装不上时 tokenize.py 退回二元组，`backend()` 如实报出来
 # 并进 model_meta。检索质量突然变差时先看这个值。
 cjk = ["jieba>=0.42"]
+# ruff 进 dev：`scripts/check.sh` 会跑它（只跑 F,B 两族，理由见仓库根
+# pyproject 的 [tool.ruff.lint]）。装在这里是因为 check.sh 用的就是
+# 这个 venv —— 不声明的话本机跑门禁会 "No module named ruff" 而 CI 是绿的
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21",
-       "ddp-core[db,cjk]"]
+       "ruff>=0.6", "ddp-core[db,cjk]"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

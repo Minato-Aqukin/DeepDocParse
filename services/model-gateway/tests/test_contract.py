@@ -372,7 +372,12 @@ async def test_chat_stream_error_releases_semaphore(client, app_state):
 
     _app.state.vqa_semaphore = asyncio.Semaphore(1)  # 容量 1：泄漏一次即封死，放大信号
     payload = {"model": "deepseek-ocr-2", "stream": True, "messages": []}
-    with pytest.raises(Exception):
+    # **断具体的异常类型，不是 `Exception`。** 写成 `pytest.raises(Exception)`
+    # 的话，测试里的一个笔误、一个改过名的字段、respx 没匹配上 —— 任何一种
+    # 都能让这一行"通过"，于是它证明不了"请求确实是被断流打断的"。
+    # 而这条测试守的是**信号量泄漏**（历次验收抓到过的那个），
+    # 前半段松了的话，后半段那句"下一个请求必须正常"就失去了前提。
+    with pytest.raises(httpx.ReadError):
         await client.post("/v1/chat/completions", json=payload)
 
     # permit 已归还：下一个请求必须正常，而不是 429

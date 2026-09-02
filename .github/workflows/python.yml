@@ -99,6 +99,13 @@ jobs:
                       -e "services/corpus-api[dev]" -e services/corpus-worker
       # 单测跑 SQLite，迁移的真实目标是 PG（pgvector / HNSW / GIN 都只在那儿生效）。
       # downgrade 到 base 再上来，回滚路径才算验过
+      # 只跑会抓 bug 的两族。理由与逐条 ignore 见 pyproject 的 [tool.ruff.lint]。
+      # 这份配置此前**全仓没人调用**，而代码里有四十来处 noqa 写给它看
+      - name: ruff（F,B）
+        run: |
+          pip install ruff
+          ruff check . --select F,B --ignore F401,B008,B905,B904,B007
+
       - name: corpus 迁移双向可跑
         working-directory: database/corpus
         env:

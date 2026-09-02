@@ -882,8 +882,20 @@ def test_dsocr2_parses_real_model_output():
             assert 0 <= x0 < x1 <= 612.1 and 0 <= y0 < y1 <= 792.1, b["bbox"]
 
     text = " ".join(layout.block_text(b) for b in blocks)
-    for fact in ("PURCHASE AGREEMENT", "NW-2026-0817",
-                 "Northwind Trading Company Limited", "486,200.50"):
+    facts = ("PURCHASE AGREEMENT", "NW-2026-0817",
+             "Northwind Trading Company Limited", "486,200.50")
+
+    # **先确认这几条确实是标准答案里的东西。** 原来这里只有下面那个循环，
+    # 而 `truth` 加载了却一个字都没用 —— docstring 说"内容与
+    # contract.truth.json 对得上"，实际对的是四个写死在测试里的字符串。
+    # 夹具换了内容，这个测试照样绿，而它自称在跟夹具对拍。
+    truth_text = "\n".join(page["text"] for page in truth["pages"])
+    for fact in facts:
+        assert fact in truth_text, (
+            f"{fact!r} 不在 contract.truth.json 里 —— "
+            f"这份清单已经跟标准答案漂开了，改夹具时忘了改它")
+
+    for fact in facts:
         assert fact in text, f"真实输出里没识别出 {fact!r}"
 
 
