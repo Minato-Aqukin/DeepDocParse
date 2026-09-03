@@ -21,7 +21,7 @@
 | 理解任务队列 | `docs/refactor/TASK-QUEUE.md` |
 | 部署 | `docs/DEPLOY.md` |
 | 前端视觉 | `../design-previews/DESIGN-GUIDE.md`（REV.04） |
-| 避开已经踩过的坑 | `docs/refactor/FINDINGS.md`（30 条，每条都写了"为什么它没被早点发现"） |
+| 避开已经踩过的坑 | `docs/refactor/FINDINGS.md`（31 条，每条都写了"为什么它没被早点发现"） |
 
 ## 八条不变式
 
