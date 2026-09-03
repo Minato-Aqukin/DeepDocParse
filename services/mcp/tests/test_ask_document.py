@@ -16,25 +16,6 @@ from httpx import Response
 from ddp_paths import fixture
 
 
-async def test_vector_index_name_carries_dim():
-    """回归（M4 验收发现）：索引名必须带维度，否则换 embedding 模型后
-    维度不符的向量会被 RediSearch **静默丢弃** -> 永久零命中、永久退回 BM25。
-
-    合仓时把这个函数收进了 `ddp_core.vector_index`，所以判据从"两边算出的
-    字符串相等"升级成"**两边就是同一个函数对象**" —— 前者在两份实现漂开
-    但当前维度恰好算出同一个名字时会绿，后者不会。
-    """
-    from ddp_core.vector_index import chunk_index_name as canonical
-    from ddp_gateway.services.task_store import chunk_index_name as writer
-
-    from ddp_mcp import server as mcp_server
-
-    assert canonical(1024) == "chunks_idx_d1024"
-    assert canonical(1024) != canonical(768)
-    assert writer is canonical, "写入侧不是共用那一份实现了"
-    assert mcp_server.chunk_index_name is canonical, "检索侧不是共用那一份实现了"
-
-
 async def test_vector_retrieve_degrades_quietly(mcp_gateway, monkeypatch):
     """回归（M4 验收发现）：REDIS_URL 配错时 redis.from_url 抛 ValueError，
     必须被吞掉退回 BM25，而不是让整个 ask_document 崩掉。"""

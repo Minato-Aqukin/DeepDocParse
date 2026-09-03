@@ -501,3 +501,31 @@ def test_the_pythonpath_scan_actually_reads_something():
                          .read_text(encoding="utf-8"))
     ini = conf.get("tool", {}).get("pytest", {}).get("ini_options", {})
     assert ini.get("pythonpath"), "读不到 corpus-api 的 pythonpath —— 判据失效了"
+
+
+# ---------------------------------------------------------------------------
+# §7 向量索引名：写入侧与检索侧必须是同一份实现
+# ---------------------------------------------------------------------------
+
+def test_vector_index_name_is_one_implementation():
+    """回归（M4 验收发现）：索引名必须带维度，否则换 embedding 模型后
+    维度不符的向量会被 RediSearch **静默丢弃** —— 永久零命中、永久退回 BM25，
+    而且不报任何错。
+
+    判据是"**三边就是同一个函数对象**"，不是"算出的字符串相等" ——
+    后者在两份实现漂开、但当前维度恰好算出同一个名字时会绿。
+
+    **这条原来住在 `services/mcp/tests/`，那是错的地方。** 它 import
+    `ddp_gateway`，而 mcp 那个包的 CI 作业**不装 model-gateway**（也不该装 ——
+    mcp 不依赖网关）。于是它在本机绿（venv 里什么都有）、在 CI 红。
+    本文件开头那段说明写的就是这件事：横跨多个包的守卫放进任何一个包里，
+    都会变成"只在那个包的 CI 里跑"。
+    """
+    from ddp_core.vector_index import chunk_index_name as canonical
+    from ddp_gateway.services.task_store import chunk_index_name as writer
+    from ddp_mcp import server as mcp_server
+
+    assert canonical(1024) == "chunks_idx_d1024"
+    assert canonical(1024) != canonical(768), "索引名没带维度 —— 换模型就静默丢向量"
+    assert writer is canonical, "写入侧不是共用那一份实现了"
+    assert mcp_server.chunk_index_name is canonical, "检索侧不是共用那一份实现了"
