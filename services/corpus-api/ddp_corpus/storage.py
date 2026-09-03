@@ -48,7 +48,9 @@ class MinioStorage:
             settings.minio_public_endpoint,
             access_key=settings.minio_access_key,
             secret_key=settings.minio_secret_key,
-            secure=settings.minio_secure,
+            # 留空跟随内网那个开关；两侧 scheme 不同的形态见 config.py 的说明
+            secure=(settings.minio_secure if settings.minio_public_secure is None
+                    else settings.minio_public_secure),
             region=settings.minio_region,
         )
         self._bucket = settings.minio_bucket

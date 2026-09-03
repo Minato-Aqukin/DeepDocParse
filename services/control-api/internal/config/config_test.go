@@ -106,3 +106,33 @@ func TestBadRegistrationModeRejected(t *testing.T) {
 		t.Fatal("非法的 REGISTRATION_MODE 被接受了")
 	}
 }
+
+// TestObjectPublicSecureFollowsObjectSecure：不显式给 OBJECT_PUBLIC_SECURE 时，
+// 它必须**跟随** OBJECT_SECURE —— 这是这次改动对既有部署的向后兼容承诺，
+// 而承诺此前没有任何守卫。回归了的表现是：OBJECT_SECURE=true 的部署默默给
+// 浏览器签 `http://` 的预签名 URL，浏览器按混合内容拦掉，服务端零报错。
+func TestObjectPublicSecureFollowsObjectSecure(t *testing.T) {
+	good(t)
+	t.Setenv("OBJECT_SECURE", "true")
+	c, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.ObjectPublicSecure {
+		t.Fatal("没给 OBJECT_PUBLIC_SECURE 时，它应当跟随 OBJECT_SECURE=true")
+	}
+}
+
+// 显式给了就以显式的为准 —— 内网明文回环 + 公网由隧道终结 TLS 的部署形态。
+func TestObjectPublicSecureCanDifferFromObjectSecure(t *testing.T) {
+	good(t)
+	t.Setenv("OBJECT_SECURE", "false")
+	t.Setenv("OBJECT_PUBLIC_SECURE", "true")
+	c, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.ObjectSecure || !c.ObjectPublicSecure {
+		t.Fatalf("两侧 scheme 应当能分开：internal=%v public=%v", c.ObjectSecure, c.ObjectPublicSecure)
+	}
+}

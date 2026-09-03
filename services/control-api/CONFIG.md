@@ -11,7 +11,7 @@ Go 这边由容器/systemd 注入环境变量）。
 user_id 伪造一个有效会话，且运行时不报任何错。一次性容器 / CI 可用
 `ALLOW_INSECURE_DEFAULTS=true` 显式跳过 —— 逃生口必须显式且留痕。
 
-共 **40** 项。
+共 **41** 项。
 
 ## 监听
 
@@ -65,6 +65,7 @@ user_id 伪造一个有效会话，且运行时不报任何错。一次性容器
 | `OBJECT_SECRET_KEY` | `string` | `"minioadmin"` | 对象存储密钥。**默认值 minioadmin 会拒绝启动** |
 | `OBJECT_BUCKET` | `string` | `"deepdocparse"` | 桶名 |
 | `OBJECT_SECURE` | `bool` | `false` | 走 https 则置 true |
+| `OBJECT_PUBLIC_SECURE` | `bool` | `envBool("OBJECT_SECURE", false)` | **公网那一侧**的 scheme。内网明文回环、公网由反代或隧道终结 TLS 时， 两侧的 scheme 是不一样的 —— 而签名覆盖 host，公网那条必须签成 https， 否则 https 页面里发出的是 http 请求，浏览器按混合内容直接拦掉。 只有一个开关时把它打开的后果是内网 client 也去 https 连回环， 表现是启动自检就连不上对象存储。留空跟随 ObjectSecure |
 | `OBJECT_REGION` | `string` | `"us-east-1"` | 对象存储的区域。**必须显式给** —— 不给的话 SDK 会在签名前先向 该 endpoint 问一次区域，而给浏览器签名用的 endpoint 在容器里连不上， 表现是 POST /api/uploads 502 而启动自检全绿。MinIO 用 us-east-1 |
 | `PRESIGN_TTL_SECONDS` | `int` | `900` | 预签名有效期。**泄露一个签名 URL 的代价与它的 TTL 成正比**， 所以超过 2 小时会拒绝启动（单位：秒） |
 
@@ -94,7 +95,7 @@ user_id 伪造一个有效会话，且运行时不报任何错。一次性容器
 |---|---|---|---|
 | `CORS_ORIGINS` | `list[str]` | `"http://localhost:5173,http://127.0.0.1:5173"` | 允许的浏览器来源。**不要用 `*`**：配合 credentials 时浏览器会直接拒绝， 而且那等于放弃同源保护 |
 | `PUBLIC_BASE_URL` | `string` | `"http://127.0.0.1:8080"` | 本服务对外可达的地址，拼稳定文件 URL 用 |
-| `INTERNAL_BASE_URL` | `string` | `env("PUBLIC_BASE_URL", "http://127.0.0.1:8080"` | 服务之间互相访问本服务时用的地址。  **与 PublicBaseURL 必须分得开。** 稳定文件 URL（`/files/{token}`） 的消费者是 model-gateway —— 一个容器里的进程，它解析不了 `127.0.0.1:8080`（那是给浏览器的）。用公网地址签的话， 表现是解析任务 `failed: All connection attempts failed`， 而上传、入库、状态查询全都正常。  缺省回落到 PublicBaseURL：单机部署两者本来就一样，不该多配一项。 |
+| `INTERNAL_BASE_URL` | `string` | `env("PUBLIC_BASE_URL", "http://127.0.0.1:8080")` | 服务之间互相访问本服务时用的地址。  **与 PublicBaseURL 必须分得开。** 稳定文件 URL（`/files/{token}`） 的消费者是 model-gateway —— 一个容器里的进程，它解析不了 `127.0.0.1:8080`（那是给浏览器的）。用公网地址签的话， 表现是解析任务 `failed: All connection attempts failed`， 而上传、入库、状态查询全都正常。  缺省回落到 PublicBaseURL：单机部署两者本来就一样，不该多配一项。 |
 | `ALLOW_INSECURE_DEFAULTS` | `bool` | `false` | 显式跳过占位密钥检查。**只给一次性容器与 CI 用** —— 逃生口必须显式且留痕 |
 | `OUTBOX_INTERVAL_SECONDS` | `int` | `2` | outbox 投递间隔。调大会让"上传完到文档出现"的延迟变长（单位：秒） |
 

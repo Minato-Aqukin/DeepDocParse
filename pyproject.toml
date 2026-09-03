@@ -13,9 +13,21 @@ members = [
 # 合仓前这层依赖靠"先装 gateway 再装 backend"的口头约定表达，
 # 装错顺序的表现是 ModuleNotFoundError（好的那种）或**导入错包**（坏的那种）。
 # 现在由 workspace 显式声明，pip/uv 都能解。
+#
+# **六个成员一个都不能少。** 只写了两个的话 uv 不是"少解一点"，而是**整个
+# workspace 拒绝解析**：
+#   `ddp-corpus-worker` is included as a workspace member, but is missing
+#   an entry in `tool.uv.sources`
+# 2026-09-03 在真机部署上撞到 —— 在那之前这段声明从没有被任何工具读过
+# （门禁与 CI 都走 pip 装各个包，pip 不认 workspace），
+# 于是"pip/uv 都能解"这句话在 uv 那半边一直是假的。
 [tool.uv.sources]
 ddp-contracts = { workspace = true }
 ddp-core = { workspace = true }
+ddp-model-gateway = { workspace = true }
+ddp-corpus-api = { workspace = true }
+ddp-corpus-worker = { workspace = true }
+ddp-mcp = { workspace = true }
 
 # 仓库根的 pytest：只跑跨服务的架构守卫（tests/）。
 # 各包有自己的 rootdir 与 testpaths，互不干扰。

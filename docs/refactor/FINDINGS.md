@@ -727,3 +727,73 @@ mcp 那个 CI 作业**不装 model-gateway**，也不该装（mcp 不依赖网�
 
 验证：根守卫 16 passed；mcp 用**只装 contracts + core + mcp** 的干净 venv
 跑裸 `pytest`，11 passed。
+
+## F-32 · 问答平面被 OCR 专用模型接走，而且什么都不报
+
+**严重度**：高（不变式 2 / 铁律 5 的缺口 —— 一个看起来像答案的答案）
+
+2026-09-03 第一次把全栈部署到有 GPU 的机器并从公网打问答时抓到的。
+
+`corpus-api` 的 `upstream.chat_request` 在 `settings.chat_model` 为空时**不带
+`model` 字段**，网关 `routers/chat.py:42-45` 于是取 `default_of(vqa_models)` ——
+而这一步**不看能力词**。`models.autodl.yaml` 里 DeepSeek-OCR-2 是 default，
+于是问答被一个"只会抄字、不听指令"的模型接走。实测它把问题复述了一遍，
+用户看到的是一段通顺的中文。
+
+**这个坑抽取平面已经踩过一次并修好了**（`no_instruct` 能力词 + 第十种降级
+`no_instruct_model`），但那次只修了抽值那一条路径。README 里
+「两个能力词是一对，少筛哪边哪边出问题」这句话，对问答平面还没有兑现。
+
+两者的差别正是不变式 2 的分界线：
+
+| | 挑中 no_instruct 模型时 |
+|---|---|
+| 抽取平面 | 如实报 `no_instruct_model`，**降级可见** |
+| 问答平面 | **什么都不报**，答案照常返回 |
+
+还有第二半：`qa.verify_parse_consistency` 与答案生成**共用同一个
+`settings.chat_model`**，而这两件事要的能力正好相反（instruct vs vision）。
+于是"OCR 模型 + 指令模型共卡"的部署里只能二选一：
+留空 → 答案是垃圾但有视觉核对；指名指令模型 → 答案正确带出处，
+而视觉核对整体关掉并如实标 `degraded=vision_unavailable`。
+
+**当前只做了缓解，没有修**：`infra/autodl/stack.bash` 加了显式的 `CHAT_MODEL`
+旋钮并在注释里写清了为什么必须填。也就是说，现在挡住这件事的是
+**"部署的人记得填"** —— 而"靠人记住"正是这个项目反复吃亏的形状。
+
+**待修**（要先动契约，铁律 1）：
+
+1. 网关选默认 chat 模型时跳过 `no_instruct`；一个都不剩时报错而不是硬答。
+2. corpus-api 把"答题模型"与"视觉核对模型"拆成两个配置项。
+
+**为什么没被早点发现**：`scripts/e2e_stack.py` 的 `[7]` 只断言了
+`index_status == "ready"`，问答那一半从来没有断言过 —— 而它的 SKIP 文案
+写的是"分块索引**与问答**"，承诺比实际覆盖多。同一份 e2e 里
+`mcp` 一个字都没有（见 F-33）。
+
+## F-33 · MCP 平面整体 404，一年多没人发现
+
+**严重度**：高（三个平面之一完全不通）
+
+同一天、同一次公网验证里抓到的第二条。
+
+入口转发 `/mcp` 时会把这个前缀**剥掉**（`internal/proxy` 的 prefixTrim，
+`/mcp` → `/`），而 FastMCP 缺省把自己挂在 `/mcp`。两边各自都"对"，
+叠起来就是整个 MCP 平面 404 —— **mcp 进程健康、入口健康、API key 鉴权
+照常放行**，唯一的痕迹是 mcp 日志里一行 `"POST / HTTP/1.1" 404`。
+
+compose 部署同样是坏的（`MCP_URL: http://mcp:9100`，同一条路径）。
+
+**为什么没被早点发现**：`scripts/e2e_stack.py` 里 grep 不到任何 `mcp`。
+这个平面**至今没有任何端到端覆盖** —— `scripts/e2e_mcp.py` 是直连 9100 的，
+不经入口，所以它验不到"入口剥前缀"这一环；而它自己的默认 URL 又恰好
+写的是 `/mcp`，改挂载点时差点把它一起带坏（同批修了）。
+
+**处理**：`mcp.run(..., path="/")`，并加一条静态配对守卫
+`test_mcp_mount_path_matches_what_the_entry_strips`，同时钉住三个消费方
+（入口的 prefixTrim、服务的 path、e2e 的默认 URL）。做成静态断言而不是
+行为测试，是因为要真起两个进程才验得到 —— 单测里 mock 掉任何一半，
+这条配对关系就不存在了。
+
+**守卫钉住的是"两边配对"，不是"这个平面能用"。** 真正的覆盖要等
+e2e 里加一段经入口的 MCP 握手。

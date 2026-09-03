@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     minio_access_key: str = "minioadmin"                # 对象存储凭据（生产必须改）
     minio_secret_key: str = "minioadmin"                # 同上
     minio_secure: bool = False                          # 走 https 则置 true
+    # **公网那一侧**的 scheme。内网明文回环、公网由反代或隧道终结 TLS 时两侧不一样：
+    # 预签名的签名覆盖 host，给浏览器的那条必须签成 https，否则 https 页面里
+    # 发出的是 http 请求，浏览器按混合内容直接拦掉。而只有 minio_secure 一个
+    # 开关时把它打开，内网 client 也会去 https 连回环 —— 表现是 ensure_bucket
+    # 就连不上。留空（None）跟随 minio_secure，既有部署行为不变
+    minio_public_secure: bool | None = None
     # 区域。**必须显式给** —— 不给的话 SDK 在签名前先向该 endpoint 问一次区域，
     # 而 public endpoint 在容器里连不上，表现是签名接口 502 而其他一切正常
     minio_region: str = "us-east-1"

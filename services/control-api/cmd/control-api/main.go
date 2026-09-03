@@ -79,6 +79,7 @@ func run() error {
 		SecretKey:      cfg.ObjectSecretKey,
 		Bucket:         cfg.ObjectBucket,
 		Secure:         cfg.ObjectSecure,
+		PublicSecure:   cfg.ObjectPublicSecure,
 		Region:         cfg.ObjectRegion,
 		PresignTTL:     cfg.PresignTTL,
 	})

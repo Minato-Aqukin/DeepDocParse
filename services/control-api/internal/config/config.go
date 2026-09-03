@@ -83,6 +83,12 @@ type Config struct {
 	ObjectBucket string
 	// 走 https 则置 true
 	ObjectSecure bool
+	// **公网那一侧**的 scheme。内网明文回环、公网由反代或隧道终结 TLS 时，
+	// 两侧的 scheme 是不一样的 —— 而签名覆盖 host，公网那条必须签成 https，
+	// 否则 https 页面里发出的是 http 请求，浏览器按混合内容直接拦掉。
+	// 只有一个开关时把它打开的后果是内网 client 也去 https 连回环，
+	// 表现是启动自检就连不上对象存储。留空跟随 ObjectSecure
+	ObjectPublicSecure bool
 	// 对象存储的区域。**必须显式给** —— 不给的话 SDK 会在签名前先向
 	// 该 endpoint 问一次区域，而给浏览器签名用的 endpoint 在容器里连不上，
 	// 表现是 POST /api/uploads 502 而启动自检全绿。MinIO 用 us-east-1
@@ -170,6 +176,7 @@ func Load() (*Config, error) {
 		ObjectSecretKey:       env("OBJECT_SECRET_KEY", "minioadmin"),
 		ObjectBucket:          env("OBJECT_BUCKET", "deepdocparse"),
 		ObjectSecure:          envBool("OBJECT_SECURE", false),
+		ObjectPublicSecure:    envBool("OBJECT_PUBLIC_SECURE", envBool("OBJECT_SECURE", false)),
 		ObjectRegion:          env("OBJECT_REGION", "us-east-1"),
 		PresignTTL:            time.Duration(envInt("PRESIGN_TTL_SECONDS", 900)) * time.Second,
 		MaxUploadBytes:        int64(envInt("MAX_UPLOAD_BYTES", 200*1024*1024)),

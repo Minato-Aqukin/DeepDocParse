@@ -7,6 +7,11 @@
 # 见 grants.sql 开头那段。
 set -e
 
+# **别写死绝对路径。** 容器里仓库在 /src，裸进程部署（infra/autodl/stack.bash）
+# 里在别处 —— 写死的表现是迁移跑完、grants 那一步 "No such file"，
+# 而 `set -e` 之下这确实会红，但错误信息指向文件系统而不是部署形态。
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
 alembic upgrade head
 
 # 授权必须在迁移之后：ALTER DEFAULT PRIVILEGES 只管**之后**建的对象，
@@ -24,5 +29,5 @@ PY
 
 # ON_ERROR_STOP：没有它，psql 会把失败的 GRANT 打成一行日志然后退出 0，
 # 而那正是"迁移成功但服务没权限"这个故障的来源
-psql "$psql_url" --set ON_ERROR_STOP=1 -f /src/database/corpus/grants.sql
+psql "$psql_url" --set ON_ERROR_STOP=1 -f "$HERE/grants.sql"
 echo "corpus schema 迁移与授权完成"

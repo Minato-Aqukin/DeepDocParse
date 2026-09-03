@@ -23,7 +23,10 @@ import sys
 
 from fastmcp import Client
 
-MCP_URL = os.environ.get("MCP_URL", "http://127.0.0.1:9100/mcp")
+# **结尾是 `/` 不是 `/mcp`。** MCP 服务挂在根路径上（入口会把 `/mcp` 前缀
+# 剥掉再转发，见 ddp_mcp/server.py 里那段说明）—— 这是那条配对关系的
+# 第三个消费方，写成 `/mcp` 的话直连必然 404。
+MCP_URL = os.environ.get("MCP_URL", "http://127.0.0.1:9100/")
 FIXTURE_BASE = os.environ.get("FIXTURE_BASE", "http://127.0.0.1:18081")
 REDIS_URL = os.environ.get("REDIS_URL", "")
 

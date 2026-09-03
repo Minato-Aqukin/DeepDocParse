@@ -529,3 +529,78 @@ def test_vector_index_name_is_one_implementation():
     assert canonical(1024) != canonical(768), "索引名没带维度 —— 换模型就静默丢向量"
     assert writer is canonical, "写入侧不是共用那一份实现了"
     assert mcp_server.chunk_index_name is canonical, "检索侧不是共用那一份实现了"
+
+
+# ---------------------------------------------------------------- uv workspace
+# **workspace 成员与 tool.uv.sources 必须一一对应。**
+#
+# 这条守的是一个"承诺没有守卫"的形状：根 pyproject 的注释写着"现在由
+# workspace 显式声明，pip/uv 都能解"，而 sources 里只列了六个成员里的两个。
+# 门禁与 CI 全程走 pip 装各个包，**pip 不读 tool.uv.sources** —— 于是那半句
+# 关于 uv 的话从来没有被任何东西验证过，直到 2026-09-03 真机部署时 uv 报：
+#   `ddp-corpus-worker` is included as a workspace member, but is missing
+#   an entry in `tool.uv.sources`
+# 不是"少解一点"，是**整个 workspace 拒绝解析**，装包这一步直接停在那里。
+#
+# 判据是**双向**的：members 里的每个包都要在 sources 里，sources 里的
+# workspace 条目也不能指向一个不存在的成员。
+def test_uv_workspace_members_and_sources_agree():
+    import tomllib
+
+    root = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    uv = root.get("tool", {}).get("uv", {})
+    members = uv.get("workspace", {}).get("members", [])
+    assert members, "根 pyproject 没有声明 workspace 成员"
+
+    declared = {name for name, spec in uv.get("sources", {}).items()
+                if isinstance(spec, dict) and spec.get("workspace")}
+
+    actual = set()
+    for member in members:
+        path = ROOT / member / "pyproject.toml"
+        assert path.exists(), f"workspace 成员 {member} 下没有 pyproject.toml"
+        actual.add(tomllib.loads(path.read_text(encoding="utf-8"))["project"]["name"])
+
+    assert actual == declared, (
+        "workspace 成员与 [tool.uv.sources] 对不上 —— uv 会整个拒绝解析。\n"
+        f"  成员里有而 sources 缺：{sorted(actual - declared)}\n"
+        f"  sources 里有而不是成员：{sorted(declared - actual)}")
+
+
+# ---------------------------------------------------------------- MCP 挂载点
+# **入口剥掉的前缀，与 MCP 服务自己挂的路径，必须是配对的。**
+#
+# control-api 转发 `/mcp` 时把这个前缀去掉（`internal/proxy` 的 prefixTrim），
+# 于是上游收到的是 `/`；而 FastMCP 缺省把自己挂在 `/mcp`。两边各自都"对"，
+# 叠在一起就是**整个 MCP 平面 404** —— 而 mcp 进程健康、入口健康、鉴权照常
+# 放行，唯一的痕迹是 mcp 日志里一行 `"POST / HTTP/1.1" 404`。
+# 2026-09-03 第一次从公网打这个平面时才发现，此前 e2e 一次都没打过它。
+#
+# 做成静态断言而不是行为测试，是因为要真起两个进程才能验到这件事
+# （单测里 mock 掉任何一半，这条配对关系就不存在了）。
+def test_mcp_mount_path_matches_what_the_entry_strips():
+    import re
+
+    server_go = (ROOT / "services" / "control-api" / "internal" / "api" / "server.go"
+                 ).read_text(encoding="utf-8")
+    trims = set(re.findall(r's\.mcp\.ServeHTTP\(w, r, "([^"]*)"\)', server_go))
+    assert trims == {"/mcp"}, f"入口对 mcp 的 prefixTrim 变了：{trims}"
+
+    server_py = (ROOT / "services" / "mcp" / "ddp_mcp" / "server.py"
+                 ).read_text(encoding="utf-8")
+    run_call = re.search(r"mcp\.run\((.*?)\)\s*$", server_py, re.S)
+    assert run_call, "ddp_mcp/server.py 里找不到 mcp.run(...)"
+    assert re.search(r'path\s*=\s*"/"', run_call.group(1)), (
+        "入口把 /mcp 剥成了 /，MCP 服务就必须挂在 / —— "
+        'mcp.run(...) 里少了 path="/"，整个 MCP 平面会 404')
+
+    # **第三个消费方。** e2e 是直连 9100 的（不经入口，所以不剥前缀），
+    # 它的默认地址也必须指向同一个挂载点 —— 二次验收指出，只钉入口与服务
+    # 两边的话，这一条会安静地过期成一个必然 404 的默认值。
+    e2e = (ROOT / "scripts" / "e2e_mcp.py").read_text(encoding="utf-8")
+    default_url = re.search(r'MCP_URL\s*=\s*os\.environ\.get\(\s*"MCP_URL"\s*,\s*"([^"]*)"',
+                            e2e)
+    assert default_url, "scripts/e2e_mcp.py 里找不到 MCP_URL 的默认值"
+    assert default_url.group(1).endswith(":9100/"), (
+        f"e2e 直连的默认地址是 {default_url.group(1)}，而 MCP 服务挂在 / —— "
+        "它不经入口，没人替它剥前缀，写成 /mcp 必然 404")

@@ -355,5 +355,22 @@ async def ask_document(file_url: str, question: str) -> str:
 
 
 if __name__ == "__main__":
-    # Streamable HTTP，供 backend 反向代理
-    mcp.run(transport="http", host="0.0.0.0", port=9100)
+    # Streamable HTTP，供入口反向代理。
+    #
+    # **监听地址必须可配。** 容器编排里要听 0.0.0.0（入口在另一个容器里，
+    # 得连得上）；而裸进程部署（infra/autodl/stack.bash）与入口同机，就该只听
+    # 回环 —— 本服务不做用户鉴权，只信任入口下发的 actor 上下文头，多监听
+    # 一个地址就是多一条"任何人都能自称 admin"的路。写死 0.0.0.0 时，
+    # 部署侧那个 MCP_PORT 旋钮也是假的：改了它只会让入口 502。
+    #
+    # **`path="/"` 不是可有可无的。** 入口（control-api）转发 `/mcp` 时会把
+    # 这个前缀**剥掉**（`internal/proxy` 的 prefixTrim，`/mcp` -> `/`），
+    # 而 FastMCP 缺省把自己挂在 `/mcp` —— 两边一叠，入口转过来的 `/` 落在
+    # 一个没有路由的位置上：**整个 MCP 平面 404**，而 mcp 进程健康、
+    # 入口健康、鉴权也正常放行，日志里只有一行 `"POST / HTTP/1.1" 404`。
+    # 2026-09-03 第一次从公网打 `/mcp` 时才发现（e2e 一直没覆盖这个平面）。
+    # 两边的配对由 tests/test_architecture_guards.py 钉着。
+    mcp.run(transport="http",
+            host=os.environ.get("MCP_HOST", "0.0.0.0"),
+            port=int(os.environ.get("MCP_PORT", "9100")),
+            path="/")

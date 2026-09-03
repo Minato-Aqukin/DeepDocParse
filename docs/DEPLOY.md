@@ -59,7 +59,86 @@ AutoDL 实例本身是非特权容器（无 `CAP_SYS_ADMIN`、`unshare --user` �
 EPERM），dind / rootless / podman 全堵死。裸进程部署在 `infra/autodl/`。
 
 架构没变 —— 网关只按注册表访问 HTTP 端点，endpoint 从容器名换成
-`127.0.0.1:端口` 就行。
+`127.0.0.1:端口` 就行。同样没变的还有两个受限角色：长跑进程一律用
+`ddp_control` / `ddp_corpus` 连库，超级用户只在迁移那一步出现。
+
+```bash
+# 本机先备好两样推不动就没法开始的东西：
+#   1. 前端产物   cd apps/web && npm run build-only
+#   2. Go 控制面  在目标机上现编（goproxy.cn 快），或本地交叉编译后 push
+bash infra/autodl/stack.bash install     # apt + conda(3.12) + 四个服务包
+bash infra/autodl/stack.bash migrate     # 两套迁移 + 授权
+bash infra/autodl/stack.bash start       # PostgreSQL + 七个应用进程 + nginx
+bash infra/autodl/stack.bash doctor      # 别跳过
+```
+
+配置全在脚本头部的 `${VAR:-默认值}`，外部 export 优先。**公网部署必须给的
+只有两个**：`PUBLIC_HOST` 与 `PUBLIC_SCHEME` —— 预签名 URL 的签名覆盖 host，
+稳定文件 URL 也要拼它。
+
+### 下载源：这类机器上什么能用、什么不能用
+
+实测（2026-09-03，AutoDL 北京 B 区）。**不要在不能用的源上重试** ——
+它们是连不上，不是抖动：
+
+| 源 | 结果 |
+|---|---|
+| `mirrors.aliyun.com`（golang / pypi） | ✅ 8MB/s |
+| `repo.huaweicloud.com`（apt） | ✅ 镜像自带 |
+| `mirrors.tuna.tsinghua.edu.cn`（conda） | ✅ 镜像自带 |
+| `goproxy.cn` | ✅ |
+| `pkg.cloudflare.com`（cloudflared 的 deb） | ✅ 19MB / 20s |
+| `dl.min.io` | ❌ 20 秒 0 字节 |
+| `github.com` releases | ❌ 20 秒 0 字节 |
+| `packages.redis.io`（redis-stack） | ❌ 超时 |
+
+由此推出两条做法：
+
+- **MinIO 从源码编**（`go install github.com/minio/minio@latest` 走 goproxy.cn，
+  两分钟）。它是纯 Go 项目，这比想办法把预编译包弄进来快得多。
+- **cloudflared 用 Cloudflare 自家的 deb**，别走 GitHub；也别 `go install`
+  ——它的 go.mod 有 replace，`go install pkg@latest` 会直接拒绝。
+- 没有 redis-stack 就**没有 RediSearch**：网关那份块级向量索引退到 scan 兜底。
+  产品主链路的向量检索走 PostgreSQL + pgvector，不受影响；`doctor` 会如实报。
+
+### 注册表要反映"这次部署真的起了什么"
+
+网关的 `/readyz` 是 `all(up)`：注册了却没起的条目会让探针恒 503，副本永远
+不接流量。所以缺省的 `MODELS_CONFIG` 是 `models.local.yaml`（只有进程内的
+borndigital），起了模型线之后再换。
+
+`models.autodl.yaml` 默认把 `embedding_models` 段注释着 —— 起了 `embed.bash`
+就要打开它。**别直接改仓库里那份**：下一次推代码会把它盖回去，而后果是索引
+静默退回失败。把它复制一份到仓库之外（例如 `$DDP_ROOT/models.deploy.yaml`）
+再把 `MODELS_CONFIG` 指过去。
+
+解析引擎另说：`models.autodl.yaml` 里 `vlm-ocr` 标着 `default: true`，那是
+**网关在请求没指定引擎时**的选择；上传路径由 corpus-api 的
+`DEFAULT_PARSE_ENGINE` 决定。有文字层的 PDF 用 borndigital（零模型零显存），
+需要扫描件 / 表格 / 公式时再点名 `engine=vlm-ocr`。
+
+### 公网暴露：Cloudflare Tunnel
+
+```bash
+( umask 077; printf '%s' "<tunnel token>" > "$DDP_ROOT/cloudflared.token" )
+bash infra/autodl/stack.bash tunnel
+```
+
+（别写成 `... > file && chmod 600 $_`：`$_` 取的是上一条命令的最后一个**参数**，
+重定向目标不算参数 —— 它展开成 token 本身，chmod 失败、文件停在 644，
+而且报错信息把 token 原样打回终端。）
+
+只有**出站**连接（到 Cloudflare 边缘的 7844），不需要公网 IP，也不用开任何
+入站端口 —— 这正是它适合"只映射了两个端口"的机器的原因。
+
+**ingress（域名 → 哪个本地端口）配在 Cloudflare 那一侧**，cloudflared 启动时
+拉下来。本地 `EDGE_PORT` 与它对不上的表现是**公网 502 而本机全绿**，
+所以 `stack.bash tunnel` 会把下发的配置打出来并当场比对。
+
+TLS 在 Cloudflare 边缘终结，回源是明文回环 —— 于是**内外两侧的 scheme 不同**。
+这就是 `OBJECT_PUBLIC_SECURE` / `MINIO_PUBLIC_SECURE` 存在的理由：只有一个
+开关时，关着则给浏览器的预签名 URL 是 `http://`，被浏览器按混合内容拦掉
+（服务端零报错）；开着则内网 client 去 https 连回环，启动自检就断。
 
 ## 迁移
 

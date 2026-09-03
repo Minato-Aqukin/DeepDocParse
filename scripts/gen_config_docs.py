@@ -160,7 +160,34 @@ def collect(source_path: Path, class_name: str) -> list[tuple[str, list[dict]]]:
 #: 而它其实有 —— 假红比假绿好，但都不该有。
 GO_CALL_RE = re.compile(
     r'(?P<field>\w+):\s*(?:[\w.]+\()?env(?P<kind>Int|Bool|List)?\('
-    r'"(?P<key>[A-Z0-9_]+)"\s*,\s*(?P<default>[^\n]*?)\)')
+    r'"(?P<key>[A-Z0-9_]+)"\s*,\s*')
+
+
+def go_default_expr(body: str, start: int) -> str:
+    r"""从 `env("KEY", ` 之后一路读到**配对**的那个右括号。
+
+    以前这里是正则里的非贪婪 `[^\n]*?\)`。默认值本身是另一个 env 调用时
+    （`envBool("OBJECT_PUBLIC_SECURE", envBool("OBJECT_SECURE", false))`）
+    它会停在**里层**那个 `)` 上，文档里于是渲染出一个少了右括号的表达式。
+    而生成器与文档仍然一致 —— `--check` 是绿的，坏的只有给人看的那一面。
+    """
+    depth, i = 0, start
+    while i < len(body):
+        ch = body[i]
+        if ch == '"':                      # 跳过字符串字面量里的括号
+            i += 1
+            while i < len(body) and body[i] != '"':
+                i += 2 if body[i] == "\\" else 1
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth == 0:
+                return body[start:i].strip()
+            depth -= 1
+        elif ch == "\n":
+            break
+        i += 1
+    return body[start:i].strip()
 GO_SECTION_RE = re.compile(r"^\s*//\s*-+\s*(.+?)\s*-+\s*$")
 
 GO_TYPES = {None: "string", "Int": "int", "Bool": "bool", "List": "list[str]"}
@@ -214,7 +241,7 @@ def collect_go(source_path: Path) -> list[tuple[str, list[dict]]]:
     found: dict[str, dict] = {}
     for m in GO_CALL_RE.finditer(body):
         field = m.group("field")
-        default = m.group("default").strip().rstrip(")").strip()
+        default = go_default_expr(body, m.end())
         key = m.group("key")
         unit = next((u for suffix, u in GO_UNIT_HINT.items() if key.endswith(suffix)), "")
         doc = docs.get(field, "")
@@ -252,12 +279,36 @@ def render(target: Target, sections: list[tuple[str, list[dict]]]) -> str:
     for title, fields in sections:
         out += [f"## {title}", "", "| 环境变量 | 类型 | 默认值 | 说明 |", "|---|---|---|---|"]
         for f in fields:
+            # **三列都要转义。** 类型列漏了转义时，`bool | None` 这种联合类型
+            # 会把一行拆成五个单元格 —— GFM 把多出来的那格丢掉，于是**整段说明
+            # 消失**，而生成器与文档依然一致，`--check` 看不出来。
             doc = f["doc"].replace("|", "\\|") or "—"
             default = f["default"].replace("|", "\\|")
-            out.append(f"| `{f['env']}` | `{f['type']}` | `{default}` | {doc} |")
+            ftype = f["type"].replace("|", "\\|")
+            out.append(f"| `{f['env']}` | `{ftype}` | `{default}` | {doc} |")
         out.append("")
     out.append("<!-- 由 scripts/gen_config_docs.py 生成，请勿手改 -->")
+    _check_table(target, out)
     return "\n".join(out) + "\n"
+
+
+def _check_table(target: Target, lines: list[str]) -> None:
+    """每一行都必须**正好**是四格。
+
+    `--check` 比的是"生成器输出 == 文件内容"，所以转义漏了的时候两边一样坏、
+    门禁照样绿 —— 坏的只有给人看的那一面：GFM 把多出来的格丢掉，那一项的
+    整段说明就此消失。2026-09-03 `bool | None` 这个类型撞上过一次
+    （type 列当时没转义），而它是全表第一个带竖线的类型。
+    """
+    for line in lines:
+        if not line.startswith("| "):
+            continue
+        # 未转义的竖线才算分隔符
+        cells = re.split(r"(?<!\\)\|", line)
+        if len(cells) != 6:      # 前后各有一个空串
+            raise SystemExit(
+                f"::error::{target.output} 渲染坏了（{len(cells) - 2} 格，应当 4 格）："
+                f"某一列里有没转义的竖线\n  {line}")
 
 
 def process(target: Target, check: bool) -> int:

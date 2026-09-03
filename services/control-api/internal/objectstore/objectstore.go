@@ -41,8 +41,10 @@ type Config struct {
 	SecretKey      string
 	Bucket         string
 	Secure         bool
-	Region         string
-	PresignTTL     time.Duration
+	// 公网那一侧的 scheme，见 config.ObjectPublicSecure
+	PublicSecure bool
+	Region       string
+	PresignTTL   time.Duration
 }
 
 func Open(ctx context.Context, c Config) (*Store, error) {
@@ -54,14 +56,14 @@ func Open(ctx context.Context, c Config) (*Store, error) {
 	//
 	// 这个坑只在"内外两个 endpoint"的部署形态下出现，本机单测与
 	// 进程内 e2e 都碰不到 —— 2026-09-02 第一次真起全栈时炸出来的。
-	mk := func(endpoint string) (*minio.Client, error) {
+	mk := func(endpoint string, secure bool) (*minio.Client, error) {
 		return minio.New(endpoint, &minio.Options{
 			Creds:  credentials.NewStaticV4(c.AccessKey, c.SecretKey, ""),
-			Secure: c.Secure,
+			Secure: secure,
 			Region: c.Region,
 		})
 	}
-	internal, err := mk(c.Endpoint)
+	internal, err := mk(c.Endpoint, c.Secure)
 	if err != nil {
 		return nil, err
 	}
@@ -69,9 +71,17 @@ func Open(ctx context.Context, c Config) (*Store, error) {
 	// 而签给浏览器的 URL 必须是浏览器解析得了的主机名。
 	// 用同一个的话，容器里签出来的 URL 里带着 `minio:9000`，
 	// 浏览器一访问就是 DNS 失败 —— 而这只在真部署里才暴露
+	//
+	// **scheme 也可能内外不同**：内网走回环明文、公网由隧道终结 TLS 时，
+	// 两个 endpoint 可以是同一个 host（都经反代），但签名必须签成 https。
+	// 所以这里的判据是"endpoint 或 scheme 任意一个不同"，不是只看 endpoint
 	public := internal
-	if c.PublicEndpoint != "" && c.PublicEndpoint != c.Endpoint {
-		if public, err = mk(c.PublicEndpoint); err != nil {
+	if (c.PublicEndpoint != "" && c.PublicEndpoint != c.Endpoint) || c.PublicSecure != c.Secure {
+		endpoint := c.PublicEndpoint
+		if endpoint == "" {
+			endpoint = c.Endpoint
+		}
+		if public, err = mk(endpoint, c.PublicSecure); err != nil {
 			return nil, err
 		}
 	}
