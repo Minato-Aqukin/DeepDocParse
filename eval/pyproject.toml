@@ -5,4 +5,6 @@
 # 质量证据写进报告，所以它们自己也要有回归用例。
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["../tests", "."]
+# "." 排最前：`tests` 是跨包的隐式命名空间包，顺序错了就会导入到别的包的
+# conftest（裸 `pytest` 入口不把 CWD 放进 sys.path，CI 正是那样跑的）
+pythonpath = [".", "../tests"]

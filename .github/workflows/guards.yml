@@ -28,16 +28,20 @@ jobs:
       - name: 安装 Python 包
         run: |
           python -m pip install --upgrade pip
-          pip install -e python/ddp_contracts
-          pip install -e "python/ddp_core[db,cjk,dev]"
-          pip install -e "services/model-gateway[dev]"
-          # **worker 要先装。** `corpus-api[dev]` 依赖 `ddp-corpus-worker`
-          # （测试要用 worker 真正的 handler 表），而那是本仓库里的兄弟包、
-          # 不在 PyPI 上。先装 corpus-api 的话，pip 会去 PyPI 找它然后
-          # "No matching distribution found" —— 本机因为早就装过所以看不见
-          pip install -e services/corpus-worker
-          pip install -e "services/corpus-api[dev]"
-          pip install -e "services/mcp[dev]"
+          # **一条命令装完，不能分开装。**
+          # `corpus-api[dev]` 依赖 `ddp-corpus-worker`（测试要用 worker 真正的
+          # handler 表），而 `corpus-worker` 又依赖 `ddp-corpus-api` ——
+          # 运行时方向是 worker -> api 不成环，但**加上 dev extra 就成环了**。
+          # 分开装的话，无论谁在前，pip 都会去 PyPI 找另一个然后
+          # "No matching distribution found"；一条命令里 pip 能同时看到两个
+          # 本地路径，环就解开了（python.yml 的矩阵本来就是这么写的）。
+          # 本机看不见这件事：两个包早就装过了。
+          pip install -e python/ddp_contracts \
+                      -e "python/ddp_core[db,cjk,dev]" \
+                      -e "services/model-gateway[dev]" \
+                      -e services/corpus-worker \
+                      -e "services/corpus-api[dev]" \
+                      -e "services/mcp[dev]"
 
       # 契约生成物过期 = 三种语言的枚举开始漂。
       # gofmt 要在 PATH 上，否则 Go 生成物会格式不一致

@@ -442,3 +442,62 @@ def test_dropping_legacy_tables_stays_hard_to_do_by_accident():
     assert not forced, (
         "删表脚本加了 --force。前提不成立的时候要做的是查清楚，不是绕过 ——"
         "这条如果真要改，先改掉脚本开头那段说明并说清为什么")
+
+
+# ---------------------------------------------------------------------------
+# §6 跨包的 tests 命名空间不许靠运气
+# ---------------------------------------------------------------------------
+
+def test_every_package_puts_itself_first_on_pythonpath():
+    """每个包的 `pythonpath` 第一项必须是 `"."`。
+
+    各包的 `tests/` 都没有 `__init__.py`，于是 `tests` 是一个**隐式命名空间包**，
+    横跨 ddp_core / corpus-api / corpus-worker / model-gateway / mcp / eval
+    六个 tests 目录 —— `from tests.conftest import ...` 落到哪一个，
+    完全取决于 sys.path 顺序。
+
+    而顺序取决于**怎么起 pytest**：
+
+      * `python -m pytest` 会把 CWD 放进 sys.path（本机一直这么跑，所以一直对）
+      * 裸 `pytest` 入口脚本**不会** —— 只剩几个可编辑安装的路径，谁先谁赢
+
+    CI 跑的正是裸 `pytest`。于是 corpus-api 的用例导入到了 ddp_core 的 conftest：
+
+        ImportError: cannot import name 'CHAT' from 'tests.conftest'
+                     (.../python/ddp_core/tests/conftest.py)
+
+    本机复现方式：在包目录下用**裸 `pytest`**（不是 `python -m pytest`）跑一次。
+
+    把 `"."` 显式排在最前，两种起法就都对了。这条守卫钉住它别被删掉 ——
+    删掉之后本机照样全绿，只有 CI 会红，而那时人已经在改别的东西了。
+    """
+    import tomllib
+
+    packages = ["python/ddp_core", "services/corpus-api", "services/corpus-worker",
+                "services/model-gateway", "services/mcp", "eval"]
+    offenders = []
+    for rel in packages:
+        pyproject = ROOT / rel / "pyproject.toml"
+        if not pyproject.exists():
+            offenders.append(f"{rel}: 没有 pyproject.toml")
+            continue
+        conf = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        ini = conf.get("tool", {}).get("pytest", {}).get("ini_options", {})
+        path = ini.get("pythonpath")
+        if not path:
+            offenders.append(f"{rel}: 没有 pythonpath")
+        elif path[0] != ".":
+            offenders.append(f"{rel}: pythonpath 第一项是 {path[0]!r}，不是 '.'")
+    assert not offenders, (
+        "这些包没有把自己排在 pythonpath 最前：" + "; ".join(offenders)
+        + "。裸 `pytest` 起的时候，它们的 tests 会被别的包的同名目录顶掉")
+
+
+def test_the_pythonpath_scan_actually_reads_something():
+    """反哨兵：一个包都没查到时上一条恒真。"""
+    import tomllib
+
+    conf = tomllib.loads((ROOT / "services" / "corpus-api" / "pyproject.toml")
+                         .read_text(encoding="utf-8"))
+    ini = conf.get("tool", {}).get("pytest", {}).get("ini_options", {})
+    assert ini.get("pythonpath"), "读不到 corpus-api 的 pythonpath —— 判据失效了"

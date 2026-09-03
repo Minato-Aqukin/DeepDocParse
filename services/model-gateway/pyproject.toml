@@ -31,7 +31,20 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21", "fakeredis>=2.26"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-pythonpath = ["../../tests"]
+# **"." 必须在最前，而且不能省。**
+# 各包的 tests/ 都没有 __init__.py，于是 `tests` 是一个**隐式命名空间包**，
+# 横跨 ddp_core / corpus-api / corpus-worker 等好几个 tests 目录 ——
+# `from tests.conftest import ...` 解析到哪一个，取决于 sys.path 顺序。
+#
+# 而顺序取决于**怎么起 pytest**：`python -m pytest` 会把 CWD 放进 sys.path
+# （所以本机一直是对的），裸 `pytest` 入口脚本**不会** ——
+# 那时只剩几个可编辑安装的路径，谁先谁赢。CI 跑的正是裸 pytest，
+# 于是 corpus-api 的用例导入到了 ddp_core 的 conftest：
+#   ImportError: cannot import name 'CHAT' from 'tests.conftest'
+#                (.../python/ddp_core/tests/conftest.py)
+#
+# 加这一行之后两种起法都对。别删。
+pythonpath = [".", "../../tests"]
 
 [build-system]
 requires = ["hatchling"]

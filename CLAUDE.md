@@ -21,7 +21,7 @@
 | 理解任务队列 | `docs/refactor/TASK-QUEUE.md` |
 | 部署 | `docs/DEPLOY.md` |
 | 前端视觉 | `../design-previews/DESIGN-GUIDE.md`（REV.04） |
-| 避开已经踩过的坑 | `docs/refactor/FINDINGS.md`（28 条，每条都写了"为什么它没被早点发现"） |
+| 避开已经踩过的坑 | `docs/refactor/FINDINGS.md`（30 条，每条都写了"为什么它没被早点发现"） |
 
 ## 八条不变式
 
@@ -82,6 +82,12 @@ cd apps/web               && npm run test:unit && npm run test:e2e
 
 **pytest 必须在包目录下跑** —— 传 rootdir 之外的路径参数会让 `asyncio_mode`
 退回 strict，所有 async 用例集体报 "requested an async fixture"。
+
+**而且 `python -m pytest` 与裸 `pytest` 不是一回事**：前者把 CWD 放进
+sys.path，后者不会。各包的 `tests` 是跨包的隐式命名空间包，顺序错了就会
+导入到别的包的 conftest（F-29）。现在各包 `pythonpath` 第一项都是 `"."`，
+两种起法都对，有守卫钉着 —— 但**复现这类问题要用裸 `pytest`**，
+用 `python -m` 加 PYTHONPATH 是复现不出来的。
 
 ## 铁律
 

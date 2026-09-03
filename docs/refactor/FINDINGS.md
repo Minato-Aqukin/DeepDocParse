@@ -635,3 +635,72 @@ DETAIL: Key (actor_id)=(...) is not present in table "users".
 **这一条是删表工具替我们照出来的**：写那个工具的时候去查"CASCADE 会连带
 删什么"，才看见三张活表挂在旧表上。不查的话，第一次真删就会同时发生
 "表没了"和"一个 schema 缺陷被无声修好了"。
+
+
+---
+
+# 第一次真跑 CI（2026-09-03）抓到的六条
+
+推上 GitHub 之后五条工作流第一次真跑。与「第一次真起全栈」同一族 ——
+**干净环境才暴露**，只是这次暴露的是依赖声明与环境假设，不是部署拓扑。
+第一轮四条，修完再推又暴露两条更深的（前一轮的修复把它们从后面顶了出来）。
+
+## F-29 · `python -m pytest` 与裸 `pytest` 不是一回事
+
+**严重度**：高（corpus-api 整个测试模块导入失败）
+
+各包的 `tests/` 都没有 `__init__.py`，于是 `tests` 是一个**隐式命名空间包**，
+横跨六个 tests 目录。`from tests.conftest import CHAT` 落到哪一个，
+完全取决于 sys.path 顺序 —— 而顺序取决于**怎么起 pytest**：
+
+- `python -m pytest` 会把 CWD 放进 sys.path（CLAUDE.md 里写的就是这个跑法，
+  所以本机一直对）
+- 裸 `pytest` 入口脚本**不会** —— 只剩几个可编辑安装的路径，谁先谁赢
+
+CI 跑的正是裸 `pytest`：
+
+```
+ImportError: cannot import name 'CHAT' from 'tests.conftest'
+             (.../python/ddp_core/tests/conftest.py)
+```
+
+corpus-api 的用例导入到了 **ddp_core 的** conftest。
+
+**本机复现方式**（花了几轮才找到）：在包目录下用**裸 `pytest`** 跑。
+用 `PYTHONPATH` 强行把 ddp_core 排前面是**复现不出来的** ——
+因为 `python -m` 的 CWD 永远在 PYTHONPATH 前面。
+一开始正是这么误判成"改了也没用"。
+
+**处理**：每个包的 `pythonpath` 第一项显式写 `"."`，两种起法就都对。
+加了守卫 `test_every_package_puts_itself_first_on_pythonpath` 钉住它 ——
+删掉之后本机照样全绿，只有 CI 会红。
+
+## F-30 · dev extra 把「不成环」变成了成环
+
+**严重度**：中（guards 工作流装不上依赖）
+
+`corpus-worker` 依赖 `ddp-corpus-api`（运行时方向），而
+`corpus-api[dev]` 依赖 `ddp-corpus-worker`（测试要用 worker 真正的
+handler 表，不在 conftest 里另抄一份）。运行时方向不成环，
+**加上 dev extra 就成环了** —— 而 pyproject 里那句注释写的是"不成环"。
+
+分开装的话，无论谁在前，pip 都会去 PyPI 找另一个然后
+`No matching distribution found`。第一轮我只是把顺序换了个方向，
+于是错误也换了个方向 —— 这说明"调顺序"根本没触及根因。
+
+**处理**：一条 `pip install` 里同时给出两个本地路径，pip 就能解开环
+（`python.yml` 的矩阵本来就是这么写的，guards 那份没跟上）。
+两处都在干净 venv 里验过。
+
+## 附：另外四条（第一轮）
+
+| 工作流 | 根因 |
+|---|---|
+| `web` | 根 `package.json` 声明了 npm workspaces，lockfile 却留在 `apps/web/` —— npm 只认 workspace 根那份。本机 `node_modules` 早在，`npm install` 又容忍缺 lockfile |
+| `guards` | 见 F-30 |
+| `python` | 「占位 SERVICE_TOKEN 必须启动即失败」依赖环境里恰好没开逃生口；CI 设了 `ALLOW_INSECURE_DEFAULTS=true`，断言直接失效。**corpus-api 里有一条一模一样的**，同批修 |
+| `stack` | 我测试的锅：用量走 outbox 异步投递，e2e 读一次就断言 |
+
+**「占位密钥必须拒绝启动」那一类出现了两次**（model-gateway 与 corpus-api），
+形状完全相同：测试断言的是"安全默认值生效"，却把"逃生口没开"当成了前提。
+两条都改成显式关掉逃生口。

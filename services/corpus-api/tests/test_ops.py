@@ -163,6 +163,12 @@ def test_placeholder_secrets_refuse_to_start(monkeypatch, field):
     from ddp_corpus.config import assert_secrets_configured
 
     monkeypatch.setattr(settings, field, "change-me")
+    # **逃生口要显式关掉，不能靠环境里恰好没开。**
+    # CI 的 job 级 env 设了 `ALLOW_INSECURE_DEFAULTS: "true"`（一次性容器没有
+    # .env，不开的话任何走 lifespan 的用例都会被拦），于是这条断言
+    # DID NOT RAISE —— 而它守的正是"门禁形同虚设"。
+    # model-gateway 那边有一条一模一样的，同批修的
+    monkeypatch.setattr(settings, "allow_insecure_defaults", False)
     with pytest.raises(RuntimeError, match=field.upper()):
         assert_secrets_configured()
 
