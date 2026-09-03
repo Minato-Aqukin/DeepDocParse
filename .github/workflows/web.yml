@@ -9,34 +9,41 @@ on:
 jobs:
   web:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      # package-lock.json 的 resolved 全部指向 registry.npmmirror.com（仓库文件，
-      # 不重生成）。npm 会把跨 host 的 tarball 当成 "remote" 类型直接拒掉
-      # （EALLOWREMOTE），所以这里必须显式带上原 registry
-      - name: 安装依赖
+      # **在仓库根装，不在 apps/web 里装。** 根 package.json 声明了
+      # npm workspaces（apps/* + packages/*），workspace 布局下 npm 会一路
+      # 往上走到 workspace 根去找 lockfile —— 放在 apps/web 里的那份它根本不看，
+      # 于是 `npm ci` 报 "can only install with an existing package-lock.json"。
+      # 本机看不见这个问题：node_modules 早就在了，`npm install` 也容忍缺 lockfile。
+      #
+      # lockfile 的 resolved 指向 registry.npmmirror.com（仓库文件，不重生成）。
+      # npm 会把跨 host 的 tarball 当成 "remote" 类型直接拒掉（EALLOWREMOTE），
+      # 所以必须显式带上原 registry
+      - name: 安装依赖（workspace 根）
         run: npm ci --registry=https://registry.npmmirror.com
 
       - name: 类型检查 + 构建
+        working-directory: apps/web
         run: npm run build
 
       # 类型检查够不着的那一类：卸载后定时器还在跑、blob URL 没回收、
       # ResizeObserver 没断
       - name: 组件单测
+        working-directory: apps/web
         run: npm run test:unit
 
       - name: 装 Playwright 浏览器
+        working-directory: apps/web
         run: npx playwright install --with-deps chromium
 
       # 产品门禁全在 e2e 里：零 console error/warn · 全路由可达 · 两套主题 ·
       # 零投影零字距 · 不破版 · 键盘可达。**必须进 CI** ——
       # 一次性检查挡不住下一个 commit 的退化
       - name: 端到端门禁
+        working-directory: apps/web
         run: npm run test:e2e

@@ -396,8 +396,17 @@ async def main() -> int:
 
         # ------------------------------------------------------ 7 计量与审计
         print("\n[8] 计量与审计")
-        # 缺省只看**调用者自己**的用量，所以上面那份文档必须是这次跑新传的
-        usage = (await http.get("/api/usage", params={"days": 1})).json()
+        # 缺省只看**调用者自己**的用量，所以上面那份文档必须是这次跑新传的。
+        #
+        # **要等。** 用量走 outbox：corpus 与业务写入同事务落库，再由 5 秒一轮的
+        # 投递循环发给 control。读一次就断言等于要求"异步投递已经完成"，
+        # 而那取决于机器快慢 —— 本机解析够慢所以一直是绿的，
+        # GitHub Actions 上就红了（第一次真跑 CI 抓到的）。
+        # 异步链路的正确断言形状是"在合理时间内出现"，不是"现在就有"。
+        usage = await _poll(
+            http, "/api/usage?days=1",
+            lambda d: any(p["kind"] == "parse" for p in (d.get("points") or [])),
+            timeout=60) or {}
         points = usage.get("points") or []
         kinds = sorted({p["kind"] for p in points})
         if "parse" in kinds:
@@ -405,7 +414,7 @@ async def main() -> int:
             run.ok("计量流水", f"{len(points)} 条，种类={kinds}，parse {pages} 页")
         else:
             run.fail("计量流水",
-                     f"解析完成后没有 parse 用量（拿到 {kinds}）—— "
+                     f"等了 60 秒仍没有 parse 用量（拿到 {kinds}）—— "
                      f"corpus 的 outbox 没投给 control？看 corpus_outbox 的 last_error")
 
         audit = await http.get("/api/audit", params={"limit": 20})

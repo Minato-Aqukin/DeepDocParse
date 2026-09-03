@@ -147,6 +147,18 @@ cd apps/web               && npm run test:unit && npm run test:e2e
 六道防线一条都没拦住，因为它们验的分别是源码、权限、模型，没有一条验
 「迁移跑完之后库长什么样」。
 
+## 仓库与可见性
+
+`Minato-Aqukin/DeepDocParse` —— **公开仓库**（不是 private，工作区那份旧
+CLAUDE.md 写错了）。`DeepDocParse-Web` 已归档为只读，代码全在这里。
+
+合仓是用 `git filter-repo --to-subdirectory-filter` 做的，**每个 commit 的 SHA
+都被重写过** —— 所以本仓库历史不是旧仓库 `main` 的后代，当初是 force-push
+上去的。旧的那段仍然可达：分支 `legacy/pre-monorepo` 与同名 tag。
+
+公开仓库意味着**推之前必须扫一遍密钥**：跟踪文件里不许有 `.env`，
+历史里不许出现过，`infra/env/dev.env` 的值不许出现在任何跟踪文件里。
+
 ## 本机环境
 
 Arch Linux（CachyOS）· **核显 780M，没有 N 卡** · Python 3.14 · Node 26 ·

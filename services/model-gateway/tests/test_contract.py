@@ -462,6 +462,11 @@ def test_placeholder_service_token_refuses_to_start(monkeypatch, placeholder):
     from ddp_gateway.config import assert_secrets_configured
 
     monkeypatch.setattr(settings, "service_token", placeholder)
+    # **逃生口要显式关掉，不能靠环境里恰好没开。**
+    # CI 的 job 级 env 设了 `ALLOW_INSECURE_DEFAULTS: "true"`（它要起真容器），
+    # 于是这条断言在 CI 上 DID NOT RAISE —— 本机没设那个变量所以一直绿。
+    # 测试依赖环境的默认值，就是"在开发机上通过"而已
+    monkeypatch.setattr(settings, "allow_insecure_defaults", False)
     with pytest.raises(RuntimeError, match="SERVICE_TOKEN"):
         assert_secrets_configured()
 

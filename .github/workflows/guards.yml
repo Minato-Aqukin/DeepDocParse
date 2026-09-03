@@ -31,8 +31,12 @@ jobs:
           pip install -e python/ddp_contracts
           pip install -e "python/ddp_core[db,cjk,dev]"
           pip install -e "services/model-gateway[dev]"
-          pip install -e "services/corpus-api[dev]"
+          # **worker 要先装。** `corpus-api[dev]` 依赖 `ddp-corpus-worker`
+          # （测试要用 worker 真正的 handler 表），而那是本仓库里的兄弟包、
+          # 不在 PyPI 上。先装 corpus-api 的话，pip 会去 PyPI 找它然后
+          # "No matching distribution found" —— 本机因为早就装过所以看不见
           pip install -e services/corpus-worker
+          pip install -e "services/corpus-api[dev]"
           pip install -e "services/mcp[dev]"
 
       # 契约生成物过期 = 三种语言的枚举开始漂。
