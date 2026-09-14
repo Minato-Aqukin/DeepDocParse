@@ -49,5 +49,10 @@
   },
   "engines": {
     "node": "^22.18.0 || >=24.12.0"
+  },
+  "optionalDependencies": {
+    "@napi-rs/canvas-win32-x64-msvc": "1.0.2",
+    "@rolldown/binding-win32-x64-msvc": "1.1.5",
+    "lightningcss-win32-x64-msvc": "1.33.0"
   }
 }
