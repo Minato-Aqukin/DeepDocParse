@@ -949,6 +949,38 @@ def test_wsl_runtime_pin_rejects_wrong_version_and_archive(tmp_path):
         build_desktop.verify_wsl_runtime(tarball)
 
 
+def test_archive_symlink_resolution_stays_posix_on_windows(monkeypatch):
+    """Tar names are posix even when Python reports Windows path semantics.
+
+    Regression: the resolver used os.path, so `bin/2to3 -> 2to3-3.12` became a
+    backslash name on windows-latest and every bundled launcher symlink read as
+    "listed but absent" in the assembler.
+    """
+    import ntpath
+
+    class WindowsOS:
+        path = ntpath
+        sep = "\\"
+
+    monkeypatch.setattr(build_desktop, "os", WindowsOS)
+    directory = "top/runtime/python/bin"
+    name = f"{directory}/2to3"
+    links = {name: "2to3-3.12"}
+    digests = {f"{directory}/2to3-3.12": "a" * 64}
+    sizes = {f"{directory}/2to3-3.12": 1234}
+    assert build_desktop.resolve_archive_member(name, links, digests) == "a" * 64
+    assert build_desktop.resolve_archive_size(name, links, sizes) == 1234
+    # A link that walks up but stays inside the archive root still resolves ...
+    digests["etc/passwd"] = "b" * 64
+    assert build_desktop.resolve_archive_member(
+        "top/bin/x", {"top/bin/x": "../../etc/passwd"}, digests) == "b" * 64
+    # ... while one that escapes the root is refused even though the resolved
+    # name exists in the map: the guard is the "../" prefix, not absence.
+    digests["../etc/passwd"] = "c" * 64
+    assert build_desktop.resolve_archive_member(
+        "top/a/b/esc", {"top/a/b/esc": "../../../../etc/passwd"}, digests) is None
+
+
 def test_wsl_runtime_pin_rejects_non_bundle_layout(tmp_path):
     """A big tarball with a valid hash but no interpreter is not a runtime."""
     top = "deepdocparse-wsl-runtime-0.1.0-linux-x64"

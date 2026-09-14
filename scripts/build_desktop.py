@@ -16,6 +16,7 @@ import importlib.util
 import json
 import os
 import platform
+import posixpath
 import re
 import shutil
 import stat
@@ -426,7 +427,12 @@ def read_wsl_archive(tarball):
 
 
 def resolve_archive_member(name, links, digests, depth=0):
-    """Digest of a member as extraction would see it, following tar symlinks."""
+    """Digest of a member as extraction would see it, following tar symlinks.
+
+    Tar member names and link targets are POSIX strings on every platform; path
+    joining must use posixpath even on Windows or `bin/2to3` -> `2to3-3.12`
+    resolves to a backslash name that never matches the archive map.
+    """
     if depth > 32:
         return None
     if name in digests:
@@ -434,8 +440,8 @@ def resolve_archive_member(name, links, digests, depth=0):
     target = links.get(name)
     if target is None or target.startswith("/"):
         return None
-    relative = os.path.normpath(os.path.join(os.path.dirname(name), target))
-    if relative == ".." or relative.startswith(".." + os.sep):
+    relative = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+    if relative == ".." or relative.startswith("../"):
         return None
     return resolve_archive_member(relative, links, digests, depth + 1)
 
@@ -453,8 +459,8 @@ def resolve_archive_size(name, links, sizes, depth=0):
     target = links.get(name)
     if target is None or target.startswith("/"):
         return None
-    relative = os.path.normpath(os.path.join(os.path.dirname(name), target))
-    if relative == ".." or relative.startswith(".." + os.sep):
+    relative = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+    if relative == ".." or relative.startswith("../"):
         return None
     return resolve_archive_size(relative, links, sizes, depth + 1)
 
