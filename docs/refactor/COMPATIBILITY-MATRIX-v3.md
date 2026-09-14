@@ -85,8 +85,8 @@ T85 那一族事故 —— 收下看不懂的东西再"尽力执行"，最后表
 
   | 平台 / 模式 | 状态 | 证据 |
   |---|---|---|
-  | Windows 桌面 Tier A（远程） | 代码路径 + 宿主单测；⬜ 真机 | `WINDOWS-AC-VALIDATION-v1.md` §4 |
-  | Windows 桌面 Tier C（WSL2 本地） | 垫片测试 + 真 W3 tarball 在 Linux 全链；⬜ 真 WSL2 | `WINDOWS-AC-VALIDATION-v1.md` §5 |
+  | Windows 桌面 Tier A（远程） | 代码路径 + 宿主单测；**CI windows-latest 冒烟通过**（渲染隔离 / IPC 边界 / DPAPI 可用 / 便携 exe exit 0，2026-09-14） | `WINDOWS-AC-VALIDATION-v1.md` §4、§9 |
+  | Windows 桌面 Tier C（WSL2 本地） | 垫片测试 + 真 W3 tarball 在 Linux 全链；CI runner 有 WSL 但**无发行版**，Tier C 冒烟如实报 `wsl_unavailable`；⬜ 真 WSL2 | `WINDOWS-AC-VALIDATION-v1.md` §5、§9 |
   | Windows 原生本地运行时 | ⛔ 明确不做 | `WINDOWS-AC-PLAN-v1.md`「明确不做」 |
   | Windows ARM64 | ⛔ 无可验产物（映射/拒绝分支在 `scripts/update_check.py`） | 同上 |
   | macOS | ⬜ 未构建 | `RELEASE-MANUAL-v3.md` §8.3 |

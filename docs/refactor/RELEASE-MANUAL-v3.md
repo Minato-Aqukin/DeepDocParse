@@ -287,8 +287,9 @@ docker exec -i ddp-postgres-1 sh -c \
 ## 9. Windows 桌面（Tier A 远程 + Tier C WSL2 本地，v1）
 
 > 本节补在 2026-09-14，记录 Windows A+C 切片**设计上已具备**的安装/更新/WSL 流程。
-> **本机是 Linux，Windows 真机与真实 WSL2 一次都没跑过**；逐条验证范围（含哪些
-> 只是垫片测试）见 `docs/refactor/WINDOWS-AC-VALIDATION-v1.md`，实施计划见
+> **Tier A 已在 CI windows-latest 跑通**（打包 + 便携 exe 冒烟 + DPAPI 可用，2026-09-14）；
+> **安装向导/卸载、真实 WSL2 发行版上的 Tier C、真实用户机仍未验证**。逐条验证范围
+> （含哪些只是垫片测试）见 `docs/refactor/WINDOWS-AC-VALIDATION-v1.md` §9，实施计划见
 > `WINDOWS-AC-PLAN-v1.md`。中心侧部署不变，仍是 Linux（见本文件前面各节）。
 > 注：§8.3 写于本切片之前（"macOS/Windows 均未构建"）—— Windows 现在有了
 > Linux 侧构建产物，但真机未验证；macOS 状态不变。
@@ -333,9 +334,10 @@ docker exec -i ddp-postgres-1 sh -c \
    Windows 版 smoke（首轮 `continue-on-error`，仅诊断）与 WSL spike（诊断，
    决策 5：不装发行版、不碰 reboot/admin）。
 
-**这条 workflow 已经在 windows-latest 上真跑**（2026-09-14 起，连续五轮各修掉一个
-跨平台缺陷，见 `WINDOWS-AC-VALIDATION-v1.md` §9）。在它出现绿色运行之前，
-不要拿它当"CI 已绿"的证据。
+**这条 workflow 已经在 windows-latest 上真跑并连续绿色**（2026-09-14，最近一次
+run 34847164881；首跑连修五个跨平台缺陷，见 `WINDOWS-AC-VALIDATION-v1.md` §9）。
+绿色覆盖 Tier A（远程宿主 + 打包 + 冒烟）；**Tier C 本地模式没有被 CI 验过** ——
+runner 的 WSL 没有发行版，需要一台装了 WSL2 发行版的机器。
 
 ### 9.4 固定调用与产物
 

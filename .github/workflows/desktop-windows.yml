@@ -12,8 +12,9 @@
 # tests/test_wsl_runtime_build.py 是 POSIX-only（模块级 os.uname()；假解释器是
 # #!/bin/sh 脚本），也在 ubuntu job 里跑，不是 Windows。
 #
-# **首次 push 前未在任何 CI 上运行过。** workflow 本身、Windows npm ci、
-# electron-builder、打包版冒烟都只做过本机静态检查（见 W5 报告）。
+# 已在 windows-latest 真跑并连续绿色（2026-09-14，首跑连修五个跨平台缺陷；
+# Tier A 冒烟通过，Tier C 因 runner 无 WSL 发行版如实报 wsl_unavailable。
+# 设计时的静态检查记录见 W5 报告。
 name: desktop-windows
 
 on:

@@ -5,9 +5,11 @@
 执行权威是 `WINDOWS-AC-PLAN-v1.md`；宽粒度工作划分 W1–W6 见其表格
 （本轮细化为 W1a/W1b/W1c/W2W/W3/W4b/W5）。
 
-> **本文所有绿色都来自本机 Linux**（Arch/CachyOS，无 N 卡，未装 WSL）。
-> **Windows 真机、真实 WSL2、真实 `wsl.exe`、CI workflow 一次都没跑过** ——
-> 「本机已验证」绝不能读成「Windows 上可用」。未跑的格子一律 ⬜。
+> **本文绝大多数绿色来自本机 Linux**（Arch/CachyOS，无 N 卡，未装 WSL）；
+> 例外是 §9：`desktop-windows.yml` 已在 windows-latest 真跑并连续绿色，其中
+> Tier A（远程宿主 + 打包 + 便携 exe 冒烟 + DPAPI 可用）**已在 CI 真 Windows 上验证**。
+> **真实 WSL2 发行版上的 Tier C、安装向导/卸载、真实用户机仍未跑过** ——
+> 「本机已验证」或「CI 已验证」都不能读成「Windows 上全能」。未跑的格子一律 ⬜。
 
 ## 0. 一页结论
 
@@ -15,11 +17,11 @@
 |---|---|---|---|
 | W3 自包含运行时 tarball | ✅ 构建 + 容器烟测 + 三次同哈希 | `packaging/windows/README.md` | ⬜ 没在 WSL2 里解压运行过 |
 | W4b 目录包 zip（win32-x64） | ✅ 构建 + 自检 | `dist/desktop/deepdocparse-0.1.0-win32-x64.release.json` | ⬜ |
-| W4b 便携 exe（Linux 构建） | ✅ 构建 + 校验带负载 | `dist/desktop/windows/`，本文 §3.2 | ⬜ 没在 Windows 上双击 |
-| W4b NSIS 安装器 | ⛔ 本机只得到卸载器 stub | `packaging/windows/README.md`「Build hosts」 | ⬜ 只能等 `windows-latest` |
-| W1a/W1b 宿主/平台分支 | ✅ 57 passed / 0 skipped | 本文 §4 | ⬜ 真 NTFS ACL/DPAPI 未验 |
+| W4b 便携 exe | ✅ 构建 + 校验带负载 | `dist/desktop/windows/`，本文 §3.2 | ✅ CI 真 Windows 启动（GUI smoke exit 0，§9 第 8 轮） |
+| W4b NSIS 安装器 | ⛔ 本机只得到卸载器 stub | `packaging/windows/README.md`「Build hosts」 | ✅ windows-latest 构建成功（run 34847164881） |
+| W1a/W1b 宿主/平台分支 | ✅ 61 passed / 0 skipped | 本文 §4 | ✅ DPAPI 可用已观测（§9 第 8 轮）；NTFS ACL 语义仍 ⬜ |
 | W2W WSL 桥（垫片） | ✅ 8 条 WSL 用例 + 真 tarball 全链 | 本文 §5 | ⬜ 真 `wsl.exe`/PID 命名空间未验 |
-| W5 CI workflow | ⬜ 首次 push 前未运行 | `.github/workflows/desktop-windows.yml` | ⬜ |
+| W5 CI workflow | ✅ 已真跑且连续绿色 | `.github/workflows/desktop-windows.yml`，§9 | ✅ 同上（Tier A 冒烟；Tier C 因无发行版 ⬜） |
 | C 组实机矩阵（无 WSL / WSL1 / 全链 / 孤儿 / token 不落盘…） | ⬜ 一条都没跑 | `WINDOWS-AC-PLAN-v1.md`「验收门」 | ⬜ |
 
 ## 1. 分层与前提
@@ -132,7 +134,7 @@
 前三条是上一轮的记录（本轮复跑；位置行号已按当前树更新，`build_desktop.py`
 那处从旧文写的 445 变成 710）。后四条是本轮新增，同样每条实测
 「破坏 → 红 → 还原」，且每处替换都先确认真的改到了那一行（`grep`/断言过）。
-其余 W4b 守卫见 `tests/test_desktop_release.py`（本轮 **61 passed**，见 §7）。
+其余 W4b 守卫见 `tests/test_desktop_release.py`（本轮 **62 passed**，见 §7）。
 
 ### 3.4 二轮复评的 F1/F2 残留与诚实边界（本轮修复）
 
@@ -232,7 +234,7 @@ v1 不签名（计划决策 6），所以**一个有构建访问权的蓄意攻�
   首次调用 `wsl.exe` 的冷启动延迟（桥的缺省 `startupMs=20000`、`provisionMs=600000`
   从未在真机标定）；打包版 smoke 的真实窗口（见 §6）。
 
-## 6. W5：CI workflow（读完的静态事实，非运行结果）
+## 6. W5：CI workflow（代码静态事实；运行结果见 §9）
 
 `.github/workflows/desktop-windows.yml`，触发 `push` 到 `codex/desktop-federation-v3`
 与 `workflow_dispatch`：
@@ -252,9 +254,9 @@ v1 不签名（计划决策 6），所以**一个有构建访问权的蓄意攻�
     --win nsis portable --x64`（`--publish never` 是首跑后补的：不加时 electron-builder
     构建完两个 exe 会默认尝试发布到 GitHub Releases，无 `GH_TOKEN` 即失败）；
     `verify_windows_package.py`；生成逐文件 `.sha256` + `SHA256SUMS`；上传安装器制品。
-- **CI 首跑已发生**（见 §9）。workflow 的「首跑前未运行过」注释只描述提交时的状态；
-  截至 2026-09-14 已跑到 electron-builder 之后一步，途中五个真实缺陷全部修复。
-  打包版 GUI smoke、WSL spike 结果与最终产物的实机验证仍待后续运行。
+- **CI 已真跑并连续绿色**（见 §9）。workflow 的「首跑前未运行过」注释只描述提交时的
+  状态；首跑途中五个真实缺陷全部修复，之后 GUI smoke 也首次通过（Tier A，含 DPAPI
+  可用观测）。仍待后续运行的是：真实 WSL2 发行版上的 Tier C 全链、安装向导/卸载流程。
 
 
 - WSL spike 是**诊断**（计划决策 5：只打印 `wsl.exe --status`/`-l -v`，不装发行版、
@@ -270,8 +272,8 @@ v1 不签名（计划决策 6），所以**一个有构建访问权的蓄意攻�
 ## 7. 本机实跑命令与结果汇总
 
 ```bash
-node --test --test-timeout=30000 apps/desktop/test/*.test.mjs   # 57 passed, 0 failed, 0 skipped
-.venv/bin/python -m pytest tests/test_desktop_release.py -q     # 61 passed
+node --test --test-timeout=30000 apps/desktop/test/*.test.mjs   # 61 passed, 0 failed, 0 skipped
+.venv/bin/python -m pytest tests/test_desktop_release.py -q     # 62 passed
 .venv/bin/python -m pytest tests/test_wsl_runtime_build.py -q   # 17 passed, 1 skipped
 cd python/ddp_local && ../../.venv/bin/python -m pytest tests/test_cli_serve.py -q   # 3 passed
 .venv/bin/python scripts/verify_windows_package.py dist/desktop/windows/win-unpacked \
@@ -303,7 +305,7 @@ cd python/ddp_local && ../../.venv/bin/python -m pytest tests/test_cli_serve.py 
 | 2 | 共享 Vue UI 构建 | 根 lockfile 在 Linux 生成，缺 vite 依赖链（rolldown/lightningcss）的 **win32 原生绑定**，`npm ci` 装不出来 | `4a8df74`：把 win32 绑定声明为 `apps/web` 的 optionalDependencies 并重生成 lockfile |
 | 3 | 组装 win32-x64 | Windows 检出把 `packaging/windows/wsl-runtime-lock.json` 转成 CRLF，摘要 `57489d78` → `02961a3e`，与 WSL tarball 内嵌 pin 不符 | `d1e3440`：`.gitattributes` 对 `packaging/{windows,arch}/*.json` 钉 `text eol=lf` |
 | 4 | 组装 win32-x64 | F1 守卫用 `os.path` 解析 tar 成员名；Windows 上 `bin/2to3 → 2to3-3.12` 变成反斜杠名，符号链接全部读作「listed but absent」 | `9596fe5`：两个解析器改 `posixpath`，ntpath 垫片回归 + 变异确认 |
-| 5 | electron-builder | 两个 exe 已构建成功后，electron-builder 默认尝试发布到 GitHub Releases，无 `GH_TOKEN` 报错退出 | 本次：固定调用加 `--publish never`（workflow、yml 头注释、发布手册同步） |
+| 5 | electron-builder | 两个 exe 已构建成功后，electron-builder 默认尝试发布到 GitHub Releases，无 `GH_TOKEN` 报错退出 | `b6d69cf`：固定调用加 `--publish never`（workflow、yml 头注释、发布手册同步） |
 
 **第 6 轮（`b6d69cf`）整条 workflow 绿色通过**：WSL 运行时构建、windows-latest 的
 桌面测试、Vue UI 构建、Electron 校验、目录组装、NSIS + 便携 exe、打包校验、SHA256
@@ -315,7 +317,33 @@ release 清单 + sha256）与 `wsl-runtime`。绿色运行的绿地之下还暴�
   本地模式**，C 组验收必须在装了 WSL2 发行版的 Windows 机器上做。
 - **GUI smoke 实际没有跑**：workflow 传 `--timeout 120000`（空格形式），而脚本只认
   `--timeout=ms`，解析即抛 `unknown option: --timeout`；因为该 step 是
-  `continue-on-error`，运行仍是绿的。已修（两种形式都接受 + 参数单测），但 smoke
-  本身仍属 Windows-only 未验证项，直到有能开 Electron 窗口的会话跑出报告。
+  `continue-on-error`，运行仍是绿的。修法见第 7 轮。
+
+**第 7 轮（`83a11db`）**：修掉 smoke 参数形式（两种都接受 + 参数单测），smoke 首次
+真正启动打包后的 exe，并如实报出 `wsl_unavailable`（runner 无发行版）。该失败暴露
+smoke 的判据问题：无 WSL 是产品状态而不是宿主崩溃。
+
+**第 8 轮（`674448b`）整条 workflow 绿色，且 GUI smoke 首次真正通过**。做法：smoke 在
+win32 且错误码为 `wsl_*` 时记录 `localRuntime {state:'unavailable', reason}` 并继续断言
+宿主边界；只有就绪时才跑本地全链。CI 上的实证（`windows-smoke` 制品，下载后核对）：
+
+```json
+// CI job log 里 smoke 脚本的 stdout 汇总；artifact 的 smoke-report.json 提供 renderer/webPreferences 等其余字段。
+{"passed":true,"executable":"...DeepDocParse-0.1.0-win-x64-portable.exe","exitCode":0,
+ "display":{"session":null},
+ "localRuntime":{"state":"unavailable","reason":"wsl_unavailable"},
+ "electron":"44.3.0",
+ "secrets":{"backend":"dpapi","persistentAvailable":true,"reason":null}}
+```
+
+报告内同样确认：`renderer.nodeRequire/nodeProcess` 为 `undefined`、`host.ok=true`、
+`webPreferences {sandbox:true, contextIsolation:true, nodeIntegration:false}`、
+`startLocal` 非法参数被拒、UI `rendered=1`、`platform: win32`、`isolation: ntfs_acl`、
+`runtimeBackend: wsl` 且 `runtimeAvailable: false`（原因如实）。这是 **Electron safeStorage 报告 DPAPI 加密可用（`persistentAvailable: true`）在真 Windows 上的首个观测**；写入/读回的持久化往返未在 CI 做。
+
+本轮绿色运行的制品：`windows-installers`（NSIS setup + 便携 exe + release 清单 +
+sha256，合计 475 382 898 B）、`wsl-runtime`（126 716 132 B）、`windows-smoke`
+（报告/日志/截图）。**Tier C（WSL2 本地全链）仍未被任何 CI 或实机验证过**——需要
+一台装了 WSL2 发行版的 Windows 机器；CI runner 只有 WSL 功能、没有发行版。
 
 **CI 通过的最终结论以 workflow 的绿色运行为准，本文不代替它。**
