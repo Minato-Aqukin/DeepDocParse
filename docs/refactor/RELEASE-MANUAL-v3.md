@@ -333,7 +333,8 @@ docker exec -i ddp-postgres-1 sh -c \
    Windows 版 smoke（首轮 `continue-on-error`，仅诊断）与 WSL spike（诊断，
    决策 5：不装发行版、不碰 reboot/admin）。
 
-**这条 workflow 本身尚未在任何 CI 上运行过**（首次 push 前只做过本机静态检查）；
+**这条 workflow 已经在 windows-latest 上真跑**（2026-09-14 起，连续五轮各修掉一个
+跨平台缺陷，见 `WINDOWS-AC-VALIDATION-v1.md` §9）。在它出现绿色运行之前，
 不要拿它当"CI 已绿"的证据。
 
 ### 9.4 固定调用与产物
@@ -341,7 +342,7 @@ docker exec -i ddp-postgres-1 sh -c \
 ```bash
 python scripts/build_desktop.py --platform win32-x64
 npx --yes electron-builder@26.15.3 \
-  --config packaging/windows/electron-builder.yml --projectDir . \
+  --config packaging/windows/electron-builder.yml --projectDir . --publish never \
   --win nsis portable --x64
 .venv/bin/python scripts/verify_windows_package.py dist/desktop/windows/win-unpacked \
   --installer dist/desktop/windows/DeepDocParse-*-setup.exe \

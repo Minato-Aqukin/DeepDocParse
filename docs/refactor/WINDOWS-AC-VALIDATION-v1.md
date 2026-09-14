@@ -248,11 +248,15 @@ v1 不签名（计划决策 6），所以**一个有构建访问权的蓄意攻�
     Node 24；`npm ci --registry=https://registry.npmmirror.com`；桌面主机测试；
     `npm run web:build`；按 `electron-lock.json` 下载并校验 Electron；`build_desktop.py
     --platform win32-x64`；`npx --yes electron-builder@26.15.3 --config
-    packaging/windows/electron-builder.yml --projectDir . --win nsis portable --x64`；
+    packaging/windows/electron-builder.yml --projectDir . --publish never
+    --win nsis portable --x64`（`--publish never` 是首跑后补的：不加时 electron-builder
+    构建完两个 exe 会默认尝试发布到 GitHub Releases，无 `GH_TOKEN` 即失败）；
     `verify_windows_package.py`；生成逐文件 `.sha256` + `SHA256SUMS`；上传安装器制品。
-- **明确未验证**：workflow 注释原文「**首次 push 前未在任何 CI 上运行过。** workflow
-  本身、Windows npm ci、electron-builder、打包版冒烟都只做过本机静态检查」。
-  **本文不提供任何 CI 运行结论。**
+- **CI 首跑已发生**（见 §9）。workflow 的「首跑前未运行过」注释只描述提交时的状态；
+  截至 2026-09-14 已跑到 electron-builder 之后一步，途中五个真实缺陷全部修复。
+  打包版 GUI smoke、WSL spike 结果与最终产物的实机验证仍待后续运行。
+
+
 - WSL spike 是**诊断**（计划决策 5：只打印 `wsl.exe --status`/`-l -v`，不装发行版、
   不碰 reboot/admin，`continue-on-error`）；打包版 GUI smoke 首轮也是
   `continue-on-error`（runner 会话未必能开窗口；原先的
@@ -287,3 +291,20 @@ cd python/ddp_local && ../../.venv/bin/python -m pytest tests/test_cli_serve.py 
    原文只列 `{url,token_file,protocol_version,identity,profile,capabilities}`，
    未写永远存在的 `pid` 与 `--token-file -` 的 stdout 形态。已在本轮文档中补齐
    （见该文件）。
+
+## 9. CI 首跑记录（2026-09-14，windows-latest）
+
+`desktop-windows.yml` 第一次真跑一路暴露的都是「Linux 测试形状看不见」的跨平台缺陷，
+逐个修复并推送（每个 commit 都先过独立验收）：
+
+| # | 失败点 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | 桌面主机测试 | `CredentialBroker` 把「凭证策略平台」与「文件系统安全门平台」混用一个参数；Windows 上验证 Linux secret-service 语义时对 NTFS 跑了 POSIX mode 检查 | `d915c83`：拆出 `directoryPlatform`，回归测试 + 变异确认 |
+| 2 | 共享 Vue UI 构建 | 根 lockfile 在 Linux 生成，缺 vite 依赖链（rolldown/lightningcss）的 **win32 原生绑定**，`npm ci` 装不出来 | `4a8df74`：把 win32 绑定声明为 `apps/web` 的 optionalDependencies 并重生成 lockfile |
+| 3 | 组装 win32-x64 | Windows 检出把 `packaging/windows/wsl-runtime-lock.json` 转成 CRLF，摘要 `57489d78` → `02961a3e`，与 WSL tarball 内嵌 pin 不符 | `d1e3440`：`.gitattributes` 对 `packaging/{windows,arch}/*.json` 钉 `text eol=lf` |
+| 4 | 组装 win32-x64 | F1 守卫用 `os.path` 解析 tar 成员名；Windows 上 `bin/2to3 → 2to3-3.12` 变成反斜杠名，符号链接全部读作「listed but absent」 | `9596fe5`：两个解析器改 `posixpath`，ntpath 垫片回归 + 变异确认 |
+| 5 | electron-builder | 两个 exe 已构建成功后，electron-builder 默认尝试发布到 GitHub Releases，无 `GH_TOKEN` 报错退出 | 本次：固定调用加 `--publish never`（workflow、yml 头注释、发布手册同步） |
+
+第 5 轮之前，桌面主机测试、Vue UI 构建、Electron 下载校验、win32 目录组装均已在
+windows-latest 上真实通过；NSIS 与便携 exe 也已在本轮真实构建出来，失败发生在其后的
+发布步骤。**CI 通过的最终结论以 workflow 的绿色运行为准，本文不代替它。**

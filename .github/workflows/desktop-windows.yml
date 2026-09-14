@@ -203,6 +203,7 @@ jobs:
           npx --yes electron-builder@26.15.3 \
             --config packaging/windows/electron-builder.yml \
             --projectDir . \
+            --publish never \
             --win nsis portable --x64
 
       # 打包后重算：win-unpacked 里的 WSL 运行时必须与 dist/wsl/wsl-runtime.json

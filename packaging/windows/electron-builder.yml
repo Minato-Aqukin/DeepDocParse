@@ -7,7 +7,7 @@
 #         This verifies the pinned Electron zip and the W3-built WSL runtime,
 #         and assembles the plain-directory app that `--prepackaged` can use.
 #   2. npx --yes electron-builder@26.15.3 --config packaging/windows/electron-builder.yml \
-#        --projectDir . --win nsis portable --x64
+#        --projectDir . --publish never --win nsis portable --x64
 #      -> dist/desktop/windows/DeepDocParse-<version>-win-x64-setup.exe
 #         dist/desktop/windows/DeepDocParse-<version>-win-x64-portable.exe
 #
@@ -20,7 +20,8 @@
 #
 # Fallback if a future electron-builder drops custom `electronDist` zips:
 #   npx --yes electron-builder@26.15.3 --config packaging/windows/electron-builder.yml \
-#     --prepackaged dist/desktop/deepdocparse-<version>-win32-x64 --win nsis portable --x64
+#     --prepackaged dist/desktop/deepdocparse-<version>-win32-x64 \
+#     --publish never --win nsis portable --x64
 # In `--prepackaged` mode `files`/`extraResources` are ignored because the
 # directory is already complete (and it is the only mode where the packaged exe
 # name is exactly the directory's `deepdocparse.exe`).
