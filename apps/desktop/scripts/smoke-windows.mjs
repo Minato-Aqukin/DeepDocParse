@@ -15,7 +15,7 @@
 // window, but the report assertions are real.
 //
 // Usage:
-//   node scripts/smoke-windows.mjs [TARGET] [--timeout=ms] [--report=path] [--host]
+//   node scripts/smoke-windows.mjs [TARGET] [--timeout[=]ms] [--report[=]path] [--host]
 //
 // TARGET  packaged directory (win-unpacked / the assembled stage) or an .exe
 //         path (portable/setup, or win-unpacked/deepdocparse.exe).
@@ -34,7 +34,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, writeFile, copyFile } from 'node:fs/promises'
 import { existsSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import path from 'node:path'
 import os from 'node:os'
@@ -43,18 +43,28 @@ import assert from 'node:assert/strict'
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repository = path.resolve(desktop, '../..')
 
-function parseArguments(argv) {
+export function parseArguments(argv) {
   const result = { target: null, host: false, timeoutMs: 120000,
     report: path.join(desktop, 'artifacts', 'smoke-report.json') }
-  for (const argument of argv) {
+  const valued = new Set(['--timeout', '--report'])
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]
     if (argument === '--host') result.host = true
     else if (argument === '--help' || argument === '-h') {
-      process.stdout.write('Usage: node scripts/smoke-windows.mjs [TARGET] [--host] [--timeout=ms] [--report=path]\n')
+      process.stdout.write('Usage: node scripts/smoke-windows.mjs [TARGET] [--host] [--timeout[=]ms] [--report[=]path]\n')
       process.exit(0)
     } else if (argument.startsWith('--timeout=')) {
       result.timeoutMs = Number(argument.slice('--timeout='.length))
     } else if (argument.startsWith('--report=')) {
       result.report = path.resolve(argument.slice('--report='.length))
+    } else if (valued.has(argument)) {
+      const value = argv[index + 1]
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error(`${argument} needs a value`)
+      }
+      index += 1
+      if (argument === '--timeout') result.timeoutMs = Number(value)
+      else result.report = path.resolve(value)
     } else if (argument.startsWith('--')) {
       throw new Error(`unknown option: ${argument}`)
     } else if (result.target === null) {
@@ -200,4 +210,6 @@ async function main() {
     `DDP_DESKTOP_SMOKE_DIRECTORY (see the script header); log: ${logPath}`)
 }
 
-await main()
+const invokedDirectly = process.argv[1] !== undefined
+  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+if (invokedDirectly) await main()

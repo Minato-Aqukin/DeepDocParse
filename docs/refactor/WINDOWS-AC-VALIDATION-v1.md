@@ -305,6 +305,17 @@ cd python/ddp_local && ../../.venv/bin/python -m pytest tests/test_cli_serve.py 
 | 4 | 组装 win32-x64 | F1 守卫用 `os.path` 解析 tar 成员名；Windows 上 `bin/2to3 → 2to3-3.12` 变成反斜杠名，符号链接全部读作「listed but absent」 | `9596fe5`：两个解析器改 `posixpath`，ntpath 垫片回归 + 变异确认 |
 | 5 | electron-builder | 两个 exe 已构建成功后，electron-builder 默认尝试发布到 GitHub Releases，无 `GH_TOKEN` 报错退出 | 本次：固定调用加 `--publish never`（workflow、yml 头注释、发布手册同步） |
 
-第 5 轮之前，桌面主机测试、Vue UI 构建、Electron 下载校验、win32 目录组装均已在
-windows-latest 上真实通过；NSIS 与便携 exe 也已在本轮真实构建出来，失败发生在其后的
-发布步骤。**CI 通过的最终结论以 workflow 的绿色运行为准，本文不代替它。**
+**第 6 轮（`b6d69cf`）整条 workflow 绿色通过**：WSL 运行时构建、windows-latest 的
+桌面测试、Vue UI 构建、Electron 校验、目录组装、NSIS + 便携 exe、打包校验、SHA256
+记录、制品上传全部成功。产物：`windows-installers`（setup.exe + portable.exe +
+release 清单 + sha256）与 `wsl-runtime`。绿色运行的绿地之下还暴露两件事，均已记录：
+
+- **WSL spike 的实际结果**：runner 有 WSL（`Default Version: 2`）但**没有任何发行版**
+  （`wsl.exe -l -v` 返回 "no installed distributions"）。因此 **CI 无法验证 Tier C
+  本地模式**，C 组验收必须在装了 WSL2 发行版的 Windows 机器上做。
+- **GUI smoke 实际没有跑**：workflow 传 `--timeout 120000`（空格形式），而脚本只认
+  `--timeout=ms`，解析即抛 `unknown option: --timeout`；因为该 step 是
+  `continue-on-error`，运行仍是绿的。已修（两种形式都接受 + 参数单测），但 smoke
+  本身仍属 Windows-only 未验证项，直到有能开 Electron 窗口的会话跑出报告。
+
+**CI 通过的最终结论以 workflow 的绿色运行为准，本文不代替它。**
