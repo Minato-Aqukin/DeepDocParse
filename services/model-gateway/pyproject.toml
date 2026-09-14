@@ -22,7 +22,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21", "fakeredis>=2.26"]
+# jsonschema：能力清单用例按冻结契约 schema 校验响应（本机 venv 恰好有，CI 干净装没有）。
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21", "fakeredis>=2.26", "jsonschema>=4.23"]
 
 # **这里故意没有 `ddp-core[db]`。** 网关是无状态适配层，一行 ORM 都不该 import；
 # 理由与失守后的表现见 python/ddp_core/pyproject.toml 里那段说明。

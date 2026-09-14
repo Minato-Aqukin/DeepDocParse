@@ -35,7 +35,7 @@ docker run -d --name ddp-recovery-drill-pg \
 docker run -d --name ddp-recovery-drill-minio \
   -e MINIO_ROOT_USER=drill -e MINIO_ROOT_PASSWORD=drill-secret \
   -p 127.0.0.1:19055:9000 -v ddp-recovery-drill-miniodata:/data \
-  minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+  quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
 
 # 2) 两套真实迁移链
 cd services/control-api && go build -o /tmp/.../control-migrate ./cmd/control-migrate

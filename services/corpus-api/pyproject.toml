@@ -23,6 +23,9 @@ dependencies = [
 dev = [
     "pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21",
     "aiosqlite>=0.20",          # 单测走 SQLite in-memory，不需要 PG
+    # 契约 schema 校验（能力清单 / 联邦 probe / 集合目录用例直接 import）。
+    # 本机 venv 恰好有它，CI 干净装时 15 个测试模块收集即失败。
+    "jsonschema>=4.23",
     # **只在 dev 里依赖 worker**（运行时依赖方向是 worker -> api，不成环）。
     # 理由：索引与抽取现在排在持久队列里，测试要能把队列跑干净。
     # 用 worker 真正的 handler 表而不是在 conftest 里另抄一份 ——

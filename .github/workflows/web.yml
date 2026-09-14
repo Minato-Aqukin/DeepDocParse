@@ -31,10 +31,14 @@ jobs:
         working-directory: apps/web
         run: npm run build
 
+      # **在 apps/web 里跑 tsc**：typescript 只装在 apps/web/node_modules（没被
+      # 提升到根）。在仓库根 `npx tsc` 找不到它，npx 会去装 npm 上一个同名的
+      # 废弃包 `tsc@2.0.4` 并直接失败。与 scripts/check.sh 同一种起法。
       - name: 共享连接与持久缓存门禁
+        working-directory: apps/web
         run: |
-          npx tsc -p packages/client-runtime/tsconfig.json
-          node --test packages/client-runtime/test/*.test.mjs
+          npx tsc -p ../../packages/client-runtime/tsconfig.json
+          node --test ../../packages/client-runtime/test/*.test.mjs
 
       # 类型检查够不着的那一类：卸载后定时器还在跑、blob URL 没回收、
       # ResizeObserver 没断

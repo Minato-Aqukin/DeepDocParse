@@ -160,7 +160,9 @@ CLAUDE.md 写错了）。`DeepDocParse-Web` 已归档为只读，代码全在这
 
 合仓是用 `git filter-repo --to-subdirectory-filter` 做的，**每个 commit 的 SHA
 都被重写过** —— 所以本仓库历史不是旧仓库 `main` 的后代，当初是 force-push
-上去的。旧的那段仍然可达：分支 `legacy/pre-monorepo` 与同名 tag。
+上去的。旧的那段仍然可达：tag `pre-monorepo`。仓库只保留 main 一个分支 ——
+原来指向同一 commit 的分支 `legacy/pre-monorepo` 随 v3 合入 main 一并删除。
+核对旧行为用 `git show pre-monorepo:<路径>`。
 
 公开仓库意味着**推之前必须扫一遍密钥**：跟踪文件里不许有 `.env`，
 历史里不许出现过，`infra/env/dev.env` 的值不许出现在任何跟踪文件里。

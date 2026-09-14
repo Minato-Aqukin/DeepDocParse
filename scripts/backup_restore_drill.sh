@@ -30,7 +30,7 @@ MINIO_CONTAINER="${DRILL_MINIO_CONTAINER:-ddp-recovery-drill-minio}"
 PG_VOLUME="${DRILL_PG_VOLUME:-ddp-recovery-drill-pgdata}"
 MINIO_VOLUME="${DRILL_MINIO_VOLUME:-ddp-recovery-drill-miniodata}"
 PG_IMAGE="${DRILL_PG_IMAGE:-pgvector/pgvector:pg16}"
-MINIO_IMAGE="${DRILL_MINIO_IMAGE:-minio/minio:RELEASE.2025-04-22T22-12-26Z}"
+MINIO_IMAGE="${DRILL_MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e}"
 PG_PASSWORD="drill-password"
 BUCKET="deepdocparse"
 

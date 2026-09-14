@@ -8,7 +8,7 @@
 
 | # | 交付项 | 状态 | 说明 |
 |---|---|---|---|
-| 1 | 两个仓库及历史合并为唯一 monorepo | ✅ | **已推上 GitHub**（`Minato-Aqukin/DeepDocParse` 的 main；旧历史留在 `legacy/pre-monorepo` 分支与同名 tag；`DeepDocParse-Web` 已归档只读）。67 个 commit，author/日期/message 全保留；随机抽 10 个旧 commit 的 tree 逐字节比对通过 |
+| 1 | 两个仓库及历史合并为唯一 monorepo | ✅ | **已推上 GitHub**（`Minato-Aqukin/DeepDocParse` 的 main；旧历史留在 tag `pre-monorepo`（原来指向同一 commit 的分支 `legacy/pre-monorepo` 随 v3 合入 main 一并删除）；`DeepDocParse-Web` 已归档只读）。67 个 commit，author/日期/message 全保留；随机抽 10 个旧 commit 的 tree 逐字节比对通过 |
 | 2 | 目录、包名、统一 CI、构建、版本号 | ✅ | 五条工作流 + `scripts/check.sh`（22 项）；四个 Python 包名互不相同，有静态守卫 |
 | 3 | 删除重复/不可达/旧部署专用代码 | ✅ | 台账 `INVENTORY.md`，含测试搬迁对照表；工作树里没有 legacy/compat 目录 |
 | 4 | contracts workspace 与三语言类型生成 | ✅ | 16 组 / 99 个取值；含**用户可见文案**，缺一样生成器报错。Go 侧原本生成了 754 行却零 import（手抄了角色与 upload_status），已改成真消费（F-12）|
