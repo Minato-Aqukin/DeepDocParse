@@ -23,17 +23,30 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_corpus.archive import archive_job, fail_job
+from ddp_corpus.capabilities import collect_capability_profiles
 from ddp_corpus.control_client import ControlClient
 from ddp_corpus.db import get_session
 from ddp_corpus.deps import Actor, get_service_client, get_storage, require_service_actor
 from ddp_corpus.errors import APIError
 from ddp_corpus.ingest import ingest_document
 from ddp_corpus.queue import enqueue
-from ddp_corpus.models import Document, ParseJob, ProcessedEvent
+from ddp_corpus.models import Document, ParseJob, ProcessedEvent, Resource, ResourceVersion
 from ddp_corpus.service_client import ServiceClient
 from ddp_corpus.storage import Storage
 
 router = APIRouter()
+
+
+@router.get("/internal/capabilities")
+async def capabilities(request: Request,
+                       _: Actor = Depends(require_service_actor)):
+    """本节点的能力清单。**node_id 由 control-api 注入**，这里没有。
+
+    上游网关的就绪度只对"本层确实走网关"的那些操作有效；独立配置的
+    chat/embedding/rerank 端点观测不到就报 unknown（见 capabilities.py）。
+    """
+    profiles, status = await collect_capability_profiles(request.app.state.http)
+    return {"profiles": profiles, "capability_status": status}
 
 
 class ParseCallback(BaseModel):
@@ -74,7 +87,7 @@ async def parse_callback(body: ParseCallback, request: Request,
             continue
         if await archive_job(session, storage, service, job.id):
             archived += 1
-            await _schedule_index(session, document.id)
+            await _schedule_index(session, document.id, job_id=job.id)
 
     return {"ok": True, "archived": archived}
 
@@ -145,13 +158,15 @@ async def _on_document_submitted(session, storage, service, control,
         doc_id=p["sha256"],
         engine=p.get("engine") or "",
         options=options,
+        upload_key=event.event_id,
+        receipt_key=p.get("upload_id") or event.event_id,
     )
     # **复活的文档要把索引推回去。** 删除会清空 chunks 并把 index_status 置回
     # none；复活时如果不重新排队，文档看着好好的却永远问不了，而对账只捞
     # pending 状态的 job，自愈不了 —— 只能等用户自己发现去点"重建索引"。
     # 同参数重传会在 ingest 里命中已有 job 直接返回，正是这条路径。
-    if document.index_status == "pending" and document.current_job_id:
-        await _schedule_index(session, document.id, event.organization_id)
+    if _job and _job.index_status == "pending":
+        await _schedule_index(session, document.id, event.organization_id, job_id=_job.id)
     return document.id
 
 
@@ -167,7 +182,19 @@ async def _on_document_deleted(session, storage, service, control,
     document = await session.get(Document, event.payload.get("document_id", ""))
     if document is None:
         return None
-    document.deleted_at = utcnow()
+    from ddp_corpus.resources import tombstone_resource
+    resources = (await session.execute(select(Resource).join(ResourceVersion).where(
+        ResourceVersion.document_id == document.id,
+        Resource.organization_id == event.organization_id,
+        Resource.deleted_at.is_(None)).distinct())).scalars().all()
+    if resources:
+        for resource in resources:
+            await tombstone_resource(session, resource)
+    else:
+        mapped = await session.scalar(select(ResourceVersion.id).where(
+            ResourceVersion.document_id == document.id).limit(1))
+        if not mapped and document.organization_id == event.organization_id:
+            document.deleted_at = utcnow()
     return document.id
 
 
@@ -178,8 +205,14 @@ _HANDLERS = {
 
 
 async def _schedule_index(session: AsyncSession, document_id: str,
-                          organization_id: str = "") -> None:
+                          organization_id: str = "", *, job_id: str | None = None) -> None:
     """排一次索引任务（持久队列，见 routers/documents.py 里同名函数的说明）。"""
-    await enqueue(session, kind="index", payload={"document_id": document_id},
-                  organization_id=organization_id,
-                  dedupe_key=f"index:{document_id}")
+    if job_id is None:
+        job_id = await session.scalar(select(Document.current_job_id).where(Document.id == document_id))
+    if not job_id:
+        return
+    job = await session.get(ParseJob, job_id)
+    resource = await session.get(Resource, job.resource_id) if job and job.resource_id else None
+    await enqueue(session, kind="index", payload={"document_id": document_id, "job_id": job_id},
+                  organization_id=resource.organization_id if resource else organization_id,
+                  dedupe_key=f"index:{job_id}")

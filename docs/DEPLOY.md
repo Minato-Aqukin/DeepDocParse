@@ -157,6 +157,48 @@ docker compose ... run --rm --entrypoint control-migrate control-api \
 `control-migrate status` 会把每个迁移标成"已应用 / 待应用 / 内容已变（危险）"
 —— 最后那个表示已经应用过的迁移文件被改过，库里是旧结构而代码读起来是新的。
 
+## 桌面端（Linux/Arch）：构建、更新、回滚
+
+Electron 在 Linux 上没有 autoUpdater。桌面包走**版本化 manifest + 校验 +
+预升级备份 + 显式回滚**，完整流程、支持矩阵与验证日志见
+`docs/refactor/RELEASE-MANUAL-v3.md`；本地容量基线见
+`docs/refactor/CAPACITY-LOCAL-v3.md`。
+
+```bash
+# 构建（2026-09-13 在 Arch x86_64 / Python 3.14 上验证；目录包连打三次同哈希）
+npm run web:build
+.venv/bin/python scripts/build_desktop.py
+.venv/bin/python scripts/build_desktop.py --verify dist/desktop/deepdocparse-0.1.0-linux-x64
+scripts/build_desktop_arch.sh --reproduce      # makepkg 两次，同 SHA256 才算过
+
+# 更新（把新版本的 tar.gz + .release.json[+ .sig] 放到目标机）
+.venv/bin/python scripts/update_check.py verify --root /opt/deepdocparse \
+  --manifest <new>.release.json --archive <new>.tar.gz \
+  --allowed-signers release.allowed_signers
+.venv/bin/python scripts/update_check.py apply  --root /opt/deepdocparse \
+  --manifest <new>.release.json --archive <new>.tar.gz \
+  --allowed-signers release.allowed_signers --models /var/lib/deepdocparse/models
+.venv/bin/python scripts/update_check.py rollback --root /opt/deepdocparse
+```
+
+未签名的 manifest 必须显式 `--allow-unsigned`；降级默认拒绝
+（`--allow-downgrade` 才放行）。升级前旧整树保留在
+`/opt/deepdocparse.previous`，模型目录只读校验、不被触碰。服务端升级前
+先按下方「迁移」同一条规矩备份控制/语料库（`pg_dump -Fc` + `pg_restore -l`）。
+
+### 桌面端（Windows）：Tier A 远程 + Tier C WSL2 本地
+
+Windows 只出 Electron 宿主（NSIS per-user 安装器 / 便携 exe，v1 不签名），
+**不移植原生 Windows 运行时**：本地模式是 WSL2 里的自包含 Linux 运行时，
+由安装包捆绑、按 manifest 校验后解到 `~/.deepdocparse/`。更新/回滚与 Linux
+共用 `scripts/update_check.py`（Windows 走 zip + `deepdocparse.exe`，
+跨系统 manifest 拒绝）。完整安装/更新/WSL 设置流程与实测范围见
+`docs/refactor/RELEASE-MANUAL-v3.md` §9 与
+`docs/refactor/WINDOWS-AC-VALIDATION-v1.md`。
+
+**中心不因 Windows 客户端改变**：控制面/语料面仍部署在 Linux（或服务器的
+WSL2）上，Windows 端 Tier A 只是现有 `client-runtime` 的 HTTPS 客户端。
+
 ## 数据库角色
 
 `database/control/0002_roles.sql` 用**数据库权限**钉死写入所有权：

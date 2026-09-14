@@ -1,280 +1,189 @@
-"""语料级 MCP 工具实现；直接连接 core 的 PostgreSQL/MinIO。"""
+"""五个语料工具的**HTTP 适配层** —— 本模块不碰数据库，也不碰对象存储。
+
+## 它以前是什么样，为什么必须变
+
+搬迁前这里自己 `create_async_engine(CORPUS_DATABASE_URL)` + 自己连 MinIO，
+用的是一条**没有任何 actor 的连接**：`search` 直接 SELECT 全库 evidence，
+`get_evidence` 直接按 `crop_key` 从对象存储取像素。于是
+
+- 授权判据一条都没有：谁连得上 MCP 端口，谁就读得到整份语料的原文与裁图；
+- 资源层（迁移 0015）上线后这变成实打实的越权 —— 别人私有资源里的内容
+  会被原样交给外部 agent，而语料域那边刚建好的 `ddp_corpus.policy`
+  在这条路上完全没有落点。
+
+现在取数全在 `corpus-api` 的 `/internal/mcp/*`（`routers/mcp_tools.py`），
+和 `/api/*` 共用同一条 `current_actor` + policy 授权链。本模块只做三件事：
+**验服务凭据、转发 actor 上下文、把响应还原成 MCP 的返回形状。**
+
+## 身份从哪来，以及为什么必须先验服务凭据
+
+入口（control-api）验完 API key 之后，把 actor 上下文写成一组 `X-DDP-*` 头
+转发过来（`internal/identity.Actor.Apply`），并把**客户端传来的同名头
+无条件剥掉**。本服务因此只需要回答一个问题：**这组头是不是入口填的？**
+
+判据是随请求一起来的服务凭据（`Authorization: Bearer $SERVICE_TOKEN`，
+与入口的 `proxy.Rewrite` 对应）。少了这一步，任何能连到 MCP 端口的人
+都能自己发一个 `X-DDP-Role: admin` —— 而下游 corpus-api 会完全正常地
+接受它，没有报错、没有异常日志，只是权限没了。
+
+**没有身份就失败，不是降级。** 缺头、凭据不对、压根没有 HTTP 上下文
+（stdio 传输）三种情况一律抛错：默认放行的那一版等于把"入口漏挂了鉴权"
+表现成"匿名也能读全语料"。
+"""
 from __future__ import annotations
 
-import asyncio
-import base64
 import json
 import os
-from contextlib import asynccontextmanager
+import secrets
 
 import httpx
+from fastmcp.exceptions import ToolError
+from fastmcp.server.dependencies import get_http_headers
 from fastmcp.tools import ToolResult
 from mcp.types import ImageContent, TextContent
-try:
-    from minio import Minio
-except ImportError:  # 老开发 venv 尚未补装时，文本工具仍可加载；部署依赖已显式声明
-    Minio = None
-from sqlalchemy import or_, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from ddp_core.agent import assertions_from_text
-from ddp_core.knowledge import neighbor_ids, normalize_entity_name
-from ddp_core.models import (
-    Chunk, Citation, Document, Evidence, GraphEdge, KnowledgeEntity, WikiEntry, WikiSection,
-    WikiSentence,
+#: 语料 API 的内网地址（compose 里是 `http://corpus-api:8081`）。
+CORPUS_URL = os.environ.get("CORPUS_API_URL", "http://127.0.0.1:8081").rstrip("/")
+SERVICE_TOKEN = os.environ.get("SERVICE_TOKEN", "")
+#: 裁图 URL 的对外基址。语料域返回的是相对路径（它不知道自己被挂在哪个域名下），
+#: 绝对化在这里做 —— 外部 agent 拿到相对路径没法用。
+PUBLIC_BASE_URL = os.environ.get("MCP_PUBLIC_BASE_URL", "").rstrip("/")
+
+#: 要转给语料 API 的身份头。**与 control-api 的 `identity.Inbound` 同一张表**：
+#: 那边加一个头、这边忘了转，表现是"新的授权维度对 MCP 这条路静默失效"。
+#: `X-DDP-User` 正是这种头 —— api_key 调用的真实主体在它里面，
+#: 丢了它 `policy.resource_condition` 会拿 key id 去比 `owner_id`，
+#: 结果是"用 key 调 MCP 的人什么都看不见"。
+#: 值写成规范大小写：HTTP 头不分大小写，但**报错信息要说人能搜的那个名字**
+#: （部署侧文档与 Go 常量都写作 `X-DDP-Organization`）。
+IDENTITY_HEADERS = (
+    "X-DDP-Organization", "X-DDP-Actor", "X-DDP-Actor-Kind", "X-DDP-Role",
+    "X-DDP-User", "X-DDP-Api-Key", "X-Request-Id", "traceparent",
 )
-from ddp_core.search import PgVectorIndex
+#: 缺任何一个就不算有身份（与 `ddp_corpus.deps.current_actor` 的必填集一致）。
+REQUIRED_HEADERS = ("X-DDP-Organization", "X-DDP-Actor", "X-DDP-Actor-Kind", "X-DDP-Role")
 
-DATABASE_URL = os.environ.get("CORPUS_DATABASE_URL", "")
-GATEWAY = os.environ.get("GATEWAY_URL", "http://localhost:9000")
-SERVICE_TOKEN = os.environ.get("SERVICE_TOKEN", "change-me")
-MIN_SIMILARITY = float(os.environ.get("MCP_MIN_SIMILARITY", "0.55"))
-
-_engine = None
-_sessions = None
-_index = PgVectorIndex()
 _http = httpx.AsyncClient(timeout=httpx.Timeout(30, read=300), trust_env=False)
-_minio = None
 
 
-def _headers() -> dict:
-    return {"Authorization": f"Bearer {SERVICE_TOKEN}"}
+def forwarded_identity() -> dict[str, str]:
+    """取出这次调用的可信 actor 上下文，取不到就抛。
 
-
-def _sessionmaker():
-    global _engine, _sessions
-    if not DATABASE_URL:
-        raise RuntimeError("CORPUS_DATABASE_URL is not configured")
-    if _sessions is None:
-        _engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
-        _sessions = async_sessionmaker(_engine, expire_on_commit=False)
-    return _sessions
-
-
-@asynccontextmanager
-async def corpus_session():
-    async with _sessionmaker()() as session:
-        yield session
-
-
-def _minio_client():
-    global _minio
-    endpoint = os.environ.get("MINIO_ENDPOINT", "")
-    if not endpoint or Minio is None:
-        return None
-    if _minio is None:
-        _minio = Minio(endpoint.removeprefix("http://").removeprefix("https://"),
-                       access_key=os.environ.get("MINIO_ACCESS_KEY", ""),
-                       secret_key=os.environ.get("MINIO_SECRET_KEY", ""),
-                       secure=endpoint.startswith("https://"))
-    return _minio
-
-
-async def _crop_url(document_id: str, key: str | None) -> str | None:
-    """返回经 Web 鉴权的稳定裁图路径，不泄露 MinIO 内网预签名地址。"""
-    if not key:
-        return None
-    parts = key.split("/")
-    if len(parts) < 3:
-        return None
-    base = os.environ.get("MCP_PUBLIC_BASE_URL", "").rstrip("/")
-    return f"{base}/api/documents/{document_id}/crops/{parts[-2]}/{parts[-1]}"
-
-
-async def _crop_bytes(key: str | None) -> tuple[bytes | None, str | None]:
-    """返回 (裁图字节, 降级原因)。**"没有图"与"取不到图"必须分开** ——
-
-    外部 agent 拿不到像素就核对不了这条证据；把两者都渲染成"没有图"，
-    等于把一次配置缺失（minio 没装/没配）伪装成"这条证据本来就没裁图"。
-    不变式 2：任何降级都必须可见。
+    `get_http_headers` 在没有活动 HTTP 请求时返回空 dict（不抛），所以
+    "没有 HTTP 上下文"会自然落到下面缺凭据那一支 —— 这正是想要的：
+    失败闭合，而不是"本地跑就当它是 admin"。
     """
-    if not key:
-        return None, None
-    client = _minio_client()
-    if client is None:
-        return None, "crop_store_unavailable"
-    bucket = os.environ.get("MINIO_BUCKET", "deepdocparse")
+    headers = get_http_headers(include={"authorization"})
+    if not SERVICE_TOKEN:
+        # 空 token 会让 compare_digest 对一个空 Bearer 成立，等于没有门。
+        # 这是部署配置错，必须炸在第一次调用上而不是静默放行
+        raise ToolError("MCP 服务未配置 SERVICE_TOKEN，拒绝服务（否则转发头不可信）")
+    token = headers.get("authorization", "")
+    token = token[7:].strip() if token[:7].lower() == "bearer " else ""
+    if not token or not secrets.compare_digest(token, SERVICE_TOKEN):
+        raise ToolError("缺少或不正确的服务凭据：本服务只接受经入口（control-api）"
+                        "转发的调用，不直接受理客户端请求")
+    # get_http_headers 给的是小写键；转发时用规范大小写
+    identity = {name: headers[name.lower()] for name in IDENTITY_HEADERS
+                if headers.get(name.lower())}
+    missing = [name for name in REQUIRED_HEADERS if name not in identity]
+    if missing:
+        raise ToolError(f"缺少 actor 上下文头：{', '.join(missing)}。"
+                        "这些头由入口下发；没有它们就无法判断你能看哪些资源，"
+                        "因此本次调用被拒绝而不是按匿名处理")
+    return {**identity, "authorization": f"Bearer {SERVICE_TOKEN}"}
 
-    def read():
-        response = client.get_object(bucket, key)
-        try:
-            return response.read()
-        finally:
-            response.close()
-            response.release_conn()
+
+def _message(response: httpx.Response) -> str:
     try:
-        return await asyncio.to_thread(read), None
-    except Exception:
-        return None, "crop_read_failed"
+        body = response.json()
+    except ValueError:
+        return response.text[:200]
+    error = body.get("error") if isinstance(body, dict) else None
+    if isinstance(error, dict):
+        return f"{error.get('code') or error.get('type')}: {error.get('message')}"
+    return response.text[:200]
 
 
-async def _embedding(query: str) -> tuple[list[float] | None, str | None]:
+async def _call(method: str, path: str, *, body: dict | None = None,
+                params: dict | None = None, allow_404: bool = False) -> dict | None:
+    """调语料 API 的一个 MCP 端点。404 按调用方要求转成 None。
+
+    连不上、5xx、鉴权失败一律抛 `ToolError` —— **绝不返回空结果**：
+    "数据库不可用"长得像"语料里没有"是这个项目明令禁止的形状（契约
+    「错误与降级」一节：不得返回看似成功的空数组）。
+    """
     try:
-        response = await _http.post(f"{GATEWAY}/v1/embeddings", headers=_headers(),
-                                    json={"input": query})
-        if response.status_code != 200:
-            return None, "embedding_unavailable"
-        return response.json()["data"][0]["embedding"], None
-    except Exception:
-        return None, "embedding_unavailable"
+        response = await _http.request(method, f"{CORPUS_URL}{path}", json=body,
+                                       params=params, headers=forwarded_identity())
+    except httpx.HTTPError as exc:
+        raise ToolError(f"语料服务不可达：{type(exc).__name__}") from exc
+    if response.status_code == 404 and allow_404:
+        return None
+    if response.status_code >= 400:
+        raise ToolError(f"语料服务拒绝了这次调用（HTTP {response.status_code}）："
+                        f"{_message(response)}")
+    return response.json()
 
 
-async def _evidence_payload(session: AsyncSession, evidence: Evidence,
-                            *, score=None, similarity=None) -> dict:
-    chunk = (await session.execute(select(Chunk).where(
-        Chunk.parse_job_id == evidence.parse_job_id, Chunk.seq == evidence.seq,
-        or_(Chunk.evidence_id == evidence.id, Chunk.derived_evidence_id == evidence.id)
-    ))).scalar_one_or_none()
-    document = await session.get(Document, evidence.document_id)
-    return {
-        "evidence_id": evidence.id, "document_id": evidence.document_id,
-        "document": document.filename if document else None,
-        "page_idx": evidence.page_idx, "seq": evidence.seq, "bbox": evidence.bbox,
-        "page_size": evidence.page_size, "kind": evidence.kind,
-        "content": evidence.content, "snippet": evidence.content[:500],
-        "source_type": "generated" if evidence.derived_from else "source",
-        "derived_from": evidence.derived_from, "review_state": evidence.review_state,
-        "resolved": chunk is not None, "chunk_id": chunk.id if chunk else None,
-        "crop_url": await _crop_url(evidence.document_id, evidence.crop_key),
-        "score": score, "similarity": similarity,
-    }
+def _absolutize(value):
+    """把响应里所有 `crop_url` 补成绝对地址（就地不改原对象语义，递归重建）。"""
+    if isinstance(value, list):
+        return [_absolutize(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    out = {key: _absolutize(item) for key, item in value.items()}
+    url = out.get("crop_url")
+    if isinstance(url, str) and url.startswith("/") and PUBLIC_BASE_URL:
+        out["crop_url"] = f"{PUBLIC_BASE_URL}{url}"
+    return out
 
+
+# --------------------------------------------------------------------- 五个工具
 
 async def search_impl(query: str, limit: int = 10) -> dict:
-    if not query.strip():
-        return {"results": [], "degraded": "empty_query"}
-    limit = max(1, min(limit, 50))
-    vector, degraded = await _embedding(query)
-    async with corpus_session() as session:
-        hits = await _index.search(session, vector=vector, query=query, document_id=None,
-                                   limit=limit, candidates=max(20, limit * 3),
-                                   min_similarity=MIN_SIMILARITY)
-        ids = [hit.get("derived_evidence_id") or hit.get("evidence_id") for hit in hits]
-        evidence = {row.id: row for row in (await session.execute(
-            select(Evidence).where(Evidence.id.in_([value for value in ids if value]))
-        )).scalars().all()}
-        results = [await _evidence_payload(
-            session, evidence[eid], score=hit.get("score"), similarity=hit.get("similarity"))
-            for hit, eid in zip(hits, ids) if eid in evidence]
-    return {"results": results, "degraded": degraded if vector is None else None}
+    limit = max(1, min(int(limit), 50))
+    return _absolutize(await _call("POST", "/internal/mcp/search",
+                                   body={"query": query, "limit": limit}))
 
 
 async def ask_impl(question: str) -> dict:
-    found = await search_impl(question, 8)
-    evidence = found["results"]
-    if not evidence:
-        return {"assertions": [{"text": "语料中未找到可支持的证据。", "evidence_ids": [],
-                                "verification": {"state": "unverified", "mode": None},
-                                "unsupported": True, "citations": []}],
-                # **契约里的 `no_hits`，不是自己造一个同义词。**
-                # `no_relevant_chunks` 不在 enums.yaml 里，于是它没有用户可见
-                # 文案：界面上要么显示这个裸标识符，要么按枚举分支渲染时
-                # 干脆什么都不显示 —— 而那正是"降级不可见"（不变式 2）。
-                # 语料侧同样的情形用的就是 no_hits。
-                # 这一处是补上 `return`/`or` 两种形状之后被守卫抓出来的
-                "degraded": found["degraded"] or "no_hits"}
-    sources = "\n\n".join(f"[{i}] {item['content']}" for i, item in enumerate(evidence, 1))
-    response = await _http.post(f"{GATEWAY}/v1/chat/completions", headers=_headers(), json={
-        "messages": [{"role": "system", "content": "只依据资料回答并用 [n] 引用。"},
-                     {"role": "user", "content": f"【资料】\n{sources}\n【问题】\n{question}"}],
-        "stream": False})
-    if response.status_code != 200:
-        return {"assertions": [], "degraded": "answer_unavailable"}
-    text = response.json()["choices"][0]["message"]["content"] or ""
-    parsed = assertions_from_text(text, [item["evidence_id"] for item in evidence])
-    by_id = {item["evidence_id"]: item for item in evidence}
-    assertions = []
-    for item in parsed:
-        citations = [by_id[value] for value in item["evidence_ids"] if value in by_id]
-        assertions.append({"text": item["text"], "evidence_ids": item["evidence_ids"],
-                           "verification": {"state": "unverified", "mode": None},
-                           "unsupported": not bool(item["evidence_ids"]),
-                           "citations": citations})
-    return {"assertions": assertions, "degraded": found["degraded"]}
+    return _absolutize(await _call("POST", "/internal/mcp/ask",
+                                   body={"question": question}))
 
 
 async def get_evidence_impl(evidence_id: str) -> ToolResult:
-    async with corpus_session() as session:
-        evidence = await session.get(Evidence, evidence_id)
-        if evidence is None:
-            return ToolResult(structured_content={"status": "not_found"}, is_error=True)
-        payload = await _evidence_payload(session, evidence)
-        image, payload["crop_degraded"] = await _crop_bytes(evidence.crop_key)
+    """证据 + **MCP 原生 image content**（裁图存在时）。
+
+    图必须以 image content 回去，不能只给 URL：外部 agent 手里没有能取那张图
+    的凭据，只给 URL 等于让"可复核"这条属性停在纸面上。
+    """
+    data = await _call("GET", f"/internal/mcp/evidence/{evidence_id}", allow_404=True)
+    if data is None:
+        return ToolResult(structured_content={"status": "not_found"}, is_error=True)
+    payload = _absolutize(data["evidence"])
     content = [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))]
-    if image:
-        content.append(ImageContent(type="image", data=base64.b64encode(image).decode(),
-                                    mimeType="image/png"))
+    crop = data.get("crop")
+    if crop:
+        content.append(ImageContent(type="image", data=crop["data_base64"],
+                                    mime_type=crop.get("mime") or "image/png"))
     return ToolResult(content=content, structured_content=payload)
 
 
 async def read_wiki_impl(value: str) -> dict:
-    async with corpus_session() as session:
-        entry = await session.get(WikiEntry, value)
-        if entry is None:
-            entry = (await session.execute(select(WikiEntry).where(
-                WikiEntry.title == value))).scalar_one_or_none()
-        if entry is None:
-            return {"status": "not_found"}
-        sections = (await session.execute(select(WikiSection).where(
-            WikiSection.entry_id == entry.id).order_by(WikiSection.position))).scalars().all()
-        out = []
-        for section in sections:
-            sentences = (await session.execute(select(WikiSentence).where(
-                WikiSentence.section_id == section.id).order_by(WikiSentence.position)
-            )).scalars().all()
-            values = []
-            for sentence in sentences:
-                citations = (await session.execute(select(Citation, Evidence).join(
-                    Evidence, Evidence.id == Citation.evidence_id).where(
-                    Citation.source_kind == "wiki_sentence", Citation.source_id == sentence.id,
-                    Citation.role == "primary"))).all()
-                evidence_payloads = [await _evidence_payload(session, evidence)
-                                     for _, evidence in citations]
-                live = [item for item in evidence_payloads if item["resolved"]]
-                values.append({"id": sentence.id, "text": sentence.text,
-                               "evidence_ids": [item["evidence_id"] for item in live],
-                               "unsupported": sentence.unsupported or not bool(live),
-                               "conflict_group": sentence.conflict_group,
-                               "citations": evidence_payloads})
-            out.append({"heading": section.heading, "sentences": values})
-        return {"status": "ok", "entry": {"id": entry.id, "title": entry.title},
-                "sections": out}
+    data = await _call("GET", "/internal/mcp/wiki", params={"value": value},
+                       allow_404=True)
+    return _absolutize(data) if data else {"status": "not_found"}
 
 
 async def graph_neighbors_impl(value: str, depth: int = 1) -> dict:
+    # **先验身份，再验参数。** 反过来的话，没有凭据的调用方能从"参数没问题"
+    # 这件事上拿到一个成功形状的响应 —— 每个工具都必须是同一句话：没有身份，
+    # 什么都不回答
+    forwarded_identity()
     if not 1 <= depth <= 3:
+        # 形状与搬迁前一致：越界不是错误结果，而是一个结构化状态
         return {"status": "invalid_depth"}
-    async with corpus_session() as session:
-        center = await session.get(KnowledgeEntity, value)
-        if center is None:
-            center = (await session.execute(select(KnowledgeEntity).where(
-                KnowledgeEntity.normalized_name == normalize_entity_name(value)
-            ))).scalar_one_or_none()
-        if center is None:
-            return {"status": "not_found"}
-        edges = (await session.execute(select(GraphEdge))).scalars().all()
-        included = neighbor_ids(center.id, [(edge.subject_id, edge.object_id) for edge in edges],
-                                depth)
-        entities = (await session.execute(select(KnowledgeEntity).where(
-            KnowledgeEntity.id.in_(included)))).scalars().all()
-        edge_out = []
-        for edge in edges:
-            if edge.subject_id not in included or edge.object_id not in included:
-                continue
-            rows = (await session.execute(select(Citation, Evidence).join(
-                Evidence, Evidence.id == Citation.evidence_id).where(
-                Citation.source_kind == "graph_edge", Citation.source_id == edge.id,
-                Citation.role == "primary"))).all()
-            citations = [await _evidence_payload(session, evidence) for _, evidence in rows]
-            live = [item for item in citations if item["resolved"]]
-            edge_out.append({"id": edge.id, "subject_id": edge.subject_id,
-                             "predicate": edge.predicate, "object_id": edge.object_id,
-                             "confidence": edge.confidence,
-                             "evidence_ids": [item["evidence_id"] for item in live],
-                             "unsupported": edge.unsupported or not bool(live),
-                             "citations": citations})
-        return {"status": "ok", "center_id": center.id,
-                "entities": [{"id": row.id, "name": row.canonical_name,
-                              "entity_type": row.entity_type,
-                              "entity_merge_uncertain": row.entity_merge_uncertain}
-                             for row in entities], "edges": edge_out}
+    data = await _call("GET", "/internal/mcp/graph/neighbors",
+                       params={"value": value, "depth": depth}, allow_404=True)
+    return _absolutize(data) if data else {"status": "not_found"}

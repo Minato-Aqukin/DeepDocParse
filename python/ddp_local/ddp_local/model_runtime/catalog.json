@@ -1,0 +1,57 @@
+{
+  "schema": "ddp-model-catalog/1",
+  "revision": "2026-09-12.1",
+  "artifacts": [
+    {
+      "id": "qwen3-1.7b-q8_0",
+      "kind": "model",
+      "name": "Qwen3 1.7B Q8_0",
+      "version": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+      "filename": "Qwen3-1.7B-Q8_0.gguf",
+      "bytes": 1834426016,
+      "sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+      "license": "Apache-2.0",
+      "license_url": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/blob/90862c4b9d2787eaed51d12237eafdfe7c5f6077/README.md",
+      "url": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/90862c4b9d2787eaed51d12237eafdfe7c5f6077/Qwen3-1.7B-Q8_0.gguf",
+      "format": "gguf-v3",
+      "architecture": "qwen3",
+      "input_types": [
+        "text"
+      ],
+      "output_types": [
+        "chat_completion"
+      ],
+      "backend": "llama.cpp",
+      "device": "cpu",
+      "minimum_memory_bytes": 4294967296,
+      "context_tokens": 8192,
+      "runtime_id": "llama-cpp-cpu-linux-x64",
+      "validation": "partial_real_cpu_validation"
+    },
+    {
+      "id": "llama-cpp-cpu-linux-x64",
+      "kind": "runtime",
+      "name": "llama.cpp CPU Linux x64",
+      "version": "b10809",
+      "filename": "llama-b10809-bin-ubuntu-x64.tar.gz",
+      "bytes": 16734586,
+      "sha256": "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941",
+      "license": "MIT",
+      "license_url": "https://github.com/ggml-org/llama.cpp/blob/b10809/LICENSE",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10809/llama-b10809-bin-ubuntu-x64.tar.gz",
+      "format": "tar-gz",
+      "backend": "llama.cpp",
+      "device": "cpu",
+      "platform": "linux-x86_64",
+      "architectures": [
+        "qwen3"
+      ],
+      "executable": "llama-b10809/llama-server",
+      "library_dirs": [
+        "llama-b10809"
+      ],
+      "unpacked_bytes": 134217728,
+      "validation": "real_cpu_start_and_oom_recovery_validated"
+    }
+  ]
+}

@@ -110,15 +110,20 @@ async def claim(session: AsyncSession, kinds: list[str], *, limit: int = 1,
 
 async def heartbeat(session: AsyncSession, task_id: str, generation: int,
                     lease_seconds: int | None = None) -> bool:
-    """续租。返回 False 说明这条任务已经被别人接管，**调用方应当立刻停手**。
+    """续租。返回 False 说明这条任务已经被别人接管或已被取消，**调用方应当立刻停手**。
 
     继续跑下去不会出错，但算出来的结果写不进去（generation 对不上），
     白烧 GPU。所以 worker 的长循环里要看这个返回值。
+
+    状态守卫同样是必需的：没有它时，一次恰好在 cancel 之后到达的心跳会把
+    cancelled 行**复活**成 running（generation 若因任何原因仍相等）——
+    终态被"心跳复活"是比迟到结果更难查的一类错误。
     """
     lease = lease_seconds or settings.task_lease_seconds
     done = await session.execute(
         update(Task)
-        .where(Task.id == task_id, Task.generation == generation)
+        .where(Task.id == task_id, Task.generation == generation,
+               Task.status.in_(("claimed", "running")))
         .values(status="running", lease_until=utcnow() + timedelta(seconds=lease),
                 updated_at=utcnow())
     )
@@ -126,12 +131,58 @@ async def heartbeat(session: AsyncSession, task_id: str, generation: int,
     return done.rowcount > 0
 
 
+async def cancel(session: AsyncSession, task_id: str) -> bool:
+    """显式取消：queued/claimed/running -> cancelled（终态）。返回是否发生转移。
+
+    **幂等**：已经落终态（succeeded/failed/cancelled）的任务原样不动，返回 False。
+    与其它终态写入同一套围栏：
+
+    - UPDATE 只命中活跃状态 —— 一个已被取消的任务不可能被这里"取消第二次"；
+    - **generation +1** —— 迟到的 heartbeat/succeed/fail 拿着旧代次会被拒绝，
+      旧 worker 醒过来写不进任何东西（只有 lease 没有这道围栏的队列不安全）。
+
+    清 `dedupe_key`（与 succeed/fail 同一口径）：腾出幂等键，用户重新发起同一件
+    事时能再排一次，而不是被一条永远不会被领取的 cancelled 行挡住。
+    """
+    changed = await session.execute(
+        update(Task)
+        .where(Task.id == task_id,
+               Task.status.in_(("queued", "claimed", "running")))
+        .values(status="cancelled", error="cancelled", claimed_by=None,
+                lease_until=None, dedupe_key=None,
+                generation=Task.generation + 1,
+                finished_at=utcnow(), updated_at=utcnow())
+    )
+    await session.commit()
+    return changed.rowcount == 1
+
+
+async def cancel_by_dedupe(session: AsyncSession, *, kind: str, dedupe_key: str) -> bool:
+    """按 `(kind, dedupe_key)` 找活跃任务并取消。联邦的 cancel 走这条路径 ——
+    执行行/协调行按业务键找队列任务，不必把 Task.id 抄进业务表。"""
+    task_id = await session.scalar(
+        select(Task.id).where(Task.kind == kind, Task.dedupe_key == dedupe_key,
+                              Task.status.in_(("queued", "claimed", "running")))
+        .limit(1))
+    if task_id is None:
+        return False
+    return await cancel(session, task_id)
+
+
 async def succeed(session: AsyncSession, task_id: str, generation: int,
                   degraded: str | None = None) -> None:
-    """落成功。generation 对不上直接抛 —— 见 StaleGeneration 的说明。"""
+    """落成功。generation 对不上或已成终态直接抛 —— 见 StaleGeneration 的说明。
+
+    **状态守卫与代次围栏缺一不可**：取消会把 generation +1，所以迟到的成功
+    通常已经对不上；但即使有人拿着取消后的新代次来写（理论上做不到，除非
+    调用方主动重读），`status.in_` 也保证不会把 cancelled 改回 succeeded。
+    写最终态的入口必须同时具备这两道闸，只留一道时另一道的变异不会被任何测试
+    注意到 —— 那正是"旧结果覆盖新结果"这类几乎查不出来的 bug 的温床。
+    """
     done = await session.execute(
         update(Task)
-        .where(Task.id == task_id, Task.generation == generation)
+        .where(Task.id == task_id, Task.generation == generation,
+               Task.status.in_(("claimed", "running")))
         .values(status="succeeded", degraded=degraded, error=None,
                 dedupe_key=None,      # 腾出幂等键，下次同样的任务能再排
                 finished_at=utcnow(), updated_at=utcnow())
@@ -154,6 +205,9 @@ async def fail(session: AsyncSession, task_id: str, generation: int, error: str,
     task = await session.get(Task, task_id)
     if task is None or task.generation != generation:
         raise StaleGeneration(f"任务 {task_id} 的 generation 已经不是 {generation}")
+    if task.status not in ("queued", "claimed", "running"):
+        # cancelled / succeeded 是终态：不许被迟到的失败（或重试）改写。
+        raise StaleGeneration(f"任务 {task_id} 已经是终态 {task.status}，拒绝覆盖")
 
     if retry and task.attempts < task.max_attempts:
         backoff = min(2 ** task.attempts, 300)
@@ -193,4 +247,4 @@ async def backlog(session: AsyncSession) -> dict[str, dict]:
 def is_terminal(status: str) -> bool:
     if status not in TASK_STATUS_VALUES:
         raise ValueError(f"未知任务状态 {status!r}")
-    return status in ("succeeded", "failed")
+    return status in ("succeeded", "failed", "cancelled")

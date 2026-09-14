@@ -23,10 +23,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_core.chunking import page_count_of
 from ddp_corpus.usage import record_usage
-from ddp_corpus.models import Document, ParseJob, utcnow
+from ddp_corpus.models import Document, ParseJob, ResourceVersion, utcnow
 from ddp_corpus.service_client import ServiceClient
 from ddp_corpus.storage import Storage, job_result_prefix
-from ddp_corpus.versions import advance_index_generation
+from ddp_corpus.indexing import mark_index_pending
 
 # markdown 图片引用：![alt](target "title")
 _IMG_REF = re.compile(r"(!\[[^\]]*\]\()(<[^>]*>|[^)\s]+)(\s*(?:\"[^\"]*\")?\))")
@@ -175,30 +175,30 @@ async def archive_job(session: AsyncSession, storage: Storage, service: ServiceC
     job.status = "succeeded"
     job.error = None
     job.archived_at = datetime.now(UTC)
+    # Bind an existing unparsed resource once. Reparse/switch-current must not move
+    # an already exported resource version to different evidence. Imported snapshots
+    # keep their own source parse identity and cannot be rewritten by a local parse.
+    await session.execute(update(ResourceVersion).where(
+        ResourceVersion.document_id == document.id,
+        ResourceVersion.resource_id == job.resource_id,
+        ResourceVersion.parse_job_id.is_(None), ResourceVersion.bundle_prefix == "",
+        ResourceVersion.deleted_at.is_(None),
+        ResourceVersion.created_at <= job.created_at,
+    ).values(parse_job_id=job.id))
 
-    # 首次解析成功即成为当前版本；后续重解析要用户显式切换，避免结果在脚下被换掉。
-    # deleted_at 是第二道安全闸：即使 callback 随后仍投递 index task，claim 也拒绝删除行。
+    # Compatibility selection never controls whether this particular job is indexed.
     if document.deleted_at is None:
-        previous_current = document.current_job_id
-        effective_current = previous_current or job.id
-        if effective_current == job.id:
-            generation = await advance_index_generation(
-                session, document.id, expected_current_job_id=previous_current,
-                deleted=False, values={
-                    "current_job_id": effective_current, "page_count": page_count,
-                    "index_status": "pending", "index_error": None,
-                    "index_lease_until": None, "compile_status": "pending",
-                    "compile_degraded": [], "updated_at": utcnow(),
-                })
-            if generation is None:  # 行锁下只可能是异常的外部状态改写
-                raise RuntimeError("document state changed while archive row was locked")
-            await session.refresh(document)
-        else:
-            document.updated_at = utcnow()
+        if not document.current_job_id:
+            document.current_job_id = job.id
+            document.page_count = page_count
+        await session.flush()
+        await mark_index_pending(session, job.id)
 
     # 记在发起这次解析的人头上；老 job 没这个信息时退回上传者
-    await record_usage(session, actor_id=job.initiated_by or document.uploaded_by,
-                       organization_id=document.organization_id,
+    from ddp_corpus.models import Resource
+    resource = await session.get(Resource, job.resource_id) if job.resource_id else None
+    await record_usage(session, actor_id=job.initiated_by or (resource.owner_id if resource else document.uploaded_by),
+                       organization_id=resource.organization_id if resource else document.organization_id,
                        api_key_id=job.api_key_id,
                        parse_job_id=job.id, kind="parse", pages=page_count)
     await session.commit()

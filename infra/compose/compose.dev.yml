@@ -129,6 +129,7 @@ services:
       CONTROL_DATABASE_URL: postgres://ddp_control:${CONTROL_DB_PASSWORD:-ddp}@postgres:5432/deepdocparse
       # 迁移交给 control-migrate 那个一次性容器（它用属主身份）
       CONTROL_AUTO_MIGRATE: "false"
+      NODE_IDENTITY_DIR: /var/lib/ddp/node-identity
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 必须显式设置且不短于 32 字节}
       SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
       CORPUS_URL: http://corpus-api:8081
@@ -148,6 +149,7 @@ services:
       # 它在容器里，解析不了 127.0.0.1
       INTERNAL_BASE_URL: http://control-api:8080
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+    volumes: [control_identity:/var/lib/ddp/node-identity]
     ports: ["8080:8080"]
     depends_on:
       postgres: {condition: service_healthy}
@@ -238,19 +240,15 @@ services:
     environment:
       SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
       GATEWAY_URL: http://model-gateway:9000
-      # **受限角色，不是超级用户。** MCP 是长跑的语料消费方，与 corpus-api
-      # 同一个身份。用 ddp 连的话它能写 control.usage_ledger 与 api_keys ——
-      # 而 F-20 修的正是这件事，当时漏了这一处
-      CORPUS_DATABASE_URL: postgresql+asyncpg://ddp_corpus:${CORPUS_DB_PASSWORD:-ddp}@postgres:5432/deepdocparse
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${OBJECT_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${OBJECT_SECRET_KEY:?OBJECT_SECRET_KEY 必须显式设置}
-      MINIO_BUCKET: deepdocparse
+      # MCP reads only actor-authorized corpus HTTP endpoints; no database/bucket credentials.
+      CORPUS_API_URL: http://corpus-api:8081
+      MCP_PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
       REDIS_URL: redis://redis:6379/2
     expose: ["9100"]
     depends_on:
       corpus-migrate: {condition: service_completed_successfully}
 
 volumes:
+  control_identity:
   pgdata:
   miniodata:

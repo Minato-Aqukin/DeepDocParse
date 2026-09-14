@@ -94,7 +94,8 @@ def _or_tsquery(query: str) -> str:
 class SearchIndex(Protocol):
     async def search(self, session: AsyncSession, *, vector: list[float] | None, query: str,
                      document_id: str | None, limit: int, candidates: int,
-                     min_similarity: float) -> list[Hit]: ...
+                     min_similarity: float, authorized_document_ids: list[str] | None = None,
+                     authorized_parse_job_ids: list[str] | None = None) -> list[Hit]: ...
 
 
 def _rrf(ranked_lists: list[list[str]]) -> dict[str, float]:
@@ -122,11 +123,20 @@ class PgVectorIndex:
 
     async def search(self, session: AsyncSession, *, vector: list[float] | None, query: str,
                      document_id: str | None, limit: int, candidates: int,
-                     min_similarity: float) -> list[Hit]:
+                     min_similarity: float, authorized_document_ids: list[str] | None = None,
+                     authorized_parse_job_ids: list[str] | None = None) -> list[Hit]:
         # **不再按用户收作用域**（1b）：一次部署 = 一份语料，检索天然跨全语料。
         # 不指定 document_id 就是"在整份语料里搜"，`TRUE` 是有意写成常量的 ——
         # 让 SQL 结构与指定文档时保持一致，免得两条分支各长一个样
         scope = "c.document_id = :document_id" if document_id else "TRUE"
+        if authorized_document_ids is not None:
+            if not authorized_document_ids:
+                return []
+            scope += " AND c.document_id IN :authorized_ids"
+        if authorized_parse_job_ids is not None:
+            if not authorized_parse_job_ids:
+                return []
+            scope += " AND c.parse_job_id IN :authorized_job_ids"
         params = {"document_id": document_id,
                   "qvec": str(list(vector)) if vector else None,
                   # 查询侧切词必须与索引侧同一个 tokenizer（见模块 docstring 第 1 条），
@@ -174,6 +184,14 @@ class PgVectorIndex:
                      DESC LIMIT :n
         """)
 
+        if authorized_document_ids is not None:
+            params["authorized_ids"] = authorized_document_ids
+            vec_sql = vec_sql.bindparams(bindparam("authorized_ids", expanding=True))
+            kw_sql = kw_sql.bindparams(bindparam("authorized_ids", expanding=True))
+        if authorized_parse_job_ids is not None:
+            params["authorized_job_ids"] = authorized_parse_job_ids
+            vec_sql = vec_sql.bindparams(bindparam("authorized_job_ids", expanding=True))
+            kw_sql = kw_sql.bindparams(bindparam("authorized_job_ids", expanding=True))
         similarity: dict[str, float] = {}
         vec_ids: list[str] = []
         if vector:
@@ -253,7 +271,8 @@ class MemoryIndex:
 
     async def search(self, session: AsyncSession, *, vector: list[float] | None, query: str,
                      document_id: str | None, limit: int, candidates: int,
-                     min_similarity: float) -> list[Hit]:
+                     min_similarity: float, authorized_document_ids: list[str] | None = None,
+                     authorized_parse_job_ids: list[str] | None = None) -> list[Hit]:
         from sqlalchemy import select
 
         from ddp_core.models import Chunk, Document
@@ -263,6 +282,10 @@ class MemoryIndex:
         # 不指定文档就搜全语料 —— 与 PgVectorIndex 的 scope 语义保持一致
         if document_id:
             stmt = stmt.where(Chunk.document_id == document_id)
+        if authorized_document_ids is not None:
+            stmt = stmt.where(Document.id.in_(authorized_document_ids))
+        if authorized_parse_job_ids is not None:
+            stmt = stmt.where(Chunk.parse_job_id.in_(authorized_parse_job_ids))
         rows = (await session.execute(stmt)).all()
 
         vec_ids: list[str] = []

@@ -58,9 +58,10 @@ func Open(ctx context.Context, c Config) (*Store, error) {
 	// 进程内 e2e 都碰不到 —— 2026-09-02 第一次真起全栈时炸出来的。
 	mk := func(endpoint string, secure bool) (*minio.Client, error) {
 		return minio.New(endpoint, &minio.Options{
-			Creds:  credentials.NewStaticV4(c.AccessKey, c.SecretKey, ""),
-			Secure: secure,
-			Region: c.Region,
+			Creds:      credentials.NewStaticV4(c.AccessKey, c.SecretKey, ""),
+			Secure:     secure,
+			Region:     c.Region,
+			MaxRetries: 1, // Mutation retries require persisted reconciliation, especially NewMultipartUpload.
 		})
 	}
 	internal, err := mk(c.Endpoint, c.Secure)
@@ -121,34 +122,125 @@ type Part struct {
 func (s *Store) CreateMultipart(ctx context.Context, key, contentType string,
 	size, partSize int64) (uploadID string, parts []Part, err error) {
 
-	core := minio.Core{Client: s.client}
-	uploadID, err = core.NewMultipartUpload(ctx, s.bucket, key,
-		minio.PutObjectOptions{ContentType: contentType})
+	uploadID, err = s.BeginMultipart(ctx, key, contentType)
 	if err != nil {
 		return "", nil, err
 	}
-	count := (size + partSize - 1) / partSize
-	if count == 0 {
-		count = 1
+	parts, err = s.PresignParts(ctx, key, uploadID, size, partSize, nil)
+	return uploadID, parts, err
+}
+
+// BeginMultipart is called only after a durable allocation claim. It does not
+// sign URLs or abort on signing failure: an acquired receipt must be persisted.
+func (s *Store) BeginMultipart(ctx context.Context, key, contentType string) (string, error) {
+	core := minio.Core{Client: s.client}
+	return core.NewMultipartUpload(ctx, s.bucket, key, minio.PutObjectOptions{ContentType: contentType})
+}
+
+func (s *Store) PresignParts(ctx context.Context, key, uploadID string, size, partSize int64, completed []CompletedPart) ([]Part, error) {
+	if partSize <= 0 || size <= 0 || (size+partSize-1)/partSize > 10000 {
+		return nil, fmt.Errorf("invalid multipart geometry")
 	}
-	for i := int64(1); i <= count; i++ {
+	done := map[int]bool{}
+	for _, p := range ValidCompletedParts(completed, size, partSize) {
+		done[p.PartNumber] = true
+	}
+	parts := []Part{}
+	for i := int64(1); i <= (size+partSize-1)/partSize; i++ {
+		if done[int(i)] {
+			continue
+		}
 		q := url.Values{}
 		q.Set("uploadId", uploadID)
 		q.Set("partNumber", fmt.Sprint(i))
 		u, err := s.publicClient.Presign(ctx, "PUT", s.bucket, key, s.presignTTL, q)
 		if err != nil {
-			// 签到一半失败就把这次 multipart 撤掉，别留下计费中的碎片
-			_ = core.AbortMultipartUpload(ctx, s.bucket, key, uploadID)
-			return "", nil, err
+			return nil, err
 		}
 		parts = append(parts, Part{PartNumber: int(i), URL: u.String()})
 	}
-	return uploadID, parts, nil
+	return parts, nil
+}
+
+// FindMultipart never widens the persisted random object key to an actor/org
+// prefix. Empty or multiple receipts mean UNKNOWN, not permission to create.
+func (s *Store) FindMultipart(ctx context.Context, key string) ([]string, error) {
+	core := minio.Core{Client: s.client}
+	ids := []string{}
+	keyMarker, uploadMarker := "", ""
+	for {
+		result, err := core.ListMultipartUploads(ctx, s.bucket, key, keyMarker, uploadMarker, "", 1000)
+		if err != nil {
+			return nil, err
+		}
+		for _, u := range result.Uploads {
+			if u.Key == key {
+				ids = append(ids, u.UploadID)
+			}
+		}
+		if !result.IsTruncated {
+			return ids, nil
+		}
+		if result.NextKeyMarker == keyMarker && result.NextUploadIDMarker == uploadMarker {
+			return nil, fmt.Errorf("multipart listing did not advance")
+		}
+		keyMarker, uploadMarker = result.NextKeyMarker, result.NextUploadIDMarker
+	}
+}
+func (s *Store) CompletedParts(ctx context.Context, key, uploadID string) ([]CompletedPart, error) {
+	core := minio.Core{Client: s.client}
+	out := []CompletedPart{}
+	marker := 0
+	for {
+		result, err := core.ListObjectParts(ctx, s.bucket, key, uploadID, marker, 1000)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range result.ObjectParts {
+			out = append(out, CompletedPart{PartNumber: p.PartNumber, ETag: p.ETag, Size: p.Size})
+		}
+		if !result.IsTruncated {
+			return out, nil
+		}
+		if result.NextPartNumberMarker <= marker {
+			return nil, fmt.Errorf("parts listing did not advance")
+		}
+		marker = result.NextPartNumberMarker
+	}
+}
+
+func IsMissing(err error) bool {
+	code := minio.ToErrorResponse(err).Code
+	return code == "NoSuchKey" || code == "NoSuchObject" || code == "NoSuchUpload"
+}
+
+// ValidCompletedParts excludes truncated or out-of-range parts. These must be
+// re-uploaded, even if S3 has an ETag for the interrupted PUT.
+func ValidCompletedParts(parts []CompletedPart, size, partSize int64) []CompletedPart {
+	out := []CompletedPart{}
+	if partSize <= 0 {
+		return out
+	}
+	count := (size + partSize - 1) / partSize
+	for _, p := range parts {
+		if p.PartNumber < 1 || int64(p.PartNumber) > count {
+			continue
+		}
+		expected := partSize
+		if int64(p.PartNumber) == count {
+			expected = size - (count-1)*partSize
+		}
+		if p.Size == expected {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 type CompletedPart struct {
 	PartNumber int    `json:"part_number"`
 	ETag       string `json:"etag"`
+	Size       int64  `json:"size,omitempty"`
 }
 
 // CompleteMultipart 合并分片。
@@ -160,20 +252,15 @@ func (s *Store) CompleteMultipart(ctx context.Context, key, uploadID string,
 
 	core := minio.Core{Client: s.client}
 	var parts []minio.CompletePart
-	if len(reported) > 0 {
-		for _, p := range reported {
-			parts = append(parts, minio.CompletePart{PartNumber: p.PartNumber, ETag: p.ETag})
-		}
-	} else {
-		listed, err := core.ListObjectParts(ctx, s.bucket, key, uploadID, 0, 10000)
-		if err != nil {
-			return err
-		}
-		for _, p := range listed.ObjectParts {
-			parts = append(parts, minio.CompletePart{PartNumber: p.PartNumber, ETag: p.ETag})
-		}
+	listed, err := s.CompletedParts(ctx, key, uploadID)
+	if err != nil {
+		return err
 	}
-	_, err := core.CompleteMultipartUpload(ctx, s.bucket, key, uploadID, parts,
+	for _, p := range listed {
+		parts = append(parts, minio.CompletePart{PartNumber: p.PartNumber, ETag: p.ETag})
+	}
+
+	_, err = core.CompleteMultipartUpload(ctx, s.bucket, key, uploadID, parts,
 		minio.PutObjectOptions{})
 	return err
 }

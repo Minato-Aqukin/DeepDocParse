@@ -1,0 +1,630 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepdocparse.dev/schemas/ddp-discovery/1",
+  "title": "DDP-DISCOVERY v1",
+  "description": "节点发现的三份描述与一张路径表（计划 §5.2）。三份描述各自回答一个不同的问题，合起来才构成「能不能把活派到那里」。x-ddp-doc 里逐条写了「不能从这份描述推断什么」——那是本契约存在的主要理由。",
+  "x-ddp-contract": "ddp-discovery/1",
+  "$defs": {
+    "node_id": {
+      "description": "自治中心的持久身份（计划 §2.1）。升级、改地址、换上级都不改变它 —— 这是不变量 I02 的载体。",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"
+    },
+    "revision": {
+      "description": "单调递增的修订号。用于「旧修订不得覆盖新撤销」（§5.5）。",
+      "type": "integer",
+      "minimum": 1
+    },
+    "instant": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "digest": {
+      "description": "sha256 十六进制。摘要证明来源与传输完整，**不证明内容真实或推理正确**（§4.3）。",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "NodeDescriptor": {
+      "type": "object",
+      "description": "节点自己发布的身份与入口。",
+      "x-ddp-doc": "**有节点描述不代表当前可达**（§5.2）。可达性只能由实际连接验证，所以这里没有任何 `online` 字段 —— 想知道在不在线要看 CapabilityProfile.readiness，而那个值有 valid_until。",
+      "properties": {
+        "schema": {
+          "const": "ddp-discovery/1#NodeDescriptor"
+        },
+        "node_id": {
+          "$ref": "#/$defs/node_id"
+        },
+        "protocol_versions": {
+          "description": "支持的协议版本。未知必需版本要返回 protocol_incompatible，不能忽略后照常执行（§9.3）。",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "controlled_endpoints": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "type": "string",
+                "enum": [
+                  "federation",
+                  "data_channel"
+                ]
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              }
+            },
+            "required": [
+              "purpose",
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "auth_methods": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "discovery_capabilities": {
+          "description": "本节点能否枚举下级成员。`enumerate_members=false` 的节点在范围穷查里表现为 unexpanded_subtree，**不是空目录**（§5.5）。",
+          "type": "object",
+          "properties": {
+            "enumerate_members": {
+              "type": "boolean"
+            },
+            "catalog_events": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enumerate_members"
+          ],
+          "additionalProperties": false
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "valid_until": {
+          "$ref": "#/$defs/instant"
+        },
+        "publisher_signature": {
+          "description": "可选。**只证明发布者，不证明描述准确**（§5.2）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "node_id",
+        "protocol_versions",
+        "controlled_endpoints",
+        "auth_methods",
+        "discovery_capabilities",
+        "revision",
+        "valid_until"
+      ],
+      "additionalProperties": false
+    },
+    "CapabilityProfile": {
+      "type": "object",
+      "description": "一个 operation 在该节点上的真实就绪度。",
+      "x-ddp-doc": "**`gpu=true` 不代表所需模型已就绪**（§5.2）。所以静态配置、周期健康、本次预检是三个字段，不是一个 bool。这正是本项目踩过的坑的联邦版本：注册表里只有 OCR 专用模型时，抽取平面拿它去抽值抽不出来，被记成 not_found —— 系统能力缺失伪装成「文档里没有」。",
+      "properties": {
+        "schema": {
+          "const": "ddp-discovery/1#CapabilityProfile"
+        },
+        "node_id": {
+          "$ref": "#/$defs/node_id"
+        },
+        "operation": {
+          "description": "类型化操作名。第一版只允许已登记模板，不接受任意 shell/代码（§6.5）。",
+          "type": "string",
+          "enum": [
+            "corpus.retrieve",
+            "corpus.locate",
+            "doc.parse",
+            "doc.compile",
+            "rag.answer.cited",
+            "extract.fields",
+            "wiki.pages",
+            "rerank"
+          ]
+        },
+        "profile": {
+          "type": "string"
+        },
+        "readiness": {
+          "description": "健康探测结论。过期记录按 unknown 处理，不得按最后一次成功当成现在可用。",
+          "type": "string",
+          "x-ddp-enum": "capability_readiness"
+        },
+        "accepting_admissions": {
+          "description": "**与 readiness 分开**：ready 但不接单（排空中、配额满）是常态。I06：能力声明不等于任务成功。",
+          "type": "boolean"
+        },
+        "engine_versions": {
+          "description": "引擎/模型版本。换了模型版本，缓存的向量与阈值都可能不再可比（§4.3）。",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "input_contract": {
+          "type": "object",
+          "properties": {
+            "formats": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "max_bytes": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "max_concurrency": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_candidates": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "observed_at": {
+          "$ref": "#/$defs/instant"
+        },
+        "valid_until": {
+          "$ref": "#/$defs/instant"
+        },
+        "configured": {
+          "type": "boolean",
+          "description": "静态配置是否存在，与观测readiness和接单状态分离。"
+        }
+      },
+      "required": [
+        "schema",
+        "node_id",
+        "operation",
+        "readiness",
+        "accepting_admissions",
+        "observed_at",
+        "valid_until"
+      ],
+      "additionalProperties": false
+    },
+    "CollectionDescriptor": {
+      "type": "object",
+      "description": "一个可检索集合的公开摘要。",
+      "x-ddp-doc": "**摘要不代表完整内容覆盖，也不是永久否定依据**（§5.2）。摘要只影响穷查的**顺序**，不删除成员（§7.3）—— 计划 T84 专门测这件事：唯一关键证据不在主题摘要里时，穷查仍须实际探测该集合。私有集合的数量、实体、向量同样敏感，不自动上报（§5.2）。",
+      "properties": {
+        "schema": {
+          "const": "ddp-discovery/1#CollectionDescriptor"
+        },
+        "origin_node_id": {
+          "description": "**来源身份，不随路径变化**（I02）。经上级中继拿到的描述，这里仍是原始来源。",
+          "$ref": "#/$defs/node_id"
+        },
+        "collection_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "licence": {
+          "type": "string"
+        },
+        "languages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "time_range": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "$ref": "#/$defs/instant"
+            },
+            "to": {
+              "$ref": "#/$defs/instant"
+            }
+          },
+          "additionalProperties": false
+        },
+        "index_revision": {
+          "description": "**与成员修订是两件事**（§5.4）：成员名单封存不等于全文内容冻结。检索回执要单独记实际用到的 index_revision。",
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "valid_until": {
+          "$ref": "#/$defs/instant"
+        }
+      },
+      "required": [
+        "schema",
+        "origin_node_id",
+        "collection_id",
+        "index_revision",
+        "revision",
+        "valid_until"
+      ],
+      "additionalProperties": false
+    },
+    "RouteRecord": {
+      "type": "object",
+      "description": "一条被观测到的可达路径。",
+      "x-ddp-doc": "**A 能连 B 不代表 App 能直连 B**（§5.2）—— 所以有 observed_by。客户端连不上下游时由中心中继或委托读取，而**中继也是数据接收方**，要进外发许可与保留策略（§5.3）。提供传输 URL 时要防错误回环地址、内网地址与跨目标凭证泄露。",
+      "properties": {
+        "schema": {
+          "const": "ddp-discovery/1#RouteRecord"
+        },
+        "origin_node_id": {
+          "$ref": "#/$defs/node_id"
+        },
+        "next_hop_node_id": {
+          "$ref": "#/$defs/node_id"
+        },
+        "path": {
+          "description": "从观测方到目标的节点序列。第一版是批准的无环父子拓扑（§5.3）。",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/node_id"
+          }
+        },
+        "observed_by": {
+          "$ref": "#/$defs/node_id"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/instant"
+        },
+        "valid_until": {
+          "$ref": "#/$defs/instant"
+        }
+      },
+      "required": [
+        "schema",
+        "origin_node_id",
+        "next_hop_node_id",
+        "path",
+        "observed_by",
+        "observed_at",
+        "valid_until"
+      ],
+      "additionalProperties": false
+    },
+    "NodeProof": {
+      "type": "object",
+      "description": "中心持久Ed25519私钥对单次nonce及配置endpoint的60秒持key证明；签UTF8 JSON数组[schema,nonce,node_id,endpoint,issued_at,expires_at]。",
+      "properties": {
+        "schema": {
+          "const": "ddp-node-proof/1"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{32,64}$"
+        },
+        "node_id": {
+          "$ref": "#/$defs/node_id"
+        },
+        "endpoint": {
+          "type": "string",
+          "format": "uri"
+        },
+        "issued_at": {
+          "$ref": "#/$defs/instant"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/instant"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
+      },
+      "required": [
+        "schema",
+        "nonce",
+        "node_id",
+        "endpoint",
+        "issued_at",
+        "expires_at",
+        "signature"
+      ],
+      "additionalProperties": false
+    },
+    "NodeHandshake": {
+      "type": "object",
+      "description": "公开节点握手不含用户或组织。提供challenge时返回proof；公钥metadata自身不能证明持key。",
+      "properties": {
+        "authority_node_id": {
+          "$ref": "#/$defs/node_id"
+        },
+        "public_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{43}=$"
+        },
+        "key_fingerprint": {
+          "$ref": "#/$defs/digest"
+        },
+        "descriptor": {
+          "$ref": "#/$defs/NodeDescriptor"
+        },
+        "proof": {
+          "$ref": "#/$defs/NodeProof"
+        }
+      },
+      "required": [
+        "authority_node_id",
+        "public_key",
+        "key_fingerprint",
+        "descriptor"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryRegistration": {
+      "type": "object",
+      "description": "仅管理员会话可登记pending直接节点，不执行远端请求，不发放凭据。",
+      "properties": {
+        "descriptor": {
+          "$ref": "#/$defs/NodeDescriptor"
+        },
+        "public_key": {
+          "type": "string"
+        },
+        "visible_to_org": {
+          "type": "boolean",
+          "default": false
+        },
+        "allowed_subjects": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "descriptor",
+        "public_key"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryMember": {
+      "type": "object",
+      "description": "快照中的成员位置；撤销保留node_id但不返回端点。health只由实际producer产生，本阶段unknown。",
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/node_id"
+        },
+        "state": {
+          "type": "string",
+          "x-ddp-enum": "node_membership_state"
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "descriptor": {
+          "$ref": "#/$defs/NodeDescriptor"
+        },
+        "route": {
+          "$ref": "#/$defs/RouteRecord"
+        },
+        "configured": {
+          "type": "boolean"
+        },
+        "health": {
+          "type": "string",
+          "x-ddp-enum": "capability_readiness"
+        },
+        "accepting_admissions": {
+          "type": "boolean"
+        },
+        "expansion_state": {
+          "type": "string",
+          "x-ddp-enum": "member_expansion_state"
+        }
+      },
+      "required": [
+        "node_id",
+        "state",
+        "revision",
+        "configured",
+        "health",
+        "accepting_admissions",
+        "expansion_state"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "revoked"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "configured": {
+                "const": false
+              },
+              "accepting_admissions": {
+                "const": false
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "descriptor"
+                  ]
+                },
+                {
+                  "required": [
+                    "route"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "MemberSnapshot": {
+      "type": "object",
+      "description": "当前调用者可见成员的持久快照；全局私有成员数不进入响应。目录revision与内容index_revision独立。",
+      "properties": {
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "authority_node_id": {
+          "$ref": "#/$defs/node_id"
+        },
+        "caller_scope_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "registry_revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "created_at": {
+          "$ref": "#/$defs/instant"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/instant"
+        },
+        "first_cursor": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "terminal_cursor": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "authority_node_id",
+        "caller_scope_hash",
+        "registry_revision",
+        "created_at",
+        "expires_at",
+        "first_cursor",
+        "terminal_cursor"
+      ],
+      "additionalProperties": false
+    },
+    "MemberSnapshotPage": {
+      "type": "object",
+      "description": "冻结目录分页；complete只在稳定terminal_cursor页为true。过期410，不能接续到新快照。",
+      "properties": {
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "authority_node_id": {
+          "$ref": "#/$defs/node_id"
+        },
+        "caller_scope_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "registry_revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "created_at": {
+          "$ref": "#/$defs/instant"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/instant"
+        },
+        "first_cursor": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "terminal_cursor": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "members": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/DirectoryMember"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "authority_node_id",
+        "caller_scope_hash",
+        "registry_revision",
+        "created_at",
+        "expires_at",
+        "first_cursor",
+        "terminal_cursor",
+        "members",
+        "next_cursor",
+        "complete"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "complete": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "members": {
+                "maxItems": 0
+              },
+              "next_cursor": {
+                "const": null
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "files": [
+    {
+      "digest": "sha256:23bf214bc4efad42b2b1c3b77fa26ba765306d36699943a293d31b261a957d5f",
+      "path": "../outside",
+      "role": "evidence",
+      "size": 704
+    },
+    {
+      "digest": "sha256:f9448b9f507d036bb849d23de2cfa1e911231c0294d4d47be2810755320f8cd3",
+      "path": "layout.json",
+      "role": "layout",
+      "size": 174
+    },
+    {
+      "digest": "sha256:3cb0c7d7f33e5add3a749e99c3dac2a12ec64eec42625fd50686d37d898b27f4",
+      "path": "provenance.json",
+      "role": "provenance",
+      "size": 41
+    },
+    {
+      "digest": "sha256:fb493512b2da72bcd6b47e04efcf71dd534bad974ffc02ef19a126f2d72de9bf",
+      "path": "source.bin",
+      "role": "original",
+      "size": 59
+    }
+  ],
+  "required_features": [],
+  "schema": "ddp-bundle/1",
+  "source": {
+    "authority_node_id": "node-origin",
+    "filename": "manual.pdf",
+    "mime": "application/pdf",
+    "missing_reason": null,
+    "origin_node_id": "node-origin",
+    "original": "present",
+    "parse_revision": "parse-001",
+    "policy_revision": "policy-001",
+    "resource_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_digest": "sha256:fb493512b2da72bcd6b47e04efcf71dd534bad974ffc02ef19a126f2d72de9bf",
+    "source_version_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "uploader_ref": "original-uploader"
+  }
+}

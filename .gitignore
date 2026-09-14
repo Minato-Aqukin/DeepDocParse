@@ -42,3 +42,9 @@ blob-report/
 
 # 运行日志
 .dev-logs/
+
+# Persistent control identity and interrupted atomic key writes are secrets.
+ed25519.seed
+.ed25519-*.tmp
+**/state/control-node/
+**/node-identity/

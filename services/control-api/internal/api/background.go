@@ -128,7 +128,8 @@ func (s *Server) verifyUploads(ctx context.Context) {
 			if err != nil {
 				slog.Error("摘要校验失败", "upload_id", sess.ID, "err", err)
 				obs.UploadFailed("digest_error")
-				_ = s.store.MarkUploadFailed(ctx, sess.OrganizationID, sess.ID, "摘要计算失败")
+				// A transient read failure is unknown, not proof of corrupt content.
+				// Keep verifying so restart/reconnect retries the full-object digest.
 				continue
 			}
 			if sess.DeclaredSize > 0 && size != sess.DeclaredSize {

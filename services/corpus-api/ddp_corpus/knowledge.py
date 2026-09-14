@@ -60,14 +60,16 @@ def _evidence_prompt(rows: list[Evidence]) -> str:
 
 
 async def generate(session: AsyncSession, http: httpx.AsyncClient,
-                   evidence_ids: list[str], *, provider: dict) -> dict:
+                   evidence_ids: list[str], *, provider: dict, check_sources=None) -> dict:
     rows = (await session.execute(select(Evidence).where(
-        Evidence.id.in_(evidence_ids), Evidence.content != ""
+        Evidence.id.in_(evidence_ids), Evidence.content != "", Evidence.derived_from.is_(None)
     ).order_by(Evidence.id))).scalars().all()
     if not rows:
         return {"status": "not_found", "entities": 0, "edges": 0,
                 "relation_status": "not_found", "wiki_entries": 0}
     allowed = {row.id for row in rows}
+    if check_sources:
+        await check_sources()
     graph = await _complete(http, GRAPH_PROMPT, _evidence_prompt(rows))
     mentions = [EntityMention(
         str(item.get("name") or ""), str(item.get("type") or "other"),
@@ -77,12 +79,14 @@ async def generate(session: AsyncSession, http: httpx.AsyncClient,
         for item in graph.get("entities") or [] if isinstance(item, dict)]
     groups = merge_mentions(mentions)
 
+    scope_key = provider["scope_key"]
     entities: dict[str, KnowledgeEntity] = {}
     for group in groups:
         existing = (await session.execute(select(KnowledgeEntity).where(
-            KnowledgeEntity.normalized_name == group.normalized_name))).scalar_one_or_none()
+            KnowledgeEntity.normalized_name == group.normalized_name,
+            KnowledgeEntity.scope_key == scope_key))).scalar_one_or_none()
         row = existing or KnowledgeEntity(
-            canonical_name=group.canonical_name, normalized_name=group.normalized_name,
+            canonical_name=group.canonical_name, normalized_name=group.normalized_name, scope_key=scope_key,
             entity_type=group.entity_type, aliases=group.aliases, merged_by=group.merged_by,
             merge_confidence=group.merge_confidence,
             entity_merge_uncertain=group.entity_merge_uncertain, provider=provider)
@@ -93,7 +97,9 @@ async def generate(session: AsyncSession, http: httpx.AsyncClient,
             # 重建不是 append-only：同一个规范名的新别名与审计信息必须能更新，
             # 但不能因为模型少吐了一次别名就把已有的人审结果抹掉。
             row.aliases = sorted(set(row.aliases or []) | set(group.aliases))
-            row.provider = provider
+            row.provider = {**provider, "input_document_ids": sorted(set(
+                (row.provider or {}).get("input_document_ids") or []) | set(
+                provider.get("input_document_ids") or []))}
             if row.review_state != "passed":
                 row.merged_by = group.merged_by
                 row.merge_confidence = group.merge_confidence
@@ -142,6 +148,8 @@ async def generate(session: AsyncSession, http: httpx.AsyncClient,
         edge.unsupported = not bool(cited)
         edge_count += 1
 
+    if check_sources:
+        await check_sources()
     outline = await _complete(http, OUTLINE_PROMPT, json.dumps({
         "entities": [group.canonical_name for group in groups]}, ensure_ascii=False))
     wiki_count = 0
@@ -150,6 +158,8 @@ async def generate(session: AsyncSession, http: httpx.AsyncClient,
         headings = [str(value).strip() for value in item.get("sections") or [] if str(value).strip()]
         if entity is None or not headings:
             continue
+        if check_sources:
+            await check_sources()
         written = await _complete(http, WRITE_PROMPT, json.dumps({
             "entity": entity.canonical_name, "outline": headings,
             "evidence": [{"evidence_id": row.id, "text": row.content} for row in rows],

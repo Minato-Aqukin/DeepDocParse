@@ -43,6 +43,7 @@ export async function stubApi(page: Page): Promise<void> {
         return route.fulfill({ json: { graph_version: 'ddp-graph/1', entities: [] } })
       }
       if (path === '/api/reviews') return route.fulfill({ json: { items: [] } })
+      if (path === '/api/resources') return route.fulfill({ json: { items: [], has_more: false } })
       // **形状必须是 SearchResult，不能落到下面那个 `[]` 兜底。** 落下去的话
       // `data.groups` 是 undefined，模板里 `!groups.length` 当场抛，
       // 而**只访问 /search 不搜索是发现不了的**（q 为空时 run() 直接 return）——

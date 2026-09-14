@@ -1,0 +1,3526 @@
+{
+  "_comment": "由 scripts/check_federation_contracts.py --write 生成 —— 不要手改。改 schema 请改 packages/contracts/schemas/，改枚举请改 enums.yaml。",
+  "schemas": {
+    "ddp-bundle/v1.json": {
+      "$defs": {
+        "BundleManifest": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "else": {
+                "properties": {
+                  "files": {
+                    "items": {
+                      "properties": {
+                        "path": {
+                          "not": {
+                            "const": "source.bin"
+                          }
+                        }
+                      }
+                    },
+                    "maxItems": 3
+                  }
+                }
+              },
+              "if": {
+                "properties": {
+                  "source": {
+                    "properties": {
+                      "original": {
+                        "const": "present"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "files": {
+                    "contains": {
+                      "properties": {
+                        "path": {
+                          "const": "source.bin"
+                        }
+                      },
+                      "required": [
+                        "path"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1,
+                    "minItems": 4
+                  }
+                }
+              }
+            }
+          ],
+          "description": "DDP-Bundle v1 root manifest. ZIP path/type/ratio limits and evidence byte/identity consistency are checked in addition to this schema.",
+          "properties": {
+            "files": {
+              "allOf": [
+                {
+                  "contains": {
+                    "properties": {
+                      "path": {
+                        "const": "layout.json"
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ]
+                  },
+                  "maxContains": 1,
+                  "minContains": 1
+                },
+                {
+                  "contains": {
+                    "properties": {
+                      "path": {
+                        "const": "evidence.json"
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ]
+                  },
+                  "maxContains": 1,
+                  "minContains": 1
+                },
+                {
+                  "contains": {
+                    "properties": {
+                      "path": {
+                        "const": "provenance.json"
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ]
+                  },
+                  "maxContains": 1,
+                  "minContains": 1
+                }
+              ],
+              "items": {
+                "$ref": "#/$defs/VersionFile"
+              },
+              "maxItems": 4,
+              "minItems": 3,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "required_features": {
+              "maxItems": 0,
+              "type": "array"
+            },
+            "schema": {
+              "const": "ddp-bundle/1"
+            },
+            "source": {
+              "$ref": "#/$defs/BundleSource"
+            }
+          },
+          "required": [
+            "schema",
+            "required_features",
+            "source",
+            "files"
+          ],
+          "type": "object"
+        },
+        "BundleSource": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "original": {
+                    "const": "present"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "missing_reason": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "original": {
+                    "const": "missing"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "missing_reason": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ],
+          "description": "Immutable source identity and explicit original availability. These are transfer claims, not authorization credentials.",
+          "properties": {
+            "authority_node_id": {
+              "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$",
+              "type": "string"
+            },
+            "filename": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            "mime": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "missing_reason": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "origin_node_id": {
+              "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$",
+              "type": "string"
+            },
+            "original": {
+              "enum": [
+                "present",
+                "missing"
+              ]
+            },
+            "parse_revision": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "policy_revision": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "resource_id": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "source_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "source_version_id": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "uploader_ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "origin_node_id",
+            "authority_node_id",
+            "resource_id",
+            "source_version_id",
+            "source_digest",
+            "parse_revision",
+            "filename",
+            "mime",
+            "original",
+            "missing_reason",
+            "uploader_ref",
+            "policy_revision"
+          ],
+          "type": "object"
+        },
+        "VersionFile": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "path": {
+                    "const": "source.bin"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "role": {
+                    "const": "original"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "path": {
+                    "const": "layout.json"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "role": {
+                    "const": "layout"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "path": {
+                    "const": "evidence.json"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "role": {
+                    "const": "evidence"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "path": {
+                    "const": "provenance.json"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "role": {
+                    "const": "provenance"
+                  }
+                }
+              }
+            }
+          ],
+          "description": "One exact archive member. Runtime verifies its actual length and bytes against this digest.",
+          "properties": {
+            "digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "path": {
+              "enum": [
+                "source.bin",
+                "layout.json",
+                "evidence.json",
+                "provenance.json"
+              ]
+            },
+            "role": {
+              "enum": [
+                "original",
+                "layout",
+                "evidence",
+                "provenance"
+              ]
+            },
+            "size": {
+              "maximum": 67108864,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path",
+            "role",
+            "size",
+            "digest"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "https://deepdocparse.dev/schemas/ddp-bundle/1",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DDP-BUNDLE v1",
+      "x-ddp-contract": "ddp-bundle/1"
+    },
+    "ddp-discovery/v1.json": {
+      "$defs": {
+        "CapabilityProfile": {
+          "additionalProperties": false,
+          "description": "一个 operation 在该节点上的真实就绪度。",
+          "properties": {
+            "accepting_admissions": {
+              "description": "**与 readiness 分开**：ready 但不接单（排空中、配额满）是常态。I06：能力声明不等于任务成功。",
+              "type": "boolean"
+            },
+            "configured": {
+              "description": "静态配置是否存在，与观测readiness和接单状态分离。",
+              "type": "boolean"
+            },
+            "engine_versions": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "引擎/模型版本。换了模型版本，缓存的向量与阈值都可能不再可比（§4.3）。",
+              "type": "object"
+            },
+            "input_contract": {
+              "additionalProperties": false,
+              "properties": {
+                "formats": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "max_bytes": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "limits": {
+              "additionalProperties": false,
+              "properties": {
+                "max_candidates": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "max_concurrency": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "observed_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "operation": {
+              "description": "类型化操作名。第一版只允许已登记模板，不接受任意 shell/代码（§6.5）。",
+              "enum": [
+                "corpus.retrieve",
+                "corpus.locate",
+                "doc.parse",
+                "doc.compile",
+                "rag.answer.cited",
+                "extract.fields",
+                "wiki.pages",
+                "rerank"
+              ],
+              "type": "string"
+            },
+            "profile": {
+              "type": "string"
+            },
+            "readiness": {
+              "description": "健康探测结论。过期记录按 unknown 处理，不得按最后一次成功当成现在可用。",
+              "enum": [
+                "configured",
+                "ready",
+                "draining",
+                "unhealthy",
+                "unknown"
+              ],
+              "type": "string",
+              "x-ddp-enum": "capability_readiness"
+            },
+            "schema": {
+              "const": "ddp-discovery/1#CapabilityProfile"
+            },
+            "valid_until": {
+              "$ref": "#/$defs/instant"
+            }
+          },
+          "required": [
+            "schema",
+            "node_id",
+            "operation",
+            "readiness",
+            "accepting_admissions",
+            "observed_at",
+            "valid_until"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**`gpu=true` 不代表所需模型已就绪**（§5.2）。所以静态配置、周期健康、本次预检是三个字段，不是一个 bool。这正是本项目踩过的坑的联邦版本：注册表里只有 OCR 专用模型时，抽取平面拿它去抽值抽不出来，被记成 not_found —— 系统能力缺失伪装成「文档里没有」。"
+        },
+        "CollectionDescriptor": {
+          "additionalProperties": false,
+          "description": "一个可检索集合的公开摘要。",
+          "properties": {
+            "collection_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "index_revision": {
+              "description": "**与成员修订是两件事**（§5.4）：成员名单封存不等于全文内容冻结。检索回执要单独记实际用到的 index_revision。",
+              "minLength": 1,
+              "type": "string"
+            },
+            "languages": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "licence": {
+              "type": "string"
+            },
+            "origin_node_id": {
+              "$ref": "#/$defs/node_id",
+              "description": "**来源身份，不随路径变化**（I02）。经上级中继拿到的描述，这里仍是原始来源。"
+            },
+            "revision": {
+              "$ref": "#/$defs/revision"
+            },
+            "schema": {
+              "const": "ddp-discovery/1#CollectionDescriptor"
+            },
+            "time_range": {
+              "additionalProperties": false,
+              "properties": {
+                "from": {
+                  "$ref": "#/$defs/instant"
+                },
+                "to": {
+                  "$ref": "#/$defs/instant"
+                }
+              },
+              "type": "object"
+            },
+            "topics": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "valid_until": {
+              "$ref": "#/$defs/instant"
+            }
+          },
+          "required": [
+            "schema",
+            "origin_node_id",
+            "collection_id",
+            "index_revision",
+            "revision",
+            "valid_until"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**摘要不代表完整内容覆盖，也不是永久否定依据**（§5.2）。摘要只影响穷查的**顺序**，不删除成员（§7.3）—— 计划 T84 专门测这件事：唯一关键证据不在主题摘要里时，穷查仍须实际探测该集合。私有集合的数量、实体、向量同样敏感，不自动上报（§5.2）。"
+        },
+        "DirectoryMember": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "state": {
+                    "const": "revoked"
+                  }
+                }
+              },
+              "then": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "descriptor"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "route"
+                      ]
+                    }
+                  ]
+                },
+                "properties": {
+                  "accepting_admissions": {
+                    "const": false
+                  },
+                  "configured": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          ],
+          "description": "快照中的成员位置；撤销保留node_id但不返回端点。health只由实际producer产生，本阶段unknown。",
+          "properties": {
+            "accepting_admissions": {
+              "type": "boolean"
+            },
+            "configured": {
+              "type": "boolean"
+            },
+            "descriptor": {
+              "$ref": "#/$defs/NodeDescriptor"
+            },
+            "expansion_state": {
+              "enum": [
+                "not_requested",
+                "unexpanded_subtree",
+                "source_revoked"
+              ],
+              "type": "string",
+              "x-ddp-enum": "member_expansion_state"
+            },
+            "health": {
+              "enum": [
+                "configured",
+                "ready",
+                "draining",
+                "unhealthy",
+                "unknown"
+              ],
+              "type": "string",
+              "x-ddp-enum": "capability_readiness"
+            },
+            "node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "revision": {
+              "$ref": "#/$defs/revision"
+            },
+            "route": {
+              "$ref": "#/$defs/RouteRecord"
+            },
+            "state": {
+              "enum": [
+                "pending",
+                "approved",
+                "revoked"
+              ],
+              "type": "string",
+              "x-ddp-enum": "node_membership_state"
+            }
+          },
+          "required": [
+            "node_id",
+            "state",
+            "revision",
+            "configured",
+            "health",
+            "accepting_admissions",
+            "expansion_state"
+          ],
+          "type": "object"
+        },
+        "DirectoryRegistration": {
+          "additionalProperties": false,
+          "description": "仅管理员会话可登记pending直接节点，不执行远端请求，不发放凭据。",
+          "properties": {
+            "allowed_subjects": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 100,
+              "type": "array"
+            },
+            "descriptor": {
+              "$ref": "#/$defs/NodeDescriptor"
+            },
+            "public_key": {
+              "type": "string"
+            },
+            "visible_to_org": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "descriptor",
+            "public_key"
+          ],
+          "type": "object"
+        },
+        "MemberSnapshot": {
+          "additionalProperties": false,
+          "description": "当前调用者可见成员的持久快照；全局私有成员数不进入响应。目录revision与内容index_revision独立。",
+          "properties": {
+            "authority_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "caller_scope_hash": {
+              "$ref": "#/$defs/digest"
+            },
+            "created_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "expires_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "first_cursor": {
+              "pattern": "^[0-9a-f]{32}$",
+              "type": "string"
+            },
+            "registry_revision": {
+              "$ref": "#/$defs/revision"
+            },
+            "snapshot_id": {
+              "pattern": "^[0-9a-f]{32}$",
+              "type": "string"
+            },
+            "terminal_cursor": {
+              "pattern": "^[0-9a-f]{32}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "snapshot_id",
+            "authority_node_id",
+            "caller_scope_hash",
+            "registry_revision",
+            "created_at",
+            "expires_at",
+            "first_cursor",
+            "terminal_cursor"
+          ],
+          "type": "object"
+        },
+        "MemberSnapshotPage": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "complete": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "members": {
+                    "maxItems": 0
+                  },
+                  "next_cursor": {
+                    "const": null
+                  }
+                }
+              }
+            }
+          ],
+          "description": "冻结目录分页；complete只在稳定terminal_cursor页为true。过期410，不能接续到新快照。",
+          "properties": {
+            "authority_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "caller_scope_hash": {
+              "$ref": "#/$defs/digest"
+            },
+            "complete": {
+              "type": "boolean"
+            },
+            "created_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "expires_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "first_cursor": {
+              "pattern": "^[0-9a-f]{32}$",
+              "type": "string"
+            },
+            "members": {
+              "items": {
+                "$ref": "#/$defs/DirectoryMember"
+              },
+              "maxItems": 100,
+              "type": "array"
+            },
+            "next_cursor": {
+              "pattern": "^[0-9a-f]{32}$",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "registry_revision": {
+              "$ref": "#/$defs/revision"
+            },
+            "snapshot_id": {
+              "pattern": "^[0-9a-f]{32}$",
+              "type": "string"
+            },
+            "terminal_cursor": {
+              "pattern": "^[0-9a-f]{32}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "snapshot_id",
+            "authority_node_id",
+            "caller_scope_hash",
+            "registry_revision",
+            "created_at",
+            "expires_at",
+            "first_cursor",
+            "terminal_cursor",
+            "members",
+            "next_cursor",
+            "complete"
+          ],
+          "type": "object"
+        },
+        "NodeDescriptor": {
+          "additionalProperties": false,
+          "description": "节点自己发布的身份与入口。",
+          "properties": {
+            "auth_methods": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "controlled_endpoints": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "purpose": {
+                    "enum": [
+                      "federation",
+                      "data_channel"
+                    ],
+                    "type": "string"
+                  },
+                  "url": {
+                    "format": "uri",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "purpose",
+                  "url"
+                ],
+                "type": "object"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "discovery_capabilities": {
+              "additionalProperties": false,
+              "description": "本节点能否枚举下级成员。`enumerate_members=false` 的节点在范围穷查里表现为 unexpanded_subtree，**不是空目录**（§5.5）。",
+              "properties": {
+                "catalog_events": {
+                  "type": "boolean"
+                },
+                "enumerate_members": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "enumerate_members"
+              ],
+              "type": "object"
+            },
+            "node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "protocol_versions": {
+              "description": "支持的协议版本。未知必需版本要返回 protocol_incompatible，不能忽略后照常执行（§9.3）。",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "publisher_signature": {
+              "description": "可选。**只证明发布者，不证明描述准确**（§5.2）。",
+              "type": "string"
+            },
+            "revision": {
+              "$ref": "#/$defs/revision"
+            },
+            "schema": {
+              "const": "ddp-discovery/1#NodeDescriptor"
+            },
+            "valid_until": {
+              "$ref": "#/$defs/instant"
+            }
+          },
+          "required": [
+            "schema",
+            "node_id",
+            "protocol_versions",
+            "controlled_endpoints",
+            "auth_methods",
+            "discovery_capabilities",
+            "revision",
+            "valid_until"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**有节点描述不代表当前可达**（§5.2）。可达性只能由实际连接验证，所以这里没有任何 `online` 字段 —— 想知道在不在线要看 CapabilityProfile.readiness，而那个值有 valid_until。"
+        },
+        "NodeHandshake": {
+          "additionalProperties": false,
+          "description": "公开节点握手不含用户或组织。提供challenge时返回proof；公钥metadata自身不能证明持key。",
+          "properties": {
+            "authority_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "descriptor": {
+              "$ref": "#/$defs/NodeDescriptor"
+            },
+            "key_fingerprint": {
+              "$ref": "#/$defs/digest"
+            },
+            "proof": {
+              "$ref": "#/$defs/NodeProof"
+            },
+            "public_key": {
+              "pattern": "^[A-Za-z0-9+/]{43}=$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_node_id",
+            "public_key",
+            "key_fingerprint",
+            "descriptor"
+          ],
+          "type": "object"
+        },
+        "NodeProof": {
+          "additionalProperties": false,
+          "description": "中心持久Ed25519私钥对单次nonce及配置endpoint的60秒持key证明；签UTF8 JSON数组[schema,nonce,node_id,endpoint,issued_at,expires_at]。",
+          "properties": {
+            "endpoint": {
+              "format": "uri",
+              "type": "string"
+            },
+            "expires_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "issued_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "nonce": {
+              "pattern": "^[A-Za-z0-9_-]{32,64}$",
+              "type": "string"
+            },
+            "schema": {
+              "const": "ddp-node-proof/1"
+            },
+            "signature": {
+              "pattern": "^[A-Za-z0-9_-]{86}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schema",
+            "nonce",
+            "node_id",
+            "endpoint",
+            "issued_at",
+            "expires_at",
+            "signature"
+          ],
+          "type": "object"
+        },
+        "RouteRecord": {
+          "additionalProperties": false,
+          "description": "一条被观测到的可达路径。",
+          "properties": {
+            "next_hop_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "observed_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "observed_by": {
+              "$ref": "#/$defs/node_id"
+            },
+            "origin_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "path": {
+              "description": "从观测方到目标的节点序列。第一版是批准的无环父子拓扑（§5.3）。",
+              "items": {
+                "$ref": "#/$defs/node_id"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "schema": {
+              "const": "ddp-discovery/1#RouteRecord"
+            },
+            "valid_until": {
+              "$ref": "#/$defs/instant"
+            }
+          },
+          "required": [
+            "schema",
+            "origin_node_id",
+            "next_hop_node_id",
+            "path",
+            "observed_by",
+            "observed_at",
+            "valid_until"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**A 能连 B 不代表 App 能直连 B**（§5.2）—— 所以有 observed_by。客户端连不上下游时由中心中继或委托读取，而**中继也是数据接收方**，要进外发许可与保留策略（§5.3）。提供传输 URL 时要防错误回环地址、内网地址与跨目标凭证泄露。"
+        },
+        "digest": {
+          "description": "sha256 十六进制。摘要证明来源与传输完整，**不证明内容真实或推理正确**（§4.3）。",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "instant": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "node_id": {
+          "description": "自治中心的持久身份（计划 §2.1）。升级、改地址、换上级都不改变它 —— 这是不变量 I02 的载体。",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$",
+          "type": "string"
+        },
+        "revision": {
+          "description": "单调递增的修订号。用于「旧修订不得覆盖新撤销」（§5.5）。",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "$id": "https://deepdocparse.dev/schemas/ddp-discovery/1",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "节点发现的三份描述与一张路径表（计划 §5.2）。三份描述各自回答一个不同的问题，合起来才构成「能不能把活派到那里」。x-ddp-doc 里逐条写了「不能从这份描述推断什么」——那是本契约存在的主要理由。",
+      "title": "DDP-DISCOVERY v1",
+      "x-ddp-contract": "ddp-discovery/1"
+    },
+    "ddp-evidence/v1.json": {
+      "$defs": {
+        "ClaimEvidenceBinding": {
+          "additionalProperties": false,
+          "description": "一句实质性主张与支撑它的证据之间的绑定（§4.3、§4.4）。",
+          "properties": {
+            "claim_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "claim_text": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "evidence_refs": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "semantic_review": {
+              "enum": [
+                "pending",
+                "passed",
+                "failed",
+                "needs_review"
+              ],
+              "type": "string",
+              "x-ddp-enum": "validation_state"
+            },
+            "structural_validation": {
+              "enum": [
+                "pending",
+                "passed",
+                "failed",
+                "needs_review"
+              ],
+              "type": "string",
+              "x-ddp-enum": "validation_state"
+            }
+          },
+          "required": [
+            "claim_id",
+            "claim_text",
+            "evidence_refs",
+            "structural_validation"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**引用校验分两层**（§4.3）：结构校验（引用确实取得、版本正确、可授权定位）与语义检验（原文是否支持该结论）。structural_validation 是机器能给的，semantic_review 只能是人给的 —— 所以它默认 needs_review 而不是 passed。计划 §14.3 明确：**不能用引用存在率替代正确性**。"
+        },
+        "DeliveryReceipt": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "confirmed 必须有已校验的 manifest 摘要与校验时间 —— 否则「已交付」只是一个没有依据的乐观标记。",
+              "if": {
+                "properties": {
+                  "state": {
+                    "const": "confirmed"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "result_manifest_digest": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "verified_at": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "result_manifest_digest",
+                  "verified_at"
+                ]
+              }
+            },
+            {
+              "$comment": "**expired 不许带 persistent 保留类**（§8.3）：TTL 到期导致未领取结果失效时，界面上不得仍然显示「已保存本地」。",
+              "if": {
+                "properties": {
+                  "state": {
+                    "const": "expired"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "retention": {
+                    "not": {
+                      "const": "persistent"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "description": "本地校验后回给中心的幂等交付确认（§8.3）。",
+          "properties": {
+            "delivery_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "idempotency_key": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "result_manifest_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retention": {
+              "enum": [
+                "temporary",
+                "task_pinned",
+                "persistent",
+                "deleting",
+                "deleted"
+              ],
+              "type": "string",
+              "x-ddp-enum": "retention_class"
+            },
+            "root_task_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schema": {
+              "const": "ddp-evidence/1#DeliveryReceipt"
+            },
+            "state": {
+              "enum": [
+                "not_requested",
+                "pending",
+                "transferring",
+                "confirmed",
+                "expired"
+              ],
+              "type": "string",
+              "x-ddp-enum": "delivery_state"
+            },
+            "step_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "verified_at": {
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "schema",
+            "delivery_id",
+            "root_task_id",
+            "step_id",
+            "state",
+            "idempotency_key",
+            "retention"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**计算成功不代表本地拿到结果**（§8.3）。`state=confirmed` 只能由**本地校验过 manifest 与文件之后**发出（T29：下载后回执丢失/重复时，本地验证后可重复确认，结果不重复发布或提前清理）。"
+        },
+        "FederatedAnswer": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "**证据不足时不许给出带主张绑定的答案**（§7.6、T38、T86）：「无证据时返回本次范围与配置下未获得足够证据」，不能伪造引用或把模型知识说成资料结论。所以 insufficient 时 bindings 必须为空 —— 有绑定就说明它在拿不足的证据支撑主张。",
+              "if": {
+                "properties": {
+                  "evidence_sufficiency": {
+                    "const": "insufficient"
+                  }
+                },
+                "required": [
+                  "evidence_sufficiency"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "claim_evidence_bindings": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          ],
+          "description": "委托完整回答时，执行者必须回传的东西（§4.3 末段）。",
+          "properties": {
+            "answer": {
+              "type": "string"
+            },
+            "claim_evidence_bindings": {
+              "items": {
+                "$ref": "#/$defs/ClaimEvidenceBinding"
+              },
+              "type": "array"
+            },
+            "coverage_ref": {
+              "description": "指向 CoverageLedger。**没有它就无法判断「未找到」是什么意思**（§7.6）。",
+              "minLength": 1,
+              "type": "string"
+            },
+            "degraded": {
+              "description": "复用既有 degraded 枚举 —— 联邦侧不另立一套降级词汇。一次只报一个（最先命中的）。",
+              "enum": [
+                "no_hits",
+                "parse_mismatch",
+                "resource_index_unavailable",
+                "embedding_unavailable",
+                "vision_unavailable",
+                "crop_unsupported",
+                "crop_failed",
+                "client_aborted",
+                "upstream_error",
+                "upstream_interrupted",
+                "index_changed_during_answer",
+                "decision_unavailable",
+                "no_evidence_in_turn",
+                "inherited_evidence_incomplete",
+                "gate_rejected_all",
+                "citation_persist_failed",
+                "verification_unavailable",
+                "schema_violation",
+                "rerank_unavailable",
+                "no_instruct_model",
+                "empty_query",
+                "answer_unavailable",
+                null
+              ],
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-ddp-enum": "degraded",
+              "x-ddp-enum-nullable": true
+            },
+            "evidence": {
+              "items": {
+                "$ref": "#/$defs/FederatedEvidence"
+              },
+              "type": "array"
+            },
+            "evidence_sufficiency": {
+              "enum": [
+                "sufficient_by_policy",
+                "insufficient",
+                "conflicting",
+                "unknown"
+              ],
+              "type": "string",
+              "x-ddp-enum": "evidence_sufficiency"
+            },
+            "schema": {
+              "const": "ddp-evidence/1#FederatedAnswer"
+            }
+          },
+          "required": [
+            "schema",
+            "answer",
+            "claim_evidence_bindings",
+            "evidence",
+            "coverage_ref",
+            "evidence_sufficiency"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**入口无生成能力时可以委托完整回答，但结果必须包含 answer + claim_evidence_bindings + evidence + coverage，不是只返回一段自然语言**（§4.3 原文）。这是计划 T50 / 演示 A 的验收对象：A 没有生成模型，仍要在 A 上展示带 B 原文的答案。"
+        },
+        "FederatedEvidence": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "**生成物必须指回原文**（既有的第三条不变式）。一条 generated 而 derived_from 为空的证据，就是「生成 Wiki 成为独立原始证据制造自证循环」（§4.4）的最小单元。",
+              "if": {
+                "properties": {
+                  "source_type": {
+                    "const": "generated"
+                  }
+                },
+                "required": [
+                  "source_type"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "derived_from": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "derived_from"
+                ]
+              }
+            },
+            {
+              "$comment": "反向也钉住：source_type=source 的证据不该有 derived_from，否则两个字段会开始互相矛盾，而判据是「derived_from 是否为空」。",
+              "if": {
+                "properties": {
+                  "source_type": {
+                    "const": "source"
+                  }
+                },
+                "required": [
+                  "source_type"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "derived_from": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          ],
+          "description": "一条可跨节点验证的证据。",
+          "properties": {
+            "authority_node_id": {
+              "$ref": "#/$defs/node_id",
+              "description": "当前对该资源权限有最终判定权的节点。**与 origin 可以不同**（获准副本场景），但权限由来源资源权威判定（§8.4）。"
+            },
+            "block_type": {
+              "enum": [
+                "text",
+                "title",
+                "code",
+                "table",
+                "figure",
+                "equation",
+                "list",
+                "other"
+              ],
+              "type": "string",
+              "x-ddp-enum": "block_type"
+            },
+            "derived_from": {
+              "description": "source_type=generated 时**必填**（见下 allOf）：生成理解要能指回原始原子，否则它是无根的。判据就是这个字段是否为空 —— 不要在别处另立标志位。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "evidence_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "excerpt": {
+              "maxLength": 2000,
+              "type": "string",
+              "x-ddp-doc": "本次引用片段的正文。**只在证据集读取（`/api/v1/federation/evidence-sets/{set_ref}`）上返回**：协调者本地生成必须真的看到证据正文，否则 `[n]` 只是一串空编号；单条 resolve 不返回它（正文不是证据身份）。超长片段按 2000 字符截断，截断事实不外推。"
+            },
+            "excerpt_digest": {
+              "$ref": "#/$defs/digest",
+              "description": "本次引用片段的摘要。结构校验靠它对比「拿到的片段是不是当初那一段」。"
+            },
+            "locator": {
+              "$ref": "#/$defs/Locator"
+            },
+            "origin_node_id": {
+              "$ref": "#/$defs/node_id",
+              "description": "资料最初所属的自治中心。"
+            },
+            "parse_revision": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "policy_revision": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "resource_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "retrieval_receipt_ref": {
+              "description": "哪一次检索取得了它。**跨节点默认只传本次需要的证据与定位，不复制全库**（§4.3）。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schema": {
+              "const": "ddp-evidence/1#FederatedEvidence"
+            },
+            "source_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "source_type": {
+              "enum": [
+                "source",
+                "generated"
+              ],
+              "type": "string",
+              "x-ddp-enum": "source_type"
+            },
+            "source_version_id": {
+              "description": "固定版本。**固定版本内容不能原地变化**（T04）。",
+              "minLength": 1,
+              "type": "string"
+            },
+            "uploader_ref": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "schema",
+            "evidence_id",
+            "origin_node_id",
+            "authority_node_id",
+            "resource_id",
+            "source_version_id",
+            "parse_revision",
+            "source_digest",
+            "excerpt_digest",
+            "locator",
+            "source_type",
+            "policy_revision"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**来源身份不随路径变化**（I02）：URL、上级节点、缓存位置变化都不改变 origin_node_id / resource_id / source_version_id。**下载 URL 是临时位置，不是证据身份**（§4.3）—— 所以这里没有任何 url 字段。`source_type` 复用既有枚举：生成物与原文必须可区分，且生成物的引用最终仍要指回原始原子（derived_from）。"
+        },
+        "Locator": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "**有 bbox 就必须有 page_size**。没有 page_size 的 bbox 在 CropBox 偏移或旋转页上会裁到错的区域，而裁图与原文对不上正是 parse_mismatch 想抓的那类假出处。",
+              "if": {
+                "properties": {
+                  "bbox": {
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "bbox"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "page_size": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "page_size"
+                ]
+              }
+            }
+          ],
+          "description": "原文位置。",
+          "properties": {
+            "bbox": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "page_block",
+                "table_cell",
+                "paragraph"
+              ],
+              "type": "string"
+            },
+            "page_size": {
+              "additionalProperties": false,
+              "properties": {
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                "rotation": {
+                  "enum": [
+                    0,
+                    90,
+                    180,
+                    270
+                  ],
+                  "type": "integer"
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "width",
+                "height"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "physical_page_index": {
+              "description": "从 0 起的物理页序。**与印刷页码分开** —— 前言用罗马数字时两者差一大截。",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "printed_page_label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "seq": {
+              "description": "块序。出处定位键的后两段是 (parse_revision, seq) —— 与既有 chunks/evidence 的稳定键一致。",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "physical_page_index",
+            "seq"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**PDF 用既有真实坐标约定，明确页旋转、crop box、物理页序与印刷页码；非 PDF 不伪造页码**（§4.3）。项目已经在 evidence.page_size 上吃过这个亏 —— 缺它遇到 CropBox 偏移/旋转页会裁错区域，而「出处图对不上原文」是最恶劣的错。所以 page_size 在这里是 bbox 的**同级必填伴随字段**，不是可选补充。"
+        },
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "instant": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "node_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$",
+          "type": "string"
+        }
+      },
+      "$id": "https://deepdocparse.dev/schemas/ddp-evidence/1",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "跨节点传递一条证据时的稳定身份（计划 §4.3）。**这不是一张新表** —— 它是既有 `evidence` 行在联邦边界上的信封。字段与本地列的逐条映射写在 x-ddp-local-mapping 里，其中四个字段在当前源码里**没有对应物**，那是 P0 记录的真实缺口，不是这里漏写。",
+      "title": "DDP-EVIDENCE v1（联邦信封）",
+      "x-ddp-contract": "ddp-evidence/1",
+      "x-ddp-local-mapping": {
+        "authority_node_id": "无对应列 —— 同上",
+        "evidence_id": "evidence.id",
+        "excerpt_digest": "无对应列 —— citations.snippet 存的是文本本身，没有摘要（P1 新增）",
+        "locator": "evidence.page_idx + bbox + page_size（已有，且已处理 CropBox 偏移与页旋转）",
+        "origin_node_id": "无对应列 —— 当前没有节点概念（P1/P4 新增）",
+        "parse_revision": "evidence.parse_job_id（列名不同，语义对应）",
+        "policy_revision": "无对应列（P1 随 ACL 贯通新增）",
+        "resource_id": "evidence.document_id。**语义差异见 BASELINE-v3.md 的 C-01**：当前一次部署一份共享语料，(doc_id, origin) 全局唯一；计划要求的是每用户独立逻辑资源",
+        "retrieval_receipt_ref": "无对应列（P5 随 Probe 新增）",
+        "source_digest": "evidence.content_digest",
+        "source_version_id": "evidence.doc_version —— **当前恒为 0**（迁移 0007 原注释：documents 今天没有版本概念）",
+        "uploader_ref": "documents.uploaded_by，全部上传者在 document_uploads"
+      }
+    },
+    "ddp-plan-admission/v1.json": {
+      "$defs": {
+        "AdmissionReceipt": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "**accepted 三件套**：必须有 executor_task_id、必须有已校验输入摘要、input_validation 必须是 content_verified。这三条合起来就是 T78 —— 只看文件描述（metadata_only）就放进 admission，等于信任客户端声明的哈希；本项目在直传上传那里已经踩过同一个坑（upload_status 的 verifying 不能跳过）。",
+              "if": {
+                "properties": {
+                  "state": {
+                    "const": "accepted"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "accepted_at": {
+                    "type": "string"
+                  },
+                  "executor_task_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "input_validation": {
+                    "const": "content_verified"
+                  },
+                  "verified_input_manifest_digest": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "executor_task_id",
+                  "verified_input_manifest_digest",
+                  "accepted_at"
+                ]
+              }
+            },
+            {
+              "$comment": "waiting_input 时不得已有校验摘要 —— 有摘要却还在等输入是自相矛盾的状态。",
+              "if": {
+                "properties": {
+                  "state": {
+                    "const": "waiting_input"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "verified_input_manifest_digest": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          ],
+          "description": "执行者的持久受理记录（§6.6）。",
+          "properties": {
+            "accepted_at": {
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "admission_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "delegation_generation": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "effective_policy_ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executor_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "executor_task_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "idempotency_key": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "input_validation": {
+              "enum": [
+                "metadata_only",
+                "content_verified"
+              ],
+              "type": "string",
+              "x-ddp-enum": "input_validation"
+            },
+            "issuer_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "plan_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "quota_decision_ref": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receipt_revision": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "request_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "root_task_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schema": {
+              "const": "ddp-plan-admission/1#AdmissionReceipt"
+            },
+            "state": {
+              "enum": [
+                "not_submitted",
+                "waiting_input",
+                "checking",
+                "accepted",
+                "rejected",
+                "unknown"
+              ],
+              "type": "string",
+              "x-ddp-enum": "admission_state"
+            },
+            "step_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "verified_input_manifest_digest": {
+              "description": "**输入校验完成后才能有这个值**（§6.6、T78）：state=accepted 时必填，见下面的 allOf。waiting_input 阶段它是 null —— 那时不得占 GPU。",
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "schema",
+            "admission_id",
+            "issuer_node_id",
+            "executor_node_id",
+            "root_task_id",
+            "step_id",
+            "delegation_generation",
+            "idempotency_key",
+            "request_digest",
+            "plan_digest",
+            "state",
+            "input_validation",
+            "receipt_revision",
+            "effective_policy_ref"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**已受理不等于算力预留，也不等于计算成功**（I06、§6.6）。`delegation_generation` 是防旧结果提交的围栏 —— 与项目已有的 `tasks.generation` fencing 同一个思想（见 corpus-api 的 Task 模型）：lease 只解决「谁可以接管」，最终写入还要比代次，否则被判死的旧 worker 迟到写入会覆盖新结果。**相同幂等键 + 相同请求摘要返回已有任务；同键但不同正文返回 idempotency_conflict**（T80），不能因 HTTP 重试自动增加逻辑执行代次（§6.6）。"
+        },
+        "DataEdge": {
+          "additionalProperties": false,
+          "description": "一条数据传输边。",
+          "properties": {
+            "authorised_by": {
+              "description": "这条边凭什么合法：来源节点的授权引用。**空着的边不可执行。**",
+              "minLength": 1,
+              "type": "string"
+            },
+            "edge_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "from_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "payload_kind": {
+              "enum": [
+                "query_text",
+                "evidence_excerpts",
+                "source_files",
+                "parsed_layout",
+                "embeddings",
+                "answer_text",
+                "wiki_draft"
+              ],
+              "type": "string"
+            },
+            "relay_via": {
+              "description": "中继节点。**中继是数据接收方**，不是透明管道。",
+              "items": {
+                "$ref": "#/$defs/node_id"
+              },
+              "type": "array"
+            },
+            "retention": {
+              "enum": [
+                "temporary",
+                "task_pinned",
+                "persistent",
+                "deleting",
+                "deleted"
+              ],
+              "type": "string",
+              "x-ddp-enum": "retention_class"
+            },
+            "to_node_id": {
+              "$ref": "#/$defs/node_id"
+            }
+          },
+          "required": [
+            "edge_id",
+            "from_node_id",
+            "to_node_id",
+            "payload_kind",
+            "retention",
+            "authorised_by"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**计划 T83 的载体**：资料只在 B、生成能力只在 C 时，要形成合法数据边；B 禁止向 C 传证据时**计划不得执行**，而且不许「自动绕到 A 中转规避权限」（§16 风险表明确列为禁止处理）。中继本身也是接收方，要进外发许可与保留策略（§5.3）—— 所以 relay_via 里的每个节点都必须同时出现在 ExecutionConsent.allowed_recipients 里。"
+        },
+        "ExecutionConsent": {
+          "additionalProperties": false,
+          "description": "规划之后、执行之前的第二层许可（§6.2）。",
+          "properties": {
+            "allowed_edges": {
+              "description": "被批准的数据边 id。计划里出现而这里没有的边不可执行。",
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "allowed_recipients": {
+              "description": "包括执行者**与所有中继**。",
+              "items": {
+                "$ref": "#/$defs/node_id"
+              },
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "consent_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "granted_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "granted_by": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "output_locations": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "plan_digest": {
+              "$ref": "#/$defs/digest",
+              "description": "**绑定到具体计划修订**。计划一变这个摘要就对不上，许可自动失效 —— 这比「记得去撤销」可靠。"
+            },
+            "retention": {
+              "enum": [
+                "temporary",
+                "task_pinned",
+                "persistent",
+                "deleting",
+                "deleted"
+              ],
+              "type": "string",
+              "x-ddp-enum": "retention_class"
+            },
+            "schema": {
+              "const": "ddp-plan-admission/1#ExecutionConsent"
+            },
+            "valid_until": {
+              "$ref": "#/$defs/instant"
+            }
+          },
+          "required": [
+            "schema",
+            "consent_id",
+            "plan_digest",
+            "granted_by",
+            "granted_at",
+            "valid_until",
+            "allowed_recipients",
+            "allowed_edges",
+            "retention"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**计划变化超过原许可时暂停并重新批准**（§6.2）——对应 planning_state 的 awaiting_approval 与错误码 plan_changed。用户可以预先授权一个明确边界，不必每个公开检索请求都弹窗，**但不得利用后台规划扩大边界**。"
+        },
+        "PlanStep": {
+          "additionalProperties": false,
+          "description": "执行图里的一个类型化步骤。",
+          "properties": {
+            "depends_on": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "executor_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "fixed_inputs": {
+              "description": "固定输入引用 —— **解析前固定输入快照，防止扫描后文件变化**（§3.6、T14）。",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "operation": {
+              "enum": [
+                "parse",
+                "index",
+                "retrieve",
+                "fuse",
+                "rerank",
+                "answer",
+                "source_manifest",
+                "wiki_pages",
+                "validate",
+                "deliver"
+              ],
+              "type": "string"
+            },
+            "probe_refs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "step_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "step_id",
+            "operation",
+            "executor_node_id",
+            "depends_on"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**第一版只实现已登记、类型化模板，不允许用户或 LLM 输出任意 shell/任意代码**（§6.5）。所以 operation 是枚举，不是自由字符串。"
+        },
+        "TaskPlan": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "**approved 必须有执行许可**（§6.2）。没有 ExecutionConsent 的 approved 计划就是「后台规划扩大边界」那个漏洞本身。",
+              "if": {
+                "properties": {
+                  "planning_state": {
+                    "const": "approved"
+                  }
+                },
+                "required": [
+                  "planning_state"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "execution_consent_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "execution_consent_ref"
+                ]
+              }
+            }
+          ],
+          "description": "已经选出的可执行步骤（§6.3 最小内容清单）。",
+          "properties": {
+            "budget": {
+              "additionalProperties": false,
+              "description": "**整个请求有总预算**（I11）：包括发现、Probe、检索、转委托、生成与回传，不只限制每跳。层级联邦以互不重叠的份额委托下级（§7.5）——「不能把重复到达当作新的免费预算」。",
+              "properties": {
+                "deadline": {
+                  "$ref": "#/$defs/instant"
+                },
+                "max_bytes": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "max_generation_tokens": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "max_hops": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "max_requests": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "max_requests",
+                "max_bytes",
+                "max_hops",
+                "deadline"
+              ],
+              "type": "object"
+            },
+            "data_edges": {
+              "items": {
+                "$ref": "#/$defs/DataEdge"
+              },
+              "type": "array"
+            },
+            "execution_consent_ref": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "final_result_writer": {
+              "$ref": "#/$defs/node_id"
+            },
+            "plan_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "plan_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "planning_state": {
+              "enum": [
+                "draft",
+                "exploring",
+                "ready",
+                "awaiting_approval",
+                "approved",
+                "invalidated"
+              ],
+              "type": "string",
+              "x-ddp-enum": "planning_state"
+            },
+            "revision": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "root_coordinator_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "schema": {
+              "const": "ddp-plan-admission/1#TaskPlan"
+            },
+            "steps": {
+              "items": {
+                "$ref": "#/$defs/PlanStep"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "task_spec_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "valid_until": {
+              "$ref": "#/$defs/instant"
+            }
+          },
+          "required": [
+            "schema",
+            "plan_id",
+            "revision",
+            "plan_digest",
+            "task_spec_digest",
+            "root_coordinator_node_id",
+            "planning_state",
+            "steps",
+            "data_edges",
+            "budget",
+            "final_result_writer",
+            "valid_until"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**每个范围只有一个预算负责人和结果提交者**（§2.2、I10）——不能本地与中心互相把同一任务当作新任务转发。`final_result_writer` 就是这件事的字段化。"
+        },
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "instant": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "node_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$",
+          "type": "string"
+        }
+      },
+      "$id": "https://deepdocparse.dev/schemas/ddp-plan-admission/1",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "执行图、数据边、执行许可与正式接单（计划 §6.5、§6.6）。这份契约的中心思想：**各节点分别有能力但没有合法传输路径时，计划仍然不可执行**（§6.5）。所以数据边是一等对象，不是实现细节。",
+      "title": "DDP-PLAN-ADMISSION v1",
+      "x-ddp-contract": "ddp-plan-admission/1"
+    },
+    "ddp-resource/v1.json": {
+      "$defs": {
+        "Resource": {
+          "additionalProperties": false,
+          "description": "一份逻辑资产 —— 「谁的东西」。",
+          "properties": {
+            "copied_from": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "created_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "deleted_at": {
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "display_name": {
+              "type": "string"
+            },
+            "organization_id": {
+              "type": "string"
+            },
+            "owner_ref": {
+              "$ref": "#/$defs/actor_ref"
+            },
+            "publication": {
+              "enum": [
+                "private",
+                "draft",
+                "published",
+                "withdrawn"
+              ],
+              "type": "string",
+              "x-ddp-enum": "publishing_state"
+            },
+            "resource_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schema": {
+              "const": "ddp-resource/1#Resource"
+            },
+            "uploaded_by_ref": {
+              "$ref": "#/$defs/actor_ref",
+              "description": "首次提交人。通常等于 owner_ref；「另存为我的资源」时两者不同。"
+            }
+          },
+          "required": [
+            "schema",
+            "resource_id",
+            "owner_ref",
+            "uploaded_by_ref",
+            "publication",
+            "created_at"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**不变量 I01：逻辑资源不等于内容哈希。** A、B 上传相同内容分别生成 RA、RB；删除 RA 不能删除 RB 或运行任务仍引用的内容（§4.1、T01、T03）。去重先限定在用户或明确共享范围，**不因已知内容哈希就授予读取权**（T13：伪造已有私有文件哈希不能换到文件或存在性信息）。`copied_from` 承载 I02：副本、缓存与联邦转发保留来源身份，用户明确「另存为我的资源」才创建新逻辑资源。"
+        },
+        "ResourceVersion": {
+          "additionalProperties": false,
+          "description": "资产的一个固定版本，绑定到一份内容。",
+          "properties": {
+            "content_ref": {
+              "description": "内容层身份（当前实现是 documents.id）。**多对一**：多份资产可共享一份内容。",
+              "minLength": 1,
+              "type": "string"
+            },
+            "created_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "deleted_at": {
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "filename": {
+              "type": "string"
+            },
+            "resource_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schema": {
+              "const": "ddp-resource/1#ResourceVersion"
+            },
+            "size_bytes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "source_digest": {
+              "description": "内容摘要。联邦侧 DDP-EVIDENCE 的 source_digest 直接取它。**服务端校验输入摘要，不能直接信任客户端声明**（§4.1）。",
+              "minLength": 1,
+              "type": "string"
+            },
+            "version_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "version_no": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schema",
+            "version_id",
+            "resource_id",
+            "version_no",
+            "content_ref",
+            "source_digest",
+            "created_at"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**T04：固定版本内容不能原地变化。** 换版是加一行（version_no+1），不是改 content_ref —— 改它等于让一条已经被引用过的出处悄悄指向别的内容，而出处漂移是本项目最不能接受的一类错。**多个 ResourceVersion 可以指同一个 content_ref**，那正是「内容去重仍然生效」的形状：解析、索引、embedding 只做一次。"
+        },
+        "UploadEvent": {
+          "additionalProperties": false,
+          "description": "谁真正提交了什么。",
+          "properties": {
+            "actor_ref": {
+              "$ref": "#/$defs/actor_ref"
+            },
+            "created_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "idempotency_key": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "request_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "resource_version_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schema": {
+              "const": "ddp-resource/1#UploadEvent"
+            },
+            "upload_event_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schema",
+            "upload_event_id",
+            "resource_version_id",
+            "actor_ref",
+            "idempotency_key",
+            "request_digest",
+            "created_at"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**网络重试不是新上传**（§4.1、T02）。同一个 (actor, idempotency_key) 只留一条；想真的再传一次要换键，那时是一次显式的新上传。**键域按提交人隔离**（T80）：只按 key 全局唯一的话，A 用过的键 B 再用会被判成重试，于是 B 的上传静默变成「已存在」，拿到的是 A 的资产。`request_digest` 让「同键不同正文」判成冲突，而不是复用一个不相关的结果 —— 与联邦侧的 `idempotency_conflict` 是同一条规则。"
+        },
+        "actor_ref": {
+          "description": "经验证的用户/服务主体。**不同发行者的同名用户不自动合并**（§2.1、T32）。",
+          "minLength": 1,
+          "type": "string"
+        },
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "instant": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "$id": "https://deepdocparse.dev/schemas/ddp-resource/1",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "逻辑资产、固定版本与上传事件（计划 §4.1）。**这一份契约曾经被 C-01 卡住** —— 计划要求「同内容不同用户 → 两条独立资源」，而迁移 0006 刻意把去重做成了全局的。选定方案 B 之后才写得出来：在内容层之上加一层，两件事同时成立。",
+      "title": "DDP-RESOURCE v1",
+      "x-ddp-contract": "ddp-resource/1",
+      "x-ddp-local-mapping": {
+        "Resource": "resources 表（迁移 0015 新增）",
+        "ResourceVersion": "resource_versions 表（迁移 0015 新增）",
+        "UploadEvent": "upload_events 表（迁移 0015 新增）",
+        "content_ref": "resource_versions.document_id -> documents.id（既有内容层，全局去重照旧）",
+        "备注": "documents 保持 (doc_id, origin) 全局唯一 —— 两个人传同一份文件仍然只解析一次、只索引一次、只做一次 embedding。变的只是「谁的资产」这一层。"
+      }
+    },
+    "ddp-scope-coverage/v1.json": {
+      "$defs": {
+        "CoverageEntry": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "unsupported 必须有依据。没有这条约束，「排除」就变成了免费的完成率来源。",
+              "if": {
+                "properties": {
+                  "state": {
+                    "const": "unsupported"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "exclusion_basis": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "exclusion_basis"
+                ]
+              }
+            },
+            {
+              "$comment": "succeeded 必须带回执与实际索引版本 —— 「仅有失败原因被记录不算搜索成功」（§7.4）的反面：仅有成功标记也不算。",
+              "if": {
+                "properties": {
+                  "state": {
+                    "const": "succeeded"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "actual_index_revision": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "probe_receipts": {
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "probe_receipts",
+                  "actual_index_revision"
+                ]
+              }
+            }
+          ],
+          "description": "覆盖账本里的一行 —— 一个目标 × 一个（子）查询。",
+          "properties": {
+            "actual_index_revision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "attempts": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "evidence_refs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "exclusion_basis": {
+              "description": "state 为 unsupported 时**必须**给出可核验依据（§7.3：能力元数据过期/缺失算未知，不算排除）。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "last_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "probe_receipts": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "query_or_subquery_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "scope_ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "search_profile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "enum": [
+                "planned",
+                "in_flight",
+                "succeeded",
+                "partial",
+                "denied",
+                "failed",
+                "unsupported",
+                "unreachable",
+                "not_attempted",
+                "revoked"
+              ],
+              "type": "string",
+              "x-ddp-enum": "coverage_target_state"
+            },
+            "target_key": {
+              "$ref": "#/$defs/TargetKey"
+            },
+            "used_budget": {
+              "additionalProperties": false,
+              "properties": {
+                "bytes": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "requests": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "type": "object",
+              "x-ddp-doc": "本次尝试消耗的预算。**本切片只如实记请求次数，`bytes` 恒为 0**：精确的外发字节需要数据面（socket/网关计数器）测量，协调者不做猜测。把它当已发生的字节数会得到看起来精确的错误账。"
+            }
+          },
+          "required": [
+            "target_key",
+            "scope_ref",
+            "query_or_subquery_digest",
+            "state",
+            "attempts"
+          ],
+          "type": "object",
+          "x-ddp-doc": "多子问题任务要**逐项**记录必须的子查询：只完成一个子查询不能替代整个目标的检索完成（§7.3）。actual_index_revision 与 CollectionDescriptor 里的可能不同 —— 那正是要记它的原因。"
+        },
+        "CoverageLedger": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "**快速模式永远不许声明 complete**（§7.2）。这是整份契约里最重要的一条机器约束：fast 的成功结局也只是 partial 加上「未检索范围」。少了它，「selected candidate 全成功就显示全 scope 查完」这个错误没有任何东西挡得住。",
+              "if": {
+                "properties": {
+                  "search_mode": {
+                    "const": "fast"
+                  }
+                },
+                "required": [
+                  "search_mode"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "retrieval_completeness": {
+                    "not": {
+                      "const": "complete"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "$comment": "retrieval=complete 要求 enumeration=sealed（§7.4 判据①）。枚举没封上就没有分母，没有分母就不存在「全部查完」。",
+              "if": {
+                "properties": {
+                  "retrieval_completeness": {
+                    "const": "complete"
+                  }
+                },
+                "required": [
+                  "retrieval_completeness"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "enumeration_state": {
+                    "const": "sealed"
+                  }
+                },
+                "required": [
+                  "enumeration_state"
+                ]
+              }
+            },
+            {
+              "$comment": "retrieval=complete 要求 incomplete 计数为 0（§7.4 判据③）。",
+              "if": {
+                "properties": {
+                  "retrieval_completeness": {
+                    "const": "complete"
+                  }
+                },
+                "required": [
+                  "retrieval_completeness"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "counts": {
+                    "properties": {
+                      "incomplete": {
+                        "const": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "description": "一次任务的完整覆盖报告。",
+          "properties": {
+            "counts": {
+              "additionalProperties": false,
+              "description": "报告目标总数、适用数、成功数、排除数、未完成数（§7.4）。",
+              "properties": {
+                "applicable_targets": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "excluded": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "incomplete": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "succeeded": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "total_targets": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "total_targets",
+                "applicable_targets",
+                "succeeded",
+                "excluded",
+                "incomplete"
+              ],
+              "type": "object"
+            },
+            "entries": {
+              "items": {
+                "$ref": "#/$defs/CoverageEntry"
+              },
+              "type": "array"
+            },
+            "enumeration_state": {
+              "enum": [
+                "building",
+                "sealed",
+                "partial",
+                "expired"
+              ],
+              "type": "string",
+              "x-ddp-enum": "enumeration_state"
+            },
+            "evidence_sufficiency": {
+              "enum": [
+                "sufficient_by_policy",
+                "insufficient",
+                "conflicting",
+                "unknown"
+              ],
+              "type": "string",
+              "x-ddp-enum": "evidence_sufficiency"
+            },
+            "retrieval_completeness": {
+              "enum": [
+                "not_started",
+                "partial",
+                "complete"
+              ],
+              "type": "string",
+              "x-ddp-enum": "retrieval_completeness"
+            },
+            "root_task_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schema": {
+              "const": "ddp-scope-coverage/1#CoverageLedger"
+            },
+            "scope_ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "search_mode": {
+              "enum": [
+                "fast",
+                "exhaustive_scope"
+              ],
+              "type": "string",
+              "x-ddp-enum": "search_mode"
+            }
+          },
+          "required": [
+            "schema",
+            "root_task_id",
+            "scope_ref",
+            "search_mode",
+            "enumeration_state",
+            "retrieval_completeness",
+            "evidence_sufficiency",
+            "entries",
+            "counts"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**分母未知时不显示伪百分比**（§7.4）。五个状态轴分别呈现，禁止压成一个绿色「完成」或一个 confidence 数字（I09）。`applicable_targets` 与 `total_targets` 分开是因为「已核实不支持」的目标进排除数、不进成功数，但也不能从总数里删掉。"
+        },
+        "ScopeManifest": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "sealed 的硬判据：封存的范围不许还留着未展开子域。这一条把 §5.5「不把无法展开当成空目录」变成机器可查的东西 —— 否则它只是文档里的一句话。",
+              "if": {
+                "properties": {
+                  "enumeration_state": {
+                    "const": "sealed"
+                  }
+                },
+                "required": [
+                  "enumeration_state"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "unexpanded_subtrees": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          ],
+          "description": "一次范围穷查的成员快照。",
+          "properties": {
+            "caller_scope_hash": {
+              "$ref": "#/$defs/digest",
+              "description": "调用者身份+权限的摘要。**不同用户、不同权限不能因共用 root 名称错误共享探测结果**（§7.5）。"
+            },
+            "child_manifests": {
+              "description": "下级范围的引用与完成状态（递归联邦，§6/§7.5）。",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "enumeration_state": {
+                    "enum": [
+                      "building",
+                      "sealed",
+                      "partial",
+                      "expired"
+                    ],
+                    "type": "string",
+                    "x-ddp-enum": "enumeration_state"
+                  },
+                  "node_id": {
+                    "$ref": "#/$defs/node_id"
+                  },
+                  "scope_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "node_id",
+                  "scope_ref",
+                  "enumeration_state"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "created_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "enumeration_state": {
+              "enum": [
+                "building",
+                "sealed",
+                "partial",
+                "expired"
+              ],
+              "type": "string",
+              "x-ddp-enum": "enumeration_state"
+            },
+            "expanded_members": {
+              "description": "去重后的目标。大范围可分片保存，不要求一次塞进内存或传给浏览器（§5.4）。",
+              "items": {
+                "$ref": "#/$defs/TargetKey"
+              },
+              "type": "array"
+            },
+            "manifest_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "registry_revision_vector": {
+              "description": "每个目录自己的快照版本。**这就是「不是全局快照」的证据** —— 它是一个向量而不是一个数。",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "directory_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "fetched_at": {
+                    "$ref": "#/$defs/instant"
+                  },
+                  "node_id": {
+                    "$ref": "#/$defs/node_id"
+                  },
+                  "registry_revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "snapshot_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "node_id",
+                  "registry_revision",
+                  "fetched_at"
+                ],
+                "type": "object"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "schema": {
+              "const": "ddp-scope-coverage/1#ScopeManifest"
+            },
+            "scope_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "unexpanded_subtrees": {
+              "description": "**不能展开的子域必须列出来**（§5.5）。空列表 + sealed 才允许后续声明 retrieval=complete。reason 对无权限调用者要降敏，不得泄露私有成员存在性（§5.5、§8.4）。",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "node_id": {
+                    "$ref": "#/$defs/node_id"
+                  },
+                  "reason": {
+                    "enum": [
+                      "timeout",
+                      "denied",
+                      "enumeration_unsupported",
+                      "budget_exhausted",
+                      "unknown"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "node_id",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "valid_until": {
+              "$ref": "#/$defs/instant"
+            }
+          },
+          "required": [
+            "schema",
+            "scope_id",
+            "caller_scope_hash",
+            "created_at",
+            "valid_until",
+            "registry_revision_vector",
+            "expanded_members",
+            "unexpanded_subtrees",
+            "enumeration_state",
+            "manifest_digest"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**这是多个目录版本组成的任务快照，不是全网某一时刻的全局强一致快照**（§5.4 原文加粗）。各目录快照不同步时要报告各自修订与取得时间。新加入的成员不偷偷纳入旧 scope —— 要搜新成员就建新版本范围（§5.5、T74）。"
+        },
+        "TargetKey": {
+          "additionalProperties": false,
+          "description": "去重后的检索目标。",
+          "properties": {
+            "collection_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operation": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "origin_node_id": {
+              "$ref": "#/$defs/node_id"
+            }
+          },
+          "required": [
+            "origin_node_id",
+            "collection_id",
+            "operation"
+          ],
+          "type": "object",
+          "x-ddp-doc": "键是 `(origin_node_id, collection_id, operation)` 三元组（§7.3）。**一台服务器有多个集合时，探测了其中一个不能把整台标成完成** —— 计划 T85 就是这条。用 origin 而不是 next_hop 是为了「同一来源经多条路径到达只计一次」（§5.3），否则备用路径会变成重复证据。"
+        },
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "instant": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "node_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$",
+          "type": "string"
+        }
+      },
+      "$id": "https://deepdocparse.dev/schemas/ddp-scope-coverage/1",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "范围清单与覆盖账本（计划 §5.4、§7.4）。这两个对象合起来回答「查了哪里、哪里没查到、凭什么这么说」。**它们是分母与分子**：ScopeManifest 定分母，CoverageLedger 记分子，任何一个缺失都不允许显示百分比。",
+      "title": "DDP-SCOPE-COVERAGE v1",
+      "x-ddp-contract": "ddp-scope-coverage/1"
+    },
+    "ddp-task-probe/v1.json": {
+      "$defs": {
+        "ExplorationConsent": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "**local_only 必须寸步不让**（I03）。一个 local_only 却带着 allowed_payload 的许可对象是自相矛盾的，而这种矛盾在运行时的表现是「本地模式偷偷外发」—— 最不该静默的那一类。",
+              "if": {
+                "properties": {
+                  "egress_mode": {
+                    "const": "local_only"
+                  }
+                },
+                "required": [
+                  "egress_mode"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "allowed_payload": {
+                    "maxItems": 0
+                  },
+                  "allowed_recipients": {
+                    "maxItems": 0
+                  },
+                  "budget": {
+                    "properties": {
+                      "max_egress_bytes": {
+                        "const": 0
+                      },
+                      "max_probe_requests": {
+                        "const": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "$comment": "listed_nodes 必须真的列出节点 —— 空列表配非空 payload 等于「允许发给任何人」。",
+              "if": {
+                "properties": {
+                  "egress_mode": {
+                    "const": "listed_nodes"
+                  }
+                },
+                "required": [
+                  "egress_mode"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "allowed_recipients": {
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "allowed_recipients"
+                ]
+              }
+            }
+          ],
+          "description": "远端 Probe 之前必须先拿到的外发许可。",
+          "properties": {
+            "allowed_payload": {
+              "description": "允许外发的内容类别。**问题本身也是一种外发** —— 它在这张表里。",
+              "items": {
+                "enum": [
+                  "query_text",
+                  "subquery_text",
+                  "entity_names",
+                  "resource_names",
+                  "collection_filters",
+                  "evidence_excerpts",
+                  "source_files"
+                ],
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "allowed_recipients": {
+              "description": "egress_mode=listed_nodes 时的固定接收方集合。trust_domain 时用 trust_domain_revision 代替。",
+              "items": {
+                "$ref": "#/$defs/node_id"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "budget": {
+              "additionalProperties": false,
+              "description": "**发现与目录展开本身也有预算**（§7.5）——否则「隐藏的预算消耗」（T87）无从记账。",
+              "properties": {
+                "max_discovery_requests": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "max_egress_bytes": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "max_probe_requests": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "max_probe_requests",
+                "max_egress_bytes"
+              ],
+              "type": "object"
+            },
+            "consent_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "egress_mode": {
+              "description": "`local_only` 时 allowed_payload 必须为空 —— 下面的 allOf 钉着这件事。",
+              "enum": [
+                "local_only",
+                "listed_nodes",
+                "trust_domain"
+              ],
+              "type": "string"
+            },
+            "granted_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "granted_by": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schema": {
+              "const": "ddp-task-probe/1#ExplorationConsent"
+            },
+            "trust_domain_revision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "valid_until": {
+              "$ref": "#/$defs/instant"
+            }
+          },
+          "required": [
+            "schema",
+            "consent_id",
+            "granted_by",
+            "granted_at",
+            "valid_until",
+            "egress_mode",
+            "allowed_payload",
+            "budget"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**第一次远端检索就已经暴露问题、实体、资源名**（§6.2）——所以许可在 Probe 之前，不在执行之前。计划 T76 测的正是这条：未授权时连问题都不许发出，只能在本地准备任务。`local_only` 高于所有自动回退（I03）：即使发现服务与路由模型远端可用，也不能发任务相关探测；模型下载、遥测、更新与错误报告在严格离线测试中同样关闭。"
+        },
+        "Offer": {
+          "additionalProperties": false,
+          "description": "短时可执行意向。",
+          "properties": {
+            "capability_revision": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "estimated_duration_seconds": {
+              "additionalProperties": false,
+              "description": "**区间，不是点值**（§6.5：排队估计不是 SLA）。",
+              "properties": {
+                "high": {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "low": {
+                  "minimum": 0,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "low",
+                "high"
+              ],
+              "type": "object"
+            },
+            "offer_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "plan_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "reservation": {
+              "const": false
+            },
+            "target_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "valid_until": {
+              "$ref": "#/$defs/instant"
+            }
+          },
+          "required": [
+            "offer_id",
+            "target_node_id",
+            "plan_digest",
+            "valid_until",
+            "reservation"
+          ],
+          "type": [
+            "object",
+            "null"
+          ],
+          "x-ddp-doc": "**`reservation` 恒为 false**（§6.6）：Offer 不默认占 GPU。需要真正预约要另定义有期限、计费与释放规则的资源预留契约 —— 那不在 v1 里。下面的 const 就是为了让「顺手把它改成 true」这件事当场红。"
+        },
+        "ProbeResult": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "证据探测必须带 retrieval 段 —— 否则它不是证据探测，只是一次能力查询。默认**不是**让节点先生成一个无出处答案（§6.4）。",
+              "if": {
+                "properties": {
+                  "probe_kind": {
+                    "const": "evidence_retrieval"
+                  }
+                },
+                "required": [
+                  "probe_kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "retrieval": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "retrieval"
+                ]
+              }
+            }
+          ],
+          "description": "一次真实预检/检索的回执（§6.4 三类 Probe）。",
+          "properties": {
+            "can_generate": {
+              "description": "**不是 can_solve**（§6.1）。它只回答「这个节点能不能跑生成」，不回答「这次任务能不能成」。",
+              "type": "boolean"
+            },
+            "capability_check": {
+              "additionalProperties": false,
+              "properties": {
+                "input_validation": {
+                  "enum": [
+                    "metadata_only",
+                    "content_verified"
+                  ],
+                  "type": "string",
+                  "x-ddp-enum": "input_validation"
+                },
+                "operation": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "readiness": {
+                  "enum": [
+                    "configured",
+                    "ready",
+                    "draining",
+                    "unhealthy",
+                    "unknown"
+                  ],
+                  "type": "string",
+                  "x-ddp-enum": "capability_readiness"
+                }
+              },
+              "required": [
+                "operation",
+                "readiness"
+              ],
+              "type": "object"
+            },
+            "consent_ref": {
+              "description": "**必填**：没有探索许可就不该存在这个回执（T76）。",
+              "minLength": 1,
+              "type": "string"
+            },
+            "missing_requirements": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "observed_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "offer": {
+              "$ref": "#/$defs/Offer"
+            },
+            "probe_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "probe_kind": {
+              "enum": [
+                "capability_input",
+                "resource_locate",
+                "evidence_retrieval"
+              ],
+              "type": "string"
+            },
+            "retrieval": {
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "$comment": "**这一条是 T85 的机器版本**：节点内部有分片失败却在外层报成功，是「覆盖诚实性」指标要求为 0 的那类错误。有 internal_limits 就只能是 partial。",
+                  "if": {
+                    "properties": {
+                      "internal_limits": {
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "internal_limits"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "status": {
+                        "const": "partial"
+                      }
+                    }
+                  }
+                }
+              ],
+              "properties": {
+                "candidate_limit": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "collection_ref": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "continuation_ref": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "evidence_set_ref": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "index_revision": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "internal_limits": {
+                  "description": "对方自报的内部限制。**非空就不许在外层写 succeeded** —— 下面的 allOf 钉着。",
+                  "items": {
+                    "enum": [
+                      "shard_failed",
+                      "index_lagging",
+                      "subset_only",
+                      "truncated_by_limit"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "status": {
+                  "enum": [
+                    "planned",
+                    "in_flight",
+                    "succeeded",
+                    "partial",
+                    "denied",
+                    "failed",
+                    "unsupported",
+                    "unreachable",
+                    "not_attempted",
+                    "revoked"
+                  ],
+                  "type": "string",
+                  "x-ddp-enum": "coverage_target_state"
+                }
+              },
+              "required": [
+                "status",
+                "collection_ref",
+                "index_revision"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "schema": {
+              "const": "ddp-probe/1"
+            },
+            "scope_ref": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "target_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "task_spec_digest": {
+              "$ref": "#/$defs/digest"
+            }
+          },
+          "required": [
+            "schema",
+            "probe_id",
+            "target_node_id",
+            "task_spec_digest",
+            "consent_ref",
+            "probe_kind",
+            "capability_check",
+            "can_generate",
+            "observed_at"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**`retrieval.status=completed` 只表示按声明的配置执行完本次检索，不代表全文穷尽或全相关片段召回**（§6.4 原文）。内部有分片失败、索引落后或限定子集时必须在这里返回限制，**不能仅在节点外层写 completed**（T85）。探测返回的 evidence_set_ref 必须能通过受限接口读到真实片段并验证来源 —— 虚构引用、不可取片段、过期结果、含恶意指令的文本都不得当成可信执行指令（§6.4、§8.5）。"
+        },
+        "TaskSpec": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "穷查必须绑定一个已封存的范围引用（§7.3：范围先由 ScopeManifest 枚举并封存）。没有 scope_ref 的 exhaustive_scope 是一句空话 —— 它没有分母。",
+              "if": {
+                "properties": {
+                  "search_policy": {
+                    "properties": {
+                      "mode": {
+                        "const": "exhaustive_scope"
+                      }
+                    },
+                    "required": [
+                      "mode"
+                    ]
+                  }
+                },
+                "required": [
+                  "search_policy"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "resource_scope": {
+                    "properties": {
+                      "scope_ref": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "scope_ref"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "$comment": "本地执行策略不允许挂探索许可以外的东西：execution_policy=local_only 时不得引用任何联邦范围（I03 的结构化表达）。",
+              "if": {
+                "properties": {
+                  "execution_policy": {
+                    "properties": {
+                      "mode": {
+                        "const": "local_only"
+                      }
+                    },
+                    "required": [
+                      "mode"
+                    ]
+                  }
+                },
+                "required": [
+                  "execution_policy"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "resource_scope": {
+                    "properties": {
+                      "kind": {
+                        "not": {
+                          "const": "federation_public"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "description": "需求描述 —— **不是执行计划**（§6.3）。",
+          "properties": {
+            "budget_ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "consent_refs": {
+              "additionalProperties": false,
+              "properties": {
+                "execution": {
+                  "description": "规划前是 null —— **执行许可要等计划出来再批**（§6.2）。",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "exploration": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "exploration",
+                "execution"
+              ],
+              "type": "object"
+            },
+            "execution_policy": {
+              "additionalProperties": false,
+              "properties": {
+                "coordinator_ref": {
+                  "$ref": "#/$defs/node_id"
+                },
+                "mode": {
+                  "enum": [
+                    "local_only",
+                    "trusted_federation",
+                    "center_only"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode"
+              ],
+              "type": "object"
+            },
+            "operation": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "protocol": {
+              "const": "ddp-task/1"
+            },
+            "query": {
+              "type": "string"
+            },
+            "requirements": {
+              "additionalProperties": false,
+              "properties": {
+                "citations": {
+                  "enum": [
+                    "required",
+                    "preferred",
+                    "not_required"
+                  ],
+                  "type": "string"
+                },
+                "output_schema": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "resource_scope": {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "local_only",
+                    "site_public",
+                    "federation_public",
+                    "fixed_resources"
+                  ],
+                  "type": "string"
+                },
+                "resource_refs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "scope_ref": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            "schema": {
+              "const": "ddp-task-probe/1#TaskSpec"
+            },
+            "search_policy": {
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "fast",
+                    "exhaustive_scope"
+                  ],
+                  "type": "string",
+                  "x-ddp-enum": "search_mode"
+                },
+                "ordering": {
+                  "description": "**排序偏好，不是检索范围**（§6.3）。",
+                  "enum": [
+                    "local_first",
+                    "cost_first",
+                    "freshness_first"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode"
+              ],
+              "type": "object"
+            },
+            "workspace_ref": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schema",
+            "protocol",
+            "operation",
+            "workspace_ref",
+            "resource_scope",
+            "search_policy",
+            "execution_policy",
+            "consent_refs",
+            "budget_ref"
+          ],
+          "type": "object",
+          "x-ddp-doc": "四个旋钮各管一件事，互不覆盖（§6.3 原文）：scope 决定查哪些资料；search_policy.mode 决定怎么查；execution_policy 决定谁执行；consent 决定能发送什么。`local_first` 是排序偏好，**不能偷偷改成 `local_only`**（那是外发策略）；`fast` 也不能覆盖用户选定的固定资源范围。LLM 可以辅助拆解问题，但**不能签发权限、修改预算或猜测节点支持的操作**。"
+        },
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "instant": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "node_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$",
+          "type": "string"
+        }
+      },
+      "$id": "https://deepdocparse.dev/schemas/ddp-task-probe/1",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "需求、探索许可与实际预检/检索回执（计划 §6.2—§6.4）。核心决定：**不使用单一 can_solve=true**（§6.1）—— 声明、预检、规划、接单、执行、验收是六个阶段，每个阶段都保留 unknown / unsupported / denied / temporarily_unavailable。",
+      "title": "DDP-TASK-PROBE v1",
+      "x-ddp-contract": "ddp-task-probe/1"
+    }
+  }
+}

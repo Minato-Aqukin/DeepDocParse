@@ -50,7 +50,7 @@ async function remove(doc: DocumentInfo) {
   // 说清楚这是从**整个服务器的语料**里移除，不是"删掉我的那份副本" ——
   // 语料共享之后这两件事已经不是一回事了
   await ElMessageBox.confirm(
-    `从本服务器语料中移除「${doc.filename}」及其解析结果？其他人也将不再看得到它。`,
+    `删除你对「${doc.filename}」的资源记录？其他人的独立资源会保留。`,
     '确认', { type: 'warning' })
   await documentsApi.remove(doc.id)
   await reload()
@@ -58,7 +58,7 @@ async function remove(doc: DocumentInfo) {
 
 async function removeSelected() {
   await ElMessageBox.confirm(
-    `从本服务器语料中移除选中的 ${selected.value.length} 份文档？其他人也将不再看得到它们。`,
+    `删除你对选中 ${selected.value.length} 份文档的资源记录？其他人的独立资源会保留。`,
     '确认', { type: 'warning' })
   // **一份删不掉不能拖垮其余的。** 语料共享之后（plan.md §2 已定 2）文档库里
   // 会有别人传的东西，而删除是全站唯一还判权限的动作 —— 批量选中里混进一份

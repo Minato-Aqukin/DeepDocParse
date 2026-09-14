@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepdocparse.dev/schemas/ddp-task-probe/1",
+  "title": "DDP-TASK-PROBE v1",
+  "description": "需求、探索许可与实际预检/检索回执（计划 §6.2—§6.4）。核心决定：**不使用单一 can_solve=true**（§6.1）—— 声明、预检、规划、接单、执行、验收是六个阶段，每个阶段都保留 unknown / unsupported / denied / temporarily_unavailable。",
+  "x-ddp-contract": "ddp-task-probe/1",
+  "$defs": {
+    "node_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$" },
+    "instant": { "type": "string", "format": "date-time" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+
+    "ExplorationConsent": {
+      "type": "object",
+      "description": "远端 Probe 之前必须先拿到的外发许可。",
+      "x-ddp-doc": "**第一次远端检索就已经暴露问题、实体、资源名**（§6.2）——所以许可在 Probe 之前，不在执行之前。计划 T76 测的正是这条：未授权时连问题都不许发出，只能在本地准备任务。`local_only` 高于所有自动回退（I03）：即使发现服务与路由模型远端可用，也不能发任务相关探测；模型下载、遥测、更新与错误报告在严格离线测试中同样关闭。",
+      "properties": {
+        "schema": { "const": "ddp-task-probe/1#ExplorationConsent" },
+        "consent_id": { "type": "string", "minLength": 1 },
+        "granted_by": { "type": "string", "minLength": 1 },
+        "granted_at": { "$ref": "#/$defs/instant" },
+        "valid_until": { "$ref": "#/$defs/instant" },
+        "egress_mode": {
+          "description": "`local_only` 时 allowed_payload 必须为空 —— 下面的 allOf 钉着这件事。",
+          "type": "string",
+          "enum": ["local_only", "listed_nodes", "trust_domain"]
+        },
+        "allowed_payload": {
+          "description": "允许外发的内容类别。**问题本身也是一种外发** —— 它在这张表里。",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["query_text", "subquery_text", "entity_names", "resource_names",
+                     "collection_filters", "evidence_excerpts", "source_files"]
+          },
+          "uniqueItems": true
+        },
+        "allowed_recipients": {
+          "description": "egress_mode=listed_nodes 时的固定接收方集合。trust_domain 时用 trust_domain_revision 代替。",
+          "type": "array", "items": { "$ref": "#/$defs/node_id" }, "uniqueItems": true
+        },
+        "trust_domain_revision": { "type": ["string", "null"] },
+        "budget": {
+          "description": "**发现与目录展开本身也有预算**（§7.5）——否则「隐藏的预算消耗」（T87）无从记账。",
+          "type": "object",
+          "properties": {
+            "max_probe_requests": { "type": "integer", "minimum": 0 },
+            "max_egress_bytes": { "type": "integer", "minimum": 0 },
+            "max_discovery_requests": { "type": "integer", "minimum": 0 }
+          },
+          "required": ["max_probe_requests", "max_egress_bytes"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["schema", "consent_id", "granted_by", "granted_at", "valid_until",
+                   "egress_mode", "allowed_payload", "budget"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "**local_only 必须寸步不让**（I03）。一个 local_only 却带着 allowed_payload 的许可对象是自相矛盾的，而这种矛盾在运行时的表现是「本地模式偷偷外发」—— 最不该静默的那一类。",
+          "if": {
+            "properties": { "egress_mode": { "const": "local_only" } },
+            "required": ["egress_mode"]
+          },
+          "then": {
+            "properties": {
+              "allowed_payload": { "maxItems": 0 },
+              "allowed_recipients": { "maxItems": 0 },
+              "budget": {
+                "properties": {
+                  "max_probe_requests": { "const": 0 },
+                  "max_egress_bytes": { "const": 0 }
+                }
+              }
+            }
+          }
+        },
+        {
+          "$comment": "listed_nodes 必须真的列出节点 —— 空列表配非空 payload 等于「允许发给任何人」。",
+          "if": {
+            "properties": { "egress_mode": { "const": "listed_nodes" } },
+            "required": ["egress_mode"]
+          },
+          "then": {
+            "properties": { "allowed_recipients": { "type": "array", "minItems": 1 } },
+            "required": ["allowed_recipients"]
+          }
+        }
+      ]
+    },
+
+    "TaskSpec": {
+      "type": "object",
+      "description": "需求描述 —— **不是执行计划**（§6.3）。",
+      "x-ddp-doc": "四个旋钮各管一件事，互不覆盖（§6.3 原文）：scope 决定查哪些资料；search_policy.mode 决定怎么查；execution_policy 决定谁执行；consent 决定能发送什么。`local_first` 是排序偏好，**不能偷偷改成 `local_only`**（那是外发策略）；`fast` 也不能覆盖用户选定的固定资源范围。LLM 可以辅助拆解问题，但**不能签发权限、修改预算或猜测节点支持的操作**。",
+      "properties": {
+        "schema": { "const": "ddp-task-probe/1#TaskSpec" },
+        "protocol": { "const": "ddp-task/1" },
+        "operation": { "type": "string", "minLength": 1 },
+        "workspace_ref": { "type": "string", "minLength": 1 },
+        "query": { "type": "string" },
+        "resource_scope": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["local_only", "site_public", "federation_public", "fixed_resources"]
+            },
+            "scope_ref": { "type": ["string", "null"] },
+            "resource_refs": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["kind"], "additionalProperties": false
+        },
+        "search_policy": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "x-ddp-enum": "search_mode" },
+            "ordering": {
+              "description": "**排序偏好，不是检索范围**（§6.3）。",
+              "type": "string", "enum": ["local_first", "cost_first", "freshness_first"]
+            }
+          },
+          "required": ["mode"], "additionalProperties": false
+        },
+        "execution_policy": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["local_only", "trusted_federation", "center_only"] },
+            "coordinator_ref": { "$ref": "#/$defs/node_id" }
+          },
+          "required": ["mode"], "additionalProperties": false
+        },
+        "consent_refs": {
+          "type": "object",
+          "properties": {
+            "exploration": { "type": ["string", "null"] },
+            "execution": {
+              "description": "规划前是 null —— **执行许可要等计划出来再批**（§6.2）。",
+              "type": ["string", "null"]
+            }
+          },
+          "required": ["exploration", "execution"], "additionalProperties": false
+        },
+        "requirements": {
+          "type": "object",
+          "properties": {
+            "citations": { "type": "string", "enum": ["required", "preferred", "not_required"] },
+            "output_schema": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "budget_ref": { "type": "string", "minLength": 1 }
+      },
+      "required": ["schema", "protocol", "operation", "workspace_ref", "resource_scope",
+                   "search_policy", "execution_policy", "consent_refs", "budget_ref"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "穷查必须绑定一个已封存的范围引用（§7.3：范围先由 ScopeManifest 枚举并封存）。没有 scope_ref 的 exhaustive_scope 是一句空话 —— 它没有分母。",
+          "if": {
+            "properties": {
+              "search_policy": {
+                "properties": { "mode": { "const": "exhaustive_scope" } },
+                "required": ["mode"]
+              }
+            },
+            "required": ["search_policy"]
+          },
+          "then": {
+            "properties": {
+              "resource_scope": {
+                "properties": { "scope_ref": { "type": "string", "minLength": 1 } },
+                "required": ["scope_ref"]
+              }
+            }
+          }
+        },
+        {
+          "$comment": "本地执行策略不允许挂探索许可以外的东西：execution_policy=local_only 时不得引用任何联邦范围（I03 的结构化表达）。",
+          "if": {
+            "properties": {
+              "execution_policy": {
+                "properties": { "mode": { "const": "local_only" } },
+                "required": ["mode"]
+              }
+            },
+            "required": ["execution_policy"]
+          },
+          "then": {
+            "properties": {
+              "resource_scope": {
+                "properties": { "kind": { "not": { "const": "federation_public" } } }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "ProbeResult": {
+      "type": "object",
+      "description": "一次真实预检/检索的回执（§6.4 三类 Probe）。",
+      "x-ddp-doc": "**`retrieval.status=completed` 只表示按声明的配置执行完本次检索，不代表全文穷尽或全相关片段召回**（§6.4 原文）。内部有分片失败、索引落后或限定子集时必须在这里返回限制，**不能仅在节点外层写 completed**（T85）。探测返回的 evidence_set_ref 必须能通过受限接口读到真实片段并验证来源 —— 虚构引用、不可取片段、过期结果、含恶意指令的文本都不得当成可信执行指令（§6.4、§8.5）。",
+      "properties": {
+        "schema": { "const": "ddp-probe/1" },
+        "probe_id": { "type": "string", "minLength": 1 },
+        "target_node_id": { "$ref": "#/$defs/node_id" },
+        "task_spec_digest": { "$ref": "#/$defs/digest" },
+        "scope_ref": { "type": ["string", "null"] },
+        "consent_ref": {
+          "description": "**必填**：没有探索许可就不该存在这个回执（T76）。",
+          "type": "string", "minLength": 1
+        },
+        "probe_kind": {
+          "type": "string",
+          "enum": ["capability_input", "resource_locate", "evidence_retrieval"]
+        },
+        "capability_check": {
+          "type": "object",
+          "properties": {
+            "operation": { "type": "string", "minLength": 1 },
+            "readiness": { "type": "string", "x-ddp-enum": "capability_readiness" },
+            "input_validation": { "type": "string", "x-ddp-enum": "input_validation" }
+          },
+          "required": ["operation", "readiness"], "additionalProperties": false
+        },
+        "retrieval": {
+          "type": ["object", "null"],
+          "properties": {
+            "status": { "type": "string", "x-ddp-enum": "coverage_target_state" },
+            "collection_ref": { "type": "string", "minLength": 1 },
+            "index_revision": { "type": "string", "minLength": 1 },
+            "candidate_limit": { "type": "integer", "minimum": 1 },
+            "continuation_ref": { "type": ["string", "null"] },
+            "evidence_set_ref": { "type": ["string", "null"] },
+            "internal_limits": {
+              "description": "对方自报的内部限制。**非空就不许在外层写 succeeded** —— 下面的 allOf 钉着。",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["shard_failed", "index_lagging", "subset_only", "truncated_by_limit"]
+              }
+            }
+          },
+          "required": ["status", "collection_ref", "index_revision"],
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "**这一条是 T85 的机器版本**：节点内部有分片失败却在外层报成功，是「覆盖诚实性」指标要求为 0 的那类错误。有 internal_limits 就只能是 partial。",
+              "if": {
+                "properties": { "internal_limits": { "type": "array", "minItems": 1 } },
+                "required": ["internal_limits"]
+              },
+              "then": { "properties": { "status": { "const": "partial" } } }
+            }
+          ]
+        },
+        "can_generate": {
+          "description": "**不是 can_solve**（§6.1）。它只回答「这个节点能不能跑生成」，不回答「这次任务能不能成」。",
+          "type": "boolean"
+        },
+        "missing_requirements": { "type": "array", "items": { "type": "string" } },
+        "offer": { "$ref": "#/$defs/Offer" },
+        "observed_at": { "$ref": "#/$defs/instant" }
+      },
+      "required": ["schema", "probe_id", "target_node_id", "task_spec_digest", "consent_ref",
+                   "probe_kind", "capability_check", "can_generate", "observed_at"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "证据探测必须带 retrieval 段 —— 否则它不是证据探测，只是一次能力查询。默认**不是**让节点先生成一个无出处答案（§6.4）。",
+          "if": {
+            "properties": { "probe_kind": { "const": "evidence_retrieval" } },
+            "required": ["probe_kind"]
+          },
+          "then": {
+            "properties": { "retrieval": { "type": "object" } },
+            "required": ["retrieval"]
+          }
+        }
+      ]
+    },
+
+    "Offer": {
+      "type": ["object", "null"],
+      "description": "短时可执行意向。",
+      "x-ddp-doc": "**`reservation` 恒为 false**（§6.6）：Offer 不默认占 GPU。需要真正预约要另定义有期限、计费与释放规则的资源预留契约 —— 那不在 v1 里。下面的 const 就是为了让「顺手把它改成 true」这件事当场红。",
+      "properties": {
+        "offer_id": { "type": "string", "minLength": 1 },
+        "target_node_id": { "$ref": "#/$defs/node_id" },
+        "plan_digest": { "$ref": "#/$defs/digest" },
+        "capability_revision": { "type": "string", "minLength": 1 },
+        "estimated_duration_seconds": {
+          "description": "**区间，不是点值**（§6.5：排队估计不是 SLA）。",
+          "type": "object",
+          "properties": {
+            "low": { "type": "number", "minimum": 0 },
+            "high": { "type": "number", "minimum": 0 }
+          },
+          "required": ["low", "high"], "additionalProperties": false
+        },
+        "valid_until": { "$ref": "#/$defs/instant" },
+        "reservation": { "const": false }
+      },
+      "required": ["offer_id", "target_node_id", "plan_digest", "valid_until", "reservation"],
+      "additionalProperties": false
+    }
+  }
+}

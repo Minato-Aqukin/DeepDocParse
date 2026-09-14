@@ -1,0 +1,20 @@
+{
+  "schema": "ddp-plan-admission/1#AdmissionReceipt",
+  "admission_id": "adm-7",
+  "executor_task_id": "c-task-55",
+  "issuer_node_id": "node-a",
+  "executor_node_id": "node-c",
+  "root_task_id": "task-9",
+  "step_id": "s2",
+  "delegation_generation": 0,
+  "idempotency_key": "task-9:s2:gen0",
+  "request_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "plan_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "verified_input_manifest_digest": null,
+  "state": "accepted",
+  "input_validation": "content_verified",
+  "accepted_at": "2026-09-12T00:00:00Z",
+  "receipt_revision": 1,
+  "quota_decision_ref": "quota-3",
+  "effective_policy_ref": "policy-rev-11"
+}

@@ -1,0 +1,48 @@
+{
+  "scope": "local CPU source-statement relation profile",
+  "runs": [
+    {
+      "experiment": "v1",
+      "run_id": "5ee16be7b6c54bda939b62cef1cfafcf",
+      "raw_report_status": "failed",
+      "accepted_for_T51": false,
+      "attempts": 2
+    },
+    {
+      "experiment": "v2",
+      "run_id": "1d2904e7594347c0b11cbca6bca4b7d9",
+      "raw_report_status": "passed",
+      "accepted_for_T51": false,
+      "attempts": 2
+    },
+    {
+      "experiment": "v3",
+      "run_id": "b159b63d2833453ab6d58d0619326d7a",
+      "raw_report_status": "failed",
+      "accepted_for_T51": false,
+      "attempts": 2
+    },
+    {
+      "experiment": "v4",
+      "run_id": "1f42b15749d142bca248e76593d57220",
+      "raw_report_status": "failed",
+      "accepted_for_T51": false,
+      "attempts": 3
+    },
+    {
+      "experiment": "v5",
+      "run_id": "6b300d29a3f448898bb9ca52e125650e",
+      "raw_report_status": "failed",
+      "accepted_for_T51": false,
+      "attempts": 3
+    },
+    {
+      "experiment": "v5-final",
+      "run_id": "b67b20d7b87c4f29916a7430a007e1c5",
+      "raw_report_status": "passed",
+      "accepted_for_T51": true,
+      "attempts": 3
+    }
+  ],
+  "v2_correction": "The original evaluator accepted a placeholder relation; manual review rejects that relation result. The original output is preserved."
+}

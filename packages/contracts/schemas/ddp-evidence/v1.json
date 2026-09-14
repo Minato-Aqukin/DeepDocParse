@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepdocparse.dev/schemas/ddp-evidence/1",
+  "title": "DDP-EVIDENCE v1（联邦信封）",
+  "description": "跨节点传递一条证据时的稳定身份（计划 §4.3）。**这不是一张新表** —— 它是既有 `evidence` 行在联邦边界上的信封。字段与本地列的逐条映射写在 x-ddp-local-mapping 里，其中四个字段在当前源码里**没有对应物**，那是 P0 记录的真实缺口，不是这里漏写。",
+  "x-ddp-contract": "ddp-evidence/1",
+  "x-ddp-local-mapping": {
+    "origin_node_id": "无对应列 —— 当前没有节点概念（P1/P4 新增）",
+    "authority_node_id": "无对应列 —— 同上",
+    "resource_id": "evidence.document_id。**语义差异见 BASELINE-v3.md 的 C-01**：当前一次部署一份共享语料，(doc_id, origin) 全局唯一；计划要求的是每用户独立逻辑资源",
+    "source_version_id": "evidence.doc_version —— **当前恒为 0**（迁移 0007 原注释：documents 今天没有版本概念）",
+    "parse_revision": "evidence.parse_job_id（列名不同，语义对应）",
+    "source_digest": "evidence.content_digest",
+    "evidence_id": "evidence.id",
+    "excerpt_digest": "无对应列 —— citations.snippet 存的是文本本身，没有摘要（P1 新增）",
+    "locator": "evidence.page_idx + bbox + page_size（已有，且已处理 CropBox 偏移与页旋转）",
+    "uploader_ref": "documents.uploaded_by，全部上传者在 document_uploads",
+    "retrieval_receipt_ref": "无对应列（P5 随 Probe 新增）",
+    "policy_revision": "无对应列（P1 随 ACL 贯通新增）"
+  },
+  "$defs": {
+    "node_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$" },
+    "instant": { "type": "string", "format": "date-time" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+
+    "Locator": {
+      "type": "object",
+      "description": "原文位置。",
+      "x-ddp-doc": "**PDF 用既有真实坐标约定，明确页旋转、crop box、物理页序与印刷页码；非 PDF 不伪造页码**（§4.3）。项目已经在 evidence.page_size 上吃过这个亏 —— 缺它遇到 CropBox 偏移/旋转页会裁错区域，而「出处图对不上原文」是最恶劣的错。所以 page_size 在这里是 bbox 的**同级必填伴随字段**，不是可选补充。",
+      "properties": {
+        "kind": { "type": "string", "enum": ["page_block", "table_cell", "paragraph"] },
+        "physical_page_index": {
+          "description": "从 0 起的物理页序。**与印刷页码分开** —— 前言用罗马数字时两者差一大截。",
+          "type": "integer", "minimum": 0
+        },
+        "printed_page_label": { "type": ["string", "null"] },
+        "seq": {
+          "description": "块序。出处定位键的后两段是 (parse_revision, seq) —— 与既有 chunks/evidence 的稳定键一致。",
+          "type": "integer", "minimum": 0
+        },
+        "bbox": {
+          "type": ["array", "null"], "minItems": 4, "maxItems": 4,
+          "items": { "type": "number" }
+        },
+        "page_size": {
+          "type": ["object", "null"],
+          "properties": {
+            "width": { "type": "number", "exclusiveMinimum": 0 },
+            "height": { "type": "number", "exclusiveMinimum": 0 },
+            "rotation": { "type": "integer", "enum": [0, 90, 180, 270] }
+          },
+          "required": ["width", "height"], "additionalProperties": false
+        }
+      },
+      "required": ["kind", "physical_page_index", "seq"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "**有 bbox 就必须有 page_size**。没有 page_size 的 bbox 在 CropBox 偏移或旋转页上会裁到错的区域，而裁图与原文对不上正是 parse_mismatch 想抓的那类假出处。",
+          "if": { "properties": { "bbox": { "type": "array" } }, "required": ["bbox"] },
+          "then": { "properties": { "page_size": { "type": "object" } }, "required": ["page_size"] }
+        }
+      ]
+    },
+
+    "FederatedEvidence": {
+      "type": "object",
+      "description": "一条可跨节点验证的证据。",
+      "x-ddp-doc": "**来源身份不随路径变化**（I02）：URL、上级节点、缓存位置变化都不改变 origin_node_id / resource_id / source_version_id。**下载 URL 是临时位置，不是证据身份**（§4.3）—— 所以这里没有任何 url 字段。`source_type` 复用既有枚举：生成物与原文必须可区分，且生成物的引用最终仍要指回原始原子（derived_from）。",
+      "properties": {
+        "schema": { "const": "ddp-evidence/1#FederatedEvidence" },
+        "evidence_id": { "type": "string", "minLength": 1 },
+        "origin_node_id": {
+          "description": "资料最初所属的自治中心。",
+          "$ref": "#/$defs/node_id"
+        },
+        "authority_node_id": {
+          "description": "当前对该资源权限有最终判定权的节点。**与 origin 可以不同**（获准副本场景），但权限由来源资源权威判定（§8.4）。",
+          "$ref": "#/$defs/node_id"
+        },
+        "resource_id": { "type": "string", "minLength": 1 },
+        "source_version_id": {
+          "description": "固定版本。**固定版本内容不能原地变化**（T04）。",
+          "type": "string", "minLength": 1
+        },
+        "parse_revision": { "type": "string", "minLength": 1 },
+        "source_digest": { "$ref": "#/$defs/digest" },
+        "excerpt_digest": {
+          "description": "本次引用片段的摘要。结构校验靠它对比「拿到的片段是不是当初那一段」。",
+          "$ref": "#/$defs/digest"
+        },
+        "locator": { "$ref": "#/$defs/Locator" },
+        "source_type": { "type": "string", "x-ddp-enum": "source_type" },
+        "derived_from": {
+          "description": "source_type=generated 时**必填**（见下 allOf）：生成理解要能指回原始原子，否则它是无根的。判据就是这个字段是否为空 —— 不要在别处另立标志位。",
+          "type": ["string", "null"]
+        },
+        "uploader_ref": { "type": ["string", "null"] },
+        "retrieval_receipt_ref": {
+          "description": "哪一次检索取得了它。**跨节点默认只传本次需要的证据与定位，不复制全库**（§4.3）。",
+          "type": ["string", "null"]
+        },
+        "policy_revision": { "type": "string", "minLength": 1 },
+        "block_type": { "type": "string", "x-ddp-enum": "block_type" },
+        "excerpt": {
+          "type": "string", "maxLength": 2000,
+          "x-ddp-doc": "本次引用片段的正文。**只在证据集读取（`/api/v1/federation/evidence-sets/{set_ref}`）上返回**：协调者本地生成必须真的看到证据正文，否则 `[n]` 只是一串空编号；单条 resolve 不返回它（正文不是证据身份）。超长片段按 2000 字符截断，截断事实不外推。"
+        }
+      },
+      "required": ["schema", "evidence_id", "origin_node_id", "authority_node_id",
+                   "resource_id", "source_version_id", "parse_revision", "source_digest",
+                   "excerpt_digest", "locator", "source_type", "policy_revision"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "**生成物必须指回原文**（既有的第三条不变式）。一条 generated 而 derived_from 为空的证据，就是「生成 Wiki 成为独立原始证据制造自证循环」（§4.4）的最小单元。",
+          "if": {
+            "properties": { "source_type": { "const": "generated" } },
+            "required": ["source_type"]
+          },
+          "then": {
+            "properties": { "derived_from": { "type": "string", "minLength": 1 } },
+            "required": ["derived_from"]
+          }
+        },
+        {
+          "$comment": "反向也钉住：source_type=source 的证据不该有 derived_from，否则两个字段会开始互相矛盾，而判据是「derived_from 是否为空」。",
+          "if": {
+            "properties": { "source_type": { "const": "source" } },
+            "required": ["source_type"]
+          },
+          "then": { "properties": { "derived_from": { "type": "null" } } }
+        }
+      ]
+    },
+
+    "ClaimEvidenceBinding": {
+      "type": "object",
+      "description": "一句实质性主张与支撑它的证据之间的绑定（§4.3、§4.4）。",
+      "x-ddp-doc": "**引用校验分两层**（§4.3）：结构校验（引用确实取得、版本正确、可授权定位）与语义检验（原文是否支持该结论）。structural_validation 是机器能给的，semantic_review 只能是人给的 —— 所以它默认 needs_review 而不是 passed。计划 §14.3 明确：**不能用引用存在率替代正确性**。",
+      "properties": {
+        "claim_id": { "type": "string", "minLength": 1 },
+        "claim_text": { "type": "string", "minLength": 1 },
+        "evidence_refs": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "structural_validation": { "type": "string", "x-ddp-enum": "validation_state" },
+        "semantic_review": { "type": "string", "x-ddp-enum": "validation_state" }
+      },
+      "required": ["claim_id", "claim_text", "evidence_refs", "structural_validation"],
+      "additionalProperties": false
+    },
+
+    "FederatedAnswer": {
+      "type": "object",
+      "description": "委托完整回答时，执行者必须回传的东西（§4.3 末段）。",
+      "x-ddp-doc": "**入口无生成能力时可以委托完整回答，但结果必须包含 answer + claim_evidence_bindings + evidence + coverage，不是只返回一段自然语言**（§4.3 原文）。这是计划 T50 / 演示 A 的验收对象：A 没有生成模型，仍要在 A 上展示带 B 原文的答案。",
+      "properties": {
+        "schema": { "const": "ddp-evidence/1#FederatedAnswer" },
+        "answer": { "type": "string" },
+        "claim_evidence_bindings": {
+          "type": "array", "items": { "$ref": "#/$defs/ClaimEvidenceBinding" }
+        },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/FederatedEvidence" } },
+        "coverage_ref": {
+          "description": "指向 CoverageLedger。**没有它就无法判断「未找到」是什么意思**（§7.6）。",
+          "type": "string", "minLength": 1
+        },
+        "evidence_sufficiency": { "type": "string", "x-ddp-enum": "evidence_sufficiency" },
+        "degraded": {
+          "description": "复用既有 degraded 枚举 —— 联邦侧不另立一套降级词汇。一次只报一个（最先命中的）。",
+          "type": ["string", "null"], "x-ddp-enum": "degraded", "x-ddp-enum-nullable": true
+        }
+      },
+      "required": ["schema", "answer", "claim_evidence_bindings", "evidence",
+                   "coverage_ref", "evidence_sufficiency"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "**证据不足时不许给出带主张绑定的答案**（§7.6、T38、T86）：「无证据时返回本次范围与配置下未获得足够证据」，不能伪造引用或把模型知识说成资料结论。所以 insufficient 时 bindings 必须为空 —— 有绑定就说明它在拿不足的证据支撑主张。",
+          "if": {
+            "properties": { "evidence_sufficiency": { "const": "insufficient" } },
+            "required": ["evidence_sufficiency"]
+          },
+          "then": { "properties": { "claim_evidence_bindings": { "maxItems": 0 } } }
+        }
+      ]
+    },
+
+    "DeliveryReceipt": {
+      "type": "object",
+      "description": "本地校验后回给中心的幂等交付确认（§8.3）。",
+      "x-ddp-doc": "**计算成功不代表本地拿到结果**（§8.3）。`state=confirmed` 只能由**本地校验过 manifest 与文件之后**发出（T29：下载后回执丢失/重复时，本地验证后可重复确认，结果不重复发布或提前清理）。",
+      "properties": {
+        "schema": { "const": "ddp-evidence/1#DeliveryReceipt" },
+        "delivery_id": { "type": "string", "minLength": 1 },
+        "root_task_id": { "type": "string", "minLength": 1 },
+        "step_id": { "type": "string", "minLength": 1 },
+        "state": { "type": "string", "x-ddp-enum": "delivery_state" },
+        "result_manifest_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+        "verified_at": { "type": ["string", "null"], "format": "date-time" },
+        "idempotency_key": { "type": "string", "minLength": 1 },
+        "retention": { "type": "string", "x-ddp-enum": "retention_class" }
+      },
+      "required": ["schema", "delivery_id", "root_task_id", "step_id", "state",
+                   "idempotency_key", "retention"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "confirmed 必须有已校验的 manifest 摘要与校验时间 —— 否则「已交付」只是一个没有依据的乐观标记。",
+          "if": { "properties": { "state": { "const": "confirmed" } }, "required": ["state"] },
+          "then": {
+            "properties": {
+              "result_manifest_digest": { "type": "string", "minLength": 1 },
+              "verified_at": { "type": "string" }
+            },
+            "required": ["result_manifest_digest", "verified_at"]
+          }
+        },
+        {
+          "$comment": "**expired 不许带 persistent 保留类**（§8.3）：TTL 到期导致未领取结果失效时，界面上不得仍然显示「已保存本地」。",
+          "if": { "properties": { "state": { "const": "expired" } }, "required": ["state"] },
+          "then": { "properties": { "retention": { "not": { "const": "persistent" } } } }
+        }
+      ]
+    }
+  }
+}

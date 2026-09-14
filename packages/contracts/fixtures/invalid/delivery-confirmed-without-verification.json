@@ -1,0 +1,11 @@
+{
+  "schema": "ddp-evidence/1#DeliveryReceipt",
+  "delivery_id": "dlv-2",
+  "root_task_id": "task-9",
+  "step_id": "s2",
+  "state": "confirmed",
+  "result_manifest_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "verified_at": null,
+  "idempotency_key": "dlv:task-9:s2",
+  "retention": "persistent"
+}

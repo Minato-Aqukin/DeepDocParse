@@ -22,22 +22,32 @@ import (
 // 内部头。**改名字要同时改 corpus-api 的 ddp_corpus/deps.py**，
 // 那边有一份同样的常量，靠 scripts/check_internal_headers.py 对拍。
 const (
-	HeaderRequestID    = "X-Request-Id"
-	HeaderTraceParent  = "traceparent"
-	HeaderService      = "X-DDP-Service"
-	HeaderOrganization = "X-DDP-Organization"
-	HeaderActor        = "X-DDP-Actor"
-	HeaderActorKind    = "X-DDP-Actor-Kind"
-	HeaderRole         = "X-DDP-Role"
-	HeaderAPIKeyID     = "X-DDP-Api-Key"
-	HeaderIdempotency  = "Idempotency-Key"
+	HeaderRequestID     = "X-Request-Id"
+	HeaderTraceParent   = "traceparent"
+	HeaderService       = "X-DDP-Service"
+	HeaderOrganization  = "X-DDP-Organization"
+	HeaderActor         = "X-DDP-Actor"
+	HeaderUser          = "X-DDP-User"
+	HeaderActorKind     = "X-DDP-Actor-Kind"
+	HeaderRole          = "X-DDP-Role"
+	HeaderAPIKeyID      = "X-DDP-Api-Key"
+	HeaderClientScope   = "X-DDP-Client-Scope"
+	HeaderAuthorityNode = "X-DDP-Authority-Node"
+	HeaderCallerActor   = "X-DDP-Caller-Actor"
+	HeaderCallerKind    = "X-DDP-Caller-Kind"
+	HeaderCallerRole    = "X-DDP-Caller-Role"
+	HeaderCallerUser    = "X-DDP-Caller-User"
+	HeaderCallerScope   = "X-DDP-Caller-Scope"
+	HeaderIdempotency   = "Idempotency-Key"
 )
 
 // Inbound 列出所有**必须从客户端请求里剥掉**的头。
 // 新增一个内部头就往这里加一行 —— 漏加等于开了一个提权后门。
 var Inbound = []string{
-	HeaderService, HeaderOrganization, HeaderActor,
+	HeaderService, HeaderOrganization, HeaderActor, HeaderUser,
 	HeaderActorKind, HeaderRole, HeaderAPIKeyID,
+	HeaderClientScope, HeaderAuthorityNode,
+	HeaderCallerActor, HeaderCallerKind, HeaderCallerRole, HeaderCallerUser, HeaderCallerScope,
 }
 
 type Kind string
@@ -95,6 +105,7 @@ func (a *Actor) Apply(r *http.Request, serviceName string) {
 	r.Header.Set(HeaderService, serviceName)
 	r.Header.Set(HeaderOrganization, a.OrganizationID)
 	r.Header.Set(HeaderActor, a.ID)
+	r.Header.Set(HeaderUser, a.UserID)
 	r.Header.Set(HeaderActorKind, string(a.Kind))
 	r.Header.Set(HeaderRole, string(a.Role))
 	if a.APIKeyID != "" {

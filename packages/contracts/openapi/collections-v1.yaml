@@ -1,0 +1,202 @@
+openapi: 3.1.0
+info:
+  title: DeepDocParse Explicit Collection Catalog
+  version: 1.0.0
+  description: See ../ddp/collection-catalog-format.md. Corpus owns collections and all source authorization.
+security: [{session: []}, {userKey: []}]
+paths:
+  /api/v1/collections:
+    post:
+      operationId: createExplicitCollection
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CollectionInput'}}}}
+      responses:
+        '201': {description: Owner-bound draft, including current revision and fixed version_ids}
+        '404': {description: At least one source is not readable}
+        '409': {description: Idempotency conflict}
+  /api/v1/collections/{collection_id}:
+    parameters: [{$ref: '#/components/parameters/CollectionId'}]
+    get:
+      operationId: readExplicitCollection
+      responses:
+        '200': {description: Current authorized metadata and fixed version_ids; source ACL rechecked}
+        '404': {description: Collection or source is not readable}
+    put:
+      operationId: replaceExplicitCollection
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: '#/components/schemas/CollectionFields'}
+                - type: object
+                  properties: {expected_revision: {type: integer, minimum: 1}}
+                  required: [expected_revision]
+              unevaluatedProperties: false
+      responses:
+        '200': {description: Metadata/member replacement retracts publication to draft and increments revision}
+        '404': {description: Collection or source not accessible}
+        '409': {description: Revision or idempotency conflict}
+  /api/v1/collections/{collection_id}/publish:
+    parameters: [{$ref: '#/components/parameters/CollectionId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+    post:
+      operationId: publishExplicitCollection
+      requestBody: {$ref: '#/components/requestBodies/Revision'}
+      responses:
+        '200': {description: Explicit owner/admin publication after live public source and index checks}
+        '404': {description: Collection not manageable}
+        '409': {description: Source not publishable, stale revision or idempotency conflict}
+  /api/v1/collections/{collection_id}/withdraw:
+    parameters: [{$ref: '#/components/parameters/CollectionId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+    post:
+      operationId: withdrawExplicitCollection
+      requestBody: {$ref: '#/components/requestBodies/Revision'}
+      responses:
+        '200': {description: Withdrawn publication, current revision and accepted operation_revision}
+        '404': {description: Collection not manageable}
+        '409': {description: Stale revision or idempotency conflict}
+  /internal/federation/collections:
+    get:
+      operationId: enumeratePublishedCollections
+      security: [{service: []}]
+      description: Requires service actor and all trusted caller headers documented in collection-catalog-format.md. Never directly proxy user requests to this path.
+      parameters:
+        - {name: scope_id, in: query, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: snapshot_id, in: query, schema: {type: string, maxLength: 32}}
+        - {name: cursor, in: query, schema: {type: string, maxLength: 32}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      responses:
+        '200': {description: Stable authorized metadata page with separate empty terminal proof, content: {application/json: {schema: {$ref: '#/components/schemas/CatalogPage'}}}}
+        '401': {description: Service or trusted caller context missing}
+        '403': {description: Non-service actor}
+        '409': {description: catalog_snapshot_changed; index/member revision changed, not a revocation}
+        '410': {description: catalog_snapshot_expired or catalog_snapshot_invalid. A bound unexpired owner may also receive revoked_collection_ids, restricted to original snapshot identities.}
+        '429': {description: Caller snapshot storage bound reached}
+        '507': {description: Authorized catalog too large; never claim complete}
+  /internal/federation/published-collections:
+    get:
+      operationId: enumerateNodePublishedCollections
+      security: [{service: []}]
+      description: |
+        Service-only, **node-scoped** producer for peer directory reads. The caller supplies
+        no scope and no caller identity: the fixed peer scope, caller digest and origin are
+        derived inside corpus from this node's persistent identity. Empty node identity fails
+        closed. The caller-scoped /internal/federation/collections path above is unchanged.
+      parameters:
+        - {name: snapshot_id, in: query, schema: {type: string, maxLength: 32}}
+        - {name: cursor, in: query, schema: {type: string, maxLength: 32}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      responses:
+        '200': {description: Stable node catalog page with separate empty terminal proof, content: {application/json: {schema: {$ref: '#/components/schemas/CatalogPage'}}}}
+        '401': {description: Missing service credentials or actor context}
+        '403': {description: Non-service actor}
+        '409': {description: catalog_snapshot_changed; never a revocation}
+        '410': {description: catalog_snapshot_expired or catalog_snapshot_invalid with the original revoked identities}
+        '429': {description: Node snapshot storage bound reached}
+        '503': {description: Persistent node identity unavailable; never emit origin-less descriptors}
+        '507': {description: Authorized catalog too large; never claim complete}
+  /api/v1/federation/collections:
+    get:
+      operationId: readPeerPublishedCollections
+      security: [{peer: []}]
+      description: |
+        Node-entry peer read served by control-api. Control authenticates X-DDP-Peer-Token
+        (fail closed), proxies to the service-only corpus producer with its service identity,
+        and re-checks that every descriptor is originated by this node before any peer sees
+        it. Caller scope, caller digest and readiness internals are never exposed.
+      parameters:
+        - {name: snapshot_id, in: query, schema: {type: string, maxLength: 32}}
+        - {name: cursor, in: query, schema: {type: string, maxLength: 32}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      responses:
+        '200': {description: Stable node catalog page; continuation cannot change the page size, content: {application/json: {schema: {$ref: '#/components/schemas/PeerCatalogPage'}}}}
+        '401': {description: peer_unauthenticated; unconfigured or wrong peer token}
+        '409': {description: wrong_target or snapshot revision conflict}
+        '410': {description: Peer catalog snapshot expired or withdrawn; already observed targets are retained by the caller}
+        '502': {description: Upstream corpus producer unavailable or inconsistent}
+        '503': {description: Node identity or corpus connection unavailable}
+        '507': {description: Authorized catalog too large; never claim complete}
+components:
+  securitySchemes:
+    session: {type: http, scheme: bearer}
+    userKey: {type: apiKey, in: header, name: X-API-Key}
+    service: {type: http, scheme: bearer}
+    peer: {type: apiKey, in: header, name: X-DDP-Peer-Token, description: Node-level shared directory credential; fail closed when unconfigured}
+  parameters:
+    CollectionId: {name: collection_id, in: path, required: true, schema: {type: string}}
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+  requestBodies:
+    Revision:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties: {expected_revision: {type: integer, minimum: 1}}
+            required: [expected_revision]
+            additionalProperties: false
+  schemas:
+    CollectionFields:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 255}
+        licence: {type: string, minLength: 1, maxLength: 512}
+        languages: {type: array, maxItems: 30, items: {type: string, minLength: 1, maxLength: 128}}
+        topics: {type: array, maxItems: 50, items: {type: string, minLength: 1, maxLength: 128}}
+        time_range:
+          type: object
+          properties:
+            from: {type: string, format: date-time}
+            to: {type: string, format: date-time}
+          additionalProperties: false
+        version_ids: {type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: {type: string, minLength: 1, maxLength: 32}}
+      required: [name, licence, version_ids]
+    CollectionInput:
+      allOf: [{$ref: '#/components/schemas/CollectionFields'}]
+      unevaluatedProperties: false
+    CatalogPage:
+      type: object
+      properties:
+        snapshot_id: {type: string, pattern: '^[0-9a-f]{32}$'}
+        scope_id: {type: string, minLength: 1, maxLength: 128}
+        caller_scope_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        origin_node_id: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/node_id'}
+        registry_revision: {type: integer, minimum: 1}
+        created_at: {type: string, format: date-time}
+        valid_until: {type: string, format: date-time}
+        first_cursor: {type: string, pattern: '^[0-9a-f]{32}$'}
+        terminal_cursor: {type: string, pattern: '^[0-9a-f]{32}$'}
+        total: {type: integer, minimum: 0, maximum: 10000}
+        collections: {type: array, maxItems: 100, items: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/CollectionDescriptor'}}
+        index_readiness: {type: object, additionalProperties: {type: string, enum: [ready, unavailable]}}
+        next_cursor: {type: [string, 'null'], pattern: '^[0-9a-f]{32}$'}
+        complete: {type: boolean}
+        content_snapshot_complete: {const: false}
+      required: [snapshot_id, scope_id, caller_scope_hash, origin_node_id, registry_revision, created_at, valid_until, first_cursor, terminal_cursor, total, collections, index_readiness, next_cursor, complete, content_snapshot_complete]
+      additionalProperties: false
+      allOf:
+        - if: {properties: {complete: {const: true}}}
+          then:
+            properties: {collections: {maxItems: 0}, next_cursor: {const: null}, index_readiness: {maxProperties: 0}}
+    PeerCatalogPage:
+      type: object
+      properties:
+        authority_node_id: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/node_id'}
+        snapshot_id: {type: string, pattern: '^[0-9a-f]{32}$'}
+        registry_revision: {type: integer, minimum: 1}
+        created_at: {type: string, format: date-time}
+        valid_until: {type: string, format: date-time}
+        first_cursor: {type: string, pattern: '^[0-9a-f]{32}$'}
+        terminal_cursor: {type: string, pattern: '^[0-9a-f]{32}$'}
+        total: {type: integer, minimum: 0, maximum: 10000}
+        collections: {type: array, maxItems: 100, items: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/CollectionDescriptor'}}
+        next_cursor: {type: [string, 'null'], pattern: '^[0-9a-f]{32}$'}
+        complete: {type: boolean}
+      required: [authority_node_id, snapshot_id, registry_revision, created_at, valid_until, first_cursor, terminal_cursor, total, collections, next_cursor, complete]
+      additionalProperties: false
+      allOf:
+        - if: {properties: {complete: {const: true}}}
+          then:
+            properties: {collections: {maxItems: 0}, next_cursor: {const: null}}

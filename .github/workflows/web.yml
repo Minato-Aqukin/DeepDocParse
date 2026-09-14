@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
 
       # **在仓库根装，不在 apps/web 里装。** 根 package.json 声明了
       # npm workspaces（apps/* + packages/*），workspace 布局下 npm 会一路
@@ -25,11 +25,16 @@ jobs:
       # npm 会把跨 host 的 tarball 当成 "remote" 类型直接拒掉（EALLOWREMOTE），
       # 所以必须显式带上原 registry
       - name: 安装依赖（workspace 根）
-        run: npm ci --registry=https://registry.npmmirror.com
+        run: ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci --registry=https://registry.npmmirror.com
 
       - name: 类型检查 + 构建
         working-directory: apps/web
         run: npm run build
+
+      - name: 共享连接与持久缓存门禁
+        run: |
+          npx tsc -p packages/client-runtime/tsconfig.json
+          node --test packages/client-runtime/test/*.test.mjs
 
       # 类型检查够不着的那一类：卸载后定时器还在跑、blob URL 没回收、
       # ResizeObserver 没断

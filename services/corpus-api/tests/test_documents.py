@@ -1,7 +1,7 @@
 """文档链路契约：上传 -> 稳定 URL -> service -> 回调/对账 -> 归档 -> 索引 -> 预览。
 
 重点覆盖事关可靠性与安全的行为：
-- 传给 service 的 doc_id 是文件内容哈希（URL 变化不影响幂等与向量索引）
+- 内容哈希固定在 Document，传给 service 的 doc_id 按资源隔离授权与解析幂等
 - 归档后 markdown 不再残留 base64，图片落成对象
 - 回调丢失时对账能把结果补回来（service 只暂存 24h）
 - /files/{token} 不能把用户自选的 MIME 原样 inline 回去（同源 XSS）
@@ -147,14 +147,17 @@ async def _callback(client, status: str = "succeeded", task_id: str = "s-1",
 
 
 @respx.mock
-async def test_upload_passes_content_hash_as_doc_id(actor_client, session):
-    """契约关键点：doc_id = 文件内容 sha256，file_url 是本层的稳定 URL（非预签名）。"""
+async def test_upload_preserves_content_hash_and_namespaces_parse_identity(actor_client, session):
+    """Content identity is immutable; revocable parse attempts have an asset namespace."""
     routes = _mock_service()
     document = await _upload(actor_client)
 
     assert document["status"] == "pending" and document["doc_id"] == DOC_ID
     body = json.loads(routes["submit"].calls.last.request.content)
-    assert body["doc_id"] == DOC_ID, "必须传内容哈希，否则 service 侧向量索引永不命中"
+    from ddp_corpus.ingest import parse_identity
+    job = (await session.execute(select(ParseJob))).scalars().one()
+    assert body["doc_id"] == parse_identity(DOC_ID, job.resource_id)
+    assert body["doc_id"] != DOC_ID and job.resource_id is not None
     assert body["callback_url"].endswith("/internal/parse-callback")
 
     # 稳定文件 URL 的凭证住在 control schema（Go 拥有），所以这里断言的是
@@ -336,12 +339,14 @@ async def test_inline_base64_in_markdown_is_externalized(actor_client):
 
 
 @respx.mock
-async def test_duplicate_upload_reuses_document(actor_client):
+async def test_duplicate_upload_reuses_content_with_independent_parse_attempts(actor_client, session):
     routes = _mock_service()
     first = await _upload(actor_client)
     second = await _upload(actor_client)
     assert first["id"] == second["id"]
-    assert routes["submit"].call_count == 1, "同一文件重复上传不得再打 service"
+    assert routes["submit"].call_count == 2
+    jobs = list((await session.execute(select(ParseJob))).scalars())
+    assert len(jobs) == 2 and len({job.resource_id for job in jobs}) == 2
 
 
 @respx.mock
@@ -428,8 +433,11 @@ async def test_resubmit_after_failure_is_not_instantly_expired(actor_client, ses
     job.created_at = utcnow() - timedelta(seconds=settings.result_ttl + 3600)
     await session.commit()
 
-    again = await _upload(actor_client)
-    assert again["id"] == document["id"]
+    again = await actor_client.post(
+        f"/api/documents/{document['id']}/reparse?resource_id={job.resource_id}",
+        json={"engine": job.engine, "options": job.options})
+    assert again.status_code == 202, again.text
+    assert again.json()["id"] == job.id
 
     stats = await reconcile_once(db.get_sessionmaker(), app_state.storage,
                                  app_state.service_client, app_state.http)
@@ -546,39 +554,19 @@ async def test_file_token_must_be_valid(client):
 
 
 @respx.mock
-async def test_corpus_is_shared_between_users(actor_client, client):
-    """**语料是整个部署共享的** —— 这条用例在 1b 里被整个反转过来。
-
-    改之前它断言的是"别人的文档看不见（404）"。plan.md §2 已定 2 之后，
-    一次部署 = 一份语料 = 一个知识库：账号层只管认证 / 计量 / 限速，**不管授权**。
-    所以另一个账号必须能看见、能读、能问。
-
-    留着这条反转记录是有意的：谁哪天把可见性过滤加回去，这里立刻会红，
-    而红的时候能从这段说明看到"这不是 bug，是产品决定"。
-    """
+async def test_private_corpus_is_not_shared_between_users(actor_client, client):
+    """v3 I07 supersedes the old shared-read decision: new uploads default private."""
     _mock_service()
     document_id = (await _upload(actor_client))["id"]
-
     headers = as_actor("actor-bob")
-
-    resp = await client.get(f"/api/documents/{document_id}", headers=headers)
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["id"] == document_id
-
-    # 列表里也要有 —— 不是"知道 id 就能访问"，是真的在他的文档库里
+    assert (await client.get(f"/api/documents/{document_id}", headers=headers)).status_code == 404
     listed = await client.get("/api/documents", headers=headers)
-    assert listed.status_code == 200
-    assert document_id in [d["id"] for d in listed.json()]
+    assert listed.status_code == 200 and listed.json() == []
 
 
 @respx.mock
-async def test_second_uploader_reuses_the_parse_and_is_recorded(actor_client, client, session):
-    """同一份文件第二个人再传：**命中已有解析，不产生第二个 parse_job**；
-    但"他也传过"要记下来。
-
-    这是全局去重的核心收益 —— 以前两个人传同一份手册 = 两次解析 + 两次索引 +
-    两套 embedding，而 GPU 是按小时租的。
-    """
+async def test_second_uploader_has_independent_parse_and_is_recorded(actor_client, client, session):
+    """Shared bytes retain distinct revocable assets and in-flight parse attempts."""
     from sqlalchemy import func, select as sa_select
 
     from ddp_corpus.models import Document, DocumentUpload, ParseJob
@@ -597,7 +585,7 @@ async def test_second_uploader_reuses_the_parse_and_is_recorded(actor_client, cl
         sa_select(func.count(Document.id))) == docs_before, "不该多出一份文档"
     assert await session.scalar(
         sa_select(func.count(ParseJob.id)).where(
-            ParseJob.document_id == document_id)) == jobs_before, "不该多出一次解析"
+            ParseJob.document_id == document_id)) == jobs_before + 1, "每个资源需要独立解析授权"
 
     uploaders = (await session.execute(
         sa_select(DocumentUpload.user_id).where(
@@ -606,36 +594,19 @@ async def test_second_uploader_reuses_the_parse_and_is_recorded(actor_client, cl
 
 
 @respx.mock
-async def test_only_uploader_or_admin_can_delete(actor_client, client, session):
-    """**全站唯一残留的授权**：删除权限。
-
-    非上传者删不掉（403，不是 404 —— 文档本来就是全员可见的，
-    装作不存在只会让人以为自己找错了 id）。管理员可以。
-    """
+async def test_only_resource_owner_can_delete_private_asset(actor_client, client, session):
+    """Organization role alone never grants another owner's private resource."""
     _mock_service()
     document_id = (await _upload(actor_client))["id"]
-
-    # 另一个人：没传过这份文档，角色也只是 contributor
-    headers = as_actor("actor-dave")
-
-    resp = await client.delete(f"/api/documents/{document_id}", headers=headers)
-    assert resp.status_code == 403, resp.text
-    assert resp.json()["error"]["code"] == "not_uploader"
-
-    # 看得见但删不掉 —— 两件事要分开
-    assert (await client.get(f"/api/documents/{document_id}", headers=headers)).status_code == 200
-
-    # **角色够了就能删。** 合仓前这条是改库里的 `is_admin` 布尔位；
-    # 现在角色由 control-api 下发，语料侧只看那一个头 —— 换个角色重发即可。
-    # 判据也从"是不是 admin"升级成"角色够不够"（reviewer 起），
-    # 加新角色时不必回来改这里
-    elevated = as_actor("actor-dave", role="reviewer")
-    assert (await client.delete(f"/api/documents/{document_id}",
-                                headers=elevated)).status_code == 204
+    for role in ("contributor", "reviewer", "admin"):
+        headers = as_actor("actor-dave", role=role)
+        assert (await client.delete(f"/api/documents/{document_id}", headers=headers)).status_code == 404
+        assert (await client.get(f"/api/documents/{document_id}", headers=headers)).status_code == 404
+    assert (await actor_client.delete(f"/api/documents/{document_id}")).status_code == 204
 
 
 @respx.mock
-async def test_soft_delete_keeps_usage_and_drops_chunks(actor_client, session, app_state):
+async def test_soft_delete_keeps_usage_and_hides_retained_content(actor_client, session, app_state):
     _mock_service(status="succeeded")
     document = await _upload(actor_client)
     await _callback(actor_client)
@@ -646,7 +617,7 @@ async def test_soft_delete_keeps_usage_and_drops_chunks(actor_client, session, a
     row = await session.get(Document, document["id"])
     await session.refresh(row)
     assert row.deleted_at is not None, "软删除：对象由 GC 回收，记录留痕"
-    assert (await session.execute(select(Chunk))).scalars().all() == []
+    assert (await actor_client.get("/api/search?q=正文")).json()["groups"] == []
     usage = await usage_events(session, "parse")
     assert len(usage) == 1, "账单不能因删文档而消失"
 
@@ -820,57 +791,46 @@ async def test_second_uploader_can_also_delete(actor_client, client, session):
 
 
 @respx.mock
-async def test_search_within_a_specific_document_is_not_user_scoped(actor_client, client):
-    """指定文档检索也不按用户收作用域。
-
-    验收变异实测：把 `routers/search.py` 里"指定文档"那条分支的归属判定加回去，
-    **没有任何用例变红** —— `test_corpus_is_shared_between_users` 只覆盖了
-    列表与详情。这条补上检索那一半。
-    """
+async def test_specific_document_search_requires_permission(actor_client, client):
+    """v3 I07: even a known document id cannot bypass the candidate ACL."""
     _mock_service()
     document_id = (await _upload(actor_client))["id"]
-
-    headers = as_actor("actor-searcher")
-    resp = await client.get(f"/api/search?q=test&doc={document_id}", headers=headers)
-    # 有没有命中不重要（索引可能还没建），**不能是 404 document_not_found**
-    assert resp.status_code == 200, resp.text
+    resp = await client.get(f"/api/search?q=test&doc={document_id}", headers=as_actor("actor-searcher"))
+    assert resp.status_code == 404, resp.text
 
 
 @respx.mock
-async def test_conversations_can_be_started_on_anyone_s_document(actor_client, client):
-    """对别人传的文档也能发起问答 —— 语料共享的直接含义。
-
-    同样是验收变异存活的一处：把 `conversations.py` 的归属判定加回去无人报警。
-    （会话**本身**仍然是个人产物，只有创建者看得见自己的会话，那条不变。）
-    """
+async def test_conversations_require_source_permission(actor_client, client):
+    """Private sources cannot enter another user's model context."""
     _mock_service()
     document_id = (await _upload(actor_client))["id"]
-
-    headers = as_actor("actor-asker")
-    resp = await client.post(f"/api/documents/{document_id}/conversations", headers=headers)
-    assert resp.status_code in (200, 201), resp.text
+    resp = await client.post(f"/api/documents/{document_id}/conversations", headers=as_actor("actor-asker"))
+    assert resp.status_code == 404, resp.text
 
 
 @respx.mock
 async def test_reparse_bills_the_person_who_asked_not_the_uploader(
         actor_client, client, session, app_state):
-    """**别人重新解析我的文档，页数不能记在我头上。**
-
-    语料共享之后（1b）任何人都能对任一文档点"换参数重解析"/"重建索引"，
-    而那是要花钱的（GPU 按小时租，页数是贵的那一项）。按 `uploaded_by` 记账
-    等于"谁传的谁买单" —— B 可以任意消耗 A 的额度，而 `/api/*` 这条路
-    **没有任何按发起人的限速**（限速中间件只覆盖 `/v1/*`）。
-
-    验收（1b 二次）指出这半虽然代码改对了却**零守卫**：把 `archive.py` 的
-    `job.initiated_by or document.uploaded_by` 退回成 `document.uploaded_by`，
-    150 个用例一个都没红。抽取那半有守卫，**页数这半没有**。
-    """
+    """A sole surviving asset owner pays for reparse, independent of first uploader."""
     _mock_service(status="succeeded")
     document = await _upload(actor_client)
     uploader_job = (await session.execute(select(ParseJob))).scalars().one()
     uploader_id = (await session.get(Document, document["id"])).uploaded_by
 
-    # 换个账号，对**别人的**文档换参数重解析
+    # The new owner verified the same bytes; delete the original asset so a legacy
+    # Document-wide reparse cannot alter another live asset's state.
+    from ddp_corpus.models import Resource, ResourceVersion, new_id
+    from tests.conftest import ORG
+    resource = await session.scalar(select(Resource).join(ResourceVersion).where(
+        ResourceVersion.document_id == document["id"]))
+    replacement = Resource(id=new_id(), owner_id="actor-reparser", uploaded_by="actor-reparser",
+                           organization_id=ORG, display_name="my verified upload")
+    session.add(replacement)
+    await session.flush()
+    session.add(ResourceVersion(resource_id=replacement.id, document_id=document["id"],
+        source_digest=DOC_ID, filename="own-copy.pdf"))
+    await session.commit()
+    assert (await actor_client.delete(f"/api/resources/{resource.id}")).status_code == 204
     headers = as_actor("actor-reparser")
     resp = await client.post(f"/api/documents/{document['id']}/reparse",
                              json={"engine": "borndigital", "options": {"scale": 3.0}},

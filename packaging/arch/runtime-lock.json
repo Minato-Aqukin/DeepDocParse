@@ -1,0 +1,89 @@
+{
+  "format": 1,
+  "python_major_minor": [
+    3,
+    14
+  ],
+  "machine": "x86_64",
+  "roots": [
+    "httpx",
+    "pypdfium2",
+    "pillow",
+    "fastapi",
+    "uvicorn"
+  ],
+  "distributions": {
+    "annotated-doc": {
+      "version": "0.0.5",
+      "payload_sha256": "943ef0f9db733a4dc89c9d3bd9f5cfa25b9febcd3976e128ac3d9674b89c4b91"
+    },
+    "annotated-types": {
+      "version": "0.8.0",
+      "payload_sha256": "d1a1142d7f1a717db36e8c7ede50d897bbd6e10c06f6a6957a500f5a9e882d86"
+    },
+    "anyio": {
+      "version": "4.15.0",
+      "payload_sha256": "82937cc4417ac88fad9f624e0516e8cbe740ab35b320ae9ac7dabd4a44cf5cc3"
+    },
+    "certifi": {
+      "version": "2026.7.22",
+      "payload_sha256": "b737065df6d2148514dbe4e873a45af7064c0b2479d4b0eac06b20f64a2961dc"
+    },
+    "click": {
+      "version": "8.5.0",
+      "payload_sha256": "15c86306a9aba11199a4e084fe8e529f256fcfa14394d654e8f9c8c02e766c58"
+    },
+    "fastapi": {
+      "version": "0.141.1",
+      "payload_sha256": "19928808d9c134e4fa84d9a48e98502306debbb99c82137aa266aeee94ba6c63"
+    },
+    "h11": {
+      "version": "0.16.0",
+      "payload_sha256": "2a511b383ae43880d92f5d4680b6ed8900bc928caf68f22b6762abda276bdbd7"
+    },
+    "httpcore": {
+      "version": "1.0.9",
+      "payload_sha256": "75ecc63d6ff5bd10450ec44842365e399d8cc27c9c92e901c344f6fc81f164c4"
+    },
+    "httpx": {
+      "version": "0.28.1",
+      "payload_sha256": "fbd96dae38e24244f8b0dea30cdf469bbf092b8e4d11fe5f11f6bbef20d91b22"
+    },
+    "idna": {
+      "version": "3.19",
+      "payload_sha256": "1c8c76311f97d8eb2704f5bc59b4fc04903d706e07c7482a8be8718e33516d57"
+    },
+    "pillow": {
+      "version": "12.3.0",
+      "payload_sha256": "15bec086cffa67bc0d8be52c51e28ddfa2a2c38ab3ea2fbdc09a3218d35b6fdf"
+    },
+    "pydantic": {
+      "version": "2.13.5",
+      "payload_sha256": "1a0888bc66c3657c58f8e479a654d9a684c762aff2a205fd3753a7e774c33faf"
+    },
+    "pydantic-core": {
+      "version": "2.46.5",
+      "payload_sha256": "c335369e5cdb8515b017572ed51f1a20de3fa08aee31ddb5c1557a08d51bbe37"
+    },
+    "pypdfium2": {
+      "version": "5.13.0",
+      "payload_sha256": "458b6a0ea4e856b02ab971a993e55fa398f188b848a571f11b6cee8e2955c0ab"
+    },
+    "starlette": {
+      "version": "1.6.0",
+      "payload_sha256": "b835fb0b6ebdfe62aedd80933f0d2a91f1d06bd486c0350b04924af5c4ccffd4"
+    },
+    "typing-extensions": {
+      "version": "4.16.0",
+      "payload_sha256": "a144528591da1aec01576246e475b8e5888bbfba9c923b2d7fbbfd754f10774f"
+    },
+    "typing-inspection": {
+      "version": "0.4.4",
+      "payload_sha256": "7b72a22247243821e905fdde9b490e23a00ae50e1b1e2b0897f53f64b17dbf56"
+    },
+    "uvicorn": {
+      "version": "0.52.4",
+      "payload_sha256": "1e371ce5b87bef0b3a478443b2caeb327c6825d3a19246631b4694e69f421246"
+    }
+  }
+}

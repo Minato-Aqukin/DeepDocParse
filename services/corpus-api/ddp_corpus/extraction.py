@@ -20,13 +20,14 @@
 import asyncio
 import base64
 import json
-import re
 from dataclasses import dataclass, field as dc_field
+from collections.abc import Awaitable, Callable
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_corpus.config import rerank_config, settings
+from ddp_corpus.errors import APIError
 from ddp_corpus.crops import get_or_create_crop
 from ddp_core.extract_format import (
     CoerceError, FieldSpec, SchemaSpec, coerce_value, field_result, overall_status,
@@ -89,7 +90,9 @@ class ExtractOutcome:
 class ExtractContext:
     def __init__(self, *, session: AsyncSession, index: SearchIndex, http: httpx.AsyncClient,
                  storage: Storage, document: Document, job: ParseJob | None,
-                 actor_id: str, verify: bool | None = None):
+                 actor_id: str, verify: bool | None = None,
+                 authorize: Callable[[], Awaitable[None]] | None = None,
+                 authorized_parse_job_ids: list[str] | None = None):
         self.session = session
         self.index = index
         self.http = http
@@ -97,6 +100,8 @@ class ExtractContext:
         self.document = document
         self.job = job
         self.actor_id = actor_id
+        self._authorize = authorize
+        self.authorized_parse_job_ids = authorized_parse_job_ids
         self.verify = settings.extract_verify if verify is None else verify
         self.usage = {"fields": 0, "retrievals": 0, "chat_calls": 0, "verifications": 0}
         # 核对是有预算的：每次核对 = 一次渲染 + 一次视觉模型调用。
@@ -107,11 +112,16 @@ class ExtractContext:
         self._crop_cache: dict[tuple[str, int],
                               tuple[str | None, bool | None, bool]] = {}
 
+    async def check_access(self) -> None:
+        if self._authorize is not None:
+            await self._authorize()
+
 
 # ---------- 上游 ----------
 
 async def _chat(ctx: ExtractContext, prompt: str) -> str | None:
     """调 chat 端点。不可达/非 200 返回 None -> 字段判 error。"""
+    await ctx.check_access()
     ctx.usage["chat_calls"] += 1
     try:
         request = chat_request(ctx.http, [
@@ -130,6 +140,7 @@ async def _chat(ctx: ExtractContext, prompt: str) -> str | None:
 
 async def _retrieve(ctx: ExtractContext, query: str, *, k: int,
                     prefer_types: tuple[str, ...] = ()) -> tuple[list[Hit], str | None]:
+    await ctx.check_access()
     ctx.usage["retrievals"] += 1
     degraded = None
     try:
@@ -142,11 +153,13 @@ async def _retrieve(ctx: ExtractContext, query: str, *, k: int,
     candidates = max(settings.rerank_candidates if settings.rerank_enabled else k * 3, k)
     hits = await ctx.index.search(ctx.session, vector=vector, query=query,
                                   document_id=ctx.document.id,
+                                  authorized_parse_job_ids=ctx.authorized_parse_job_ids,
                                   limit=candidates, candidates=candidates,
                                   min_similarity=settings.qa_min_similarity)
     if not hits:
         return [], degraded or "no_hits"
 
+    await ctx.check_access()
     hits, rerank_degraded = await rerank_hits(ctx.http, query, hits, top_k=max(k, 1),
                                               cfg=rerank_config())
     degraded = degraded or rerank_degraded
@@ -233,6 +246,7 @@ async def _crop_and_verify(ctx: ExtractContext, hit: Hit) -> tuple[str | None, b
     用户看到的是一整表 `verified: false` 且没有任何解释 ——
     与"预算用完"长得一模一样。这正是「降级必须可见」要防的事。
     """
+    await ctx.check_access()
     cache_key = (hit.get("parse_job_id") or "", hit.get("seq") or 0)
     if cache_key in ctx._crop_cache:
         return ctx._crop_cache[cache_key]
@@ -252,6 +266,7 @@ async def _crop_and_verify(ctx: ExtractContext, hit: Hit) -> tuple[str | None, b
         attempted = True
         raw = await ctx.storage.get(key)
         uri = "data:image/png;base64," + base64.b64encode(raw).decode()
+        await ctx.check_access()
         consistent = await verify_parse_consistency(ctx.http, uri, hit["text"])
 
     ctx._crop_cache[cache_key] = (key, consistent, attempted)
@@ -439,6 +454,8 @@ async def run(ctx: ExtractContext, spec: SchemaSpec) -> ExtractOutcome:
         async with semaphore:
             try:
                 return field.name, await extract_field(ctx, field)
+            except APIError:
+                raise  # permission revocation aborts this task; it is not an empty field
             except Exception:   # noqa: BLE001
                 # **一个字段的意外不能丢掉整批已经抽好的字段。**
                 # gather 默认在第一个异常处抛出，其余协程的结果直接作废 ——
@@ -448,7 +465,15 @@ async def run(ctx: ExtractContext, spec: SchemaSpec) -> ExtractOutcome:
                 return field.name, field_result(status="error",
                                                 degraded="upstream_error")
 
-    result = dict(await asyncio.gather(*(one(f) for f in fields)))
+    tasks = [asyncio.create_task(one(f)) for f in fields]
+    try:
+        result = dict(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     return ExtractOutcome(fields=result, status=overall_status(result, spec),
                           degraded=rollup_degraded(result.values()), usage=ctx.usage)
 

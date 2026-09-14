@@ -1,0 +1,355 @@
+# 联邦契约夹具清单 —— 由 scripts/check_federation_contracts.py 读取。
+#
+# 每个反例（expect: invalid）必须声明 `violates`（出错的实例路径），
+# 路径为 `$` 的还要声明 `violates_message`。**理由**：一个反例夹具如果因为
+# 拼错字段名而被拒绝，它看起来是绿的，但它量的不是目标规则 ——
+# 这个项目在 docs/refactor/FINDINGS.md 里记过好几次这种假守卫。
+#
+# `because` 是给人读的：这条反例守的是计划里的哪一句。
+
+# ============================================================ discovery
+- {fixture: valid/node-descriptor.json,           schema: ddp-discovery/v1.json, def: NodeDescriptor,        expect: valid}
+- {fixture: valid/capability-profile-ready.json,  schema: ddp-discovery/v1.json, def: CapabilityProfile,     expect: valid}
+- {fixture: valid/collection-descriptor.json,     schema: ddp-discovery/v1.json, def: CollectionDescriptor,  expect: valid}
+- {fixture: valid/route-record.json,              schema: ddp-discovery/v1.json, def: RouteRecord,           expect: valid}
+
+- fixture: invalid/capability-readiness-unknown-value.json
+  schema: ddp-discovery/v1.json
+  def: CapabilityProfile
+  expect: invalid
+  violates: $.readiness
+  violates_keyword: enum
+  because: |
+    readiness 只能取 capability_readiness 的五个值。这条**同时是注入机制自己的
+    体检**：x-ddp-enum 如果没被真的注入，schema 里就没有 enum 数组，
+    "healthy" 会畅通无阻 —— 于是所有枚举字段都退化成任意字符串。
+
+# ====================================================== scope & coverage
+- {fixture: valid/scope-manifest-sealed.json,     schema: ddp-scope-coverage/v1.json, def: ScopeManifest,  expect: valid}
+- {fixture: valid/scope-manifest-partial.json,    schema: ddp-scope-coverage/v1.json, def: ScopeManifest,  expect: valid}
+- {fixture: valid/coverage-entry-succeeded.json,  schema: ddp-scope-coverage/v1.json, def: CoverageEntry,  expect: valid}
+- {fixture: valid/coverage-entry-unsupported.json, schema: ddp-scope-coverage/v1.json, def: CoverageEntry, expect: valid}
+- {fixture: valid/coverage-ledger-exhaustive-complete.json, schema: ddp-scope-coverage/v1.json, def: CoverageLedger, expect: valid}
+- {fixture: valid/coverage-ledger-fast-partial.json,        schema: ddp-scope-coverage/v1.json, def: CoverageLedger, expect: valid}
+
+- fixture: invalid/scope-sealed-with-unexpanded.json
+  schema: ddp-scope-coverage/v1.json
+  def: ScopeManifest
+  expect: invalid
+  violates: $.unexpanded_subtrees
+  violates_keyword: maxItems
+  because: §5.5 —— 封存的范围不许还留着未展开子域。把无法展开当成空目录，等于用"那里没有资料"冒充"我没能去看"。
+
+- fixture: invalid/coverage-succeeded-without-receipt.json
+  schema: ddp-scope-coverage/v1.json
+  def: CoverageEntry
+  expect: invalid
+  violates: $
+  violates_message: "'probe_receipts' is a required property"
+  because: §7.4 —— 「仅有失败原因被记录不算搜索成功」的反面：仅有成功标记也不算，要有回执与实际索引版本。
+
+- fixture: invalid/coverage-unsupported-without-basis.json
+  schema: ddp-scope-coverage/v1.json
+  def: CoverageEntry
+  expect: invalid
+  violates: $
+  violates_message: "'exclusion_basis' is a required property"
+  because: §7.3 —— 只有可核验依据才能记 unsupported；能力元数据过期/缺失算未知。否则"排除"会变成免费的完成率来源。
+
+- fixture: invalid/coverage-fast-claims-complete.json
+  schema: ddp-scope-coverage/v1.json
+  def: CoverageLedger
+  expect: invalid
+  violates: $.retrieval_completeness
+  violates_keyword: not
+  because: |
+    §7.2 —— **整份契约里最重要的一条机器约束**。快速模式只完成了自己选中的候选，
+    不能因为 selected candidate 全成功就显示全 scope 已查完。
+    这条夹具刻意把 counts.incomplete 设成 0，好让它**只**触发 fast 这一条规则；
+    否则它会同时撞上"complete 要求 incomplete==0"，就量不清是哪条在拦。
+
+- fixture: invalid/coverage-complete-without-sealed.json
+  schema: ddp-scope-coverage/v1.json
+  def: CoverageLedger
+  expect: invalid
+  violates: $.enumeration_state
+  violates_keyword: const
+  because: §7.4 判据① —— 枚举没封上就没有分母，没有分母不存在"全部查完"。
+
+- fixture: invalid/coverage-complete-with-incomplete-count.json
+  schema: ddp-scope-coverage/v1.json
+  def: CoverageLedger
+  expect: invalid
+  violates: $.counts.incomplete
+  violates_keyword: const
+  because: §7.4 判据③ —— 有在途/未尝试/超时/拒绝/撤销的目标时不许写 complete。
+
+# ========================================================= task & probe
+- {fixture: valid/exploration-consent-listed.json,     schema: ddp-task-probe/v1.json, def: ExplorationConsent, expect: valid}
+- {fixture: valid/exploration-consent-local-only.json, schema: ddp-task-probe/v1.json, def: ExplorationConsent, expect: valid}
+- {fixture: valid/task-spec-exhaustive.json,           schema: ddp-task-probe/v1.json, def: TaskSpec,           expect: valid}
+- {fixture: valid/probe-evidence-succeeded.json,       schema: ddp-task-probe/v1.json, def: ProbeResult,        expect: valid}
+- {fixture: valid/probe-evidence-partial.json,         schema: ddp-task-probe/v1.json, def: ProbeResult,        expect: valid}
+- {fixture: valid/probe-with-offer.json,               schema: ddp-task-probe/v1.json, def: ProbeResult,        expect: valid}
+
+- fixture: invalid/consent-local-only-with-payload.json
+  schema: ddp-task-probe/v1.json
+  def: ExplorationConsent
+  expect: invalid
+  violates: $.allowed_payload
+  violates_keyword: maxItems
+  because: I03 —— 本地模式禁止自动外发。local_only 却允许外发问题的许可对象是自相矛盾的，而这种矛盾在运行时的表现是"本地模式偷偷外发"。
+
+- fixture: invalid/consent-local-only-with-budget.json
+  schema: ddp-task-probe/v1.json
+  def: ExplorationConsent
+  expect: invalid
+  violates: $.budget.max_egress_bytes
+  violates_keyword: const
+  because: I03 —— 非零外发预算等于给自动回退留了口子。§6.2：local_only 高于所有自动回退。
+
+- fixture: invalid/consent-listed-without-recipients.json
+  schema: ddp-task-probe/v1.json
+  def: ExplorationConsent
+  expect: invalid
+  violates: $.allowed_recipients
+  violates_keyword: minItems
+  because: 空接收方列表配非空 payload 等于"允许发给任何人"。
+
+- fixture: invalid/task-spec-exhaustive-without-scope.json
+  schema: ddp-task-probe/v1.json
+  def: TaskSpec
+  expect: invalid
+  violates: $.resource_scope
+  violates_message: "'scope_ref' is a required property"
+  because: §7.3 —— 范围先由 ScopeManifest 枚举并封存。没有 scope_ref 的 exhaustive_scope 没有分母，是一句空话。
+
+- fixture: invalid/task-spec-local-with-federation-scope.json
+  schema: ddp-task-probe/v1.json
+  def: TaskSpec
+  expect: invalid
+  violates: $.resource_scope.kind
+  violates_keyword: not
+  because: I03 的结构化表达 —— execution_policy=local_only 不得引用联邦范围。
+
+- fixture: invalid/task-spec-old-protocol.json
+  schema: ddp-task-probe/v1.json
+  def: TaskSpec
+  expect: invalid
+  violates: $.protocol
+  violates_keyword: const
+  because: 兼容性 —— 旧协议版本（ddp-task/0）必须被拒（runtime 侧 `plans.validate_spec` 抛 protocol_incompatible），不许按新协议字段执行。
+
+- fixture: invalid/probe-internal-limit-claims-success.json
+  schema: ddp-task-probe/v1.json
+  def: ProbeResult
+  expect: invalid
+  violates: $.retrieval.status
+  violates_keyword: const
+  because: T85 / §6.4 —— 内部有分片失败却在外层写 completed，是"覆盖诚实性"指标要求为 0 的那类错误。
+
+- fixture: invalid/probe-evidence-without-retrieval.json
+  schema: ddp-task-probe/v1.json
+  def: ProbeResult
+  expect: invalid
+  violates: $
+  violates_message: "'retrieval' is a required property"
+  because: §6.4 —— 证据探测要实际执行受限检索，默认不是让节点先生成一个无出处答案。
+
+- fixture: invalid/offer-claims-reservation.json
+  schema: ddp-task-probe/v1.json
+  def: ProbeResult
+  expect: invalid
+  violates: $.offer.reservation
+  violates_keyword: const
+  because: §6.6 —— Offer 只是短时意向，不默认占 GPU。这条挡的是"顺手把 reservation 改成 true"。
+
+# ==================================================== plan & admission
+- {fixture: valid/task-plan-approved-split.json, schema: ddp-plan-admission/v1.json, def: TaskPlan,          expect: valid}
+- {fixture: valid/execution-consent.json,        schema: ddp-plan-admission/v1.json, def: ExecutionConsent,  expect: valid}
+- {fixture: valid/admission-accepted.json,       schema: ddp-plan-admission/v1.json, def: AdmissionReceipt,  expect: valid}
+- {fixture: valid/admission-waiting-input.json,  schema: ddp-plan-admission/v1.json, def: AdmissionReceipt,  expect: valid}
+
+- fixture: invalid/plan-approved-without-consent.json
+  schema: ddp-plan-admission/v1.json
+  def: TaskPlan
+  expect: invalid
+  violates: $.execution_consent_ref
+  violates_keyword: type
+  because: §6.2 —— 没有 ExecutionConsent 的 approved 计划就是"利用后台规划扩大边界"那个漏洞本身。
+
+- fixture: invalid/admission-accepted-metadata-only.json
+  schema: ddp-plan-admission/v1.json
+  def: AdmissionReceipt
+  expect: invalid
+  violates: $.input_validation
+  violates_keyword: const
+  because: T78 —— 只看文件描述就放进 admission，等于信任客户端声明的哈希。本项目在直传上传那里踩过同一个坑（upload_status 的 verifying 不能跳过）。
+
+- fixture: invalid/admission-accepted-without-verified-input.json
+  schema: ddp-plan-admission/v1.json
+  def: AdmissionReceipt
+  expect: invalid
+  violates: $.verified_input_manifest_digest
+  violates_keyword: type
+  because: §6.6 —— 受理时要重新检查输入版本，没有已校验摘要就没有受理的依据。
+
+- fixture: invalid/admission-waiting-with-verified-input.json
+  schema: ddp-plan-admission/v1.json
+  def: AdmissionReceipt
+  expect: invalid
+  violates: $.verified_input_manifest_digest
+  violates_keyword: type
+  because: 还在等输入却已有校验摘要是自相矛盾的状态；waiting_input 阶段不得占 GPU。
+
+# =========================================================== evidence
+- {fixture: valid/evidence-source.json,                 schema: ddp-evidence/v1.json, def: FederatedEvidence, expect: valid}
+- {fixture: valid/evidence-generated.json,              schema: ddp-evidence/v1.json, def: FederatedEvidence, expect: valid}
+- {fixture: valid/federated-answer-cited.json,          schema: ddp-evidence/v1.json, def: FederatedAnswer,   expect: valid}
+- {fixture: valid/federated-answer-insufficient.json,   schema: ddp-evidence/v1.json, def: FederatedAnswer,   expect: valid}
+- {fixture: valid/delivery-confirmed.json,              schema: ddp-evidence/v1.json, def: DeliveryReceipt,   expect: valid}
+- {fixture: valid/delivery-expired.json,                schema: ddp-evidence/v1.json, def: DeliveryReceipt,   expect: valid}
+
+- fixture: invalid/evidence-old-schema.json
+  schema: ddp-evidence/v1.json
+  def: FederatedEvidence
+  expect: invalid
+  violates: $.schema
+  violates_keyword: const
+  because: 兼容性 —— 旧版本证据（ddp-evidence/0）必须整体拒收，绝不许按新版本字段猜读。runtime 里对应 `bundle._validate_evidence` 的 schema 分支（bundle_schema_unsupported）。
+
+- fixture: invalid/evidence-generated-without-derived-from.json
+  schema: ddp-evidence/v1.json
+  def: FederatedEvidence
+  expect: invalid
+  violates: $.derived_from
+  violates_keyword: type
+  because: 既有第三条不变式 —— 生成物的引用最终仍要指回原始原子。一条 generated 而 derived_from 为空的证据，是"生成 Wiki 制造自证循环"的最小单元。
+
+- fixture: invalid/evidence-source-with-derived-from.json
+  schema: ddp-evidence/v1.json
+  def: FederatedEvidence
+  expect: invalid
+  violates: $.derived_from
+  violates_keyword: type
+  because: 判据是"derived_from 是否为空"，两个字段互相矛盾时这个判据就失效了。
+
+- fixture: invalid/evidence-bbox-without-page-size.json
+  schema: ddp-evidence/v1.json
+  def: FederatedEvidence
+  expect: invalid
+  violates: $.locator
+  violates_message: "'page_size' is a required property"
+  because: 迁移 0007 的原注释 —— 缺 page_size 遇到 CropBox 偏移/旋转页会裁错区域，而"出处图对不上原文"是最恶劣的错。
+
+- fixture: invalid/answer-insufficient-with-bindings.json
+  schema: ddp-evidence/v1.json
+  def: FederatedAnswer
+  expect: invalid
+  violates: $.claim_evidence_bindings
+  violates_keyword: maxItems
+  because: T38 / T86 / §7.6 —— 证据不足时要如实说不足，不能伪造引用或把模型知识说成资料结论。
+
+- fixture: invalid/answer-degraded-unknown-value.json
+  schema: ddp-evidence/v1.json
+  def: FederatedAnswer
+  expect: invalid
+  violates: $.degraded
+  violates_keyword: enum
+  because: |
+    联邦侧复用既有 degraded 枚举，不另立一套降级词汇。这条也验证了
+    x-ddp-enum 对 nullable 字段（[string, null]）同样注入了取值 ——
+    否则 degraded 会退化成任意字符串，而"降级必须可见"是第二条不变式。
+
+- fixture: invalid/delivery-confirmed-without-verification.json
+  schema: ddp-evidence/v1.json
+  def: DeliveryReceipt
+  expect: invalid
+  violates: $.verified_at
+  violates_keyword: type
+  because: T29 —— confirmed 只能由本地校验过 manifest 与文件之后发出，否则"已交付"只是个没有依据的乐观标记。
+
+- fixture: invalid/delivery-expired-but-persistent.json
+  schema: ddp-evidence/v1.json
+  def: DeliveryReceipt
+  expect: invalid
+  violates: $.retention
+  violates_keyword: not
+  because: §8.3 原文 —— TTL 到期导致未领取结果失效时，界面上不得仍然显示"已保存本地"。
+
+# =========================================================== resource
+- {fixture: valid/resource-owned.json,                   schema: ddp-resource/v1.json, def: Resource,        expect: valid}
+- {fixture: valid/resource-copied.json,                  schema: ddp-resource/v1.json, def: Resource,        expect: valid}
+- {fixture: valid/resource-version-v1.json,              schema: ddp-resource/v1.json, def: ResourceVersion, expect: valid}
+- {fixture: valid/resource-version-shared-content.json,  schema: ddp-resource/v1.json, def: ResourceVersion, expect: valid}
+- {fixture: valid/upload-event.json,                     schema: ddp-resource/v1.json, def: UploadEvent,     expect: valid}
+
+- fixture: invalid/resource-unknown-publication.json
+  schema: ddp-resource/v1.json
+  def: Resource
+  expect: invalid
+  violates: $.publication
+  violates_keyword: enum
+  because: publication 只能取 publishing_state 的四个值。"public" 不在表里 —— 发布范围是有授权含义的，多一个词就是多一种没人检查的状态。
+
+- fixture: invalid/resource-version-zero.json
+  schema: ddp-resource/v1.json
+  def: ResourceVersion
+  expect: invalid
+  violates: $.version_no
+  violates_keyword: minimum
+  because: 版本号 1 基。允许 0 会让"第一版"有两种写法，而固定版本引用靠它对齐。
+
+- fixture: invalid/upload-event-bad-digest.json
+  schema: ddp-resource/v1.json
+  def: UploadEvent
+  expect: invalid
+  violates: $.request_digest
+  violates_keyword: pattern
+  because: §4.1 —— 服务端校验输入摘要，不能直接信任客户端声明。收一个形状都不对的字符串等于没校验。
+
+# Bundle transfer: schema checks supplement real ZIP/bytes validation tests.
+- fixture: valid/bundle-manifest.json
+  schema: ddp-bundle/v1.json
+  def: BundleManifest
+  expect: valid
+- fixture: valid/bundle-original-missing.json
+  schema: ddp-bundle/v1.json
+  def: BundleManifest
+  expect: valid
+- fixture: invalid/bundle-new-schema.json
+  schema: ddp-bundle/v1.json
+  def: BundleManifest
+  expect: invalid
+  violates: "$.schema"
+- fixture: invalid/bundle-old-schema.json
+  schema: ddp-bundle/v1.json
+  def: BundleManifest
+  expect: invalid
+  violates: "$.schema"
+  because: 兼容性 —— 旧版本 Bundle（ddp-bundle/0）必须整体拒收；runtime 侧的 `bundle.validate_parts` 对非 ddp-bundle/1 一律 `bundle_schema_unsupported`，绝不部分导入。
+- fixture: invalid/bundle-required-feature.json
+  schema: ddp-bundle/v1.json
+  def: BundleManifest
+  expect: invalid
+  violates: "$.required_features"
+- fixture: invalid/bundle-unsafe-path.json
+  schema: ddp-bundle/v1.json
+  def: BundleManifest
+  expect: invalid
+  violates: "$.files[0].path"
+- fixture: invalid/bundle-missing-without-reason.json
+  schema: ddp-bundle/v1.json
+  def: BundleManifest
+  expect: invalid
+  violates: "$.source.missing_reason"
+
+# P4 persistent authorized directory pagination
+- {fixture: valid/member-snapshot-terminal.json, schema: ddp-discovery/v1.json, def: MemberSnapshotPage, expect: valid}
+- fixture: invalid/member-snapshot-false-terminal.json
+  schema: ddp-discovery/v1.json
+  def: MemberSnapshotPage
+  expect: invalid
+  violates: $.next_cursor
+  violates_keyword: const
+  because: 终止页不得同时声明还存在下一页。

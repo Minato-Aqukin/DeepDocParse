@@ -329,6 +329,147 @@ paths:
         "404": { description: 未注册 rerank 模型 }
         "502": { description: rerank 运行时不可达 }
 
+  /v1/capabilities:
+    get:
+      summary: 能力清单（注册表 + 当前健康，v1.2 新增；v1.3 加 model_channels）
+      description: |
+        只由 models.yaml 注册表与**当前**健康探测驱动 —— **注册不等于就绪**。
+        响应分成两半，分别回答两个不同的问题。
+
+        ### `profiles`：网关**自己执行**的 operation
+
+        只有三条，因为网关只有这三个端点：`/v1/parse` -> `doc.parse`、
+        `/v1/extract` -> `extract.fields`、`/v1/rerank` -> `rerank`。
+        编译、带出处的问答、Wiki、跨文档检索都住在 corpus-api，网关手上只有
+        模型通道 —— **把它们列进这里等于宣称网关会执行它们**，planner 会把活
+        派到一个只会转发 chat 的进程上。（v1.2 曾经这么做过：`doc.compile` /
+        `rag.answer.cited` / `wiki.pages` / `corpus.retrieve` 四条都在 profiles
+        里，其中 `doc.compile` 只凭"有个视觉模型"、`corpus.retrieve` 只凭
+        "embedding 健康"就报 ready，而后者与真正决定能否检索的 SQL 索引无关。）
+
+        `readiness` 是该 operation **全部依赖**的合并，最差者胜：
+
+        - 模型探测：只有 2xx 算数，401 / 404 / 重定向 / 超时都不是 ready；
+        - **OpenAI 协议的条目还要在 `/v1/models` 的 `data[].id` 里真找到本网关
+          会请求的那个 id**。200 只说明运行时活着，而 vLLM 只认自己
+          `--served-model-name` 的那一个 id，对不上时每一次真实请求都是 404；
+        - 解析与抽取是异步任务，受理第一步就要读 Redis 在途水位，
+          任务存储不通时模型再健康也受理不了；
+        - 进程内 CPU 解析（borndigital）没有远端可探，就绪性等于本进程。
+
+        候选按**真实选路**（`default_of` + 能力词）挑出唯一一个条目再探 ——
+        选路不看健康，所以"另有一个健康的兄弟条目"不能把死掉的默认条目救成
+        ready。一个候选都没有时该 operation 直接不出现（不编造 `configured`）。
+
+        ### `model_channels`：chat / embedding / rerank 通道的原料
+
+        **不是能力声明**，而是 corpus-api 组合语料侧就绪度用的原料：语料侧会
+        请求哪个 model 由**它自己的配置**决定（`CHAT_MODEL` 留空就是本网关的
+        default），所以必须由它按 `model` / `default` 去挑。`supports` 是派生
+        能力，不是注册表原词：`instruct` 的判据是**没写 `no_instruct`**（与
+        `services/extraction.py` 的选路一字不差，段名补出来的老条目照样算），
+        `vision` 的判据是写了 `vision`。两者不互相顶替 —— OCR 专用模型看得见
+        图但不听指令，拿它去抽值会抽出一堆假的 `not_found`。
+
+        `accepting_admissions` 恒为 false：admission 受理器尚未实现，能力就绪
+        不等于会接单（I06）。**队列满属于接单问题，不进 readiness。**
+
+        **`node_id` 不在本响应里** —— gateway 没有自治节点身份，由 control-api
+        消费 corpus 的 `/internal/capabilities` 时注入它自己的权威 node_id。
+        `engine_versions` 只在注册表显式给出模型标识（`adapter` / `options.model`）
+        时出现，不编造版本号；`limits` 只填真实配置项，**`doc.parse` 故意没有
+        `max_concurrency`**（`PARSE_QUEUE_MAX` 是在途水位上限而不是并发度，
+        契约的 limits 里没有队列深度这一项，报成并发度会误导 planner）。
+      operationId: listCapabilities
+      responses:
+        "200":
+          description: 能力清单
+          content:
+            application/json:
+              schema:
+                type: object
+                # 顶层也钉死：`gpu: true` 这类"看起来有用"的字段不许偷偷长出来，
+                # 契约里没有的东西消费方读不到，只会变成两边各写一份的开始
+                additionalProperties: false
+                required: [capability_status, profiles, model_channels]
+                properties:
+                  capability_status:
+                    type: string
+                    enum: [observed, unknown]
+                    description: observed = 本次真的探测过；unknown = 没有有效健康证据
+                  model_channels:
+                    type: array
+                    maxItems: 128
+                    description: |
+                      通道里**每个**注册条目的健康与派生能力。消费方按 `model`
+                      （自己指定了模型时）或 `default: true`（没指定时）去挑，
+                      不要按数组顺序猜。
+                    items:
+                      type: object
+                      required: [channel, model, profile, default, readiness, supports,
+                                 observed_at, valid_until]
+                      properties:
+                        channel: { type: string, enum: [chat, embedding, rerank] }
+                        model:
+                          type: string
+                          description: 真实请求里会填在 `model` 字段上的 id（可能来自 options.model / adapter）
+                        profile: { type: string, description: 注册表条目名 }
+                        default:
+                          type: boolean
+                          description: 调用方不指定 model 时会被选中的那个条目
+                        readiness:
+                          type: string
+                          enum: [configured, ready, draining, unhealthy, unknown]
+                        supports:
+                          type: object
+                          description: 派生能力（instruct / vision / dense / rerank），不是注册表原词
+                          additionalProperties: { type: boolean }
+                        limits:
+                          type: object
+                          properties:
+                            max_concurrency: { type: integer, minimum: 0 }
+                          additionalProperties: false
+                        observed_at: { type: string, format: date-time }
+                        valid_until: { type: string, format: date-time }
+                      additionalProperties: false
+                  profiles:
+                    type: array
+                    maxItems: 128
+                    description: 只含网关自己有端点的 operation
+                    items:
+                      type: object
+                      required: [schema, operation, readiness, accepting_admissions,
+                                 observed_at, valid_until]
+                      properties:
+                        schema: { type: string, const: "ddp-discovery/1#CapabilityProfile" }
+                        operation:
+                          type: string
+                          enum: [doc.parse, extract.fields, rerank]
+                        profile: { type: string, description: 真实选路会挑中的注册表条目名 }
+                        readiness:
+                          type: string
+                          enum: [configured, ready, draining, unhealthy, unknown]
+                        accepting_admissions: { type: boolean, const: false }
+                        engine_versions:
+                          type: object
+                          additionalProperties: { type: string }
+                        input_contract:
+                          type: object
+                          properties:
+                            formats: { type: array, items: { type: string } }
+                            max_bytes: { type: integer, minimum: 1 }
+                          additionalProperties: false
+                        limits:
+                          type: object
+                          properties:
+                            max_concurrency: { type: integer, minimum: 0 }
+                            max_candidates: { type: integer, minimum: 1 }
+                          additionalProperties: false
+                        observed_at: { type: string, format: date-time }
+                        valid_until: { type: string, format: date-time }
+                      additionalProperties: false
+        "401": { description: 缺少或错误的 service token }
+
   /healthz:
     get:
       summary: 存活探针

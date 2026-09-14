@@ -220,12 +220,13 @@ async def test_middle_submitter_of_a_three_way_share_is_still_billed(actor_clien
 
 
 @respx.mock
-async def test_status_query_is_a_plain_relay(actor_client):
+async def test_status_query_requires_an_authorized_record(actor_client):
     """状态查询不做任何记账，原样透传。"""
     route = respx.get(f"{SERVICE}/v1/parse/s-x").mock(
         return_value=httpx.Response(200, json={"task_id": "s-x", "status": "running",
                                                "progress": 0.5, "error": None}))
     resp = await actor_client.get("/v1/parse/s-x",
                                   headers=_api_key_actor(ACTOR, "key-a"))
-    assert resp.status_code == 200 and resp.json()["status"] == "running"
-    assert route.called
+    # An unowned opaque task id cannot bypass resource ACL through the gateway relay.
+    assert resp.status_code == 404
+    assert not route.called

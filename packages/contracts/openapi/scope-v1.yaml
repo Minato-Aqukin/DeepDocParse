@@ -1,0 +1,86 @@
+openapi: 3.1.0
+info:
+  title: DeepDocParse Persistent Scope API
+  version: 1.0.0
+  description: Caller-scoped frozen directory denominator. See ../ddp/scope-control-format.md.
+security: [{session: []}, {userKey: []}]
+paths:
+  /api/v1/federation/scopes:
+    post:
+      operationId: createScopeManifest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation]
+              additionalProperties: false
+              properties:
+                operation: {type: string, minLength: 1, maxLength: 100}
+                member_snapshot_id: {type: string, minLength: 1}
+                page_size: {type: integer, minimum: 1, maximum: 100, default: 50}
+                max_members: {type: integer, minimum: 1, maximum: 10000, default: 1000}
+                max_discovery_requests: {type: integer, minimum: 0, maximum: 10000, default: 64, description: Outbound peer directory request budget; exhaustion keeps observed targets and marks the scope partial}
+                max_remote_members: {type: integer, minimum: 0, maximum: 10000, default: 32, description: Distinct remote nodes contacted while expanding; exhaustion keeps observed targets and marks the scope partial}
+                ttl_seconds: {type: integer, minimum: 30, maximum: 3600, default: 900}
+      responses:
+        '201': {description: Persisted sealed or explicitly partial scope, content: {application/json: {schema: {$ref: '#/components/schemas/ScopeEnvelope'}}}}
+        '400': {description: Invalid options or caller-supplied authority fields}
+        '404': {description: Member snapshot unavailable to this credential}
+        '410': {description: Supplied member snapshot already expired; create a new member snapshot}
+  /api/v1/federation/scopes/{scope_id}:
+    get:
+      operationId: getScopeManifest
+      parameters: [{$ref: '#/components/parameters/ScopeId'}]
+      responses:
+        '200': {description: Retained frozen metadata with current expiry state, content: {application/json: {schema: {$ref: '#/components/schemas/ScopeEnvelope'}}}}
+        '404': {description: Scope unavailable to this credential}
+  /api/v1/federation/scopes/{scope_id}/targets:
+    get:
+      operationId: getScopeTargets
+      parameters:
+        - {$ref: '#/components/parameters/ScopeId'}
+        - {name: cursor, in: query, schema: {type: string}}
+      responses:
+        '200': {description: Stable target page and live revocation overlay, content: {application/json: {schema: {$ref: '#/components/schemas/ScopeTargetPage'}}}}
+        '404': {description: Scope or cursor unavailable to this credential}
+components:
+  securitySchemes:
+    session: {type: http, scheme: bearer}
+    userKey: {type: http, scheme: bearer}
+  parameters:
+    ScopeId: {name: scope_id, in: path, required: true, schema: {type: string}}
+  schemas:
+    ScopeEnvelope:
+      type: object
+      required: [manifest, first_cursor, terminal_cursor, total_targets, content_snapshot, expired, effective_enumeration_state]
+      additionalProperties: false
+      properties:
+        manifest: {$ref: '../schemas/ddp-scope-coverage/v1.json#/$defs/ScopeManifest'}
+        first_cursor: {type: string}
+        terminal_cursor: {type: string}
+        total_targets: {type: integer, minimum: 0}
+        content_snapshot: {const: not_frozen}
+        expired: {type: boolean}
+        effective_enumeration_state: {type: string}
+    ScopeTargetPage:
+      type: object
+      required: [scope_id, manifest_digest, targets, next_cursor, complete, total_targets, expired]
+      additionalProperties: false
+      properties:
+        scope_id: {type: string}
+        manifest_digest: {type: string}
+        targets:
+          type: array
+          items:
+            type: object
+            required: [target_key, state]
+            additionalProperties: false
+            properties:
+              target_key: {$ref: '../schemas/ddp-scope-coverage/v1.json#/$defs/TargetKey'}
+              state: {type: string}
+        next_cursor: {type: [string, 'null']}
+        complete: {type: boolean}
+        total_targets: {type: integer, minimum: 0}
+        expired: {type: boolean}

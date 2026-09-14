@@ -26,10 +26,14 @@ from ddp_corpus.config import assert_secrets_configured, settings
 from ddp_corpus.db import get_engine, get_sessionmaker
 from ddp_corpus.errors import install_error_handlers
 from ddp_corpus.outbox import deliver_loop
-from ddp_corpus.reconcile import reconcile_loop
+from ddp_corpus.reconcile import reconcile_loop, sweep_federation_loop
 from ddp_corpus.routers import (
-    conversations, documents, external, extractions, internal, knowledge, search,
+    conversations, documents, external, extractions, internal, knowledge, search, file_access, resources, bundles, mcp_tools,
 )
+from ddp_corpus.routers import client as client_router
+from ddp_corpus.routers import collections as collections_router
+from ddp_corpus.routers import federation as federation_router
+from ddp_corpus.routers import tasks as tasks_router
 from ddp_core.search import PgVectorIndex
 from ddp_core.tokenize import backend as tokenize_backend
 from ddp_corpus.service_client import ServiceClient, new_http_client
@@ -78,8 +82,15 @@ async def lifespan(app: FastAPI):
     app.state.outbox_deliverer = asyncio.create_task(
         deliver_loop(get_sessionmaker(), app.state.http)
     )
+    # 联邦回收清扫：过期租约的执行/卡死的协调任务落显式失败。**没有它**，
+    # worker 崩溃后执行行会永远停在 running，而"还在跑"与"已经死了"在界面上
+    # 长得一模一样（企业边界 7 的第二半）。
+    app.state.federation_sweeper = asyncio.create_task(
+        sweep_federation_loop(get_sessionmaker(), app.state.redis)
+    )
     yield
-    for task in (app.state.reconciler, app.state.outbox_deliverer):
+    for task in (app.state.reconciler, app.state.outbox_deliverer,
+                 app.state.federation_sweeper):
         task.cancel()
         try:
             await task
@@ -100,8 +111,21 @@ install_error_handlers(app)
 app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
 app.include_router(conversations.router, prefix="/api", tags=["qa"])
 app.include_router(search.router, prefix="/api", tags=["search"])
+app.include_router(bundles.router, tags=["bundles"])
+app.include_router(resources.router, prefix="/api/resources", tags=["resources"])
+app.include_router(resources.router, prefix="/api/v1/resources", tags=["resources"])
 app.include_router(extractions.router, prefix="/api", tags=["extractions"])
 app.include_router(knowledge.router, prefix="/api", tags=["knowledge"])
+app.include_router(file_access.router, tags=["internal"])
+app.include_router(mcp_tools.router, tags=["mcp"])
+app.include_router(client_router.router, tags=["client"])
+app.include_router(collections_router.router, tags=["collections"])
+# 联邦执行者面：probe / admission / task / locate / resolve。**只对内网 + peer
+# 凭据开放**，不进 control 的 corpusPrefixes（见 routers/federation.py）
+app.include_router(federation_router.router, tags=["federation"])
+# P5 协调者入口面（task-intents/plans/tasks/deliveries）。**走入口鉴权**，
+# 由 control-api 按 corpusPrefixes 转发；节点面在 routers/federation.py。
+app.include_router(tasks_router.router, tags=["federation-tasks"])
 app.include_router(internal.router, tags=["internal"]) # /internal/* 回调与事件
 # 对外解析平面在语料侧的那一半：它会在语料里留下 Document 与 ParseJob，
 # 而那两张表 Go 一个字都写不了。**只有 /v1/parse\*** —— 其余 /v1/* 是纯算力，

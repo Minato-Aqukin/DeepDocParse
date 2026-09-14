@@ -40,6 +40,8 @@ from ddp_corpus.config import settings
 from ddp_corpus.db import get_session
 from ddp_corpus.deps import Actor, current_actor
 from ddp_corpus.errors import APIError
+from ddp_corpus.policy import require_document, visible_document_condition
+from ddp_corpus.resources import create_asset
 from ddp_corpus.ingest import options_hash
 from ddp_corpus.models import Document, DocumentUpload, ParseJob, UsageClaim, new_id
 from ddp_corpus.usage import record_usage
@@ -104,7 +106,19 @@ async def submit(request: Request, actor: Actor = Depends(current_actor),
     第三方的文件在他们自己那儿，本服务**不下载、不归档**，
     `object_key` 留空标识"外部任务"。
     """
+    if actor.principal_id is None:
+        raise APIError(403, "verified user identity is required", "permission_error", "resource_permission_required")
     body = await request.body()
+    try:
+        payload = json.loads(body)
+    except (ValueError, TypeError):
+        raise APIError(400, "invalid request body", "invalid_request_error", "invalid_json")
+    # External cache keys are scoped to the verified subject, including URL-only submissions.
+    # A guessed content hash must never return another subject's gateway cache entry.
+    source_identity = str(payload.get("doc_id") or payload.get("file_url") or "")
+    payload["doc_id"] = hashlib.sha256(json.dumps(["external", actor.organization_id,
+        actor.principal_id, source_identity]).encode()).hexdigest()
+    body = json.dumps(payload).encode()
     http: httpx.AsyncClient = request.app.state.http
     try:
         upstream = await http.post(f"{settings.service_url}/v1/parse",
@@ -144,7 +158,7 @@ async def _record_external_job(session: AsyncSession, actor: Actor, body: bytes,
     )).scalar_one_or_none()
     if document is None:
         document = Document(
-            id=new_id(), uploaded_by=actor.id, organization_id=actor.organization_id,
+            id=new_id(), uploaded_by=actor.principal_id, organization_id=actor.organization_id,
             doc_id=doc_id, origin="external",
             filename=PurePosixPath(urlparse(file_url).path).name or "remote-document",
             object_key="")     # 外部任务：文件在调用方那儿，本层不下载不归档
@@ -155,29 +169,36 @@ async def _record_external_job(session: AsyncSession, actor: Actor, body: bytes,
     # `document_uploads`，于是**提交者自己删不掉自己提交的文档**（403）。
     if not await session.scalar(
             select(DocumentUpload.id).where(DocumentUpload.document_id == document.id,
-                                            DocumentUpload.user_id == actor.id).limit(1)):
+                                            DocumentUpload.user_id == actor.principal_id).limit(1)):
         try:
             async with session.begin_nested():
                 session.add(DocumentUpload(id=new_id(), document_id=document.id,
-                                           user_id=actor.id))
+                                           user_id=actor.principal_id))
         except IntegrityError:
             pass        # 并发下另一边先记上了，正是想要的结果
         await session.commit()
 
+    resource, version, _ = await create_asset(session, document=document,
+        actor_id=actor.principal_id, organization_id=actor.organization_id,
+        idempotency_key="external:" + str(service_task_id), filename=document.filename,
+        request_payload={"doc_id": doc_id, "engine": engine, "options": options})
     digest = options_hash(engine, options)
     job = (await session.execute(
         select(ParseJob).where(ParseJob.document_id == document.id,
+                               ParseJob.resource_id == resource.id,
                                ParseJob.options_hash == digest)
     )).scalar_one_or_none()
     if job is None:
         job = ParseJob(document_id=document.id, engine=engine, options=options,
-                       initiated_by=actor.id, options_hash=digest,
+                       initiated_by=actor.principal_id, resource_id=resource.id, options_hash=digest,
                        document_version=await next_document_version(session, document.id))
         session.add(job)
     job.api_key_id = actor.api_key_id
     job.service_task_id = service_task_id
     job.status = "pending"
     job.error = None
+    await session.flush()
+    version.parse_job_id = job.id
     await session.commit()
 
 
@@ -189,6 +210,22 @@ async def status_or_result(path: str, request: Request,
 
     结果是 JSON（不是流），缓冲它不额外花成本；页数在这里才第一次可见。
     """
+    task_id = path.split("/", 1)[0]
+    jobs = (await session.execute(select(ParseJob).join(Document).where(
+        ParseJob.service_task_id == task_id, visible_document_condition(actor)))).scalars().all()
+    permitted = False
+    for candidate in jobs:
+        try:
+            await require_document(session, actor, candidate.document_id,
+                                   resource_id=candidate.resource_id)
+        except APIError:
+            continue
+        permitted = True
+        break
+    if not permitted:
+        raise APIError(404, "parse job not found", "invalid_request_error", "job_not_found")
+    if not re.fullmatch(r"[^/]+(?:/result)?", path):
+        raise APIError(404, "parse job not found", "invalid_request_error", "job_not_found")
     url = f"{settings.service_url}/v1/parse/{path}"
     match = _RESULT_PATH.fullmatch(path)
     if match is None:
@@ -225,7 +262,7 @@ async def _meter_result(session: AsyncSession, actor: Actor, service_task_id: st
     # job —— 简单的 `rows[0]` 兜底会把 A 的解析算到 B 头上，而 A 从此永不被计费
     # （实测：A used_pages=0、B used_pages=3）。
     job = (next((j for j in rows if j.api_key_id and j.api_key_id == actor.api_key_id), None)
-           or next((j for j in rows if j.initiated_by == actor.id), None)
+           or next((j for j in rows if j.initiated_by == actor.principal_id), None)
            # **第三层兜底：他提交过吗？** 前两层只认得"最后一个提交者"
            # （`api_key_id` 每次提交都被覆盖）和"第一个发起人"
            # （`initiated_by` 只在建 job 时写）—— 三个人以上共享同一份外部文档时，
@@ -233,7 +270,7 @@ async def _meter_result(session: AsyncSession, actor: Actor, service_task_id: st
            # `document_uploads` 记的是"谁提交过"，正好补上这个洞；
            # 而没提交过的人不在那张表里，所以这一层不会重新打开
            # "拿别人的 task_id 白嫖结果"那个口子
-           or await _submitted_it(session, actor.id, rows))
+           or await _submitted_it(session, actor.principal_id, rows))
     if job is None:
         return
 

@@ -31,6 +31,9 @@ def _concurrency(kind: str) -> int:
         "index": settings.task_concurrency_index,
         "compile": settings.task_concurrency_compile,
         "extract": settings.task_concurrency_extract,
+        # 联邦协调与节点执行各一个池：协调者等本地执行时不会占满执行池
+        "federation_plan": settings.task_concurrency_federation_plan,
+        "federation_execute": settings.task_concurrency_federation_execute,
     }.get(kind, settings.task_concurrency_default)
 
 

@@ -27,8 +27,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 from ddp_core.models import (  # noqa: F401
     AgentTurn, Assertion, Base, Chunk, Citation, Document, DocumentUpload, Evidence,
     EvidenceVerification, GraphEdge, KnowledgeEntity, KnowledgeReview, ParseJob,
-    RetrievalCandidate, WikiEntry, WikiSection, WikiSentence,
+    Resource, ResourceVersion, RetrievalCandidate, UploadEvent,
+    WikiEntry, WikiSection, WikiSentence,
     as_aware, new_id, utcnow,
+)
+from ddp_corpus.client_models import ClientPage, ClientReceipt, ClientSnapshot, ClientView  # noqa: F401
+from ddp_corpus.collection_models import (  # noqa: F401
+    Collection, CollectionMember, CollectionReceipt, CollectionCatalogView,
+    CollectionCatalogSnapshot, CollectionCatalogPage,
 )
 
 
@@ -42,6 +48,7 @@ class Conversation(Base):
     actor_id: Mapped[str] = mapped_column(String(32), index=True)
     organization_id: Mapped[str] = mapped_column(String(32), default="", index=True)
     document_id: Mapped[str] = mapped_column(String(32), ForeignKey("documents.id"), index=True)
+    resource_id: Mapped[str | None] = mapped_column(String(32), default=None)
     title: Mapped[str] = mapped_column(String(200), default="新会话")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
@@ -122,6 +129,7 @@ class ExtractionRun(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     actor_id: Mapped[str] = mapped_column(String(32), index=True)
     organization_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+    resource_context: Mapped[dict] = mapped_column(JSON, default=dict)
     # 模板可以被删，run 不该跟着消失 —— 所以是可空的弱引用，真正的依据是 schema_json
     template_id: Mapped[str | None] = mapped_column(String(32), default=None)
     name: Mapped[str] = mapped_column(String(128), default="")
@@ -190,9 +198,13 @@ class Task(Base):
 
     ## 状态机
 
-        queued → claimed(generation, lease_until) → running → succeeded / failed
+        queued → claimed(generation, lease_until) → running → succeeded / failed / cancelled
                         │
                         └─ lease 过期后可被新 worker 接管
+
+    `cancelled` 是显式取消的终态（契约 task_status）：与 `failed` 分开，因为
+    "用户不想要了"和"系统做砸了"对用户是两件事。取消写 `queue.cancel`，
+    幂等 + generation 前移，迟到的成功/失败写不进来。
 
     ## 领取必须带 generation fencing
 
@@ -340,3 +352,95 @@ class ProcessedEvent(Base):
     # 处理结果的引用（如新建的 document_id），便于重投时直接返回同一个结果
     result_id: Mapped[str | None] = mapped_column(String(64), default=None)
     processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Wiki(Base):
+    """Actor-owned workflow; only pointers and publication state are mutable."""
+    __tablename__ = "wikis"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(String(32), index=True)
+    owner_id: Mapped[str] = mapped_column(String(32), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    current_revision_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    published_revision_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WikiRevision(Base):
+    __tablename__ = "wiki_revisions"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    wiki_id: Mapped[str] = mapped_column(String(32), ForeignKey("wikis.id"), index=True)
+    base_revision_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    kind: Mapped[str] = mapped_column(String(16), default="generated")
+    title: Mapped[str] = mapped_column(String(255))
+    created_by: Mapped[str] = mapped_column(String(32))
+    provider: Mapped[dict] = mapped_column(JSON, default=dict)
+    limits: Mapped[dict] = mapped_column(JSON, default=dict)
+    merge_conflicts: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WikiPage(Base):
+    __tablename__ = "wiki_pages"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    revision_id: Mapped[str] = mapped_column(String(32), ForeignKey("wiki_revisions.id"), index=True)
+    page_key: Mapped[str] = mapped_column(String(64))
+    position: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(255))
+    generated_sections: Mapped[list] = mapped_column(JSON, default=list)
+    human_paragraphs: Mapped[list] = mapped_column(JSON, default=list)
+    __table_args__ = (UniqueConstraint("revision_id", "page_key", name="uq_wiki_pages_key"),)
+
+
+class DependencyManifest(Base):
+    """Fixed identity/locator of an ORIGINAL evidence actually used by a page."""
+    __tablename__ = "wiki_dependencies"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    revision_id: Mapped[str] = mapped_column(String(32), ForeignKey("wiki_revisions.id"), index=True)
+    page_key: Mapped[str] = mapped_column(String(64))
+    resource_id: Mapped[str] = mapped_column(String(32), index=True)
+    source_version_id: Mapped[str] = mapped_column(String(32))
+    document_id: Mapped[str] = mapped_column(String(32))
+    source_digest: Mapped[str] = mapped_column(String(64))
+    parse_revision: Mapped[str] = mapped_column(String(32))
+    evidence_id: Mapped[str] = mapped_column(String(32), index=True)
+    excerpt_digest: Mapped[str] = mapped_column(String(64))
+    locator: Mapped[dict] = mapped_column(JSON, default=dict)
+    __table_args__ = (UniqueConstraint("revision_id", "page_key", "resource_id", "evidence_id",
+                                      name="uq_wiki_dependencies_binding"),)
+
+
+class ClaimEvidenceBinding(Base):
+    __tablename__ = "wiki_claim_bindings"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    revision_id: Mapped[str] = mapped_column(String(32), ForeignKey("wiki_revisions.id"), index=True)
+    page_key: Mapped[str] = mapped_column(String(64))
+    claim_id: Mapped[str] = mapped_column(String(32))
+    evidence_id: Mapped[str] = mapped_column(String(32))
+    excerpt_digest: Mapped[str] = mapped_column(String(64))
+    __table_args__ = (UniqueConstraint("revision_id", "claim_id", "evidence_id",
+                                      name="uq_wiki_claim_evidence"),)
+
+
+class WikiHumanEdit(Base):
+    __tablename__ = "wiki_human_edits"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    revision_id: Mapped[str] = mapped_column(String(32), ForeignKey("wiki_revisions.id"), index=True)
+    base_revision_id: Mapped[str] = mapped_column(String(32))
+    page_key: Mapped[str] = mapped_column(String(64))
+    actor_id: Mapped[str] = mapped_column(String(32))
+    before: Mapped[list] = mapped_column(JSON, default=list)
+    after: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WikiWriteKey(Base):
+    __tablename__ = "wiki_write_keys"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(String(32))
+    actor_id: Mapped[str] = mapped_column(String(32))
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_digest: Mapped[str] = mapped_column(String(64))
+    revision_id: Mapped[str] = mapped_column(String(32), ForeignKey("wiki_revisions.id"))
+    __table_args__ = (UniqueConstraint("organization_id", "actor_id", "idempotency_key",
+                                      name="uq_wiki_write_keys_actor_key"),)

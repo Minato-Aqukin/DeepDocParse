@@ -23,14 +23,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_corpus.config import settings
 from ddp_corpus.db import get_session, get_sessionmaker
-from ddp_corpus.deps import Actor, current_actor, get_storage
+from ddp_corpus.deps import Actor, current_actor
 from ddp_corpus.queue import enqueue
 from ddp_corpus.errors import APIError
+from ddp_corpus.document_context import document_context
+from ddp_corpus.policy import require_document_parse, document_resource_id, require_document, require_history_document, visible_document_condition
 from ddp_core.extract_format import SchemaError, parse_schema, validate_schema
 from ddp_corpus.extraction import ExtractContext, extraction_model_meta, run as run_extraction
 from ddp_corpus.evidence import citation_out, load_citations, record_evidence
 from ddp_corpus.usage import record_usage
 from ddp_corpus.models import (
+    Chunk,
     Document, ExtractionItem, ExtractionRun, ExtractionTemplate, ParseJob, as_aware, utcnow,
 )
 
@@ -97,6 +100,7 @@ async def list_templates(actor: Actor = Depends(current_actor),
     rows = (await session.execute(
         select(ExtractionTemplate)
         .where(ExtractionTemplate.actor_id == actor.id,
+               ExtractionTemplate.organization_id == actor.organization_id,
                ExtractionTemplate.deleted_at.is_(None))
         .order_by(ExtractionTemplate.updated_at.desc())
     )).scalars().all()
@@ -109,6 +113,7 @@ async def create_template(body: TemplateIn, actor: Actor = Depends(current_actor
     _validate_or_400(body.doc_schema)
     existing = (await session.execute(
         select(ExtractionTemplate).where(ExtractionTemplate.actor_id == actor.id,
+               ExtractionTemplate.organization_id == actor.organization_id,
                                          ExtractionTemplate.name == body.name)
     )).scalar_one_or_none()
     if existing is not None and existing.deleted_at is None:
@@ -157,7 +162,8 @@ async def delete_template(template_id: str, actor: Actor = Depends(current_actor
 async def _owned_template(template_id: str, actor: Actor,
                           session: AsyncSession) -> ExtractionTemplate:
     row = await session.get(ExtractionTemplate, template_id)
-    if row is None or row.actor_id != actor.id or row.deleted_at is not None:
+    if (row is None or row.actor_id != actor.id or row.deleted_at is not None
+            or row.organization_id != actor.organization_id):
         raise APIError(404, "模板不存在", "invalid_request_error", "template_not_found")
     return row
 
@@ -230,15 +236,27 @@ async def create_run(body: RunIn, request: Request, actor: Actor = Depends(curre
 
     documents = (await session.execute(
         select(Document).where(Document.id.in_(body.document_ids),
-                               Document.deleted_at.is_(None))
+                               visible_document_condition(actor))
     )).scalars().all()
+    if len(documents) != len(set(body.document_ids)):
+        raise APIError(404, "document not found", "invalid_request_error", "document_not_found")
+    for document in documents:
+        await require_document(session, actor, document.id)
     if not documents:
         raise APIError(404, "没有可抽取的文档（不存在或已删除）",
                        "invalid_request_error", "no_documents")
 
     # 未建索引的文档抽不了。**当场说清楚是哪几份**，不要让它们跑完变成一堆
     # 空结果 —— 空值看起来像"文档里没有"，那是抽取里最危险的误导
-    not_ready = [d.filename for d in documents if d.index_status != "ready"]
+    ready_jobs = {}
+    contexts = {}
+    for document in documents:
+        context = await document_context(session, actor, document)
+        contexts[document.id] = context
+        job = await session.get(ParseJob, context.parse_job_id) if context.parse_job_id else None
+        if job is not None and job.index_status == "ready":
+            ready_jobs[document.id] = job
+    not_ready = [contexts[d.id].filename for d in documents if d.id not in ready_jobs]
     if len(not_ready) == len(documents):
         raise APIError(409,
                        "所选文档都还没建好索引，无法抽取："
@@ -246,7 +264,7 @@ async def create_run(body: RunIn, request: Request, actor: Actor = Depends(curre
                        + ("…" if len(not_ready) > 5 else ""),
                        "invalid_request_error", "index_not_ready")
 
-    ready = [d for d in documents if d.index_status == "ready"]
+    ready = [d for d in documents if d.id in ready_jobs]
     # 部分未就绪：**不静默丢弃**。此前它们只体现在 document_count 变小上，
     # 用户不知道自己勾的 20 份里有 3 份根本没跑 —— 与上面那句注释自相矛盾
     skipped_note = ("；已跳过未建索引的 "
@@ -257,7 +275,10 @@ async def create_run(body: RunIn, request: Request, actor: Actor = Depends(curre
         template_id=template_id, name=body.name or "未命名抽取",
         schema_json=schema, kind=spec.kind, status="pending",
         document_count=len(ready), error=skipped_note.lstrip("；") or None,
-        model_meta=extraction_model_meta())
+        model_meta=extraction_model_meta(),
+        resource_context={"principal_id": actor.principal_id, "resources": {d.id:
+            await document_resource_id(session, actor, d.id) for d in ready},
+            "versions": {d.id: (await document_context(session, actor, d)).version_id for d in ready}})
     session.add(row)
     await session.commit()
 
@@ -359,7 +380,13 @@ async def _extract_one(session: AsyncSession, run_id: str, document_id: str, spe
                     + f"；文档 {document_id[:8]} 在抽取期间被删除"))
         await session.commit()
         return
-    job = await session.get(ParseJob, document.current_job_id) if document.current_job_id else None
+    owner_run = await session.get(ExtractionRun, run_id)
+    if owner_run is None:
+        return
+    context = owner_run.resource_context or {}
+    await require_history_document(session, Actor(id=context.get("principal_id") or owner_run.actor_id, kind="user",
+        organization_id=owner_run.organization_id, role="contributor"), document_id,
+        resource_id=context.get("resources", {}).get(document_id))
 
     # **记在发起这次抽取的人头上，不是上传者头上。**
     # 语料共享之后（plan.md §2 已定 2）任何人都能对任一文档发起抽取，
@@ -369,9 +396,38 @@ async def _extract_one(session: AsyncSession, run_id: str, document_id: str, spe
         select(ExtractionRun.actor_id, ExtractionRun.organization_id)
         .where(ExtractionRun.id == run_id))).one()
 
+    source_actor = Actor(id=context.get("principal_id") or owner_run.actor_id, kind="user",
+                         organization_id=owner_run.organization_id, role="contributor")
+    source_resource_id = context.get("resources", {}).get(document_id)
+    from dataclasses import replace
+    source_actor = replace(source_actor, resource_id=source_resource_id,
+                           version_id=context.get("versions", {}).get(document_id))
+    fixed_context = await document_context(session, source_actor, document)
+    job = await session.get(ParseJob, fixed_context.parse_job_id) if fixed_context.parse_job_id else None
+    if job is None or job.index_status != "ready":
+        raise APIError(409, "fixed parse index is not ready", "invalid_request_error", "index_not_ready")
+    if source_resource_id and (job is None or not await session.scalar(
+            select(Chunk.id).where(Chunk.document_id == document_id,
+                                  Chunk.parse_job_id == job.id).limit(1))):
+        raise APIError(409, "fixed resource version has no searchable index",
+                       "invalid_request_error", "resource_index_unavailable")
+
+    async def authorize() -> None:
+        # A fresh session per dispatch also avoids sharing one AsyncSession among fields.
+        async with get_sessionmaker()() as policy_session:
+            source_document = await require_history_document(policy_session, source_actor, document_id,
+                                           resource_id=source_resource_id)
+            latest_context = await document_context(policy_session, source_actor, source_document)
+            if latest_context.parse_job_id != fixed_context.parse_job_id:
+                raise APIError(409, "source version changed during extraction",
+                               "invalid_request_error", "resource_context_changed")
+
     ctx = ExtractContext(session=session, index=index, http=http, storage=storage,
-                         document=document, job=job, actor_id=initiator, verify=verify)
+                         document=document, job=job, actor_id=initiator, verify=verify,
+                         authorize=authorize,
+                         authorized_parse_job_ids=[job.id] if job else [])
     outcome = await run_extraction(ctx, spec)
+    await authorize()
 
     records = outcome.records or [{"fields": outcome.fields}]
     items = [ExtractionItem(
@@ -436,17 +492,25 @@ async def _fail_run(session: AsyncSession, run_id: str, reason: str) -> None:
 async def list_runs(limit: int = 50, actor: Actor = Depends(current_actor),
                     session: AsyncSession = Depends(get_session)):
     rows = (await session.execute(
-        select(ExtractionRun).where(ExtractionRun.actor_id == actor.id)
+        select(ExtractionRun).where(ExtractionRun.actor_id == actor.id,
+                                    ExtractionRun.organization_id == actor.organization_id)
         .order_by(ExtractionRun.created_at.desc()).limit(min(limit, 200))
     )).scalars().all()
-    return [_run_out(r) for r in rows]
+    permitted = []
+    for row in rows:
+        try:
+            await _owned_run(row.id, actor, session)
+        except APIError:
+            continue
+        permitted.append(_run_out(row))
+    return permitted
 
 
 @router.get("/extractions/runs/{run_id}")
 async def get_run(run_id: str, actor: Actor = Depends(current_actor),
                   session: AsyncSession = Depends(get_session)):
     run = await _owned_run(run_id, actor, session)
-    items, filenames, citations = await _load_items(session, run_id)
+    items, filenames, citations = await _load_items(session, run_id, actor)
     return {
         # by_alias：线上字段名必须是 schema_json（前端与库里都用这个名），
         # 不加的话前端会拿到一个叫 doc_schema 的字段
@@ -466,22 +530,42 @@ async def delete_run(run_id: str, actor: Actor = Depends(current_actor),
 
 async def _owned_run(run_id: str, actor: Actor, session: AsyncSession) -> ExtractionRun:
     run = await session.get(ExtractionRun, run_id)
-    if run is None or run.actor_id != actor.id:
+    if (run is None or run.actor_id != actor.id
+            or run.organization_id != actor.organization_id):
         raise APIError(404, "抽取任务不存在", "invalid_request_error", "run_not_found")
+    from dataclasses import replace
+    context = run.resource_context or {}
+    items = (await session.execute(select(ExtractionItem.document_id, ExtractionItem.parse_job_id).where(
+        ExtractionItem.run_id == run.id).distinct())).all()
+    for document_id, parse_job_id in items:
+        resource_id = context.get("resources", {}).get(document_id)
+        await require_history_document(session, actor, document_id, resource_id=resource_id)
+        if parse_job_id:
+            source_actor = replace(actor, resource_id=resource_id,
+                                   version_id=context.get("versions", {}).get(document_id))
+            await require_document_parse(session, source_actor, document_id, parse_job_id)
+    for document_id, resource_id in context.get("resources", {}).items():
+        await require_history_document(session, actor, document_id, resource_id=resource_id)
     return run
 
 
-async def _load_items(session: AsyncSession, run_id: str) -> tuple[
+async def _load_items(session: AsyncSession, run_id: str, actor: Actor) -> tuple[
         list[ExtractionItem], dict[str, str], dict[str, list[dict]]]:
     items = (await session.execute(
         select(ExtractionItem).where(ExtractionItem.run_id == run_id)
         .order_by(ExtractionItem.created_at, ExtractionItem.record_index)
     )).scalars().all()
-    # 文件名一次查完，不要每行查一次（一批 200 份文档就是 200 次往返）
+    # Use the saved resource/version context; content metadata may belong to another uploader.
+    from dataclasses import replace
     doc_ids = {i.document_id for i in items}
-    filenames = dict((await session.execute(
-        select(Document.id, Document.filename).where(Document.id.in_(doc_ids))
-    )).all()) if doc_ids else {}
+    documents = (await session.execute(select(Document).where(Document.id.in_(doc_ids)))).scalars().all()
+    run = await session.get(ExtractionRun, run_id)
+    context = run.resource_context or {}
+    filenames = {}
+    for document in documents:
+        source_actor = replace(actor, resource_id=context.get("resources", {}).get(document.id),
+                               version_id=context.get("versions", {}).get(document.id))
+        filenames[document.id] = (await document_context(session, source_actor, document)).filename
     # **出处走 evidence/citations 两张表**（阶段 3 切换）。抽取的出处是字段级的，
     # 所以来源键是 `{item_id}:{字段名}`。整批一次查完，同样是为了避开 N+1
     sources = [f"{i.id}:{name}" for i in items for name in (i.fields or {})]
@@ -567,7 +651,7 @@ async def export_run_csv(run_id: str, actor: Actor = Depends(current_actor),
     """
     run = await _owned_run(run_id, actor, session)
     spec = parse_schema(run.schema_json or {})
-    items, filenames, citations = await _load_items(session, run_id)
+    items, filenames, citations = await _load_items(session, run_id, actor)
 
     buffer = io.StringIO()
     writer = csv.writer(buffer)

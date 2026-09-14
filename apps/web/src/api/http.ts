@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { selectedResource, selectedVersion } from './resource-context'
 
 /** 统一的 axios 实例：自动带 JWT，401 直接踢回登录页。 */
 export const http = axios.create({ baseURL: '/', timeout: 120_000 })
@@ -9,6 +10,10 @@ export const TOKEN_KEY = 'ddp.token'
 http.interceptors.request.use((config) => {
   const token = localStorage.getItem(TOKEN_KEY)
   if (token) config.headers.Authorization = `Bearer ${token}`
+  const resource = selectedResource(config.url || '', location.hash, config.params)
+  if (resource && !config.params?.resource_id) config.params = { ...config.params, resource_id: resource }
+  const version = selectedVersion(config.url || '', location.hash, config.params)
+  if (version && !config.params?.version_id) config.params = { ...config.params, version_id: version }
   return config
 })
 

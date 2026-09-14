@@ -1,0 +1,15 @@
+{
+  "schema": "ddp-discovery/1#CollectionDescriptor",
+  "origin_node_id": "node-b",
+  "collection_id": "b:robotics",
+  "languages": [
+    "zh",
+    "en"
+  ],
+  "topics": [
+    "robotics"
+  ],
+  "index_revision": "index-42",
+  "revision": 3,
+  "valid_until": "2026-09-13T00:00:00Z"
+}

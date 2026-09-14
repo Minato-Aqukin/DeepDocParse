@@ -11,11 +11,14 @@ from ddp_corpus.config import settings
 from ddp_corpus.deps import Actor, current_actor
 from ddp_corpus.errors import APIError
 from ddp_corpus.evidence import citation_out, load_citations
+from ddp_corpus.knowledge_policy import accessible_knowledge, owned_projection, provider_allowed
+from ddp_corpus.policy import document_resource_id, require_document, visible_document_condition
 from ddp_corpus.knowledge import generate as generate_knowledge
 from ddp_corpus.usage import record_usage
+from ddp_corpus.routers.wikis import router as versioned_wiki_router
 from ddp_corpus.models import (
-    Assertion, Citation, Evidence, ExtractionItem, GraphEdge, KnowledgeEntity,
-    KnowledgeReview, WikiEntry, WikiSection, WikiSentence,
+    Assertion, Citation, Document, Evidence, ExtractionItem, ExtractionRun, GraphEdge, KnowledgeEntity,
+    KnowledgeReview, ResourceVersion, WikiEntry, WikiSection, WikiSentence,
 )
 from ddp_core.knowledge import neighbor_ids, normalize_entity_name
 
@@ -26,6 +29,7 @@ def require_knowledge_enabled() -> None:
 
 
 router = APIRouter(dependencies=[Depends(require_knowledge_enabled)])
+router.include_router(versioned_wiki_router)
 
 
 class BuildIn(BaseModel):
@@ -39,20 +43,55 @@ async def build_knowledge(body: BuildIn, request: Request,
     # **限速不在这里。** 图谱/wiki 生成很贵，但那道闸在 control-api 的
     # 领域限速里（按路由类别 + actor 计数，跨副本共享）。两处各限一次
     # 只会让"到底是谁把我限了"变成一个没人答得上的问题
+    actor.require(actor.can_upload and actor.principal_id is not None, "生成知识")
     evidence_ids = list(dict.fromkeys(body.evidence_ids))
     if not evidence_ids:
         evidence_ids = list((await session.execute(
-            select(Evidence.id).where(Evidence.derived_from.is_(None), Evidence.content != "")
+            select(Evidence.id).join(Document, Evidence.document_id == Document.id).where(
+                visible_document_condition(actor), Evidence.derived_from.is_(None), Evidence.content != "")
             .order_by(Evidence.created_at.desc()).limit(settings.knowledge_max_evidence)
         )).scalars().all())
     if len(evidence_ids) > settings.knowledge_max_evidence:
         raise APIError(400, f"一次最多 {settings.knowledge_max_evidence} 条证据",
                        "invalid_request_error", "too_many_evidence")
-    provider = {"kind": "knowledge_generation",
+    rows = (await session.execute(select(Evidence).join(Document).where(
+        Evidence.id.in_(evidence_ids), visible_document_condition(actor),
+        Evidence.derived_from.is_(None)))).scalars().all()
+    if {row.id for row in rows} != set(evidence_ids):
+        raise APIError(404, "original evidence not found", "invalid_request_error", "not_found")
+    source_bindings = []
+    for evidence in rows:
+        resource_id = await document_resource_id(session, actor, evidence.document_id)
+        version = await session.scalar(select(ResourceVersion).where(
+            ResourceVersion.resource_id == resource_id,
+            ResourceVersion.document_id == evidence.document_id,
+            ResourceVersion.parse_job_id == evidence.parse_job_id,
+            ResourceVersion.deleted_at.is_(None)).order_by(ResourceVersion.version_no.desc()).limit(1))
+        if version is None:
+            raise APIError(409, "explicit source version required", "invalid_request_error",
+                           "knowledge_source_unavailable")
+        binding = {"resource_id": resource_id, "source_version_id": version.id,
+                   "document_id": evidence.document_id, "parse_revision": evidence.parse_job_id}
+        if binding not in source_bindings:
+            source_bindings.append(binding)
+    from ddp_corpus.wiki import canonical_digest
+    scope_key = canonical_digest({"owner": actor.principal_id, "org": actor.organization_id,
+                                  "sources": sorted(source_bindings, key=lambda b: b["source_version_id"])})
+    provider = {"scope_key": scope_key, "source_bindings": source_bindings,
+                "input_document_ids": sorted({row.document_id for row in rows}),
+                "generated_by": actor.principal_id, "organization_id": actor.organization_id,
+                "kind": "knowledge_generation",
                 "model": settings.chat_model or "registry-default", "revision": "runtime"}
+    async def check_sources():
+        if not await provider_allowed(session, actor, provider):
+            raise APIError(404, "knowledge source unavailable", "invalid_request_error", "not_found")
     try:
         result = await generate_knowledge(
-            session, request.app.state.http, evidence_ids, provider=provider)
+            session, request.app.state.http, evidence_ids, provider=provider, check_sources=check_sources)
+        await check_sources()
+    except APIError:
+        await session.rollback()
+        raise
     except Exception as exc:
         await session.rollback()
         raise APIError(502, f"知识生成失败：{type(exc).__name__}", "upstream_error",
@@ -88,7 +127,8 @@ async def list_entities(q: str = "", entity_type: str = "",
                         uncertain: bool | None = None,
                         actor: Actor = Depends(current_actor),
                         session: AsyncSession = Depends(get_session)):
-    stmt = select(KnowledgeEntity)
+    access = await accessible_knowledge(session, actor)
+    stmt = select(KnowledgeEntity).where(KnowledgeEntity.id.in_(access["entities"]))
     if q:
         term = f"%{q}%"
         stmt = stmt.where(or_(KnowledgeEntity.canonical_name.ilike(term),
@@ -102,12 +142,13 @@ async def list_entities(q: str = "", entity_type: str = "",
     return {"graph_version": "ddp-graph/1", "entities": [_entity_out(row) for row in rows]}
 
 
-async def _resolve_entity(value: str, session: AsyncSession) -> KnowledgeEntity:
+async def _resolve_entity(value: str, session: AsyncSession, allowed: set[str]) -> KnowledgeEntity:
     row = await session.get(KnowledgeEntity, value)
     if row is None:
         row = (await session.execute(select(KnowledgeEntity).where(
-            KnowledgeEntity.normalized_name == normalize_entity_name(value)
-        ))).scalar_one_or_none()
+            KnowledgeEntity.normalized_name == normalize_entity_name(value),
+            KnowledgeEntity.id.in_(allowed)
+        ).order_by(KnowledgeEntity.created_at.desc()).limit(1))).scalar_one_or_none()
     if row is None:
         raise APIError(404, "entity not found", "invalid_request_error", "not_found")
     return row
@@ -120,10 +161,15 @@ async def graph(entity: str = "", depth: int = 1,
     if not 1 <= depth <= 3:
         raise APIError(400, "depth must be between 1 and 3", "invalid_request_error",
                        "invalid_depth")
-    entities = (await session.execute(select(KnowledgeEntity))).scalars().all()
-    edges = (await session.execute(select(GraphEdge).order_by(GraphEdge.id))).scalars().all()
+    access = await accessible_knowledge(session, actor)
+    entities = (await session.execute(select(KnowledgeEntity).where(
+        KnowledgeEntity.id.in_(access["entities"])))).scalars().all()
+    edges = (await session.execute(select(GraphEdge).where(
+        GraphEdge.id.in_(access["edges"])).order_by(GraphEdge.id))).scalars().all()
     if entity:
-        center = await _resolve_entity(entity, session)
+        center = await _resolve_entity(entity, session, access["entities"])
+        if center.id not in access["entities"]:
+            raise APIError(404, "entity not found", "invalid_request_error", "not_found")
         included = neighbor_ids(center.id, [(edge.subject_id, edge.object_id) for edge in edges],
                                 depth)
         entities = [row for row in entities if row.id in included]
@@ -149,9 +195,11 @@ async def graph(entity: str = "", depth: int = 1,
 @router.get("/wiki")
 async def list_wiki(actor: Actor = Depends(current_actor),
                     session: AsyncSession = Depends(get_session)):
+    access = await accessible_knowledge(session, actor)
     rows = (await session.execute(
         select(WikiEntry, KnowledgeEntity).join(
             KnowledgeEntity, KnowledgeEntity.id == WikiEntry.entity_id)
+        .where(WikiEntry.id.in_(access["entries"]))
         .order_by(WikiEntry.title))).all()
     return [{"id": entry.id, "entity": _entity_out(entity), "title": entry.title,
              "outline": entry.outline or [], "provider": entry.provider or {}}
@@ -161,11 +209,13 @@ async def list_wiki(actor: Actor = Depends(current_actor),
 @router.get("/wiki/{entry_id_or_title}")
 async def read_wiki(entry_id_or_title: str, actor: Actor = Depends(current_actor),
                     session: AsyncSession = Depends(get_session)):
+    access = await accessible_knowledge(session, actor)
     entry = await session.get(WikiEntry, entry_id_or_title)
     if entry is None:
         entry = (await session.execute(select(WikiEntry).where(
-            WikiEntry.title == entry_id_or_title))).scalar_one_or_none()
-    if entry is None:
+            WikiEntry.title == entry_id_or_title, WikiEntry.id.in_(access["entries"]))
+            .order_by(WikiEntry.created_at.desc()).limit(1))).scalar_one_or_none()
+    if entry is None or entry.id not in access["entries"]:
         raise APIError(404, "wiki entry not found", "invalid_request_error", "not_found")
     entity = await session.get(KnowledgeEntity, entry.entity_id)
     sections = (await session.execute(select(WikiSection).where(
@@ -197,11 +247,22 @@ async def read_wiki(entry_id_or_title: str, actor: Actor = Depends(current_actor
 @router.get("/evidence/{evidence_id}/backlinks")
 async def backlinks(evidence_id: str, actor: Actor = Depends(current_actor),
                     session: AsyncSession = Depends(get_session)):
+    evidence = await session.get(Evidence, evidence_id)
+    if evidence is None:
+        raise APIError(404, "evidence not found", "invalid_request_error", "not_found")
+    await require_document(session, actor, evidence.document_id)
+    access = await accessible_knowledge(session, actor)
     rows = (await session.execute(select(Citation).where(
         Citation.evidence_id == evidence_id).order_by(Citation.created_at, Citation.id)
     )).scalars().all()
     result = []
     for row in rows:
+        if row.source_kind in ("graph_edge", "wiki_sentence"):
+            bucket = "edges" if row.source_kind == "graph_edge" else "sentences"
+            if row.source_id not in access[bucket]:
+                continue
+        elif not await owned_projection(session, actor, row.source_kind, row.source_id):
+            continue
         label = row.source_id
         if row.source_kind == "assertion":
             target = await session.get(Assertion, row.source_id)
@@ -225,20 +286,25 @@ async def backlinks(evidence_id: str, actor: Actor = Depends(current_actor),
 async def review_queue(limit: int = Query(default=200, ge=1, le=500),
                        actor: Actor = Depends(current_actor),
                        session: AsyncSession = Depends(get_session)):
+    access = await accessible_knowledge(session, actor)
     edges = (await session.execute(select(GraphEdge).where(
-        GraphEdge.review_state.in_(["unreviewed", "questioned"]))
+        GraphEdge.id.in_(access["edges"]), GraphEdge.review_state.in_(["unreviewed", "questioned"]))
         .order_by(GraphEdge.id).limit(limit + 1))).scalars().all()
     sentences = (await session.execute(select(WikiSentence).where(
-        WikiSentence.review_state.in_(["unreviewed", "questioned"]))
+        WikiSentence.id.in_(access["sentences"]), WikiSentence.review_state.in_(["unreviewed", "questioned"]))
         .order_by(WikiSentence.id).limit(limit + 1))).scalars().all()
     entities = (await session.execute(select(KnowledgeEntity).where(
-        KnowledgeEntity.entity_merge_uncertain.is_(True))
+        KnowledgeEntity.id.in_(access["entities"]), KnowledgeEntity.entity_merge_uncertain.is_(True))
         .order_by(KnowledgeEntity.id)
         .limit(limit + 1))).scalars().all()
-    extraction_items = (await session.execute(select(ExtractionItem)
+    extraction_items = (await session.execute(select(ExtractionItem).join(ExtractionRun)
+        .where(ExtractionItem.document_id.in_(access["documents"]),
+               ExtractionRun.actor_id == actor.id, ExtractionRun.organization_id == actor.organization_id)
         .order_by(ExtractionItem.id)
         .limit(limit + 1))).scalars().all()
     extraction_fields = []
+    extraction_items = [item for item in extraction_items
+                        if await owned_projection(session, actor, "extract_field", item.id)]
     for item in extraction_items:
         for field_name, field in (item.fields or {}).items():
             if not isinstance(field, dict):
@@ -277,6 +343,10 @@ async def review(target_kind: Literal["graph_edge", "wiki_sentence", "entity_mer
                                       "extract_field"], target_id: str, body: ReviewIn,
                  actor: Actor = Depends(current_actor),
                  session: AsyncSession = Depends(get_session)):
+    access = await accessible_knowledge(session, actor)
+    bucket = {"graph_edge": "edges", "wiki_sentence": "sentences", "entity_merge": "entities"}.get(target_kind)
+    if bucket and target_id not in access[bucket]:
+        raise APIError(404, "review target not found", "invalid_request_error", "not_found")
     model = {"graph_edge": GraphEdge, "wiki_sentence": WikiSentence,
              "entity_merge": KnowledgeEntity}.get(target_kind)
     target = await session.get(model, target_id) if model else None
@@ -285,7 +355,8 @@ async def review(target_kind: Literal["graph_edge", "wiki_sentence", "entity_mer
     if target_kind == "extract_field":
         item_id, separator, field_name = target_id.partition(":")
         item = await session.get(ExtractionItem, item_id)
-        if not separator or item is None or field_name not in (item.fields or {}):
+        if (not separator or item is None or not await owned_projection(session, actor, "extract_field", target_id)
+                or field_name not in (item.fields or {})):
             raise APIError(404, "review target not found", "invalid_request_error", "not_found")
     state = {"pass": "passed", "reject": "rejected", "question": "questioned"}[body.action]
     if target is not None:
@@ -315,20 +386,23 @@ class SplitIn(BaseModel):
 @router.post("/knowledge/entities/{entity_id}/split", status_code=201)
 async def split_entity(entity_id: str, body: SplitIn, actor: Actor = Depends(current_actor),
                        session: AsyncSession = Depends(get_session)):
+    access = await accessible_knowledge(session, actor)
     entity = await session.get(KnowledgeEntity, entity_id)
-    if entity is None or body.alias not in (entity.aliases or []):
+    if entity_id not in access["entities"] or entity is None or body.alias not in (entity.aliases or []):
         raise APIError(404, "merge alias not found", "invalid_request_error", "not_found")
     normalized = normalize_entity_name(body.alias)
     if (await session.execute(select(KnowledgeEntity).where(
-            KnowledgeEntity.normalized_name == normalized))).scalar_one_or_none():
+            KnowledgeEntity.normalized_name == normalized,
+            KnowledgeEntity.scope_key == entity.scope_key))).scalar_one_or_none():
         raise APIError(409, "entity already exists", "invalid_request_error", "duplicate_entity")
     entity.aliases = [alias for alias in entity.aliases if alias != body.alias]
     entity.entity_merge_uncertain = False
     separated = KnowledgeEntity(
-        canonical_name=body.alias, normalized_name=normalized, entity_type=entity.entity_type,
+        canonical_name=body.alias, normalized_name=normalized, scope_key=entity.scope_key,
+        entity_type=entity.entity_type,
         aliases=[], merged_by="human", merge_confidence=1.0,
         entity_merge_uncertain=False, split_from_id=entity.id, review_state="passed",
-        provider={"kind": "human_split"})
+        provider={**(entity.provider or {}), "kind": "human_split"})
     session.add(separated)
     await session.flush()
     rewired = 0

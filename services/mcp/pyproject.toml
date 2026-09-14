@@ -4,8 +4,12 @@ version = "1.0.0"
 description = "DeepDocParse 语料级 MCP：search / ask / get_evidence / read_wiki / graph_neighbors"
 requires-python = ">=3.11"
 dependencies = [
-    # MCP 是**语料消费方**（铁律 6），所以装的是带 ORM 的那一层
-    "ddp-core[db]",
+    # MCP 是**语料消费方**（铁律 6）。语料取数已经收回 corpus-api
+    # （`/internal/mcp/*`，授权与 /api/* 同一条链），所以这里**不再有
+    # 数据库驱动与对象存储客户端**：`asyncpg` / `minio` 曾经是"MCP 自己连库
+    # 连桶"的物证，而那条路没有任何 actor，读得到整份语料。
+    # Core pure retrieval/citation rules only; no ORM or direct corpus SQL.
+    "ddp-core",
     "ddp-contracts",
     "fastmcp>=2.0",
     "httpx>=0.27",
@@ -13,8 +17,6 @@ dependencies = [
     "pypdfium2>=4.30",
     "rank-bm25>=0.2",
     "redis>=5.0",
-    "asyncpg>=0.29",
-    "minio>=7.2",
 ]
 
 [project.optional-dependencies]

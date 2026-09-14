@@ -70,6 +70,8 @@ def actor_headers(actor_id: str = ACTOR, *, role: str = "contributor",
         "X-DDP-Role": role,
         "X-Request-Id": "test-request",
     }
+    if kind == "api_key":
+        headers["X-DDP-User"] = actor_id
     if api_key_id:
         headers["X-DDP-Api-Key"] = api_key_id
     return headers
@@ -237,6 +239,11 @@ async def drain_tasks(app_state, *, max_rounds: int = 5) -> int:
 
     **这让测试更接近生产**：它真的走了一遍领取（claim）、心跳、
     generation fencing 与落终态，而不是绕过队列直接调实现。
+
+    串行执行是安全的：联邦协调者（`federation_plan`）在本地目标上会直接
+    认领并跑完自己排出的 `federation_execute`（见 `_local_execution_outcome`），
+    不会"等着另一个还没被领取的任务"。SQLite 的 StaticPool 只有一条连接，
+    并发会话反而会互相踩事务。
 
     用 worker 真正的 `HANDLERS` 表，不在这里另抄一份 —— 抄一份的话，
     worker 少注册一种任务时这些用例照样绿。

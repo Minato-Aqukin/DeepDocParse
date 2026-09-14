@@ -156,7 +156,7 @@ async def test_stream_reindex_race_preserves_explicit_evidence_and_marks_invalid
         actor_client, session, monkeypatch):
     """检索后、核对通过、流结束前重建：旧出处仍不得成为已验证支持。"""
     from ddp_corpus.db import get_sessionmaker
-    from ddp_core.models import Citation
+    from ddp_core.models import Citation, ParseJob
     from ddp_corpus.evidence import load_citations
 
     document = await _ready_document(actor_client)
@@ -167,8 +167,9 @@ async def test_stream_reindex_race_preserves_explicit_evidence_and_marks_invalid
                '\n\n').encode()
         async with get_sessionmaker()() as concurrent:
             row = await concurrent.get(Document, document["id"])
-            row.index_generation += 1
-            row.index_status = "pending"
+            job = await concurrent.get(ParseJob, row.current_job_id)
+            job.index_generation += 1
+            job.index_status = "pending"
             await concurrent.execute(delete(Chunk).where(Chunk.document_id == row.id))
             await concurrent.commit()
         yield b"data: [DONE]\n\n"
@@ -624,11 +625,12 @@ async def test_reupload_after_delete_restores_askability(actor_client, session, 
     """
     document = await _ready_document(actor_client)
     await actor_client.delete(f"/api/documents/{document['id']}")
-    assert (await session.execute(select(Chunk))).scalars().all() == []
+    assert (await actor_client.get("/api/search?q=表格")).json()["groups"] == []
 
     again = await _upload(actor_client, PDF)
     assert again["id"] == document["id"]
-    await drain_tasks(app_state)     # 复活会把索引重新排进队列
+    await _callback(actor_client)    # New upload owns a new fixed parse, which must finish.
+    await drain_tasks(app_state)
 
     detail = (await actor_client.get(f"/api/documents/{document['id']}")).json()
     assert detail["index_status"] == "ready", detail
@@ -651,7 +653,8 @@ async def test_deleted_document_is_not_searchable(actor_client, session):
     resp = await actor_client.delete(f"/api/documents/{document['id']}")
     assert resp.status_code == 204, resp.text
     assert (await actor_client.get("/api/search?q=表格")).json()["groups"] == []
-    assert (await session.execute(select(Message))).scalars().all() == []
+    # Audit/history rows remain, but current source permission is required to read them.
+    assert (await actor_client.get(f"/api/conversations/{cid}/messages")).status_code == 404
 
     row = await session.get(Document, document["id"])
     await session.refresh(row)
@@ -1163,11 +1166,10 @@ async def test_follow_up_refuses_when_inherited_evidence_no_longer_resolves(
     second_handler, calls = _agent_chat(
         need_retrieval=False, answer="不应调用回答模型")
     route.side_effect = second_handler
-    second = dict(await _ask(actor_client, cid, question="换一种说法"))
-    assert second["meta"]["query_decision"]["degraded"] == "no_evidence_in_turn"
-    assert second["done"]["degraded"] == "no_evidence_in_turn"
-    assert second["assertions"]["assertions"][0]["unsupported"] is True
-    assert calls == {"decision": 1, "answer": 0, "verify": 0}
+    second = await actor_client.post(f"/api/conversations/{cid}/ask", json={"question": "换一种说法"})
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "resource_index_unavailable"
+    assert calls == {"decision": 0, "answer": 0, "verify": 0}
 
 
 @respx.mock

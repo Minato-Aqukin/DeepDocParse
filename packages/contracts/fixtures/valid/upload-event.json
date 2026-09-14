@@ -1,0 +1,9 @@
+{
+  "schema": "ddp-resource/1#UploadEvent",
+  "upload_event_id": "ue-1",
+  "resource_version_id": "ver-a-1",
+  "actor_ref": "userA",
+  "idempotency_key": "upload-1",
+  "request_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "created_at": "2026-09-12T00:00:00Z"
+}

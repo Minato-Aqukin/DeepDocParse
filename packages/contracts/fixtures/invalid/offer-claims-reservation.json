@@ -1,0 +1,38 @@
+{
+  "schema": "ddp-probe/1",
+  "probe_id": "probe-b-21",
+  "target_node_id": "node-b",
+  "task_spec_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "scope_ref": "scope-17",
+  "consent_ref": "consent-probe-4",
+  "probe_kind": "evidence_retrieval",
+  "capability_check": {
+    "operation": "corpus.retrieve",
+    "readiness": "ready",
+    "input_validation": "metadata_only"
+  },
+  "retrieval": {
+    "status": "succeeded",
+    "collection_ref": "b:robotics",
+    "index_revision": "index-42",
+    "candidate_limit": 8,
+    "continuation_ref": null,
+    "evidence_set_ref": "b:evidence-set-31",
+    "internal_limits": []
+  },
+  "can_generate": true,
+  "missing_requirements": [],
+  "offer": {
+    "offer_id": "offer-c-3",
+    "target_node_id": "node-c",
+    "plan_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "capability_revision": "cap-rev-5",
+    "estimated_duration_seconds": {
+      "low": 4.0,
+      "high": 20.0
+    },
+    "valid_until": "2026-09-13T00:00:00Z",
+    "reservation": true
+  },
+  "observed_at": "2026-09-12T00:00:00Z"
+}

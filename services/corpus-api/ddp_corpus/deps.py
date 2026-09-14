@@ -52,6 +52,13 @@ class Actor:
     role: str
     api_key_id: str | None = None
     request_id: str = ""
+    resource_id: str | None = None
+    version_id: str | None = None
+    user_id: str | None = None
+
+    @property
+    def principal_id(self) -> str | None:
+        return self.user_id if self.kind == "api_key" else (self.id if self.kind == "user" else None)
 
     def at_least(self, need: str) -> bool:
         """角色比大小。未知角色一律无权 —— 默认拒绝。
@@ -104,12 +111,14 @@ async def require_gateway_credentials(authorization: str | None = Header(default
 
 
 async def current_actor(
+    request: Request,
     _: None = Depends(require_gateway_credentials),
     x_ddp_organization: str | None = Header(default=None),
     x_ddp_actor: str | None = Header(default=None),
     x_ddp_actor_kind: str | None = Header(default=None),
     x_ddp_role: str | None = Header(default=None),
     x_ddp_api_key: str | None = Header(default=None),
+    x_ddp_user: str | None = Header(default=None),
     x_request_id: str | None = Header(default=None),
 ) -> Actor:
     """从内部头组装 actor。
@@ -141,7 +150,10 @@ async def current_actor(
         organization_id=x_ddp_organization,
         role=x_ddp_role,
         api_key_id=x_ddp_api_key,
+        user_id=x_ddp_user,
         request_id=x_request_id or "",
+        resource_id=request.query_params.get("resource_id"),
+        version_id=request.query_params.get("version_id"),
     )
 
 

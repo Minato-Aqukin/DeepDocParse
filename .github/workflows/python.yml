@@ -19,6 +19,9 @@ jobs:
           - name: model-gateway
             dir: services/model-gateway
             install: 'pip install -e python/ddp_contracts -e python/ddp_core -e "services/model-gateway[dev]"'
+          - name: ddp_local
+            dir: python/ddp_local
+            install: 'pip install -e python/ddp_contracts -e python/ddp_core -e "python/ddp_local[dev]"'
           - name: corpus-api
             dir: services/corpus-api
             install: 'pip install -e python/ddp_contracts -e "python/ddp_core[db,cjk]" -e "services/corpus-api[dev]" -e services/corpus-worker'

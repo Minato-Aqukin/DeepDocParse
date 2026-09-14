@@ -1,0 +1,606 @@
+openapi: 3.1.0
+info:
+  title: DeepDocParse Federated Task API
+  version: 1.0.0
+  description: |
+    P5 联邦任务接口（计划 v3 §6–§9 为执行权威；冻结端点表与形状见
+    ../../docs/refactor/P5-INTERFACES-v3.md §2–§3）。
+
+    节点/执行者端点由**每个中心**暴露；协调者端点只在入口中心暴露。
+    认证是服务凭据 `Authorization: Bearer SERVICE_TOKEN`，调用者上下文沿用
+    `deps.actor` 头（`X-DDP-Organization` / `X-DDP-Actor` / `X-DDP-Role` …）；
+    所有写操作必须带 `Idempotency-Key`。
+
+    schema 绑定类型直接 `$ref ../schemas/*.json`。**生成枚举不在本文件另写取值**：
+    字段上的 `x-ddp-enum` 指向 `packages/contracts/enums.yaml` 里的枚举名
+    （与 schemas/*.json 同一套约定）；只有协议错误码清单（enums.yaml 的
+    `federation_error`，计划 §9.6）在 components 里落成字面量。
+security: [{service: []}]
+paths:
+  # ---------------------------------------------------------------- 节点/执行者
+  /api/v1/federation/probes:
+    post:
+      operationId: createFederationProbe
+      description: |
+        按探索许可执行一次真实 Probe（capability_input / resource_locate /
+        evidence_retrieval）。`target_node_id` 必须等于本节点身份，否则 409
+        wrong_target（P5-INTERFACES-v3 §2）。节点内部不完整（分片失败、索引
+        落后、只查子集）必须落进 ProbeResult.retrieval.internal_limits 并把
+        status 置 partial，不得只在节点外层写 completed（T85）。
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProbeRequest'}}}}
+      responses:
+        '201': {description: 实际 Probe 回执；没有探索许可就不该存在这个回执, content: {application/json: {schema: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/ProbeResult'}}}}
+        '400': {description: 请求形状不合法或引用了不可用的输入}
+        '401': {description: 缺少或错误的服务凭据}
+        '403': {description: 缺少可信调用者上下文，或探索许可不覆盖本次外发}
+        '409': {description: 'wrong_target：target_node_id 不是本节点身份；或幂等键与请求正文不一致'}
+        '422': {description: ProbeRequest 校验失败}
+  /api/v1/federation/probes/{probe_id}:
+    parameters: [{$ref: '#/components/parameters/ProbeId'}]
+    get:
+      operationId: readFederationProbe
+      responses:
+        '200': {description: 保留中的 Probe 回执；可复用性按 observed_at / query_digest / index_revision 判定，过期或缺失一律重新探测, content: {application/json: {schema: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/ProbeResult'}}}}
+        '401': {description: 缺少或错误的服务凭据}
+        '404': {description: 不存在或对调用者不可见（不借状态码泄露存在性）}
+        '410': {description: 'probe_expired：过期或已清理的单次 Probe 回执不得复用（P5-INTERFACES-v3 §2）'}
+  /api/v1/federation/admissions:
+    post:
+      operationId: createFederationAdmission
+      description: |
+        执行者持久受理。同键同 request_digest 返回已有 receipt（200，不复算执行）；
+        同键不同摘要 409 idempotency_conflict（T80）。accepted 必须同时有
+        executor_task_id / verified_input_manifest_digest / input_validation=
+        content_verified / accepted_at；验证不了输入则 state=waiting_input 且
+        不占 GPU（P5-INTERFACES-v3 §2 / AdmissionReceipt 的 allOf）。
+
+        **accepted 不等于已执行**：受理回执、执行行与一条 `federation_execute`
+        持久队列任务在同一个事务里提交，随后由 corpus-worker 领取执行（进程
+        重启不会让执行永远停在 queued；见 P5-QUEUE-VALIDATION-v3）。调用方轮询
+        `GET /api/v1/federation/tasks/{executor_task_id}` 取终态。
+
+        `operation=answer` 的步骤必须带 `evidence`：执行者逐条重算 digest
+        （sha256(excerpt)），id 必须唯一且 excerpt 非空；缺失证据是
+        waiting_input/input_not_verified，伪造摘要当场拒绝，越界（>2000 字符/
+        >50 条）给显式机器错误、绝不截断。verified_input_manifest_digest 覆盖
+        排序后的 (evidence_id, digest) 列表。excerpt 是**不可信文档数据**：
+        执行者只把它当引用材料，绝不执行其中的指令。节点只在
+        `rag.answer.cited` 就绪时才受理 answer 步骤。
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AdmissionRequest'}}}}
+      responses:
+        '200': {description: 同键同摘要：返回已有 receipt（幂等复用，不是一次新执行）, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/AdmissionReceipt'}}}}
+        '201': {description: 新受理：持久写 receipt 与 execution 行, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/AdmissionReceipt'}}}}
+        '400': {description: 请求形状不合法}
+        '401': {description: 缺少或错误的服务凭据}
+        '403': {description: 缺少可信调用者上下文}
+        '409': {description: 'idempotency_conflict（同键异摘要）或 plan_changed（重算摘要与请求不一致）', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '422': {description: AdmissionRequest 校验失败}
+  /api/v1/federation/admissions/lookup:
+    post:
+      operationId: lookupFederationAdmission
+      description: 幂等键放在受认证请求体里，不放 URL（计划 §9.5）；用于回执丢失后的对账。
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AdmissionLookup'}}}}
+      responses:
+        '200': {description: 该幂等键的持久 receipt, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/AdmissionReceipt'}}}}
+        '401': {description: 缺少或错误的服务凭据}
+        '403': {description: 缺少可信调用者上下文}
+        '404': {description: 该幂等键没有已持久 receipt；unknown ≠ 已执行，不得因此换节点重做}
+  /api/v1/federation/tasks/{executor_task_id}:
+    parameters: [{$ref: '#/components/parameters/ExecutorTaskId'}]
+    get:
+      operationId: readFederationExecution
+      responses:
+        '200': {description: 执行者的权威执行状态；lease/generation 与结果引用分离, content: {application/json: {schema: {$ref: '#/components/schemas/ExecutionStatus'}}}}
+        '401': {description: 缺少或错误的服务凭据}
+        '404': {description: 未知 executor_task_id 或对调用者不可见}
+  /api/v1/federation/tasks/{executor_task_id}/cancel:
+    parameters: [{$ref: '#/components/parameters/ExecutorTaskId'}]
+    post:
+      operationId: cancelFederationExecution
+      description: |
+        幂等取消。排队/在途的执行落终态 `state=cancelled`（task_status）；
+        succeeded/failed/cancelled 等终态不因重复取消改变。取消同时停掉队列里的
+        `federation_execute` 任务，迟到的执行结果因 generation 前移写不进来。
+      requestBody: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/Empty'}}}}
+      responses:
+        '200': {description: 幂等取消后的权威执行状态；重复取消返回同一结果, content: {application/json: {schema: {$ref: '#/components/schemas/ExecutionStatus'}}}}
+        '401': {description: 缺少或错误的服务凭据}
+        '404': {description: 未知 executor_task_id 或对调用者不可见}
+  /api/v1/federation/resources/locate:
+    post:
+      operationId: locateFederationResource
+      description: 校验指定版本（缺省则解析当前可读版本）的可读性与权威归属；不返回临时 URL——位置不是证据身份。
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LocateRequest'}}}}
+      responses:
+        '200': {description: 版本可读性与来源/权威节点, content: {application/json: {schema: {$ref: '#/components/schemas/LocateResult'}}}}
+        '401': {description: 缺少或错误的服务凭据}
+        '403': {description: 缺少可信调用者上下文}
+        '404': {description: 资源不存在或无权访问（降敏，不泄露存在性）}
+  /api/v1/federation/results/resolve:
+    post:
+      operationId: resolveFederationEvidence
+      description: 把稳定原始引用解析成一条可验证证据（含 locator 与摘要）；虚构、过期、越权的引用一律失败。
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ResolveRequest'}}}}
+      responses:
+        '200': {description: 授权范围内的证据信封, content: {application/json: {schema: {$ref: '../schemas/ddp-evidence/v1.json#/$defs/FederatedEvidence'}}}}
+        '401': {description: 缺少或错误的服务凭据}
+        '403': {description: 缺少可信调用者上下文}
+        '404': {description: 引用不存在或对调用者不可见}
+        '410': {description: 'source_revoked：来源已撤销或转为私有，停止新授权并重判派生依赖'}
+  /api/v1/federation/evidence-sets/{set_ref}:
+    parameters:
+      - {name: set_ref, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 160},
+         description: '`federation-probe:<probe_id>` 或 `federation-execution:<executor_task_id>`；伪造引用一律 404'}
+    get:
+      operationId: readFederationEvidenceSet
+      description: |
+        读取一次 Probe 或执行留下的真实片段。**逐条重新授权后才返回**（本地证据走
+        `results/resolve` 同一条路径，远端证据按存它的组织/调用者绑定）；有任意一条
+        越权就整集 404，不借部分返回泄露存在性。最多 50 条，complete=false 表示被截断。
+      responses:
+        '200': {description: 授权范围内的证据集, content: {application/json: {schema: {$ref: '#/components/schemas/EvidenceSet'}}}}
+        '401': {description: 缺少或错误的服务凭据}
+        '403': {description: 缺少可信调用者上下文}
+        '404': {description: 集合不存在、伪造或对调用者不可见（降敏，不泄露存在性）}
+        '410': {description: 'probe_expired：探测回执过期，不得复用'}
+  # ---------------------------------------------------------------- 协调者
+  /api/v1/task-intents:
+    post:
+      operationId: createTaskIntent
+      description: |
+        持久任务需求 + 用户已批准的探索许可。协调者只做校验与持久化，不代用户签署；
+        探索许可门先于任何远端 Probe。同键同请求体返回已持久化的同一 TaskIntent
+        （本实现固定 201），同键不同请求体 409 idempotency_conflict —— HTTP 重试
+        不得造出第二个 root task。
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TaskIntentInput'}}}}
+      responses:
+        '201': {description: 已持久化的任务需求与探索许可引用（新建与同键同体重放共用此响应）, content: {application/json: {schema: {$ref: '#/components/schemas/TaskIntent'}}}}
+        '400': {description: 请求形状不合法}
+        '403': {description: 'egress_denied：探索许可缺失、过期或与请求内容不一致'}
+        '409': {description: 'idempotency_conflict：同一 Idempotency-Key 携带了不同的请求实体', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '422': {description: TaskIntentInput 校验失败或缺少 Idempotency-Key}
+  /api/v1/task-plans:
+    post:
+      operationId: createTaskPlan
+      description: |
+        按 scope 清单与探索许可做 Probe、生成 TaskPlan。没有有效
+        ExplorationConsent（或 egress_mode=local_only）时不得向任何远端发出
+        Probe（含 answer 委托前的能力探测），返回 egress_denied ——
+        问题/实体/资源名一个字都不出网。
+        `rag.answer.cited` 且本地生成未就绪时，会按探索许可与根预算探测候选
+        执行节点的生成就绪度；有就绪节点就在计划里落下 `answer-1` 步骤与
+        `evidence_excerpts` 数据边（先有计划、后批准，许可覆盖不到这条边就
+        egress_denied），没有就保持诚实的无答案结果。
+        并发重放由每 root 的排他锁串行化：计划修订落定后的重放直接返回已存计划，
+        不再重探测、不再外发。
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlanningRequest'}}}}
+      responses:
+        '200': {description: 计划已生成（planning_state=ready/awaiting_approval）, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/TaskPlan'}}}}
+        '202': {description: 探测/规划尚未结束，计划修订未定；客户端可稍后重取, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/TaskPlan'}}}}
+        '403': {description: 'egress_denied：没有有效探索许可或 egress_mode=local_only', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '404': {description: 未知 root_task_id}
+        '409': {description: 'plan_changed：提交的修订与持久状态不一致'}
+        '410': {description: 'scope_expired：ScopeManifest 已过期，重新枚举生成新 scope'}
+  /api/v1/task-plans/{root_task_id}/approve:
+    parameters: [{$ref: '#/components/parameters/RootTaskId'}]
+    post:
+      operationId: approveTaskPlan
+      description: 批准计划修订与外发边界；ExecutionConsent.plan_digest 必须绑定提交的修订，否则原批准自动失效。并发重放由每 root 的排他锁串行化：同许可重复批准返回同一已批准计划，不重签名、不追加副作用。
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApprovalRequest'}}}}
+      responses:
+        '200': {description: 批准后的计划（planning_state=approved，带 execution_consent_ref）, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/TaskPlan'}}}}
+        '400': {description: 计划修订或执行许可形状不合法}
+        '403': {description: 'egress_denied：执行许可的接收方集合不覆盖计划的数据边'}
+        '404': {description: 未知 root_task_id}
+        '409': {description: 'plan_changed：计划修订已变，原批准不再适用，需重新批准', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '410': {description: 'scope_expired：范围或计划已过期，需重新规划'}
+  /api/v1/tasks:
+    post:
+      operationId: submitTask
+      description: |
+        以幂等键受理已批准计划。执行许可必须覆盖所有数据边（含 relay），
+        否则 egress_denied。同键同摘要返回已有任务，同键不同摘要 409
+        idempotency_conflict，不因 HTTP 重试增加逻辑执行代次。
+
+        **执行是异步的**：受理行与 `federation_plan` 持久队列任务在同一个事务里
+        提交后立即返回 202，由 corpus-worker 推进；受理进程重启不会让任务永远
+        停在 running（企业边界 7）。调用方用 `GET /api/v1/tasks/{root_task_id}`
+        轮询权威状态；同键重放回 200 + 当前权威状态，绝不重复执行。
+        已取消的任务终态不许被新幂等键复活：返回 409 `task_cancelled`。
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExecutionRequest'}}}}
+      responses:
+        '200': {description: 同键同摘要：已有任务的权威状态（重放不重复执行）, content: {application/json: {schema: {$ref: '#/components/schemas/TaskStatus'}}}}
+        '202': {description: '已受理并排入持久队列（status=running，result=null）；可用 GET /api/v1/tasks/{root_task_id} 对账', content: {application/json: {schema: {$ref: '#/components/schemas/TaskStatus'}}}}
+        '403': {description: 'egress_denied：执行许可的接收方集合没有覆盖所有数据边（含 relay）', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '404': {description: 未知 root_task_id}
+        '409': {description: 'idempotency_conflict（同键异摘要）、plan_changed（计划修订与许可不一致）或 task_cancelled（任务已被显式取消，终态不得复活）', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/tasks/{root_task_id}:
+    parameters: [{$ref: '#/components/parameters/RootTaskId'}]
+    get:
+      operationId: readTask
+      responses:
+        '200': {description: 权威状态、结果、覆盖引用与消耗；执行/准入/交付各轴独立呈现, content: {application/json: {schema: {$ref: '#/components/schemas/TaskStatus'}}}}
+        '404': {description: 未知 root_task_id 或对调用者不可见}
+  /api/v1/tasks/{root_task_id}/coverage:
+    parameters: [{$ref: '#/components/parameters/RootTaskId'}]
+    get:
+      operationId: readTaskCoverage
+      responses:
+        '200': {description: 覆盖账本：分母（枚举）与分子（逐目标）分开，fast 不得 complete, content: {application/json: {schema: {$ref: '../schemas/ddp-scope-coverage/v1.json#/$defs/CoverageLedger'}}}}
+        '404': {description: 未知 root_task_id 或对调用者不可见}
+  /api/v1/tasks/{root_task_id}/events:
+    parameters:
+      - {$ref: '#/components/parameters/RootTaskId'}
+      - {name: after, in: query, required: false, schema: {type: integer, minimum: 0}, description: 最后已接收的事件序号；返回其后的可恢复事件，断开不取消任务}
+    get:
+      operationId: readTaskEvents
+      responses:
+        '200': {description: 带序号的事件页, content: {application/json: {schema: {$ref: '#/components/schemas/EventPage'}}}}
+        '404': {description: 未知 root_task_id 或对调用者不可见}
+  /api/v1/tasks/{root_task_id}/resume:
+    parameters: [{$ref: '#/components/parameters/RootTaskId'}]
+    post:
+      operationId: resumeTask
+      description: |
+        重新判权后补做未完成目标，不隐式扩权（旧授权不得无期限复用）。
+        **202 表示已受理并排入持久队列**（与 `POST /tasks` 同一套）：本调用
+        立即返回当前状态，由 corpus-worker 只补做可重做的目标。对已经
+        `lease_expired` 的本地执行，这一步会重新排队执行（同一条受理，
+        不产生第二条执行记录）。
+        对**已经取消**的任务返回 409 `task_cancelled` 且不做任何改写：
+        取消是显式终态，重跑必须另起一条新任务。
+      responses:
+        '202': {description: '已受理恢复，未完成目标继续执行；可用 GET /api/v1/tasks/{root_task_id} 对账', content: {application/json: {schema: {$ref: '#/components/schemas/TaskStatus'}}}}
+        '403': {description: 'egress_denied：重新判权未通过或超出原外发边界', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '404': {description: 未知 root_task_id 或对调用者不可见}
+        '409': {description: 'task_cancelled：任务已被显式取消，终态不得被 resume 复活；任务状态原样不动', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '410': {description: 'scope_expired：范围已过期，需重新枚举而不是拿旧授权补做'}
+  /api/v1/tasks/{root_task_id}/cancel:
+    parameters: [{$ref: '#/components/parameters/RootTaskId'}]
+    post:
+      operationId: cancelTask
+      description: |
+        显式、幂等取消并对账。未完成目标的覆盖记录置 `not_attempted`（保留在
+        分母里），任务落终态 `status=cancelled`（task_status）—— 与 `failed`
+        分开："用户不想要了"和"系统做砸了"对用户是两件事。已提交完成不得被
+        无条件改成 cancelled，迟到结果不得悄悄发布；取消同时停掉队列里的
+        `federation_plan` 任务。
+      responses:
+        '200': {description: 取消后的权威状态（幂等：重复取消返回同一结果）, content: {application/json: {schema: {$ref: '#/components/schemas/TaskStatus'}}}}
+        '404': {description: 未知 root_task_id 或对调用者不可见}
+  /api/v1/deliveries/{delivery_id}/ack:
+    parameters: [{$ref: '#/components/parameters/DeliveryId'}]
+    post:
+      operationId: ackFederationDelivery
+      description: |
+        本地校验并持久提交后的幂等确认（计划 §9.4）。**只有提交的
+        `result_manifest_digest` 与已交付结果一致才可能 confirmed**；TTL 到期的
+        交付一律 expired，过期件永远不可确认，也不得显示"已保存本地"。
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DeliveryAckRequest'}}}}
+      responses:
+        '200': {description: 交付回执（confirmed 或 expired；重复确认返回同一回执）, content: {application/json: {schema: {$ref: '../schemas/ddp-evidence/v1.json#/$defs/DeliveryReceipt'}}}}
+        '401': {description: 缺少或错误的服务凭据}
+        '403': {description: 缺少可信调用者上下文}
+        '404': {description: 交付不存在或对调用者不可见}
+        '409': {description: 'input_not_verified：提交的结果摘要与已交付结果不一致', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/deliveries/{delivery_id}:
+    parameters: [{$ref: '#/components/parameters/DeliveryId'}]
+    get:
+      operationId: readFederationDelivery
+      description: |
+        读取暂存中的可交付结果字节（有界 JSON，**不含源文件字节**）。未确认且过
+        TTL -> 410 `delivery_expired`，交付在库里置 expired，客户端不得再显示
+        "已保存本地"；已 confirmed 的不再受 TTL 影响。结果文档的
+        `content_digest(canonical result)` 必须等于 `result_manifest_digest` ——
+        客户端本地校验通过后才允许 ack。响应一律 `Cache-Control: no-store`。
+      responses:
+        '200': {description: 交付身份、状态与可校验的结果文档, content: {application/json: {schema: {$ref: '#/components/schemas/DeliveryRead'}}}}
+        '401': {description: 缺少或错误的服务凭据}
+        '403': {description: 缺少可信调用者上下文}
+        '404': {description: 交付不存在或对调用者不可见（降敏，不泄露存在性）}
+        '410': {description: 'delivery_expired：TTL 已过且未确认；本地不得把过期件当作"已保存"', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+components:
+  securitySchemes:
+    service: {type: http, scheme: bearer, description: 内网同伴服务凭据（SERVICE_TOKEN），不是用户会话}
+  parameters:
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+    ProbeId: {name: probe_id, in: path, required: true, schema: {type: string, minLength: 1}}
+    ExecutorTaskId: {name: executor_task_id, in: path, required: true, schema: {type: string, minLength: 1}}
+    RootTaskId: {name: root_task_id, in: path, required: true, schema: {type: string, minLength: 1}}
+    DeliveryId: {name: delivery_id, in: path, required: true, schema: {type: string, minLength: 1}}
+  schemas:
+    Digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+    NodeId: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{2,63}$'}
+    Empty:
+      type: object
+      additionalProperties: false
+      description: 取消等幂等操作的空请求体。
+    ProbeRequest:
+      type: object
+      additionalProperties: false
+      required: [schema, task_spec_digest, consent_ref, probe_kind, target_node_id]
+      properties:
+        schema: {const: ddp-task-probe/1#ProbeRequest}
+        task_spec_digest: {description: 固定本次探测的需求修订, $ref: '#/components/schemas/Digest'}
+        consent_ref: {description: 先于 Probe 的探索许可；没有它不得发请求（T76）, type: string, minLength: 1}
+        probe_kind:
+          type: string
+          enum: [capability_input, resource_locate, evidence_retrieval]
+          description: 与 ProbeResult.probe_kind 同一组取值；证据探测必须带 retrieval 输入。
+        target_node_id: {description: 必须等于接收本请求的节点身份，否则 409 wrong_target, $ref: '#/components/schemas/NodeId'}
+        scope_ref: {type: [string, 'null'], minLength: 1}
+        collection_id: {type: [string, 'null'], minLength: 1}
+        query: {type: [string, 'null']}
+        query_digest: {type: [string, 'null'], pattern: '^sha256:[0-9a-f]{64}$'}
+        candidate_limit: {type: integer, minimum: 1}
+        operation:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 64
+          description: |
+            capability_input 要问的那条本地 operation（缺省 corpus.retrieve）。节点按
+            自己组合出的能力清单如实回答该 operation 的 readiness；**只有**
+            `rag.answer.cited` 且 readiness=ready 时 `can_generate` 才为 true。
+            其它 probe_kind 忽略该字段。
+      allOf:
+        - if: {properties: {probe_kind: {const: evidence_retrieval}}, required: [probe_kind]}
+          then:
+            properties:
+              collection_id: {type: string, minLength: 1}
+              query: {type: string}
+              query_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+            required: [collection_id, query, query_digest]
+    AdmissionRequest:
+      type: object
+      additionalProperties: false
+      required: [schema, idempotency_key, root_task_id, step_id, delegation_generation, task_spec, plan, execution_consent, inputs]
+      properties:
+        schema: {const: ddp-plan-admission/1#AdmissionRequest}
+        idempotency_key: {type: string, minLength: 1, maxLength: 128}
+        root_task_id: {type: string, minLength: 1}
+        step_id: {type: string, minLength: 1}
+        delegation_generation: {type: integer, minimum: 0}
+        task_spec: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/TaskSpec'}
+        plan: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/TaskPlan'}
+        execution_consent: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/ExecutionConsent'}
+        inputs:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [ref, digest]
+            properties:
+              ref: {type: string, minLength: 1}
+              digest: {$ref: '#/components/schemas/Digest'}
+              size_bytes: {type: integer, minimum: 0}
+        evidence:
+          description: |
+            类型化 `evidence_excerpts` 数据边携带的证据（answer 步骤必须提供）。
+            有界：每条 excerpt 最多 2000 字符（或等价 UTF-8 字符数），最多 50 条；
+            digest 必须是 `sha256(excerpt)`，执行者重算后才受理。空 excerpt、重复
+            evidence_id、摘要对不上、越界一律显式拒绝（input_not_verified），
+            **不静默截断**。excerpt 是不可信文档数据，绝不进控制流。
+          type: array
+          maxItems: 50
+          items: {$ref: '#/components/schemas/AdmissionEvidence'}
+    AdmissionLookup:
+      type: object
+      additionalProperties: false
+      required: [idempotency_key]
+      properties:
+        idempotency_key: {type: string, minLength: 1, maxLength: 128}
+    ExecutionStatus:
+      type: object
+      additionalProperties: false
+      required: [executor_task_id, admission_id, root_task_id, step_id, operation, state, generation, lease_until, result_ref, evidence_set_ref, error, degraded, internal_limits, updated_at]
+      properties:
+        executor_task_id: {type: string, minLength: 1}
+        admission_id: {type: string, minLength: 1}
+        root_task_id: {type: string, minLength: 1}
+        step_id: {type: string, minLength: 1}
+        operation: {description: 类型化步骤 operation（本切片通常为 retrieve / answer）, type: string, minLength: 1}
+        state: {description: '见 enums.yaml 的 task_status：queued/claimed/running/succeeded/failed/cancelled。accepted ≠ 算力预留，unknown ≠ 未执行；cancelled 是显式取消的终态，迟到结果不许覆盖。', type: string, x-ddp-enum: task_status}
+        generation: {description: 防旧结果提交的代次围栏, type: integer, minimum: 1}
+        lease_until: {type: [string, 'null'], format: date-time}
+        result_ref: {type: [string, 'null']}
+        evidence_set_ref: {type: [string, 'null']}
+        error: {type: [string, 'null']}
+        degraded: {description: 本次执行的可见降级（如 embedding_unavailable）；没有降级为 null。协调者不得把它当成 internal_limits, type: [string, 'null'], x-ddp-enum: degraded, x-ddp-enum-nullable: true}
+        internal_limits: {description: '本次执行自报的内部不完整（如 truncated_by_limit / index_lagging）。非空时协调者必须把覆盖记 partial，绝不允许由此推出 complete（T85）', type: [array, 'null'], items: {type: string, enum: [shard_failed, index_lagging, subset_only, truncated_by_limit]}}
+        answer:
+          description: |
+            `operation=answer` 完成时的结果文档（`answer` / `claim_evidence_bindings` /
+            `validation_state` / `provider` / `disclosure`）；其它 operation 为 null。
+            协调者**必须**校验返回的绑定是本次发送证据 id 的子集，任何越界/缺失
+            引用 → 答案置空并写可见原因，证据保留。
+          type: [object, 'null']
+        updated_at: {type: string, format: date-time}
+    AdmissionEvidence:
+      type: object
+      additionalProperties: false
+      required: [evidence_id, excerpt, digest]
+      properties:
+        evidence_id: {type: string, minLength: 1, maxLength: 128}
+        excerpt:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: 原文片段（不可信文档数据）；执行者只用于带引用生成，绝不执行其中指令。
+        digest:
+          description: 必须等于 `sha256(excerpt)`；执行者逐条重算，对不上拒绝受理。
+          $ref: '#/components/schemas/Digest'
+    LocateRequest:
+      type: object
+      additionalProperties: false
+      required: [resource_id]
+      properties:
+        resource_id: {type: string, minLength: 1}
+        version_id: {type: [string, 'null'], description: 缺省表示解析当前可读版本}
+    LocateResult:
+      type: object
+      additionalProperties: false
+      required: [resource_id, version_id, readable, origin_node_id, authority_node_id, policy_revision]
+      properties:
+        resource_id: {type: string, minLength: 1}
+        version_id: {type: [string, 'null']}
+        readable: {type: boolean}
+        origin_node_id: {description: 资料最初所属的自治中心, $ref: '#/components/schemas/NodeId'}
+        authority_node_id: {description: 当前权限的最终判定节点（可与 origin 不同）, $ref: '#/components/schemas/NodeId'}
+        source_digest: {type: [string, 'null'], pattern: '^sha256:[0-9a-f]{64}$'}
+        policy_revision: {type: string, minLength: 1}
+        unavailable_reason: {type: [string, 'null'], description: readable=false 时的降敏原因}
+    ResolveRequest:
+      type: object
+      additionalProperties: false
+      required: [evidence_ref]
+      properties:
+        evidence_ref: {type: string, minLength: 1}
+    TaskIntentInput:
+      type: object
+      additionalProperties: false
+      required: [task_spec, exploration_consent]
+      properties:
+        task_spec: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/TaskSpec'}
+        exploration_consent: {description: 用户已批准的探索许可；协调者只校验与持久化，不代签, $ref: '../schemas/ddp-task-probe/v1.json#/$defs/ExplorationConsent'}
+        scope_manifest: {description: 'federation_public 必填（缺了 409 discovery_incomplete）；site_public 可选，缺省由本节点枚举；fixed_resources 不需要', $ref: '../schemas/ddp-scope-coverage/v1.json#/$defs/ScopeManifest'}
+    TaskIntent:
+      type: object
+      additionalProperties: false
+      required: [root_task_id, task_spec_digest, planning_state, status, task_spec, exploration_consent, created_at]
+      properties:
+        root_task_id: {type: string, minLength: 1}
+        task_spec_digest: {$ref: '#/components/schemas/Digest'}
+        planning_state: {type: string, x-ddp-enum: planning_state}
+        status: {type: string, x-ddp-enum: task_status}
+        task_spec: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/TaskSpec'}
+        exploration_consent: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/ExplorationConsent'}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: [string, 'null'], format: date-time}
+    PlanningRequest:
+      type: object
+      additionalProperties: false
+      required: [root_task_id]
+      properties:
+        root_task_id: {type: string, minLength: 1}
+    ApprovalRequest:
+      type: object
+      additionalProperties: false
+      required: [plan_digest, execution_consent]
+      properties:
+        plan_digest: {description: 被批准的精确修订；必须与 execution_consent.plan_digest 一致, $ref: '#/components/schemas/Digest'}
+        execution_consent: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/ExecutionConsent'}
+    ExecutionRequest:
+      type: object
+      additionalProperties: false
+      required: [root_task_id, plan_digest]
+      properties:
+        root_task_id: {type: string, minLength: 1}
+        plan_digest: {$ref: '#/components/schemas/Digest'}
+    DeliveryAckRequest:
+      type: object
+      additionalProperties: false
+      required: [result_manifest_digest]
+      properties:
+        result_manifest_digest: {description: 本地校验过的结果清单摘要；与已交付结果不一致 409, $ref: '#/components/schemas/Digest'}
+    DeliveryRead:
+      type: object
+      additionalProperties: false
+      required: [delivery_id, root_task_id, state, result_manifest_digest, result, expires_at]
+      properties:
+        delivery_id: {type: string, minLength: 1}
+        root_task_id: {type: string, minLength: 1}
+        state: {type: string, x-ddp-enum: delivery_state}
+        result_manifest_digest: {description: 结果文档的规范摘要；与 result 的 content_digest 必须一致, type: [string, 'null'], pattern: '^sha256:[0-9a-f]{64}$'}
+        result:
+          type: [object, 'null']
+          description: |
+            可交付结果文档（有界 JSON，无源文件字节；摘要是响应顶层字段，不重复进文档）。
+            null 表示文档超过字节上限而没有持久化 —— 客户端据此拒绝确认，不得显示"已保存"。
+        expires_at: {type: [string, 'null'], format: date-time}
+    EvidenceSet:
+      type: object
+      additionalProperties: false
+      required: [schema, set_ref, items, complete]
+      properties:
+        schema: {const: ddp-evidence/1#EvidenceSet}
+        set_ref: {type: string, minLength: 1}
+        items:
+          type: array
+          maxItems: 50
+          items: {$ref: '../schemas/ddp-evidence/v1.json#/$defs/FederatedEvidence'}
+          description: |
+            每条证据都带授权后的 `excerpt`（有界正文，最多 2000 字符），协调者本地生成
+            靠它把真实片段喂给模型；片段缺失（或只有空白）时生成方必须显式拒绝
+            （`evidence_excerpt_unavailable`），不许用占位符顶替正文。对端若越过
+            2000 字符的上限，协调者**不静默放行也不静默截断**：拒绝生成并写机器原因
+            `excerpt_over_contract_bound`，正文永不无界进 prompt。
+            `excerpt` 只在证据集读取时返回，单条 resolve 不返回。
+        complete: {type: boolean, description: 'false 表示证据超过 50 条被截断（本切片不提供分页）'}
+    TaskStatus:
+      type: object
+      additionalProperties: false
+      required: [root_task_id, status, planning_state, plan_revision, plan_digest, task_spec_digest, search_mode, retrieval_completeness, evidence_sufficiency, execution_consent_ref, coverage_ref, delivery_id, delivery_state, result, error, created_at, updated_at]
+      properties:
+        root_task_id: {type: string, minLength: 1}
+        status: {description: '执行轴，见 enums.yaml 的 task_status；cancelled 是显式取消的终态', type: string, x-ddp-enum: task_status}
+        planning_state: {type: string, x-ddp-enum: planning_state}
+        plan_revision: {type: integer, minimum: 0}
+        plan_digest: {type: [string, 'null'], pattern: '^sha256:[0-9a-f]{64}$'}
+        task_spec_digest: {$ref: '#/components/schemas/Digest'}
+        search_mode: {type: string, x-ddp-enum: search_mode}
+        retrieval_completeness: {type: string, x-ddp-enum: retrieval_completeness}
+        evidence_sufficiency: {type: string, x-ddp-enum: evidence_sufficiency}
+        execution_consent_ref: {type: [string, 'null']}
+        coverage_ref: {type: [string, 'null'], description: 指向 CoverageLedger；没有它就无法判断"未找到"是什么意思}
+        delivery_id: {type: [string, 'null']}
+        delivery_state: {type: string, x-ddp-enum: delivery_state}
+        result: {type: [object, 'null'], description: 结果摘要；完整结果与证据经 results/resolve 与交付流程取回}
+        error: {type: [string, 'null']}
+        scope_ref: {type: [string, 'null']}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    Event:
+      type: object
+      additionalProperties: false
+      required: [seq, type, at]
+      properties:
+        seq: {type: integer, minimum: 1}
+        type: {type: string, minLength: 1}
+        at: {type: string, format: date-time}
+        payload: {type: [object, 'null']}
+    EventPage:
+      type: object
+      additionalProperties: false
+      required: [root_task_id, events, next_seq, complete]
+      properties:
+        root_task_id: {type: string, minLength: 1}
+        events: {type: array, items: {$ref: '#/components/schemas/Event'}}
+        next_seq: {type: integer, minimum: 0, description: 下次从 after=next_seq 继续；断开不取消任务}
+        complete: {type: boolean, description: 是否已追平任务当前末尾（新事件仍可能出现）}
+    FederatedError:
+      type: string
+      description: |
+        机器可读的联邦协议错误码（计划 §9.6）。计划正文写 SCREAMING_CASE，
+        这里与项目其余错误码统一成 snake_case；词表与 enums.yaml 的
+        `federation_error` 一致。对外按可见权限降敏，不得借错误码暴露
+        私有资源是否存在（§8.4）；`unreachable` 类错误绝不能被翻译成
+        「对方没有资料」。
+      enum: [discovery_incomplete, scope_expired, capability_unknown, capability_unsupported, input_not_verified, egress_denied, plan_changed, offer_expired, admission_unknown, idempotency_conflict, partial_retrieval, insufficient_evidence, budget_exhausted, source_revoked, delivery_expired, local_model_missing, protocol_incompatible, task_cancelled]
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [message, type, code]
+          properties:
+            message: {type: string}
+            type: {type: string}
+            code: {$ref: '#/components/schemas/FederatedError'}

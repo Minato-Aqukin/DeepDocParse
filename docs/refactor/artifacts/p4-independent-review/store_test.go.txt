@@ -1,0 +1,28 @@
+package store
+import (
+ "context"
+ "testing"
+ "time"
+ "github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/auth"
+ "github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/discovery"
+)
+func TestIndependentSnapshotPermissionEpochDoesNotRevive(t *testing.T) {
+ s:=&Store{pool:testPool(t)}; ctx:=context.Background(); org:=seedOrg(t,s)
+ r:=testNode("changing-visibility",true); registerApproved(t,s,org,r)
+ snap,e:=s.CreateMemberSnapshot(ctx,org,"alice","alice-scope","local-node",false,1,time.Minute); if e!=nil{t.Fatal(e)}
+ r.Descriptor.Revision=2; r.VisibleToOrg=false; if _,e=s.RegisterNode(ctx,org,r);e!=nil{t.Fatal(e)}
+ if _,e=s.SetNodeState(ctx,org,r.Descriptor.NodeID,"approved");e!=nil{t.Fatal(e)}
+ p,e:=s.MemberSnapshotPage(ctx,org,"alice","alice-scope",snap.ID,"",false);if e!=nil{t.Fatal(e)}
+ if p.Members[0].State!="revoked"{t.Fatal("fixture did not revoke visibility")}
+ r.Descriptor.Revision=3;r.VisibleToOrg=true;if _,e=s.RegisterNode(ctx,org,r);e!=nil{t.Fatal(e)}
+ if _,e=s.SetNodeState(ctx,org,r.Descriptor.NodeID,"approved");e!=nil{t.Fatal(e)}
+ p,e=s.MemberSnapshotPage(ctx,org,"alice","alice-scope",snap.ID,"",false);if e!=nil{t.Fatal(e)}
+ if p.Members[0].State!="revoked"{t.Errorf("counterexample: old revoked snapshot revived state=%s descriptor_revision=%d",p.Members[0].State,p.Members[0].Descriptor.Revision)}
+}
+func TestIndependentActualJSONBDigest(t *testing.T){
+ s,org,opts:=scopeFixture(t);opts.Operation="search中文<&>\u2028x"; id:=auth.NewID()
+ out,e:=s.CreateScope(context.Background(),org,"alice","scope-alice","local-node",id,false,opts,testScopeCatalog(id));if e!=nil{t.Fatal(e)}
+ restored,e:=s.ScopeManifest(context.Background(),org,"scope-alice",id);if e!=nil{t.Fatal(e)}
+ if e=discovery.FinalizeScope(&restored.Manifest);e!=nil{t.Fatal(e)}
+ if restored.Manifest.ManifestDigest!=out.Manifest.ManifestDigest{t.Fatal("JSONB changed digest")}
+}

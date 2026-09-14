@@ -42,6 +42,9 @@ jobs:
                       -e services/corpus-worker \
                       -e "services/corpus-api[dev]" \
                       -e "services/mcp[dev]"
+          # jsonschema 目前是 mcp SDK 的传递依赖，但 scripts/check_federation_contracts.py
+          # 直接依赖它 —— **显式装**，别指望别人的依赖树替我们保证门禁能跑。
+          pip install jsonschema
 
       # 契约生成物过期 = 三种语言的枚举开始漂。
       # gofmt 要在 PATH 上，否则 Go 生成物会格式不一致
@@ -50,6 +53,12 @@ jobs:
 
       - name: 契约守卫（契约 ←→ 网关端点）
         run: python scripts/check_contract.py
+
+      - name: 联邦契约（schema ←→ 枚举 ←→ 夹具）
+        run: python scripts/check_federation_contracts.py
+
+      - name: 联邦任务路由（契约端点 ←→ corpus-api 实际路由）
+        run: python scripts/check_federation_routes.py
 
       - name: 数据所有权（企业边界 5）
         run: python scripts/check_data_ownership.py
@@ -63,6 +72,9 @@ jobs:
 
       - name: 枚举用法都在契约内
         run: python scripts/check_enum_usage.py
+
+      - name: 日志脱敏（凭据/正文不得进日志）
+        run: python scripts/check_log_redaction.py --with-self-test
 
       - name: control 迁移的两份副本一致
         run: python scripts/check_control_migrations.py

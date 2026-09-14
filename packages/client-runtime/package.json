@@ -1,0 +1,8 @@
+{
+  "name": "@ddp/client-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./sqlite-store": "./src/sqlite-store.ts", "./http-provider": "./src/http-provider.ts" },
+  "scripts": { "test": "node --test test/*.test.mjs" }
+}

@@ -1,0 +1,53 @@
+{
+  "schema": "ddp-scope-coverage/1#CoverageLedger",
+  "root_task_id": "task-9",
+  "scope_ref": "scope-17",
+  "search_mode": "exhaustive_scope",
+  "enumeration_state": "sealed",
+  "retrieval_completeness": "complete",
+  "evidence_sufficiency": "sufficient_by_policy",
+  "entries": [
+    {
+      "target_key": {
+        "origin_node_id": "node-b",
+        "collection_id": "b:robotics",
+        "operation": "corpus.retrieve"
+      },
+      "scope_ref": "scope-17",
+      "query_or_subquery_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "state": "succeeded",
+      "probe_receipts": [
+        "probe-b-21"
+      ],
+      "actual_index_revision": "index-42",
+      "search_profile": "bm25+vector",
+      "attempts": 1,
+      "evidence_refs": [
+        "ev-1"
+      ],
+      "used_budget": {
+        "requests": 1,
+        "bytes": 4096
+      }
+    },
+    {
+      "target_key": {
+        "origin_node_id": "node-b",
+        "collection_id": "b:robotics",
+        "operation": "wiki.pages"
+      },
+      "scope_ref": "scope-17",
+      "query_or_subquery_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "state": "unsupported",
+      "attempts": 1,
+      "exclusion_basis": "capability-profile node-b rev 3: wiki.pages 未注册"
+    }
+  ],
+  "counts": {
+    "total_targets": 2,
+    "applicable_targets": 1,
+    "succeeded": 1,
+    "excluded": 1,
+    "incomplete": 3
+  }
+}

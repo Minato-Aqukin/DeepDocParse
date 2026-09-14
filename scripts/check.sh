@@ -53,6 +53,9 @@ if want guards; then
   run "块类型判据"        "$PY" scripts/check_blocktype_parity.py
   run "分块回归"          "$PY" scripts/check_chunk_regression.py
   run "枚举用法"          "$PY" scripts/check_enum_usage.py
+  run "日志脱敏"          "$PY" scripts/check_log_redaction.py --with-self-test
+  run "联邦契约"          "$PY" scripts/check_federation_contracts.py
+  run "联邦任务路由"      "$PY" scripts/check_federation_routes.py
   run "control 迁移同步"  "$PY" scripts/check_control_migrations.py
   run "配置参考文档"      "$PY" scripts/gen_config_docs.py --check
   run "架构守卫"          "$PY" -m pytest -q
@@ -72,6 +75,7 @@ if want python; then
   run "ruff（F,B）"   "$PY" -m ruff check . --select F,B \
       --ignore F401,B008,B905,B904,B007
   run "ddp_core"       in_dir python/ddp_core        "$PY" -m pytest -q
+  run "ddp_local"      in_dir python/ddp_local       "$PY" -m pytest -q
   run "model-gateway"  in_dir services/model-gateway "$PY" -m pytest -q
   run "corpus-api"     in_dir services/corpus-api    "$PY" -m pytest -q
   run "corpus-worker"  in_dir services/corpus-worker "$PY" -m pytest -q
@@ -119,6 +123,11 @@ if want web; then
   if [ -d apps/web/node_modules ]; then
     run "前端类型检查"  in_dir apps/web npm run --silent type-check
     run "前端单测"      in_dir apps/web npx vitest run
+    run "连接层类型检查" in_dir apps/web npx tsc -p ../../packages/client-runtime/tsconfig.json
+    run "连接层持久化与协议" node --test packages/client-runtime/test/*.test.mjs
+    # 与 windows-latest 工作流的「桌面主机测试」同一套用例（WSL 垫片在
+    # Linux 上真跑；真 tarball 不存在时用例自己 skip 并打印理由）。
+    run "桌面主机测试" node --test apps/desktop/test/*.test.mjs
   else
     printf '\033[33m>>> 跳过前端：apps/web/node_modules 不存在（npm ci）\033[0m\n'
     FAILED+=("前端（依赖未安装）")

@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/identity"
 	"net/http"
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/apierr"
@@ -30,12 +31,30 @@ func (s *Server) handleFileByToken(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 
+	// Legacy grants have no subject; guessing one would inherit another user's ACL.
+	if grant.SubjectID == "" {
+		return apierr.NotFound("no_such_file", "文件不存在或凭证已失效")
+	}
+	user, err := s.store.UserByID(r.Context(), grant.OrganizationID, grant.SubjectID)
+	if err != nil || !user.Active() {
+		return apierr.NotFound("no_such_file", "文件不存在或凭证已失效")
+	}
+	actor := &identity.Actor{ID: user.ID, UserID: user.ID, Kind: identity.KindUser,
+		OrganizationID: user.OrganizationID, Role: user.Role}
+	access, err := s.documentAccess(r.Context(), actor, grant.DocumentID, grant.ResourceID)
+	if err != nil {
+		return err
+	}
+	if access.ObjectKey != grant.ObjectKey || access.ResourceID != grant.ResourceID {
+		return apierr.NotFound("no_such_file", "文件不存在或凭证已失效")
+	}
+
 	// service 侧只做下载，一律 attachment：
 	// inline 打开一个上传上来的 text/html 就是本站同源 XSS
 	disposition := "attachment"
 	// **内网 endpoint 签名**：这条 URL 的消费者是 model-gateway（容器里的进程），
 	// 不是浏览器。给浏览器的那条是 handleDownloadURL，用 PresignGet
-	name := grant.Filename
+	name := access.Filename
 	if name == "" {
 		name = grant.DocumentID
 	}
@@ -64,8 +83,12 @@ func (s *Server) handleDownloadURL(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 	docID := r.PathValue("document_id")
+	access, err := s.documentAccess(r.Context(), actor, docID, r.URL.Query().Get("resource_id"))
+	if err != nil {
+		return err
+	}
 
-	grant, err := s.store.StableGrantFor(r.Context(), actor.OrganizationID, docID, "", "", "")
+	grant, err := s.store.StableGrantFor(r.Context(), actor.OrganizationID, docID, actor.UserID, access.ResourceID, access.ObjectKey, access.MIME, access.Filename)
 	if err != nil || grant.ObjectKey == "" {
 		// 还没有凭证说明这份文档不属于本组织，或者还没归档完
 		return apierr.NotFound("no_such_document", "文档不存在或尚未归档")
@@ -84,7 +107,7 @@ func (s *Server) handleDownloadURL(w http.ResponseWriter, r *http.Request) error
 	// **文件名用凭证里存的那个，不是 document id。**
 	// 这条 URL 跨源，浏览器忽略 <a download> 的提示 —— 服务端签的这个说了算。
 	// 拿 docID 当文件名的话，用户下到的是 `46250ceb…`（还没有扩展名）
-	filename := grant.Filename
+	filename := access.Filename
 	if filename == "" {
 		filename = docID // 老凭证没存名字，退回旧行为而不是给个空名
 	}

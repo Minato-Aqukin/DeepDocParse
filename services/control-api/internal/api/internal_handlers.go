@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/identity"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -40,6 +41,8 @@ func (s *Server) handleInternalFileGrant(w http.ResponseWriter, r *http.Request)
 	var body struct {
 		OrganizationID string `json:"organization_id"`
 		DocumentID     string `json:"document_id"`
+		SubjectID      string `json:"subject_id"`
+		ResourceID     string `json:"resource_id"`
 		ObjectKey      string `json:"object_key"`
 		MIME           string `json:"mime"`
 		// 原始文件名。语料侧知道它，control 侧不知道 —— 而签名 URL 的
@@ -49,14 +52,26 @@ func (s *Server) handleInternalFileGrant(w http.ResponseWriter, r *http.Request)
 	if err := httpx.DecodeJSON(r, &body); err != nil {
 		return err
 	}
-	if body.DocumentID == "" || body.ObjectKey == "" {
-		return apierr.BadRequest("bad_grant_request", "document_id 与 object_key 必填")
+	if body.DocumentID == "" || body.ObjectKey == "" || body.SubjectID == "" {
+		return apierr.BadRequest("bad_grant_request", "document_id、object_key 与 subject_id 必填")
 	}
 	if body.OrganizationID == "" {
 		body.OrganizationID = s.defaultOrg
 	}
+	user, err := s.store.UserByID(r.Context(), body.OrganizationID, body.SubjectID)
+	if err != nil || !user.Active() {
+		return apierr.NotFound("no_such_document", "文档不存在或无权访问")
+	}
+	access, err := s.documentAccess(r.Context(), &identity.Actor{ID: user.ID, UserID: user.ID,
+		Kind: identity.KindUser, OrganizationID: user.OrganizationID, Role: user.Role}, body.DocumentID, body.ResourceID)
+	if err != nil {
+		return err
+	}
+	if access.ObjectKey != body.ObjectKey {
+		return apierr.NotFound("no_such_document", "文档不存在或无权访问")
+	}
 	grant, err := s.store.StableGrantFor(r.Context(), body.OrganizationID,
-		body.DocumentID, body.ObjectKey, body.MIME, body.Filename)
+		body.DocumentID, body.SubjectID, access.ResourceID, access.ObjectKey, access.MIME, access.Filename)
 	if err != nil {
 		return err
 	}

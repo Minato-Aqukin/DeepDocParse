@@ -11,7 +11,7 @@
    反向依赖会把服务的应用层（config / task_store / FastAPI）拖进别人的进程。
 2. **依赖切分**：`ddp_core` 里碰数据库的模块要 SQLAlchemy，在 `[db]` extra 里；
    **model-gateway 一行 ORM 都不 import，venv 里压根没装**。
-   MCP 与 corpus-api 是语料消费方，允许越界。
+   corpus-api 通过 db extra 访问语料；MCP 通过带 actor 的 HTTP 访问语料。
 3. **所有 httpx 客户端必须 `trust_env=False`**：带代理变量的机器上，
    内网调用会被塞进代理并**卡住而不是报错**。
 """
@@ -43,7 +43,7 @@ def _imports(path: pathlib.Path, *, top_level_only: bool) -> set[str]:
 
 
 def _core_modules() -> list[pathlib.Path]:
-    return sorted(CORE.glob("*.py"))
+    return sorted(CORE.rglob("*.py"))
 
 
 def test_ddp_core_never_imports_a_service_package():
@@ -141,14 +141,16 @@ def test_gateway_does_not_reach_into_the_corpus_layer():
         + "。gateway 的 venv 没有 sqlalchemy，容器会起不来")
 
 
-def test_mcp_declares_the_corpus_layer():
-    """MCP 是语料服务：必须显式依赖带 ORM 的那一层。
-
-    漏了的表现是镜像起来直接 ModuleNotFoundError（好的那种），
-    但**只在生产**：开发共享 venv 里 sqlalchemy 一直在。
-    """
+def test_mcp_cannot_import_the_corpus_database_layer():
+    """MCP must go through actor-authorized corpus HTTP, never a whole-database connection."""
     pyproject = (MCP.parent / "pyproject.toml").read_text(encoding="utf-8")
-    assert "ddp-core[db]" in pyproject, "MCP 没声明 ddp-core[db]"
+    assert '"ddp-core"' in pyproject and "ddp-core[db]" not in pyproject
+    for path in MCP.rglob("*.py"):
+        modules = _imports(path, top_level_only=False)
+        forbidden = {module for module in modules if module == "ddp_core.models"
+                     or module.startswith("ddp_core.models.")
+                     or module.split(".")[0] in CORPUS_DEPS}
+        assert not forbidden, (path, forbidden)
 
 
 def test_the_boundary_scan_actually_covers_something():
@@ -594,13 +596,14 @@ def test_mcp_mount_path_matches_what_the_entry_strips():
         "入口把 /mcp 剥成了 /，MCP 服务就必须挂在 / —— "
         'mcp.run(...) 里少了 path="/"，整个 MCP 平面会 404')
 
-    # **第三个消费方。** e2e 是直连 9100 的（不经入口，所以不剥前缀），
-    # 它的默认地址也必须指向同一个挂载点 —— 二次验收指出，只钉入口与服务
-    # 两边的话，这一条会安静地过期成一个必然 404 的默认值。
+    # e2e 必须验证带用户鉴权的入口，不能直连受信内网端口冒充用户路径。
     e2e = (ROOT / "scripts" / "e2e_mcp.py").read_text(encoding="utf-8")
-    default_url = re.search(r'MCP_URL\s*=\s*os\.environ\.get\(\s*"MCP_URL"\s*,\s*"([^"]*)"',
-                            e2e)
-    assert default_url, "scripts/e2e_mcp.py 里找不到 MCP_URL 的默认值"
-    assert default_url.group(1).endswith(":9100/"), (
-        f"e2e 直连的默认地址是 {default_url.group(1)}，而 MCP 服务挂在 / —— "
-        "它不经入口，没人替它剥前缀，写成 /mcp 必然 404")
+    tree = ast.parse(e2e)
+    url_property = next(node for node in ast.walk(tree)
+                        if isinstance(node, ast.FunctionDef) and node.name == "mcp_url")
+    returned = next(node.value for node in url_property.body if isinstance(node, ast.Return))
+    assert isinstance(returned, ast.BinOp) and isinstance(returned.op, ast.Add)
+    assert isinstance(returned.left, ast.Attribute) and returned.left.attr == "base_url"
+    assert isinstance(returned.right, ast.Constant) and returned.right.value == "/mcp/"
+    default_url = re.search(r'env.get\("CONTROL_BASE_URL",\s*"([^"]+)"\)', e2e)
+    assert default_url and default_url.group(1) == "http://127.0.0.1:8080"

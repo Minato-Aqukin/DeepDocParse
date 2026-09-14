@@ -17,7 +17,8 @@ dependencies = [
 # **这个切分不是包装技巧，是服务边界的物理体现。**
 #
 # model-gateway 是无状态的 HTTP 适配层，一行 ORM 都不该 import；
-# corpus-api / corpus-worker / mcp 是有状态的语料侧，它们要 ORM。
+# corpus-api / corpus-worker 是有状态的语料侧，它们要 ORM。
+# local runtime 使用 SQLite 标准库，MCP 使用语料 HTTP API；两者不安装 [db]。
 # 合仓前这条线靠 `gateway[corpus]` extra 表达，合仓后靠这里。
 #
 # 丢掉这条线的表现不会是报错，而是几个月后某次 docker build 变大、没人察觉，

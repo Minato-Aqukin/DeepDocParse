@@ -1,0 +1,12 @@
+{
+  "target_key": {
+    "origin_node_id": "node-b",
+    "collection_id": "b:robotics",
+    "operation": "wiki.pages"
+  },
+  "scope_ref": "scope-17",
+  "query_or_subquery_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "state": "unsupported",
+  "attempts": 1,
+  "exclusion_basis": "capability-profile node-b rev 3: wiki.pages 未注册"
+}

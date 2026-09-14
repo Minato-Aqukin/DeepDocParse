@@ -1,0 +1,13 @@
+{
+  "schema": "ddp-discovery/1#RouteRecord",
+  "origin_node_id": "node-b",
+  "next_hop_node_id": "node-p",
+  "path": [
+    "node-a",
+    "node-p",
+    "node-b"
+  ],
+  "observed_by": "node-a",
+  "observed_at": "2026-09-12T00:00:00Z",
+  "valid_until": "2026-09-13T00:00:00Z"
+}

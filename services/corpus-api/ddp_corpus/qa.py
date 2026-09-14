@@ -27,7 +27,6 @@ from ddp_corpus.config import rerank_config, settings
 from ddp_corpus.crops import get_or_create_crop
 from ddp_corpus.models import Chunk, Document, Evidence, ParseJob
 from ddp_core.agent import CandidateDecision, QueryDecision, gate_candidates
-from ddp_core.anchor import same_content
 from ddp_core.rerank import rerank_hits
 from ddp_core.search import Hit, SearchIndex
 from ddp_corpus.storage import Storage
@@ -153,8 +152,21 @@ def retrieval_confidence(citations: list[dict]) -> dict:
 
 
 async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncClient, *,
-                   question: str, document: Document) -> Retrieval:
+                   question: str, document: Document, actor=None) -> Retrieval:
     """混合检索 + 出处裁剪。任何一步不可用都降级——但降级要**说出来**。"""
+    allowed_jobs = None
+    if actor is not None:
+        from ddp_corpus.policy import require_document
+        from ddp_corpus.document_context import document_context
+        from ddp_corpus.errors import APIError
+        await require_document(session, actor, document.id)
+        context = await document_context(session, actor, document)
+        allowed_jobs = [context.parse_job_id] if context.parse_job_id else []
+        if context.resource_id and (not allowed_jobs or not await session.scalar(
+                select(Chunk.id).where(Chunk.document_id == document.id,
+                                      Chunk.parse_job_id.in_(allowed_jobs)).limit(1))):
+            raise APIError(409, "fixed resource version has no searchable index",
+                           "invalid_request_error", "resource_index_unavailable")
     degraded: str | None = None
     try:
         vector = await embed_one(http, question)
@@ -173,6 +185,7 @@ async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncC
 
     raw_hits = await index.search(session, vector=vector, query=question,
                               document_id=document.id,
+                              authorized_parse_job_ids=allowed_jobs,
                               limit=limit, candidates=candidates,
                               # 先保留候选，再由逐篇门控作决定；在 SearchIndex 里提前
                               # 丢掉就无法报告门控前精确率，也看不见“为什么没引”。
@@ -186,6 +199,8 @@ async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncC
     if not hits:
         return Retrieval(candidates=decisions, degraded=degraded or "gate_rejected_all")
 
+    if actor is not None:
+        await require_document(session, actor, document.id)
     hits, rerank_degraded = await rerank_hits(http, question, hits,
                                               top_k=settings.qa_top_k, cfg=rerank_config())
     # 向量化不可用比"没重排"严重得多，不能被后者盖掉 —— 前者意味着整条语义路都没跑
@@ -194,13 +209,17 @@ async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncC
 
 
 async def inherited_retrieval(session: AsyncSession,
-                              evidence_ids: list[str]) -> Retrieval:
+                              evidence_ids: list[str], *, actor=None) -> Retrieval:
     """把上一轮仍能接回当前 Chunk 的 Evidence 重建成 Retrieval；失效证据不继承。"""
     if not evidence_ids:
         return Retrieval(degraded="no_evidence_in_turn")
     evidence_rows = (await session.execute(
         select(Evidence).where(Evidence.id.in_(evidence_ids))
     )).scalars().all()
+    if actor is not None:
+        from ddp_corpus.document_context import search_contexts
+        allowed = await search_contexts(session, actor)
+        evidence_rows = [row for row in evidence_rows if row.parse_job_id in allowed]
     evidence_by_id = {row.id: row for row in evidence_rows}
     chunks = (await session.execute(
         select(Chunk).where(

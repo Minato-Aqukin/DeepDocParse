@@ -32,6 +32,7 @@ DDP_ROOT="${DDP_ROOT:-$( [ -d /root/autodl-tmp ] && echo /root/autodl-tmp || ech
 VENV="${VENV:-$DDP_ROOT/appvenv}"                 # **与模型线的 venv 分开**：
                                                   # 那边装 torch/vLLM，两者互不相干
 LOG_DIR="${LOG_DIR:-$DDP_ROOT/logs}"
+NODE_IDENTITY_DIR="${NODE_IDENTITY_DIR:-$DDP_ROOT/node-identity}" # 与数据库一致备份，不可当临时run目录清理
 RUN_DIR="${RUN_DIR:-$DDP_ROOT/run}"               # 进程的中立 CWD，见下方说明
 DIST="${DIST:-$SRC/apps/web/dist}"                # 前端构建产物（本地构建后推上来）
 # nginx 的 worker 不是 root，而产物大概率躺在 /root 下（700，进不去）——
@@ -408,11 +409,8 @@ do_start() {
   if ! alive "ddp_mcp.server"; then
     ( export SERVICE_TOKEN="$SERVICE_TOKEN" \
              GATEWAY_URL="http://127.0.0.1:$GATEWAY_PORT" \
-             CORPUS_DATABASE_URL="$corpus_db" \
-             MINIO_ENDPOINT="127.0.0.1:$MINIO_PORT" \
-             MINIO_ACCESS_KEY="$OBJECT_ACCESS_KEY" \
-             MINIO_SECRET_KEY="$OBJECT_SECRET_KEY" \
-             MINIO_BUCKET="$OBJECT_BUCKET" \
+             CORPUS_API_URL="http://127.0.0.1:$CORPUS_PORT" \
+             MCP_PUBLIC_BASE_URL="$PUBLIC_BASE" \
              REDIS_URL="redis://127.0.0.1:$REDIS_PORT/2" \
              MCP_HOST=127.0.0.1 MCP_PORT="$MCP_PORT"
       start_bg mcp "$RUN_DIR" "$VENV/bin/python" -m ddp_mcp.server ); sleep 4
@@ -423,7 +421,7 @@ do_start() {
   if ! alive "[c]ontrol-api"; then
     ( export CONTROL_ADDR="127.0.0.1:$CONTROL_PORT" \
              CONTROL_DATABASE_URL="postgres://ddp_control:$CONTROL_DB_PASSWORD@127.0.0.1:$PG_PORT/deepdocparse" \
-             CONTROL_AUTO_MIGRATE=false \
+             CONTROL_AUTO_MIGRATE=false NODE_IDENTITY_DIR="$NODE_IDENTITY_DIR" \
              JWT_SECRET="$JWT_SECRET" SERVICE_TOKEN="$SERVICE_TOKEN" \
              CORPUS_URL="http://127.0.0.1:$CORPUS_PORT" \
              GATEWAY_URL="http://127.0.0.1:$GATEWAY_PORT" \

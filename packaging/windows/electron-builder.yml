@@ -1,0 +1,106 @@
+# Windows packaging for the Tier A + WSL-bridge desktop host.
+#
+# How CI invokes it (W5 owns the workflow; run these from the repository root):
+#
+#   1. python scripts/build_desktop.py --platform win32-x64
+#      -> dist/desktop/deepdocparse-<version>-win32-x64/ (+ .zip/.sha256/.release.json)
+#         This verifies the pinned Electron zip and the W3-built WSL runtime,
+#         and assembles the plain-directory app that `--prepackaged` can use.
+#   2. npx --yes electron-builder@26.15.3 --config packaging/windows/electron-builder.yml \
+#        --projectDir . --win nsis portable --x64
+#      -> dist/desktop/windows/DeepDocParse-<version>-win-x64-setup.exe
+#         dist/desktop/windows/DeepDocParse-<version>-win-x64-portable.exe
+#
+# Step 2 is a *normal* electron-builder build: `electronDist` reuses the same
+# checksum-pinned zip from step 1, `files` assembles the app sources and
+# `extraResources` copies the already-built client-runtime / WSL runtime out of
+# the assembled directory. Keep apps/desktop/package.json's version equal to
+# `--version` (or pass `-c.extraMetadata.version=<version>`) so the ${version}
+# macros below resolve to the directory name step 1 produced.
+#
+# Fallback if a future electron-builder drops custom `electronDist` zips:
+#   npx --yes electron-builder@26.15.3 --config packaging/windows/electron-builder.yml \
+#     --prepackaged dist/desktop/deepdocparse-<version>-win32-x64 --win nsis portable --x64
+# In `--prepackaged` mode `files`/`extraResources` are ignored because the
+# directory is already complete (and it is the only mode where the packaged exe
+# name is exactly the directory's `deepdocparse.exe`).
+
+appId: org.deepdocparse.desktop
+productName: DeepDocParse
+copyright: DeepDocParse
+
+directories:
+  # apps/desktop holds package.json + src (main.mjs, preload.cjs, runtime-*.py).
+  app: apps/desktop
+  output: dist/desktop/windows
+
+# Reuse the exact archive build_desktop.py verified (sha256 pinned in
+# packaging/windows/electron-lock.json). Path is relative to the project dir.
+electronDist: apps/desktop/artifacts/download/electron-v44.3.0-win32-x64.zip
+# Pinned explicitly: electron lives in apps/desktop/node_modules, which is not
+# the project dir when CI invokes electron-builder from the repository root.
+electronVersion: 44.3.0
+extraMetadata:
+  author: DeepDocParse
+
+# The shared client-runtime is loaded by a runtime dynamic import of .ts files
+# (see apps/desktop/src/shared-client.mjs). asar would make that import depend
+# on Electron's asar fs shim for no benefit, so keep the plain-directory layout
+# that the Linux package and --prepackaged path already use.
+asar: false
+
+files:
+  - package.json
+  - src/**/*
+  # apps/web/dist goes inside the app dir because main.mjs serves
+  # app.getAppPath()/ui (FileSet.from is relative to directories.app).
+  - from: ../../apps/web/dist
+    to: ui
+
+extraResources:
+  # Everything below comes from the directory build_desktop.py assembled.
+  - from: dist/desktop/deepdocparse-${version}-win32-x64/resources/client-runtime
+    to: client-runtime
+  # runtime-info.json (WSL Linux ABI) + wsl-runtime.json (W3 lock).
+  - from: dist/desktop/deepdocparse-${version}-win32-x64/resources/runtime
+    to: runtime
+  # Bundled WSL runtime tarball + its .sha256 sidecar, same names as dist/.
+  - from: dist/desktop/deepdocparse-${version}-win32-x64/resources/deepdocparse-wsl-runtime-${version}-linux-x64.tar.gz
+    to: deepdocparse-wsl-runtime-${version}-linux-x64.tar.gz
+  - from: dist/desktop/deepdocparse-${version}-win32-x64/resources/deepdocparse-wsl-runtime-${version}-linux-x64.tar.gz.sha256
+    to: deepdocparse-wsl-runtime-${version}-linux-x64.tar.gz.sha256
+  - from: LICENSE
+    to: LICENSE.DeepDocParse
+
+artifactName: ${productName}-${version}-win-x64.${ext}
+
+win:
+  target:
+    - nsis
+    - portable
+  # Match the update channel: update_check.py looks for deepdocparse.exe, and
+  # build_desktop.py names the directory package's binary the same way.
+  executableName: deepdocparse
+  # v1 is deliberately unsigned (plan decision #6). Skipping resedit also keeps
+  # this config runnable on Linux build hosts without wine; enable it again
+  # once Authenticode signing exists.
+  signAndEditExecutable: false
+
+nsis:
+  # Assisted installer, per-user install (no elevation required); the user may
+  # pick another directory. The uninstaller is registered with the display name
+  # below, and the app data stays on uninstall (deleteAppDataOnUninstall is off).
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: DeepDocParse
+  uninstallDisplayName: ${productName} ${version}
+  runAfterFinish: true
+  artifactName: ${productName}-${version}-win-x64-setup.${ext}
+
+portable:
+  requestExecutionLevel: user
+  artifactName: ${productName}-${version}-win-x64-portable.${ext}

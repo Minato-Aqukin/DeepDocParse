@@ -16,7 +16,10 @@ _REFERENCE = re.compile(r"\[(\d+)]")
 _SENTENCE = re.compile(
     r"(?<=[。！？；;!?])\s*(?!\[\d+])"
     r"|(?<=[.])\s+(?!\[\d+])"
-    r"|(?<=\])\s*(?=(?!\[\d+])\S)"
+    # Citations can precede the sentence terminator: `42 [1].` / `125件[1]。`.
+    # Keep that terminator with its supported assertion, then split at the normal
+    # punctuation boundary. Splitting before it invents an unsupported '.' claim.
+    r"|(?<=\])\s*(?=(?!\[\d+]|[。！？；;!?.])\S)"
     r"|\n+"
 )
 _REFERENCE_GAP = re.compile(r"([。！？!?；;])\s+(?=\[\d+])")

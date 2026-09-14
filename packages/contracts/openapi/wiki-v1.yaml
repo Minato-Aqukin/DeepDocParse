@@ -1,0 +1,102 @@
+openapi: 3.1.0
+info:
+  title: DeepDocParse Versioned Wiki API
+  version: 1.0.0
+  description: See ../ddp/wiki-format.md for immutable revisions, source policy and budgets.
+paths:
+  /api/wikis:
+    get:
+      operationId: listVersionedWikis
+      responses: {'200': {description: Authorized Wiki revisions}}
+    post:
+      operationId: createVersionedWiki
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Build'}}}}
+      responses: {'201': {description: Fixed draft revision}, '409': {description: Idempotency conflict}}
+  /api/wikis/{wiki_id}:
+    parameters: [{$ref: '#/components/parameters/WikiId'}]
+    get:
+      operationId: readVersionedWiki
+      responses: {'200': {description: Authorized current or published revision}, '404': {description: Unavailable}}
+  /api/wikis/{wiki_id}/revisions:
+    parameters: [{$ref: '#/components/parameters/WikiId'}]
+    post:
+      operationId: rebuildVersionedWiki
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Rebuild'}}}}
+      responses: {'201': {description: New immutable draft preserving human paragraphs}, '409': {description: Revision or idempotency conflict}}
+  /api/wikis/{wiki_id}/revisions/{revision_id}:
+    parameters:
+      - {$ref: '#/components/parameters/WikiId'}
+      - {name: revision_id, in: path, required: true, schema: {type: string}}
+    get:
+      operationId: readWikiRevision
+      responses: {'200': {description: Fixed revision with dynamically checked staleness}, '404': {description: Unavailable}}
+  /api/wikis/{wiki_id}/pages/{page_key}:
+    parameters:
+      - {$ref: '#/components/parameters/WikiId'}
+      - {name: page_key, in: path, required: true, schema: {type: string}}
+    patch:
+      operationId: editWikiPage
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [base_revision_id, paragraphs]
+              properties:
+                base_revision_id: {type: string}
+                paragraphs:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [id, text]
+                    properties:
+                      id: {type: string, minLength: 1, maxLength: 64}
+                      text: {type: string, minLength: 1, maxLength: 10000}
+      responses: {'201': {description: New human edit revision}, '409': {description: Revision or idempotency conflict}}
+  /api/wikis/{wiki_id}/publish:
+    parameters: [{$ref: '#/components/parameters/WikiId'}]
+    post:
+      operationId: publishWikiRevision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [base_revision_id]
+              properties:
+                base_revision_id: {type: string}
+      responses: {'200': {description: Published fixed revision}, '409': {description: Revision or quality conflict}, '403': {description: Source publication denied}}
+components:
+  parameters:
+    WikiId: {name: wiki_id, in: path, required: true, schema: {type: string}}
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+  schemas:
+    Build:
+      type: object
+      required: [title, sources]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 255}
+        sources:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: object
+            required: [resource_id, source_version_id]
+            properties:
+              resource_id: {type: string}
+              source_version_id: {type: string}
+        max_pages: {type: integer, minimum: 1, maximum: 12, default: 4}
+        max_evidence: {type: integer, minimum: 1, maximum: 200, default: 50}
+        max_output_tokens: {type: integer, minimum: 256, maximum: 16384, default: 4096}
+        max_input_chars: {type: integer, minimum: 1000, maximum: 200000, default: 50000}
+    Rebuild:
+      allOf:
+        - {$ref: '#/components/schemas/Build'}
+        - {type: object, required: [base_revision_id], properties: {base_revision_id: {type: string}}}

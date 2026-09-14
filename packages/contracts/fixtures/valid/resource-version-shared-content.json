@@ -1,0 +1,12 @@
+{
+  "schema": "ddp-resource/1#ResourceVersion",
+  "version_id": "ver-b-1",
+  "resource_id": "res-b-1",
+  "version_no": 1,
+  "content_ref": "doc-1",
+  "source_digest": "abababababababababababababababababababababababababababababababab",
+  "filename": "handbook.pdf",
+  "size_bytes": 1024,
+  "created_at": "2026-09-12T00:00:00Z",
+  "deleted_at": null
+}

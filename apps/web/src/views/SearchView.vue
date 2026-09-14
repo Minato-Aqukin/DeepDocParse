@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { searchApi } from '@/api'
@@ -16,16 +16,28 @@ const groups = ref<SearchResult['groups']>([])
 const degraded = ref<string | null>(null)
 const loading = ref(false)
 
+let generation = 0
+onBeforeUnmount(() => { generation++ })
+
+function target(group: SearchResult['groups'][number]) {
+  return { name: 'workbench', params: { id: group.document_id }, query: {
+    resource_id: group.resource_id || undefined, version_id: group.source_version_id || undefined,
+    job: group.parse_revision,
+  } }
+}
+
 async function run() {
   if (!keyword.value.trim()) return
+  const current = ++generation
   loading.value = true
   try {
     const { data } = await searchApi.query(keyword.value)
+    if (current !== generation) return
     groups.value = data.groups
     degraded.value = data.degraded ?? null
     router.replace({ name: 'search', query: { q: keyword.value } })
   } finally {
-    loading.value = false
+    if (current === generation) loading.value = false
   }
 }
 
@@ -34,7 +46,7 @@ watch(() => route.query.q, run, { immediate: true })
 
 <template>
   <div class="bar">
-    <el-input v-model="keyword" placeholder="在本服务器的全部语料里检索" clearable class="search"
+    <el-input v-model="keyword" placeholder="在可访问的资源中检索" clearable class="search"
               @keyup.enter="run" />
     <el-button type="primary" :loading="loading" @click="run">搜索</el-button>
   </div>
@@ -48,17 +60,20 @@ watch(() => route.query.q, run, { immediate: true })
     title="向量化服务不可用，本次仅做了关键词检索（语义相近但用词不同的内容可能漏掉）"
   />
 
+  <el-alert v-if="degraded === 'resource_index_unavailable'" type="warning" :closable="false"
+    title="资源尚无可用的固定版本索引，请查看解析任务状态。" />
+
   <el-empty v-if="!groups.length && !loading" description="没有命中" />
 
-  <el-card v-for="group in groups" :key="group.document_id" shadow="never" class="group">
+  <el-card v-for="group in groups" :key="group.source_version_id || group.document_id" shadow="never" class="group">
     <template #header>
-      <router-link :to="`/documents/${group.document_id}`" class="filename">
+      <router-link :to="target(group)" class="filename">
         {{ group.filename }}
       </router-link>
       <span class="count">{{ group.hits.length }} 处命中</span>
     </template>
     <div v-for="(hit, i) in group.hits" :key="i" class="hit"
-         @click="router.push(`/documents/${group.document_id}`)">
+         @click="router.push(target(group))">
       <!-- 页码是元信息不是状态，按准则二排成普通文字，不做成标签 -->
       <span class="page ddp-cite-page">第 {{ hit.page_idx + 1 }} 页</span>
       <!-- 相关度用 similarity（有校准量纲），不用 score（RRF 名次分，表达不了相关度）。

@@ -107,3 +107,22 @@ derived evidence
 - `reindex_validation_required`（存在历史出处的复活文档，尚未获人工确认）
 
 如果连可检索源文本都没有，索引仍失败；不得用空描述或伪造整页 bbox 把状态装成 ready。
+
+## Independent fixed parse revisions (v3)
+
+Index and compilation state belongs to `ParseJob`, not to the shared content
+`Document`. Each fixed parse revision has `index_status`, `index_error`,
+`index_generation`, `index_lease_until`, `compile_status`, `compile_degraded`,
+`compile_fingerprint`, `layout_version` and `code_detection`.
+
+Index tasks include `document_id` and `job_id` and deduplicate by job. Claim,
+heartbeat, failure and final writes compare the same job generation. Rebuilding
+one job replaces only that job's chunks; other parse revisions and their original
+evidence remain queryable under their own source authorization. Selecting another
+current revision does not by itself invalidate a fixed citation.
+
+Document fields are a compatibility cache for its selected `current_job_id` only.
+Consumers with a resource/version binding must read their exact ParseJob state.
+A revoked/deleted input binding prevents subsequent model or embedding requests
+and final index publication for that job. It does not cancel another resource's
+independent job sharing the same content digest.

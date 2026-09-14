@@ -1,0 +1,78 @@
+from datetime import timedelta
+import json
+import pytest
+from sqlalchemy import text, update
+from conftest import actor_headers
+from ddp_corpus.collection_models import CollectionCatalogSnapshot
+from ddp_corpus.models import Resource, ParseJob, new_id, utcnow
+from test_collection_catalog import BASE, INTERNAL, body, internal, source
+from test_collection_catalog_pg import catalog_pg
+
+async def setup_case(catalog_pg):
+    client,factory=catalog_pg; org,owner=new_id(),new_id()
+    async with factory() as s:
+        r,v,p,d=await source(s,owner)
+        r.organization_id=d.organization_id=org
+        await s.commit()
+    h={**actor_headers(owner,organization_id=org), 'Idempotency-Key':'create'}
+    cr=await client.post(BASE,headers=h,json=body(v)); assert cr.status_code==201,cr.text
+    cid=cr.json()['collection_id']
+    pr=await client.post(f'{BASE}/{cid}/publish',headers={**h,'Idempotency-Key':'publish'},json={'expected_revision':1})
+    assert pr.status_code==200,pr.text
+    async def snap(**params):
+        return await client.get(INTERNAL,headers=internal(owner,org),params={'scope_id':'independent',**params})
+    first=(await snap(limit=1)).json()
+    return client,factory,org,owner,r,v,p,d,cid,snap,first
+
+async def test_independent_expired_invalid_cursor(catalog_pg):
+    client,factory,org,owner,r,v,p,d,cid,snap,first=await setup_case(catalog_pg)
+    async with factory() as s:
+        await s.execute(update(CollectionCatalogSnapshot).where(CollectionCatalogSnapshot.id==first['snapshot_id']).values(valid_until=utcnow()-timedelta(seconds=1)))
+        await s.commit()
+    result=await snap(snapshot_id=first['snapshot_id'],cursor='incorrect-cursor')
+    assert result.status_code==410,result.text
+    assert result.json()['error']['code']=='catalog_snapshot_invalid',result.text
+
+async def test_independent_private_changes_hidden_and_index_semantics(catalog_pg):
+    client,factory,org,owner,r,v,p,d,cid,snap,first=await setup_case(catalog_pg)
+    private_owner=new_id()
+    async with factory() as s:
+        hidden,hv,_,hd=await source(s,private_owner,'private')
+        hidden.organization_id=hd.organization_id=org
+        await s.commit()
+    h={**actor_headers(private_owner,organization_id=org),'Idempotency-Key':'hidden'}
+    cr=await client.post(BASE,headers=h,json={**body(hv),'name':'PRIVATE DECOY','topics':['not public']})
+    assert cr.status_code==201,cr.text
+    hidden_id=cr.json()['collection_id']
+    before=(await snap()).json()
+    assert before['total']==first['total']==1
+    assert before['registry_revision']==first['registry_revision']
+    await client.put(f'{BASE}/{hidden_id}',headers={**h,'Idempotency-Key':'replace'},json={**body(hv),'expected_revision':1,'topics':['PRIVATE CHANGE']})
+    after=(await snap()).json()
+    assert after['registry_revision']==first['registry_revision']
+    assert hidden_id not in json.dumps(after)
+    async with factory() as s:
+        await s.execute(update(ParseJob).where(ParseJob.id==p.id).values(index_generation=ParseJob.index_generation+1))
+        await s.commit()
+    stale=await snap(snapshot_id=first['snapshot_id'],cursor=first['terminal_cursor'])
+    assert stale.status_code==409 and stale.json()['error']['code']=='catalog_snapshot_changed'
+    assert 'revoked_collection_ids' not in stale.json()
+    fresh=(await snap()).json()
+    assert fresh['total']==1 and fresh['index_readiness'][cid]=='ready'
+    assert fresh['collections'][0]['index_revision']!=first['collections'][0]['index_revision']
+
+async def test_independent_authority_across_keys_orgs_and_wrong_cursor(catalog_pg):
+    client,factory,org,owner,r,v,p,d,cid,snap,first=await setup_case(catalog_pg)
+    target={'scope_id':'independent','snapshot_id':first['snapshot_id'],'cursor':first['terminal_cursor']}
+    h=internal(owner,org)
+    variants=[{**h,'X-DDP-Caller-Kind':'api_key','X-DDP-Caller-Actor':'new-key','X-DDP-Caller-User':owner},{**h,'X-DDP-Organization':'unrelated'},{**h,'X-DDP-Caller-Scope':'sha256:'+'a'*64}]
+    async with factory() as s:
+        await s.execute(update(Resource).where(Resource.id==r.id).values(publication='private'))
+        await s.commit()
+    for headers in variants:
+        denied=await client.get(INTERNAL,headers=headers,params=target)
+        assert denied.status_code==410 and 'revoked_collection_ids' not in denied.json(),denied.text
+    wrong=await snap(snapshot_id=first['snapshot_id'],cursor='incorrect')
+    assert wrong.status_code==410 and 'revoked_collection_ids' not in wrong.json()
+    actual=await snap(snapshot_id=first['snapshot_id'],cursor=first['terminal_cursor'])
+    assert actual.status_code==410 and actual.json()['revoked_collection_ids']==[cid]

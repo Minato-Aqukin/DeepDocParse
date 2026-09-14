@@ -24,7 +24,14 @@ declare module 'vue-router' {
  * 不需要改 AppShell，也不需要改导航配置。
  */
 export const routes: RouteRecordRaw[] = [
-  { path: '/', redirect: '/documents' },
+  { path: '/', redirect: () => window.ddpDesktop ? '/workspaces' : '/resources' },
+  { path: '/workspaces', name: 'environment-workspace', component: () => import('@/views/EnvironmentWorkspaceView.vue'),
+    meta: { title: '环境工作台', public: true, nav: false } },
+  {
+    path: '/resources', name: 'resources',
+    component: () => import('@/views/ResourcesView.vue'),
+    meta: { title: '资源库', icon: 'Files', group: 'workspace', nav: true },
+  },
 
   {
     path: '/login',

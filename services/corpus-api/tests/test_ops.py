@@ -36,6 +36,17 @@ async def _delete_and_age(client, session, document_id: str) -> None:
     row = await session.get(Document, document_id)
     await session.refresh(row)
     row.deleted_at = utcnow() - timedelta(seconds=settings.gc_grace_seconds + 60)
+    # Resource/Version now own deletion; age the logical tombstones as well, so
+    # this old storage test does not accidentally assert GC ignores their grace period.
+    from ddp_corpus.models import Resource, ResourceVersion
+    versions = list((await session.execute(select(ResourceVersion).where(
+        ResourceVersion.document_id == document_id))).scalars())
+    for version in versions:
+        if version.deleted_at:
+            version.deleted_at = row.deleted_at
+        resource = await session.get(Resource, version.resource_id)
+        if resource.deleted_at:
+            resource.deleted_at = row.deleted_at
     await session.commit()
 
 

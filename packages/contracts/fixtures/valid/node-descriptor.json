@@ -1,0 +1,22 @@
+{
+  "schema": "ddp-discovery/1#NodeDescriptor",
+  "node_id": "node-b",
+  "protocol_versions": [
+    "ddp-federation/1"
+  ],
+  "controlled_endpoints": [
+    {
+      "purpose": "federation",
+      "url": "https://b.example.org/api/v1/federation"
+    }
+  ],
+  "auth_methods": [
+    "mtls"
+  ],
+  "discovery_capabilities": {
+    "enumerate_members": true,
+    "catalog_events": true
+  },
+  "revision": 7,
+  "valid_until": "2026-09-13T00:00:00Z"
+}

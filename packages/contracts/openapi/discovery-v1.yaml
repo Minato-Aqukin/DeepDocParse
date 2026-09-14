@@ -1,0 +1,200 @@
+openapi: 3.1.0
+info:
+  title: DeepDocParse Managed Discovery Control API
+  version: 1.0.0
+  description: |
+    See ../ddp/discovery-control-format.md. Control owns node identity, approvals and
+    per-caller persistent directory snapshots. Peer reads expose only the approved,
+    organization-visible direct directory (X-DDP-Peer-Token, fail closed); recursive
+    expansion, budgets and loop detection live in the scope collector, not here.
+    No scanning, address probing or user-credential forwarding is provided.
+security: [{session: []}, {userKey: []}]
+paths:
+  /api/v1/federation/members:
+    get:
+      operationId: readPeerDirectoryMembers
+      security: [{peer: []}]
+      description: |
+        Node-level read of this directory's approved, organization-visible direct members.
+        Unconfigured peer token is 401. Hidden, pending and unauthorized members never
+        appear; descriptor routes, keys and sharing lists never leave the node. Pages are
+        a persistent frozen snapshot: continuation must pass snapshot_id and cursor, and
+        limit cannot change. Requesting the terminal cursor returns an empty complete page.
+      parameters:
+        - {name: snapshot_id, in: query, schema: {type: string, maxLength: 128}, description: Omitted on the first request only; a cursor without it is rejected}
+        - {name: cursor, in: query, schema: {type: string, maxLength: 128}, description: Opaque cursor bound to the frozen peer snapshot}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}, description: First-request page size only}
+      responses:
+        '200': {description: Stable member page with a separate empty terminal proof, content: {application/json: {schema: {$ref: '#/components/schemas/PeerMemberPage'}}}}
+        '400': {description: Invalid page options or cursor without snapshot_id}
+        '401': {description: peer_unauthenticated; unconfigured or wrong peer token}
+        '409': {description: wrong_target; X-DDP-Target-Node names another node}
+        '410': {description: Peer snapshot expired; create a new one}
+  /api/v1/federation/node:
+    get:
+      operationId: inspectAuthorityNode
+      security: []
+      parameters:
+        - name: challenge
+          in: query
+          schema: {type: string, pattern: '^[A-Za-z0-9_-]{32,64}$'}
+          description: Canonical raw base64url nonce; optional, requested proof binds configured public base URL.
+      responses:
+        '200': {description: Public identity, no workspace or user; challenge returns 60-second key-possession proof, content: {application/json: {schema: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/NodeHandshake'}}}}
+        '400': {description: Invalid or duplicate challenge}
+        '503': {description: Persistent identity unavailable}
+  /api/v1/capabilities:
+    get:
+      operationId: authenticatedCapabilities
+      responses:
+        '200': {description: Authenticated identity/profile and actually observed capabilities, content: {application/json: {schema: {$ref: '#/components/schemas/Handshake'}}}}
+        '401': {description: Missing, expired or revoked credentials}
+        '403': {description: Key lacks read scope or account disabled}
+  /api/v1/client/handshake:
+    get:
+      operationId: clientHandshake
+      description: Exact alias of authenticatedCapabilities; unimplemented client projections are absent from capabilities.
+      responses:
+        '200': {description: Authenticated capabilities, content: {application/json: {schema: {$ref: '#/components/schemas/Handshake'}}}}
+        '401': {description: Authentication required}
+  /api/v1/federation/capabilities:
+    get:
+      operationId: federationCapabilities
+      description: Exact alias of authenticatedCapabilities; admission remains disabled.
+      responses:
+        '200': {description: Authenticated capabilities, content: {application/json: {schema: {$ref: '#/components/schemas/Handshake'}}}}
+        '401': {description: Authentication required}
+  /api/v1/federation/nodes:
+    get:
+      operationId: adminListNodes
+      security: [{session: []}]
+      responses:
+        '200': {description: Administrator directory with config, health and admission separated}
+        '403': {description: Administrator session required}
+    post:
+      operationId: adminRegisterNode
+      security: [{session: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/DirectoryRegistration'}}}
+      responses:
+        '201': {description: Pending metadata registration; no remote request made}
+        '400': {description: Invalid identity, protocol or endpoint}
+        '403': {description: Administrator session required}
+        '404': {description: Sharing subject not in organization}
+        '409': {description: Stale revision or revoked identity}
+  /api/v1/federation/nodes/{node_id}/approve:
+    parameters: [{$ref: '#/components/parameters/NodeId'}]
+    post:
+      operationId: adminApproveNode
+      security: [{session: []}]
+      responses:
+        '200': {description: Approved configuration, not proof of health or node credential}
+        '403': {description: Administrator session required}
+        '404': {description: Node unavailable}
+        '409': {description: Expired descriptor or revoked node}
+  /api/v1/federation/nodes/{node_id}/revoke:
+    parameters: [{$ref: '#/components/parameters/NodeId'}]
+    post:
+      operationId: adminRevokeNode
+      security: [{session: []}]
+      responses:
+        '200': {description: Revoked idempotently; old snapshot member preserved}
+        '403': {description: Administrator session required}
+        '404': {description: Node unavailable}
+  /api/v1/federation/member-snapshots:
+    post:
+      operationId: createMemberSnapshot
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                page_size: {type: integer, minimum: 1, maximum: 100, default: 50}
+                ttl_seconds: {type: integer, minimum: 30, maximum: 3600, default: 900}
+      responses:
+        '201': {description: Frozen visible member set, content: {application/json: {schema: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/MemberSnapshot'}}}}
+        '400': {description: Invalid options or client-supplied caller scope}
+        '401': {description: Authentication required}
+  /api/v1/federation/member-snapshots/{snapshot_id}/members:
+    parameters:
+      - {name: snapshot_id, in: path, required: true, schema: {type: string}}
+      - {name: cursor, in: query, schema: {type: string}, description: Opaque cursor bound to snapshot and caller; omitted starts first page}
+    get:
+      operationId: readMemberSnapshotPage
+      responses:
+        '200': {description: Stable page, terminal cursor returns empty complete page, content: {application/json: {schema: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/MemberSnapshotPage'}}}}
+        '404': {description: Snapshot, caller scope or cursor mismatch; no hidden counts}
+        '410': {description: scope_expired; create a new scope instead of joining directory revisions}
+components:
+  securitySchemes:
+    session: {type: http, scheme: bearer, bearerFormat: JWT}
+    userKey: {type: http, scheme: bearer, description: User API key with read scope; never a node credential}
+    peer: {type: apiKey, in: header, name: X-DDP-Peer-Token, description: Node-level shared directory credential; fail closed when unconfigured}
+  parameters:
+    NodeId: {name: node_id, in: path, required: true, schema: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/node_id'}}
+  schemas:
+    PeerMemberPage:
+      type: object
+      additionalProperties: false
+      required: [authority_node_id, snapshot_id, registry_revision, created_at, expires_at, first_cursor, terminal_cursor, members, next_cursor, complete]
+      properties:
+        authority_node_id: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/node_id'}
+        snapshot_id: {type: string, minLength: 1, maxLength: 128}
+        registry_revision: {type: integer, minimum: 1}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        first_cursor: {type: string, minLength: 1}
+        terminal_cursor: {type: string, minLength: 1}
+        members: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/PeerMember'}}
+        next_cursor: {type: [string, 'null']}
+        complete: {type: boolean}
+    PeerMember:
+      type: object
+      additionalProperties: false
+      required: [node_id, descriptor_revision, valid_until, endpoints, state, health, accepting_admissions, expansion_state]
+      properties:
+        node_id: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/node_id'}
+        descriptor_revision: {type: integer, minimum: 0}
+        valid_until: {type: string, format: date-time}
+        endpoints:
+          type: array
+          maxItems: 8
+          items:
+            type: object
+            additionalProperties: false
+            required: [purpose, url]
+            properties:
+              purpose: {type: string, enum: [federation, data_channel]}
+              url: {type: string, format: uri}
+        state: {type: string, enum: [approved, revoked]}
+        health: {type: string, enum: [unknown, ready, draining, unhealthy]}
+        accepting_admissions: {type: boolean}
+        expansion_state: {type: string, enum: [not_requested, unexpanded_subtree, source_revoked]}
+    Handshake:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, identity, profile, capabilities, profiles, capability_status, accepting_admissions]
+      properties:
+        protocol_version: {const: ddp-client/1}
+        identity:
+          type: object
+          additionalProperties: false
+          required: [environment_id, authority_node_id, workspace_id]
+          properties:
+            environment_id: {type: string}
+            authority_node_id: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/node_id'}
+            workspace_id: {type: string}
+        profile:
+          type: object
+          additionalProperties: false
+          required: [issuer, subject]
+          properties:
+            issuer: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/node_id'}
+            subject: {type: string}
+        capabilities: {type: array, items: {type: string}, description: Implemented client projection interfaces only}
+        profiles: {type: array, items: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/CapabilityProfile'}}
+        capability_status: {type: string, enum: [observed, unknown]}
+        accepting_admissions: {const: false}

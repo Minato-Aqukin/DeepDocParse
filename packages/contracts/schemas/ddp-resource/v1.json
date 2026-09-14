@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepdocparse.dev/schemas/ddp-resource/1",
+  "title": "DDP-RESOURCE v1",
+  "description": "逻辑资产、固定版本与上传事件（计划 §4.1）。**这一份契约曾经被 C-01 卡住** —— 计划要求「同内容不同用户 → 两条独立资源」，而迁移 0006 刻意把去重做成了全局的。选定方案 B 之后才写得出来：在内容层之上加一层，两件事同时成立。",
+  "x-ddp-contract": "ddp-resource/1",
+  "x-ddp-local-mapping": {
+    "Resource": "resources 表（迁移 0015 新增）",
+    "ResourceVersion": "resource_versions 表（迁移 0015 新增）",
+    "UploadEvent": "upload_events 表（迁移 0015 新增）",
+    "content_ref": "resource_versions.document_id -> documents.id（既有内容层，全局去重照旧）",
+    "备注": "documents 保持 (doc_id, origin) 全局唯一 —— 两个人传同一份文件仍然只解析一次、只索引一次、只做一次 embedding。变的只是「谁的资产」这一层。"
+  },
+  "$defs": {
+    "instant": { "type": "string", "format": "date-time" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "actor_ref": {
+      "description": "经验证的用户/服务主体。**不同发行者的同名用户不自动合并**（§2.1、T32）。",
+      "type": "string", "minLength": 1
+    },
+
+    "Resource": {
+      "type": "object",
+      "description": "一份逻辑资产 —— 「谁的东西」。",
+      "x-ddp-doc": "**不变量 I01：逻辑资源不等于内容哈希。** A、B 上传相同内容分别生成 RA、RB；删除 RA 不能删除 RB 或运行任务仍引用的内容（§4.1、T01、T03）。去重先限定在用户或明确共享范围，**不因已知内容哈希就授予读取权**（T13：伪造已有私有文件哈希不能换到文件或存在性信息）。`copied_from` 承载 I02：副本、缓存与联邦转发保留来源身份，用户明确「另存为我的资源」才创建新逻辑资源。",
+      "properties": {
+        "schema": { "const": "ddp-resource/1#Resource" },
+        "resource_id": { "type": "string", "minLength": 1 },
+        "organization_id": { "type": "string" },
+        "owner_ref": { "$ref": "#/$defs/actor_ref" },
+        "uploaded_by_ref": {
+          "description": "首次提交人。通常等于 owner_ref；「另存为我的资源」时两者不同。",
+          "$ref": "#/$defs/actor_ref"
+        },
+        "display_name": { "type": "string" },
+        "publication": { "type": "string", "x-ddp-enum": "publishing_state" },
+        "copied_from": { "type": ["string", "null"] },
+        "created_at": { "$ref": "#/$defs/instant" },
+        "deleted_at": { "type": ["string", "null"], "format": "date-time" }
+      },
+      "required": ["schema", "resource_id", "owner_ref", "uploaded_by_ref",
+                   "publication", "created_at"],
+      "additionalProperties": false
+    },
+
+    "ResourceVersion": {
+      "type": "object",
+      "description": "资产的一个固定版本，绑定到一份内容。",
+      "x-ddp-doc": "**T04：固定版本内容不能原地变化。** 换版是加一行（version_no+1），不是改 content_ref —— 改它等于让一条已经被引用过的出处悄悄指向别的内容，而出处漂移是本项目最不能接受的一类错。**多个 ResourceVersion 可以指同一个 content_ref**，那正是「内容去重仍然生效」的形状：解析、索引、embedding 只做一次。",
+      "properties": {
+        "schema": { "const": "ddp-resource/1#ResourceVersion" },
+        "version_id": { "type": "string", "minLength": 1 },
+        "resource_id": { "type": "string", "minLength": 1 },
+        "version_no": { "type": "integer", "minimum": 1 },
+        "content_ref": {
+          "description": "内容层身份（当前实现是 documents.id）。**多对一**：多份资产可共享一份内容。",
+          "type": "string", "minLength": 1
+        },
+        "source_digest": {
+          "description": "内容摘要。联邦侧 DDP-EVIDENCE 的 source_digest 直接取它。**服务端校验输入摘要，不能直接信任客户端声明**（§4.1）。",
+          "type": "string", "minLength": 1
+        },
+        "filename": { "type": "string" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "created_at": { "$ref": "#/$defs/instant" },
+        "deleted_at": { "type": ["string", "null"], "format": "date-time" }
+      },
+      "required": ["schema", "version_id", "resource_id", "version_no",
+                   "content_ref", "source_digest", "created_at"],
+      "additionalProperties": false
+    },
+
+    "UploadEvent": {
+      "type": "object",
+      "description": "谁真正提交了什么。",
+      "x-ddp-doc": "**网络重试不是新上传**（§4.1、T02）。同一个 (actor, idempotency_key) 只留一条；想真的再传一次要换键，那时是一次显式的新上传。**键域按提交人隔离**（T80）：只按 key 全局唯一的话，A 用过的键 B 再用会被判成重试，于是 B 的上传静默变成「已存在」，拿到的是 A 的资产。`request_digest` 让「同键不同正文」判成冲突，而不是复用一个不相关的结果 —— 与联邦侧的 `idempotency_conflict` 是同一条规则。",
+      "properties": {
+        "schema": { "const": "ddp-resource/1#UploadEvent" },
+        "upload_event_id": { "type": "string", "minLength": 1 },
+        "resource_version_id": { "type": "string", "minLength": 1 },
+        "actor_ref": { "$ref": "#/$defs/actor_ref" },
+        "idempotency_key": { "type": "string", "minLength": 1 },
+        "request_digest": { "$ref": "#/$defs/digest" },
+        "created_at": { "$ref": "#/$defs/instant" }
+      },
+      "required": ["schema", "upload_event_id", "resource_version_id", "actor_ref",
+                   "idempotency_key", "request_digest", "created_at"],
+      "additionalProperties": false
+    }
+  }
+}

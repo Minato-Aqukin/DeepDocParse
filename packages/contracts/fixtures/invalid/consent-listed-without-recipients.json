@@ -1,0 +1,18 @@
+{
+  "schema": "ddp-task-probe/1#ExplorationConsent",
+  "consent_id": "consent-probe-4",
+  "granted_by": "user-1",
+  "granted_at": "2026-09-12T00:00:00Z",
+  "valid_until": "2026-09-13T00:00:00Z",
+  "egress_mode": "listed_nodes",
+  "allowed_payload": [
+    "query_text",
+    "entity_names"
+  ],
+  "allowed_recipients": [],
+  "budget": {
+    "max_probe_requests": 8,
+    "max_egress_bytes": 65536,
+    "max_discovery_requests": 4
+  }
+}

@@ -19,11 +19,12 @@ class EnumMeta(TypedDict, total=False):
 #
 # **一次只报一个**（最先命中的那个）。需要同时报多个的场合请用
 # `compile_degraded` 那种列表形状，不要往这里塞逗号分隔串。
-Degraded = Literal["no_hits", "parse_mismatch", "embedding_unavailable", "vision_unavailable", "crop_unsupported", "crop_failed", "client_aborted", "upstream_error", "upstream_interrupted", "index_changed_during_answer", "decision_unavailable", "no_evidence_in_turn", "inherited_evidence_incomplete", "gate_rejected_all", "citation_persist_failed", "verification_unavailable", "schema_violation", "rerank_unavailable", "no_instruct_model", "empty_query", "answer_unavailable"]
+Degraded = Literal["no_hits", "parse_mismatch", "resource_index_unavailable", "embedding_unavailable", "vision_unavailable", "crop_unsupported", "crop_failed", "client_aborted", "upstream_error", "upstream_interrupted", "index_changed_during_answer", "decision_unavailable", "no_evidence_in_turn", "inherited_evidence_incomplete", "gate_rejected_all", "citation_persist_failed", "verification_unavailable", "schema_violation", "rerank_unavailable", "no_instruct_model", "empty_query", "answer_unavailable"]
 
 DEGRADED_VALUES: Final[tuple[str, ...]] = (
     "no_hits",
     "parse_mismatch",
+    "resource_index_unavailable",
     "embedding_unavailable",
     "vision_unavailable",
     "crop_unsupported",
@@ -52,6 +53,8 @@ DEGRADED_META: Final[dict[str, EnumMeta]] = {
     # QA_PARSE_MISMATCH_THRESHOLD / EXTRACT_MISMATCH_THRESHOLD，实测标定 0.55）。
     # 它是**假出处**的主要探测手段，不是小问题。
     "parse_mismatch": {"value": "parse_mismatch", "label": "出处存疑（图上内容与解析文本对不上）", "severity": "warn"},
+    # 授权资源的固定解析版本尚无可用索引
+    "resource_index_unavailable": {"value": "resource_index_unavailable", "label": "该资源版本索引尚不可用，请查看解析任务", "severity": "warn"},
     # 向量化服务不可达，只走了关键词路。**这条是本项目吃过最大亏的地方**：
     # M4a 时向量检索静默退回 BM25，没人发现。必须可见。
     "embedding_unavailable": {"value": "embedding_unavailable", "label": "仅关键词检索（向量化服务不可用）", "severity": "warn"},
@@ -541,7 +544,7 @@ def role_label(value: str | None) -> str | None:
 # 持久任务的状态机（§10）。**领取必须带 generation fencing**：
 # lease 只解决"谁可以接管"，最终写入还要比 generation —— 否则被判死的
 # 旧 worker 迟到写入会覆盖新结果。
-TaskStatus = Literal["queued", "claimed", "running", "succeeded", "failed"]
+TaskStatus = Literal["queued", "claimed", "running", "succeeded", "failed", "cancelled"]
 
 TASK_STATUS_VALUES: Final[tuple[str, ...]] = (
     "queued",
@@ -549,6 +552,7 @@ TASK_STATUS_VALUES: Final[tuple[str, ...]] = (
     "running",
     "succeeded",
     "failed",
+    "cancelled",
 )
 
 TASK_STATUS_META: Final[dict[str, EnumMeta]] = {
@@ -562,6 +566,10 @@ TASK_STATUS_META: Final[dict[str, EnumMeta]] = {
     "succeeded": {"value": "succeeded", "label": "已完成", "severity": "ok"},
     # 失败，失败原因必须持久化并在 UI 可见
     "failed": {"value": "failed", "label": "失败", "severity": "error"},
+    # 被显式取消。**终态，迟到的成功/失败写入一律被 generation + 状态守卫拒绝**。
+    # 与 failed 分开是因为"用户不想要了"和"系统做砸了"对用户是两件事：
+    # 前者不该进失败告警，后者必须留失败原因。
+    "cancelled": {"value": "cancelled", "label": "已取消", "severity": "warn"},
 }
 
 
@@ -575,7 +583,7 @@ def task_status_label(value: str | None) -> str | None:
 
 
 # 持久任务的种类。每种**分别设并发与队列**，不共用一个无量纲总并发。
-TaskKind = Literal["parse_poll", "compile", "index", "extract", "knowledge", "gc"]
+TaskKind = Literal["parse_poll", "compile", "index", "extract", "knowledge", "gc", "federation_execute", "federation_plan"]
 
 TASK_KIND_VALUES: Final[tuple[str, ...]] = (
     "parse_poll",
@@ -584,6 +592,8 @@ TASK_KIND_VALUES: Final[tuple[str, ...]] = (
     "extract",
     "knowledge",
     "gc",
+    "federation_execute",
+    "federation_plan",
 )
 
 TASK_KIND_META: Final[dict[str, EnumMeta]] = {
@@ -599,6 +609,14 @@ TASK_KIND_META: Final[dict[str, EnumMeta]] = {
     "knowledge": {"value": "knowledge", "label": "知识生成", "severity": "neutral"},
     # 对象回收（带宽限期）
     "gc": {"value": "gc", "label": "对象回收", "severity": "neutral"},
+    # 联邦节点侧的单步执行（`federation.execute`）。受理与执行行先提交、
+    # 再排这个任务 —— 进程重启后由别的 worker 按租约接管，已受理的执行
+    # 不会永远停在 queued/running（不变式 7）。
+    "federation_execute": {"value": "federation_execute", "label": "联邦执行", "severity": "neutral"},
+    # 联邦协调者推进一个已批准计划（`federation_tasks._execute_plan`）。
+    # 与节点侧分开成两种任务，协调者等待本地执行时不会占满执行池
+    # （否则单池会被"等子任务的父任务"堵死）。
+    "federation_plan": {"value": "federation_plan", "label": "联邦计划执行", "severity": "neutral"},
 }
 
 
@@ -646,4 +664,719 @@ def upload_status_label(value: str | None) -> str | None:
     if not value:
         return None
     meta = UPLOAD_STATUS_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# `ScopeManifest` 的成员枚举状态（计划 §5.4）。**这是「查了哪里」这句话
+# 的分母**：分母没封上就没有百分比可言。
+#
+# `partial` 与 `expired` 必须与 `sealed` 严格分开：把无法展开的子域
+# 当成空目录，等于用"那里没有资料"冒充"我没能去看"。
+EnumerationState = Literal["building", "sealed", "partial", "expired"]
+
+ENUMERATION_STATE_VALUES: Final[tuple[str, ...]] = (
+    "building",
+    "sealed",
+    "partial",
+    "expired",
+)
+
+ENUMERATION_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 正在逐个目录取分页快照，还没封存
+    "building": {"value": "building", "label": "正在确定检索范围", "severity": "progress", "active": True},
+    # 全部获准目录都取到稳定快照且已去重封存，可重放。
+    # **只有这个值允许后续声明 retrieval=complete。**
+    "sealed": {"value": "sealed", "label": "检索范围已确定", "severity": "ok"},
+    # 有子目录超时、拒绝或不支持枚举。未展开子域记在
+    # `unexpanded_subtrees[]`，**不得当成空集**，也不得给出真实总数。
+    "partial": {"value": "partial", "label": "检索范围不完整（部分下级目录无法展开）", "severity": "warn"},
+    # 快照有效期已过或枚举游标失效。不能把不同分页时代的列表拼成
+    # "完整快照"（§5.5）—— 要重新枚举生成新 scope。
+    "expired": {"value": "expired", "label": "检索范围已过期，需重新确定", "severity": "warn"},
+}
+
+
+def enumeration_state_label(value: str | None) -> str | None:
+    """enumeration_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = ENUMERATION_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 覆盖账本里**单个目标**的状态（计划 §7.4）。目标键是
+# `(origin_node_id, collection_id, operation)` —— 一台服务器有多个集合时，
+# 探测了其中一个**不能**把整台标成完成（计划 T85）。
+#
+# `unsupported` 可以结束对该目标的发现处理，但**它不表示在那里完成了
+# 全文检索**；报告时它进"排除数"，不进"成功检索数"。
+CoverageTargetState = Literal["planned", "in_flight", "succeeded", "partial", "denied", "failed", "unsupported", "unreachable", "not_attempted", "revoked"]
+
+COVERAGE_TARGET_STATE_VALUES: Final[tuple[str, ...]] = (
+    "planned",
+    "in_flight",
+    "succeeded",
+    "partial",
+    "denied",
+    "failed",
+    "unsupported",
+    "unreachable",
+    "not_attempted",
+    "revoked",
+)
+
+COVERAGE_TARGET_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 已进入本次范围，尚未发出请求
+    "planned": {"value": "planned", "label": "待检索", "severity": "neutral", "active": True},
+    # 请求已发出，还没有回执
+    "in_flight": {"value": "in_flight", "label": "检索中", "severity": "progress", "active": True},
+    # 拿到有效且完成的检索回执
+    "succeeded": {"value": "succeeded", "label": "已检索", "severity": "ok"},
+    # 目标自己报了内部限制（分片失败、索引落后、只查了子集）。
+    # **算缺口，不算完成** —— 节点外层写 completed 而内部有 partial
+    # 是计划 §6.4 明确禁止的。
+    "partial": {"value": "partial", "label": "部分检索（对方报告内部不完整）", "severity": "warn"},
+    # 鉴权通过但该目标拒绝本次操作
+    "denied": {"value": "denied", "label": "对方拒绝", "severity": "warn"},
+    # 请求出错（非超时）
+    "failed": {"value": "failed", "label": "检索失败", "severity": "error"},
+    # 已核实该目标不支持所需 operation。**只有可核验依据才能记这个值** ——
+    # 能力元数据过期或缺失一律算 unknown/未完成，不得直接排除（§7.3）。
+    "unsupported": {"value": "unsupported", "label": "对方不支持该操作", "severity": "neutral"},
+    # 超时或连不上
+    "unreachable": {"value": "unreachable", "label": "无法连接", "severity": "error"},
+    # 预算耗尽 / 任务取消 / 范围过期导致压根没发出。**不是"没有资料"**
+    "not_attempted": {"value": "not_attempted", "label": "未检索（预算或取消）", "severity": "warn"},
+    # 成员在范围封存后被撤销。**留在分母里**（§5.5）——
+    # 从分母删掉来把完成率做漂亮是明确禁止的。
+    "revoked": {"value": "revoked", "label": "成员已撤销（保留在范围内）", "severity": "warn"},
+}
+
+
+def coverage_target_state_label(value: str | None) -> str | None:
+    """coverage_target_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = COVERAGE_TARGET_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 整个任务的检索完成度（计划 §7.4）。
+#
+# `complete` 的判据是**合取**，缺一条都不许写：
+#   ① `enumeration_state == sealed` 且无未展开子域；
+#   ② 所有适用且已授权的目标都返回有效、完成的回执；
+#   ③ 没有 in_flight / not_attempted / unreachable / denied / revoked，
+#      也没有任何目标自报 partial；
+#   ④ 每个被排除的目标都有可核验依据。
+#
+# 快速模式**永远不允许**写 complete（§7.2）：它只完成了自己选中的候选，
+# 所以它报的是 `partial` 加上"未检索范围"。
+RetrievalCompleteness = Literal["not_started", "partial", "complete"]
+
+RETRIEVAL_COMPLETENESS_VALUES: Final[tuple[str, ...]] = (
+    "not_started",
+    "partial",
+    "complete",
+)
+
+RETRIEVAL_COMPLETENESS_META: Final[dict[str, EnumMeta]] = {
+    # 范围还没封存或还没开始检索
+    "not_started": {"value": "not_started", "label": "尚未检索", "severity": "neutral", "active": True},
+    # 有目标未完成，或本轮是 fast 模式。**fast 模式的成功结局也是这个值**
+    # —— 它必须同时给出未检索范围，不能因为选中的候选全成功就报完成。
+    "partial": {"value": "partial", "label": "部分范围已检索", "severity": "warn"},
+    # 上述四条合取全部成立。**这仍然不代表证据充分或结论正确。**
+    "complete": {"value": "complete", "label": "声明范围内已全部检索", "severity": "ok"},
+}
+
+
+def retrieval_completeness_label(value: str | None) -> str | None:
+    """retrieval_completeness 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = RETRIEVAL_COMPLETENESS_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 证据充分性（计划 §7.4 第三轴）。与检索完成度**严格分开**：
+# 「该查的都查了」和「查到的够回答」是两件事，而
+# 「够回答」和「答对了」又是第三件事（那一件靠人工评审，不进这个枚举）。
+#
+# `conflicting` 不是 `insufficient` 的变体：矛盾证据意味着拿到了实质内容
+# 但来源互相打架，界面上要让用户看见冲突，而不是折叠成"资料不足"。
+EvidenceSufficiency = Literal["sufficient_by_policy", "insufficient", "conflicting", "unknown"]
+
+EVIDENCE_SUFFICIENCY_VALUES: Final[tuple[str, ...]] = (
+    "sufficient_by_policy",
+    "insufficient",
+    "conflicting",
+    "unknown",
+)
+
+EVIDENCE_SUFFICIENCY_META: Final[dict[str, EnumMeta]] = {
+    # 按当次策略判定证据足够。名字里的 `by_policy` 是刻意的 ——
+    # 它是**按规则判的**，不是"客观上充分"，更不是 LLM 自报信心
+    # （§7.2 明确禁止把自报信心当唯一早停条件）。
+    "sufficient_by_policy": {"value": "sufficient_by_policy", "label": "证据满足本次策略要求", "severity": "ok"},
+    # 没有足够证据支撑结论，必须如实说不足
+    "insufficient": {"value": "insufficient", "label": "证据不足", "severity": "warn"},
+    # 多来源证据互相矛盾（含同一资料的不同版本）。要展示冲突，不要挑一个
+    "conflicting": {"value": "conflicting", "label": "证据存在矛盾", "severity": "warn"},
+    # 还没评估（检索未完成 / 评估器不可用）
+    "unknown": {"value": "unknown", "label": "证据充分性未知", "severity": "neutral"},
+}
+
+
+def evidence_sufficiency_label(value: str | None) -> str | None:
+    """evidence_sufficiency 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = EVIDENCE_SUFFICIENCY_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# TaskPlan 的规划轴（计划 §8.1）。`invalidated` 是关键一态：
+# 计划过期、输入版本变了、授权被撤销之后，**旧计划不许被执行**，
+# 要重新规划并重新批准（§6.6 接单时重新检查）。
+PlanningState = Literal["draft", "exploring", "ready", "awaiting_approval", "approved", "invalidated"]
+
+PLANNING_STATE_VALUES: Final[tuple[str, ...]] = (
+    "draft",
+    "exploring",
+    "ready",
+    "awaiting_approval",
+    "approved",
+    "invalidated",
+)
+
+PLANNING_STATE_META: Final[dict[str, EnumMeta]] = {
+    # TaskSpec 已建，还没探测
+    "draft": {"value": "draft", "label": "草稿", "severity": "neutral", "active": True},
+    # 已获探索许可，正在 Probe
+    "exploring": {"value": "exploring", "label": "正在探测", "severity": "progress", "active": True},
+    # 计划已生成，等待用户批准外发边界
+    "ready": {"value": "ready", "label": "计划待批准", "severity": "neutral", "active": True},
+    # 计划变化超出原许可，暂停等重新批准
+    "awaiting_approval": {"value": "awaiting_approval", "label": "等待重新批准", "severity": "warn", "active": True},
+    # 计划与外发边界都已批准，可以接单
+    "approved": {"value": "approved", "label": "已批准", "severity": "ok"},
+    # 计划过期、输入版本变更或授权撤销。**不得凭旧 Probe 放行**
+    "invalidated": {"value": "invalidated", "label": "计划已失效，需重新规划", "severity": "warn"},
+}
+
+
+def planning_state_label(value: str | None) -> str | None:
+    """planning_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = PLANNING_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 远端执行者的受理轴（计划 §8.1 / §6.6）。
+#
+# **`unknown` 不等于「没执行」** —— 这是计划 T82 专门要求的区分：
+# 回执丢了要先按幂等键对账，不能立刻把有副作用的步骤换个节点重做。
+AdmissionState = Literal["not_submitted", "waiting_input", "checking", "accepted", "rejected", "unknown"]
+
+ADMISSION_STATE_VALUES: Final[tuple[str, ...]] = (
+    "not_submitted",
+    "waiting_input",
+    "checking",
+    "accepted",
+    "rejected",
+    "unknown",
+)
+
+ADMISSION_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 还没提交给执行者
+    "not_submitted": {"value": "not_submitted", "label": "未提交", "severity": "neutral"},
+    # 受理会话已建、等输入上传完（§6.6）。**这一态不占 GPU** ——
+    # 输入没齐就排队等于占着卡等上传。
+    "waiting_input": {"value": "waiting_input", "label": "等待输入上传", "severity": "progress", "active": True},
+    # 服务端正在校验输入摘要与格式
+    "checking": {"value": "checking", "label": "校验输入中", "severity": "progress", "active": True},
+    # 已持久受理并返回 AdmissionReceipt（≠ 算力预留）
+    "accepted": {"value": "accepted", "label": "已受理", "severity": "ok", "active": True},
+    # 明确拒绝（授权、计划过期、输入不合格、配额）
+    "rejected": {"value": "rejected", "label": "被拒绝", "severity": "error"},
+    # 请求发出了但回执丢失。**必须按幂等键查询对账**，查到已有任务就用它；
+    # 不得增加逻辑执行代次，也不得重复计一次成功交付。
+    "unknown": {"value": "unknown", "label": "受理状态未知（正在对账）", "severity": "warn", "active": True},
+}
+
+
+def admission_state_label(value: str | None) -> str | None:
+    """admission_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = ADMISSION_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 输出验收轴（计划 §8.1 / §4.3 两层引用校验）。
+#
+# **结构校验通过 ≠ 内容正确**：`passed` 只表示引用确实存在、版本对得上、
+# 定位可授权解析；"原文是否真的支持这个结论"是 `needs_review`
+# 要人看的那件事（计划 §14.3 主张支持度，明确不能用引用存在率替代）。
+ValidationState = Literal["pending", "passed", "failed", "needs_review"]
+
+VALIDATION_STATE_VALUES: Final[tuple[str, ...]] = (
+    "pending",
+    "passed",
+    "failed",
+    "needs_review",
+)
+
+VALIDATION_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 还没校验
+    "pending": {"value": "pending", "label": "待校验", "severity": "neutral", "active": True},
+    # 结构校验通过：引用存在、版本正确、定位可解析
+    "passed": {"value": "passed", "label": "校验通过", "severity": "ok"},
+    # 结构校验不通过（虚构引用 / 错版本 / 无权定位）
+    "failed": {"value": "failed", "label": "校验未通过", "severity": "error"},
+    # 需要人工复核语义支持度或冲突
+    "needs_review": {"value": "needs_review", "label": "需人工复核", "severity": "warn"},
+}
+
+
+def validation_state_label(value: str | None) -> str | None:
+    """validation_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = VALIDATION_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 交付轴（计划 §8.3）。**计算成功不代表本地拿到结果。**
+#
+# `expired` 必须能显示出来：TTL 到期导致未领取结果失效时，界面上
+# **不许**仍然显示"已保存本地"（计划 §8.3 原文要求）。
+DeliveryState = Literal["not_requested", "pending", "transferring", "confirmed", "expired"]
+
+DELIVERY_STATE_VALUES: Final[tuple[str, ...]] = (
+    "not_requested",
+    "pending",
+    "transferring",
+    "confirmed",
+    "expired",
+)
+
+DELIVERY_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 不需要回传（结果留在中心）
+    "not_requested": {"value": "not_requested", "label": "无需交付", "severity": "neutral"},
+    # 结果已就绪，等待本地领取
+    "pending": {"value": "pending", "label": "待领取", "severity": "neutral", "active": True},
+    # 正在下载
+    "transferring": {"value": "transferring", "label": "传输中", "severity": "progress", "active": True},
+    # 本地校验 manifest 与文件后已幂等确认
+    "confirmed": {"value": "confirmed", "label": "已交付", "severity": "ok"},
+    # 暂存 TTL 到期，结果已失效。**不得显示成已保存本地**
+    "expired": {"value": "expired", "label": "交付已过期（结果未领取）", "severity": "error"},
+}
+
+
+def delivery_state_label(value: str | None) -> str | None:
+    """delivery_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = DELIVERY_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 数据保留类别（计划 §8.1 / §8.3）。**临时处理不自动进入永久语料库** ——
+# 远端算一次不等于对方获得了这份资料的长期副本。
+#
+# `task_pinned` 是给 GC 看的：引用仍被活跃任务或他人合法产物使用时，
+# GC 不能删唯一副本（计划 §8.3 末段，项目已有的 `gc.py` 宽限期同理）。
+RetentionClass = Literal["temporary", "task_pinned", "persistent", "deleting", "deleted"]
+
+RETENTION_CLASS_VALUES: Final[tuple[str, ...]] = (
+    "temporary",
+    "task_pinned",
+    "persistent",
+    "deleting",
+    "deleted",
+)
+
+RETENTION_CLASS_META: Final[dict[str, EnumMeta]] = {
+    # 临时输入/中间产物，按 TTL 清理
+    "temporary": {"value": "temporary", "label": "临时数据", "severity": "neutral"},
+    # 被活跃任务引用，GC 不得回收
+    "task_pinned": {"value": "task_pinned", "label": "任务占用中", "severity": "neutral"},
+    # 已按授权进入永久语料
+    "persistent": {"value": "persistent", "label": "永久保存", "severity": "ok"},
+    # 正在清理（宽限期内可能仍可见）
+    "deleting": {"value": "deleting", "label": "正在清理", "severity": "progress", "active": True},
+    # 已清理
+    "deleted": {"value": "deleted", "label": "已删除", "severity": "neutral"},
+}
+
+
+def retention_class_label(value: str | None) -> str | None:
+    """retention_class 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = RETENTION_CLASS_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 发布轴（计划 §8.1 / §4.4）。**私有来源的派生页面不能靠切 public 绕过
+# 原许可** —— 发布前要检查派生内容的公开权（计划 §4.4、T06）。
+PublishingState = Literal["private", "draft", "published", "withdrawn"]
+
+PUBLISHING_STATE_VALUES: Final[tuple[str, ...]] = (
+    "private",
+    "draft",
+    "published",
+    "withdrawn",
+)
+
+PUBLISHING_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 仅所有者与获授权者可见
+    "private": {"value": "private", "label": "私有", "severity": "neutral"},
+    # 草稿，未发布
+    "draft": {"value": "draft", "label": "草稿", "severity": "neutral"},
+    # 已按授权范围发布
+    "published": {"value": "published", "label": "已发布", "severity": "ok"},
+    # 已撤回。**不承诺收回已下载副本**
+    "withdrawn": {"value": "withdrawn", "label": "已撤回", "severity": "warn"},
+}
+
+
+def publishing_state_label(value: str | None) -> str | None:
+    """publishing_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = PUBLISHING_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 节点能力的就绪度（计划 §5.2）。**三件事必须分开记**：
+# 静态能力配置、周期健康探测、本次任务预检。
+#
+# `configured` 不代表能用：计划原文举的例子是 `gpu=true` 不代表
+# 所需模型已经就绪 —— 这正是本项目踩过的坑的联邦版本
+# （注册表里有 OCR 专用模型，抽取平面拿它去抽值，抽不出来被记成
+# `not_found`，系统能力缺失伪装成"文档里没有"，见已有的 `no_instruct`）。
+CapabilityReadiness = Literal["configured", "ready", "draining", "unhealthy", "unknown"]
+
+CAPABILITY_READINESS_VALUES: Final[tuple[str, ...]] = (
+    "configured",
+    "ready",
+    "draining",
+    "unhealthy",
+    "unknown",
+)
+
+CAPABILITY_READINESS_META: Final[dict[str, EnumMeta]] = {
+    # 配置里声明了这个能力，但没有健康证据。**不得当成可用**
+    "configured": {"value": "configured", "label": "已配置（未验证可用）", "severity": "neutral"},
+    # 健康探测通过且当前可接单
+    "ready": {"value": "ready", "label": "可用", "severity": "ok"},
+    # 正在排空，不接新单但在跑的会做完
+    "draining": {"value": "draining", "label": "正在排空", "severity": "warn"},
+    # 健康探测失败
+    "unhealthy": {"value": "unhealthy", "label": "不可用", "severity": "error"},
+    # 没有有效的健康证据（从没探过 / 记录过期）。
+    # **过期记录不是当前能力证明**（§5.5），要按未知处理，不许按
+    # 最后一次成功当成现在可用。
+    "unknown": {"value": "unknown", "label": "能力状态未知", "severity": "warn"},
+}
+
+
+def capability_readiness_label(value: str | None) -> str | None:
+    """capability_readiness 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = CAPABILITY_READINESS_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# Probe 的输入校验深度（计划 §6.4 / T78）。**这两个值的区别是钱**：
+# 只看了文件描述就放进 admission，等于信任客户端声明的哈希 ——
+# 本项目在直传上传那里已经踩过同一个坑（upload_status 的 `verifying`
+# 不能跳过），联邦侧是同一条规则。
+InputValidation = Literal["metadata_only", "content_verified"]
+
+INPUT_VALIDATION_VALUES: Final[tuple[str, ...]] = (
+    "metadata_only",
+    "content_verified",
+)
+
+INPUT_VALIDATION_META: Final[dict[str, EnumMeta]] = {
+    # 只校验了声明的格式/大小/类型，**没收到内容**。
+    # 上传阶段只能是这个值，且此时不得占 GPU。
+    "metadata_only": {"value": "metadata_only", "label": "仅校验元数据", "severity": "warn"},
+    # 已收到内容并自己算过摘要校验通过。**预检仍不能排除运行时 OOM 或坏页**
+    "content_verified": {"value": "content_verified", "label": "已校验内容", "severity": "ok"},
+}
+
+
+def input_validation_label(value: str | None) -> str | None:
+    """input_validation 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = INPUT_VALIDATION_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 检索模式（计划 §6.3 / §7）。**mode 决定怎么查，scope 决定查哪些** ——
+# 两者不许互相覆盖：`fast` 不能缩小用户固定的资源范围，
+# `local_first`（排序偏好）也不能偷偷变成 `local_only`（外发策略）。
+SearchMode = Literal["fast", "exhaustive_scope"]
+
+SEARCH_MODE_VALUES: Final[tuple[str, ...]] = (
+    "fast",
+    "exhaustive_scope",
+)
+
+SEARCH_MODE_META: Final[dict[str, EnumMeta]] = {
+    # 有界选点：摘要排序 + 少量并行 Probe + 有条件扩展。
+    # **结局最多是 retrieval=partial**，必须报告未检索范围。
+    "fast": {"value": "fast", "label": "快速检索（部分范围）", "severity": "neutral"},
+    # 按封存的 ScopeManifest 逐个目标实际探测。摘要只影响顺序、不删成员。
+    # 即使已经拿到好答案也继续做完，除非用户取消（§7.3）。
+    "exhaustive_scope": {"value": "exhaustive_scope", "label": "范围穷查", "severity": "neutral"},
+}
+
+
+def search_mode_label(value: str | None) -> str | None:
+    """search_mode 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = SEARCH_MODE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# `client-runtime` 的连接状态（计划 §3.4）。**与数据状态分开**
+# （数据状态见 `snapshot_state`）—— 合起来的后果是
+# "一个无关面板订阅失败把整个界面标成服务器断开"，计划明确禁止。
+#
+# 每个 `(environment_id, authenticated_profile_id)` 只有**一个**重连
+# 负责人（计划 T66）；界面组件只订阅状态，不各自开重连循环。
+TransportState = Literal["disconnected", "connecting", "authenticating", "ready", "backoff", "blocked"]
+
+TRANSPORT_STATE_VALUES: Final[tuple[str, ...]] = (
+    "disconnected",
+    "connecting",
+    "authenticating",
+    "ready",
+    "backoff",
+    "blocked",
+)
+
+TRANSPORT_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 未连接
+    "disconnected": {"value": "disconnected", "label": "未连接", "severity": "neutral"},
+    # 正在建立连接
+    "connecting": {"value": "connecting", "label": "连接中", "severity": "progress", "active": True},
+    # 连上了，正在认证
+    "authenticating": {"value": "authenticating", "label": "认证中", "severity": "progress", "active": True},
+    # 可用
+    "ready": {"value": "ready", "label": "已连接", "severity": "ok"},
+    # 有限退避等待重试
+    "backoff": {"value": "backoff", "label": "等待重连", "severity": "warn", "active": True},
+    # 认证失效或被拒，**不再自动重试**（避免无休止刷新，T66）
+    "blocked": {"value": "blocked", "label": "连接被拒绝（需重新配对）", "severity": "error"},
+}
+
+
+def transport_state_label(value: str | None) -> str | None:
+    """transport_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = TRANSPORT_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 客户端缓存投影的数据状态（计划 §3.4）。与 `transport_state` 分开的理由
+# 在那条里。`stale` 要能显示：断网时可以看已取得的本地内容，
+# 但**不能显示假在线**（计划 §3.2）。
+SnapshotState = Literal["loading", "current", "stale", "failed"]
+
+SNAPSHOT_STATE_VALUES: Final[tuple[str, ...]] = (
+    "loading",
+    "current",
+    "stale",
+    "failed",
+)
+
+SNAPSHOT_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 首次取快照中
+    "loading": {"value": "loading", "label": "加载中", "severity": "progress", "active": True},
+    # 与服务端游标一致
+    "current": {"value": "current", "label": "最新", "severity": "ok"},
+    # 连接中断或游标落后，显示的是旧数据。**不得显示成在线最新**
+    "stale": {"value": "stale", "label": "数据可能已过期", "severity": "warn"},
+    # 取快照失败（游标失效时应重新取快照而不是永久等）
+    "failed": {"value": "failed", "label": "数据加载失败", "severity": "error"},
+}
+
+
+def snapshot_state_label(value: str | None) -> str | None:
+    """snapshot_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = SNAPSHOT_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 联邦协议的机器可读错误码（计划 §9.6）。
+#
+# **命名对齐项目既有约定**：计划正文写的是 SCREAMING_CASE，这里统一成
+# snake_case —— 项目所有错误码（`invalid_request_error`、`quota_error` …）
+# 与所有枚举都是 snake_case，而生成器也只接受 snake_case。
+# 同一个概念两种拼法就是漂移的开始，所以在 P0 一次定死。
+#
+# **对外降敏**：不得借错误码暴露私有资源是否存在（§8.4）——
+# 无权主体看到的应该是"找不到"而不是"存在但你没权限"。
+#
+# **`unreachable` 类错误绝不能被前端翻译成「对方没有资料」**（§9.6 原文）：
+# 那是把"我没查到"说成"那里没有"。
+FederationError = Literal["discovery_incomplete", "scope_expired", "capability_unknown", "capability_unsupported", "input_not_verified", "egress_denied", "plan_changed", "offer_expired", "admission_unknown", "idempotency_conflict", "partial_retrieval", "insufficient_evidence", "budget_exhausted", "source_revoked", "delivery_expired", "local_model_missing", "protocol_incompatible", "task_cancelled"]
+
+FEDERATION_ERROR_VALUES: Final[tuple[str, ...]] = (
+    "discovery_incomplete",
+    "scope_expired",
+    "capability_unknown",
+    "capability_unsupported",
+    "input_not_verified",
+    "egress_denied",
+    "plan_changed",
+    "offer_expired",
+    "admission_unknown",
+    "idempotency_conflict",
+    "partial_retrieval",
+    "insufficient_evidence",
+    "budget_exhausted",
+    "source_revoked",
+    "delivery_expired",
+    "local_model_missing",
+    "protocol_incompatible",
+    "task_cancelled",
+)
+
+FEDERATION_ERROR_META: Final[dict[str, EnumMeta]] = {
+    # 成员枚举没能封存，覆盖承诺随之降级
+    "discovery_incomplete": {"value": "discovery_incomplete", "label": "节点范围未能完整确定", "severity": "warn"},
+    # ScopeManifest 过期，需重新枚举生成新 scope
+    "scope_expired": {"value": "scope_expired", "label": "检索范围已过期", "severity": "warn"},
+    # 没有有效健康证据。**与 unsupported 严格分开** —— 未知要去预检，不是排除
+    "capability_unknown": {"value": "capability_unknown", "label": "对方能力未知（需预检）", "severity": "warn"},
+    # 已核实不支持所需 operation
+    "capability_unsupported": {"value": "capability_unsupported", "label": "对方不支持该操作", "severity": "neutral"},
+    # 输入摘要/格式还没校验通过就想进 admission
+    "input_not_verified": {"value": "input_not_verified", "label": "输入尚未校验通过", "severity": "error"},
+    # 外发许可不覆盖这次发送（接收方、内容或有效期超界）。
+    # `local_only` 命中时也是这个码 —— 它高于所有自动回退（§6.2）。
+    "egress_denied": {"value": "egress_denied", "label": "该数据不允许发往此接收方", "severity": "error"},
+    # 计划修订变了，原批准不再适用
+    "plan_changed": {"value": "plan_changed", "label": "执行计划已变更，需重新批准", "severity": "warn"},
+    # Offer 有效期已过（Offer 本来就不预留算力）
+    "offer_expired": {"value": "offer_expired", "label": "执行意向已过期", "severity": "warn"},
+    # 受理状态不明。**不等于未执行**，要按幂等键对账（T82）
+    "admission_unknown": {"value": "admission_unknown", "label": "受理状态未知（正在对账）", "severity": "warn"},
+    # 同一幂等键对应不同请求正文。**返回冲突，不许复用不相关结果**（T80）
+    "idempotency_conflict": {"value": "idempotency_conflict", "label": "幂等键冲突（请求内容不一致）", "severity": "error"},
+    # 检索只完成了一部分，覆盖账本里有缺口
+    "partial_retrieval": {"value": "partial_retrieval", "label": "检索未覆盖全部范围", "severity": "warn"},
+    # 本次范围与配置下没拿到足够证据
+    "insufficient_evidence": {"value": "insufficient_evidence", "label": "证据不足", "severity": "warn"},
+    # 根预算用尽（含发现与 Probe 的消耗）
+    "budget_exhausted": {"value": "budget_exhausted", "label": "预算已用尽", "severity": "warn"},
+    # 来源被撤销或转为私有，停止新授权并重判派生依赖
+    "source_revoked": {"value": "source_revoked", "label": "来源已撤销", "severity": "warn"},
+    # 结果暂存 TTL 到期未领取
+    "delivery_expired": {"value": "delivery_expired", "label": "结果已过期未领取", "severity": "error"},
+    # 本地缺所需模型。**必须明确报出来**，不得悄悄请求远端（I03 / T18）——
+    # 这正是项目已有的 `no_instruct_model` 在本地模式下的对应物。
+    "local_model_missing": {"value": "local_model_missing", "label": "本地缺少所需模型", "severity": "error"},
+    # 协议版本或必需字段不兼容，明确拒绝而不是忽略后乱执行
+    "protocol_incompatible": {"value": "protocol_incompatible", "label": "协议版本不兼容", "severity": "error"},
+    # 对已取消任务调用 resume。**取消是显式终态，不得被"恢复"改写回
+    # running** —— 重跑必须是一条新任务（新授权、新覆盖分母），而不是
+    # 拿旧计划接着跑。返回 409，任务状态原样不动。
+    "task_cancelled": {"value": "task_cancelled", "label": "任务已取消，不能恢复", "severity": "error"},
+}
+
+
+def federation_error_label(value: str | None) -> str | None:
+    """federation_error 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = FEDERATION_ERROR_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 控制域管理员批准的直接节点成员状态，批准不授予资源权限或证明远端持有密钥。
+NodeMembershipState = Literal["pending", "approved", "revoked"]
+
+NODE_MEMBERSHIP_STATE_VALUES: Final[tuple[str, ...]] = (
+    "pending",
+    "approved",
+    "revoked",
+)
+
+NODE_MEMBERSHIP_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 已登记但管理员尚未批准
+    "pending": {"value": "pending", "label": "待批准", "severity": "neutral"},
+    # 管理员已批准配置，健康与接单另行判断
+    "approved": {"value": "approved", "label": "已批准", "severity": "ok"},
+    # 已撤销，保留旧快照成员位置且禁止旧修订恢复
+    "revoked": {"value": "revoked", "label": "已撤销", "severity": "warn"},
+}
+
+
+def node_membership_state_label(value: str | None) -> str | None:
+    """node_membership_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = NODE_MEMBERSHIP_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 单目录快照中的下级枚举状态，不声明递归全局覆盖。
+MemberExpansionState = Literal["not_requested", "unexpanded_subtree", "source_revoked"]
+
+MEMBER_EXPANSION_STATE_VALUES: Final[tuple[str, ...]] = (
+    "not_requested",
+    "unexpanded_subtree",
+    "source_revoked",
+)
+
+MEMBER_EXPANSION_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 成员支持枚举但尚未请求下级目录
+    "not_requested": {"value": "not_requested", "label": "尚未展开", "severity": "neutral"},
+    # 下级不可枚举，不等于空目录
+    "unexpanded_subtree": {"value": "unexpanded_subtree", "label": "下级未展开", "severity": "warn"},
+    # 原快照成员已撤销或当前调用者不可见
+    "source_revoked": {"value": "source_revoked", "label": "来源已撤销", "severity": "warn"},
+}
+
+
+def member_expansion_state_label(value: str | None) -> str | None:
+    """member_expansion_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = MEMBER_EXPANSION_STATE_META.get(value)
     return meta["label"] if meta else f"未知取值（{value}）"

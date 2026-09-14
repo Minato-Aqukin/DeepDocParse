@@ -1,87 +1,271 @@
-"""对象回收：软删除的文档，其 MinIO 里的原件与归档产物要真的删掉。
+"""Reference-safe object collection with durable retry manifests.
 
-放在对账循环里跑而不是单独起进程：它本来就是"扫库 + 补动作"，与对账同构。
-删对象是不可逆的，所以只删已经软删除、且确实属于该文档的键前缀。
-
-**与"删了又传回来"的竞态**：documents.upload 会把软删除的行复活并重新 put 原件。
-本模块是全项目唯一一处会不可逆地毁数据的地方，因此两道防护：
-
-1. 宽限期（gc_grace_seconds）—— 只回收"删掉有一阵子了"的文档。复活通常紧跟在
-   误删之后，宽限期把撞车从真实竞态变成实际不可达。
-2. claim —— 删对象之前先用条件 UPDATE 把这一行原子地移出"可回收"集合
-   （沿用 archive/index 的套路）。已经提交的复活会让 claim 落空，GC 直接跳过；
-   多副本也不会重复删。
-
-残留窗口只剩"复活恰好提交在 claim 与删对象之间"这一瞬，且必须发生在删除满一个
-宽限期之后 —— 接受它，换取"绝不把还在用的对象删掉"这个更重要的性质。
+Persist the exact deletion manifest before the first destructive call. Reacquire
+the content row lock and recheck references after that commit, then hold it through
+object deletion. A failed or interrupted sweep never loses its remaining keys.
 """
+
 from datetime import timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ddp_corpus.config import settings
-from ddp_corpus.models import Document, ParseJob, as_aware, utcnow
+from ddp_corpus.models import (
+    Citation,
+    ClaimEvidenceBinding,
+    DependencyManifest,
+    Document,
+    Evidence,
+    ParseJob,
+    Resource,
+    ResourceVersion,
+    Task,
+    as_aware,
+    utcnow,
+)
 from ddp_corpus.storage import Storage, job_result_prefix, prefix_of
 
+ACTIVE_TASKS = ("queued", "claimed", "running")
+ACTIVE_PARSES = ("pending", "running", "archiving")
 
-async def _claim(session, document: Document, object_key: str) -> bool:
-    """把这一行移出"可回收"集合。抢不到（已被复活 / 被别的副本收走）返回 False。
 
-    object_key 置空同时兼作"已回收"标记，所以 claim 与标记是同一次写入 ——
-    不会出现"标记成功但对象没删"或"对象删了但标记没落"的中间态。
-    """
-    claimed = await session.execute(
-        update(Document)
-        .where(Document.id == document.id,
-               Document.deleted_at.is_not(None),          # 复活过就不该再删
-               Document.object_key == object_key)          # 换过 key 也不该删
-        .values(object_key="")
+def _live_versions(document_id):
+    return exists(
+        select(ResourceVersion.id)
+        .join(Resource, Resource.id == ResourceVersion.resource_id)
+        .where(
+            ResourceVersion.document_id == document_id,
+            ResourceVersion.deleted_at.is_(None),
+            Resource.deleted_at.is_(None),
+        )
     )
-    await session.commit()
-    return claimed.rowcount > 0
 
 
-async def collect_deleted_objects(sessionmaker: async_sessionmaker, storage: Storage,
-                                  limit: int = 20) -> int:
-    """清理软删除文档的对象，返回清掉的文档数。"""
+def _references(value, identities: set[str]) -> bool:
+    if isinstance(value, str):
+        return value in identities
+    if isinstance(value, list):
+        return any(_references(item, identities) for item in value)
+    if isinstance(value, dict):
+        return any(_references(item, identities) for item in value.values())
+    return False
+
+
+async def _protected(session, document, versions, jobs) -> bool:
+    if await session.scalar(select(_live_versions(document.id))):
+        return True
+    if any(job.status in ACTIVE_PARSES for job in jobs):
+        return True
+    if await session.scalar(
+        select(Citation.id)
+        .join(Evidence, Evidence.id == Citation.evidence_id)
+        .where(Evidence.document_id == document.id)
+        .limit(1)
+    ):
+        return True
+    # New Wiki revisions own references independently of the historical Citation table.
+    if await session.scalar(
+        select(DependencyManifest.id)
+        .where(
+            or_(
+                DependencyManifest.document_id == document.id,
+                DependencyManifest.source_version_id.in_([v.id for v in versions]),
+            )
+        )
+        .limit(1)
+    ):
+        return True
+    if await session.scalar(
+        select(ClaimEvidenceBinding.id)
+        .join(Evidence, Evidence.id == ClaimEvidenceBinding.evidence_id)
+        .where(Evidence.document_id == document.id)
+        .limit(1)
+    ):
+        return True
+    identities = {
+        document.id,
+        *(v.id for v in versions),
+        *(v.resource_id for v in versions),
+        *(job.id for job in jobs),
+    }
+    tasks = (await session.execute(select(Task).where(Task.status.in_(ACTIVE_TASKS)))).scalars()
+    for task in tasks:
+        if task.kind == "gc":
+            continue
+        if _references(task.payload, identities):
+            return True
+        # Whole-corpus/unknown input scope cannot prove this document is unreferenced.
+        if task.kind == "knowledge" and not task.payload.get("document_ids"):
+            return True
+        if not any(
+            k in task.payload
+            for k in (
+                "document_id",
+                "document_ids",
+                "parse_job_id",
+                "resource_version_id",
+                "resource_version_ids",
+            )
+        ):
+            return True
+    return False
+
+
+async def _load_locked(session, document_id):
+    document = await session.scalar(
+        select(Document)
+        .where(Document.id == document_id)
+        .with_for_update(skip_locked=True)
+        .execution_options(populate_existing=True)
+    )
+    if document is None:
+        return None, [], []
+    versions = list(
+        (
+            await session.execute(
+                select(ResourceVersion).where(ResourceVersion.document_id == document.id)
+            )
+        ).scalars()
+    )
+    jobs = list(
+        (
+            await session.execute(select(ParseJob).where(ParseJob.document_id == document.id))
+        ).scalars()
+    )
+    return document, versions, jobs
+
+
+async def _deletion_time(session, document, versions):
+    stamps = [as_aware(document.deleted_at)] if document.deleted_at else []
+    for version in versions:
+        resource = await session.get(Resource, version.resource_id)
+        ends = [
+            as_aware(t)
+            for t in (version.deleted_at, resource.deleted_at if resource else None)
+            if t
+        ]
+        if ends:
+            stamps.append(min(ends))
+    return max(stamps) if stamps else None
+
+
+async def _collect_keys(session, storage, document, versions, jobs):
+    prefixes = {prefix for job in jobs for prefix in (prefix_of(job), job_result_prefix(job.id))}
+    prefixes.update(v.bundle_prefix for v in versions if v.bundle_prefix == f"bundles/{v.id}/")
+    other_jobs = list(
+        (
+            await session.execute(select(ParseJob).where(ParseJob.document_id != document.id))
+        ).scalars()
+    )
+    shared_prefixes = {p for job in other_jobs for p in (prefix_of(job), job_result_prefix(job.id))}
+    other_keys = set(
+        (
+            await session.execute(
+                select(Document.object_key).where(
+                    Document.id != document.id, Document.object_key != ""
+                )
+            )
+        ).scalars()
+    )
+    keys = set(document.gc_pending_keys)
+    for prefix in prefixes - shared_prefixes:
+        if any(key.startswith(prefix) for key in other_keys):
+            continue
+        if (
+            not prefix.startswith(("results/", "bundles/"))
+            or not prefix.endswith("/")
+            or ".." in prefix.split("/")
+            or len(prefix.split("/")) != 3
+        ):
+            continue
+        keys.update(key for key in await storage.list_prefix(prefix) if key.startswith(prefix))
+    if document.object_key and document.object_key not in other_keys:
+        keys.add(document.object_key)
+    # Recheck old pending keys too: another document may now reference a formerly unique key.
+    return sorted(
+        key
+        for key in keys
+        if key not in other_keys and not any(key.startswith(prefix) for prefix in shared_prefixes)
+    )
+
+
+async def collect_deleted_objects(
+    sessionmaker: async_sessionmaker, storage: Storage, limit: int = 20
+) -> int:
     cleaned = 0
+    cutoff = utcnow() - timedelta(seconds=settings.gc_grace_seconds)
     async with sessionmaker() as session:
-        # 宽限期在 Python 里判而不是写进 SQL：SQLite 存 naive、PG 存 aware，
-        # 直接拿 aware 参数去比会两边行为不一（全项目统一走 as_aware，见 models）
-        cutoff = utcnow() - timedelta(seconds=settings.gc_grace_seconds)
-        candidates = (await session.execute(
-            select(Document).where(Document.deleted_at.is_not(None),
-                                   Document.object_key != "")
-            .order_by(Document.deleted_at).limit(limit * 5)
-        )).scalars().all()
-
-        for document in candidates:
+        pending = func.json_array_length(Document.gc_pending_keys) > 0
+        tombstoned = exists(
+            select(ResourceVersion.id)
+            .join(Resource)
+            .where(
+                ResourceVersion.document_id == Document.id,
+                or_(ResourceVersion.deleted_at.is_not(None), Resource.deleted_at.is_not(None)),
+            )
+        )
+        candidate_ids = list(
+            (
+                await session.execute(
+                    select(Document.id)
+                    .where(
+                        or_(Document.object_key != "", pending),
+                        or_(Document.deleted_at.is_not(None), tombstoned, pending),
+                        ~_live_versions(Document.id),
+                    )
+                    .order_by(Document.created_at)
+                    .limit(limit * 5)
+                )
+            ).scalars()
+        )
+        await session.rollback()
+        for document_id in candidate_ids:
             if cleaned >= limit:
                 break
-            if as_aware(document.deleted_at) > cutoff:
-                continue                       # 还在宽限期内，下一轮再说
-            object_key = document.object_key
-            if not await _claim(session, document, object_key):
+            document, versions, jobs = await _load_locked(session, document_id)
+            if document is None or await _protected(session, document, versions, jobs):
+                await session.rollback()
                 continue
-
-            jobs = (await session.execute(
-                select(ParseJob).where(ParseJob.document_id == document.id)
-            )).scalars().all()
+            deleted_at = await _deletion_time(session, document, versions)
+            if deleted_at is None or deleted_at > cutoff:
+                await session.rollback()
+                continue
             try:
-                for job in jobs:
-                    # 两个前缀都要列：归档产物在 job.result_prefix 下（迁移过来的老 job
-                    # 指向原 task_id），而问答的裁剪图是按 job.id 写的（crops.crop_key）。
-                    # 迁移过的 job 这两者不是同一个前缀，只列一个就会漏删另一半
-                    prefixes = {prefix_of(job), job_result_prefix(job.id)}
-                    for prefix in prefixes:
-                        for key in await storage.list_prefix(prefix):
-                            await storage.delete(key)
-                await storage.delete(object_key)
+                keys = await _collect_keys(session, storage, document, versions, jobs)
             except Exception as exc:
-                # claim 已经把 object_key 清了，这里不回滚：宁可漏几个对象没删
-                # （下面这行日志就是线索），也不要把标记退回去、让下一轮重新去删
-                # 一个可能已经被复活的文档
-                print(f"[gc] {document.id} partially collected: {type(exc).__name__}: {exc}")
-            cleaned += 1
+                document.gc_error = f"list_failed:{type(exc).__name__}"
+                await session.commit()
+                continue
+            document.deleted_at = deleted_at
+            # The exact old keys are now durable before object_key is cleared. A process
+            # crash after any delete can repeat that idempotent delete on the next sweep.
+            document.gc_pending_keys = keys
+            document.gc_error = None
+            document.object_key = ""
+            await session.commit()
+
+            # The manifest commit releases the row lock. A writer may have acquired a
+            # new reference in that gap: recheck before deleting a single byte.
+            document, versions, jobs = await _load_locked(session, document_id)
+            if (
+                document is None
+                or document.deleted_at is None
+                or await _protected(session, document, versions, jobs)
+            ):
+                await session.rollback()
+                continue
+            remaining = list(document.gc_pending_keys)
+            for key in tuple(remaining):
+                try:
+                    await storage.delete(key)
+                except Exception as exc:
+                    document.gc_error = f"delete_failed:{type(exc).__name__}"
+                    break
+                remaining.remove(key)
+            document.gc_pending_keys = remaining
+            if not remaining:
+                document.gc_error = None
+                cleaned += 1
+            await session.commit()
     return cleaned

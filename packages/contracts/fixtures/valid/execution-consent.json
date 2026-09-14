@@ -1,0 +1,20 @@
+{
+  "schema": "ddp-plan-admission/1#ExecutionConsent",
+  "consent_id": "consent-exec-2",
+  "plan_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "granted_by": "user-1",
+  "granted_at": "2026-09-12T00:00:00Z",
+  "valid_until": "2026-09-13T00:00:00Z",
+  "allowed_recipients": [
+    "node-b",
+    "node-c",
+    "node-a"
+  ],
+  "allowed_edges": [
+    "e1"
+  ],
+  "output_locations": [
+    "local-env:workspace-1"
+  ],
+  "retention": "task_pinned"
+}

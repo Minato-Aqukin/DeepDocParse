@@ -23,7 +23,9 @@ from ddp_gateway.config import (
     assert_secrets_configured, assert_thresholds_sane, load_registry, settings,
 )
 from ddp_gateway.errors import install_error_handlers
-from ddp_gateway.routers import chat, embeddings, extract, health, parse, rerank
+from ddp_gateway.routers import (
+    capabilities, chat, embeddings, extract, health, parse, rerank,
+)
 from ddp_gateway.services.mineru_client import MineruClient
 from ddp_gateway.services.task_store import TaskStore
 
@@ -65,6 +67,7 @@ app = FastAPI(
 install_error_handlers(app)
 
 app.include_router(health.router)
+app.include_router(capabilities.router, prefix="/v1")
 app.include_router(parse.router, prefix="/v1")
 app.include_router(chat.router, prefix="/v1")
 app.include_router(embeddings.router, prefix="/v1")

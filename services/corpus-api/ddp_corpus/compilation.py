@@ -14,7 +14,8 @@ from ddp_corpus.crops import get_or_create_crops
 from ddp_corpus.models import Document, ParseJob
 from ddp_corpus.storage import Storage
 from ddp_corpus.upstream import chat_request
-from ddp_core.compilation import VISUAL_KINDS, code_detection_of, compile_chunks, provider_of
+from ddp_core.application.workflows import compile_layout
+from ddp_core.compilation import VISUAL_KINDS
 
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
@@ -77,18 +78,18 @@ async def _understand(http: httpx.AsyncClient, png: bytes, kind: str,
 
 async def compile_document(*, storage: Storage, http: httpx.AsyncClient,
                            document: Document, job: ParseJob, layout: dict) -> CompileOutput:
-    provider = provider_of(
-        layout=layout, parse_options_hash=job.options_hash,
-        embedding_model=settings.embedding_model, vision_model=settings.chat_model)
-    base = compile_chunks(layout, max_chars=settings.chunk_max_chars, provider=provider)
-    degraded: set[str] = set()
+    # Keep one provider/configuration across awaited crop and vision work.
+    compile_options = {
+        "parse_options_hash": job.options_hash,
+        "embedding_model": settings.embedding_model,
+        "vision_model": settings.chat_model,
+        "max_chars": settings.chunk_max_chars,
+    }
+    compiled = compile_layout(layout, **compile_options)
+    provider, base = compiled.provider, compiled.chunks
+    degraded = set(compiled.degraded)
     crop_keys: dict[int, str] = {}
     vision_requests = 0
-
-    if code_detection_of(layout) == "unavailable":
-        degraded.add("code_detection_unavailable")
-    if not provider["provider_resolved"]:
-        degraded.add("provider_unresolved")
 
     crop_supported = "pdf" in (document.mime or "").lower() and bool(document.object_key)
     crop_keys = await get_or_create_crops(
@@ -126,8 +127,7 @@ async def compile_document(*, storage: Storage, http: httpx.AsyncClient,
             if reason:
                 degraded.add(reason)
 
-    chunks = compile_chunks(layout, max_chars=settings.chunk_max_chars, provider=provider,
-                            descriptions=descriptions)
+    chunks = compile_layout(layout, **compile_options, descriptions=descriptions).chunks
     return CompileOutput(chunks=chunks, crop_keys=crop_keys,
                          degraded=sorted(degraded), provider=provider,
                          vision_requests=vision_requests)

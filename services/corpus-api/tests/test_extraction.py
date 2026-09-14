@@ -1,3 +1,4 @@
+from tests.conftest import ACTOR, ORG
 """结构化抽取的单测（v1.1）。
 
 三条不变式，每一条都对应一种**真实会发生且不会报错**的故障：
@@ -237,7 +238,7 @@ async def test_run_rejects_documents_without_index(actor_client, session):
     """索引没就绪的文档抽不了。**当场说清楚**，别让它们跑完变成一堆空结果 ——
     空值看起来像"文档里没有"，那是抽取里最危险的误导。"""
     
-    document = Document(uploaded_by="actor-ex", doc_id="z" * 64, filename="未索引.pdf",
+    document = Document(uploaded_by=ACTOR, organization_id=ORG, doc_id="z" * 64, filename="未索引.pdf",
                         mime="application/pdf", index_status="none")
     session.add(document)
     await session.commit()
@@ -574,11 +575,22 @@ async def test_extract_one_runs_against_a_real_document(session, app_state):
     from ddp_corpus.routers.extractions import _extract_one
 
     document, _job = await _seed_document(session, await _a_user(session))
+    _job.index_status = "ready"
     initiator = await _a_user(session, username="initiator")
     assert initiator != document.uploaded_by, "发起人要与上传者不同才测得出归属"
 
+    # This test intentionally uses another actor's content: grant an explicit public resource.
+    from ddp_corpus.models import Resource, ResourceVersion
+    resource = Resource(owner_id=document.uploaded_by, uploaded_by=document.uploaded_by,
+                        organization_id=document.organization_id, publication="published")
+    session.add(resource)
+    await session.flush()
+    session.add(ResourceVersion(resource_id=resource.id, document_id=document.id,
+                                source_digest=document.doc_id, parse_job_id=_job.id))
+    await session.flush()
     run = ExtractionRun(actor_id=initiator, name="t", schema_json=SCHEMA, kind="object",
-                        status="running", document_count=1)
+                        status="running", document_count=1,
+                        resource_context={"principal_id": initiator, "resources": {document.id: resource.id}})
     session.add(run)
     await session.commit()
 

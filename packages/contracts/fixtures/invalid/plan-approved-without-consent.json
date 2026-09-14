@@ -1,0 +1,54 @@
+{
+  "schema": "ddp-plan-admission/1#TaskPlan",
+  "plan_id": "plan-4",
+  "revision": 2,
+  "plan_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "task_spec_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "root_coordinator_node_id": "node-a",
+  "planning_state": "approved",
+  "steps": [
+    {
+      "step_id": "s1",
+      "operation": "retrieve",
+      "executor_node_id": "node-b",
+      "depends_on": [],
+      "probe_refs": [
+        "probe-b-21"
+      ]
+    },
+    {
+      "step_id": "s2",
+      "operation": "answer",
+      "executor_node_id": "node-c",
+      "depends_on": [
+        "s1"
+      ],
+      "fixed_inputs": [
+        "b:evidence-set-31"
+      ]
+    }
+  ],
+  "data_edges": [
+    {
+      "edge_id": "e1",
+      "from_node_id": "node-b",
+      "to_node_id": "node-c",
+      "payload_kind": "evidence_excerpts",
+      "relay_via": [
+        "node-a"
+      ],
+      "retention": "temporary",
+      "authorised_by": "node-b:grant-88"
+    }
+  ],
+  "execution_consent_ref": null,
+  "budget": {
+    "max_requests": 40,
+    "max_bytes": 8388608,
+    "max_generation_tokens": 4096,
+    "max_hops": 3,
+    "deadline": "2026-09-13T00:00:00Z"
+  },
+  "final_result_writer": "node-a",
+  "valid_until": "2026-09-13T00:00:00Z"
+}

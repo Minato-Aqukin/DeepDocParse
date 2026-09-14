@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepdocparse.dev/schemas/ddp-scope-coverage/1",
+  "title": "DDP-SCOPE-COVERAGE v1",
+  "description": "范围清单与覆盖账本（计划 §5.4、§7.4）。这两个对象合起来回答「查了哪里、哪里没查到、凭什么这么说」。**它们是分母与分子**：ScopeManifest 定分母，CoverageLedger 记分子，任何一个缺失都不允许显示百分比。",
+  "x-ddp-contract": "ddp-scope-coverage/1",
+  "$defs": {
+    "node_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$" },
+    "instant": { "type": "string", "format": "date-time" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+
+    "TargetKey": {
+      "type": "object",
+      "description": "去重后的检索目标。",
+      "x-ddp-doc": "键是 `(origin_node_id, collection_id, operation)` 三元组（§7.3）。**一台服务器有多个集合时，探测了其中一个不能把整台标成完成** —— 计划 T85 就是这条。用 origin 而不是 next_hop 是为了「同一来源经多条路径到达只计一次」（§5.3），否则备用路径会变成重复证据。",
+      "properties": {
+        "origin_node_id": { "$ref": "#/$defs/node_id" },
+        "collection_id": { "type": "string", "minLength": 1 },
+        "operation": { "type": "string", "minLength": 1 }
+      },
+      "required": ["origin_node_id", "collection_id", "operation"],
+      "additionalProperties": false
+    },
+
+    "ScopeManifest": {
+      "type": "object",
+      "description": "一次范围穷查的成员快照。",
+      "x-ddp-doc": "**这是多个目录版本组成的任务快照，不是全网某一时刻的全局强一致快照**（§5.4 原文加粗）。各目录快照不同步时要报告各自修订与取得时间。新加入的成员不偷偷纳入旧 scope —— 要搜新成员就建新版本范围（§5.5、T74）。",
+      "properties": {
+        "schema": { "const": "ddp-scope-coverage/1#ScopeManifest" },
+        "scope_id": { "type": "string", "minLength": 1 },
+        "caller_scope_hash": {
+          "description": "调用者身份+权限的摘要。**不同用户、不同权限不能因共用 root 名称错误共享探测结果**（§7.5）。",
+          "$ref": "#/$defs/digest"
+        },
+        "created_at": { "$ref": "#/$defs/instant" },
+        "valid_until": { "$ref": "#/$defs/instant" },
+        "registry_revision_vector": {
+          "description": "每个目录自己的快照版本。**这就是「不是全局快照」的证据** —— 它是一个向量而不是一个数。",
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "node_id": { "$ref": "#/$defs/node_id" },
+              "registry_revision": { "type": "integer", "minimum": 1 },
+              "fetched_at": { "$ref": "#/$defs/instant" },
+              "directory_ref": { "type": "string", "minLength": 1 },
+              "snapshot_ref": { "type": "string", "minLength": 1 }
+            },
+            "required": ["node_id", "registry_revision", "fetched_at"],
+            "additionalProperties": false
+          }
+        },
+        "child_manifests": {
+          "description": "下级范围的引用与完成状态（递归联邦，§6/§7.5）。",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "node_id": { "$ref": "#/$defs/node_id" },
+              "scope_ref": { "type": "string", "minLength": 1 },
+              "enumeration_state": { "type": "string", "x-ddp-enum": "enumeration_state" }
+            },
+            "required": ["node_id", "scope_ref", "enumeration_state"],
+            "additionalProperties": false
+          }
+        },
+        "expanded_members": {
+          "description": "去重后的目标。大范围可分片保存，不要求一次塞进内存或传给浏览器（§5.4）。",
+          "type": "array", "items": { "$ref": "#/$defs/TargetKey" }
+        },
+        "unexpanded_subtrees": {
+          "description": "**不能展开的子域必须列出来**（§5.5）。空列表 + sealed 才允许后续声明 retrieval=complete。reason 对无权限调用者要降敏，不得泄露私有成员存在性（§5.5、§8.4）。",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "node_id": { "$ref": "#/$defs/node_id" },
+              "reason": {
+                "type": "string",
+                "enum": ["timeout", "denied", "enumeration_unsupported", "budget_exhausted", "unknown"]
+              }
+            },
+            "required": ["node_id", "reason"], "additionalProperties": false
+          }
+        },
+        "enumeration_state": { "type": "string", "x-ddp-enum": "enumeration_state" },
+        "manifest_digest": { "$ref": "#/$defs/digest" }
+      },
+      "required": ["schema", "scope_id", "caller_scope_hash", "created_at", "valid_until",
+                   "registry_revision_vector", "expanded_members", "unexpanded_subtrees",
+                   "enumeration_state", "manifest_digest"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "sealed 的硬判据：封存的范围不许还留着未展开子域。这一条把 §5.5「不把无法展开当成空目录」变成机器可查的东西 —— 否则它只是文档里的一句话。",
+          "if": {
+            "properties": { "enumeration_state": { "const": "sealed" } },
+            "required": ["enumeration_state"]
+          },
+          "then": { "properties": { "unexpanded_subtrees": { "maxItems": 0 } } }
+        }
+      ]
+    },
+
+    "CoverageEntry": {
+      "type": "object",
+      "description": "覆盖账本里的一行 —— 一个目标 × 一个（子）查询。",
+      "x-ddp-doc": "多子问题任务要**逐项**记录必须的子查询：只完成一个子查询不能替代整个目标的检索完成（§7.3）。actual_index_revision 与 CollectionDescriptor 里的可能不同 —— 那正是要记它的原因。",
+      "properties": {
+        "target_key": { "$ref": "#/$defs/TargetKey" },
+        "scope_ref": { "type": "string", "minLength": 1 },
+        "query_or_subquery_digest": { "$ref": "#/$defs/digest" },
+        "state": { "type": "string", "x-ddp-enum": "coverage_target_state" },
+        "probe_receipts": { "type": "array", "items": { "type": "string" } },
+        "actual_index_revision": { "type": ["string", "null"] },
+        "search_profile": { "type": ["string", "null"] },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "last_error": { "type": ["string", "null"] },
+        "evidence_refs": { "type": "array", "items": { "type": "string" } },
+        "used_budget": {
+          "type": "object",
+          "properties": {
+            "requests": { "type": "integer", "minimum": 0 },
+            "bytes": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false,
+          "x-ddp-doc": "本次尝试消耗的预算。**本切片只如实记请求次数，`bytes` 恒为 0**：精确的外发字节需要数据面（socket/网关计数器）测量，协调者不做猜测。把它当已发生的字节数会得到看起来精确的错误账。"
+        },
+        "exclusion_basis": {
+          "description": "state 为 unsupported 时**必须**给出可核验依据（§7.3：能力元数据过期/缺失算未知，不算排除）。",
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["target_key", "scope_ref", "query_or_subquery_digest", "state", "attempts"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "unsupported 必须有依据。没有这条约束，「排除」就变成了免费的完成率来源。",
+          "if": {
+            "properties": { "state": { "const": "unsupported" } },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": { "exclusion_basis": { "type": "string", "minLength": 1 } },
+            "required": ["exclusion_basis"]
+          }
+        },
+        {
+          "$comment": "succeeded 必须带回执与实际索引版本 —— 「仅有失败原因被记录不算搜索成功」（§7.4）的反面：仅有成功标记也不算。",
+          "if": {
+            "properties": { "state": { "const": "succeeded" } },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "probe_receipts": { "type": "array", "minItems": 1 },
+              "actual_index_revision": { "type": "string", "minLength": 1 }
+            },
+            "required": ["probe_receipts", "actual_index_revision"]
+          }
+        }
+      ]
+    },
+
+    "CoverageLedger": {
+      "type": "object",
+      "description": "一次任务的完整覆盖报告。",
+      "x-ddp-doc": "**分母未知时不显示伪百分比**（§7.4）。五个状态轴分别呈现，禁止压成一个绿色「完成」或一个 confidence 数字（I09）。`applicable_targets` 与 `total_targets` 分开是因为「已核实不支持」的目标进排除数、不进成功数，但也不能从总数里删掉。",
+      "properties": {
+        "schema": { "const": "ddp-scope-coverage/1#CoverageLedger" },
+        "root_task_id": { "type": "string", "minLength": 1 },
+        "scope_ref": { "type": "string", "minLength": 1 },
+        "search_mode": { "type": "string", "x-ddp-enum": "search_mode" },
+        "enumeration_state": { "type": "string", "x-ddp-enum": "enumeration_state" },
+        "retrieval_completeness": { "type": "string", "x-ddp-enum": "retrieval_completeness" },
+        "evidence_sufficiency": { "type": "string", "x-ddp-enum": "evidence_sufficiency" },
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/CoverageEntry" } },
+        "counts": {
+          "description": "报告目标总数、适用数、成功数、排除数、未完成数（§7.4）。",
+          "type": "object",
+          "properties": {
+            "total_targets": { "type": "integer", "minimum": 0 },
+            "applicable_targets": { "type": "integer", "minimum": 0 },
+            "succeeded": { "type": "integer", "minimum": 0 },
+            "excluded": { "type": "integer", "minimum": 0 },
+            "incomplete": { "type": "integer", "minimum": 0 }
+          },
+          "required": ["total_targets", "applicable_targets", "succeeded", "excluded", "incomplete"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["schema", "root_task_id", "scope_ref", "search_mode", "enumeration_state",
+                   "retrieval_completeness", "evidence_sufficiency", "entries", "counts"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "**快速模式永远不许声明 complete**（§7.2）。这是整份契约里最重要的一条机器约束：fast 的成功结局也只是 partial 加上「未检索范围」。少了它，「selected candidate 全成功就显示全 scope 查完」这个错误没有任何东西挡得住。",
+          "if": {
+            "properties": { "search_mode": { "const": "fast" } },
+            "required": ["search_mode"]
+          },
+          "then": {
+            "properties": {
+              "retrieval_completeness": { "not": { "const": "complete" } }
+            }
+          }
+        },
+        {
+          "$comment": "retrieval=complete 要求 enumeration=sealed（§7.4 判据①）。枚举没封上就没有分母，没有分母就不存在「全部查完」。",
+          "if": {
+            "properties": { "retrieval_completeness": { "const": "complete" } },
+            "required": ["retrieval_completeness"]
+          },
+          "then": {
+            "properties": { "enumeration_state": { "const": "sealed" } },
+            "required": ["enumeration_state"]
+          }
+        },
+        {
+          "$comment": "retrieval=complete 要求 incomplete 计数为 0（§7.4 判据③）。",
+          "if": {
+            "properties": { "retrieval_completeness": { "const": "complete" } },
+            "required": ["retrieval_completeness"]
+          },
+          "then": {
+            "properties": { "counts": { "properties": { "incomplete": { "const": 0 } } } }
+          }
+        }
+      ]
+    }
+  }
+}

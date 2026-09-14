@@ -43,6 +43,15 @@ describe('路由守卫', () => {
     expect(router.currentRoute.value.name).toBe('login')
   })
 
+  it('本地环境入口不要求本站账号，本站资源入口仍要求登录', async () => {
+    const router = makeRouter()
+    await router.push('/workspaces')
+    expect(router.currentRoute.value.name).toBe('environment-workspace')
+    await router.push('/resources')
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/resources')
+  })
+
   it('已登录访问登录页 -> 回文档库', async () => {
     const router = makeRouter()
     useAuthStore().token = 'fake-jwt'
@@ -73,9 +82,9 @@ describe('路由表本身', () => {
     expect(missing).toEqual([])
   })
 
-  it('只有登录页是 public —— 多一个就是把内容暴露出去了', () => {
+  it('只有登录和独立环境入口免本站登录；资料由各自身份边界授权', () => {
     const publicNames = routes.filter((r) => r.meta?.public).map((r) => String(r.name))
-    expect(publicNames).toEqual(['login'])
+    expect(publicNames).toEqual(['environment-workspace', 'login'])
   })
 
   it('每条具名路由都能被解析出来（组件路径写错在这里就红）', () => {

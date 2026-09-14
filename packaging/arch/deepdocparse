@@ -1,0 +1,3 @@
+#!/bin/sh
+# Do not forward arbitrary Chromium switches from document links or file managers.
+exec /opt/deepdocparse/deepdocparse

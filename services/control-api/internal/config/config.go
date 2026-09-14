@@ -15,6 +15,9 @@ import (
 )
 
 type Config struct {
+	// 持久 Ed25519 节点 seed 目录（0700，文件0600）。必须与数据库一致备份；丢失或不匹配拒绝启动
+	NodeIdentityDir string
+
 	// ---- 监听 ----
 	// 监听地址。容器里通常保持 :8080，对外端口由编排层映射
 	Addr string
@@ -67,6 +70,23 @@ type Config struct {
 	// 留着 change-me 等于 /v1/* 与语料 API 无鉴权开放。
 	// 生产优先 mTLS 或短期服务 token，这是最低限度的那一层
 	ServiceToken string
+
+	// ---- 联邦节点（P4/P6）----
+	// 本节点作为目录提供者接受对端调用时校验的同伴凭据（`X-DDP-Peer-Token`）。
+	// **留空 = 一律 401 `peer_unauthenticated`（Fail Closed）** ——
+	// 没有配置信任凭据的节点不该被任何对端读取目录、集合或成员。
+	// 比较用 constant time；**绝不回显、绝不入日志、绝不进错误消息**。
+	FederationPeerToken string
+	// 出站目录展开的已登记节点目录。JSON 对象：
+	// `{"<node_id>": {"endpoint": "https://…", "service_token": "…", "peer_token": "…"}}`。
+	// **Fail Closed**：没登记的 node_id 一个请求都不发（不解析 DNS、不试端口）。
+	// endpoint 必须 HTTPS 且无 userinfo/query/fragment；三个凭据字段
+	// **绝不回显、绝不入日志、绝不进错误消息**。
+	FederationPeers string
+	// 只给本地回环集成测试用的逃生口：允许 `http://127.0.0.1` 或 `http://[::1]`
+	// 的 peer endpoint。**只认字面回环地址**（`localhost` 会走 DNS，不给过）。
+	// 生产保持 false —— 打开它等于允许明文外发目录与集合摘要。
+	FederationAllowLoopback bool
 
 	// ---- 对象存储 ----
 	// 服务自己访问对象存储的地址（内网）
@@ -153,47 +173,51 @@ const placeholder = "change-me"
 
 func Load() (*Config, error) {
 	c := &Config{
-		Addr:                  env("CONTROL_ADDR", ":8080"),
-		DatabaseURL:           env("CONTROL_DATABASE_URL", "postgres://ddp_control:ddp@127.0.0.1:15432/deepdocparse"),
-		DBMaxConns:            int32(envInt("CONTROL_DB_MAX_CONNS", 20)),
-		DBMinConns:            int32(envInt("CONTROL_DB_MIN_CONNS", 2)),
-		JWTSecret:             env("JWT_SECRET", placeholder),
-		JWTTTL:                time.Duration(envInt("JWT_TTL_MINUTES", 60*24*7)) * time.Minute,
-		BcryptCost:            envInt("BCRYPT_COST", 12),
-		RegistrationMode:      env("REGISTRATION_MODE", "open"),
-		DefaultRole:           env("DEFAULT_MEMBER_ROLE", "contributor"),
-		OIDCIssuer:            env("OIDC_ISSUER", ""),
-		OIDCClientID:          env("OIDC_CLIENT_ID", ""),
-		OIDCClientSecret:      env("OIDC_CLIENT_SECRET", ""),
-		OIDCRedirectURL:       env("OIDC_REDIRECT_URL", ""),
-		CorpusURL:             env("CORPUS_URL", "http://127.0.0.1:8081"),
-		GatewayURL:            env("GATEWAY_URL", "http://127.0.0.1:9000"),
-		MCPURL:                env("MCP_URL", "http://127.0.0.1:9100"),
-		ServiceToken:          env("SERVICE_TOKEN", placeholder),
-		ObjectEndpoint:        env("OBJECT_ENDPOINT", "127.0.0.1:19000"),
-		ObjectPublicHost:      env("OBJECT_PUBLIC_ENDPOINT", "127.0.0.1:19000"),
-		ObjectAccessKey:       env("OBJECT_ACCESS_KEY", "minioadmin"),
-		ObjectSecretKey:       env("OBJECT_SECRET_KEY", "minioadmin"),
-		ObjectBucket:          env("OBJECT_BUCKET", "deepdocparse"),
-		ObjectSecure:          envBool("OBJECT_SECURE", false),
-		ObjectPublicSecure:    envBool("OBJECT_PUBLIC_SECURE", envBool("OBJECT_SECURE", false)),
-		ObjectRegion:          env("OBJECT_REGION", "us-east-1"),
-		PresignTTL:            time.Duration(envInt("PRESIGN_TTL_SECONDS", 900)) * time.Second,
-		MaxUploadBytes:        int64(envInt("MAX_UPLOAD_BYTES", 200*1024*1024)),
-		UploadPartSize:        int64(envInt("UPLOAD_PART_SIZE", 16*1024*1024)),
-		UploadTTL:             time.Duration(envInt("UPLOAD_TTL_SECONDS", 24*3600)) * time.Second,
-		AllowedMIME:           envList("ALLOWED_UPLOAD_MIME", "application/pdf"),
-		RedisURL:              env("REDIS_URL", ""),
-		DefaultRatePerMin:     envInt("DEFAULT_RATE_LIMIT_PER_MIN", 60),
-		LoginRatePerMin:       envInt("LOGIN_RATE_LIMIT_PER_MIN", 10),
-		QARatePerMin:          envInt("QA_RATE_PER_MIN", 20),
-		KnowledgeRatePerMin:   envInt("KNOWLEDGE_RATE_PER_MIN", 2),
-		ExtractRatePerMin:     envInt("EXTRACT_RATE_PER_MIN", 6),
-		CORSOrigins:           envList("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
-		PublicBaseURL:         env("PUBLIC_BASE_URL", "http://127.0.0.1:8080"),
-		InternalBaseURL:       env("INTERNAL_BASE_URL", env("PUBLIC_BASE_URL", "http://127.0.0.1:8080")),
-		AllowInsecureDefaults: envBool("ALLOW_INSECURE_DEFAULTS", false),
-		OutboxInterval:        time.Duration(envInt("OUTBOX_INTERVAL_SECONDS", 2)) * time.Second,
+		NodeIdentityDir:         env("NODE_IDENTITY_DIR", "./state/control-node"),
+		Addr:                    env("CONTROL_ADDR", ":8080"),
+		DatabaseURL:             env("CONTROL_DATABASE_URL", "postgres://ddp_control:ddp@127.0.0.1:15432/deepdocparse"),
+		DBMaxConns:              int32(envInt("CONTROL_DB_MAX_CONNS", 20)),
+		DBMinConns:              int32(envInt("CONTROL_DB_MIN_CONNS", 2)),
+		JWTSecret:               env("JWT_SECRET", placeholder),
+		JWTTTL:                  time.Duration(envInt("JWT_TTL_MINUTES", 60*24*7)) * time.Minute,
+		BcryptCost:              envInt("BCRYPT_COST", 12),
+		RegistrationMode:        env("REGISTRATION_MODE", "open"),
+		DefaultRole:             env("DEFAULT_MEMBER_ROLE", "contributor"),
+		OIDCIssuer:              env("OIDC_ISSUER", ""),
+		OIDCClientID:            env("OIDC_CLIENT_ID", ""),
+		OIDCClientSecret:        env("OIDC_CLIENT_SECRET", ""),
+		OIDCRedirectURL:         env("OIDC_REDIRECT_URL", ""),
+		CorpusURL:               env("CORPUS_URL", "http://127.0.0.1:8081"),
+		GatewayURL:              env("GATEWAY_URL", "http://127.0.0.1:9000"),
+		MCPURL:                  env("MCP_URL", "http://127.0.0.1:9100"),
+		ServiceToken:            env("SERVICE_TOKEN", placeholder),
+		FederationPeerToken:     env("FEDERATION_PEER_TOKEN", ""),
+		FederationPeers:         env("FEDERATION_PEERS", ""),
+		FederationAllowLoopback: envBool("FEDERATION_ALLOW_LOOPBACK", false),
+		ObjectEndpoint:          env("OBJECT_ENDPOINT", "127.0.0.1:19000"),
+		ObjectPublicHost:        env("OBJECT_PUBLIC_ENDPOINT", "127.0.0.1:19000"),
+		ObjectAccessKey:         env("OBJECT_ACCESS_KEY", "minioadmin"),
+		ObjectSecretKey:         env("OBJECT_SECRET_KEY", "minioadmin"),
+		ObjectBucket:            env("OBJECT_BUCKET", "deepdocparse"),
+		ObjectSecure:            envBool("OBJECT_SECURE", false),
+		ObjectPublicSecure:      envBool("OBJECT_PUBLIC_SECURE", envBool("OBJECT_SECURE", false)),
+		ObjectRegion:            env("OBJECT_REGION", "us-east-1"),
+		PresignTTL:              time.Duration(envInt("PRESIGN_TTL_SECONDS", 900)) * time.Second,
+		MaxUploadBytes:          int64(envInt("MAX_UPLOAD_BYTES", 200*1024*1024)),
+		UploadPartSize:          int64(envInt("UPLOAD_PART_SIZE", 16*1024*1024)),
+		UploadTTL:               time.Duration(envInt("UPLOAD_TTL_SECONDS", 24*3600)) * time.Second,
+		AllowedMIME:             envList("ALLOWED_UPLOAD_MIME", "application/pdf"),
+		RedisURL:                env("REDIS_URL", ""),
+		DefaultRatePerMin:       envInt("DEFAULT_RATE_LIMIT_PER_MIN", 60),
+		LoginRatePerMin:         envInt("LOGIN_RATE_LIMIT_PER_MIN", 10),
+		QARatePerMin:            envInt("QA_RATE_PER_MIN", 20),
+		KnowledgeRatePerMin:     envInt("KNOWLEDGE_RATE_PER_MIN", 2),
+		ExtractRatePerMin:       envInt("EXTRACT_RATE_PER_MIN", 6),
+		CORSOrigins:             envList("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
+		PublicBaseURL:           env("PUBLIC_BASE_URL", "http://127.0.0.1:8080"),
+		InternalBaseURL:         env("INTERNAL_BASE_URL", env("PUBLIC_BASE_URL", "http://127.0.0.1:8080")),
+		AllowInsecureDefaults:   envBool("ALLOW_INSECURE_DEFAULTS", false),
+		OutboxInterval:          time.Duration(envInt("OUTBOX_INTERVAL_SECONDS", 2)) * time.Second,
 	}
 	if err := c.validate(); err != nil {
 		return nil, err

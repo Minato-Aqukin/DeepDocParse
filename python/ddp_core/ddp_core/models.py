@@ -117,6 +117,9 @@ class Document(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     # 空串 = 外部提交：文件在调用方那儿，本层不下载也不归档
     object_key: Mapped[str] = mapped_column(String(512), default="")
+    # Durable deletion manifest. Clearing object_key must never discard retry state.
+    gc_pending_keys: Mapped[list] = mapped_column(JSON, default=list)
+    gc_error: Mapped[str | None] = mapped_column(Text, default=None)
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     # 当前生效的解析版本。无 FK 约束：与 parse_jobs 互相引用，加 FK 会形成建表循环
     current_job_id: Mapped[str | None] = mapped_column(String(32), default=None)
@@ -143,6 +146,116 @@ class Document(Base):
         UniqueConstraint("doc_id", "origin", name="uq_documents_doc_origin"),
         # 列表页按 (未删, 时间倒序) 翻页，不再有 user 维
         Index("ix_documents_deleted_created", "deleted_at", "created_at"),
+    )
+
+
+class Resource(Base):
+    """逻辑资产 —— **「谁的东西」，与「哪份内容」是两件事。**
+
+    v3 计划的不变量 I01：逻辑资源不等于内容哈希。两个人上传相同字节拥有
+    **各自独立**的资源记录，删一条不影响另一条；而文件内容仍然只存一份、
+    只解析一次、只索引一次（0006 的全局去重原封不动）。
+
+        Resource（本类）          谁的、能发布到哪
+          └─ ResourceVersion     固定版本
+               └─ document_id ──→ Document（内容层，全局去重）
+
+    与 `DocumentUpload` 的关系：那张表记的是"谁提交过这份内容"，
+    是**内容层**的归属台账；本表是**资产层**，一条 DocumentUpload 对应一条
+    Resource。两者并存不是重复 —— 前者回答"这份语料从哪来"，
+    后者回答"这份资产归谁、发布没有、删了没有"。
+
+    **无外键指向 users**：用户住在 control schema，由 Go 拥有
+    （与 `Document.uploaded_by` 同一个理由）。
+    """
+
+    __tablename__ = "resources"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+    owner_id: Mapped[str] = mapped_column(String(32), index=True)
+    # 首次提交人。通常 == owner_id；"另存为我的资源"时两者不同
+    uploaded_by: Mapped[str] = mapped_column(String(32))
+    display_name: Mapped[str] = mapped_column(String(255), default="")
+    # 契约 publishing_state。**私有来源的派生内容不能靠切 published 绕过原许可**
+    # （计划 §4.4）—— 那条检查在应用层，这里只存状态
+    publication: Mapped[str] = mapped_column(String(16), default="private", index=True)
+    # "另存为我的资源"时指向来源资产：副本保留来源身份（不变量 I02）
+    copied_from: Mapped[str | None] = mapped_column(String(32), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    __table_args__ = (
+        Index("ix_resources_deleted_created", "deleted_at", "created_at"),
+    )
+
+
+class ResourceVersion(Base):
+    """资产的一个**固定**版本。
+
+    计划 T04：固定版本内容不能原地变化。所以换版是**加一行**（version_no+1），
+    不是改 `document_id` —— 改它等于让一条已经被引用过的出处悄悄指向别的内容，
+    而出处漂移是这个项目最不能接受的一类错。
+
+    **多条 ResourceVersion 可以指同一个 Document**，那正是"内容去重仍然生效"
+    的形状：A 和 B 各有自己的资产与版本，底下是同一份解析结果。
+
+    `deleted_at` 与 Resource 的分开：删整个资产 vs 只删某一版是两件事。
+    GC 判"这个 document 还有没有人要"时看的是**未删的** ResourceVersion。
+    """
+
+    __tablename__ = "resource_versions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    resource_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("resources.id", ondelete="CASCADE"), index=True)
+    version_no: Mapped[int] = mapped_column(Integer, default=1)
+    document_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("documents.id"), index=True)
+    # Frozen parse binding. None means no parse was frozen, never "use current_job".
+    parse_job_id: Mapped[str | None] = mapped_column(String(32), default=None, index=True)
+    # Verified imported snapshot; origin identity remains in its immutable manifest.
+    bundle_prefix: Mapped[str] = mapped_column(String(512), default="")
+    # Immutable audit of a recovered historical parse-to-asset binding.
+    binding_provenance: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    # 冗余一份内容摘要：联邦侧 DDP-EVIDENCE 的 source_digest 直接取它，
+    # 不必回表 join；也用于校验绑定没被换掉
+    source_digest: Mapped[str] = mapped_column(String(64), default="")
+    filename: Mapped[str] = mapped_column(String(255), default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    __table_args__ = (
+        UniqueConstraint("resource_id", "version_no", name="uq_resource_versions_no"),
+    )
+
+
+class UploadEvent(Base):
+    """谁**真正**提交了什么 —— **网络重试不是新上传**（计划 T02）。
+
+    幂等键的键域按提交人隔离：只按 key 全局唯一的话，A 用过的键 B 再用会被
+    判成重试，于是 B 的上传静默变成"已存在"，拿到的是 A 的资产（计划 T80）。
+
+    `request_digest` 让"同键不同正文"能判成冲突，而不是复用一个不相关的结果 ——
+    与联邦侧的 `idempotency_conflict` 是同一条规则。
+    """
+
+    __tablename__ = "upload_events"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    resource_version_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("resource_versions.id", ondelete="CASCADE"), index=True)
+    actor_id: Mapped[str] = mapped_column(String(32), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_digest: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("actor_id", "idempotency_key", name="uq_upload_events_actor_key"),
     )
 
 
@@ -192,6 +305,7 @@ class ParseJob(Base):
     # 按 `documents.uploaded_by` 记账等于"谁传的谁买单"，别人能随意花掉他的额度。
     # 可空：迁移过来的老 job 没有这个信息，那时退回按上传者记（见 archive.py）。
     initiated_by: Mapped[str | None] = mapped_column(String(32), default=None)
+    resource_id: Mapped[str | None] = mapped_column(String(32), default=None)
     service_task_id: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     error: Mapped[str | None] = mapped_column(Text, default=None)
@@ -200,12 +314,23 @@ class ParseJob(Base):
     # 同一 Document 下按创建顺序递增。Evidence.doc_version 从这里取，不再恒为 0。
     document_version: Mapped[int] = mapped_column(Integer, default=1)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # Fixed parse revisions own their index/compile state and fencing lease.
+    index_status: Mapped[str] = mapped_column(String(16), default="none", index=True)
+    index_error: Mapped[str | None] = mapped_column(Text, default=None)
+    index_generation: Mapped[int] = mapped_column(Integer, default=0)
+    index_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None, index=True)
+    compile_status: Mapped[str] = mapped_column(String(16), default="none", index=True)
+    compile_degraded: Mapped[list] = mapped_column(JSON, default=list)
+    compile_fingerprint: Mapped[str] = mapped_column(String(64), default="", index=True)
+    layout_version: Mapped[str] = mapped_column(String(32), default="")
+    code_detection: Mapped[str] = mapped_column(String(16), default="unavailable", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
                                                  onupdate=utcnow)
 
     __table_args__ = (
-        UniqueConstraint("document_id", "options_hash", name="uq_parse_jobs_doc_options"),
+        UniqueConstraint("document_id", "resource_id", "options_hash",
+                         name="uq_parse_jobs_resource_options"),
         UniqueConstraint("document_id", "document_version", name="uq_parse_jobs_doc_version"),
     )
 
@@ -480,7 +605,8 @@ class KnowledgeEntity(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     canonical_name: Mapped[str] = mapped_column(String(255), index=True)
-    normalized_name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    normalized_name: Mapped[str] = mapped_column(String(255), index=True)
+    scope_key: Mapped[str] = mapped_column(String(64), default="legacy", index=True)
     entity_type: Mapped[str] = mapped_column(String(32), default="other", index=True)
     aliases: Mapped[list] = mapped_column(JSON, default=list)
     merged_by: Mapped[str] = mapped_column(String(16), default="none", index=True)
@@ -493,6 +619,9 @@ class KnowledgeEntity(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
                                                  onupdate=utcnow)
+
+    __table_args__ = (UniqueConstraint("scope_key", "normalized_name",
+                                      name="uq_knowledge_entities_scope_name"),)
 
 
 class GraphEdge(Base):

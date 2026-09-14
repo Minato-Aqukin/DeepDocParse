@@ -21,6 +21,8 @@ import (
 type FileGrant struct {
 	Token          string
 	OrganizationID string
+	SubjectID      string
+	ResourceID     string
 	DocumentID     string
 	ObjectKey      string
 	MIME           string
@@ -42,10 +44,10 @@ func (s *Store) CreateFileGrant(ctx context.Context, g *FileGrant) error {
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO control.file_grants
-		    (token, organization_id, document_id, object_key, mime, filename, scope, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		    (token, organization_id, document_id, object_key, mime, filename, scope, expires_at, subject_id, resource_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 		g.Token, g.OrganizationID, g.DocumentID, g.ObjectKey, g.MIME, g.Filename,
-		g.Scope, g.ExpiresAt)
+		g.Scope, g.ExpiresAt, g.SubjectID, g.ResourceID)
 	return err
 }
 
@@ -55,45 +57,67 @@ func (s *Store) CreateFileGrant(ctx context.Context, g *FileGrant) error {
 func (s *Store) FileGrantByToken(ctx context.Context, token string) (*FileGrant, error) {
 	g := &FileGrant{Token: token}
 	err := s.pool.QueryRow(ctx, `
-		SELECT organization_id, document_id, object_key, mime, scope, expires_at
+		SELECT organization_id, document_id, object_key, mime, scope, expires_at, subject_id, resource_id, filename
 		FROM control.file_grants
 		WHERE token = $1 AND revoked = FALSE
 		  AND (expires_at IS NULL OR expires_at > now())`, token).
-		Scan(&g.OrganizationID, &g.DocumentID, &g.ObjectKey, &g.MIME, &g.Scope, &g.ExpiresAt)
+		Scan(&g.OrganizationID, &g.DocumentID, &g.ObjectKey, &g.MIME, &g.Scope, &g.ExpiresAt, &g.SubjectID, &g.ResourceID, &g.Filename)
 	if err != nil {
 		return nil, norows(err)
 	}
 	return g, nil
 }
 
-// StableGrantFor 取该文档的稳定凭证；没有就建一个。
-// **同一份文档只能有一个 source 凭证** —— 每次建新的等于每次换 URL。
-func (s *Store) StableGrantFor(ctx context.Context, orgID, documentID, objectKey, mime, filename string) (*FileGrant, error) {
-	g := &FileGrant{OrganizationID: orgID, DocumentID: documentID, ObjectKey: objectKey,
-		MIME: mime, Filename: filename, Scope: "source"}
-	err := s.pool.QueryRow(ctx, `
-		SELECT token, object_key, mime, filename FROM control.file_grants
-		WHERE organization_id = $1 AND document_id = $2 AND scope = 'source' AND revoked = FALSE
-		ORDER BY created_at LIMIT 1`, orgID, documentID).
+// StableGrantFor reuses a stable bearer capability within one authorized subject.
+// An empty objectKey is read-only: downloads cannot manufacture an empty grant.
+func (s *Store) StableGrantFor(ctx context.Context, orgID, documentID, subjectID, resourceID, objectKey, mime, filename string) (*FileGrant, error) {
+	if subjectID == "" {
+		return nil, ErrNotFound
+	}
+	g := &FileGrant{OrganizationID: orgID, DocumentID: documentID, SubjectID: subjectID, ResourceID: resourceID, Scope: "source"}
+	if objectKey == "" {
+		err := s.pool.QueryRow(ctx, `
+            SELECT token, object_key, mime, filename FROM control.file_grants
+            WHERE organization_id=$1 AND document_id=$2 AND subject_id=$3
+              AND resource_id=$4 AND scope='source' AND revoked=FALSE
+              AND (expires_at IS NULL OR expires_at > now())`, orgID, documentID, subjectID, resourceID).
+			Scan(&g.Token, &g.ObjectKey, &g.MIME, &g.Filename)
+		return g, norows(err)
+	}
+	// Serialize renewal with creation. Expired capabilities remain revoked forever;
+	// extending an old bearer token would revive a previously invalid capability.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	domain, _ := json.Marshal([]string{orgID, documentID, subjectID, resourceID, "source"})
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, string(domain)); err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE control.file_grants SET revoked=TRUE
+		WHERE organization_id=$1 AND document_id=$2 AND subject_id=$3 AND resource_id=$4
+		  AND scope='source' AND revoked=FALSE AND expires_at <= now()`,
+		orgID, documentID, subjectID, resourceID); err != nil {
+		return nil, err
+	}
+	// The partial unique index also protects callers outside this renewal path.
+	err = tx.QueryRow(ctx, `
+        INSERT INTO control.file_grants
+          (token, organization_id, document_id, subject_id, resource_id, object_key, mime, filename, scope)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'source')
+        ON CONFLICT (organization_id, document_id, scope, subject_id, resource_id) WHERE revoked=FALSE AND subject_id<>''
+        DO UPDATE SET filename=CASE WHEN file_grants.filename='' THEN EXCLUDED.filename ELSE file_grants.filename END
+        RETURNING token, object_key, mime, filename`,
+		auth.NewToken(), orgID, documentID, subjectID, resourceID, objectKey, mime, filename).
 		Scan(&g.Token, &g.ObjectKey, &g.MIME, &g.Filename)
-	if err == nil {
-		// 老凭证是在加 filename 那列之前建的（默认空串）。**就地补上** ——
-		// 不能因为缺个名字就换一个 token，那会换掉 doc_hash（ADR #11/#12）
-		if g.Filename == "" && filename != "" {
-			if _, e := s.pool.Exec(ctx,
-				`UPDATE control.file_grants SET filename = $1 WHERE token = $2`,
-				filename, g.Token); e == nil {
-				g.Filename = filename
-			}
-		}
-		return g, nil
+	if err != nil {
+		return nil, err
 	}
-	// 只有"确实还没有"才去建；别的错误（连接断了、权限不对）必须原样上抛 ——
-	// 把它们也当成"没有"会在故障时静默地建出一堆重复凭证，而每一个都是一个新 URL
-	if e := norows(err); !errors.Is(e, ErrNotFound) {
-		return nil, e
+	if g.ObjectKey != objectKey {
+		return nil, errors.New("immutable file grant object mismatch")
 	}
-	if err := s.CreateFileGrant(ctx, g); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return g, nil

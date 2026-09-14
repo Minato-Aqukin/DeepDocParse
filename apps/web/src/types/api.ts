@@ -349,7 +349,8 @@ export interface SearchResult {
   query: string
   /** 非 null 表示这次检索降级了（如 embedding_unavailable），UI 必须显示出来 */
   degraded: string | null
-  groups: { document_id: string; filename: string; hits: SearchHit[] }[]
+  groups: { document_id: string; resource_id?: string | null; source_version_id?: string | null;
+    parse_revision?: string; filename: string; hits: SearchHit[] }[]
 }
 
 export interface KeyInfo {

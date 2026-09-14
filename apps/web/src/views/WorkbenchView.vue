@@ -79,8 +79,8 @@ async function load() {
     document.value = (await documentsApi.get(id)).data
     if (document.value.status !== 'succeeded') return
     const [result, pageData, source] = await Promise.all([
-      documentsApi.result(id),
-      documentsApi.pages(id),
+      documentsApi.result(id, typeof route.query.job === 'string' ? route.query.job : undefined),
+      documentsApi.pages(id, typeof route.query.job === 'string' ? route.query.job : undefined),
       documentsApi.sourceViewUrl(id).catch(() => null),
     ])
     markdown.value = result.data.markdown
@@ -131,7 +131,8 @@ async function download(format: DownloadFormat) {
   const id = String(route.params.id)
   // 原件走签名直读，产物走应用进程 —— 两条路刻意不同（不变式 6）
   if (format === 'source') return downloadViaSignedUrl(id, document.value?.filename)
-  await downloadAs(documentsApi.exportUrl(id, format), document.value?.filename)
+  await downloadAs(documentsApi.exportUrl(id, format,
+    typeof route.query.job === 'string' ? route.query.job : undefined), document.value?.filename)
 }
 
 async function reindex() {
@@ -262,7 +263,10 @@ watch(
       </section>
 
       <section class="pane ask">
-        <AskPanel v-if="document" :document="document" @locate="locate" />
+        <p v-if="route.query.job && document?.current_job_id !== route.query.job">
+          当前显示固定的历史解析修订。问答索引已切换，请从资源库选择当前修订开始新的问答。
+        </p>
+        <AskPanel v-else-if="document" :document="document" @locate="locate" />
       </section>
     </div>
   </div>

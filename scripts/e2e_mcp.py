@@ -1,205 +1,207 @@
-"""真环境 e2e：MCP 客户端 -> mcp_server -> gateway -> mineru / VQA / TEI 全链路。
+"""v3 real MCP acceptance through control-api using two different users' API keys.
 
-覆盖 corpus MCP 契约、deprecated ask_document 三条路径 + v2 向量索引物证：
-  1. 图片 URL        -> 直接 VQA，不碰解析平面
-  2. 文档首次询问     -> 触发解析，返回"解析中"，重试后得到带出处的答案
-  3. 长文档跨页事实   -> 检索定位到正确页码（v2 走向量检索，未配 embedding 则 BM25 兜底）
-  4. REDIS_URL 已配时 -> 断言 worker 确实写入了 chunk 向量、FT 索引存在
+Requires an existing PRIVATE, indexed resource with evidence, a dependent Wiki entry
+and graph entity owned by MCP_API_KEY's user. MCP_OTHER_API_KEY must belong to a
+user with no access to that resource. No uploads or publication are performed.
 
-前置（宿主机混合模式，见 ../CLAUDE.md「dev 环境陷阱」）：
-  redis-stack / mineru / TEI 用容器；gateway、arq worker、mcp_server 用 venv 起；
-  fixtures 用 `python -m http.server 18081 --directory tests/fixtures` 暴露。
+Required environment:
+  MCP_API_KEY, MCP_OTHER_API_KEY, MCP_E2E_QUERY, MCP_E2E_EXPECTED_TEXT,
+  MCP_E2E_EVIDENCE_ID, MCP_E2E_WIKI, MCP_E2E_ENTITY
+Optional: CONTROL_BASE_URL (http://127.0.0.1:8080), MCP_E2E_REQUIRE_CROP=1.
 
-用法：
-  python scripts/e2e_mcp.py                    # 全部场景
-  python scripts/e2e_mcp.py --skip-image       # 跳过图片（VQA 未启动时）
-环境变量：MCP_URL / FIXTURE_BASE / REDIS_URL
+Example: .venv/bin/python scripts/e2e_mcp.py --report /tmp/mcp-v3-report.json
+Exit 0 = all checks passed; 1 = observed failure; 2 = prerequisites unavailable.
+The report contains check outcomes and runtime versions, never keys or source text.
 """
 import argparse
 import asyncio
-import hashlib
+import importlib.metadata
+import json
 import os
+import platform
 import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlsplit
 
-from fastmcp import Client
+import httpx
 
-# **结尾是 `/` 不是 `/mcp`。** MCP 服务挂在根路径上（入口会把 `/mcp` 前缀
-# 剥掉再转发，见 ddp_mcp/server.py 里那段说明）—— 这是那条配对关系的
-# 第三个消费方，写成 `/mcp` 的话直连必然 404。
-MCP_URL = os.environ.get("MCP_URL", "http://127.0.0.1:9100/")
-FIXTURE_BASE = os.environ.get("FIXTURE_BASE", "http://127.0.0.1:18081")
-REDIS_URL = os.environ.get("REDIS_URL", "")
-
-RETRY_LIMIT = 60        # 最多等 60 * 5s = 5 分钟解析
-RETRY_INTERVAL = 5
-INDEX_WAIT_LIMIT = 24   # 分块索引最多再等 24 * 5s = 2 分钟
-PENDING_MARKERS = ("解析中", "归档中")
+TOOLS = ("search", "ask", "get_evidence", "read_wiki", "graph_neighbors")
+REQUIRED = ("MCP_API_KEY", "MCP_OTHER_API_KEY", "MCP_E2E_QUERY", "MCP_E2E_EXPECTED_TEXT",
+            "MCP_E2E_EVIDENCE_ID", "MCP_E2E_WIKI", "MCP_E2E_ENTITY")
 
 
-def text_of(result) -> str:
-    return "\n".join(getattr(b, "text", "") for b in (getattr(result, "content", None) or []))
+@dataclass(frozen=True)
+class Config:
+    base_url: str
+    owner_key: str
+    other_key: str
+    query: str
+    expected: str
+    evidence_id: str
+    wiki: str
+    entity: str
+    require_crop: bool = False
+
+    @property
+    def mcp_url(self) -> str:
+        return self.base_url + "/mcp/"
 
 
-async def ask_until_ready(client: Client, file_url: str, question: str) -> str:
-    """按 ask_document 的契约重试：同参数轮询直到不再返回"解析中"。"""
-    out = text_of(await client.call_tool("ask_document",
-                                         {"file_url": file_url, "question": question}))
-    first = out
-    for i in range(RETRY_LIMIT):
-        if not any(m in out for m in PENDING_MARKERS):
-            return out
-        await asyncio.sleep(RETRY_INTERVAL)
-        out = text_of(await client.call_tool("ask_document",
-                                             {"file_url": file_url, "question": question}))
-        print(f"    retry {i + 1}: {'等待中' if any(m in out for m in PENDING_MARKERS) else '完成'}")
-    raise AssertionError(f"解析未在 {RETRY_LIMIT * RETRY_INTERVAL}s 内完成，首次返回：{first[:200]}")
-
-
-def check(label: str, condition: bool, detail: str = "") -> bool:
-    print(f"  {'PASS' if condition else 'FAIL'}  {label}" + (f" — {detail}" if detail else ""))
-    return condition
-
-
-def _redis():
-    import redis.asyncio as redis
-
-    return redis.from_url(REDIS_URL)
-
-
-def doc_hash_of(file_url: str) -> str:
-    """必须与 gateway parse.py / mcp_server 的算法一致。"""
-    return hashlib.sha256(file_url.encode()).hexdigest()
-
-
-async def wait_for_index(file_url: str) -> int | None:
-    """等 chunk_and_index 把分块写入（最终一致）。未配 REDIS_URL 返回 None。"""
-    if not REDIS_URL:
-        return None
-    r = _redis()
+def configuration(env: dict) -> tuple[Config | None, list[str]]:
+    missing = [name for name in REQUIRED if not env.get(name, "").strip()]
+    if missing:
+        return None, ["missing " + ", ".join(missing)]
+    base = env.get("CONTROL_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
     try:
-        for _ in range(INDEX_WAIT_LIMIT):
-            keys = await r.keys(f"chunk:{doc_hash_of(file_url)}:*")
-            if keys:
-                return len(keys)
-            await asyncio.sleep(RETRY_INTERVAL)
-        return 0
-    finally:
-        await r.aclose()
+        parsed = urlsplit(base)
+        port = parsed.port
+    except ValueError:
+        return None, ["CONTROL_BASE_URL is malformed"]
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.username or parsed.password:
+        return None, ["CONTROL_BASE_URL must be an HTTP(S) control-api URL without credentials"]
+    if parsed.query or parsed.fragment or port == 9100 or parsed.path.rstrip("/").endswith("/mcp"):
+        return None, ["CONTROL_BASE_URL must identify control-api, not the internal MCP listener or /mcp path"]
+    if not all(env[name].startswith("sk-") for name in ("MCP_API_KEY", "MCP_OTHER_API_KEY")):
+        return None, ["MCP_API_KEY and MCP_OTHER_API_KEY must be user API keys (sk-), never SERVICE_TOKEN"]
+    if env["MCP_API_KEY"] == env["MCP_OTHER_API_KEY"]:
+        return None, ["two different users' API keys are required for privacy acceptance"]
+    if env["MCP_E2E_EXPECTED_TEXT"] in env["MCP_E2E_QUERY"]:
+        return None, ["MCP_E2E_QUERY must not contain the private answer marker"]
+    return Config(base, env["MCP_API_KEY"], env["MCP_OTHER_API_KEY"], env["MCP_E2E_QUERY"],
+                  env["MCP_E2E_EXPECTED_TEXT"], env["MCP_E2E_EVIDENCE_ID"],
+                  env["MCP_E2E_WIKI"], env["MCP_E2E_ENTITY"], env.get("MCP_E2E_REQUIRE_CROP") == "1"), []
 
 
-async def retrieval_counters() -> dict[str, int]:
-    """读 mcp_server 记录的检索路径计数（vector / bm25），用于判别真实走了哪条路。"""
-    if not REDIS_URL:
-        return {}
-    r = _redis()
-    try:
-        out = {}
-        for mode in ("vector", "bm25"):
-            raw = await r.get(f"metrics:retrieval:{mode}")
-            out[mode] = int(raw) if raw else 0
-        return out
-    finally:
-        await r.aclose()
-
-
-async def main(skip_image: bool) -> int:
-    ok = True
-    async with Client(MCP_URL) as client:
-        tools = [t.name for t in await client.list_tools()]
-        print("== 工具清单 ==")
-        expected = ["search", "ask", "get_evidence", "read_wiki", "graph_neighbors",
-                    "ask_document"]
-        ok &= check("五个语料工具 + deprecated ask_document", tools == expected, str(tools))
-
-        if not skip_image:
-            print("\n== 场景 1：图片直答 ==")
-            out = text_of(await client.call_tool(
-                "ask_document", {"file_url": f"{FIXTURE_BASE}/vqa-test.png",
-                                 "question": "Read all text in this image."}))
-            ok &= check("VQA 读出图中数字 42", "42" in out, out[:120].replace("\n", " "))
-            ok &= check("返回出处", "出处" in out)
-
-        print("\n== 场景 2：长文档跨页事实检索 ==")
-        pdf = f"{FIXTURE_BASE}/long-doc.pdf"
-        out = await ask_until_ready(client, pdf, "What is the launch code of project Zephyr?")
-        ok &= check("检索到埋在第 3 页的 launch code 8712", "8712" in out,
-                    out[:160].replace("\n", " "))
-        ok &= check("出处页码正确（第 3 页）", "第 3 页" in out)
-
-        # 分块索引是归档后的独立后续任务，上面那问几乎必然跑在 BM25 上；
-        # 下面的向量检索断言必须等索引真正就绪后再发问，否则测不到 v2 路径
-        indexed = await wait_for_index(pdf)
-        if indexed is None:
-            print("  (未设 REDIS_URL，跳过向量检索判别)")
-        else:
-            ok &= check("分块索引已就绪", indexed > 0, f"{indexed} 个 chunk")
-
-            print("\n== 场景 3：向量检索判别（语义化提问，与原文无词面重叠）==")
-            before = await retrieval_counters()
-            # 原文是 "The annual revenue of Acme Corp reached 42 million dollars in 2025."
-            # 提问与原文**零词面重叠**（连 "the" 都不能有——它在埋点句里出现，
-            # 会让 BM25 把第 3/5 页一起捞进证据串从而蒙对页码）。
-            # 零重叠时 BM25 全零分只会回落到第 1 页首块，唯有语义向量能定位第 5 页。
-            out2 = await ask_until_ready(client, pdf, "How much did they earn?")
-            after = await retrieval_counters()
-            used_vector = after.get("vector", 0) > before.get("vector", 0)
-            ok &= check("本次确实走了向量检索（而非 BM25 兜底）", used_vector,
-                        f"vector {before.get('vector', 0)}→{after.get('vector', 0)}, "
-                        f"bm25 {before.get('bm25', 0)}→{after.get('bm25', 0)}")
-            ok &= check("语义提问定位到第 5 页的金额事实",
-                        "42" in out2 and "第 5 页" in out2, out2[:160].replace("\n", " "))
-
-    if REDIS_URL:
-        print("\n== v2 向量索引物证 ==")
-        import redis.asyncio as redis
-
-        doc_hash = hashlib.sha256(f"{FIXTURE_BASE}/long-doc.pdf".encode()).hexdigest()
-        r = redis.from_url(REDIS_URL)
-        try:
-            keys = await r.keys(f"chunk:{doc_hash}:*")
-            if not keys:
-                # 上面"分块索引已就绪"已经报过 FAIL，这里不重复计分，但要说一声
-                # 这两条没验过 —— 静默跳过跟静默降级是一回事
-                print("  SKIP  chunk 的 TTL 与 page_size（一个 chunk 都没有，无从验证）")
-            else:
-                ttl = await r.ttl(keys[0])
-                ok &= check("chunk 带 TTL（可重建缓存，铁律 5）", ttl > 0, f"TTL={ttl}s")
-                fields = await r.hgetall(keys[0])
-                fields = {(k.decode() if isinstance(k, bytes) else k) for k in fields}
-                ok &= check("chunk 存了裁剪所需的 page_size", "page_size" in fields,
-                            str(sorted(fields)))
-
-            # 普通 redis 没有 RediSearch 模块（compose.web.yml 起的就是那个）。
-            # 那是合法配置——检索会退回 BM25——但**这一条无论如何都要报出来**：
-            # 直接抛 ResponseError 会把整个 e2e 连同后面的结论一起打断，
-            # 而"没建索引就不打印"等于静默降级，正是本项目吃过大亏的那种
+def structured(result) -> dict:
+    payload = getattr(result, "structured_content", None)
+    if isinstance(payload, dict):
+        return payload
+    for item in getattr(result, "content", []):
+        if getattr(item, "type", None) == "text":
             try:
-                names = [n.decode() if isinstance(n, bytes) else n
-                         for n in await r.execute_command("FT._LIST")]
-            except redis.ResponseError as exc:
-                ok &= check("FT 向量索引已建立（名字带维度）", False,
-                            f"这个 Redis 没有 RediSearch 模块（{exc}）——"
-                            "需要 redis-stack-server，见 docker/compose.cpu.yml")
-            else:
-                hit = [n for n in names if n.startswith("chunks_idx_d")]
-                ok &= check("FT 向量索引已建立（名字带维度）", bool(hit),
-                            str(names) if names else "一个 FT 索引都没有")
-                if hit:
-                    info = await r.execute_command("FT.INFO", hit[0])
-                    meta = {(k.decode() if isinstance(k, bytes) else k): v
-                            for k, v in zip(info[::2], info[1::2])}
-                    print(f"        {hit[0]} num_docs={meta.get('num_docs')}")
-        finally:
-            await r.aclose()
-    else:
-        print("\n(未设 REDIS_URL，跳过向量索引物证)")
+                data = json.loads(item.text)
+            except ValueError:
+                continue
+            if isinstance(data, dict):
+                return data
+    return {}
 
-    print("\n" + ("M4 E2E PASSED" if ok else "M4 E2E FAILED"))
-    return 0 if ok else 1
+
+def evidence_ids(value) -> set[str]:
+    if isinstance(value, list):
+        return set().union(*(evidence_ids(item) for item in value)) if value else set()
+    if not isinstance(value, dict):
+        return set()
+    ids = {value["evidence_id"]} if isinstance(value.get("evidence_id"), str) else set()
+    ids.update(item for item in value.get("evidence_ids", []) if isinstance(item, str))
+    for item in value.values():
+        ids.update(evidence_ids(item))
+    return ids
+
+
+def client_for(config: Config, key: str):
+    from fastmcp import Client
+    from fastmcp.client.transports import StreamableHttpTransport
+
+    def factory(**kwargs):
+        kwargs["trust_env"] = False
+        return httpx.AsyncClient(**kwargs)
+
+    return Client(StreamableHttpTransport(config.mcp_url,
+        headers={"Authorization": "Bearer " + key}, httpx_client_factory=factory))
+
+
+async def run(config: Config, report: dict) -> int:
+    def check(name, condition):
+        result = bool(condition)
+        report["checks"].append({"name": name, "passed": result})
+        print(("PASS " if result else "FAIL ") + name)
+
+    calls = {"search": {"query": config.query, "limit": 10},
+             "ask": {"question": config.query}, "get_evidence": {"evidence_id": config.evidence_id},
+             "read_wiki": {"entry_id_or_title": config.wiki},
+             "graph_neighbors": {"entity_id_or_name": config.entity, "depth": 1}}
+    # Verify the real user-facing entry before connecting MCP. No trusted identity
+    # headers or service credentials are constructed anywhere in this script.
+    async with httpx.AsyncClient(trust_env=False, timeout=15) as http:
+        anonymous = await http.post(config.mcp_url, json={})
+        check("control entry rejects anonymous requests", anonymous.status_code in (401, 403))
+
+    async with client_for(config, config.owner_key) as client:
+        names = {tool.name for tool in await client.list_tools()}
+        check("five corpus tools and deprecated compatibility tool are registered", set(TOOLS) | {"ask_document"} <= names)
+        for tool, arguments in calls.items():
+            result = await client.call_tool(tool, arguments, raise_on_error=False)
+            data = structured(result)
+            check(tool + " owner call succeeds", not result.is_error and bool(data))
+            check(tool + " reaches the expected evidence", config.evidence_id in evidence_ids(data))
+            if tool == "search":
+                check("search reports fixed parse scope", data.get("scope", {}).get("authorized_parse_revisions", 0) > 0)
+                matches = [item for item in data.get("results", []) if item.get("evidence_id") == config.evidence_id]
+                check("search returns resource, version and parse identities", matches and all(
+                    item.get("resource_id") and item.get("source_version_id") and item.get("parse_revision") for item in matches))
+            if tool in ("search", "ask", "get_evidence"):
+                check(tool + " returns the expected private fact", config.expected in json.dumps(data, ensure_ascii=False))
+            if tool == "ask":
+                check("answer includes a supported assertion", any(not item.get("unsupported", True)
+                    and config.evidence_id in item.get("evidence_ids", []) for item in data.get("assertions", [])))
+            if tool == "get_evidence":
+                check("evidence resolves to a source", data.get("resolved") is True)
+                check("crop status is explicit", "crop_degraded" in data)
+                if config.require_crop:
+                    check("evidence includes native image pixels", any(item.type == "image" for item in result.content))
+
+    async with client_for(config, config.other_key) as client:
+        for tool, arguments in calls.items():
+            result = await client.call_tool(tool, arguments, raise_on_error=False)
+            data = structured(result)
+            serialized = json.dumps(data, ensure_ascii=False) + "\n".join(
+                item.text for item in result.content if getattr(item, "type", None) == "text")
+            check(tool + " excludes private evidence and answer", bool(data) and config.evidence_id not in evidence_ids(data)
+                  and config.expected not in serialized)
+            if tool == "get_evidence":
+                check("get_evidence withholds private pixels", not any(item.type == "image" for item in result.content))
+            if tool in ("get_evidence", "read_wiki", "graph_neighbors"):
+                check(tool + " conceals private existence", data.get("status") == "not_found")
+            else:
+                check(tool + " is an authorized non-error response", not result.is_error)
+    return 0 if all(item["passed"] for item in report["checks"]) else 1
+
+
+def main(argv=None, env=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--report", type=Path, help="write a redacted JSON acceptance report")
+    parser.add_argument("--timeout", type=float, default=300, help="total timeout in seconds")
+    args = parser.parse_args(argv)
+    report = {"suite": "mcp-v3-five-tools-acl", "started_at": datetime.now(timezone.utc).isoformat(),
+              "python": platform.python_version(), "checks": []}
+    config, reasons = configuration(os.environ if env is None else env)
+    try:
+        report["fastmcp"] = importlib.metadata.version("fastmcp")
+    except importlib.metadata.PackageNotFoundError:
+        reasons.append("missing fastmcp; install the services/mcp development environment")
+    if reasons:
+        report.update(status="blocked", prerequisites=reasons)
+        print("BLOCKED: " + "; ".join(reasons))
+        code = 2
+    else:
+        report["entry"] = config.mcp_url
+        try:
+            async def execute():
+                return await asyncio.wait_for(run(config, report), timeout=args.timeout)
+            code = asyncio.run(execute())
+            report["status"] = "passed" if code == 0 else "failed"
+        except Exception as exc:
+            # Do not print exception bodies: tool payloads can contain private source text.
+            report.update(status="failed", error_type=type(exc).__name__)
+            print("FAIL: real MCP entry/tool execution failed (" + type(exc).__name__ + ")")
+            code = 1
+    if args.report:
+        args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return code
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--skip-image", action="store_true", help="跳过图片直答场景（VQA 未启动时）")
-    args = parser.parse_args()
-    sys.exit(asyncio.run(main(args.skip_image)))
+    sys.exit(main())

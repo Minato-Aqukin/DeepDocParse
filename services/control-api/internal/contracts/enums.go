@@ -36,6 +36,8 @@ const (
 	// QA_PARSE_MISMATCH_THRESHOLD / EXTRACT_MISMATCH_THRESHOLD，实测标定 0.55）。
 	// 它是**假出处**的主要探测手段，不是小问题。
 	DegradedParseMismatch Degraded = "parse_mismatch"
+	// 授权资源的固定解析版本尚无可用索引
+	DegradedResourceIndexUnavailable Degraded = "resource_index_unavailable"
 	// 向量化服务不可达，只走了关键词路。**这条是本项目吃过最大亏的地方**：
 	// M4a 时向量检索静默退回 BM25，没人发现。必须可见。
 	DegradedEmbeddingUnavailable Degraded = "embedding_unavailable"
@@ -83,6 +85,7 @@ const (
 var DegradedValues = []Degraded{
 	DegradedNoHits,
 	DegradedParseMismatch,
+	DegradedResourceIndexUnavailable,
 	DegradedEmbeddingUnavailable,
 	DegradedVisionUnavailable,
 	DegradedCropUnsupported,
@@ -107,6 +110,7 @@ var DegradedValues = []Degraded{
 var DegradedMeta = map[Degraded]EnumMeta{
 	DegradedNoHits:                      {Value: "no_hits", Label: "未在本文档中检索到相关内容", Severity: SeverityNeutral},
 	DegradedParseMismatch:               {Value: "parse_mismatch", Label: "出处存疑（图上内容与解析文本对不上）", Severity: SeverityWarn},
+	DegradedResourceIndexUnavailable:    {Value: "resource_index_unavailable", Label: "该资源版本索引尚不可用，请查看解析任务", Severity: SeverityWarn},
 	DegradedEmbeddingUnavailable:        {Value: "embedding_unavailable", Label: "仅关键词检索（向量化服务不可用）", Severity: SeverityWarn},
 	DegradedVisionUnavailable:           {Value: "vision_unavailable", Label: "未做视觉验证（视觉模型不可用）", Severity: SeverityWarn},
 	DegradedCropUnsupported:             {Value: "crop_unsupported", Label: "未做视觉验证（该文件不支持区域截图）", Severity: SeverityNeutral},
@@ -641,6 +645,10 @@ const (
 	TaskStatusSucceeded TaskStatus = "succeeded"
 	// 失败，失败原因必须持久化并在 UI 可见
 	TaskStatusFailed TaskStatus = "failed"
+	// 被显式取消。**终态，迟到的成功/失败写入一律被 generation + 状态守卫拒绝**。
+	// 与 failed 分开是因为"用户不想要了"和"系统做砸了"对用户是两件事：
+	// 前者不该进失败告警，后者必须留失败原因。
+	TaskStatusCancelled TaskStatus = "cancelled"
 )
 
 // TaskStatusValues 保持 enums.yaml 里的声明顺序。
@@ -650,6 +658,7 @@ var TaskStatusValues = []TaskStatus{
 	TaskStatusRunning,
 	TaskStatusSucceeded,
 	TaskStatusFailed,
+	TaskStatusCancelled,
 }
 
 var TaskStatusMeta = map[TaskStatus]EnumMeta{
@@ -658,6 +667,7 @@ var TaskStatusMeta = map[TaskStatus]EnumMeta{
 	TaskStatusRunning:   {Value: "running", Label: "执行中", Severity: SeverityProgress, Active: true},
 	TaskStatusSucceeded: {Value: "succeeded", Label: "已完成", Severity: SeverityOk},
 	TaskStatusFailed:    {Value: "failed", Label: "失败", Severity: SeverityError},
+	TaskStatusCancelled: {Value: "cancelled", Label: "已取消", Severity: SeverityWarn},
 }
 
 // Valid 报告 s 是不是一个已知的 task_status 取值。
@@ -682,6 +692,14 @@ const (
 	TaskKindKnowledge TaskKind = "knowledge"
 	// 对象回收（带宽限期）
 	TaskKindGc TaskKind = "gc"
+	// 联邦节点侧的单步执行（`federation.execute`）。受理与执行行先提交、
+	// 再排这个任务 —— 进程重启后由别的 worker 按租约接管，已受理的执行
+	// 不会永远停在 queued/running（不变式 7）。
+	TaskKindFederationExecute TaskKind = "federation_execute"
+	// 联邦协调者推进一个已批准计划（`federation_tasks._execute_plan`）。
+	// 与节点侧分开成两种任务，协调者等待本地执行时不会占满执行池
+	// （否则单池会被"等子任务的父任务"堵死）。
+	TaskKindFederationPlan TaskKind = "federation_plan"
 )
 
 // TaskKindValues 保持 enums.yaml 里的声明顺序。
@@ -692,15 +710,19 @@ var TaskKindValues = []TaskKind{
 	TaskKindExtract,
 	TaskKindKnowledge,
 	TaskKindGc,
+	TaskKindFederationExecute,
+	TaskKindFederationPlan,
 }
 
 var TaskKindMeta = map[TaskKind]EnumMeta{
-	TaskKindParsePoll: {Value: "parse_poll", Label: "解析归档", Severity: SeverityNeutral},
-	TaskKindCompile:   {Value: "compile", Label: "版面编译", Severity: SeverityNeutral},
-	TaskKindIndex:     {Value: "index", Label: "建立索引", Severity: SeverityNeutral},
-	TaskKindExtract:   {Value: "extract", Label: "结构化抽取", Severity: SeverityNeutral},
-	TaskKindKnowledge: {Value: "knowledge", Label: "知识生成", Severity: SeverityNeutral},
-	TaskKindGc:        {Value: "gc", Label: "对象回收", Severity: SeverityNeutral},
+	TaskKindParsePoll:         {Value: "parse_poll", Label: "解析归档", Severity: SeverityNeutral},
+	TaskKindCompile:           {Value: "compile", Label: "版面编译", Severity: SeverityNeutral},
+	TaskKindIndex:             {Value: "index", Label: "建立索引", Severity: SeverityNeutral},
+	TaskKindExtract:           {Value: "extract", Label: "结构化抽取", Severity: SeverityNeutral},
+	TaskKindKnowledge:         {Value: "knowledge", Label: "知识生成", Severity: SeverityNeutral},
+	TaskKindGc:                {Value: "gc", Label: "对象回收", Severity: SeverityNeutral},
+	TaskKindFederationExecute: {Value: "federation_execute", Label: "联邦执行", Severity: SeverityNeutral},
+	TaskKindFederationPlan:    {Value: "federation_plan", Label: "联邦计划执行", Severity: SeverityNeutral},
 }
 
 // Valid 报告 s 是不是一个已知的 task_kind 取值。
@@ -750,5 +772,815 @@ var UploadStatusMeta = map[UploadStatus]EnumMeta{
 // Valid 报告 s 是不是一个已知的 upload_status 取值。
 func (s UploadStatus) Valid() bool {
 	_, ok := UploadStatusMeta[s]
+	return ok
+}
+
+// `ScopeManifest` 的成员枚举状态（计划 §5.4）。**这是「查了哪里」这句话
+// 的分母**：分母没封上就没有百分比可言。
+//
+// `partial` 与 `expired` 必须与 `sealed` 严格分开：把无法展开的子域
+// 当成空目录，等于用"那里没有资料"冒充"我没能去看"。
+type EnumerationState string
+
+const (
+	// 正在逐个目录取分页快照，还没封存
+	EnumerationStateBuilding EnumerationState = "building"
+	// 全部获准目录都取到稳定快照且已去重封存，可重放。
+	// **只有这个值允许后续声明 retrieval=complete。**
+	EnumerationStateSealed EnumerationState = "sealed"
+	// 有子目录超时、拒绝或不支持枚举。未展开子域记在
+	// `unexpanded_subtrees[]`，**不得当成空集**，也不得给出真实总数。
+	EnumerationStatePartial EnumerationState = "partial"
+	// 快照有效期已过或枚举游标失效。不能把不同分页时代的列表拼成
+	// "完整快照"（§5.5）—— 要重新枚举生成新 scope。
+	EnumerationStateExpired EnumerationState = "expired"
+)
+
+// EnumerationStateValues 保持 enums.yaml 里的声明顺序。
+var EnumerationStateValues = []EnumerationState{
+	EnumerationStateBuilding,
+	EnumerationStateSealed,
+	EnumerationStatePartial,
+	EnumerationStateExpired,
+}
+
+var EnumerationStateMeta = map[EnumerationState]EnumMeta{
+	EnumerationStateBuilding: {Value: "building", Label: "正在确定检索范围", Severity: SeverityProgress, Active: true},
+	EnumerationStateSealed:   {Value: "sealed", Label: "检索范围已确定", Severity: SeverityOk},
+	EnumerationStatePartial:  {Value: "partial", Label: "检索范围不完整（部分下级目录无法展开）", Severity: SeverityWarn},
+	EnumerationStateExpired:  {Value: "expired", Label: "检索范围已过期，需重新确定", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 enumeration_state 取值。
+func (s EnumerationState) Valid() bool {
+	_, ok := EnumerationStateMeta[s]
+	return ok
+}
+
+// 覆盖账本里**单个目标**的状态（计划 §7.4）。目标键是
+// `(origin_node_id, collection_id, operation)` —— 一台服务器有多个集合时，
+// 探测了其中一个**不能**把整台标成完成（计划 T85）。
+//
+// `unsupported` 可以结束对该目标的发现处理，但**它不表示在那里完成了
+// 全文检索**；报告时它进"排除数"，不进"成功检索数"。
+type CoverageTargetState string
+
+const (
+	// 已进入本次范围，尚未发出请求
+	CoverageTargetStatePlanned CoverageTargetState = "planned"
+	// 请求已发出，还没有回执
+	CoverageTargetStateInFlight CoverageTargetState = "in_flight"
+	// 拿到有效且完成的检索回执
+	CoverageTargetStateSucceeded CoverageTargetState = "succeeded"
+	// 目标自己报了内部限制（分片失败、索引落后、只查了子集）。
+	// **算缺口，不算完成** —— 节点外层写 completed 而内部有 partial
+	// 是计划 §6.4 明确禁止的。
+	CoverageTargetStatePartial CoverageTargetState = "partial"
+	// 鉴权通过但该目标拒绝本次操作
+	CoverageTargetStateDenied CoverageTargetState = "denied"
+	// 请求出错（非超时）
+	CoverageTargetStateFailed CoverageTargetState = "failed"
+	// 已核实该目标不支持所需 operation。**只有可核验依据才能记这个值** ——
+	// 能力元数据过期或缺失一律算 unknown/未完成，不得直接排除（§7.3）。
+	CoverageTargetStateUnsupported CoverageTargetState = "unsupported"
+	// 超时或连不上
+	CoverageTargetStateUnreachable CoverageTargetState = "unreachable"
+	// 预算耗尽 / 任务取消 / 范围过期导致压根没发出。**不是"没有资料"**
+	CoverageTargetStateNotAttempted CoverageTargetState = "not_attempted"
+	// 成员在范围封存后被撤销。**留在分母里**（§5.5）——
+	// 从分母删掉来把完成率做漂亮是明确禁止的。
+	CoverageTargetStateRevoked CoverageTargetState = "revoked"
+)
+
+// CoverageTargetStateValues 保持 enums.yaml 里的声明顺序。
+var CoverageTargetStateValues = []CoverageTargetState{
+	CoverageTargetStatePlanned,
+	CoverageTargetStateInFlight,
+	CoverageTargetStateSucceeded,
+	CoverageTargetStatePartial,
+	CoverageTargetStateDenied,
+	CoverageTargetStateFailed,
+	CoverageTargetStateUnsupported,
+	CoverageTargetStateUnreachable,
+	CoverageTargetStateNotAttempted,
+	CoverageTargetStateRevoked,
+}
+
+var CoverageTargetStateMeta = map[CoverageTargetState]EnumMeta{
+	CoverageTargetStatePlanned:      {Value: "planned", Label: "待检索", Severity: SeverityNeutral, Active: true},
+	CoverageTargetStateInFlight:     {Value: "in_flight", Label: "检索中", Severity: SeverityProgress, Active: true},
+	CoverageTargetStateSucceeded:    {Value: "succeeded", Label: "已检索", Severity: SeverityOk},
+	CoverageTargetStatePartial:      {Value: "partial", Label: "部分检索（对方报告内部不完整）", Severity: SeverityWarn},
+	CoverageTargetStateDenied:       {Value: "denied", Label: "对方拒绝", Severity: SeverityWarn},
+	CoverageTargetStateFailed:       {Value: "failed", Label: "检索失败", Severity: SeverityError},
+	CoverageTargetStateUnsupported:  {Value: "unsupported", Label: "对方不支持该操作", Severity: SeverityNeutral},
+	CoverageTargetStateUnreachable:  {Value: "unreachable", Label: "无法连接", Severity: SeverityError},
+	CoverageTargetStateNotAttempted: {Value: "not_attempted", Label: "未检索（预算或取消）", Severity: SeverityWarn},
+	CoverageTargetStateRevoked:      {Value: "revoked", Label: "成员已撤销（保留在范围内）", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 coverage_target_state 取值。
+func (s CoverageTargetState) Valid() bool {
+	_, ok := CoverageTargetStateMeta[s]
+	return ok
+}
+
+// 整个任务的检索完成度（计划 §7.4）。
+//
+// `complete` 的判据是**合取**，缺一条都不许写：
+//
+//	① `enumeration_state == sealed` 且无未展开子域；
+//	② 所有适用且已授权的目标都返回有效、完成的回执；
+//	③ 没有 in_flight / not_attempted / unreachable / denied / revoked，
+//	   也没有任何目标自报 partial；
+//	④ 每个被排除的目标都有可核验依据。
+//
+// 快速模式**永远不允许**写 complete（§7.2）：它只完成了自己选中的候选，
+// 所以它报的是 `partial` 加上"未检索范围"。
+type RetrievalCompleteness string
+
+const (
+	// 范围还没封存或还没开始检索
+	RetrievalCompletenessNotStarted RetrievalCompleteness = "not_started"
+	// 有目标未完成，或本轮是 fast 模式。**fast 模式的成功结局也是这个值**
+	// —— 它必须同时给出未检索范围，不能因为选中的候选全成功就报完成。
+	RetrievalCompletenessPartial RetrievalCompleteness = "partial"
+	// 上述四条合取全部成立。**这仍然不代表证据充分或结论正确。**
+	RetrievalCompletenessComplete RetrievalCompleteness = "complete"
+)
+
+// RetrievalCompletenessValues 保持 enums.yaml 里的声明顺序。
+var RetrievalCompletenessValues = []RetrievalCompleteness{
+	RetrievalCompletenessNotStarted,
+	RetrievalCompletenessPartial,
+	RetrievalCompletenessComplete,
+}
+
+var RetrievalCompletenessMeta = map[RetrievalCompleteness]EnumMeta{
+	RetrievalCompletenessNotStarted: {Value: "not_started", Label: "尚未检索", Severity: SeverityNeutral, Active: true},
+	RetrievalCompletenessPartial:    {Value: "partial", Label: "部分范围已检索", Severity: SeverityWarn},
+	RetrievalCompletenessComplete:   {Value: "complete", Label: "声明范围内已全部检索", Severity: SeverityOk},
+}
+
+// Valid 报告 s 是不是一个已知的 retrieval_completeness 取值。
+func (s RetrievalCompleteness) Valid() bool {
+	_, ok := RetrievalCompletenessMeta[s]
+	return ok
+}
+
+// 证据充分性（计划 §7.4 第三轴）。与检索完成度**严格分开**：
+// 「该查的都查了」和「查到的够回答」是两件事，而
+// 「够回答」和「答对了」又是第三件事（那一件靠人工评审，不进这个枚举）。
+//
+// `conflicting` 不是 `insufficient` 的变体：矛盾证据意味着拿到了实质内容
+// 但来源互相打架，界面上要让用户看见冲突，而不是折叠成"资料不足"。
+type EvidenceSufficiency string
+
+const (
+	// 按当次策略判定证据足够。名字里的 `by_policy` 是刻意的 ——
+	// 它是**按规则判的**，不是"客观上充分"，更不是 LLM 自报信心
+	// （§7.2 明确禁止把自报信心当唯一早停条件）。
+	EvidenceSufficiencySufficientByPolicy EvidenceSufficiency = "sufficient_by_policy"
+	// 没有足够证据支撑结论，必须如实说不足
+	EvidenceSufficiencyInsufficient EvidenceSufficiency = "insufficient"
+	// 多来源证据互相矛盾（含同一资料的不同版本）。要展示冲突，不要挑一个
+	EvidenceSufficiencyConflicting EvidenceSufficiency = "conflicting"
+	// 还没评估（检索未完成 / 评估器不可用）
+	EvidenceSufficiencyUnknown EvidenceSufficiency = "unknown"
+)
+
+// EvidenceSufficiencyValues 保持 enums.yaml 里的声明顺序。
+var EvidenceSufficiencyValues = []EvidenceSufficiency{
+	EvidenceSufficiencySufficientByPolicy,
+	EvidenceSufficiencyInsufficient,
+	EvidenceSufficiencyConflicting,
+	EvidenceSufficiencyUnknown,
+}
+
+var EvidenceSufficiencyMeta = map[EvidenceSufficiency]EnumMeta{
+	EvidenceSufficiencySufficientByPolicy: {Value: "sufficient_by_policy", Label: "证据满足本次策略要求", Severity: SeverityOk},
+	EvidenceSufficiencyInsufficient:       {Value: "insufficient", Label: "证据不足", Severity: SeverityWarn},
+	EvidenceSufficiencyConflicting:        {Value: "conflicting", Label: "证据存在矛盾", Severity: SeverityWarn},
+	EvidenceSufficiencyUnknown:            {Value: "unknown", Label: "证据充分性未知", Severity: SeverityNeutral},
+}
+
+// Valid 报告 s 是不是一个已知的 evidence_sufficiency 取值。
+func (s EvidenceSufficiency) Valid() bool {
+	_, ok := EvidenceSufficiencyMeta[s]
+	return ok
+}
+
+// TaskPlan 的规划轴（计划 §8.1）。`invalidated` 是关键一态：
+// 计划过期、输入版本变了、授权被撤销之后，**旧计划不许被执行**，
+// 要重新规划并重新批准（§6.6 接单时重新检查）。
+type PlanningState string
+
+const (
+	// TaskSpec 已建，还没探测
+	PlanningStateDraft PlanningState = "draft"
+	// 已获探索许可，正在 Probe
+	PlanningStateExploring PlanningState = "exploring"
+	// 计划已生成，等待用户批准外发边界
+	PlanningStateReady PlanningState = "ready"
+	// 计划变化超出原许可，暂停等重新批准
+	PlanningStateAwaitingApproval PlanningState = "awaiting_approval"
+	// 计划与外发边界都已批准，可以接单
+	PlanningStateApproved PlanningState = "approved"
+	// 计划过期、输入版本变更或授权撤销。**不得凭旧 Probe 放行**
+	PlanningStateInvalidated PlanningState = "invalidated"
+)
+
+// PlanningStateValues 保持 enums.yaml 里的声明顺序。
+var PlanningStateValues = []PlanningState{
+	PlanningStateDraft,
+	PlanningStateExploring,
+	PlanningStateReady,
+	PlanningStateAwaitingApproval,
+	PlanningStateApproved,
+	PlanningStateInvalidated,
+}
+
+var PlanningStateMeta = map[PlanningState]EnumMeta{
+	PlanningStateDraft:            {Value: "draft", Label: "草稿", Severity: SeverityNeutral, Active: true},
+	PlanningStateExploring:        {Value: "exploring", Label: "正在探测", Severity: SeverityProgress, Active: true},
+	PlanningStateReady:            {Value: "ready", Label: "计划待批准", Severity: SeverityNeutral, Active: true},
+	PlanningStateAwaitingApproval: {Value: "awaiting_approval", Label: "等待重新批准", Severity: SeverityWarn, Active: true},
+	PlanningStateApproved:         {Value: "approved", Label: "已批准", Severity: SeverityOk},
+	PlanningStateInvalidated:      {Value: "invalidated", Label: "计划已失效，需重新规划", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 planning_state 取值。
+func (s PlanningState) Valid() bool {
+	_, ok := PlanningStateMeta[s]
+	return ok
+}
+
+// 远端执行者的受理轴（计划 §8.1 / §6.6）。
+//
+// **`unknown` 不等于「没执行」** —— 这是计划 T82 专门要求的区分：
+// 回执丢了要先按幂等键对账，不能立刻把有副作用的步骤换个节点重做。
+type AdmissionState string
+
+const (
+	// 还没提交给执行者
+	AdmissionStateNotSubmitted AdmissionState = "not_submitted"
+	// 受理会话已建、等输入上传完（§6.6）。**这一态不占 GPU** ——
+	// 输入没齐就排队等于占着卡等上传。
+	AdmissionStateWaitingInput AdmissionState = "waiting_input"
+	// 服务端正在校验输入摘要与格式
+	AdmissionStateChecking AdmissionState = "checking"
+	// 已持久受理并返回 AdmissionReceipt（≠ 算力预留）
+	AdmissionStateAccepted AdmissionState = "accepted"
+	// 明确拒绝（授权、计划过期、输入不合格、配额）
+	AdmissionStateRejected AdmissionState = "rejected"
+	// 请求发出了但回执丢失。**必须按幂等键查询对账**，查到已有任务就用它；
+	// 不得增加逻辑执行代次，也不得重复计一次成功交付。
+	AdmissionStateUnknown AdmissionState = "unknown"
+)
+
+// AdmissionStateValues 保持 enums.yaml 里的声明顺序。
+var AdmissionStateValues = []AdmissionState{
+	AdmissionStateNotSubmitted,
+	AdmissionStateWaitingInput,
+	AdmissionStateChecking,
+	AdmissionStateAccepted,
+	AdmissionStateRejected,
+	AdmissionStateUnknown,
+}
+
+var AdmissionStateMeta = map[AdmissionState]EnumMeta{
+	AdmissionStateNotSubmitted: {Value: "not_submitted", Label: "未提交", Severity: SeverityNeutral},
+	AdmissionStateWaitingInput: {Value: "waiting_input", Label: "等待输入上传", Severity: SeverityProgress, Active: true},
+	AdmissionStateChecking:     {Value: "checking", Label: "校验输入中", Severity: SeverityProgress, Active: true},
+	AdmissionStateAccepted:     {Value: "accepted", Label: "已受理", Severity: SeverityOk, Active: true},
+	AdmissionStateRejected:     {Value: "rejected", Label: "被拒绝", Severity: SeverityError},
+	AdmissionStateUnknown:      {Value: "unknown", Label: "受理状态未知（正在对账）", Severity: SeverityWarn, Active: true},
+}
+
+// Valid 报告 s 是不是一个已知的 admission_state 取值。
+func (s AdmissionState) Valid() bool {
+	_, ok := AdmissionStateMeta[s]
+	return ok
+}
+
+// 输出验收轴（计划 §8.1 / §4.3 两层引用校验）。
+//
+// **结构校验通过 ≠ 内容正确**：`passed` 只表示引用确实存在、版本对得上、
+// 定位可授权解析；"原文是否真的支持这个结论"是 `needs_review`
+// 要人看的那件事（计划 §14.3 主张支持度，明确不能用引用存在率替代）。
+type ValidationState string
+
+const (
+	// 还没校验
+	ValidationStatePending ValidationState = "pending"
+	// 结构校验通过：引用存在、版本正确、定位可解析
+	ValidationStatePassed ValidationState = "passed"
+	// 结构校验不通过（虚构引用 / 错版本 / 无权定位）
+	ValidationStateFailed ValidationState = "failed"
+	// 需要人工复核语义支持度或冲突
+	ValidationStateNeedsReview ValidationState = "needs_review"
+)
+
+// ValidationStateValues 保持 enums.yaml 里的声明顺序。
+var ValidationStateValues = []ValidationState{
+	ValidationStatePending,
+	ValidationStatePassed,
+	ValidationStateFailed,
+	ValidationStateNeedsReview,
+}
+
+var ValidationStateMeta = map[ValidationState]EnumMeta{
+	ValidationStatePending:     {Value: "pending", Label: "待校验", Severity: SeverityNeutral, Active: true},
+	ValidationStatePassed:      {Value: "passed", Label: "校验通过", Severity: SeverityOk},
+	ValidationStateFailed:      {Value: "failed", Label: "校验未通过", Severity: SeverityError},
+	ValidationStateNeedsReview: {Value: "needs_review", Label: "需人工复核", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 validation_state 取值。
+func (s ValidationState) Valid() bool {
+	_, ok := ValidationStateMeta[s]
+	return ok
+}
+
+// 交付轴（计划 §8.3）。**计算成功不代表本地拿到结果。**
+//
+// `expired` 必须能显示出来：TTL 到期导致未领取结果失效时，界面上
+// **不许**仍然显示"已保存本地"（计划 §8.3 原文要求）。
+type DeliveryState string
+
+const (
+	// 不需要回传（结果留在中心）
+	DeliveryStateNotRequested DeliveryState = "not_requested"
+	// 结果已就绪，等待本地领取
+	DeliveryStatePending DeliveryState = "pending"
+	// 正在下载
+	DeliveryStateTransferring DeliveryState = "transferring"
+	// 本地校验 manifest 与文件后已幂等确认
+	DeliveryStateConfirmed DeliveryState = "confirmed"
+	// 暂存 TTL 到期，结果已失效。**不得显示成已保存本地**
+	DeliveryStateExpired DeliveryState = "expired"
+)
+
+// DeliveryStateValues 保持 enums.yaml 里的声明顺序。
+var DeliveryStateValues = []DeliveryState{
+	DeliveryStateNotRequested,
+	DeliveryStatePending,
+	DeliveryStateTransferring,
+	DeliveryStateConfirmed,
+	DeliveryStateExpired,
+}
+
+var DeliveryStateMeta = map[DeliveryState]EnumMeta{
+	DeliveryStateNotRequested: {Value: "not_requested", Label: "无需交付", Severity: SeverityNeutral},
+	DeliveryStatePending:      {Value: "pending", Label: "待领取", Severity: SeverityNeutral, Active: true},
+	DeliveryStateTransferring: {Value: "transferring", Label: "传输中", Severity: SeverityProgress, Active: true},
+	DeliveryStateConfirmed:    {Value: "confirmed", Label: "已交付", Severity: SeverityOk},
+	DeliveryStateExpired:      {Value: "expired", Label: "交付已过期（结果未领取）", Severity: SeverityError},
+}
+
+// Valid 报告 s 是不是一个已知的 delivery_state 取值。
+func (s DeliveryState) Valid() bool {
+	_, ok := DeliveryStateMeta[s]
+	return ok
+}
+
+// 数据保留类别（计划 §8.1 / §8.3）。**临时处理不自动进入永久语料库** ——
+// 远端算一次不等于对方获得了这份资料的长期副本。
+//
+// `task_pinned` 是给 GC 看的：引用仍被活跃任务或他人合法产物使用时，
+// GC 不能删唯一副本（计划 §8.3 末段，项目已有的 `gc.py` 宽限期同理）。
+type RetentionClass string
+
+const (
+	// 临时输入/中间产物，按 TTL 清理
+	RetentionClassTemporary RetentionClass = "temporary"
+	// 被活跃任务引用，GC 不得回收
+	RetentionClassTaskPinned RetentionClass = "task_pinned"
+	// 已按授权进入永久语料
+	RetentionClassPersistent RetentionClass = "persistent"
+	// 正在清理（宽限期内可能仍可见）
+	RetentionClassDeleting RetentionClass = "deleting"
+	// 已清理
+	RetentionClassDeleted RetentionClass = "deleted"
+)
+
+// RetentionClassValues 保持 enums.yaml 里的声明顺序。
+var RetentionClassValues = []RetentionClass{
+	RetentionClassTemporary,
+	RetentionClassTaskPinned,
+	RetentionClassPersistent,
+	RetentionClassDeleting,
+	RetentionClassDeleted,
+}
+
+var RetentionClassMeta = map[RetentionClass]EnumMeta{
+	RetentionClassTemporary:  {Value: "temporary", Label: "临时数据", Severity: SeverityNeutral},
+	RetentionClassTaskPinned: {Value: "task_pinned", Label: "任务占用中", Severity: SeverityNeutral},
+	RetentionClassPersistent: {Value: "persistent", Label: "永久保存", Severity: SeverityOk},
+	RetentionClassDeleting:   {Value: "deleting", Label: "正在清理", Severity: SeverityProgress, Active: true},
+	RetentionClassDeleted:    {Value: "deleted", Label: "已删除", Severity: SeverityNeutral},
+}
+
+// Valid 报告 s 是不是一个已知的 retention_class 取值。
+func (s RetentionClass) Valid() bool {
+	_, ok := RetentionClassMeta[s]
+	return ok
+}
+
+// 发布轴（计划 §8.1 / §4.4）。**私有来源的派生页面不能靠切 public 绕过
+// 原许可** —— 发布前要检查派生内容的公开权（计划 §4.4、T06）。
+type PublishingState string
+
+const (
+	// 仅所有者与获授权者可见
+	PublishingStatePrivate PublishingState = "private"
+	// 草稿，未发布
+	PublishingStateDraft PublishingState = "draft"
+	// 已按授权范围发布
+	PublishingStatePublished PublishingState = "published"
+	// 已撤回。**不承诺收回已下载副本**
+	PublishingStateWithdrawn PublishingState = "withdrawn"
+)
+
+// PublishingStateValues 保持 enums.yaml 里的声明顺序。
+var PublishingStateValues = []PublishingState{
+	PublishingStatePrivate,
+	PublishingStateDraft,
+	PublishingStatePublished,
+	PublishingStateWithdrawn,
+}
+
+var PublishingStateMeta = map[PublishingState]EnumMeta{
+	PublishingStatePrivate:   {Value: "private", Label: "私有", Severity: SeverityNeutral},
+	PublishingStateDraft:     {Value: "draft", Label: "草稿", Severity: SeverityNeutral},
+	PublishingStatePublished: {Value: "published", Label: "已发布", Severity: SeverityOk},
+	PublishingStateWithdrawn: {Value: "withdrawn", Label: "已撤回", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 publishing_state 取值。
+func (s PublishingState) Valid() bool {
+	_, ok := PublishingStateMeta[s]
+	return ok
+}
+
+// 节点能力的就绪度（计划 §5.2）。**三件事必须分开记**：
+// 静态能力配置、周期健康探测、本次任务预检。
+//
+// `configured` 不代表能用：计划原文举的例子是 `gpu=true` 不代表
+// 所需模型已经就绪 —— 这正是本项目踩过的坑的联邦版本
+// （注册表里有 OCR 专用模型，抽取平面拿它去抽值，抽不出来被记成
+// `not_found`，系统能力缺失伪装成"文档里没有"，见已有的 `no_instruct`）。
+type CapabilityReadiness string
+
+const (
+	// 配置里声明了这个能力，但没有健康证据。**不得当成可用**
+	CapabilityReadinessConfigured CapabilityReadiness = "configured"
+	// 健康探测通过且当前可接单
+	CapabilityReadinessReady CapabilityReadiness = "ready"
+	// 正在排空，不接新单但在跑的会做完
+	CapabilityReadinessDraining CapabilityReadiness = "draining"
+	// 健康探测失败
+	CapabilityReadinessUnhealthy CapabilityReadiness = "unhealthy"
+	// 没有有效的健康证据（从没探过 / 记录过期）。
+	// **过期记录不是当前能力证明**（§5.5），要按未知处理，不许按
+	// 最后一次成功当成现在可用。
+	CapabilityReadinessUnknown CapabilityReadiness = "unknown"
+)
+
+// CapabilityReadinessValues 保持 enums.yaml 里的声明顺序。
+var CapabilityReadinessValues = []CapabilityReadiness{
+	CapabilityReadinessConfigured,
+	CapabilityReadinessReady,
+	CapabilityReadinessDraining,
+	CapabilityReadinessUnhealthy,
+	CapabilityReadinessUnknown,
+}
+
+var CapabilityReadinessMeta = map[CapabilityReadiness]EnumMeta{
+	CapabilityReadinessConfigured: {Value: "configured", Label: "已配置（未验证可用）", Severity: SeverityNeutral},
+	CapabilityReadinessReady:      {Value: "ready", Label: "可用", Severity: SeverityOk},
+	CapabilityReadinessDraining:   {Value: "draining", Label: "正在排空", Severity: SeverityWarn},
+	CapabilityReadinessUnhealthy:  {Value: "unhealthy", Label: "不可用", Severity: SeverityError},
+	CapabilityReadinessUnknown:    {Value: "unknown", Label: "能力状态未知", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 capability_readiness 取值。
+func (s CapabilityReadiness) Valid() bool {
+	_, ok := CapabilityReadinessMeta[s]
+	return ok
+}
+
+// Probe 的输入校验深度（计划 §6.4 / T78）。**这两个值的区别是钱**：
+// 只看了文件描述就放进 admission，等于信任客户端声明的哈希 ——
+// 本项目在直传上传那里已经踩过同一个坑（upload_status 的 `verifying`
+// 不能跳过），联邦侧是同一条规则。
+type InputValidation string
+
+const (
+	// 只校验了声明的格式/大小/类型，**没收到内容**。
+	// 上传阶段只能是这个值，且此时不得占 GPU。
+	InputValidationMetadataOnly InputValidation = "metadata_only"
+	// 已收到内容并自己算过摘要校验通过。**预检仍不能排除运行时 OOM 或坏页**
+	InputValidationContentVerified InputValidation = "content_verified"
+)
+
+// InputValidationValues 保持 enums.yaml 里的声明顺序。
+var InputValidationValues = []InputValidation{
+	InputValidationMetadataOnly,
+	InputValidationContentVerified,
+}
+
+var InputValidationMeta = map[InputValidation]EnumMeta{
+	InputValidationMetadataOnly:    {Value: "metadata_only", Label: "仅校验元数据", Severity: SeverityWarn},
+	InputValidationContentVerified: {Value: "content_verified", Label: "已校验内容", Severity: SeverityOk},
+}
+
+// Valid 报告 s 是不是一个已知的 input_validation 取值。
+func (s InputValidation) Valid() bool {
+	_, ok := InputValidationMeta[s]
+	return ok
+}
+
+// 检索模式（计划 §6.3 / §7）。**mode 决定怎么查，scope 决定查哪些** ——
+// 两者不许互相覆盖：`fast` 不能缩小用户固定的资源范围，
+// `local_first`（排序偏好）也不能偷偷变成 `local_only`（外发策略）。
+type SearchMode string
+
+const (
+	// 有界选点：摘要排序 + 少量并行 Probe + 有条件扩展。
+	// **结局最多是 retrieval=partial**，必须报告未检索范围。
+	SearchModeFast SearchMode = "fast"
+	// 按封存的 ScopeManifest 逐个目标实际探测。摘要只影响顺序、不删成员。
+	// 即使已经拿到好答案也继续做完，除非用户取消（§7.3）。
+	SearchModeExhaustiveScope SearchMode = "exhaustive_scope"
+)
+
+// SearchModeValues 保持 enums.yaml 里的声明顺序。
+var SearchModeValues = []SearchMode{
+	SearchModeFast,
+	SearchModeExhaustiveScope,
+}
+
+var SearchModeMeta = map[SearchMode]EnumMeta{
+	SearchModeFast:            {Value: "fast", Label: "快速检索（部分范围）", Severity: SeverityNeutral},
+	SearchModeExhaustiveScope: {Value: "exhaustive_scope", Label: "范围穷查", Severity: SeverityNeutral},
+}
+
+// Valid 报告 s 是不是一个已知的 search_mode 取值。
+func (s SearchMode) Valid() bool {
+	_, ok := SearchModeMeta[s]
+	return ok
+}
+
+// `client-runtime` 的连接状态（计划 §3.4）。**与数据状态分开**
+// （数据状态见 `snapshot_state`）—— 合起来的后果是
+// "一个无关面板订阅失败把整个界面标成服务器断开"，计划明确禁止。
+//
+// 每个 `(environment_id, authenticated_profile_id)` 只有**一个**重连
+// 负责人（计划 T66）；界面组件只订阅状态，不各自开重连循环。
+type TransportState string
+
+const (
+	// 未连接
+	TransportStateDisconnected TransportState = "disconnected"
+	// 正在建立连接
+	TransportStateConnecting TransportState = "connecting"
+	// 连上了，正在认证
+	TransportStateAuthenticating TransportState = "authenticating"
+	// 可用
+	TransportStateReady TransportState = "ready"
+	// 有限退避等待重试
+	TransportStateBackoff TransportState = "backoff"
+	// 认证失效或被拒，**不再自动重试**（避免无休止刷新，T66）
+	TransportStateBlocked TransportState = "blocked"
+)
+
+// TransportStateValues 保持 enums.yaml 里的声明顺序。
+var TransportStateValues = []TransportState{
+	TransportStateDisconnected,
+	TransportStateConnecting,
+	TransportStateAuthenticating,
+	TransportStateReady,
+	TransportStateBackoff,
+	TransportStateBlocked,
+}
+
+var TransportStateMeta = map[TransportState]EnumMeta{
+	TransportStateDisconnected:   {Value: "disconnected", Label: "未连接", Severity: SeverityNeutral},
+	TransportStateConnecting:     {Value: "connecting", Label: "连接中", Severity: SeverityProgress, Active: true},
+	TransportStateAuthenticating: {Value: "authenticating", Label: "认证中", Severity: SeverityProgress, Active: true},
+	TransportStateReady:          {Value: "ready", Label: "已连接", Severity: SeverityOk},
+	TransportStateBackoff:        {Value: "backoff", Label: "等待重连", Severity: SeverityWarn, Active: true},
+	TransportStateBlocked:        {Value: "blocked", Label: "连接被拒绝（需重新配对）", Severity: SeverityError},
+}
+
+// Valid 报告 s 是不是一个已知的 transport_state 取值。
+func (s TransportState) Valid() bool {
+	_, ok := TransportStateMeta[s]
+	return ok
+}
+
+// 客户端缓存投影的数据状态（计划 §3.4）。与 `transport_state` 分开的理由
+// 在那条里。`stale` 要能显示：断网时可以看已取得的本地内容，
+// 但**不能显示假在线**（计划 §3.2）。
+type SnapshotState string
+
+const (
+	// 首次取快照中
+	SnapshotStateLoading SnapshotState = "loading"
+	// 与服务端游标一致
+	SnapshotStateCurrent SnapshotState = "current"
+	// 连接中断或游标落后，显示的是旧数据。**不得显示成在线最新**
+	SnapshotStateStale SnapshotState = "stale"
+	// 取快照失败（游标失效时应重新取快照而不是永久等）
+	SnapshotStateFailed SnapshotState = "failed"
+)
+
+// SnapshotStateValues 保持 enums.yaml 里的声明顺序。
+var SnapshotStateValues = []SnapshotState{
+	SnapshotStateLoading,
+	SnapshotStateCurrent,
+	SnapshotStateStale,
+	SnapshotStateFailed,
+}
+
+var SnapshotStateMeta = map[SnapshotState]EnumMeta{
+	SnapshotStateLoading: {Value: "loading", Label: "加载中", Severity: SeverityProgress, Active: true},
+	SnapshotStateCurrent: {Value: "current", Label: "最新", Severity: SeverityOk},
+	SnapshotStateStale:   {Value: "stale", Label: "数据可能已过期", Severity: SeverityWarn},
+	SnapshotStateFailed:  {Value: "failed", Label: "数据加载失败", Severity: SeverityError},
+}
+
+// Valid 报告 s 是不是一个已知的 snapshot_state 取值。
+func (s SnapshotState) Valid() bool {
+	_, ok := SnapshotStateMeta[s]
+	return ok
+}
+
+// 联邦协议的机器可读错误码（计划 §9.6）。
+//
+// **命名对齐项目既有约定**：计划正文写的是 SCREAMING_CASE，这里统一成
+// snake_case —— 项目所有错误码（`invalid_request_error`、`quota_error` …）
+// 与所有枚举都是 snake_case，而生成器也只接受 snake_case。
+// 同一个概念两种拼法就是漂移的开始，所以在 P0 一次定死。
+//
+// **对外降敏**：不得借错误码暴露私有资源是否存在（§8.4）——
+// 无权主体看到的应该是"找不到"而不是"存在但你没权限"。
+//
+// **`unreachable` 类错误绝不能被前端翻译成「对方没有资料」**（§9.6 原文）：
+// 那是把"我没查到"说成"那里没有"。
+type FederationError string
+
+const (
+	// 成员枚举没能封存，覆盖承诺随之降级
+	FederationErrorDiscoveryIncomplete FederationError = "discovery_incomplete"
+	// ScopeManifest 过期，需重新枚举生成新 scope
+	FederationErrorScopeExpired FederationError = "scope_expired"
+	// 没有有效健康证据。**与 unsupported 严格分开** —— 未知要去预检，不是排除
+	FederationErrorCapabilityUnknown FederationError = "capability_unknown"
+	// 已核实不支持所需 operation
+	FederationErrorCapabilityUnsupported FederationError = "capability_unsupported"
+	// 输入摘要/格式还没校验通过就想进 admission
+	FederationErrorInputNotVerified FederationError = "input_not_verified"
+	// 外发许可不覆盖这次发送（接收方、内容或有效期超界）。
+	// `local_only` 命中时也是这个码 —— 它高于所有自动回退（§6.2）。
+	FederationErrorEgressDenied FederationError = "egress_denied"
+	// 计划修订变了，原批准不再适用
+	FederationErrorPlanChanged FederationError = "plan_changed"
+	// Offer 有效期已过（Offer 本来就不预留算力）
+	FederationErrorOfferExpired FederationError = "offer_expired"
+	// 受理状态不明。**不等于未执行**，要按幂等键对账（T82）
+	FederationErrorAdmissionUnknown FederationError = "admission_unknown"
+	// 同一幂等键对应不同请求正文。**返回冲突，不许复用不相关结果**（T80）
+	FederationErrorIdempotencyConflict FederationError = "idempotency_conflict"
+	// 检索只完成了一部分，覆盖账本里有缺口
+	FederationErrorPartialRetrieval FederationError = "partial_retrieval"
+	// 本次范围与配置下没拿到足够证据
+	FederationErrorInsufficientEvidence FederationError = "insufficient_evidence"
+	// 根预算用尽（含发现与 Probe 的消耗）
+	FederationErrorBudgetExhausted FederationError = "budget_exhausted"
+	// 来源被撤销或转为私有，停止新授权并重判派生依赖
+	FederationErrorSourceRevoked FederationError = "source_revoked"
+	// 结果暂存 TTL 到期未领取
+	FederationErrorDeliveryExpired FederationError = "delivery_expired"
+	// 本地缺所需模型。**必须明确报出来**，不得悄悄请求远端（I03 / T18）——
+	// 这正是项目已有的 `no_instruct_model` 在本地模式下的对应物。
+	FederationErrorLocalModelMissing FederationError = "local_model_missing"
+	// 协议版本或必需字段不兼容，明确拒绝而不是忽略后乱执行
+	FederationErrorProtocolIncompatible FederationError = "protocol_incompatible"
+	// 对已取消任务调用 resume。**取消是显式终态，不得被"恢复"改写回
+	// running** —— 重跑必须是一条新任务（新授权、新覆盖分母），而不是
+	// 拿旧计划接着跑。返回 409，任务状态原样不动。
+	FederationErrorTaskCancelled FederationError = "task_cancelled"
+)
+
+// FederationErrorValues 保持 enums.yaml 里的声明顺序。
+var FederationErrorValues = []FederationError{
+	FederationErrorDiscoveryIncomplete,
+	FederationErrorScopeExpired,
+	FederationErrorCapabilityUnknown,
+	FederationErrorCapabilityUnsupported,
+	FederationErrorInputNotVerified,
+	FederationErrorEgressDenied,
+	FederationErrorPlanChanged,
+	FederationErrorOfferExpired,
+	FederationErrorAdmissionUnknown,
+	FederationErrorIdempotencyConflict,
+	FederationErrorPartialRetrieval,
+	FederationErrorInsufficientEvidence,
+	FederationErrorBudgetExhausted,
+	FederationErrorSourceRevoked,
+	FederationErrorDeliveryExpired,
+	FederationErrorLocalModelMissing,
+	FederationErrorProtocolIncompatible,
+	FederationErrorTaskCancelled,
+}
+
+var FederationErrorMeta = map[FederationError]EnumMeta{
+	FederationErrorDiscoveryIncomplete:   {Value: "discovery_incomplete", Label: "节点范围未能完整确定", Severity: SeverityWarn},
+	FederationErrorScopeExpired:          {Value: "scope_expired", Label: "检索范围已过期", Severity: SeverityWarn},
+	FederationErrorCapabilityUnknown:     {Value: "capability_unknown", Label: "对方能力未知（需预检）", Severity: SeverityWarn},
+	FederationErrorCapabilityUnsupported: {Value: "capability_unsupported", Label: "对方不支持该操作", Severity: SeverityNeutral},
+	FederationErrorInputNotVerified:      {Value: "input_not_verified", Label: "输入尚未校验通过", Severity: SeverityError},
+	FederationErrorEgressDenied:          {Value: "egress_denied", Label: "该数据不允许发往此接收方", Severity: SeverityError},
+	FederationErrorPlanChanged:           {Value: "plan_changed", Label: "执行计划已变更，需重新批准", Severity: SeverityWarn},
+	FederationErrorOfferExpired:          {Value: "offer_expired", Label: "执行意向已过期", Severity: SeverityWarn},
+	FederationErrorAdmissionUnknown:      {Value: "admission_unknown", Label: "受理状态未知（正在对账）", Severity: SeverityWarn},
+	FederationErrorIdempotencyConflict:   {Value: "idempotency_conflict", Label: "幂等键冲突（请求内容不一致）", Severity: SeverityError},
+	FederationErrorPartialRetrieval:      {Value: "partial_retrieval", Label: "检索未覆盖全部范围", Severity: SeverityWarn},
+	FederationErrorInsufficientEvidence:  {Value: "insufficient_evidence", Label: "证据不足", Severity: SeverityWarn},
+	FederationErrorBudgetExhausted:       {Value: "budget_exhausted", Label: "预算已用尽", Severity: SeverityWarn},
+	FederationErrorSourceRevoked:         {Value: "source_revoked", Label: "来源已撤销", Severity: SeverityWarn},
+	FederationErrorDeliveryExpired:       {Value: "delivery_expired", Label: "结果已过期未领取", Severity: SeverityError},
+	FederationErrorLocalModelMissing:     {Value: "local_model_missing", Label: "本地缺少所需模型", Severity: SeverityError},
+	FederationErrorProtocolIncompatible:  {Value: "protocol_incompatible", Label: "协议版本不兼容", Severity: SeverityError},
+	FederationErrorTaskCancelled:         {Value: "task_cancelled", Label: "任务已取消，不能恢复", Severity: SeverityError},
+}
+
+// Valid 报告 s 是不是一个已知的 federation_error 取值。
+func (s FederationError) Valid() bool {
+	_, ok := FederationErrorMeta[s]
+	return ok
+}
+
+// 控制域管理员批准的直接节点成员状态，批准不授予资源权限或证明远端持有密钥。
+type NodeMembershipState string
+
+const (
+	// 已登记但管理员尚未批准
+	NodeMembershipStatePending NodeMembershipState = "pending"
+	// 管理员已批准配置，健康与接单另行判断
+	NodeMembershipStateApproved NodeMembershipState = "approved"
+	// 已撤销，保留旧快照成员位置且禁止旧修订恢复
+	NodeMembershipStateRevoked NodeMembershipState = "revoked"
+)
+
+// NodeMembershipStateValues 保持 enums.yaml 里的声明顺序。
+var NodeMembershipStateValues = []NodeMembershipState{
+	NodeMembershipStatePending,
+	NodeMembershipStateApproved,
+	NodeMembershipStateRevoked,
+}
+
+var NodeMembershipStateMeta = map[NodeMembershipState]EnumMeta{
+	NodeMembershipStatePending:  {Value: "pending", Label: "待批准", Severity: SeverityNeutral},
+	NodeMembershipStateApproved: {Value: "approved", Label: "已批准", Severity: SeverityOk},
+	NodeMembershipStateRevoked:  {Value: "revoked", Label: "已撤销", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 node_membership_state 取值。
+func (s NodeMembershipState) Valid() bool {
+	_, ok := NodeMembershipStateMeta[s]
+	return ok
+}
+
+// 单目录快照中的下级枚举状态，不声明递归全局覆盖。
+type MemberExpansionState string
+
+const (
+	// 成员支持枚举但尚未请求下级目录
+	MemberExpansionStateNotRequested MemberExpansionState = "not_requested"
+	// 下级不可枚举，不等于空目录
+	MemberExpansionStateUnexpandedSubtree MemberExpansionState = "unexpanded_subtree"
+	// 原快照成员已撤销或当前调用者不可见
+	MemberExpansionStateSourceRevoked MemberExpansionState = "source_revoked"
+)
+
+// MemberExpansionStateValues 保持 enums.yaml 里的声明顺序。
+var MemberExpansionStateValues = []MemberExpansionState{
+	MemberExpansionStateNotRequested,
+	MemberExpansionStateUnexpandedSubtree,
+	MemberExpansionStateSourceRevoked,
+}
+
+var MemberExpansionStateMeta = map[MemberExpansionState]EnumMeta{
+	MemberExpansionStateNotRequested:      {Value: "not_requested", Label: "尚未展开", Severity: SeverityNeutral},
+	MemberExpansionStateUnexpandedSubtree: {Value: "unexpanded_subtree", Label: "下级未展开", Severity: SeverityWarn},
+	MemberExpansionStateSourceRevoked:     {Value: "source_revoked", Label: "来源已撤销", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 member_expansion_state 取值。
+func (s MemberExpansionState) Valid() bool {
+	_, ok := MemberExpansionStateMeta[s]
 	return ok
 }

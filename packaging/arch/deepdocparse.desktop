@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DeepDocParse
+Comment=Local document evidence workbench
+Exec=deepdocparse
+Terminal=false
+Categories=Office;Education;
+StartupWMClass=DeepDocParse

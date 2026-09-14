@@ -84,3 +84,21 @@ Wiki 采用 STORM 两阶段产物，而不是一段无结构长文本：
 生成接口即使仍产出实体或 Wiki，也必须单独返回
 `relation_status="not_found"` 表示本轮没有任何合法关系，不能用笼统 `status=ok`
 把负样本状态藏起来。
+
+
+## v3 compatibility surface ownership
+
+The legacy graph and `/api/wiki` entity projection are private to the recorded
+`generated_by` principal and `organization_id`. `source_bindings` freeze each
+logical `resource_id`, `source_version_id`, `document_id` and `parse_revision`.
+Every source is reauthorized before generation calls and reads; an alternate
+public resource pointing to identical bytes does not restore this binding.
+Unattributed historical projections are quarantined, not assigned to the first
+uploader. Entity names are unique within an author/source `scope_key`, preventing
+one actor's build from overwriting another actor's edges, aliases or Wiki entry.
+Backlinks and review mutations additionally require ownership of their originating
+conversation, extraction run or generated knowledge scope.
+
+Manual paragraph editing and immutable draft/publication workflows are exposed
+separately in [DDP-Wiki v1](wiki-format.md); the annotation-only rules above apply
+to the legacy `/api/reviews` surface.

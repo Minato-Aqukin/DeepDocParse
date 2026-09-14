@@ -3,6 +3,9 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -10,6 +13,7 @@ import (
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/apierr"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/auth"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/config"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/discovery"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/httpx"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/identity"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/objectstore"
@@ -35,7 +39,12 @@ type Server struct {
 	// 默认组织。单组织独占部署下，每个请求的组织都是它 ——
 	// 但**所有查询仍然带 organization_id**，这样将来上多组织时
 	// 要补的是隔离与 RLS，而不是给几十张表加列
-	defaultOrg string
+	defaultOrg   string
+	nodeIdentity *discovery.Identity
+	nodeRevision int64
+	// Outbound peer directory parsed from FEDERATION_PEERS. Nil means no
+	// outbound expansion: no remote endpoint is contacted.
+	peers *discovery.PeerDirectory
 }
 
 type Deps struct {
@@ -60,6 +69,32 @@ func NewServer(ctx context.Context, d Deps) (*Server, error) {
 		return nil, err
 	}
 	s.defaultOrg = org.ID
+	if !discovery.ValidBaseURL(d.Config.PublicBaseURL) {
+		return nil, errors.New("invalid public node endpoint")
+	}
+	_, persistedErr := s.store.NodeIdentity(ctx)
+	if persistedErr != nil && !errors.Is(persistedErr, store.ErrNotFound) {
+		return nil, persistedErr
+	}
+	s.nodeIdentity, err = discovery.LoadIdentity(d.Config.NodeIdentityDir, errors.Is(persistedErr, store.ErrNotFound))
+	if err != nil {
+		return nil, err
+	}
+	if err = s.store.BindNodeIdentity(ctx, store.PublicNodeIdentity{NodeID: s.nodeIdentity.NodeID(), PublicKey: s.nodeIdentity.PublicKey(), Fingerprint: s.nodeIdentity.Fingerprint()}); err != nil {
+		return nil, err
+	}
+	descriptorHash := sha256.Sum256([]byte(d.Config.PublicBaseURL + "|ddp-discovery/1|session,user_api_key|members-v1"))
+	s.nodeRevision, err = s.store.NodeDescriptorRevision(ctx, hex.EncodeToString(descriptorHash[:]))
+	if err != nil {
+		return nil, err
+	}
+	// A malformed peer directory is a startup failure, never a silent skip:
+	// one typo must not disable expansion with no visible signal.
+	peers, err := discovery.ParsePeers(d.Config.FederationPeers, d.Config.FederationAllowLoopback)
+	if err != nil {
+		return nil, err
+	}
+	s.peers = discovery.NewPeerDirectory(peers, nil, 0)
 
 	if s.corpus, err = proxy.New("corpus-api", d.Config.CorpusURL, d.Config.ServiceToken); err != nil {
 		return nil, err
@@ -79,6 +114,8 @@ func NewServer(ctx context.Context, d Deps) (*Server, error) {
 // 而不是散落在各个 register 函数里。
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+
+	s.mountDiscovery(mux)
 
 	// ---- 无需鉴权 ----
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +157,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /api/audit", session(httpx.Wrap(s.handleAudit)))
 
 	mux.Handle("POST /api/uploads", session(httpx.Wrap(s.handleCreateUpload)))
+	mux.Handle("GET /api/uploads/reconcile", session(httpx.Wrap(s.handleReconcileUpload)))
 	mux.Handle("GET /api/uploads/{upload_id}", session(httpx.Wrap(s.handleGetUpload)))
 	mux.Handle("POST /api/uploads/{upload_id}/finalize", session(httpx.Wrap(s.handleFinalizeUpload)))
 
@@ -178,6 +216,16 @@ func (s *Server) Routes() http.Handler {
 // 加一个语料端点就往这里加一行 —— 漏加的表现是 404，
 // 而不是"转发到了错的地方"，所以这是可以接受的失败模式。
 var corpusPrefixes = []string{
+	"/api/v1/collections",
+	"/api/v1/collections/",
+	"/api/v1/resources",
+	"/api/v1/resources/",
+	"/api/resources",
+	"/api/resources/",
+	"/api/bundles",
+	"/api/bundles/",
+	"/api/wikis",
+	"/api/wikis/",
 	"/api/documents",
 	"/api/documents/",
 	"/api/conversations",
@@ -190,6 +238,16 @@ var corpusPrefixes = []string{
 	"/api/wiki/",
 	"/api/reviews",
 	"/api/reviews/",
+	// P5 协调者入口：任务需求 / 计划 / 执行 / 覆盖 / 事件 / 交付确认。
+	// 这些都是**入口端点**（corpus-api 侧走 deps.current_actor），由这里
+	// 完成会话鉴权与 actor 头下发后整段转发。
+	"/api/v1/task-intents",
+	"/api/v1/task-plans",
+	"/api/v1/task-plans/",
+	"/api/v1/tasks",
+	"/api/v1/tasks/",
+	"/api/v1/deliveries",
+	"/api/v1/deliveries/",
 }
 
 func (s *Server) observe(next http.Handler) http.Handler {

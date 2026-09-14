@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepdocparse.dev/schemas/ddp-plan-admission/1",
+  "title": "DDP-PLAN-ADMISSION v1",
+  "description": "执行图、数据边、执行许可与正式接单（计划 §6.5、§6.6）。这份契约的中心思想：**各节点分别有能力但没有合法传输路径时，计划仍然不可执行**（§6.5）。所以数据边是一等对象，不是实现细节。",
+  "x-ddp-contract": "ddp-plan-admission/1",
+  "$defs": {
+    "node_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$" },
+    "instant": { "type": "string", "format": "date-time" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+
+    "DataEdge": {
+      "type": "object",
+      "description": "一条数据传输边。",
+      "x-ddp-doc": "**计划 T83 的载体**：资料只在 B、生成能力只在 C 时，要形成合法数据边；B 禁止向 C 传证据时**计划不得执行**，而且不许「自动绕到 A 中转规避权限」（§16 风险表明确列为禁止处理）。中继本身也是接收方，要进外发许可与保留策略（§5.3）—— 所以 relay_via 里的每个节点都必须同时出现在 ExecutionConsent.allowed_recipients 里。",
+      "properties": {
+        "edge_id": { "type": "string", "minLength": 1 },
+        "from_node_id": { "$ref": "#/$defs/node_id" },
+        "to_node_id": { "$ref": "#/$defs/node_id" },
+        "payload_kind": {
+          "type": "string",
+          "enum": ["query_text", "evidence_excerpts", "source_files", "parsed_layout",
+                   "embeddings", "answer_text", "wiki_draft"]
+        },
+        "relay_via": {
+          "description": "中继节点。**中继是数据接收方**，不是透明管道。",
+          "type": "array", "items": { "$ref": "#/$defs/node_id" }
+        },
+        "retention": { "type": "string", "x-ddp-enum": "retention_class" },
+        "authorised_by": {
+          "description": "这条边凭什么合法：来源节点的授权引用。**空着的边不可执行。**",
+          "type": "string", "minLength": 1
+        }
+      },
+      "required": ["edge_id", "from_node_id", "to_node_id", "payload_kind",
+                   "retention", "authorised_by"],
+      "additionalProperties": false
+    },
+
+    "PlanStep": {
+      "type": "object",
+      "description": "执行图里的一个类型化步骤。",
+      "x-ddp-doc": "**第一版只实现已登记、类型化模板，不允许用户或 LLM 输出任意 shell/任意代码**（§6.5）。所以 operation 是枚举，不是自由字符串。",
+      "properties": {
+        "step_id": { "type": "string", "minLength": 1 },
+        "operation": {
+          "type": "string",
+          "enum": ["parse", "index", "retrieve", "fuse", "rerank", "answer",
+                   "source_manifest", "wiki_pages", "validate", "deliver"]
+        },
+        "executor_node_id": { "$ref": "#/$defs/node_id" },
+        "depends_on": { "type": "array", "items": { "type": "string" } },
+        "fixed_inputs": {
+          "description": "固定输入引用 —— **解析前固定输入快照，防止扫描后文件变化**（§3.6、T14）。",
+          "type": "array", "items": { "type": "string" }
+        },
+        "probe_refs": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["step_id", "operation", "executor_node_id", "depends_on"],
+      "additionalProperties": false
+    },
+
+    "ExecutionConsent": {
+      "type": "object",
+      "description": "规划之后、执行之前的第二层许可（§6.2）。",
+      "x-ddp-doc": "**计划变化超过原许可时暂停并重新批准**（§6.2）——对应 planning_state 的 awaiting_approval 与错误码 plan_changed。用户可以预先授权一个明确边界，不必每个公开检索请求都弹窗，**但不得利用后台规划扩大边界**。",
+      "properties": {
+        "schema": { "const": "ddp-plan-admission/1#ExecutionConsent" },
+        "consent_id": { "type": "string", "minLength": 1 },
+        "plan_digest": {
+          "description": "**绑定到具体计划修订**。计划一变这个摘要就对不上，许可自动失效 —— 这比「记得去撤销」可靠。",
+          "$ref": "#/$defs/digest"
+        },
+        "granted_by": { "type": "string", "minLength": 1 },
+        "granted_at": { "$ref": "#/$defs/instant" },
+        "valid_until": { "$ref": "#/$defs/instant" },
+        "allowed_recipients": {
+          "description": "包括执行者**与所有中继**。",
+          "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/node_id" }, "uniqueItems": true
+        },
+        "allowed_edges": {
+          "description": "被批准的数据边 id。计划里出现而这里没有的边不可执行。",
+          "type": "array", "items": { "type": "string" }, "uniqueItems": true
+        },
+        "output_locations": { "type": "array", "items": { "type": "string" } },
+        "retention": { "type": "string", "x-ddp-enum": "retention_class" }
+      },
+      "required": ["schema", "consent_id", "plan_digest", "granted_by", "granted_at",
+                   "valid_until", "allowed_recipients", "allowed_edges", "retention"],
+      "additionalProperties": false
+    },
+
+    "TaskPlan": {
+      "type": "object",
+      "description": "已经选出的可执行步骤（§6.3 最小内容清单）。",
+      "x-ddp-doc": "**每个范围只有一个预算负责人和结果提交者**（§2.2、I10）——不能本地与中心互相把同一任务当作新任务转发。`final_result_writer` 就是这件事的字段化。",
+      "properties": {
+        "schema": { "const": "ddp-plan-admission/1#TaskPlan" },
+        "plan_id": { "type": "string", "minLength": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "plan_digest": { "$ref": "#/$defs/digest" },
+        "task_spec_digest": { "$ref": "#/$defs/digest" },
+        "root_coordinator_node_id": { "$ref": "#/$defs/node_id" },
+        "planning_state": { "type": "string", "x-ddp-enum": "planning_state" },
+        "steps": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/PlanStep" } },
+        "data_edges": { "type": "array", "items": { "$ref": "#/$defs/DataEdge" } },
+        "execution_consent_ref": { "type": ["string", "null"] },
+        "budget": {
+          "description": "**整个请求有总预算**（I11）：包括发现、Probe、检索、转委托、生成与回传，不只限制每跳。层级联邦以互不重叠的份额委托下级（§7.5）——「不能把重复到达当作新的免费预算」。",
+          "type": "object",
+          "properties": {
+            "max_requests": { "type": "integer", "minimum": 0 },
+            "max_bytes": { "type": "integer", "minimum": 0 },
+            "max_generation_tokens": { "type": "integer", "minimum": 0 },
+            "max_hops": { "type": "integer", "minimum": 1 },
+            "deadline": { "$ref": "#/$defs/instant" }
+          },
+          "required": ["max_requests", "max_bytes", "max_hops", "deadline"],
+          "additionalProperties": false
+        },
+        "final_result_writer": { "$ref": "#/$defs/node_id" },
+        "valid_until": { "$ref": "#/$defs/instant" }
+      },
+      "required": ["schema", "plan_id", "revision", "plan_digest", "task_spec_digest",
+                   "root_coordinator_node_id", "planning_state", "steps", "data_edges",
+                   "budget", "final_result_writer", "valid_until"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "**approved 必须有执行许可**（§6.2）。没有 ExecutionConsent 的 approved 计划就是「后台规划扩大边界」那个漏洞本身。",
+          "if": {
+            "properties": { "planning_state": { "const": "approved" } },
+            "required": ["planning_state"]
+          },
+          "then": {
+            "properties": { "execution_consent_ref": { "type": "string", "minLength": 1 } },
+            "required": ["execution_consent_ref"]
+          }
+        }
+      ]
+    },
+
+    "AdmissionReceipt": {
+      "type": "object",
+      "description": "执行者的持久受理记录（§6.6）。",
+      "x-ddp-doc": "**已受理不等于算力预留，也不等于计算成功**（I06、§6.6）。`delegation_generation` 是防旧结果提交的围栏 —— 与项目已有的 `tasks.generation` fencing 同一个思想（见 corpus-api 的 Task 模型）：lease 只解决「谁可以接管」，最终写入还要比代次，否则被判死的旧 worker 迟到写入会覆盖新结果。**相同幂等键 + 相同请求摘要返回已有任务；同键但不同正文返回 idempotency_conflict**（T80），不能因 HTTP 重试自动增加逻辑执行代次（§6.6）。",
+      "properties": {
+        "schema": { "const": "ddp-plan-admission/1#AdmissionReceipt" },
+        "admission_id": { "type": "string", "minLength": 1 },
+        "executor_task_id": { "type": "string", "minLength": 1 },
+        "issuer_node_id": { "$ref": "#/$defs/node_id" },
+        "executor_node_id": { "$ref": "#/$defs/node_id" },
+        "root_task_id": { "type": "string", "minLength": 1 },
+        "step_id": { "type": "string", "minLength": 1 },
+        "delegation_generation": { "type": "integer", "minimum": 0 },
+        "idempotency_key": { "type": "string", "minLength": 1 },
+        "request_digest": { "$ref": "#/$defs/digest" },
+        "plan_digest": { "$ref": "#/$defs/digest" },
+        "verified_input_manifest_digest": {
+          "description": "**输入校验完成后才能有这个值**（§6.6、T78）：state=accepted 时必填，见下面的 allOf。waiting_input 阶段它是 null —— 那时不得占 GPU。",
+          "type": ["string", "null"],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "state": { "type": "string", "x-ddp-enum": "admission_state" },
+        "input_validation": { "type": "string", "x-ddp-enum": "input_validation" },
+        "accepted_at": { "type": ["string", "null"], "format": "date-time" },
+        "receipt_revision": { "type": "integer", "minimum": 1 },
+        "quota_decision_ref": { "type": ["string", "null"] },
+        "effective_policy_ref": { "type": "string", "minLength": 1 }
+      },
+      "required": ["schema", "admission_id", "issuer_node_id", "executor_node_id",
+                   "root_task_id", "step_id", "delegation_generation", "idempotency_key",
+                   "request_digest", "plan_digest", "state", "input_validation",
+                   "receipt_revision", "effective_policy_ref"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "**accepted 三件套**：必须有 executor_task_id、必须有已校验输入摘要、input_validation 必须是 content_verified。这三条合起来就是 T78 —— 只看文件描述（metadata_only）就放进 admission，等于信任客户端声明的哈希；本项目在直传上传那里已经踩过同一个坑（upload_status 的 verifying 不能跳过）。",
+          "if": {
+            "properties": { "state": { "const": "accepted" } },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "executor_task_id": { "type": "string", "minLength": 1 },
+              "verified_input_manifest_digest": { "type": "string", "minLength": 1 },
+              "input_validation": { "const": "content_verified" },
+              "accepted_at": { "type": "string" }
+            },
+            "required": ["executor_task_id", "verified_input_manifest_digest", "accepted_at"]
+          }
+        },
+        {
+          "$comment": "waiting_input 时不得已有校验摘要 —— 有摘要却还在等输入是自相矛盾的状态。",
+          "if": {
+            "properties": { "state": { "const": "waiting_input" } },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": { "verified_input_manifest_digest": { "type": "null" } }
+          }
+        }
+      ]
+    }
+  }
+}

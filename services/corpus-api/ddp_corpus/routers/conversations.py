@@ -12,6 +12,7 @@
 在流里复用它必炸（M5 在 proxy 上踩过，见 proxy.py 模块 docstring）。
 """
 import asyncio
+from dataclasses import replace
 import json
 from typing import Literal
 
@@ -26,11 +27,13 @@ from ddp_corpus.config import settings
 from ddp_corpus.db import get_session, get_sessionmaker
 from ddp_corpus.deps import Actor, current_actor, get_storage
 from ddp_corpus.errors import APIError
+from ddp_corpus.document_context import document_context, search_contexts
+from ddp_corpus.policy import require_document_parse, document_resource_id, require_document, require_mutable_document, require_history_document, visible_document_condition
 from ddp_corpus.evidence import citation_out, load_citations, record_evidence
 from ddp_corpus.usage import record_usage
 from ddp_corpus.models import (
     AgentTurn, Assertion, Chunk, Citation, Conversation, Document, Evidence,
-    EvidenceVerification, Message, ParseJob, RetrievalCandidate, utcnow,
+    EvidenceVerification, Message, ParseJob, ResourceVersion, RetrievalCandidate, utcnow,
 )
 from ddp_corpus.qa import (
     Retrieval, answer_model_meta, attach_crops, build_messages, decide_retrieval,
@@ -70,21 +73,17 @@ def _sse(event: str, payload: dict) -> bytes:
 
 
 async def _owned_document(document_id: str, actor: Actor, session: AsyncSession) -> Document:
-    """取文档。**不判归属**（1b）—— 语料整个部署共享，谁都能对任一文档发起问答。
-
-    名字保留是为了少改调用点；判据只剩"存在且未删"。
-    """
-    document = await session.get(Document, document_id)
-    if document is None or document.deleted_at is not None:
-        raise APIError(404, "document not found", "invalid_request_error", "document_not_found")
-    return document
+    return await require_document(session, actor, document_id)
 
 
 async def _owned_conversation(cid: str, actor: Actor, session: AsyncSession) -> Conversation:
     conversation = await session.get(Conversation, cid)
-    if conversation is None or conversation.actor_id != actor.id:
+    if (conversation is None or conversation.actor_id != actor.id
+            or conversation.organization_id != actor.organization_id):
         raise APIError(404, "conversation not found", "invalid_request_error",
                        "conversation_not_found")
+    await require_history_document(session, actor, conversation.document_id,
+                                   resource_id=conversation.resource_id)
     return conversation
 
 
@@ -93,7 +92,8 @@ async def create_conversation(document_id: str, actor: Actor = Depends(current_a
                               session: AsyncSession = Depends(get_session)):
     document = await _owned_document(document_id, actor, session)
     conversation = Conversation(actor_id=actor.id, organization_id=actor.organization_id,
-                                document_id=document.id, title="新会话")
+                                document_id=document.id, title="新会话",
+                                resource_id=await document_resource_id(session, actor, document.id))
     session.add(conversation)
     await session.commit()
     return {"id": conversation.id, "document_id": document.id, "title": conversation.title,
@@ -103,10 +103,20 @@ async def create_conversation(document_id: str, actor: Actor = Depends(current_a
 @router.get("/conversations")
 async def list_conversations(document: str = "", actor: Actor = Depends(current_actor),
                              session: AsyncSession = Depends(get_session)):
-    stmt = select(Conversation).where(Conversation.actor_id == actor.id)
+    stmt = select(Conversation).join(Document).where(
+        Conversation.actor_id == actor.id, Conversation.organization_id == actor.organization_id,
+        visible_document_condition(actor))
     if document:
         stmt = stmt.where(Conversation.document_id == document)
     rows = (await session.execute(stmt.order_by(Conversation.updated_at.desc()))).scalars().all()
+    permitted = []
+    for row in rows:
+        try:
+            await require_history_document(session, actor, row.document_id, resource_id=row.resource_id)
+        except APIError:
+            continue
+        permitted.append(row)
+    rows = permitted
     return [{"id": c.id, "document_id": c.document_id, "title": c.title,
              "created_at": c.created_at, "updated_at": c.updated_at} for c in rows]
 
@@ -306,7 +316,7 @@ async def get_crop(document_id: str, job_id: str, name: str, request: Request,
     """
     from fastapi.responses import Response
 
-    document = await _owned_document(document_id, actor, session)
+    document = await require_document_parse(session, actor, document_id, job_id)
     if "/" in name or ".." in name:
         raise APIError(400, "invalid crop name", "invalid_request_error", "invalid_name")
     # job 也要校验归属：不然路径里的 job_id 会被原样拼进对象键
@@ -353,7 +363,12 @@ async def get_evidence_detail(evidence_id: str, actor: Actor = Depends(current_a
     evidence = await session.get(Evidence, evidence_id)
     if evidence is None:
         raise APIError(404, "evidence not found", "invalid_request_error", "evidence_not_found")
-    document = await _owned_document(evidence.document_id, actor, session)
+    try:
+        document = await require_document_parse(session, actor, evidence.document_id, evidence.parse_job_id)
+    except APIError as exc:
+        if exc.status_code != 404:
+            raise
+        raise APIError(404, "evidence not found", "invalid_request_error", "evidence_not_found")
     verifications = (await session.execute(
         select(EvidenceVerification).where(
             EvidenceVerification.evidence_id == evidence.id)
@@ -369,9 +384,22 @@ async def get_evidence_detail(evidence_id: str, actor: Actor = Depends(current_a
                 Chunk.derived_evidence_id == evidence.id),
         )
     )).scalars().first()
+    rid = await document_resource_id(session, actor, document.id)
+    version_query = select(ResourceVersion).where(
+        ResourceVersion.resource_id == rid, ResourceVersion.document_id == document.id,
+        ResourceVersion.parse_job_id == evidence.parse_job_id,
+        ResourceVersion.deleted_at.is_(None))
+    if actor.version_id:
+        version_query = version_query.where(ResourceVersion.id == actor.version_id)
+    version = await session.scalar(version_query.order_by(
+        ResourceVersion.version_no.desc()).limit(1)) if rid else None
     return {
+        "resource_id": rid,
+        "source_version_id": version.id if version else None,
+        "source_digest": version.source_digest if version else document.doc_id,
+        "parse_revision": evidence.parse_job_id,
         "id": evidence.id,
-        "document": {"id": document.id, "filename": document.filename},
+        "document": {"id": document.id, "filename": version.filename if version else document.filename},
         "page_idx": evidence.page_idx, "seq": evidence.seq,
         "parse_job_id": evidence.parse_job_id, "doc_version": evidence.doc_version,
         "bbox": evidence.bbox, "page_size": evidence.page_size, "kind": evidence.kind,
@@ -425,7 +453,13 @@ async def verify_evidence_human(evidence_id: str, req: HumanVerificationRequest,
     )).scalar_one_or_none()
     if evidence is None:
         raise APIError(404, "evidence not found", "invalid_request_error", "evidence_not_found")
-    await _owned_document(evidence.document_id, actor, session)
+    try:
+        await require_mutable_document(session, actor, evidence.document_id)
+        await require_document_parse(session, actor, evidence.document_id, evidence.parse_job_id)
+    except APIError as exc:
+        if exc.status_code != 404:
+            raise
+        raise APIError(404, "evidence not found", "invalid_request_error", "evidence_not_found")
     state = {"pass": "passed", "reject": "rejected", "question": "questioned"}[
         req.verdict]
     verification = EvidenceVerification(
@@ -451,18 +485,25 @@ async def ask(cid: str, req: AskRequest, request: Request, actor: Actor = Depend
               session: AsyncSession = Depends(get_session),
               storage: Storage = Depends(get_storage)):
     conversation = await _owned_conversation(cid, actor, session)
-    document = await _owned_document(conversation.document_id, actor, session)
+    actor = replace(actor, resource_id=conversation.resource_id, version_id=None)
+    document = await require_document(session, actor, conversation.document_id,
+                                      resource_id=conversation.resource_id)
     # 限速在 control-api（见 routers/knowledge.py 里同一条说明）
 
-    if document.index_status != "ready":
+    context = await document_context(session, actor, document)
+    actor = replace(actor, version_id=context.version_id)
+    job = await session.get(ParseJob, context.parse_job_id) if context.parse_job_id else None
+    if job is None or job.index_status != "ready":
+        state, error = (job.index_status, job.index_error) if job else ("none", None)
         raise APIError(409, {
-            "none": "文档还没有建立索引",
-            "pending": "索引正在排队，请稍候重试",
-            "indexing": "索引正在建立，请稍候重试",
-            "failed": f"索引建立失败：{document.index_error or '未知原因'}",
-        }.get(document.index_status, "文档尚不可问答"), "invalid_request_error", "index_not_ready")
+            "none": "文档还没有建立索引", "pending": "索引正在排队，请稍候重试",
+            "indexing": "索引正在建立，请稍候重试", "failed": f"索引建立失败：{error or '未知原因'}",
+        }.get(state, "文档尚不可问答"), "invalid_request_error", "index_not_ready")
 
-    job = await session.get(ParseJob, document.current_job_id)
+    if context.resource_id and (job is None or not await session.scalar(
+            select(Chunk.id).where(Chunk.document_id == document.id, Chunk.parse_job_id == job.id).limit(1))):
+        raise APIError(409, "fixed resource version has no searchable index",
+                       "invalid_request_error", "resource_index_unavailable")
     if job is None or not job.result_prefix:
         raise APIError(409, "文档没有可用的解析结果", "invalid_request_error", "result_not_ready")
 
@@ -482,16 +523,17 @@ async def ask(cid: str, req: AskRequest, request: Request, actor: Actor = Depend
     index = request.app.state.search_index
 
     history_payload = [{"role": m.role, "content": m.content} for m in history]
+    await require_document(session, actor, document.id)
     decision = await decide_retrieval(
         http, question=req.question, history=history_payload,
         inherited_evidence_ids=inherited_ids)
     if decision.need_retrieval:
         retrieval = await retrieve(session, index, http, question=req.question,
-                                   document=document)
+                                   document=document, actor=actor)
         if retrieval.degraded is None and decision.degraded:
             retrieval.degraded = decision.degraded
     else:
-        retrieval = await inherited_retrieval(session, decision.inherited_evidence_ids)
+        retrieval = await inherited_retrieval(session, decision.inherited_evidence_ids, actor=actor)
         if retrieval.degraded in {"no_evidence_in_turn", "inherited_evidence_incomplete"}:
             # 判定时有 ID，不代表证据仍能接回当前索引。重建/删除后继承集可能全失效；
             # 此时必须把决定收紧成显式拒答，不能让空资料 prompt 落回模型常识。
@@ -510,10 +552,10 @@ async def ask(cid: str, req: AskRequest, request: Request, actor: Actor = Depend
 
     return StreamingResponse(
         _stream_answer(http, messages, retrieval, decision=decision, conversation_id=cid,
-                       document_id=document.id, actor_id=actor.id,
+                       document_id=document.id, actor_id=actor.id, actor=actor,
                        organization_id=actor.organization_id, has_image=bool(image_uris),
                        expected_job_id=job.id,
-                       expected_generation=document.index_generation,
+                       expected_generation=job.index_generation,
                        # 图与文本必须成对取，不能一个取 image_uris[0] 一个取 hits[0]
                        verify_pair=(crops[0][0], crops[0][1]["text"],
                                     crops[0][1].get("evidence_id")) if crops else None),
@@ -528,7 +570,19 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
                          organization_id: str, has_image: bool,
                          verify_pair: tuple[str, str, str | None] | None = None,
                          expected_job_id: str | None = None,
-                         expected_generation: int | None = None):
+                         expected_generation: int | None = None,
+                         actor: Actor | None = None):
+    async def authorize() -> None:
+        if actor is not None:
+            async with get_sessionmaker()() as policy_session:
+                await require_document(policy_session, actor, document_id)
+                if expected_job_id and expected_job_id not in await search_contexts(policy_session, actor, document_id):
+                    raise APIError(404, "source access was revoked", "permission_error", "resource_access_revoked")
+    try:
+        await authorize()
+    except APIError:
+        yield _sse("error", {"message": "source access was revoked", "code": "resource_access_revoked"})
+        return
     message_id = None
     decision = decision or QueryDecision(need_retrieval=True, reason="legacy_caller")
     chunks: list[str] = []
@@ -543,8 +597,10 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
     verify_task: asyncio.Task | None = None
     refusing = decision.degraded in {"no_evidence_in_turn", "inherited_evidence_incomplete"}
     if settings.qa_verify_parse and verify_pair and not refusing:
-        verify_task = asyncio.create_task(
-            verify_parse_consistency(http, verify_pair[0], verify_pair[1]))
+        async def checked_verification():
+            await authorize()
+            return await verify_parse_consistency(http, verify_pair[0], verify_pair[1])
+        verify_task = asyncio.create_task(checked_verification())
 
     yield _sse("meta", {
         "query_decision": {
@@ -567,6 +623,7 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
                 chunks.append(refusal)
                 yield _sse("delta", {"text": refusal})
             else:
+                await authorize()
                 async for piece in _relay_chat(http, messages):
                     chunks.append(piece)
                     yield _sse("delta", {"text": piece})
@@ -577,13 +634,18 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
                 degraded, verified = "vision_unavailable", False
                 text_only = _strip_images(messages)
                 try:
+                    await authorize()
                     async for piece in _relay_chat(http, text_only):
                         chunks.append(piece)
                         yield _sse("delta", {"text": piece})
+                except APIError:
+                    error = {"message": "source access was revoked", "code": "resource_access_revoked"}
                 except (_UpstreamDown, httpx.HTTPError) as exc:
                     error = {"message": str(exc), "code": "upstream_unavailable"}
             else:
                 error = {"message": "问答服务不可用", "code": "upstream_unavailable"}
+        except APIError:
+            error = {"message": "source access was revoked", "code": "resource_access_revoked"}
         except httpx.HTTPError as exc:
             # 中途断流（上游超时/连接断开）：把已经产出的文本留住并如实报错，
             # 不能让异常冒到 StreamingResponse —— 那会把响应体截断在半路，
@@ -707,14 +769,14 @@ async def _persist(*, conversation_id: str, actor_id: str, organization_id: str,
         index_changed = False
         if (document_id is not None and expected_job_id is not None
                 and expected_generation is not None):
-            # generation 核对与 Message/Citation 提交必须在同一把 Document 行锁内；
-            # 否则 reindex 仍可插进“检查通过 → record_evidence”之间。
-            document = (await db.execute(
-                select(Document).where(Document.id == document_id).with_for_update()
-            )).scalar_one_or_none()
-            index_changed = (document is None or document.current_job_id != expected_job_id
-                             or document.index_generation != expected_generation
-                             or document.index_status != "ready")
+            # Lock the exact fixed parse revision; another resource's current cache
+            # and index generation are unrelated to this answer's evidence.
+            job = await db.scalar(select(ParseJob).where(ParseJob.id == expected_job_id,
+                ParseJob.document_id == document_id).with_for_update())
+            document = await db.get(Document, document_id)
+            index_changed = (document is None or document.deleted_at is not None or job is None
+                             or job.index_generation != expected_generation
+                             or job.index_status != "ready")
             if index_changed:
                 # 核对针对的是检索时的旧索引。即使图文一致，也不能在当前索引已
                 # 切换后继续把断言标 passed，更不能落一条无效的自动核对记录。

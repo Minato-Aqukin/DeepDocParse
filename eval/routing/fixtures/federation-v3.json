@@ -1,0 +1,2457 @@
+{
+  "collections": {
+    "col-a-core": {
+      "index_revision": "idx-col-a-core-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-a",
+      "publication": "published",
+      "topics": [
+        "manuals",
+        "general"
+      ]
+    },
+    "col-a-ops": {
+      "index_revision": "idx-col-a-ops-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-a",
+      "publication": "published",
+      "topics": [
+        "operations",
+        "safety"
+      ]
+    },
+    "col-a-private": {
+      "index_revision": "idx-col-a-private-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-a",
+      "publication": "private",
+      "topics": [
+        "manuals",
+        "general"
+      ]
+    },
+    "col-b-hardware": {
+      "index_revision": "idx-col-b-hardware-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-b",
+      "publication": "published",
+      "topics": [
+        "hardware",
+        "power"
+      ]
+    },
+    "col-b-service": {
+      "index_revision": "idx-col-b-service-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-b",
+      "publication": "published",
+      "topics": [
+        "service",
+        "calibration"
+      ]
+    },
+    "col-c-power": {
+      "index_revision": "idx-col-c-power-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-c",
+      "publication": "published",
+      "topics": [
+        "power",
+        "electrical"
+      ]
+    },
+    "col-c-thermal": {
+      "index_revision": "idx-col-c-thermal-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-c",
+      "publication": "published",
+      "topics": [
+        "thermal",
+        "cooling"
+      ]
+    },
+    "col-d-network": {
+      "index_revision": "idx-col-d-network-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-d",
+      "publication": "published",
+      "topics": [
+        "network",
+        "connectivity"
+      ]
+    },
+    "col-d-software": {
+      "index_revision": "idx-col-d-software-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-d",
+      "publication": "published",
+      "topics": [
+        "software",
+        "firmware"
+      ]
+    },
+    "col-e-archive": {
+      "index_revision": "idx-col-e-archive-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-e",
+      "publication": "published",
+      "topics": [
+        "archive",
+        "legacy"
+      ]
+    },
+    "col-e-legal": {
+      "index_revision": "idx-col-e-legal-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-e",
+      "publication": "published",
+      "topics": [
+        "legal",
+        "compliance"
+      ]
+    },
+    "col-f-lab": {
+      "index_revision": "idx-col-f-lab-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-f",
+      "publication": "published",
+      "topics": [
+        "lab",
+        "measurements"
+      ]
+    },
+    "col-f-misc": {
+      "index_revision": "idx-col-f-misc-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-f",
+      "publication": "published",
+      "topics": [
+        "misc",
+        "unlabeled"
+      ]
+    }
+  },
+  "dataset_digest": "sha256:156461c66d71290b65798f321000ed113261c8f4ea8e7339db0e0e9dc96178c4",
+  "descriptors": [
+    {
+      "collection_id": "col-a-core",
+      "index_revision": "idx-col-a-core-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-a",
+      "revision": 1,
+      "schema": "ddp-discovery/1#CollectionDescriptor",
+      "topics": [
+        "manuals",
+        "general"
+      ],
+      "valid_until": "2026-09-01T13:00:00Z"
+    },
+    {
+      "collection_id": "col-a-ops",
+      "index_revision": "idx-col-a-ops-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-a",
+      "revision": 1,
+      "schema": "ddp-discovery/1#CollectionDescriptor",
+      "topics": [
+        "operations",
+        "safety"
+      ],
+      "valid_until": "2026-09-01T13:00:00Z"
+    },
+    {
+      "collection_id": "col-b-hardware",
+      "index_revision": "idx-col-b-hardware-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-b",
+      "revision": 1,
+      "schema": "ddp-discovery/1#CollectionDescriptor",
+      "topics": [
+        "hardware",
+        "power"
+      ],
+      "valid_until": "2026-09-01T13:00:00Z"
+    },
+    {
+      "collection_id": "col-b-service",
+      "index_revision": "idx-col-b-service-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-b",
+      "revision": 1,
+      "schema": "ddp-discovery/1#CollectionDescriptor",
+      "topics": [
+        "service",
+        "calibration"
+      ],
+      "valid_until": "2026-09-01T13:00:00Z"
+    },
+    {
+      "collection_id": "col-c-thermal",
+      "index_revision": "idx-col-c-thermal-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-c",
+      "revision": 1,
+      "schema": "ddp-discovery/1#CollectionDescriptor",
+      "topics": [
+        "thermal",
+        "cooling"
+      ],
+      "valid_until": "2026-09-01T13:00:00Z"
+    },
+    {
+      "collection_id": "col-c-power",
+      "index_revision": "idx-col-c-power-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-c",
+      "revision": 1,
+      "schema": "ddp-discovery/1#CollectionDescriptor",
+      "topics": [
+        "power",
+        "electrical"
+      ],
+      "valid_until": "2026-09-01T13:00:00Z"
+    },
+    {
+      "collection_id": "col-d-software",
+      "index_revision": "idx-col-d-software-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-d",
+      "revision": 1,
+      "schema": "ddp-discovery/1#CollectionDescriptor",
+      "topics": [
+        "software",
+        "firmware"
+      ],
+      "valid_until": "2026-09-01T13:00:00Z"
+    },
+    {
+      "collection_id": "col-d-network",
+      "index_revision": "idx-col-d-network-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-d",
+      "revision": 1,
+      "schema": "ddp-discovery/1#CollectionDescriptor",
+      "topics": [
+        "network",
+        "connectivity"
+      ],
+      "valid_until": "2026-09-01T13:00:00Z"
+    },
+    {
+      "collection_id": "col-e-archive",
+      "index_revision": "idx-col-e-archive-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-e",
+      "revision": 1,
+      "schema": "ddp-discovery/1#CollectionDescriptor",
+      "topics": [
+        "archive",
+        "legacy"
+      ],
+      "valid_until": "2026-09-01T13:00:00Z"
+    },
+    {
+      "collection_id": "col-e-legal",
+      "index_revision": "idx-col-e-legal-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-e",
+      "revision": 1,
+      "schema": "ddp-discovery/1#CollectionDescriptor",
+      "topics": [
+        "legal",
+        "compliance"
+      ],
+      "valid_until": "2026-09-01T13:00:00Z"
+    },
+    {
+      "collection_id": "col-f-lab",
+      "index_revision": "idx-col-f-lab-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-f",
+      "revision": 1,
+      "schema": "ddp-discovery/1#CollectionDescriptor",
+      "topics": [
+        "lab",
+        "measurements"
+      ],
+      "valid_until": "2026-09-01T13:00:00Z"
+    },
+    {
+      "collection_id": "col-f-misc",
+      "index_revision": "idx-col-f-misc-r1",
+      "languages": [
+        "en"
+      ],
+      "origin_node_id": "node-f",
+      "revision": 1,
+      "schema": "ddp-discovery/1#CollectionDescriptor",
+      "topics": [
+        "misc",
+        "unlabeled"
+      ],
+      "valid_until": "2026-09-01T13:00:00Z"
+    }
+  ],
+  "documents": [
+    {
+      "collection_id": "col-b-service",
+      "document_id": "doc-ev-q-bonly-01-r01",
+      "evidence_ids": [
+        "ev-q-bonly-01-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-bonly-01-r01"
+    },
+    {
+      "collection_id": "col-a-core",
+      "document_id": "doc-ev-q-bonly-02-d01",
+      "evidence_ids": [
+        "ev-q-bonly-02-d01"
+      ],
+      "title": "Synthetic evidence document for ev-q-bonly-02-d01"
+    },
+    {
+      "collection_id": "col-b-service",
+      "document_id": "doc-ev-q-bonly-02-r01",
+      "evidence_ids": [
+        "ev-q-bonly-02-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-bonly-02-r01"
+    },
+    {
+      "collection_id": "col-b-hardware",
+      "document_id": "doc-ev-q-bonly-03-r01",
+      "evidence_ids": [
+        "ev-q-bonly-03-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-bonly-03-r01"
+    },
+    {
+      "collection_id": "col-c-power",
+      "document_id": "doc-ev-q-conflict-01-r01",
+      "evidence_ids": [
+        "ev-q-conflict-01-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-conflict-01-r01"
+    },
+    {
+      "collection_id": "col-d-software",
+      "document_id": "doc-ev-q-conflict-01-r02",
+      "evidence_ids": [
+        "ev-q-conflict-01-r02"
+      ],
+      "title": "Synthetic evidence document for ev-q-conflict-01-r02"
+    },
+    {
+      "collection_id": "col-c-thermal",
+      "document_id": "doc-ev-q-conflict-02-r01",
+      "evidence_ids": [
+        "ev-q-conflict-02-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-conflict-02-r01"
+    },
+    {
+      "collection_id": "col-d-network",
+      "document_id": "doc-ev-q-conflict-02-r02",
+      "evidence_ids": [
+        "ev-q-conflict-02-r02"
+      ],
+      "title": "Synthetic evidence document for ev-q-conflict-02-r02"
+    },
+    {
+      "collection_id": "col-c-power",
+      "document_id": "doc-ev-q-conflict-03-r01",
+      "evidence_ids": [
+        "ev-q-conflict-03-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-conflict-03-r01"
+    },
+    {
+      "collection_id": "col-e-archive",
+      "document_id": "doc-ev-q-conflict-03-r02",
+      "evidence_ids": [
+        "ev-q-conflict-03-r02"
+      ],
+      "title": "Synthetic evidence document for ev-q-conflict-03-r02"
+    },
+    {
+      "collection_id": "col-c-thermal",
+      "document_id": "doc-ev-q-cross-01-r01",
+      "evidence_ids": [
+        "ev-q-cross-01-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-cross-01-r01"
+    },
+    {
+      "collection_id": "col-c-power",
+      "document_id": "doc-ev-q-cross-01-r02",
+      "evidence_ids": [
+        "ev-q-cross-01-r02"
+      ],
+      "title": "Synthetic evidence document for ev-q-cross-01-r02"
+    },
+    {
+      "collection_id": "col-d-software",
+      "document_id": "doc-ev-q-cross-02-r01",
+      "evidence_ids": [
+        "ev-q-cross-02-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-cross-02-r01"
+    },
+    {
+      "collection_id": "col-e-archive",
+      "document_id": "doc-ev-q-cross-02-r02",
+      "evidence_ids": [
+        "ev-q-cross-02-r02"
+      ],
+      "title": "Synthetic evidence document for ev-q-cross-02-r02"
+    },
+    {
+      "collection_id": "col-e-legal",
+      "document_id": "doc-ev-q-cross-03-r01",
+      "evidence_ids": [
+        "ev-q-cross-03-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-cross-03-r01"
+    },
+    {
+      "collection_id": "col-f-lab",
+      "document_id": "doc-ev-q-cross-03-r02",
+      "evidence_ids": [
+        "ev-q-cross-03-r02"
+      ],
+      "title": "Synthetic evidence document for ev-q-cross-03-r02"
+    },
+    {
+      "collection_id": "col-f-misc",
+      "document_id": "doc-ev-q-hidden-01-r01",
+      "evidence_ids": [
+        "ev-q-hidden-01-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-hidden-01-r01"
+    },
+    {
+      "collection_id": "col-f-misc",
+      "document_id": "doc-ev-q-hidden-02-r01",
+      "evidence_ids": [
+        "ev-q-hidden-02-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-hidden-02-r01"
+    },
+    {
+      "collection_id": "col-f-misc",
+      "document_id": "doc-ev-q-hidden-03-r01",
+      "evidence_ids": [
+        "ev-q-hidden-03-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-hidden-03-r01"
+    },
+    {
+      "collection_id": "col-a-core",
+      "document_id": "doc-ev-q-ldecoy-01-d01",
+      "evidence_ids": [
+        "ev-q-ldecoy-01-d01"
+      ],
+      "title": "Synthetic evidence document for ev-q-ldecoy-01-d01"
+    },
+    {
+      "collection_id": "col-e-archive",
+      "document_id": "doc-ev-q-ldecoy-01-r01",
+      "evidence_ids": [
+        "ev-q-ldecoy-01-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-ldecoy-01-r01"
+    },
+    {
+      "collection_id": "col-a-ops",
+      "document_id": "doc-ev-q-ldecoy-02-d01",
+      "evidence_ids": [
+        "ev-q-ldecoy-02-d01"
+      ],
+      "title": "Synthetic evidence document for ev-q-ldecoy-02-d01"
+    },
+    {
+      "collection_id": "col-f-misc",
+      "document_id": "doc-ev-q-ldecoy-02-r01",
+      "evidence_ids": [
+        "ev-q-ldecoy-02-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-ldecoy-02-r01"
+    },
+    {
+      "collection_id": "col-a-core",
+      "document_id": "doc-ev-q-ldecoy-03-d01",
+      "evidence_ids": [
+        "ev-q-ldecoy-03-d01"
+      ],
+      "title": "Synthetic evidence document for ev-q-ldecoy-03-d01"
+    },
+    {
+      "collection_id": "col-c-thermal",
+      "document_id": "doc-ev-q-ldecoy-03-r01",
+      "evidence_ids": [
+        "ev-q-ldecoy-03-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-ldecoy-03-r01"
+    },
+    {
+      "collection_id": "col-b-hardware",
+      "document_id": "doc-ev-q-local-01-d01",
+      "evidence_ids": [
+        "ev-q-local-01-d01"
+      ],
+      "title": "Synthetic evidence document for ev-q-local-01-d01"
+    },
+    {
+      "collection_id": "col-a-core",
+      "document_id": "doc-ev-q-local-01-r01",
+      "evidence_ids": [
+        "ev-q-local-01-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-local-01-r01"
+    },
+    {
+      "collection_id": "col-c-power",
+      "document_id": "doc-ev-q-local-02-d01",
+      "evidence_ids": [
+        "ev-q-local-02-d01"
+      ],
+      "title": "Synthetic evidence document for ev-q-local-02-d01"
+    },
+    {
+      "collection_id": "col-a-ops",
+      "document_id": "doc-ev-q-local-02-r01",
+      "evidence_ids": [
+        "ev-q-local-02-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-local-02-r01"
+    },
+    {
+      "collection_id": "col-b-service",
+      "document_id": "doc-ev-q-local-03-d01",
+      "evidence_ids": [
+        "ev-q-local-03-d01"
+      ],
+      "title": "Synthetic evidence document for ev-q-local-03-d01"
+    },
+    {
+      "collection_id": "col-a-ops",
+      "document_id": "doc-ev-q-local-03-r01",
+      "evidence_ids": [
+        "ev-q-local-03-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-local-03-r01"
+    },
+    {
+      "collection_id": "col-c-thermal",
+      "document_id": "doc-ev-q-near-01-d01",
+      "evidence_ids": [
+        "ev-q-near-01-d01"
+      ],
+      "title": "Synthetic evidence document for ev-q-near-01-d01"
+    },
+    {
+      "collection_id": "col-e-archive",
+      "document_id": "doc-ev-q-near-01-r01",
+      "evidence_ids": [
+        "ev-q-near-01-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-near-01-r01"
+    },
+    {
+      "collection_id": "col-d-software",
+      "document_id": "doc-ev-q-near-02-d01",
+      "evidence_ids": [
+        "ev-q-near-02-d01"
+      ],
+      "title": "Synthetic evidence document for ev-q-near-02-d01"
+    },
+    {
+      "collection_id": "col-f-misc",
+      "document_id": "doc-ev-q-near-02-r01",
+      "evidence_ids": [
+        "ev-q-near-02-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-near-02-r01"
+    },
+    {
+      "collection_id": "col-b-hardware",
+      "document_id": "doc-ev-q-near-03-d01",
+      "evidence_ids": [
+        "ev-q-near-03-d01"
+      ],
+      "title": "Synthetic evidence document for ev-q-near-03-d01"
+    },
+    {
+      "collection_id": "col-d-network",
+      "document_id": "doc-ev-q-near-03-r01",
+      "evidence_ids": [
+        "ev-q-near-03-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-near-03-r01"
+    },
+    {
+      "collection_id": "col-a-private",
+      "document_id": "doc-ev-q-private-01-p01",
+      "evidence_ids": [
+        "ev-q-private-01-p01"
+      ],
+      "title": "Synthetic evidence document for ev-q-private-01-p01"
+    },
+    {
+      "collection_id": "col-b-hardware",
+      "document_id": "doc-ev-q-private-01-r01",
+      "evidence_ids": [
+        "ev-q-private-01-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-private-01-r01"
+    },
+    {
+      "collection_id": "col-a-private",
+      "document_id": "doc-ev-q-private-02-p01",
+      "evidence_ids": [
+        "ev-q-private-02-p01"
+      ],
+      "title": "Synthetic evidence document for ev-q-private-02-p01"
+    },
+    {
+      "collection_id": "col-b-service",
+      "document_id": "doc-ev-q-private-02-r01",
+      "evidence_ids": [
+        "ev-q-private-02-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-private-02-r01"
+    },
+    {
+      "collection_id": "col-a-private",
+      "document_id": "doc-ev-q-private-03-p01",
+      "evidence_ids": [
+        "ev-q-private-03-p01"
+      ],
+      "title": "Synthetic evidence document for ev-q-private-03-p01"
+    },
+    {
+      "collection_id": "col-d-software",
+      "document_id": "doc-ev-q-private-03-r01",
+      "evidence_ids": [
+        "ev-q-private-03-r01"
+      ],
+      "title": "Synthetic evidence document for ev-q-private-03-r01"
+    }
+  ],
+  "evidence": {
+    "ev-q-bonly-01-r01": {
+      "block_type": "text",
+      "collection_id": "col-b-service",
+      "document_id": "doc-ev-q-bonly-01-r01",
+      "evidence_id": "ev-q-bonly-01-r01",
+      "excerpt_digest": "sha256:9176d1a353bdeb07aef2682ccb7ab105222effcfe616bdea1a3eb49f0acb2710",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 7
+      },
+      "origin_node_id": "node-b",
+      "parse_revision": "parse-doc-ev-q-bonly-01-r01",
+      "source_digest": "sha256:5fd7f28252a7d720bc76c98411a53aa324a239fa6b7553265c4dd03c6c485216",
+      "text": "Tighten BX-200 flange bolts to 42 Nm in a star pattern."
+    },
+    "ev-q-bonly-02-d01": {
+      "block_type": "text",
+      "collection_id": "col-a-core",
+      "document_id": "doc-ev-q-bonly-02-d01",
+      "evidence_id": "ev-q-bonly-02-d01",
+      "excerpt_digest": "sha256:843461f8281d8de8bf6677960a9af18b6797a417f85b5a3bcce8da441c6e0db0",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 9
+      },
+      "origin_node_id": "node-a",
+      "parse_revision": "parse-doc-ev-q-bonly-02-d01",
+      "source_digest": "sha256:288d81895f5f1e1aa5424ebf0e063b8099b56aa87905005cdc46a990f292f2a5",
+      "text": "The local pump gearbox uses mineral grease on the test stand."
+    },
+    "ev-q-bonly-02-r01": {
+      "block_type": "text",
+      "collection_id": "col-b-service",
+      "document_id": "doc-ev-q-bonly-02-r01",
+      "evidence_id": "ev-q-bonly-02-r01",
+      "excerpt_digest": "sha256:c5928225af90df171f6b8fe3498e563e83e30b7fddef435f05d3b6aac22c8932",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 8
+      },
+      "origin_node_id": "node-b",
+      "parse_revision": "parse-doc-ev-q-bonly-02-r01",
+      "source_digest": "sha256:e9a0db2c27d17635d0ce52e62bc5667b6f5d4ddb7882a8eccbf5a13503e52788",
+      "text": "The gearbox uses synthetic ISO VG 220 lubricant."
+    },
+    "ev-q-bonly-03-r01": {
+      "block_type": "text",
+      "collection_id": "col-b-hardware",
+      "document_id": "doc-ev-q-bonly-03-r01",
+      "evidence_id": "ev-q-bonly-03-r01",
+      "excerpt_digest": "sha256:c6e9985e9f4e06622699a1be35d944c8b0e6bfe499c2d9435cfae188737a8d85",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 10
+      },
+      "origin_node_id": "node-b",
+      "parse_revision": "parse-doc-ev-q-bonly-03-r01",
+      "source_digest": "sha256:664efde67065273e8088067cffb12e60d7db4e0b7011c39175dd3497d73a1861",
+      "text": "Replace the BX-200 intake filter every 500 operating hours."
+    },
+    "ev-q-conflict-01-r01": {
+      "block_type": "text",
+      "collection_id": "col-c-power",
+      "document_id": "doc-ev-q-conflict-01-r01",
+      "evidence_id": "ev-q-conflict-01-r01",
+      "excerpt_digest": "sha256:c28b52dfd18954f994f4477cf4af6225b356fc3da9de41962bccf49074e138b2",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 32
+      },
+      "origin_node_id": "node-c",
+      "parse_revision": "parse-doc-ev-q-conflict-01-r01",
+      "source_digest": "sha256:a697a822bffd45b43668ce6f0b730c00ff4a17fea0e81008ce9d1856a478aec5",
+      "text": "The PM-2 maximum input voltage is 240 V."
+    },
+    "ev-q-conflict-01-r02": {
+      "block_type": "text",
+      "collection_id": "col-d-software",
+      "document_id": "doc-ev-q-conflict-01-r02",
+      "evidence_id": "ev-q-conflict-01-r02",
+      "excerpt_digest": "sha256:52e101267587ceaf5b0e65dbfe0a0f2d6b6cc7b9bfd2418d76541cbfeeb533c9",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 33
+      },
+      "origin_node_id": "node-d",
+      "parse_revision": "parse-doc-ev-q-conflict-01-r02",
+      "source_digest": "sha256:e006202c006d2def36c8172b8de474a15a88aa16c6097b210f357ead44477279",
+      "text": "The PM-2 maximum input voltage is 120 V."
+    },
+    "ev-q-conflict-02-r01": {
+      "block_type": "text",
+      "collection_id": "col-c-thermal",
+      "document_id": "doc-ev-q-conflict-02-r01",
+      "evidence_id": "ev-q-conflict-02-r01",
+      "excerpt_digest": "sha256:b02abde302b5c6d4ba3b51a6aee87e3bf8f4acb7e36b756ba92841f4506b61e1",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 34
+      },
+      "origin_node_id": "node-c",
+      "parse_revision": "parse-doc-ev-q-conflict-02-r01",
+      "source_digest": "sha256:611dde60c7fec28eb3468d43b69672f6533ded52f85d15c785fef6ee395f429f",
+      "text": "The PM-2 motor rated speed is 3000 rpm."
+    },
+    "ev-q-conflict-02-r02": {
+      "block_type": "text",
+      "collection_id": "col-d-network",
+      "document_id": "doc-ev-q-conflict-02-r02",
+      "evidence_id": "ev-q-conflict-02-r02",
+      "excerpt_digest": "sha256:8eddf4e6efa886fea6bac5363a393fc8338f5d91bbeedd2cb32f756ba7d3bf4c",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 35
+      },
+      "origin_node_id": "node-d",
+      "parse_revision": "parse-doc-ev-q-conflict-02-r02",
+      "source_digest": "sha256:1cee9ae6ec278ce81dbef103dffd2b1eadc3f824ac8185272cccae3fbf833303",
+      "text": "The PM-2 motor rated speed is 2800 rpm."
+    },
+    "ev-q-conflict-03-r01": {
+      "block_type": "text",
+      "collection_id": "col-c-power",
+      "document_id": "doc-ev-q-conflict-03-r01",
+      "evidence_id": "ev-q-conflict-03-r01",
+      "excerpt_digest": "sha256:00d0d9ceee55436dbca6223853b38a077ef20d7c0ea18d7acf15e2b624577427",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 36
+      },
+      "origin_node_id": "node-c",
+      "parse_revision": "parse-doc-ev-q-conflict-03-r01",
+      "source_digest": "sha256:0520c0ec3e68aa3f935c71365aad7ed10f1a68441e86f9432706bbbb5d7627b6",
+      "text": "The PM-2 bearing service life is 20000 hours."
+    },
+    "ev-q-conflict-03-r02": {
+      "block_type": "text",
+      "collection_id": "col-e-archive",
+      "document_id": "doc-ev-q-conflict-03-r02",
+      "evidence_id": "ev-q-conflict-03-r02",
+      "excerpt_digest": "sha256:42e27c5ccb743852d89e07e30c98216254b5147e2e79083a82abe3c91bd15bdc",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 37
+      },
+      "origin_node_id": "node-e",
+      "parse_revision": "parse-doc-ev-q-conflict-03-r02",
+      "source_digest": "sha256:772f7c13db33ad7237907683577cb1e3f20368321ff0f1eb87a659003b669b3a",
+      "text": "The PM-2 bearing service life is 15000 hours."
+    },
+    "ev-q-cross-01-r01": {
+      "block_type": "text",
+      "collection_id": "col-c-thermal",
+      "document_id": "doc-ev-q-cross-01-r01",
+      "evidence_id": "ev-q-cross-01-r01",
+      "excerpt_digest": "sha256:35149d4e3a5e74eab73033bce3c3fd3af77813b3936caf867923aa2842ff9ffe",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 11
+      },
+      "origin_node_id": "node-c",
+      "parse_revision": "parse-doc-ev-q-cross-01-r01",
+      "source_digest": "sha256:e18dff177e0ef4cebb374333852adf44230daac909ce5fe5d4fa63e1f5bd63a7",
+      "text": "Thermal probe alarm limit is 85 degrees."
+    },
+    "ev-q-cross-01-r02": {
+      "block_type": "text",
+      "collection_id": "col-c-power",
+      "document_id": "doc-ev-q-cross-01-r02",
+      "evidence_id": "ev-q-cross-01-r02",
+      "excerpt_digest": "sha256:e565c650bef8372f1de121374a674ef4ebbca142c6a4e48191b1038e2d1816e5",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 12
+      },
+      "origin_node_id": "node-c",
+      "parse_revision": "parse-doc-ev-q-cross-01-r02",
+      "source_digest": "sha256:72387b2735542f387588da5ab4b9689b4ae4af52f5c3cd288efa1aa4fdc2a717",
+      "text": "The thermal probe wiring uses blue and brown conductors."
+    },
+    "ev-q-cross-02-r01": {
+      "block_type": "text",
+      "collection_id": "col-d-software",
+      "document_id": "doc-ev-q-cross-02-r01",
+      "evidence_id": "ev-q-cross-02-r01",
+      "excerpt_digest": "sha256:60410fa24fb2b06b9f6c1e96cd8bda1e3af8cfb6cd97f090887d46194d3c3d21",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 13
+      },
+      "origin_node_id": "node-d",
+      "parse_revision": "parse-doc-ev-q-cross-02-r01",
+      "source_digest": "sha256:1015c4b1297bf3c128b14fab5ce58531db586fcfa3579cb93cef61565e5b5ff3",
+      "text": "CN-7 firmware checksum is 0x7a31."
+    },
+    "ev-q-cross-02-r02": {
+      "block_type": "text",
+      "collection_id": "col-e-archive",
+      "document_id": "doc-ev-q-cross-02-r02",
+      "evidence_id": "ev-q-cross-02-r02",
+      "excerpt_digest": "sha256:cdad9e2dbeb4b8cbeee8f372a0d4f7345b1946b68c99451d03e6d171926f0662",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 14
+      },
+      "origin_node_id": "node-e",
+      "parse_revision": "parse-doc-ev-q-cross-02-r02",
+      "source_digest": "sha256:98796129d14053a8526f28f1a407e3a63bda1b74cc1baaf15847656b7a7d0240",
+      "text": "CN-7 build archives are retained for seven years."
+    },
+    "ev-q-cross-03-r01": {
+      "block_type": "text",
+      "collection_id": "col-e-legal",
+      "document_id": "doc-ev-q-cross-03-r01",
+      "evidence_id": "ev-q-cross-03-r01",
+      "excerpt_digest": "sha256:5811fbe0b7501d95734deded885c5ffd2b24c846e5d4172ef0f6519a2916d50b",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 15
+      },
+      "origin_node_id": "node-e",
+      "parse_revision": "parse-doc-ev-q-cross-03-r01",
+      "source_digest": "sha256:fbe0c76e6ed4a7588ff0be41ee8977ef29bcc2282b40c315eec8da8a76558971",
+      "text": "LOT-9 is under legal hold until the audit closes."
+    },
+    "ev-q-cross-03-r02": {
+      "block_type": "text",
+      "collection_id": "col-f-lab",
+      "document_id": "doc-ev-q-cross-03-r02",
+      "evidence_id": "ev-q-cross-03-r02",
+      "excerpt_digest": "sha256:0aab62f861c90a8688d33f140c2c6bc8065eaadb351939caa3e200acd72b2c8c",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 16
+      },
+      "origin_node_id": "node-f",
+      "parse_revision": "parse-doc-ev-q-cross-03-r02",
+      "source_digest": "sha256:2bacf84379019e15643f074d7fe2a7d0d11a4cd1d17bba9b6a153cd9117d35d9",
+      "text": "LOT-9 calibration reference is the 1.0 ohm standard."
+    },
+    "ev-q-hidden-01-r01": {
+      "block_type": "text",
+      "collection_id": "col-f-misc",
+      "document_id": "doc-ev-q-hidden-01-r01",
+      "evidence_id": "ev-q-hidden-01-r01",
+      "excerpt_digest": "sha256:5ee49ac6ae260d2c66a6390bec8c75dad8b6bbf562d6f56eeba150b8ec1e0ab4",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 29
+      },
+      "origin_node_id": "node-f",
+      "parse_revision": "parse-doc-ev-q-hidden-01-r01",
+      "source_digest": "sha256:16b5f84a784b6c0d35c83314def638d5849c2f31cc1aa5cf47a49da913580737",
+      "text": "The QX-9 capacitor derating curve drops to 60 percent at 85 C."
+    },
+    "ev-q-hidden-02-r01": {
+      "block_type": "text",
+      "collection_id": "col-f-misc",
+      "document_id": "doc-ev-q-hidden-02-r01",
+      "evidence_id": "ev-q-hidden-02-r01",
+      "excerpt_digest": "sha256:5e51201ed89a88a1d9aba4c4dd50c73df331b65247e5b37988d3453e27a30e4a",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 30
+      },
+      "origin_node_id": "node-f",
+      "parse_revision": "parse-doc-ev-q-hidden-02-r01",
+      "source_digest": "sha256:3954c110baddc0a3def50345db3787e9a6dee6ddebd57ab12f6d9eaae38e61e2",
+      "text": "The QX-9 storage bay is approved for 20 to 60 percent humidity."
+    },
+    "ev-q-hidden-03-r01": {
+      "block_type": "text",
+      "collection_id": "col-f-misc",
+      "document_id": "doc-ev-q-hidden-03-r01",
+      "evidence_id": "ev-q-hidden-03-r01",
+      "excerpt_digest": "sha256:7f4da25096b9dde234ce79b0991cb5b7e6627103cbebd2a2e25377b68ae9beb2",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 31
+      },
+      "origin_node_id": "node-f",
+      "parse_revision": "parse-doc-ev-q-hidden-03-r01",
+      "source_digest": "sha256:fec6564e8fc4320f27e1ee0baefd8d5bfa27c34ffb66c7e0e14e8bf1cfa6651c",
+      "text": "The QX-9 bracket uses grade 8.8 bolts."
+    },
+    "ev-q-ldecoy-01-d01": {
+      "block_type": "text",
+      "collection_id": "col-a-core",
+      "document_id": "doc-ev-q-ldecoy-01-d01",
+      "evidence_id": "ev-q-ldecoy-01-d01",
+      "excerpt_digest": "sha256:a4aed8f934dd236020a505ce50388e5c3f2215c598f12fc4b75cb6c460b806f2",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 24
+      },
+      "origin_node_id": "node-a",
+      "parse_revision": "parse-doc-ev-q-ldecoy-01-d01",
+      "source_digest": "sha256:c7214d0f8349b6306d4886783d0fcae0f560cb026705329722b0b06ab4f1e73e",
+      "text": "NW-3 pump seal inspection is performed locally."
+    },
+    "ev-q-ldecoy-01-r01": {
+      "block_type": "text",
+      "collection_id": "col-e-archive",
+      "document_id": "doc-ev-q-ldecoy-01-r01",
+      "evidence_id": "ev-q-ldecoy-01-r01",
+      "excerpt_digest": "sha256:9c9df76d0ada97308938090b45e2c7b8607c60fc03ee67fab3166de43f990077",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 23
+      },
+      "origin_node_id": "node-e",
+      "parse_revision": "parse-doc-ev-q-ldecoy-01-r01",
+      "source_digest": "sha256:67e8b9d8733ec9ae4385fe06e6bccd630e18c75059c4677a475c4afde3e265de",
+      "text": "The NW-3 pump seal torque is 18 Nm."
+    },
+    "ev-q-ldecoy-02-d01": {
+      "block_type": "text",
+      "collection_id": "col-a-ops",
+      "document_id": "doc-ev-q-ldecoy-02-d01",
+      "evidence_id": "ev-q-ldecoy-02-d01",
+      "excerpt_digest": "sha256:7363d3b0cd119e249630e669d5152f01ed9b9e9084c2cd7b290f3a9e825a4444",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 26
+      },
+      "origin_node_id": "node-a",
+      "parse_revision": "parse-doc-ev-q-ldecoy-02-d01",
+      "source_digest": "sha256:9efa8f33f78e9ff2b65e0aa85c3763d7aff93c09614d4ee2228d5de9acb5b68e",
+      "text": "NW-3 pump lockout uses a local 230 V tag."
+    },
+    "ev-q-ldecoy-02-r01": {
+      "block_type": "text",
+      "collection_id": "col-f-misc",
+      "document_id": "doc-ev-q-ldecoy-02-r01",
+      "evidence_id": "ev-q-ldecoy-02-r01",
+      "excerpt_digest": "sha256:7dcd4f1d9169188b97f0a1fe80a1027bc435c6e7404b9c0b12b3a12998ee2bea",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 25
+      },
+      "origin_node_id": "node-f",
+      "parse_revision": "parse-doc-ev-q-ldecoy-02-r01",
+      "source_digest": "sha256:5a6e5cd4374e57f15a5b038b3171a9f5ebd53206676cd3e7c50d96b22f568be1",
+      "text": "The NW-3 pump uses 230 V AC."
+    },
+    "ev-q-ldecoy-03-d01": {
+      "block_type": "text",
+      "collection_id": "col-a-core",
+      "document_id": "doc-ev-q-ldecoy-03-d01",
+      "evidence_id": "ev-q-ldecoy-03-d01",
+      "excerpt_digest": "sha256:a905f5deca758674a145f4bf2daa9ff805ec4d85e80ad5fccdc40b2b710c90d9",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 28
+      },
+      "origin_node_id": "node-a",
+      "parse_revision": "parse-doc-ev-q-ldecoy-03-d01",
+      "source_digest": "sha256:8914b51c2a074ca38d0be14a2d21589aadc186bb22ddde2ec6ba66e0fa60af11",
+      "text": "NW-3 impeller inspection is performed locally."
+    },
+    "ev-q-ldecoy-03-r01": {
+      "block_type": "text",
+      "collection_id": "col-c-thermal",
+      "document_id": "doc-ev-q-ldecoy-03-r01",
+      "evidence_id": "ev-q-ldecoy-03-r01",
+      "excerpt_digest": "sha256:375ea92d8837c66bd7fd93b7c28a9550afeee0f01ffd52634de358601e177814",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 27
+      },
+      "origin_node_id": "node-c",
+      "parse_revision": "parse-doc-ev-q-ldecoy-03-r01",
+      "source_digest": "sha256:268525567fa3476baba88f46fbb57ea8f284d7c97d2079c2a614a698aa0c6a3a",
+      "text": "The NW-3 impeller diameter is 160 mm."
+    },
+    "ev-q-local-01-d01": {
+      "block_type": "text",
+      "collection_id": "col-b-hardware",
+      "document_id": "doc-ev-q-local-01-d01",
+      "evidence_id": "ev-q-local-01-d01",
+      "excerpt_digest": "sha256:63805d023eaa3ead81aeec6680544ad4dd66c39d908cff56853440fc84be5e4b",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 2
+      },
+      "origin_node_id": "node-b",
+      "parse_revision": "parse-doc-ev-q-local-01-d01",
+      "source_digest": "sha256:850e4eea7ea8913dfeafe34ce9f5e4834bcb337340c983c3abd8f3439b000e44",
+      "text": "The AX-100 sensor connector matches the BX-200 probe."
+    },
+    "ev-q-local-01-r01": {
+      "block_type": "text",
+      "collection_id": "col-a-core",
+      "document_id": "doc-ev-q-local-01-r01",
+      "evidence_id": "ev-q-local-01-r01",
+      "excerpt_digest": "sha256:7ac71cab0d103cde2aa78e0eaf3488e1cde174dea0ca2824b527dff79cbf27fc",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 1
+      },
+      "origin_node_id": "node-a",
+      "parse_revision": "parse-doc-ev-q-local-01-r01",
+      "source_digest": "sha256:e8193efc3918005afd8fb10bf00de5c7f5793a42057b7a87a6defe9570060437",
+      "text": "The AX-100 pressure sensor must be calibrated every 90 days."
+    },
+    "ev-q-local-02-d01": {
+      "block_type": "text",
+      "collection_id": "col-c-power",
+      "document_id": "doc-ev-q-local-02-d01",
+      "evidence_id": "ev-q-local-02-d01",
+      "excerpt_digest": "sha256:e11086d0c2524832d2cc65d1cae9987cbcd282380e4c4be3871b8be2c43c4ee2",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 4
+      },
+      "origin_node_id": "node-c",
+      "parse_revision": "parse-doc-ev-q-local-02-d01",
+      "source_digest": "sha256:b1b4ea27413c4d59651eae76ba318d951a367cf016677f616fc79d6d6d82bd48",
+      "text": "Bench power rails in the main hall use a 10A breaker."
+    },
+    "ev-q-local-02-r01": {
+      "block_type": "text",
+      "collection_id": "col-a-ops",
+      "document_id": "doc-ev-q-local-02-r01",
+      "evidence_id": "ev-q-local-02-r01",
+      "excerpt_digest": "sha256:571e45674400ea8f677a373058d68ccf01c889a8015a5eed4d9d718fdb87377b",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 3
+      },
+      "origin_node_id": "node-a",
+      "parse_revision": "parse-doc-ev-q-local-02-r01",
+      "source_digest": "sha256:02fb2c65b005ba719288e4450d25122d8db79c446f2a2eab831ec7a2e9cf3aaa",
+      "text": "The bench power rail is protected by a 5A slow-blow fuse."
+    },
+    "ev-q-local-03-d01": {
+      "block_type": "text",
+      "collection_id": "col-b-service",
+      "document_id": "doc-ev-q-local-03-d01",
+      "evidence_id": "ev-q-local-03-d01",
+      "excerpt_digest": "sha256:78dc9e764e66ca85fe579a08757ee36cd43ae92a493c103d570b3a21eac2e609",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 6
+      },
+      "origin_node_id": "node-b",
+      "parse_revision": "parse-doc-ev-q-local-03-d01",
+      "source_digest": "sha256:003cd45e13e3f4e9383fa5cc79023ec7b9fd53ba7451f898dde30956107a1b43",
+      "text": "Calibration seals are shipped in a dry cabinet."
+    },
+    "ev-q-local-03-r01": {
+      "block_type": "text",
+      "collection_id": "col-a-ops",
+      "document_id": "doc-ev-q-local-03-r01",
+      "evidence_id": "ev-q-local-03-r01",
+      "excerpt_digest": "sha256:70b0bf8ad091639f196b3e4981c7be538bc35761663514eee6f903ad1ff343fb",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 5
+      },
+      "origin_node_id": "node-a",
+      "parse_revision": "parse-doc-ev-q-local-03-r01",
+      "source_digest": "sha256:4c49c5a8ccdf625a1ad8acdc1d6babfef3d518e0f586ba3d4e534fca70a78ee9",
+      "text": "Spare seals are stored in a dry cabinet below 30 percent humidity."
+    },
+    "ev-q-near-01-d01": {
+      "block_type": "text",
+      "collection_id": "col-c-thermal",
+      "document_id": "doc-ev-q-near-01-d01",
+      "evidence_id": "ev-q-near-01-d01",
+      "excerpt_digest": "sha256:a9255f3708ce8621b7ffa9bda701459e863f982f1815eb748cd5013f259a407f",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 18
+      },
+      "origin_node_id": "node-c",
+      "parse_revision": "parse-doc-ev-q-near-01-d01",
+      "source_digest": "sha256:a4ff6ee466c912e478bb6082f52a44a4782d568bccfc362e64e24dd7fd2d3b2f",
+      "text": "KP-5 thermal paste cures at 120 degrees."
+    },
+    "ev-q-near-01-r01": {
+      "block_type": "text",
+      "collection_id": "col-e-archive",
+      "document_id": "doc-ev-q-near-01-r01",
+      "evidence_id": "ev-q-near-01-r01",
+      "excerpt_digest": "sha256:4edd3a3ae3f1e19132e47f22f398f211424cccb858a6a24bcd84a4ee701d93cc",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 17
+      },
+      "origin_node_id": "node-e",
+      "parse_revision": "parse-doc-ev-q-near-01-r01",
+      "source_digest": "sha256:04c219cc3308f11959b1bf6ea15dcaf212c1f6b3534168a84f90519b9c812a17",
+      "text": "The KP-5 reactor shutdown temperature is 120 degrees."
+    },
+    "ev-q-near-02-d01": {
+      "block_type": "text",
+      "collection_id": "col-d-software",
+      "document_id": "doc-ev-q-near-02-d01",
+      "evidence_id": "ev-q-near-02-d01",
+      "excerpt_digest": "sha256:403bd8bedfa0c43fb6f2d7e1e6760e801cf3356df89cab309545e073b4196b1a",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 20
+      },
+      "origin_node_id": "node-d",
+      "parse_revision": "parse-doc-ev-q-near-02-d01",
+      "source_digest": "sha256:7f2cb4a6f8e96bbde0f2215247b845042908ce8d63e0c73dde580e85ed24e127",
+      "text": "The KP-5 controller boots in 45 seconds."
+    },
+    "ev-q-near-02-r01": {
+      "block_type": "text",
+      "collection_id": "col-f-misc",
+      "document_id": "doc-ev-q-near-02-r01",
+      "evidence_id": "ev-q-near-02-r01",
+      "excerpt_digest": "sha256:864a143afca1de641b54b6be3c190427fde770f9d6f86bad8766791902b269b4",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 19
+      },
+      "origin_node_id": "node-f",
+      "parse_revision": "parse-doc-ev-q-near-02-r01",
+      "source_digest": "sha256:acc57c708867db01663636a4d1b802e508951af870906518be63b60013b3a2bc",
+      "text": "The KP-5 warm-up cycle lasts 45 minutes."
+    },
+    "ev-q-near-03-d01": {
+      "block_type": "text",
+      "collection_id": "col-b-hardware",
+      "document_id": "doc-ev-q-near-03-d01",
+      "evidence_id": "ev-q-near-03-d01",
+      "excerpt_digest": "sha256:e0e1e4abef77ff67d36699a41619e8901209ae96fd6c11a770ef580cb37d578f",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 22
+      },
+      "origin_node_id": "node-b",
+      "parse_revision": "parse-doc-ev-q-near-03-d01",
+      "source_digest": "sha256:2c7b4d9293b18fbf4ce60e7c6c57a458a63bc9a6a07b8e070d1eeacac1b719d0",
+      "text": "The KP-5 gasket ships with a nitrile washer."
+    },
+    "ev-q-near-03-r01": {
+      "block_type": "text",
+      "collection_id": "col-d-network",
+      "document_id": "doc-ev-q-near-03-r01",
+      "evidence_id": "ev-q-near-03-r01",
+      "excerpt_digest": "sha256:2e5cfdbc3599e913b6b939caaf3f24ab90ba24030d4941b7c1e2c530054bc4e8",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 21
+      },
+      "origin_node_id": "node-d",
+      "parse_revision": "parse-doc-ev-q-near-03-r01",
+      "source_digest": "sha256:eb81f9d14b271ca41edc011276a05dfe954d2468996bdfc785f1c5804ad88c2b",
+      "text": "The KP-5 gasket material is nitrile rubber."
+    },
+    "ev-q-private-01-p01": {
+      "block_type": "text",
+      "collection_id": "col-a-private",
+      "document_id": "doc-ev-q-private-01-p01",
+      "evidence_id": "ev-q-private-01-p01",
+      "excerpt_digest": "sha256:8e4ecf736a180112a871073b9af4f734655fe5e6aba7114ba9bb954a0815764f",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 39
+      },
+      "origin_node_id": "node-a",
+      "parse_revision": "parse-doc-ev-q-private-01-p01",
+      "source_digest": "sha256:05212da0a4b6bd0dd154e99906d94b765dbfaa39ea6477a3863d320500d172d7",
+      "text": "The SR-1 vault master key rotates every 30 days (internal copy)."
+    },
+    "ev-q-private-01-r01": {
+      "block_type": "text",
+      "collection_id": "col-b-hardware",
+      "document_id": "doc-ev-q-private-01-r01",
+      "evidence_id": "ev-q-private-01-r01",
+      "excerpt_digest": "sha256:fbc26f56040104ecb3558ac9b86b9ef52a1a235c4eee303eabd6ea85c515d101",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 38
+      },
+      "origin_node_id": "node-b",
+      "parse_revision": "parse-doc-ev-q-private-01-r01",
+      "source_digest": "sha256:99e784e89a2ea2d9af26d0ff4c7f9e799df4b3550bcbbbf6bebb8294772f1573",
+      "text": "The SR-1 vault master key rotates every 30 days."
+    },
+    "ev-q-private-02-p01": {
+      "block_type": "text",
+      "collection_id": "col-a-private",
+      "document_id": "doc-ev-q-private-02-p01",
+      "evidence_id": "ev-q-private-02-p01",
+      "excerpt_digest": "sha256:c4f3bc69c3ab42ed9dc8547b55a2ff1176fa27fe6a6427ab6107062516a1afa9",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 41
+      },
+      "origin_node_id": "node-a",
+      "parse_revision": "parse-doc-ev-q-private-02-p01",
+      "source_digest": "sha256:2ea54de229b634985bebb59a8c625f088863014834a5103d586655b683ff49db",
+      "text": "The SR-1 vault door rating is 900 kg (internal copy)."
+    },
+    "ev-q-private-02-r01": {
+      "block_type": "text",
+      "collection_id": "col-b-service",
+      "document_id": "doc-ev-q-private-02-r01",
+      "evidence_id": "ev-q-private-02-r01",
+      "excerpt_digest": "sha256:fe17f5a49fee3cff06439500c3788bb7ca3db9022fe65178b0be811230a459c9",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 40
+      },
+      "origin_node_id": "node-b",
+      "parse_revision": "parse-doc-ev-q-private-02-r01",
+      "source_digest": "sha256:999bce04aaaf11626f0243c27ce11a27dd197c62997cfa9dd441a8f00b4466ed",
+      "text": "The SR-1 vault door is rated for 900 kg."
+    },
+    "ev-q-private-03-p01": {
+      "block_type": "text",
+      "collection_id": "col-a-private",
+      "document_id": "doc-ev-q-private-03-p01",
+      "evidence_id": "ev-q-private-03-p01",
+      "excerpt_digest": "sha256:e2ec5697b4f5867e14ff5367ce40833ee2458dcca37be6cec8fc0f138123626c",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 43
+      },
+      "origin_node_id": "node-a",
+      "parse_revision": "parse-doc-ev-q-private-03-p01",
+      "source_digest": "sha256:3bdf9c8fde8bbc0c3df19d05acc960a01cd066fe1e3c3fa704dafcf0c59e4c25",
+      "text": "The SR-1 access log is signed by the internal auditor."
+    },
+    "ev-q-private-03-r01": {
+      "block_type": "text",
+      "collection_id": "col-d-software",
+      "document_id": "doc-ev-q-private-03-r01",
+      "evidence_id": "ev-q-private-03-r01",
+      "excerpt_digest": "sha256:550adb70c708e55b57d6cb1397e7b41cc26d07cd5f44cccd2547cf800de82833",
+      "locator": {
+        "bbox": [
+          10,
+          10,
+          400,
+          40
+        ],
+        "kind": "page_block",
+        "page_size": {
+          "height": 800,
+          "width": 600
+        },
+        "physical_page_index": 0,
+        "seq": 42
+      },
+      "origin_node_id": "node-d",
+      "parse_revision": "parse-doc-ev-q-private-03-r01",
+      "source_digest": "sha256:eed75284db384247af5322e3988e69235f591fda38e11221f16ce4cf22a29681",
+      "text": "The SR-1 access log is signed by the shift supervisor."
+    }
+  },
+  "frozen_at": "2026-09-01T12:00:00Z",
+  "local_node_id": "node-a",
+  "nodes": [
+    {
+      "collections": [
+        "col-a-core",
+        "col-a-ops",
+        "col-a-private"
+      ],
+      "node_id": "node-a"
+    },
+    {
+      "collections": [
+        "col-b-hardware",
+        "col-b-service"
+      ],
+      "node_id": "node-b"
+    },
+    {
+      "collections": [
+        "col-c-power",
+        "col-c-thermal"
+      ],
+      "node_id": "node-c"
+    },
+    {
+      "collections": [
+        "col-d-network",
+        "col-d-software"
+      ],
+      "node_id": "node-d"
+    },
+    {
+      "collections": [
+        "col-e-archive",
+        "col-e-legal"
+      ],
+      "node_id": "node-e"
+    },
+    {
+      "collections": [
+        "col-f-lab",
+        "col-f-misc"
+      ],
+      "node_id": "node-f"
+    }
+  ],
+  "operation": "corpus.retrieve",
+  "questions": [
+    {
+      "class": "local-solvable",
+      "conflict": false,
+      "decoy_evidence": [
+        "ev-q-local-01-d01"
+      ],
+      "evidence_collections": {
+        "ev-q-local-01-r01": "node-a/col-a-core"
+      },
+      "notes": "本地手册直接给答案；fast 的 local_first 必须真的探到本地目标。",
+      "private_decoy_evidence": [],
+      "query": "What is the calibration interval for the AX-100 pressure sensor?",
+      "question_id": "q-local-01",
+      "required_evidence": [
+        "ev-q-local-01-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "local-solvable",
+      "conflict": false,
+      "decoy_evidence": [
+        "ev-q-local-02-d01"
+      ],
+      "evidence_collections": {
+        "ev-q-local-02-r01": "node-a/col-a-ops"
+      },
+      "notes": "本地运行安全集合里的唯一答案。",
+      "private_decoy_evidence": [],
+      "query": "Which fuse protects the bench power rail in the local workshop?",
+      "question_id": "q-local-02",
+      "required_evidence": [
+        "ev-q-local-02-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "local-solvable",
+      "conflict": false,
+      "decoy_evidence": [
+        "ev-q-local-03-d01"
+      ],
+      "evidence_collections": {
+        "ev-q-local-03-r01": "node-a/col-a-ops"
+      },
+      "notes": "本地存储规范；远程集合有相似措辞但不是答案。",
+      "private_decoy_evidence": [],
+      "query": "How are spare seals stored at the local depot?",
+      "question_id": "q-local-03",
+      "required_evidence": [
+        "ev-q-local-03-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "b-only",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-bonly-01-r01": "node-b/col-b-service"
+      },
+      "notes": "B 唯一；fast 排位在候选上限内。",
+      "private_decoy_evidence": [],
+      "query": "What torque is specified for the BX-200 flange bolts?",
+      "question_id": "q-bonly-01",
+      "required_evidence": [
+        "ev-q-bonly-01-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "b-only",
+      "conflict": false,
+      "decoy_evidence": [
+        "ev-q-bonly-02-d01"
+      ],
+      "evidence_collections": {
+        "ev-q-bonly-02-r01": "node-b/col-b-service"
+      },
+      "notes": "B 唯一；本地给的是别的润滑剂。",
+      "private_decoy_evidence": [],
+      "query": "Which lubricant is approved for the node B gearbox?",
+      "question_id": "q-bonly-02",
+      "required_evidence": [
+        "ev-q-bonly-02-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "b-only",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-bonly-03-r01": "node-b/col-b-hardware"
+      },
+      "notes": "B 唯一；证据在硬件集合。",
+      "private_decoy_evidence": [],
+      "query": "What is the replacement interval for the BX-200 intake filter?",
+      "question_id": "q-bonly-03",
+      "required_evidence": [
+        "ev-q-bonly-03-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "cross-collection-split",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-cross-01-r01": "node-c/col-c-thermal",
+        "ev-q-cross-01-r02": "node-c/col-c-power"
+      },
+      "notes": "两条证据都在 node-c（fast 范围内），用来对比同节点的组合题。",
+      "private_decoy_evidence": [],
+      "query": "What are the alarm limit and wiring colour for the thermal probe?",
+      "question_id": "q-cross-01",
+      "required_evidence": [
+        "ev-q-cross-01-r01",
+        "ev-q-cross-01-r02"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "cross-collection-split",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-cross-02-r01": "node-d/col-d-software",
+        "ev-q-cross-02-r02": "node-e/col-e-archive"
+      },
+      "notes": "一条在 node-d（fast 内），一条在 node-e（fast 候选上限外）→ fast 只能拿到一半。",
+      "private_decoy_evidence": [],
+      "query": "Give the firmware checksum and the archive retention rule for the CN-7 build.",
+      "question_id": "q-cross-02",
+      "required_evidence": [
+        "ev-q-cross-02-r01",
+        "ev-q-cross-02-r02"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "cross-collection-split",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-cross-03-r01": "node-e/col-e-legal",
+        "ev-q-cross-03-r02": "node-f/col-f-lab"
+      },
+      "notes": "两条都在 fast 候选上限外（node-e/node-f）→ fast 拿不到。",
+      "private_decoy_evidence": [],
+      "query": "Give the legal hold rule and the lab calibration note for LOT-9.",
+      "question_id": "q-cross-03",
+      "required_evidence": [
+        "ev-q-cross-03-r01",
+        "ev-q-cross-03-r02"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "nearest-node-decoy",
+      "conflict": false,
+      "decoy_evidence": [
+        "ev-q-near-01-d01"
+      ],
+      "evidence_collections": {
+        "ev-q-near-01-r01": "node-e/col-e-archive"
+      },
+      "notes": "node-c 有相似的热学句子（诱饵），答案在 node-e（fast 外）。",
+      "private_decoy_evidence": [],
+      "query": "What is the shutdown temperature for the KP-5 reactor?",
+      "question_id": "q-near-01",
+      "required_evidence": [
+        "ev-q-near-01-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "nearest-node-decoy",
+      "conflict": false,
+      "decoy_evidence": [
+        "ev-q-near-02-d01"
+      ],
+      "evidence_collections": {
+        "ev-q-near-02-r01": "node-f/col-f-misc"
+      },
+      "notes": "node-d 的启动时间相似（诱饵），答案在 node-f（fast 外）。",
+      "private_decoy_evidence": [],
+      "query": "How long is the KP-5 reactor warm-up cycle?",
+      "question_id": "q-near-02",
+      "required_evidence": [
+        "ev-q-near-02-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "nearest-node-decoy",
+      "conflict": false,
+      "decoy_evidence": [
+        "ev-q-near-03-d01"
+      ],
+      "evidence_collections": {
+        "ev-q-near-03-r01": "node-d/col-d-network"
+      },
+      "notes": "诱饵在 node-b，答案在 node-d（fast 内）→ 本题 fast 命中，证明诱饵不阻断。",
+      "private_decoy_evidence": [],
+      "query": "Which material is the KP-5 gasket made from?",
+      "question_id": "q-near-03",
+      "required_evidence": [
+        "ev-q-near-03-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "local-similar-decoy",
+      "conflict": false,
+      "decoy_evidence": [
+        "ev-q-ldecoy-01-d01"
+      ],
+      "evidence_collections": {
+        "ev-q-ldecoy-01-r01": "node-e/col-e-archive"
+      },
+      "notes": "本地诱饵（node-a）只是「检查在本地」，答案在 node-e。",
+      "private_decoy_evidence": [],
+      "query": "What is the seal torque for the NW-3 pump?",
+      "question_id": "q-ldecoy-01",
+      "required_evidence": [
+        "ev-q-ldecoy-01-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "local-similar-decoy",
+      "conflict": false,
+      "decoy_evidence": [
+        "ev-q-ldecoy-02-d01"
+      ],
+      "evidence_collections": {
+        "ev-q-ldecoy-02-r01": "node-f/col-f-misc"
+      },
+      "notes": "本地诱饵提到同样的电压值，答案在 node-f。",
+      "private_decoy_evidence": [],
+      "query": "What voltage does the NW-3 pump use?",
+      "question_id": "q-ldecoy-02",
+      "required_evidence": [
+        "ev-q-ldecoy-02-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "local-similar-decoy",
+      "conflict": false,
+      "decoy_evidence": [
+        "ev-q-ldecoy-03-d01"
+      ],
+      "evidence_collections": {
+        "ev-q-ldecoy-03-r01": "node-c/col-c-thermal"
+      },
+      "notes": "本地诱饵相似，答案在 node-c（fast 内）→ 本题 fast 命中。",
+      "private_decoy_evidence": [],
+      "query": "What is the NW-3 impeller diameter?",
+      "question_id": "q-ldecoy-03",
+      "required_evidence": [
+        "ev-q-ldecoy-03-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "summary-hidden",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-hidden-01-r01": "node-f/col-f-misc"
+      },
+      "notes": "col-f-misc 摘要写的是 misc/unlabeled，关键词排序也看不见它。",
+      "private_decoy_evidence": [],
+      "query": "Find the derating curve for the QX-9 capacitor.",
+      "question_id": "q-hidden-01",
+      "required_evidence": [
+        "ev-q-hidden-01-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": true
+    },
+    {
+      "class": "summary-hidden",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-hidden-02-r01": "node-f/col-f-misc"
+      },
+      "notes": "唯一证据在摘要缺失的集合；穷查必须靠身份顺序也会触达。",
+      "private_decoy_evidence": [],
+      "query": "What humidity range applies to the QX-9 storage bay?",
+      "question_id": "q-hidden-02",
+      "required_evidence": [
+        "ev-q-hidden-02-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": true
+    },
+    {
+      "class": "summary-hidden",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-hidden-03-r01": "node-f/col-f-misc"
+      },
+      "notes": "同上；fast 的候选上限先把它排除。",
+      "private_decoy_evidence": [],
+      "query": "What bolt grade does the QX-9 bracket use?",
+      "question_id": "q-hidden-03",
+      "required_evidence": [
+        "ev-q-hidden-03-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": true
+    },
+    {
+      "class": "no-evidence-in-scope",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {},
+      "notes": "没有任何集合含所需证据；穷查应 complete + insufficient，且不得编证据。",
+      "private_decoy_evidence": [],
+      "query": "What does the ZX-404 flux modulator maintenance schedule say?",
+      "question_id": "q-none-01",
+      "required_evidence": [],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "no-evidence-in-scope",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {},
+      "notes": "同上；检索成功但零命中（evidence_set_ref=null）。",
+      "private_decoy_evidence": [],
+      "query": "Where is the ZX-404 warranty extension recorded?",
+      "question_id": "q-none-02",
+      "required_evidence": [],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "no-evidence-in-scope",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {},
+      "notes": "同上；used_budget 里字节仍记 0（生产 P5 也没测字节）。",
+      "private_decoy_evidence": [],
+      "query": "Which team owns the ZX-404 migration?",
+      "question_id": "q-none-03",
+      "required_evidence": [],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "conflicting-versions",
+      "conflict": true,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-conflict-01-r01": "node-c/col-c-power",
+        "ev-q-conflict-01-r02": "node-d/col-d-software"
+      },
+      "notes": "两版矛盾值都写在必需证据里；两条都在 fast 范围内。",
+      "private_decoy_evidence": [],
+      "query": "What is the maximum input voltage for the PM-2 module?",
+      "question_id": "q-conflict-01",
+      "required_evidence": [
+        "ev-q-conflict-01-r01",
+        "ev-q-conflict-01-r02"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "conflicting-versions",
+      "conflict": true,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-conflict-02-r01": "node-c/col-c-thermal",
+        "ev-q-conflict-02-r02": "node-d/col-d-network"
+      },
+      "notes": "同上；矛盾对都在 fast 范围内。",
+      "private_decoy_evidence": [],
+      "query": "What is the rated speed of the PM-2 motor?",
+      "question_id": "q-conflict-02",
+      "required_evidence": [
+        "ev-q-conflict-02-r01",
+        "ev-q-conflict-02-r02"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "conflicting-versions",
+      "conflict": true,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-conflict-03-r01": "node-c/col-c-power",
+        "ev-q-conflict-03-r02": "node-e/col-e-archive"
+      },
+      "notes": "第二版在 node-e（fast 外）→ fast 只能拿到一版，穷查两版都拿。",
+      "private_decoy_evidence": [],
+      "query": "What is the service life of the PM-2 bearing?",
+      "question_id": "q-conflict-03",
+      "required_evidence": [
+        "ev-q-conflict-03-r01",
+        "ev-q-conflict-03-r02"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "private-decoy",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-private-01-r01": "node-b/col-b-hardware"
+      },
+      "notes": "私有集合里有一条措辞几乎相同的证据；它既不许被探，也不许被返回。",
+      "private_decoy_evidence": [
+        "ev-q-private-01-p01"
+      ],
+      "query": "What is the master key rotation period for the SR-1 vault?",
+      "question_id": "q-private-01",
+      "required_evidence": [
+        "ev-q-private-01-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "private-decoy",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-private-02-r01": "node-b/col-b-service"
+      },
+      "notes": "同上；必需证据在 node-b。",
+      "private_decoy_evidence": [
+        "ev-q-private-02-p01"
+      ],
+      "query": "What is the SR-1 vault door weight rating?",
+      "question_id": "q-private-02",
+      "required_evidence": [
+        "ev-q-private-02-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    },
+    {
+      "class": "private-decoy",
+      "conflict": false,
+      "decoy_evidence": [],
+      "evidence_collections": {
+        "ev-q-private-03-r01": "node-d/col-d-software"
+      },
+      "notes": "同上；必需证据在 node-d。",
+      "private_decoy_evidence": [
+        "ev-q-private-03-p01"
+      ],
+      "query": "Who signs the SR-1 access log?",
+      "question_id": "q-private-03",
+      "required_evidence": [
+        "ev-q-private-03-r01"
+      ],
+      "scope_ref": "scope-routing-eval-all",
+      "summary_hidden": false
+    }
+  ],
+  "revision": "routing-eval-fixture-v3.2026-09-01",
+  "schema": "ddp-routing-eval/1#Fixture",
+  "scopes": {
+    "scope-routing-eval-all": {
+      "caller_scope_hash": "sha256:20cf2e4dce0470cc8b49ffaff2980c95180603a869f077fdf7154b9ff2804890",
+      "created_at": "2026-09-01T12:00:00Z",
+      "enumeration_state": "sealed",
+      "expanded_members": [
+        {
+          "collection_id": "col-a-core",
+          "operation": "corpus.retrieve",
+          "origin_node_id": "node-a"
+        },
+        {
+          "collection_id": "col-a-ops",
+          "operation": "corpus.retrieve",
+          "origin_node_id": "node-a"
+        },
+        {
+          "collection_id": "col-b-hardware",
+          "operation": "corpus.retrieve",
+          "origin_node_id": "node-b"
+        },
+        {
+          "collection_id": "col-b-service",
+          "operation": "corpus.retrieve",
+          "origin_node_id": "node-b"
+        },
+        {
+          "collection_id": "col-c-power",
+          "operation": "corpus.retrieve",
+          "origin_node_id": "node-c"
+        },
+        {
+          "collection_id": "col-c-thermal",
+          "operation": "corpus.retrieve",
+          "origin_node_id": "node-c"
+        },
+        {
+          "collection_id": "col-d-network",
+          "operation": "corpus.retrieve",
+          "origin_node_id": "node-d"
+        },
+        {
+          "collection_id": "col-d-software",
+          "operation": "corpus.retrieve",
+          "origin_node_id": "node-d"
+        },
+        {
+          "collection_id": "col-e-archive",
+          "operation": "corpus.retrieve",
+          "origin_node_id": "node-e"
+        },
+        {
+          "collection_id": "col-e-legal",
+          "operation": "corpus.retrieve",
+          "origin_node_id": "node-e"
+        },
+        {
+          "collection_id": "col-f-lab",
+          "operation": "corpus.retrieve",
+          "origin_node_id": "node-f"
+        },
+        {
+          "collection_id": "col-f-misc",
+          "operation": "corpus.retrieve",
+          "origin_node_id": "node-f"
+        }
+      ],
+      "manifest_digest": "sha256:ab3febdd87b6e157f304fb85a8bf7deff8b48e0fef8d03eef5c918dbb13b1028",
+      "registry_revision_vector": [
+        {
+          "fetched_at": "2026-09-01T12:00:00Z",
+          "node_id": "node-a",
+          "registry_revision": 1
+        },
+        {
+          "fetched_at": "2026-09-01T12:00:00Z",
+          "node_id": "node-b",
+          "registry_revision": 1
+        },
+        {
+          "fetched_at": "2026-09-01T12:00:00Z",
+          "node_id": "node-c",
+          "registry_revision": 1
+        },
+        {
+          "fetched_at": "2026-09-01T12:00:00Z",
+          "node_id": "node-d",
+          "registry_revision": 1
+        },
+        {
+          "fetched_at": "2026-09-01T12:00:00Z",
+          "node_id": "node-e",
+          "registry_revision": 1
+        },
+        {
+          "fetched_at": "2026-09-01T12:00:00Z",
+          "node_id": "node-f",
+          "registry_revision": 1
+        }
+      ],
+      "schema": "ddp-scope-coverage/1#ScopeManifest",
+      "scope_id": "scope-routing-eval-all",
+      "unexpanded_subtrees": [],
+      "valid_until": "2026-09-01T13:00:00Z"
+    }
+  },
+  "simulator": {
+    "candidate_limit": 8,
+    "description": "returns every evidence of the target collection",
+    "name": "fixture-oracle/v1"
+  }
+}

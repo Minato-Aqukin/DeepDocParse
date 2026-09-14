@@ -1,0 +1,322 @@
+# Windows 桌面打包（W5）：WSL 运行时 → win32-x64 目录包 → NSIS/便携 → 校验 → 冒烟。
+#
+# **为什么是两个 job。** W3 的 scripts/build_wsl_runtime.py 在非 Linux 上主动拒绝：
+#
+#     if sys.platform != "linux" or platform.machine() != "x86_64":
+#         raise SystemExit("only Linux x86_64 WSL runtimes have been validated")
+#
+# 它还要执行随包捆绑的 Linux 解释器做 precompile/probe_abi —— Windows 上跑不了。
+# 所以 Linux 运行时在 ubuntu-latest 上产出，作为 artifact 交给 windows-latest 组装；
+# README 说的「主路径 windows-latest」指的是 NSIS 打包（Linux 无 wine 只得到
+# 卸载器 stub）。同理，根守卫 tests/test_desktop_release.py /
+# tests/test_wsl_runtime_build.py 是 POSIX-only（模块级 os.uname()；假解释器是
+# #!/bin/sh 脚本），也在 ubuntu job 里跑，不是 Windows。
+#
+# **首次 push 前未在任何 CI 上运行过。** workflow 本身、Windows npm ci、
+# electron-builder、打包版冒烟都只做过本机静态检查（见 W5 报告）。
+name: desktop-windows
+
+on:
+  push:
+    branches: [codex/desktop-federation-v3]
+  workflow_dispatch:
+
+jobs:
+  wsl-runtime:
+    name: WSL runtime (linux-x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # 最小集：build_desktop.py 要 packaging.requirements；两个根测试额外要 pytest。
+      # jsonschema 不装 —— 这套门禁（W3/W4）用不到 check_federation_contracts。
+      - name: 安装构建与守卫的最小依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest packaging
+
+      - name: 发行守卫（W4 更新/打包 + W3 运行时）
+        run: python -m pytest -q tests/test_desktop_release.py tests/test_wsl_runtime_build.py
+
+      - name: 恢复 W3 下载缓存（standalone 111MB + 18 个 wheel）
+        id: wsl-cache
+        uses: actions/cache@v4
+        with:
+          path: dist/wsl-cache
+          key: wsl-cache-${{ hashFiles('packaging/windows/wsl-runtime-lock.json') }}
+
+      # 安装包负载的唯一来源，**必需**：没有它 build_desktop.py 会 fail closed。
+      - name: 构建 WSL 运行时
+        run: |
+          if [ "${{ steps.wsl-cache.outputs.cache-hit }}" = "true" ]; then
+            # 精确命中：先按 --skip-download 快速重建；缓存里若有坏文件，
+            # 退回联网补齐（fetch() 逐文件校验 size/sha256，坏文件会被丢掉重下）
+            python scripts/build_wsl_runtime.py --skip-download \
+              || python scripts/build_wsl_runtime.py
+          else
+            python scripts/build_wsl_runtime.py
+          fi
+
+      # 版本不写死：tarball 名来自 --version（缺省 apps/desktop 的版本宏），
+      # 这里按 glob 取构建出来的那一个并要求唯一。
+      - name: 自检产物（重算整树 + ABI 探针 + 许可清单）
+        shell: bash
+        run: |
+          shopt -s nullglob
+          archives=(dist/wsl/deepdocparse-wsl-runtime-*-linux-x64.tar.gz)
+          if [ ${#archives[@]} -ne 1 ]; then
+            echo "expected exactly one WSL runtime tarball, found ${#archives[@]}" >&2
+            exit 1
+          fi
+          python scripts/build_wsl_runtime.py --verify "${archives[0]}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wsl-runtime
+          # 多路径取最近公共祖先 dist/wsl 作 artifact 根，下载到 dist/wsl 还原原名
+          path: |
+            dist/wsl/deepdocparse-wsl-runtime-*-linux-x64.tar.gz
+            dist/wsl/deepdocparse-wsl-runtime-*-linux-x64.tar.gz.sha256
+            dist/wsl/wsl-runtime.json
+          if-no-files-found: error
+          retention-days: 7
+
+  package-windows:
+    name: Windows package + smoke
+    needs: wsl-runtime
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/desktop/package-lock.json
+
+      - name: 取回 WSL 运行时（组装安装包的唯一来源）
+        uses: actions/download-artifact@v4
+        with:
+          name: wsl-runtime
+          path: dist/wsl
+
+      - name: 安装构建依赖
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install packaging
+
+      # 主机测试是纯 node（不需要 Electron 二进制），所以跳过 electron 的
+      # postinstall 下载；构建用的 Electron 是 electron-lock.json pin 的 zip，
+      # 由下面单独下载并校验。lockfile 的 resolved 指向 npmmirror，
+      # 跨 host 的 tarball 要被显式 registry 放行（仓库陷阱 #10）。
+      #
+      # 原生运行时的用例已在 W1c 里按平台门控：win32 上带明确理由 skip
+      # （native runtime is Linux-only in the A+C slice），另有
+      # DDP_TEST_FORCE_WIN32=1 可在 Linux 上本地演练同一组 skip。
+      # 这里不静默跳过任何东西：runner 上跑的其余用例必须真绿。
+      - name: 桌面主机测试
+        shell: bash
+        working-directory: apps/desktop
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          npm ci --registry=https://registry.npmmirror.com
+          node --test test/*.test.mjs
+
+      # build_desktop.py 的输入之一：共享 Vue UI（apps/web/dist/index.html）。
+      # workspace 根安装，不在 apps/web 里装（web.yml 的既有约定）。
+      - name: 共享 Vue UI 构建
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          npm ci --registry=https://registry.npmmirror.com
+          npm run web:build
+
+      - name: 恢复 Electron win32-x64 下载缓存
+        id: electron-cache
+        uses: actions/cache@v4
+        with:
+          path: apps/desktop/artifacts/download/electron-v44.3.0-win32-x64.zip
+          key: electron-win32-x64-44.3.0-${{ hashFiles('packaging/windows/electron-lock.json') }}
+
+      - name: 下载并按 pin 校验 Electron（npmmirror）
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/artifacts/download
+          python - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import subprocess
+          import sys
+
+          lock = json.loads(pathlib.Path("packaging/windows/electron-lock.json").read_text())
+          target = pathlib.Path("apps/desktop/artifacts/download") / lock["file"]
+
+          def verified():
+              if not target.is_file() or target.stat().st_size != lock["size"]:
+                  return False
+              with target.open("rb") as stream:
+                  return hashlib.file_digest(stream, "sha256").hexdigest() == lock["sha256"]
+
+          if verified():
+              print(f"cached and verified: {target}")
+              sys.exit(0)
+          target.unlink(missing_ok=True)
+          subprocess.run([
+              "curl", "--fail", "--location", "--retry", "5", "--retry-all-errors",
+              "--retry-delay", "2", "--connect-timeout", "30", "--max-time", "3600",
+              "-C", "-", "-o", str(target), lock["source"],
+          ], check=True)
+          if not verified():
+              raise SystemExit(f"Electron zip failed size/sha256 verification: {target}")
+          print(f"downloaded and verified: {target}")
+          PY
+
+      - name: 组装 win32-x64 目录包（校验 Electron + WSL 运行时 pin）
+        shell: bash
+        run: python scripts/build_desktop.py --platform win32-x64
+
+      # packaging/windows/README.md 的固定调用：版本宏解析到 apps/desktop 的
+      # 0.1.0，electronDist 复用上面校验过的同一个 zip。
+      - name: electron-builder（NSIS + 便携，固定 26.15.3）
+        shell: bash
+        run: |
+          npx --yes electron-builder@26.15.3 \
+            --config packaging/windows/electron-builder.yml \
+            --projectDir . \
+            --win nsis portable --x64
+
+      # 打包后重算：win-unpacked 里的 WSL 运行时必须与 dist/wsl/wsl-runtime.json
+      # 逐字节一致，两个 exe 必须真的带负载（不是卸载器 stub）。
+      - name: 校验打包结果
+        shell: bash
+        run: |
+          python scripts/verify_windows_package.py dist/desktop/windows/win-unpacked \
+            --installer dist/desktop/windows/DeepDocParse-*-setup.exe \
+            --installer dist/desktop/windows/DeepDocParse-*-portable.exe
+
+      - name: 记录安装包 SHA256（逐文件 sidecar + SHA256SUMS）
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import pathlib
+
+          windows = pathlib.Path("dist/desktop/windows")
+          installers = sorted([*windows.glob("*-setup.exe"), *windows.glob("*-portable.exe")])
+          if len(installers) != 2:
+              raise SystemExit(f"expected setup+portable, found {[path.name for path in installers]}")
+
+          lines = []
+          for path in installers:
+              with path.open("rb") as stream:
+                  digest = hashlib.file_digest(stream, "sha256").hexdigest()
+              line = f"{digest}  {path.name}"
+              path.with_name(path.name + ".sha256").write_text(line + "\n")
+              lines.append(line)
+          (windows / "SHA256SUMS").write_text("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          PY
+
+      # 计划决策 5：只做诊断。不装发行版、不碰 reboot/admin。continue-on-error，
+      # 结果只进日志，不影响打包产物。
+      - name: WSL spike（诊断，不判失败）
+        continue-on-error: true
+        shell: bash
+        run: |
+          python - <<'PY'
+          import shutil
+          import subprocess
+
+
+          def decode(raw):
+              if b"\x00" in raw:  # wsl.exe 是 UTF-16LE；原生工具可能给 UTF-8
+                  return raw.decode("utf-16-le", errors="replace")
+              return raw.decode("utf-8", errors="replace")
+
+
+          def run(*args):
+              if shutil.which("wsl.exe") is None:
+                  return None, "wsl.exe not found"
+              try:
+                  done = subprocess.run(args, capture_output=True, timeout=60)
+              except Exception as error:  # 诊断步骤：异常也只打印，不抛出
+                  return None, f"{type(error).__name__}: {error}"
+              return done.returncode, decode(done.stdout + done.stderr)
+
+
+          try:
+              code, status = run("wsl.exe", "--status")
+              print(f"$ wsl.exe --status (exit {code})\n{status.strip() or '<no output>'}")
+              code, listing = run("wsl.exe", "-l", "-v")
+              print(f"\n$ wsl.exe -l -v (exit {code})\n{listing.strip() or '<no output>'}")
+              wsl2 = []
+              for line in listing.splitlines()[1:]:
+                  fields = line.split()
+                  if fields and fields[-1] == "2":
+                      wsl2.append(fields[0])
+              print(f"\nWSL2 distros present: {bool(wsl2)} {wsl2}")
+          except Exception as error:
+              print(f"WSL spike failed softly: {type(error).__name__}: {error}")
+          PY
+
+      # 打包版已支持 `--smoke`（main.mjs: DDP_DESKTOP_SMOKE + argv），门已放开；
+      # 但 runner 会话未必能开 Electron 窗口，所以首轮 continue-on-error：
+      # 报告/日志照常上传，第二轮起按阻塞项处理。
+      - name: Windows GUI smoke（首轮诊断）
+        continue-on-error: true
+        shell: bash
+        run: |
+          PORTABLE=$(ls dist/desktop/windows/DeepDocParse-*-portable.exe | head -n 1)
+          echo "smoking $PORTABLE"
+          node apps/desktop/scripts/smoke-windows.mjs "$PORTABLE" \
+            --timeout 120000 \
+            --report apps/desktop/artifacts/smoke-report.json
+
+      - name: 上传安装包（两个 exe + release 清单 + sha256）
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: |
+            dist/desktop/windows/DeepDocParse-*-setup.exe
+            dist/desktop/windows/DeepDocParse-*-portable.exe
+            dist/desktop/windows/DeepDocParse-*.exe.sha256
+            dist/desktop/windows/SHA256SUMS
+            dist/desktop/deepdocparse-*-win32-x64.release.json
+            dist/desktop/deepdocparse-*-win32-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: 上传 smoke 证据（报告 / 日志 / 失败原因）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke
+          # 不要用 artifacts/ 整目录：里面还有 download/（pin 过的 Electron zip，
+          # ~158MB，没必要再传一份）。多路径的 LCA 是 apps/desktop/artifacts。
+          path: |
+            apps/desktop/artifacts/smoke-report.json
+            apps/desktop/artifacts/smoke-windows-electron.log
+            apps/desktop/artifacts/smoke-windows-failure.json
+            apps/desktop/artifacts/desktop.png
+          if-no-files-found: warn
+          retention-days: 7

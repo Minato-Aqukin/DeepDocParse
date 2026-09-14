@@ -48,6 +48,17 @@ def options_hash(engine: str, options: dict) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def parse_identity(source_digest: str, resource_id: str | None) -> str:
+    """Execution-cache scope is distinct from verified byte identity.
+
+    Pending work for asset B must not reuse asset A's revocable input grant.
+    The legacy fallback is reserved for already-existing jobs without a resource binding.
+    """
+    if resource_id is None:
+        return source_digest
+    return hashlib.sha256(json.dumps(["resource-parse-v1", resource_id, source_digest]).encode()).hexdigest()
+
+
 async def ingest_document(
     session: AsyncSession,
     storage: Storage,
@@ -63,6 +74,8 @@ async def ingest_document(
     doc_id: str,
     engine: str = "",
     options: dict | None = None,
+    upload_key: str | None = None,
+    receipt_key: str | None = None,
 ) -> tuple[Document, ParseJob | None]:
     """建（或复用）Document 并排一次解析。返回 (document, job)。
 
@@ -84,33 +97,32 @@ async def ingest_document(
             doc_id=doc_id, origin="web", filename=filename, mime=mime,
             size_bytes=size_bytes, object_key=object_key,
         )
-        session.add(document)
         try:
-            await session.commit()
+            async with session.begin_nested():
+                session.add(document)
+                await session.flush()
         except IntegrityError:
-            # 并发：另一边先插入了，回退到复用分支。
-            # **本次上传的对象成了孤儿** —— GC 只扫库里的行，扫不到它，
-            # 所以就地清掉（与合仓前那段并发处理是同一条逻辑）
-            await session.rollback()
-            try:
-                await storage.delete(object_key)
-            except Exception:      # noqa: BLE001 —— 清不掉只是留个孤儿，不该让入库失败
-                pass
+            # The winning content row is locked before deciding which uploaded object survives.
             document = (await session.execute(
                 select(Document).where(Document.doc_id == doc_id, Document.origin == "web")
                 .with_for_update().execution_options(populate_existing=True)
             )).scalar_one_or_none()
             if document is None:
                 raise
-    elif document.deleted_at is not None:
+    if document.deleted_at is not None:
         await _revive(session, document, object_key)
-    elif document.object_key and document.object_key != object_key:
-        # 同一份内容再传一次：Document 复用旧对象，新对象是多余的。
-        # **不留着**：它无人引用，GC 扫不到，会永久占着存储与账单
-        try:
-            await storage.delete(object_key)
-        except Exception:      # noqa: BLE001
-            pass
+    elif not document.object_key:
+        document.object_key = object_key
+        await session.flush()
+
+    async def cleanup_duplicate_upload() -> None:
+        # Retain this upload until the new live asset is committed. Releasing the
+        # document lock earlier would let GC delete the old object in between.
+        if document.object_key != object_key:
+            try:
+                await storage.delete(object_key)
+            except Exception:  # noqa: BLE001
+                pass
 
     # **归属：谁传过都记一笔。** 全局去重之后第二个人传同一份文件不会产生新的
     # Document，但"他也传过"这件事不能丢 —— 删除权限判它，界面上也要说得清
@@ -124,24 +136,47 @@ async def ingest_document(
                                            user_id=actor_id))
         except IntegrityError:
             pass        # 并发下另一边先记上了，正是想要的结果
-        await session.commit()
 
+    # Resource identity follows a verified upload operation, never the content hash.
+    from ddp_corpus.resources import create_asset
+    resource, _version, _created = await create_asset(session, document=document, actor_id=actor_id,
+        organization_id=organization_id, idempotency_key="upload:" + (upload_key or object_key),
+        filename=filename, request_payload={"sha256": doc_id, "filename": filename,
+            "mime": mime, "size": size_bytes, "engine": engine, "options": options})
+    async def accept_receipt(job):
+        if receipt_key:
+            from ddp_corpus.client_projection import digest, record_upload_receipt
+            await record_upload_receipt(session, organization_id=organization_id, principal_id=actor_id,
+                operation_key=receipt_key, request_digest=digest({"sha256": doc_id, "filename": filename,
+                    "mime": mime, "size": size_bytes, "engine": engine, "options": options}),
+                resource_id=resource.id, version_id=_version.id, parse_job_id=job.id)
     digest = options_hash(engine, options)
     job = (await session.execute(
         select(ParseJob).where(ParseJob.document_id == document.id,
+                               ParseJob.resource_id == resource.id,
                                ParseJob.options_hash == digest)
     )).scalar_one_or_none()
     if job is not None and job.status != "failed":
-        return document, job        # 同文件同参数：复用，不再打网关
+        _version.parse_job_id = job.id
+        await accept_receipt(job)
+        await session.commit()
+        await cleanup_duplicate_upload()
+        return document, job        # Only retries of this logical resource share an attempt.
 
     if job is None:
         job = ParseJob(document_id=document.id, engine=engine, options=options,
-                       initiated_by=actor_id, options_hash=digest,
+                       initiated_by=actor_id, resource_id=resource.id, options_hash=digest,
                        document_version=await next_document_version(session, document.id))
         session.add(job)
     else:
         job.status, job.error = "pending", None
+        job.resource_id = resource.id
+        job.initiated_by = actor_id
+    await session.flush()
+    _version.parse_job_id = job.id
+    await accept_receipt(job)
     await session.commit()
+    await cleanup_duplicate_upload()
 
     await submit_parse(session, control, service, document, job)
     return document, job
@@ -192,7 +227,6 @@ async def _revive(session: AsyncSession, document: Document, object_key: str) ->
             raise APIError(409, "document revival raced with another request; retry",
                            "invalid_request_error", "document_state_changed")
     await session.refresh(document)
-    await session.commit()
 
 
 async def submit_parse(session: AsyncSession, control: ControlClient,
@@ -202,9 +236,15 @@ async def submit_parse(session: AsyncSession, control: ControlClient,
     **传的是稳定文件 URL**（`/files/{token}`，由 control-api 提供），不是预签名 ——
     URL 一变，网关的幂等与向量索引分块键全部失效（ADR #11/#12）。
     """
+    from ddp_corpus.models import Resource
+    resource_id = getattr(job, "resource_id", None)
+    resource = await session.get(Resource, resource_id) if resource_id else None
     file_url = await control.stable_file_url(
-        organization_id=document.organization_id, document_id=document.id,
+        organization_id=resource.organization_id if resource else document.organization_id,
+        document_id=document.id,
         object_key=document.object_key, mime=document.mime,
+        subject_id=job.initiated_by,
+        resource_id=resource_id,
         filename=document.filename)
 
     # 重新提交失败的 job 时必须刷新提交时刻：对账按它判"是否已过网关的 24h
@@ -216,7 +256,7 @@ async def submit_parse(session: AsyncSession, control: ControlClient,
 
     try:
         task_id = await service.submit_parse(
-            file_url=file_url, doc_id=document.doc_id,
+            file_url=file_url, doc_id=parse_identity(document.doc_id, resource_id),
             callback_url=f"{settings.public_base_url}/internal/parse-callback",
             engine=job.engine, options=job.options,
         )

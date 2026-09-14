@@ -84,7 +84,7 @@ function logout() {
       </el-header>
 
       <el-main class="main">
-        <RouterView />
+        <RouterView :key="route.fullPath" />
       </el-main>
 
       <!--

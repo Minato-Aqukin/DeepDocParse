@@ -1,0 +1,41 @@
+{
+  "schema": "ddp-scope-coverage/1#ScopeManifest",
+  "scope_id": "scope-17",
+  "caller_scope_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "created_at": "2026-09-12T00:00:00Z",
+  "valid_until": "2026-09-13T00:00:00Z",
+  "registry_revision_vector": [
+    {
+      "node_id": "node-a",
+      "registry_revision": 12,
+      "fetched_at": "2026-09-12T00:00:00Z"
+    },
+    {
+      "node_id": "node-p",
+      "registry_revision": 4,
+      "fetched_at": "2026-09-12T00:00:00Z"
+    }
+  ],
+  "child_manifests": [
+    {
+      "node_id": "node-p",
+      "scope_ref": "scope-p-3",
+      "enumeration_state": "sealed"
+    }
+  ],
+  "expanded_members": [
+    {
+      "origin_node_id": "node-b",
+      "collection_id": "b:robotics",
+      "operation": "corpus.retrieve"
+    },
+    {
+      "origin_node_id": "node-b",
+      "collection_id": "b:control",
+      "operation": "corpus.retrieve"
+    }
+  ],
+  "unexpanded_subtrees": [],
+  "enumeration_state": "sealed",
+  "manifest_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+}

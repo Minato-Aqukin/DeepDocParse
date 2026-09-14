@@ -1,0 +1,15 @@
+{
+  "schema": "ddp-local-model-eval/1",
+  "run_id": "7d38369da4d44b9c9d469bdc7cc096a0",
+  "python": "3.14.7",
+  "platform": "Linux-7.2.4-1-cachyos-x86_64-with-glibc2.44",
+  "network_namespace": "net:[4026532809]",
+  "offline_namespace": true,
+  "model_id": "qwen3-1.7b-q8_0",
+  "started_at": 1789228180.6721582,
+  "cases": [],
+  "status": "failed",
+  "error": "out_of_memory",
+  "message": "owned model exited before readiness",
+  "finished_at": 1789228183.785741
+}

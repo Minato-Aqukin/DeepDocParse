@@ -20,6 +20,7 @@ services/
   corpus-worker/          Python：编译 / 索引 / 抽取的持久 worker
   mcp/                    Python：语料级 MCP 五工具
 python/ddp_core/          两侧共用的语料纯逻辑（分块 / 裁图 / 检索 / 抽取 schema）
+python/ddp_local/         SQLite / 文件 / 持久任务的本地 CPU 运行时
 packages/
   contracts/              OpenAPI · JSON Schema · DDP-* 契约（Go/TS/Python 类型的唯一来源）
   sdk-ts/                 @deepdocparse/sdk
@@ -62,6 +63,9 @@ cd apps/web && npm run dev # 前端 http://localhost:5173
 只信任入口下发的 actor 上下文头（有守卫钉着这件事）。
 
 ## 验证
+
+无需中心的 CPU 本地路径见 [本地运行时](python/ddp_local/README.md)。
+当前已实测解析、关键词检索与证据；真实本地生成模型及完整桌面发行仍在 v3 实施中。
 
 ```bash
 ./scripts/check.sh          # 全量门禁 22 项，与 CI 同一套判据

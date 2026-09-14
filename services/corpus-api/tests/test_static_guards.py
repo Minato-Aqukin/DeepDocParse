@@ -130,9 +130,7 @@ def test_the_scan_actually_covers_something():
     assert total >= 3, f"一条本项目的 import 都没扫到（{total}），解析逻辑可能坏了"
 
 
-#: 语料 MCP 必须拿到的那几个键。少一个的表现是：所有容器都健康，
-#: 直到**第一次 MCP 调用**才报数据库认证失败 —— 部署脚本特有的静默错位，
-#: 常规 API 单测与 `compose config` 都抓不到。
+#: MCP 只通过带 actor 的语料 HTTP 接口访问数据，不应再获得这些数据库/对象密钥。
 CORPUS_MCP_KEYS = {
     "CORPUS_DATABASE_URL", "MINIO_ENDPOINT", "MINIO_ACCESS_KEY",
     "MINIO_SECRET_KEY", "MINIO_BUCKET",
@@ -156,16 +154,11 @@ def _env_of(service: dict) -> dict:
     return env
 
 
-def test_compose_passes_corpus_credentials_to_the_mcp_service():
-    """语料 MCP 必须拿到 PG 与对象存储的凭据。
-
-    合仓前这条查的是 quickstart 脚本有没有把随机密钥同步进 `.env.mcp`；
-    脚本删了（compose 给每个服务显式的 environment 列表，不再需要写 .env），
-    但**要守的事一件没少**：漏一个键 = 所有容器健康、第一次 MCP 调用才炸。
-    """
+def test_mcp_uses_actor_authorized_corpus_http_without_database_credentials():
     env = _env_of(_compose_service("mcp"))
-    missing = sorted(CORPUS_MCP_KEYS - set(env))
-    assert not missing, f"compose 没把这些语料配置给 mcp 服务：{missing}"
+    assert env.get("CORPUS_API_URL") == "http://corpus-api:8081"
+    assert "SERVICE_TOKEN" in env and "MCP_PUBLIC_BASE_URL" in env
+    assert not (CORPUS_MCP_KEYS & set(env))
 
 
 def test_corpus_keys_stay_out_of_the_model_gateway_environment():

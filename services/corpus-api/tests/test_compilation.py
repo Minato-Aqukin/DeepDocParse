@@ -317,7 +317,7 @@ async def test_validation_does_not_compare_other_job_same_seq_citation(
 
 
 @respx.mock
-async def test_switch_version_requires_ack_for_current_resolved_citations(
+async def test_switch_version_preserves_fixed_original_citations(
         actor_client, session, app_state):
     _mock_service(result=VISUAL_RESULT)
     respx.post(CHAT).mock(return_value=_vision())
@@ -328,7 +328,8 @@ async def test_switch_version_requires_ack_for_current_resolved_citations(
     session.add(Citation(
         evidence_id=source.id, source_kind="message", source_id="before-switch",
         role="primary", snippet=source.content, content_digest=source.content_digest))
-    target = ParseJob(
+    original_job = await session.get(ParseJob, chunk.parse_job_id)
+    target = ParseJob(resource_id=original_job.resource_id, initiated_by=original_job.initiated_by,
         document_id=document["id"], engine="borndigital", options={"variant": 2},
         options_hash="target-job", status="succeeded", result_prefix="target/",
         page_count=1, document_version=2)
@@ -340,16 +341,12 @@ async def test_switch_version_requires_ack_for_current_resolved_citations(
 
     validation = (await actor_client.post(
         f"/api/documents/{document['id']}/validate-index?job_id={target.id}")).json()
-    assert validation["citation_invalidations"] == 1
-    refused = await actor_client.put(
-        f"/api/documents/{document['id']}/current-job", json={"job_id": target.id})
-    assert refused.status_code == 409
-    assert refused.json()["error"]["code"] == "index_version_unsafe"
+    assert validation["citation_invalidations"] == 0
     accepted = await actor_client.put(
-        f"/api/documents/{document['id']}/current-job",
-        json={"job_id": target.id, "acknowledge_invalidations": True})
-    assert accepted.status_code == 200
-
+        f"/api/documents/{document['id']}/current-job", json={"job_id": target.id})
+    assert accepted.status_code == 200, accepted.text
+    loaded = await load_citations(session, source_kind="message", source_ids=["before-switch"])
+    assert loaded["before-switch"][0]["resolved"] is True
 
 @respx.mock
 async def test_revived_document_with_history_waits_for_validation(
@@ -387,7 +384,8 @@ async def test_revived_document_with_history_waits_for_validation(
     assert usage_after == usage_before
     assert len(respx.calls) == vision_calls_before
     assert (await session.scalar(select(Chunk.id).where(
-        Chunk.document_id == document["id"]))) is None
+        Chunk.document_id == document["id"]))) == chunk.id
+    # Fixed evidence is retained for GC; failed index state prevents serving it as current.
 
 
 @respx.mock
@@ -396,7 +394,8 @@ async def test_reindex_refuses_second_worker_while_build_is_active(actor_client,
     respx.post(CHAT).mock(return_value=_vision())
     document = await _upload(actor_client, _real_pdf())
     await _callback(actor_client)
-    row = await session.get(Document, document["id"])
+    doc = await session.get(Document, document["id"])
+    row = await session.get(ParseJob, doc.current_job_id)
     row.index_status = "indexing"
     row.index_lease_until = utcnow() + timedelta(minutes=5)
     await session.commit()
@@ -415,7 +414,8 @@ async def test_reconcile_recovers_expired_index_lease(
     respx.post(CHAT).mock(return_value=_vision())
     document = await _upload(actor_client, _real_pdf())
     await _callback(actor_client)
-    row = await session.get(Document, document["id"])
+    doc = await session.get(Document, document["id"])
+    row = await session.get(ParseJob, doc.current_job_id)
     old_generation = row.index_generation
     row.index_status = "indexing"
     row.compile_status = "compiling"
@@ -425,8 +425,9 @@ async def test_reconcile_recovers_expired_index_lease(
     stats = await reconcile_once(db.get_sessionmaker(), app_state.storage,
                                  app_state.service_client, app_state.http)
     assert stats["indexed"] == 1
+    job_id = row.id
     session.expire_all()
-    recovered = await session.get(Document, document["id"])
+    recovered = await session.get(ParseJob, job_id)
     assert recovered.index_status == "ready"
     assert recovered.index_generation > old_generation
     assert recovered.index_lease_until is None
@@ -441,8 +442,10 @@ async def test_old_generation_cannot_commit_while_successor_is_indexing(
     respx.post(CHAT).mock(return_value=_vision())
     document = await _upload(actor_client, _real_pdf())
     await _callback(actor_client)
-    row = await session.get(Document, document["id"])
+    doc = await session.get(Document, document["id"])
+    row = await session.get(ParseJob, doc.current_job_id)
     existing_ids = set((await session.execute(select(Chunk.id))).scalars().all())
+    job_id = row.id
     stale_generation = row.index_generation
     row.index_generation += 1
     successor_generation = row.index_generation
@@ -469,7 +472,7 @@ async def test_old_generation_cannot_commit_while_successor_is_indexing(
         document_id=document["id"], generation=stale_generation) == 0
     assert set((await session.execute(select(Chunk.id))).scalars().all()) == existing_ids
     session.expire_all()
-    current = await session.get(Document, document["id"])
+    current = await session.get(ParseJob, job_id)
     assert current.index_generation == successor_generation
     assert current.index_status == "indexing"
 
@@ -478,7 +481,7 @@ async def test_stale_sessions_cannot_reuse_fencing_generation(session):
     """陈旧 ORM identity map 不能把 generation 写回旧值并复用 worker token。"""
     from ddp_corpus import db
     from ddp_corpus.indexing import _fail_if_current, claim_for_indexing
-    from ddp_corpus.versions import advance_index_generation
+    from ddp_corpus.indexing import mark_index_pending
 
     # 用户住在 control schema（Go 拥有），语料侧只存裸 actor id
 
@@ -491,7 +494,8 @@ async def test_stale_sessions_cannot_reuse_fencing_generation(session):
     await session.flush()
     job = ParseJob(
         document_id=document.id, engine="borndigital", options={}, options_hash="fence-job",
-        status="succeeded", result_prefix="fence/", document_version=1)
+        status="succeeded", result_prefix="fence/", document_version=1,
+        index_status="pending", index_generation=5)
     session.add(job)
     await session.flush()
     document.current_job_id = job.id
@@ -500,22 +504,18 @@ async def test_stale_sessions_cannot_reuse_fencing_generation(session):
 
     factory = db.get_sessionmaker()
     async with factory() as stale:
-        stale_document = await stale.get(Document, document_id)
+        stale_document = await stale.get(ParseJob, job_id)
         assert stale_document.index_generation == 5
 
         async with factory() as first:
-            assert await advance_index_generation(
-                first, document_id, expected_current_job_id=job_id, deleted=False,
-                values={"index_status": "pending", "index_lease_until": None}) == 6
+            assert await mark_index_pending(first, job_id) == 6
             await first.commit()
         async with factory() as first_worker:
             assert await claim_for_indexing(first_worker, document_id) == 7
 
         # stale 的 identity map 仍是 g5；原子 UPDATE 必须基于数据库 g7 得到 g8。
         assert stale_document.index_generation == 5
-        assert await advance_index_generation(
-            stale, document_id, expected_current_job_id=job_id, deleted=False,
-            values={"index_status": "pending", "index_lease_until": None}) == 8
+        assert await mark_index_pending(stale, job_id) == 8
         await stale.commit()
 
     async with factory() as successor:
@@ -524,7 +524,7 @@ async def test_stale_sessions_cannot_reuse_fencing_generation(session):
         await _fail_if_current(
             late_old_worker, document_id, job_id, 7, "late old worker")
     async with factory() as verify:
-        current = await verify.get(Document, document_id)
+        current = await verify.get(ParseJob, job_id)
         assert current.index_generation == 9
         assert current.index_status == "indexing"
         assert current.index_error is None
@@ -542,23 +542,28 @@ async def test_active_index_worker_renews_lease(session, monkeypatch):
         mime="application/pdf", size_bytes=1, index_status="indexing",
         index_generation=7, index_lease_until=utcnow() + timedelta(milliseconds=20))
     session.add(document)
+    await session.flush()
+    job = ParseJob(document_id=document.id, engine="borndigital", options_hash="heartbeat",
+                   index_status="indexing", index_generation=7,
+                   index_lease_until=utcnow() + timedelta(milliseconds=20))
+    session.add(job)
     await session.commit()
-    document_id = document.id
-    old_lease = document.index_lease_until
+    job_id = job.id
+    old_lease = job.index_lease_until
     monkeypatch.setattr(settings, "index_heartbeat_seconds", 0.01)
     monkeypatch.setattr(settings, "index_lease_seconds", 1)
-    task = asyncio.create_task(_heartbeat_lease(session.bind, document_id, 7))
+    task = asyncio.create_task(_heartbeat_lease(session.bind, job_id, 7))
     await asyncio.sleep(0.04)
     task.cancel()
     with suppress(asyncio.CancelledError):
         await task
     session.expire_all()
-    renewed = await session.get(Document, document_id)
+    renewed = await session.get(ParseJob, job_id)
     assert as_aware(renewed.index_lease_until) > as_aware(old_lease)
 
 
 @respx.mock
-async def test_stale_index_worker_cannot_overwrite_new_current_job(
+async def test_other_current_job_does_not_cancel_fixed_index_job(
         session, app_state, monkeypatch):
     _mock_service()
     # 用户住在 control schema（Go 拥有），语料侧只存裸 actor id
@@ -572,10 +577,10 @@ async def test_stale_index_worker_cannot_overwrite_new_current_job(
     await session.flush()
     old = ParseJob(
         document_id=document.id, engine="borndigital", options={}, options_hash="old",
-        status="succeeded", result_prefix="old/", document_version=1)
+        status="succeeded", result_prefix="old/", document_version=1, index_status="pending")
     new = ParseJob(
         document_id=document.id, engine="borndigital", options={}, options_hash="new",
-        status="succeeded", result_prefix="new/", document_version=2)
+        status="succeeded", result_prefix="new/", document_version=2, index_status="pending")
     session.add_all([old, new])
     await session.flush()
     document_id, new_job_id = document.id, new.id
@@ -606,10 +611,11 @@ async def test_stale_index_worker_cannot_overwrite_new_current_job(
         }], crop_keys={}, degraded=[], provider=provider, vision_requests=0)
 
     monkeypatch.setattr("ddp_corpus.indexing.compile_document", delayed_compile)
-    assert await index_document(session, app_state.storage, app_state.http, document_id) == 0
+    assert await index_document(session, app_state.storage, app_state.http, document_id) == 1
     remaining = (await session.execute(select(Chunk).where(
         Chunk.document_id == document_id))).scalars().all()
-    assert [c.seq for c in remaining] == [99]
+    assert [c.seq for c in remaining] == [0]
+    assert remaining[0].text == "late old"
     document = await session.get(Document, document_id)
     assert document.current_job_id == new_job_id and document.index_status == "pending"
 

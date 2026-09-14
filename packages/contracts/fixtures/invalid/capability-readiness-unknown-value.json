@@ -1,0 +1,16 @@
+{
+  "schema": "ddp-discovery/1#CapabilityProfile",
+  "node_id": "node-c",
+  "operation": "rag.answer.cited",
+  "readiness": "healthy",
+  "accepting_admissions": true,
+  "engine_versions": {
+    "generator": "qwen3-4b-instruct"
+  },
+  "limits": {
+    "max_concurrency": 2,
+    "max_candidates": 8
+  },
+  "observed_at": "2026-09-12T00:00:00Z",
+  "valid_until": "2026-09-13T00:00:00Z"
+}

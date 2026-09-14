@@ -24,6 +24,7 @@ from ddp_corpus.config import settings
 class Storage(Protocol):
     async def put(self, key: str, data: bytes, content_type: str) -> None: ...
     async def get(self, key: str) -> bytes: ...
+    async def get_limited(self, key: str, max_bytes: int) -> bytes: ...
     async def exists(self, key: str) -> bool: ...
     async def delete(self, key: str) -> None: ...
     async def list_prefix(self, prefix: str) -> list[str]: ...
@@ -90,6 +91,20 @@ class MinioStorage:
 
         return await asyncio.to_thread(_stat)
 
+    async def get_limited(self, key: str, max_bytes: int) -> bytes:
+        """Read at most the caller's budget, even if object metadata is corrupted."""
+        def _get() -> bytes:
+            resp = self._client.get_object(self._bucket, key)
+            try:
+                content = resp.read(max_bytes + 1)
+                if len(content) > max_bytes:
+                    raise ValueError("object exceeds byte limit")
+                return content
+            finally:
+                resp.close()
+                resp.release_conn()
+        return await asyncio.to_thread(_get)
+
     async def delete(self, key: str) -> None:
         await asyncio.to_thread(self._client.remove_object, self._bucket, key)
 
@@ -142,6 +157,12 @@ class MemoryStorage:
 
     async def exists(self, key: str) -> bool:
         return key in self.objects
+
+    async def get_limited(self, key: str, max_bytes: int) -> bytes:
+        content = await self.get(key)
+        if len(content) > max_bytes:
+            raise ValueError("object exceeds byte limit")
+        return content
 
     async def delete(self, key: str) -> None:
         self.objects.pop(key, None)

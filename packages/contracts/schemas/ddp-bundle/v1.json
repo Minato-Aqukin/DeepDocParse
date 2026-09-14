@@ -1,0 +1,362 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepdocparse.dev/schemas/ddp-bundle/1",
+  "title": "DDP-BUNDLE v1",
+  "x-ddp-contract": "ddp-bundle/1",
+  "$defs": {
+    "BundleSource": {
+      "type": "object",
+      "description": "Immutable source identity and explicit original availability. These are transfer claims, not authorization credentials.",
+      "properties": {
+        "origin_node_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"
+        },
+        "authority_node_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source_version_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "parse_revision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "mime": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "original": {
+          "enum": [
+            "present",
+            "missing"
+          ]
+        },
+        "missing_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "uploader_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "policy_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "origin_node_id",
+        "authority_node_id",
+        "resource_id",
+        "source_version_id",
+        "source_digest",
+        "parse_revision",
+        "filename",
+        "mime",
+        "original",
+        "missing_reason",
+        "uploader_ref",
+        "policy_revision"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "original": {
+                "const": "present"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "missing_reason": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "original": {
+                "const": "missing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "missing_reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
+            }
+          }
+        }
+      ]
+    },
+    "VersionFile": {
+      "type": "object",
+      "description": "One exact archive member. Runtime verifies its actual length and bytes against this digest.",
+      "properties": {
+        "path": {
+          "enum": [
+            "source.bin",
+            "layout.json",
+            "evidence.json",
+            "provenance.json"
+          ]
+        },
+        "role": {
+          "enum": [
+            "original",
+            "layout",
+            "evidence",
+            "provenance"
+          ]
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 67108864
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "role",
+        "size",
+        "digest"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "const": "source.bin"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "role": {
+                "const": "original"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "const": "layout.json"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "role": {
+                "const": "layout"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "const": "evidence.json"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "role": {
+                "const": "evidence"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "const": "provenance.json"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "role": {
+                "const": "provenance"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "BundleManifest": {
+      "type": "object",
+      "description": "DDP-Bundle v1 root manifest. ZIP path/type/ratio limits and evidence byte/identity consistency are checked in addition to this schema.",
+      "properties": {
+        "schema": {
+          "const": "ddp-bundle/1"
+        },
+        "required_features": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "source": {
+          "$ref": "#/$defs/BundleSource"
+        },
+        "files": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/VersionFile"
+          },
+          "uniqueItems": true,
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "path": {
+                    "const": "layout.json"
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "path": {
+                    "const": "evidence.json"
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "path": {
+                    "const": "provenance.json"
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "required_features",
+        "source",
+        "files"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "properties": {
+                  "original": {
+                    "const": "present"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "files": {
+                "minItems": 4,
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "source.bin"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "minContains": 1,
+                "maxContains": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "files": {
+                "maxItems": 3,
+                "items": {
+                  "properties": {
+                    "path": {
+                      "not": {
+                        "const": "source.bin"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

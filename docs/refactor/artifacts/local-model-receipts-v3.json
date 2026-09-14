@@ -1,0 +1,53 @@
+{
+  "run_id": "dbcfb8192b1144d49a908ce1afd4c8a4",
+  "receipts": [
+    {
+      "case": "english",
+      "operation": "answer",
+      "operation_key": "model-eval-dbcfb8192b1144d49a908ce1afd4c8a4-english-answer",
+      "status": "succeeded",
+      "error": null,
+      "result_present": true
+    },
+    {
+      "case": "english",
+      "operation": "wiki",
+      "operation_key": "model-eval-dbcfb8192b1144d49a908ce1afd4c8a4-english-wiki",
+      "status": "failed",
+      "error": "unsupported_generation",
+      "result_present": false
+    },
+    {
+      "case": "chinese",
+      "operation": "answer",
+      "operation_key": "model-eval-dbcfb8192b1144d49a908ce1afd4c8a4-chinese-answer",
+      "status": "succeeded",
+      "error": null,
+      "result_present": true
+    },
+    {
+      "case": "chinese",
+      "operation": "wiki",
+      "operation_key": "model-eval-dbcfb8192b1144d49a908ce1afd4c8a4-chinese-wiki",
+      "status": "succeeded",
+      "error": null,
+      "result_present": true
+    },
+    {
+      "case": "code",
+      "operation": "answer",
+      "operation_key": "model-eval-dbcfb8192b1144d49a908ce1afd4c8a4-code-answer",
+      "status": "succeeded",
+      "error": null,
+      "result_present": true
+    },
+    {
+      "case": "code",
+      "operation": "wiki",
+      "operation_key": "model-eval-dbcfb8192b1144d49a908ce1afd4c8a4-code-wiki",
+      "status": "succeeded",
+      "error": null,
+      "result_present": true
+    }
+  ]
+}

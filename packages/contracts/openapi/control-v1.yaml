@@ -19,6 +19,11 @@ info:
     本文件里**显式声明**的端点由 control-api 自己实现：组织、成员、角色、
     API key、配额、计量、审计、上传会话、文件授权。
 
+    新增持久节点握手、管理员目录与成员快照契约见 `discovery-v1.yaml`。
+    `/api/v1/federation/node` 为公开持key挑战端点；`/api/v1/capabilities`、
+    `/api/v1/client/handshake` 及成员快照允许会话或带 read scope 的用户 API key。
+    节点管理仍只接受管理员会话；节点凭据不能替代资源 ACL。
+
     其余前缀是**反向代理**，契约在各自的文件里：
 
     - `/api/documents/*` `/api/conversations/*` `/api/search` `/api/extractions/*`
@@ -40,6 +45,7 @@ info:
         X-DDP-Service           调用方服务身份
         X-DDP-Organization      组织 ID（单组织部署也必须带，值为默认组织）
         X-DDP-Actor             user id 或 api key id
+        X-DDP-User              已验证用户 ID；API key 时为该 key 的所有者
         X-DDP-Actor-Kind        user | api_key | service
         X-DDP-Role              该 actor 在该组织内的角色
         Idempotency-Key         写操作必带
@@ -222,7 +228,30 @@ components:
         filename: { type: string }
         mime: { type: string }
         declared_size: { type: integer }
-        part_size: { type: integer, description: 分片大小（字节） }
+        part_size: { type: integer, description: 创建时持久绑定的分片大小（字节），恢复不受配置改变影响 }
+        allocation_state:
+          type: string
+          enum: [pending, allocating, ready, unknown]
+          description: 对象存储分配状态，ready 只表示已获得 multipart 回执，与内容 ready 无关
+        input_state:
+          type: string
+          enum: [waiting_input, content_verifying, content_verified, failed, expired]
+        request_digest: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+        verified_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        actual_size: { type: integer }
+        allocation_reason: { type: string, enum: [receipt_unconfirmed_or_ambiguous] }
+        recovery_action: { type: string, enum: [reconcile_same_key_or_operator_cleanup] }
+        transfer_state: { type: string, enum: [unknown, complete_pending_finalize] }
+        completed_parts:
+          type: array
+          description: S3 已确认且大小正确的分片；parts 仅重签缺失或大小错误的分片
+          items:
+            type: object
+            required: [part_number, etag, size]
+            properties:
+              part_number: { type: integer }
+              etag: { type: string }
+              size: { type: integer }
         parts:
           type: array
           description: |
@@ -487,7 +516,15 @@ paths:
         **预期大小**，然后下发对象存储的 multipart 预签名。
 
         客户端拿到后直接 PUT 到对象存储，**不经过任何应用进程**。
+        可选 Idempotency-Key 绑定 organization + actor_kind + actor_id，建议客户端在
+        发起前持久化。带 key 时必须声明完整文件 sha256；同键同正文返回已有会话，
+        同键异正文返回 409。缺 key 保持兼容，每次创建独立上传，响应丢失无法按键找回。
+        服务端先持久创建身份与输入配额占位，再分配 S3 multipart。
+        分配回执未知时返回 202 + allocation_state=unknown，不自动重新分配。
+        本接口只受理输入传输，并非任务 admission，也不表示内容已验证或任务可排队。
       security: [{ session: [] }]
+      parameters:
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string, minLength: 1, maxLength: 200, pattern: '^[!-~]+$' } }
       requestBody:
         required: true
         content:
@@ -505,17 +542,40 @@ paths:
                   description: |
                     客户端算的内容哈希。**服务端不信它** —— finalize 后由后台
                     流式重算并比对，不一致则整个会话作废。传它只是为了让
-                    "同一份文件重复上传"能提前命中去重。
+                    带幂等键的重试绑定相同内容；无键上传不做跨用户或跨组织内容复用。
       responses:
-        "201": { description: 已创建, content: { application/json: { schema: { $ref: '#/components/schemas/UploadSession' } } } }
+        "201": { description: 已创建输入传输会话, content: { application/json: { schema: { $ref: '#/components/schemas/UploadSession' } } } }
+        "200": { description: 相同 key 与正文的已有会话，刷新缺失分片预签名, content: { application/json: { schema: { $ref: '#/components/schemas/UploadSession' } } } }
+        "202": { description: 上传身份已持久化，但分配进行中或回执未知，必须按原 key 对账, content: { application/json: { schema: { $ref: '#/components/schemas/UploadSession' } } } }
+        "409": { description: idempotency_conflict，同 key 绑定不同正文 }
         "402": { description: 配额不足 }
         "413": { description: 超过单文件上限 }
         "415": { description: MIME 不在白名单 }
 
+  /api/uploads/reconcile:
+    get:
+      tags: [uploads]
+      summary: 按原发起主体和创建幂等键对账上传
+      description: |
+        key 通过 header 传递，不放在 URL 中。只查当前 organization + actor_kind + actor_id。
+        不知道 upload_id 时也可找回。响应包含当前状态、有效的 completed_parts 和新签发的
+        缺失 parts。重启入口不改变上传身份、part_size 或逻辑代次。
+        未知 S3 分配仅按持久随机 object_key 查询；零或多个回执保持 unknown，
+        不得被解释为未执行，不创建第二个 multipart。过期会话不签发 URL。
+        404 只代表当前主体查不到持久记录；可能有并发 create 尚未提交，应保留原 key。
+      security: [{ session: [] }]
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 200, pattern: '^[!-~]+$' } }
+      responses:
+        "200": { description: 已知身份与当前状态；unknown 不等于失败或未执行, content: { application/json: { schema: { $ref: '#/components/schemas/UploadSession' } } } }
+        "404": { description: 当前主体没有可见记录 }
+        "403": { description: 当前上传权限已撤销 }
+
   /api/uploads/{upload_id}:
     get:
       tags: [uploads]
-      summary: 查上传会话状态
+      summary: 查本人上传会话状态并重签缺失分片
+      description: 与 reconcile 一样枚举 S3 已完成分片，只对未过期且分配已确认的本人会话重签；响应 Cache-Control 为 no-store。
       security: [{ session: [] }]
       parameters: [{ name: upload_id, in: path, required: true, schema: { type: string } }]
       responses:
@@ -532,7 +592,11 @@ paths:
         `DocumentSubmitted`，由 corpus-api 幂等消费。
 
         **必须幂等**：finalize 重试不得创建两份任务。幂等键是
-        `Idempotency-Key` 头，缺省用 upload_id。
+        `Idempotency-Key` 头，缺省用 upload_id。键按 organization + actor_kind + actor_id
+        隔离；engine/options 摘要在 S3 complete 之前持久绑定，同键不同参数明确 409。
+        S3 分片枚举与字节数为权威；未上传齐返回 upload_incomplete 并保留会话可续传。
+        complete 回执丢失时按同一 object_key HEAD 对账，未能确认返回 completion_unknown，
+        不标记 failed，也不创建新会话。内容大小/完整 sha256 验证完成之前不发 DocumentSubmitted。
       security: [{ session: [] }]
       parameters:
         - { name: upload_id, in: path, required: true, schema: { type: string } }
@@ -574,7 +638,9 @@ paths:
         实现是 **302 到对象存储的短期签名 URL**，而不是由本进程转发字节流
         （不变式 6）。短期签名只出现在 `Location` 里，不改变本路径。
 
-        token 本身即凭证（32 字节随机），可撤销、可设过期。
+        token 本身即凭证（32 字节随机），可撤销、可设过期。v3 凭证绑定
+        subject_id/resource_id，每次兑换重查主体成员资格与资源ACL；地址不会
+        因普通重试变化。旧无主体凭证拒绝兑换，须重新授权；证据身份保持不变。
       parameters:
         - { name: token, in: path, required: true, schema: { type: string } }
       responses:
@@ -593,9 +659,12 @@ paths:
         与 `/files/{token}` **分开**：这条每次返回一个新的短期 URL，
         给浏览器 PDF.js 用（支持 HTTP Range，看一页不用下整份）。
         绝不能拿它去喂 model-gateway —— 那会破坏 doc_hash 幂等。
+        每次签发前向语料域检查当前主体的资源权限。组织内有文件凭证不代表可读。
+        无权与不存在统一 404；权限服务不可用返回 502，不签发 URL。
       security: [{ session: [] }]
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string } }
+        - { name: resource_id, in: query, schema: { type: string }, description: 旧文档映射多条可读资产时必填 }
         - { name: disposition, in: query, schema: { type: string, enum: [inline, attachment], default: inline } }
       responses:
         "200":

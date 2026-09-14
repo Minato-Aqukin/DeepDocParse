@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "version": "44.3.0",
+  "platform": "win32-x64",
+  "file": "electron-v44.3.0-win32-x64.zip",
+  "size": 158149320,
+  "sha256": "26bf9a617d58d81772b3d68305d59ee48272969c15083c06db634a77358a8d9d",
+  "source": "https://registry.npmmirror.com/-/binary/electron/44.3.0/electron-v44.3.0-win32-x64.zip",
+  "verified_at": "2026-09-14",
+  "note": "SHA256 taken from the official v44.3.0 SHASUMS256.txt (identical bytes served by registry.npmmirror.com) and re-verified against the downloaded archive. This is a checksum pin, not a detached signature."
+}

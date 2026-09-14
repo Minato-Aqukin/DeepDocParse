@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "version": "44.3.0",
+  "platform": "linux-x64",
+  "file": "electron-v44.3.0-linux-x64.zip",
+  "size": 122830582,
+  "sha256": "8b49b9efdd73c0f467edc3c1cd5678392c384ccf224f34ff54179f736e2f384b",
+  "source": "https://registry.npmmirror.com/-/binary/electron/44.3.0/electron-v44.3.0-linux-x64.zip",
+  "verified_at": "2026-09-13",
+  "note": "SHA256 verified against the bytes actually installed under apps/desktop/node_modules/electron. This is a checksum pin, not a detached signature."
+}

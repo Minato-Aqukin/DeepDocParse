@@ -95,7 +95,6 @@ RETURN_POSITIONS = {
     "python/ddp_core/ddp_core/rerank.py::rerank_hits": {1: "degraded"},
     "services/corpus-api/ddp_corpus/compilation.py::_understand": {1: "compile_degraded"},
     "services/corpus-api/ddp_corpus/compilation.py::one": {2: "compile_degraded"},
-    "services/mcp/ddp_mcp/corpus.py::_embedding": {1: "degraded"},
     "services/model-gateway/ddp_gateway/services/extraction.py::extract_records":
         {1: "degraded"},
 }

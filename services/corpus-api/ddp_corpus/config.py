@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     # 它是本服务唯一的门禁：actor 上下文头之所以可信，前提就是
     # "只有持有它的调用方能进来"。占位值会被拒绝启动
     service_token: str = "change-me"
+    # Persistent node identity for portable source evidence. Empty disables native Bundle
+    # exports until deployment config assigns a unique identity; never invent a shared node.
+    bundle_node_id: str = ""
     # 上传/重解析没有显式指定引擎时用哪个。**名字必须在 service 的 models.yaml 里存在**，
     # 否则 service 返回 404 unknown_engine —— 这正是无 GPU 环境踩到的：
     # models.cpu.yaml 只注册了 borndigital，本层却按名字写死 mineru，第一步就断。
@@ -141,6 +144,14 @@ class Settings(BaseSettings):
     task_concurrency_extract: int = 2
     # 其它种类（知识生成、GC、解析轮询）的并发
     task_concurrency_default: int = 2
+    # 联邦协调者（federation_plan）的并发。**与节点执行分开成两个池**：
+    # 合成一个池的后果是"等本地子任务的父任务"会把池占满 —— 协调者在本地
+    # 目标上要认领并等节点执行，而节点执行排在同一池里领不到 worker。
+    # 协调者是编排（主要等 I/O），默认 2。
+    task_concurrency_federation_plan: int = 2
+    # 联邦节点执行（federation_execute）的并发。它真正跑检索，是 CPU/IO 混
+    # 合的长任务，默认 4。
+    task_concurrency_federation_execute: int = 4
     # 空转时的轮询间隔。调大省数据库连接，调小降低任务延迟
     task_poll_interval: float = 1.0
 
@@ -252,6 +263,59 @@ class Settings(BaseSettings):
     # 视觉模型在 CPU 上出第一个 token 可能要几分钟（dev 机常态），读超时要留够
     chat_read_timeout: float = 900.0
 
+    # ---- 联邦执行（P5）----
+    # 本节点是否接受 peer 的 admission。关掉时能力清单里的 accepting_admissions
+    # 如实报 false，admission 端点也会拒绝（不排队、不占算力）。
+    federation_admissions_enabled: bool = True
+    # **本节点接受 peer 调用时校验的固定信任域凭据。**
+    # 留空 = 没有配置任何 peer 信任，federation 写端点一律 401 peer_unauthenticated
+    # （Fail Closed）：一个没有登记任何对端凭据的节点不该被任何人当执行者用。
+    # **绝不回显、绝不入日志、绝不进错误消息**；比较用 hmac.compare_digest。
+    federation_peer_token: str = ""
+
+    # 协调者出站时登记的远端节点目录（P5-INTERFACES-v3 §5）。JSON 对象：
+    # {"<node_id>": {"endpoint": "https://…", "service_token": "…", "peer_token": "…"}}
+    # **Fail Closed**：没登记的节点一个请求也不发（连 DNS 都不解析）；endpoint
+    # 必须是 HTTPS 且无 userinfo/query/fragment。三个凭据字段绝不回显、不入日志、
+    # 不进错误消息 —— 它们就是"对方凭什么信我们"的全部。
+    federation_peers: str = ""
+    # 只给本地回路集成用的逃生口：允许 http://127.0.0.1 或 http://[::1] 的
+    # peer endpoint。**只认字面回环地址**，不接受 localhost 或任何域名。
+    # 生产保持 false —— 打开它等于允许明文外发问题与证据。
+    federation_allow_loopback: bool = False
+
+    # 联邦执行的执行位置。**默认 false = 走 `corpus.tasks` 持久队列**：
+    # admit / POST /tasks 先把受理行/执行行/协调行与队列任务写进同一个事务，
+    # 再由 corpus-worker 领取执行 —— 受理进程重启不会让已受理的执行永远停在
+    # queued/running（企业边界 7）。true = 旧行为：在请求进程内直接执行
+    # （`execute` 仍带 generation fencing，超时有墙钟上限）。只给没有 worker 的
+    # 单进程部署与双节点验收夹具用：它恢复不了的崩溃场景正是队列要解决的那个，
+    # 生产必须保持 false。
+    federation_execution_inline: bool = False
+
+    # 回收清扫间隔（秒）。像 outbox 一样起一个循环：过期租约的联邦执行、
+    # 卡死超过 deadline 的协调任务由它落成显式失败，绝不永远停在 running。
+    federation_sweep_interval: int = 30
+    # 协调者请求多久没有推进（updated_at 距今）就判为卡死。**必须显著大于一次
+    # 正常的计划执行耗时**：太短会把正在跑的任务标死，太长会让用户一直等。
+    # 15 分钟 = 探索许可/scope 有效期（900s）同一量级。
+    federation_request_stuck_seconds: int = 900
+
+    # ---- 联邦缓存（P6）----
+    # 有界缓存的**总条目上限**。缓存是可重建的投影，不是事实来源：满了按
+    # 使用次数/创建时间确定性驱逐，绝不为了保住缓存而牺牲正确性。默认
+    # 10000 条是"单节点正常工作量一整天也住不满"的量级；条目多不等于命中率高，
+    # 大缓存只会在驱逐时更贵。
+    federation_cache_max_entries: int = 10000
+    # 缓存的**总字节上限**（value 的规范 JSON 字节，全表合计）。64 MiB 是刻意的
+    # 小：联邦缓存只存有界摘要/投影，不存正文、图片或向量 —— 那些走对象存储。
+    # 单条超过它的 value 直接不缓存（装不下，不是截断）。
+    federation_cache_max_bytes: int = 64 * 1024 * 1024
+    # 单条缓存的 **TTL 上限**（秒）。写入请求给的 TTL 会被压到这个上限以内；
+    # 900s = 15 分钟，与探测回执 300s 的短周期同一设计取向：过期宁可重算，
+    # 不把旧证据洗成新证据。
+    federation_cache_ttl_seconds: int = 900
+
     # **没有额度与限速默认值**：配额与限速归 control-api（见它的 CONFIG.md）。
     # 两处各配一份的表现是"我明明把限速调大了"却没生效
 
@@ -309,6 +373,37 @@ class Settings(BaseSettings):
             raise ValueError(
                 "INDEX_HEARTBEAT_SECONDS 必须 > 0 且小于 INDEX_LEASE_SECONDS 的一半，"
                 "INDEX_LEASE_SECONDS 至少为 3")
+        return self
+
+    @model_validator(mode="after")
+    def _check_federation_cache_limits(self):
+        """缓存上限必须为正数。
+
+        0 或负数不会让缓存"关闭"，而是让每一次 put 都在驱逐循环里把所有行删光，
+        然后在下一个写入时重演 —— 一个看起来在工作、实际每次都是冷缓存的系统。
+        要关缓存请把 TTL 调到 1（配合调用方不写），不要给 0。
+        """
+        values = (self.federation_cache_max_entries, self.federation_cache_max_bytes,
+                  self.federation_cache_ttl_seconds)
+        if min(values) < 1:
+            raise ValueError(
+                "FEDERATION_CACHE_MAX_ENTRIES / FEDERATION_CACHE_MAX_BYTES / "
+                "FEDERATION_CACHE_TTL_SECONDS 必须都是正整数（0 不是「关闭缓存」）")
+        return self
+
+    @model_validator(mode="after")
+    def _check_federation_sweep(self):
+        """清扫间隔与卡死阈值必须为正。
+
+        0 秒间隔不是"立即清扫"，而是清扫循环里的 `asyncio.sleep(0)` 空转，
+        每个副本都不停地查库；卡死阈值 0 则会把刚受理的任务当场标死。
+        """
+        if self.federation_sweep_interval < 1:
+            raise ValueError("FEDERATION_SWEEP_INTERVAL 必须是正整数秒（0 会变成空转循环）")
+        if self.federation_request_stuck_seconds < 60:
+            raise ValueError(
+                "FEDERATION_REQUEST_STUCK_SECONDS 必须 >= 60：阈值太小会把"
+                "正常执行中的协调任务标成卡死")
         return self
 
     @property

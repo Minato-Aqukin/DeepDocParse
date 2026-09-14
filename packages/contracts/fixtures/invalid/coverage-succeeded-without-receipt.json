@@ -1,0 +1,19 @@
+{
+  "target_key": {
+    "origin_node_id": "node-b",
+    "collection_id": "b:robotics",
+    "operation": "corpus.retrieve"
+  },
+  "scope_ref": "scope-17",
+  "query_or_subquery_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "state": "succeeded",
+  "search_profile": "bm25+vector",
+  "attempts": 1,
+  "evidence_refs": [
+    "ev-1"
+  ],
+  "used_budget": {
+    "requests": 1,
+    "bytes": 4096
+  }
+}

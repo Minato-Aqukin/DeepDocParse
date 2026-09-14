@@ -1,0 +1,54 @@
+{
+  "schema": "ddp-evidence/1#FederatedAnswer",
+  "answer": "方法甲在受限算力下更稳；方法乙精度更高。",
+  "claim_evidence_bindings": [
+    {
+      "claim_id": "c1",
+      "claim_text": "方法甲在受限算力下更稳",
+      "evidence_refs": [
+        "ev-1"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review"
+    }
+  ],
+  "evidence": [
+    {
+      "schema": "ddp-evidence/1#FederatedEvidence",
+      "evidence_id": "ev-1",
+      "origin_node_id": "node-b",
+      "authority_node_id": "node-b",
+      "resource_id": "res-b-100",
+      "source_version_id": "ver-1",
+      "parse_revision": "job-77",
+      "source_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "excerpt_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 2,
+        "printed_page_label": "3",
+        "seq": 14,
+        "bbox": [
+          72.0,
+          120.5,
+          468.0,
+          210.25
+        ],
+        "page_size": {
+          "width": 595.0,
+          "height": 842.0,
+          "rotation": 0
+        }
+      },
+      "source_type": "source",
+      "derived_from": null,
+      "uploader_ref": "b:user-9",
+      "retrieval_receipt_ref": "probe-b-21",
+      "policy_revision": "policy-rev-11",
+      "block_type": "text"
+    }
+  ],
+  "coverage_ref": "task-9",
+  "evidence_sufficiency": "insufficient",
+  "degraded": null
+}

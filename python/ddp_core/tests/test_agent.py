@@ -1,4 +1,24 @@
 from ddp_core.agent import QueryDecision, assertions_from_text, gate_candidates
+import pytest
+
+
+@pytest.mark.parametrize("text", ["The answer is 42 [1].", "总数为125件[1]。", "数值为42[1]！", "The answer is 42 [1] ."])
+def test_citation_before_sentence_terminator_does_not_invent_unsupported_punctuation(text):
+    result = assertions_from_text(text, ["ev-1"])
+    assert len(result) == 1
+    assert result[0]["evidence_ids"] == ["ev-1"]
+    assert result[0]["unsupported"] is False
+
+
+@pytest.mark.parametrize("text", ["The answer is 42 [1]. This second claim has no evidence.",
+                                 "总数为125件[1]。下一句没有出处。",
+                                 "数值为42[1][2]。下一句没有出处。"])
+def test_citation_before_terminator_does_not_support_the_next_unreferenced_sentence(text):
+    result = assertions_from_text(text, ["ev-1", "ev-2"])
+    assert len(result) == 2
+    assert result[0]["unsupported"] is False
+    assert result[1]["evidence_ids"] == []
+    assert result[1]["unsupported"] is True
 from ddp_core.hits import Hit
 
 

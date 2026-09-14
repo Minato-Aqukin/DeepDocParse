@@ -1,0 +1,12 @@
+{
+  "schema": "ddp-resource/1#Resource",
+  "resource_id": "res-b-1",
+  "organization_id": "org1",
+  "owner_ref": "userB",
+  "uploaded_by_ref": "userB",
+  "display_name": "handbook.pdf",
+  "publication": "private",
+  "copied_from": "res-a-1",
+  "created_at": "2026-09-12T00:00:00Z",
+  "deleted_at": null
+}

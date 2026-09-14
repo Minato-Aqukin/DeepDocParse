@@ -24,7 +24,9 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/control-api ./cmd/control-api &&
 FROM alpine:3.21
 # 证书：OIDC 与对象存储都可能走 https
 RUN apk add --no-cache ca-certificates tzdata && \
-    adduser -D -u 10001 ddp
+    adduser -D -u 10001 ddp && \
+    mkdir -p /var/lib/ddp/node-identity && \
+    chown ddp:ddp /var/lib/ddp/node-identity && chmod 700 /var/lib/ddp/node-identity
 COPY --from=build /out/control-api /usr/local/bin/control-api
 COPY --from=build /out/control-migrate /usr/local/bin/control-migrate
 

@@ -8,7 +8,7 @@ from ddp_corpus.models import (
     Chunk, Citation, ExtractionItem, ExtractionRun, GraphEdge, KnowledgeEntity,
     KnowledgeReview, WikiEntry, WikiSection, WikiSentence,
 )
-from tests.conftest import CHAT
+from tests.conftest import ACTOR, CHAT, ORG
 from tests.test_qa import _ask, _chat_sse, _conversation, _ready_document
 
 
@@ -55,6 +55,16 @@ async def _seed_knowledge(actor_client, session, monkeypatch):
                  role="primary", snippet=evidence.content,
                  content_digest=evidence.content_digest, rank=0),
     ])
+    from ddp_corpus.models import ResourceVersion
+    version = await session.scalar(select(ResourceVersion).where(
+        ResourceVersion.document_id == evidence.document_id))
+    assert version is not None
+    provenance = {"generated_by": ACTOR, "organization_id": ORG,
+                  "source_bindings": [{"resource_id": version.resource_id,
+                    "source_version_id": version.id, "document_id": evidence.document_id,
+                    "parse_revision": evidence.parse_job_id}]}
+    for row in (source, target, edge, entry, sentence):
+        row.provider = {**(row.provider or {}), **provenance}
     await session.commit()
     return document, source, target, edge, entry, sentence, evidence_id
 
@@ -96,9 +106,13 @@ async def test_review_queue_is_annotation_only_and_uncertain_merge_can_split(
         actor_client, session, monkeypatch):
     document, source, _, edge, _, sentence, _ = await _seed_knowledge(
         actor_client, session, monkeypatch)
-    actor_id = "actor-knowledge"
-    run = ExtractionRun(actor_id=actor_id, name="review fixture", schema_json={},
+    actor_id = ACTOR
+    run = ExtractionRun(actor_id=actor_id, organization_id=ORG, name="review fixture", schema_json={},
                         status="succeeded")
+    from ddp_corpus.models import ResourceVersion
+    version = await session.scalar(select(ResourceVersion).where(
+        ResourceVersion.document_id == document["id"]))
+    run.resource_context = {"resources": {document["id"]: version.resource_id}, "principal_id": ACTOR}
     session.add(run)
     await session.flush()
     extracted = ExtractionItem(

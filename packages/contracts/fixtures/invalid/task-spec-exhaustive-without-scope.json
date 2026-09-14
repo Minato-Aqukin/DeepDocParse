@@ -1,0 +1,27 @@
+{
+  "schema": "ddp-task-probe/1#TaskSpec",
+  "protocol": "ddp-task/1",
+  "operation": "rag.answer.cited",
+  "workspace_ref": "local-env:workspace-1",
+  "query": "比较方法甲和方法乙，并给出原文出处",
+  "resource_scope": {
+    "kind": "federation_public"
+  },
+  "search_policy": {
+    "mode": "exhaustive_scope",
+    "ordering": "local_first"
+  },
+  "execution_policy": {
+    "mode": "trusted_federation",
+    "coordinator_ref": "node-a"
+  },
+  "consent_refs": {
+    "exploration": "consent-probe-4",
+    "execution": null
+  },
+  "requirements": {
+    "citations": "required",
+    "output_schema": "ddp-answer/1"
+  },
+  "budget_ref": "budget-9"
+}

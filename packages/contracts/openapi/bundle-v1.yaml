@@ -1,0 +1,49 @@
+openapi: 3.1.0
+info:
+  title: DeepDocParse Resource Bundle API
+  version: 1.0.0
+  description: DDP-Bundle v1。入口身份与资源ACL均必需；详见../ddp/bundle-format.md。
+paths:
+  /api/bundles/import:
+    post:
+      operationId: importBundle
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/zip:
+            schema: {type: string, format: binary}
+      responses:
+        '201': {description: 校验通过且所有对象已持久化，私有资源ready，索引必须重建}
+        '200': {description: 相同操作重试，返回已有本地资源身份}
+        '404': {description: 资源不存在或不可访问}
+        '409': {description: 幂等冲突或原文明确缺失，未发布资源}
+        '413': {description: 超过压缩包或解压限制}
+        '422': {description: 路径或schema或摘要或证据不合法，未发布资源}
+  /api/resources/{resource_id}/versions/{version_id}/bundle:
+    parameters:
+      - {in: path, name: resource_id, required: true, schema: {type: string}}
+      - {in: path, name: version_id, required: true, schema: {type: string}}
+    get:
+      operationId: exportBundle
+      responses:
+        '200':
+          description: 固定资源版本快照
+          content:
+            application/zip:
+              schema: {type: string, format: binary}
+        '404': {description: 资源不存在或无权访问}
+        '503': {description: 本节点持久身份未配置}
+  /api/resources/{resource_id}/versions/{version_id}/bundle/evidence:
+    parameters:
+      - {in: path, name: resource_id, required: true, schema: {type: string}}
+      - {in: path, name: version_id, required: true, schema: {type: string}}
+    get:
+      operationId: getBundleEvidence
+      responses:
+        '200': {description: 冻结原始证据与来源身份，不自动认定语义复核通过}
+        '404': {description: 资源不存在或无权访问}
