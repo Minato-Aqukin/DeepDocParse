@@ -1,2 +1,9 @@
 *.pdf binary
 tests/fixtures/** binary
+
+# Hash-pinned lock files keep LF on every checkout. The WSL runtime tarball
+# embeds the sha256 of packaging/windows/wsl-runtime-lock.json and the Windows
+# assembler re-hashes the in-repo copy; a CRLF checkout turns 57489d78 into
+# 02961a3e and fails the pin comparison. Affects only hash-sensitive files.
+packaging/windows/*.json text eol=lf
+packaging/arch/*.json text eol=lf
