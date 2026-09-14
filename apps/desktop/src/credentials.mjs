@@ -12,10 +12,18 @@ export class CredentialBroker {
   #queues = new Map()
   #sessionGeneration = 0
   #files
-  constructor({ directory, safeStorage, platform = process.platform, fileSystem = FILESYSTEM }) {
+  // `platform` decides the credential *policy* (which secret service we would
+  // call); `directoryPlatform` decides the filesystem security gate. In
+  // production both are process.platform. Tests may simulate a policy platform
+  // without pretending the host filesystem changed: a Linux policy probe on
+  // Windows must still use the NTFS gate, or it would reject every directory
+  // with POSIX mode checks NTFS cannot satisfy.
+  constructor({ directory, safeStorage, platform = process.platform,
+    directoryPlatform = process.platform, fileSystem = FILESYSTEM }) {
     this.directory = directory
     this.safeStorage = safeStorage
     this.platform = platform
+    this.directoryPlatform = directoryPlatform
     this.#files = fileSystem
   }
   policy() { return credentialBackend(this.safeStorage, this.platform) }
@@ -42,7 +50,7 @@ export class CredentialBroker {
   }
   #file(key) { return path.join(this.directory, `${key}.json`) }
   async #directory() {
-    await secureDirectory(this.directory, { platform: this.platform,
+    await secureDirectory(this.directory, { platform: this.directoryPlatform,
       code: 'unsafe_credential_directory', fileSystem: this.#files })
   }
   async #remove(key) {
@@ -88,7 +96,7 @@ export class CredentialBroker {
     await this.#directory()
     let file
     try {
-      await secureFile(this.#file(key), { platform: this.platform, maxBytes: 131072,
+      await secureFile(this.#file(key), { platform: this.directoryPlatform, maxBytes: 131072,
         code: 'credential_unavailable', fileSystem: this.#files })
       file = await this.#files.open(this.#file(key), constants.O_RDONLY | constants.O_NOFOLLOW)
     } catch (error) {

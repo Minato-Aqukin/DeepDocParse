@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile, readFile, readdir, mkdir, symlink, rename, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, writeFile, readFile, readdir, mkdir, symlink, rename, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -77,6 +77,20 @@ test('basic_text and unavailable backends are session-only and never encrypt or 
     broker.clearSession()
     assert.equal((await broker.status(pair)).present, false)
   }
+})
+
+test('credential policy platform never changes the filesystem security gate', async t => {
+  const directory = path.join(await temporary(t), 'credentials')
+  await mkdir(directory, { recursive: true })
+  if (process.platform !== 'win32') await chmod(directory, 0o755)
+  // Policy says Linux (session-only secret service), filesystem says win32:
+  // the win32 gate is advisory and must accept a 0o755 directory even though a
+  // POSIX gate would reject it. Re-coupling the two would fail this test.
+  const broker = new CredentialBroker({ directory, safeStorage: storage('basic_text'),
+    platform: 'linux', directoryPlatform: 'win32' })
+  const status = await broker.set({ ...pair, secret: 'private-key', persist: true })
+  assert.equal(status.mode, 'session')
+  assert.equal(status.persistentAvailable, false)
 })
 
 test('ciphertext is scoped to environment and profile; session replacement removes stale persistence', async t => {
