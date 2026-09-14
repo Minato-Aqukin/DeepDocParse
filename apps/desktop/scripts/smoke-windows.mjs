@@ -117,7 +117,7 @@ function killTree(child) {
   }
 }
 
-function assertReport(report) {
+export function assertReport(report) {
   assert.equal(report.renderer.nodeRequire, 'undefined')
   assert.equal(report.renderer.nodeProcess, 'undefined')
   assert.equal(report.renderer.host.ok, true)
@@ -125,15 +125,24 @@ function assertReport(report) {
   assert.ok(report.renderer.rendered > 0, 'renderer rendered no UI')
   assert.deepEqual(report.webPreferences,
     { sandbox: true, contextIsolation: true, nodeIntegration: false })
-  assert.equal(report.ready.state, 'ready')
-  assert.equal(report.suspended.state, 'stopped')
-  assert.equal(report.resumed.state, 'ready')
-  assert.deepEqual(report.ready.identity, report.resumed.identity)
-  assert.equal(report.stopped.state, 'stopped')
-  assert.equal(report.sharedClient.pdfRendered, true)
-  assert.ok(report.sharedClient.fileResults.originalBytes > 0)
-  assert.equal(report.sharedClient.fileResults.exported.value.saved, true)
   assert.equal(report.renderer.methods.includes('getCredential'), false)
+  if (report.localRuntime?.state === 'ready') {
+    assert.equal(report.ready.state, 'ready')
+    assert.equal(report.suspended.state, 'stopped')
+    assert.equal(report.resumed.state, 'ready')
+    assert.deepEqual(report.ready.identity, report.resumed.identity)
+    assert.equal(report.stopped.state, 'stopped')
+    assert.equal(report.sharedClient.pdfRendered, true)
+    assert.ok(report.sharedClient.fileResults.originalBytes > 0)
+    assert.equal(report.sharedClient.fileResults.exported.value.saved, true)
+    return
+  }
+  // Tier A: a Windows runner without a WSL2 distribution reports the honest
+  // capability reason instead of pretending local mode works.
+  assert.equal(report.localRuntime?.state, 'unavailable')
+  assert.match(report.localRuntime.reason, /^wsl_[a-z0-9_]+$/,
+    `unexpected local runtime reason: ${report.localRuntime.reason}`)
+  assert.equal(report.sharedClient, null)
 }
 
 async function main() {
@@ -196,6 +205,7 @@ async function main() {
     assertReport(report)
     process.stdout.write(JSON.stringify({ passed: true, report: options.report, log: logPath,
       executable, exitCode, display: report.display ?? null,
+      localRuntime: report.localRuntime ?? null,
       electron: report.renderer.host.value.electron, secrets: report.renderer.host.value.secrets }) + '\n')
     return
   }

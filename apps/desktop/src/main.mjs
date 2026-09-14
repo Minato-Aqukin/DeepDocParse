@@ -241,8 +241,21 @@ app.whenReady().then(async () => {
       await secureDirectory(workspace, { code: 'unsafe_smoke_directory' })
       selected = await workspaces.selectedByNativeDialog(workspace)
     }
+    // Tier A smoke: a Windows host without a WSL2 distribution cannot start
+    // local mode, and that is a product state, not a host failure. Record the
+    // honest capability reason and keep asserting the renderer/host boundary;
+    // machines with WSL run the full local flow below.
+    const WSL_UNAVAILABLE_CODES = new Set(['wsl_missing', 'wsl1_unsupported',
+      'wsl_distro_not_found', 'wsl_unavailable', 'wsl_backend_unavailable',
+      'wsl_runtime_archive_mismatch', 'wsl_runtime_abi_mismatch',
+      'wsl_runtime_provision_failed', 'wsl_runtime_not_installed'])
+    let localRuntime = { state: 'unavailable', reason: null }
+    let ready = null, suspended = null, resumed = null, fileResults = null
+    let connectionId = null, pdfRendered = false
+    try {
     const connected = await clients.connectLocal({ workspaceId: selected.workspaceId })
-    const ready = runtime.status(selected.workspaceId)
+    connectionId = connected.connectionId
+    ready = runtime.status(selected.workspaceId)
     const waitCurrent = async () => {
       for (let attempt = 0; attempt < 100; attempt++) {
         const current = clients.list().find(item => item.connectionId === connected.connectionId)
@@ -264,7 +277,7 @@ app.whenReady().then(async () => {
       if (attempt === 99) throw new HostError('smoke_parse_failed')
       await delay(100)
     }
-    const fileResults = await window.webContents.executeJavaScript(`(async () => {
+    fileResults = await window.webContents.executeJavaScript(`(async () => {
       const original = await window.ddpDesktop.clientReadOriginal(${JSON.stringify({ connectionId: connected.connectionId, versionId: imported.value.version_id })})
       const exported = await window.ddpDesktop.clientExportBundle(${JSON.stringify({ connectionId: connected.connectionId, versionId: imported.value.version_id })})
       return { originalBytes: original.ok ? original.value.byteLength : 0, exported }
@@ -273,7 +286,6 @@ app.whenReady().then(async () => {
     await window.loadURL(ui.href)
     await delay(300)
     await window.webContents.executeJavaScript(`document.querySelector('.resource-row')?.click()`)
-    let pdfRendered = false
     for (let attempt = 0; attempt < 100; attempt++) {
       pdfRendered = await window.webContents.executeJavaScript(`(() => {
         const canvas = document.querySelector('.pdf-canvas canvas')
@@ -286,14 +298,21 @@ app.whenReady().then(async () => {
     if (!pdfRendered) throw new HostError('smoke_pdf_not_rendered')
     await clients.suspend()
     await runtime.suspend()
-    const suspended = runtime.status(selected.workspaceId)
+    suspended = runtime.status(selected.workspaceId)
     await runtime.resume()
     await clients.resume()
     await waitCurrent()
-    const resumed = runtime.status(selected.workspaceId)
+    resumed = runtime.status(selected.workspaceId)
+    localRuntime = { state: 'ready', reason: null }
+    } catch (error) {
+      const reason = error instanceof HostError ? error.code : null
+      if (!(localRuntimeKind === 'wsl' && WSL_UNAVAILABLE_CODES.has(reason))) throw error
+      localRuntime = { state: 'unavailable', reason }
+    }
     const screenshot = await window.webContents.capturePage()
     await writeFile(path.join(directory, 'desktop.png'), screenshot.toPNG())
-    smokeResult = { directory, workspaceId: selected.workspaceId, report: { renderer, ready, suspended, resumed, sharedClient: { connectionId: connected.connectionId, fileResults, pdfRendered },
+    smokeResult = { directory, workspaceId: selected.workspaceId, report: { renderer, localRuntime, ready, suspended, resumed,
+      sharedClient: localRuntime.state === 'ready' ? { connectionId, fileResults, pdfRendered } : null,
       webPreferences: { sandbox: window.webContents.getLastWebPreferences().sandbox,
         contextIsolation: window.webContents.getLastWebPreferences().contextIsolation,
         nodeIntegration: window.webContents.getLastWebPreferences().nodeIntegration },
