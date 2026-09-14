@@ -74,7 +74,10 @@ CACHED_PROBE_PROFILE = "cached_probe_receipt"
 SCOPE_TTL_SECONDS = 900
 #: 交付暂存期。TTL 到期未确认 -> expired，不得再显示"已保存本地"。
 DELIVERY_TTL_SECONDS = 86400
-#: 远端执行的轮询上限；超时先取消再记 unreachable，绝不无限重试。
+#: 远端执行的轮询上限。超时记 `unreachable/peer_execution_timeout` 并**保留**
+#: 对端执行（与本地 `local_execution_timeout` 同一语义），本轮不再等；resume
+#: 按业务键对账到同一条执行接着等。超时就取消会让这个"可重做"的目标永远
+#: 重做不了：对账拿回的是已取消的执行，换代次重新受理又是同键异体 409。
 PEER_POLL_DEADLINE_SECONDS = 20.0
 PEER_POLL_INTERVAL_SECONDS = 0.05
 #: 本地执行的等待上限。本地目标现在也排在持久队列里（`federation_execute`），
@@ -262,6 +265,10 @@ def _go_manifest_digest(manifest: dict) -> str:
     Go 的 `json.Marshal` 按结构体字段顺序序列化、省略空的可选字段，时间戳
     保留原始 RFC3339 文本。这里只做**逐字段重排**、不重新格式化时间 ——
     收到什么字节就按什么字节算，"跨语言摘要"才不会在时间精度上悄悄分叉。
+
+    字段顺序以 `scope-control-format.md` 为准。`child_manifests` 是 omitempty：
+    远端展开过的 manifest 才有它，空列表与缺省同一原像。漏掉它会让每个
+    展开过远端目录的 federation_public scope 都 409 `plan_changed`。
     """
     body = {
         "schema": manifest["schema"], "scope_id": manifest["scope_id"],
@@ -271,6 +278,13 @@ def _go_manifest_digest(manifest: dict) -> str:
             {key: item[key] for key in ("node_id", "registry_revision", "fetched_at",
                                         "directory_ref", "snapshot_ref") if key in item}
             for item in manifest.get("registry_revision_vector", [])],
+    }
+    children = manifest.get("child_manifests") or []
+    if children:
+        body["child_manifests"] = [
+            {key: item[key] for key in ("node_id", "scope_ref", "enumeration_state")}
+            for item in children]
+    body.update({
         "expanded_members": [
             {key: item[key] for key in ("origin_node_id", "collection_id", "operation")}
             for item in manifest.get("expanded_members", [])],
@@ -278,7 +292,7 @@ def _go_manifest_digest(manifest: dict) -> str:
             {key: item[key] for key in ("node_id", "reason")}
             for item in manifest.get("unexpanded_subtrees", [])],
         "enumeration_state": manifest["enumeration_state"],
-    }
+    })
     raw = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
     raw = (raw.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
            .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
@@ -955,9 +969,11 @@ async def _probe_targets(session: AsyncSession, actor: Actor, row: FederationReq
         if origin == node:
             probe_key = _probe_key(row.root_task_id, target)
             try:
+                # commit=False：规划持有每 root 的事务级咨询锁，探测在规划
+                # 事务里落行、随计划一起提交；中途提交会把锁提前放掉。
                 probe = await federation.run_probe(
                     session, actor, request, now=now, http=http, index=index,
-                    idempotency_key=probe_key)
+                    idempotency_key=probe_key, commit=False)
             except APIError as exc:
                 outcome[key] = ("failed", exc.code)
                 continue
@@ -1259,9 +1275,8 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
                 peers=peers, budget=root_budget)
     finally:
         await peers.aclose()
-    # Probe 路径在并发碰撞时可能回滚过会话（本地 run_probe 的 commit 兜底），
-    # 行会被 expire；按主键重读，后面的计划构造不能触发 async 懒加载
-    # （N8；与 `_execute_plan` 的同款防御一致）。
+    # Probe 路径在碰撞时可能回滚过 SAVEPOINT，行会被 expire；按主键重读，后面
+    # 的计划构造不能触发 async 懒加载（N8；与 `_execute_plan` 的同款防御一致）。
     row = await _load_request(session, actor, root_task_id)
     try:
         steps, edges = routing.plan_steps(
@@ -1640,18 +1655,17 @@ async def _local_execution_outcome(session: AsyncSession, actor: Actor,
 
 
 async def _poll_execution(client, executor_task_id: str) -> dict:
-    """轮询到终态；超时先取消再返回 `peer_execution_timeout` 的显式状态。
+    """轮询到终态；超时返回 `peer_execution_timeout` 的显式状态。
 
     返回对端最后一次状态（或合成的超时状态）；调用方按 state/error 决定结局。
+    **超时不取消对端执行**：它仍受对端自己的执行时限约束，而 resume 的对账
+    会找回同一条执行继续等。取消它等于把可重做的目标永久钉死（对账只能
+    拿回 cancelled，换代次重受理是同键异体 409）。
     """
     deadline = time.monotonic() + PEER_POLL_DEADLINE_SECONDS
     status = await client.execution(executor_task_id)
     while status.get("state") not in ("succeeded", "failed", "cancelled"):
         if time.monotonic() >= deadline:
-            try:
-                await client.cancel(executor_task_id)
-            except PeerUnavailable:
-                pass
             return {"state": "unreachable", "error": "peer_execution_timeout"}
         await asyncio.sleep(PEER_POLL_INTERVAL_SECONDS)
         status = await client.execution(executor_task_id)
@@ -2005,6 +2019,7 @@ async def _load_excerpts(session: AsyncSession, actor: Actor,
     必须真的看到正文，否则 [n] 只是一串空编号。
     """
     excerpts: dict[str, str] = {}
+    node = federation.local_node_id()
     for step in plan["steps"]:
         if step["operation"] != "retrieve":
             continue
@@ -2012,15 +2027,38 @@ async def _load_excerpts(session: AsyncSession, actor: Actor,
             probe = await session.get(FederationProbe, probe_id)
             if probe is None or probe.organization_id != actor.organization_id:
                 continue
+            # 来源按**协调者自己生成的计划**判：retrieve 步的执行者就是目标 origin。
+            # 不用探测行的 `target_node_id` —— 远端行的这一列取自对端回执，坏对端
+            # 报成本节点就能让自己的超长 `_excerpt` 被当成本地正文静默截断，
+            # 绕过 N6 的显式拒绝。条目自报的 origin 同样不信。
+            local_source = step["executor_node_id"] == node
             for item in (probe.result_json or {}).get("evidence") or []:
                 evidence_id = str(item.get("evidence_id") or "")
-                excerpt = item.get("_excerpt")
-                if not isinstance(excerpt, str) or not excerpt.strip():
-                    # 远端探测存下来的是证据集出口的公开字段 `excerpt`。
-                    excerpt = item.get("excerpt")
-                if evidence_id and isinstance(excerpt, str) and excerpt.strip():
+                excerpt = _generation_excerpt(item, local_source=local_source)
+                if evidence_id and excerpt is not None:
                     excerpts.setdefault(evidence_id, excerpt)
     return excerpts
+
+
+def _generation_excerpt(item: dict, *, local_source: bool) -> str | None:
+    """一条证据可以进生成的正文；没有就 None（生成端据此显式拒绝）。
+
+    - **本节点自己的证据**取内部 `_excerpt`，按证据集出口同一把尺子截到契约
+      上限（`federation.bounded_excerpt`）：本节点就是这段正文的权威，对外本来
+      就只给有界片段。不截的话，一个没被切分的长表格/代码块会让整份带引用
+      答案落 `excerpt_over_contract_bound`，而远端协调者读同一条证据却能成功。
+    - **对端给的** `excerpt` 原样返回：越界交给 `excerpt_reason` 显式拒绝
+      （N6，不静默改写别人的证据正文）。对端条目里的 `_excerpt` 不采信。
+    - 空白不是正文（N5）。
+    """
+    if local_source:
+        bounded = federation.bounded_excerpt(item.get("_excerpt"))
+        if bounded is not None:
+            return bounded
+    excerpt = item.get("excerpt")
+    if isinstance(excerpt, str) and excerpt.strip():
+        return excerpt
+    return None
 
 
 def _excerpt_reason(text) -> str | None:
@@ -2099,6 +2137,9 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
     live_excerpts: dict[str, str] = {}
     generation = int(row.delegation_generation or 0)
     root_task_id = row.root_task_id
+    # resume 前移过代次：上一轮可能已受理了某个目标却在落账前死掉（没有
+    # coverage 行）。不先对账就按新代次重新受理，同一个业务键的请求摘要变了，
+    # 执行者只能 409 idempotency_conflict —— 所以补做一律先对账。
     # 循环里不能再读 `row.*`：本地目标等待终态时 `_local_execution_outcome`
     # 会 rollback 结束读事务，行对象随之过期；之后在同步上下文里摸属性就是
     # MissingGreenlet。需要的列在这里一次取完。
@@ -2123,8 +2164,14 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
                 session, actor, step, request_created_at=request_created_at)
             probe_limits: list[str] = []
             if probe is not None:
+                # 规划期探测在这里只提供**回执绑定**（probe_receipts + 实际索引
+                # 修订），成败由下面的执行决定，所以按 in_flight 记。让内核从
+                # 探测派生 succeeded 会触发"过期探测不许记成新成功"：计划有效
+                # 900s、探测只有 300s，用户审批慢一点，成功执行就被降成
+                # partial/probe_receipt_missing 并丢掉证据。
                 try:
-                    entry = coverage_kernel.record(entry, probe, now=_ts(now))
+                    entry = coverage_kernel.record(entry, probe, state="in_flight",
+                                                   now=_ts(now))
                     probe_limits = list(
                         (probe.get("retrieval") or {}).get("internal_limits") or [])
                 except ApplicationError:
@@ -2149,32 +2196,34 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
             internal_limits: list[str] = []
             try:
                 if target["origin_node_id"] == node:
-                    state, error, items, _revision, internal_limits = await _run_local_step(
+                    state, error, items, revision, internal_limits = await _run_local_step(
                         session, actor, root_task_id=root_task_id, plan=plan,
                         task_spec=task_spec,
                         consent=consent, step=step, target=target, generation=generation,
-                        now=now, http=http, index=index, reconcile=current is not None)
+                        now=now, http=http, index=index,
+                        reconcile=retry_only or current is not None)
                 else:
-                    state, error, items, _revision, internal_limits = await _run_remote_step(
+                    state, error, items, revision, internal_limits = await _run_remote_step(
                         peers, root_task_id=root_task_id, plan=plan, task_spec=task_spec,
                         consent=consent,
                         step=step, target=target, generation=generation,
-                        reconcile=current is not None)
+                        reconcile=retry_only or current is not None)
             except APIError as exc:
-                state, error, items, internal_limits = "failed", exc.code, [], []
+                state, error, items, revision, internal_limits = "failed", exc.code, [], None, []
+            if state == "succeeded" and revision:
+                # 执行报了自己检索的索引修订就以它为准：规划期探测的修订最多可能
+                # 是计划有效期（900s）之前的，覆盖账本要记"实际检索的是哪一版"。
+                entry["actual_index_revision"] = revision
             if state == "succeeded":
                 if not entry.get("probe_receipts") or not entry.get("actual_index_revision"):
                     # §7.4：没有回执与实际索引修订的"成功"不许进成功数。
                     state, error = "partial", "probe_receipt_missing"
                 else:
+                    local_source = target["origin_node_id"] == node
                     for item in items:
                         evidence[_evidence_key(item)] = _public_item(item)
-                        excerpt = item.get("_excerpt")
-                        if not isinstance(excerpt, str) or not excerpt.strip():
-                            excerpt = item.get("excerpt")
-                        # 空白不是正文；越界正文留给 `_grounded_answer` 显式
-                        # 拒绝（原因要能在 answer_reason 上看见，N5/N6）。
-                        if isinstance(excerpt, str) and excerpt.strip():
+                        excerpt = _generation_excerpt(item, local_source=local_source)
+                        if excerpt is not None:
                             live_excerpts[str(item.get("evidence_id") or "")] = excerpt
             # 执行/probe 自报的内部限制一并进账本：非空必须落 partial，
             # 绝不允许由一条 truncated_by_limit 的执行推出 complete（T85）。
@@ -2182,16 +2231,19 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
                 entry, None, state=state, error=error, now=_ts(now),
                 limits=probe_limits + list(internal_limits))
             entries[digest] = entry
-        if not retry_only:
-            for target in all_targets:
-                digest = _target_digest(target)
-                if digest in entries:
-                    continue
-                entry = coverage_kernel.new_entry(_target_key(target), scope_id, query_digest)
-                if target not in candidates:
-                    entry = coverage_kernel.record(entry, None, state="not_attempted",
-                                                   error="search_mode_fast", now=_ts(now))
-                entries[digest] = entry
+        # 分母补齐在 resume 上同样要做：上一轮若在落账前死掉，库里没有任何
+        # coverage 行，fast 模式里没被选中的目标也就没有 entry，下面按全量
+        # 目标取 entries 会 KeyError（既不是 APIError 也不是 ApplicationError，
+        # 队列里反复重试，行一直停在 running）。已有的行原样保留。
+        for target in all_targets:
+            digest = _target_digest(target)
+            if digest in entries:
+                continue
+            entry = coverage_kernel.new_entry(_target_key(target), scope_id, query_digest)
+            if target not in candidates:
+                entry = coverage_kernel.record(entry, None, state="not_attempted",
+                                               error="search_mode_fast", now=_ts(now))
+            entries[digest] = entry
     finally:
         await peers.aclose()
     # 本地执行失败时 `federation.execute` 会 rollback 整个 session（那是对的：
@@ -2458,15 +2510,22 @@ async def resume(session: AsyncSession, actor: Actor, root_task_id: str, *, now:
 
 async def cancel(session: AsyncSession, actor: Actor, root_task_id: str, *,
                  now: datetime) -> dict:
-    """显式、幂等取消：完成态不被改写；未完成目标留在分母里记 not_attempted。
+    """显式、幂等取消：终态不被改写；未完成目标留在分母里记 not_attempted。
 
     落 `status="cancelled"`（契约 task_status 的终态）。**同时取消队列里的
     `federation_plan` 任务**：不然 worker 领取后只会看到终态空转，而且它
     占着并发位；已开跑的那次会因 generation 前移而写不进结果。
+
+    - `succeeded` / `failed` / `cancelled` 都是已落定的结局，原样返回。
+      把 failed 改成 cancelled 会把"系统做砸了"改写成"用户不要了"（契约要求
+      两者分开），还会抹掉逐目标的 denied/unreachable 原因、顺手封死 resume。
+    - 只改**可重做**的目标（`_RETRYABLE_STATES`）；succeeded / unsupported /
+      denied / revoked 是本任务无法靠重做改变的结论，照实保留。
+    - 覆盖账本行跟着逐目标记录重算，不留一份过期的 counts。
     """
     await catalog.lock_key(session, "federation-task:" + root_task_id)
     row = await _load_request(session, actor, root_task_id)
-    if row.status in ("succeeded", "cancelled"):
+    if row.status in ("succeeded", "failed", "cancelled"):
         return _status_output(row)
     entries = list(await session.scalars(select(CoverageEntry).where(
         CoverageEntry.root_task_id == root_task_id)))
@@ -2491,11 +2550,21 @@ async def cancel(session: AsyncSession, actor: Actor, root_task_id: str, *,
             CoverageEntry.root_task_id == root_task_id)))
     marked = 0
     for entry in entries:
-        if entry.state in ("succeeded", "unsupported"):
+        if entry.state not in _RETRYABLE_STATES:
             continue
         entry.state = "not_attempted"
         entry.last_error = "cancelled"
         marked += 1
+    ledger = coverage_kernel.ledger(
+        root_task_id=root_task_id, scope_ref=row.scope_id, search_mode=row.search_mode,
+        enumeration_state=_enumeration_state(row),
+        entries=[_entry_from_row(entry, row.scope_id) for entry in entries])
+    ledger_row = await session.get(CoverageLedger, root_task_id)
+    if ledger_row is not None:
+        ledger_row.retrieval_completeness = ledger["retrieval_completeness"]
+        ledger_row.evidence_sufficiency = ledger["evidence_sufficiency"]
+        ledger_row.counts_json = ledger["counts"]
+        ledger_row.updated_at = now
     row.status = "cancelled"
     row.error = "cancelled"
     row.updated_at = now
@@ -2612,7 +2681,11 @@ async def ack_delivery(session: AsyncSession, actor: Actor, delivery_id: str, *,
     await catalog.lock_key(session, "federation-delivery:" + delivery_id)
     delivery = await session.get(FederationDelivery, delivery_id)
     row = await session.get(FederationRequest, delivery.root_task_id) if delivery else None
-    if delivery is None or row is None or row.organization_id != actor.organization_id:
+    # 与 read_delivery / _load_request 同一可见性判据：同组织的其他成员（非
+    # 管理员）拿到 delivery_id 也不许替别人确认 —— 确认会把交付钉成
+    # confirmed、绕过 TTL 过期。不可见与不存在同形 404。
+    if delivery is None or row is None or row.organization_id != actor.organization_id \
+            or (row.actor_id != federation.acting_actor(actor) and not actor.can_manage):
         raise APIError(404, "delivery not found", "invalid_request_error", "delivery_not_found")
     if delivery.state == "confirmed":
         return delivery.receipt_json

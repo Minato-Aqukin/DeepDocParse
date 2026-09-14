@@ -13,7 +13,9 @@ from ddp_corpus.deps import Actor, current_actor
 from ddp_corpus.document_context import document_context
 from ddp_corpus.errors import APIError
 from ddp_corpus.models import Chunk, Document, ParseJob, Resource, ResourceVersion, UploadEvent
-from ddp_corpus.policy import document_resource_id, require_document, require_resource, resource_condition
+from ddp_corpus.policy import (
+    document_resource_id, public_viewer, require_document, require_resource, resource_condition,
+)
 from ddp_corpus.resources import create_asset, scoped_upload_key, tombstone_resource
 
 router = APIRouter()
@@ -52,7 +54,8 @@ async def list_resources(scope: Literal["mine", "site_public"] = "mine",
                          offset: int = Query(default=0, ge=0),
                          actor: Actor = Depends(current_actor),
                          session: AsyncSession = Depends(get_session)):
-    viewer = actor if scope == "mine" else Actor(id="", kind="service", organization_id="", role="viewer")
+    # site_public 是**本组织**的公开目录（企业边界 8），不是跨租户目录。
+    viewer = actor if scope == "mine" else public_viewer(actor.organization_id)
     stmt = select(Resource).where(resource_condition(viewer, write=scope == "mine"))
     if scope == "site_public":
         stmt = stmt.where(Resource.publication == "published", Resource.id.in_(
@@ -171,8 +174,8 @@ async def update_resource(resource_id: str, body: UpdateResource,
                            "invalid_request_error", "resource_not_publishable")
     if body.publication == "published" and row.copied_from:
         source = await session.scalar(select(Resource).where(
-            Resource.id == row.copied_from, resource_condition(Actor(
-                id="", kind="service", organization_id="", role="viewer"))))
+            Resource.id == row.copied_from,
+            resource_condition(public_viewer(row.organization_id))))
         if source is None:
             raise APIError(403, "source does not permit publication", "permission_error",
                            "derived_publication_denied")

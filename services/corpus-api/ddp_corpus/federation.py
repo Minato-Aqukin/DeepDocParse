@@ -294,6 +294,18 @@ EVIDENCE_EXCERPT_CHARS = 2000
 ADMISSION_EVIDENCE_LIMIT = 50
 
 
+def bounded_excerpt(text) -> str | None:
+    """本节点的证据正文 -> 契约有界片段（`excerpt.maxLength`）；空白返回 None。
+
+    **只给本节点自己是权威的正文用**：证据集出口与协调者本地生成共用这一把
+    尺子，一条长表格/代码块不会在一条路径上成功、另一条路径上被判越界。
+    对端给的正文不经过这里 —— 越界由 `excerpt_reason` 显式拒绝（N6）。
+    """
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return text[:EVIDENCE_EXCERPT_CHARS]
+
+
 def _public_evidence_with_excerpt(envelope: dict) -> dict:
     """证据集出口：公开信封 + 有界正文 `excerpt`。
 
@@ -305,8 +317,9 @@ def _public_evidence_with_excerpt(envelope: dict) -> dict:
     text = envelope.get("_excerpt")
     if not isinstance(text, str) or not text.strip():
         text = envelope.get("excerpt")
-    if isinstance(text, str) and text.strip():
-        public["excerpt"] = text[:EVIDENCE_EXCERPT_CHARS]
+    bounded = bounded_excerpt(text)
+    if bounded is not None:
+        public["excerpt"] = bounded
     else:
         # 空白文本不是正文：带上它等于告诉协调者"这条有正文可用"。
         public.pop("excerpt", None)
@@ -598,10 +611,16 @@ async def _locate_probe(session: AsyncSession, actor: Actor, request: dict, *,
 
 
 async def run_probe(session: AsyncSession, actor: Actor, request: dict, *, now: datetime,
-                    http=None, index=None, idempotency_key: str = "") -> dict:
+                    http=None, index=None, idempotency_key: str = "",
+                    commit: bool = True) -> dict:
     """执行一次 capability / evidence / locate 探测并持久化。
 
     同键同摘要返回已有回执（不重算）；同键不同摘要 `idempotency_conflict`。
+
+    `commit=False` 给**已经持有事务的调用方**（协调者规划）：探测行只 flush 进
+    调用方的事务，由调用方提交。协调者用 `pg_advisory_xact_lock` 串行化同一个
+    root 的规划，这里一 commit 事务级锁就提前释放了，并发的第二次规划会看到
+    draft、把全部外发与探测再做一遍并覆盖计划摘要。
     """
     node = local_node_id()
     if request.get("target_node_id") != node:
@@ -672,6 +691,8 @@ async def run_probe(session: AsyncSession, actor: Actor, request: dict, *, now: 
         raise api_error(ApplicationError(
             "idempotency_conflict", "same probe idempotency key with a different request")) \
             from None
+    if not commit:
+        return result
     try:
         await session.commit()
     except IntegrityError:

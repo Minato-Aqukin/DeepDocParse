@@ -9,12 +9,10 @@ from sqlalchemy.exc import IntegrityError
 from ddp_corpus.collection_models import (Collection, CollectionCatalogPage,
     CollectionCatalogSnapshot, CollectionCatalogView, CollectionMember, CollectionReceipt)
 from ddp_corpus.config import settings
-from ddp_corpus.deps import Actor
 from ddp_corpus.errors import APIError
 from ddp_corpus.models import Chunk, Document, ParseJob, Resource, ResourceVersion, as_aware, new_id, utcnow
-from ddp_corpus.policy import resource_condition
+from ddp_corpus.policy import public_viewer, resource_condition
 
-PUBLIC = Actor(id="", kind="service", organization_id="", role="viewer")
 MAX_COLLECTIONS = 10000
 MAX_SNAPSHOTS = 32
 MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
@@ -71,7 +69,8 @@ async def members_state(session, row, actor, *, public=False):
         .outerjoin(ParseJob, ParseJob.id == ResourceVersion.parse_job_id).where(
             ResourceVersion.id.in_([m.version_id for m in members]),
             ResourceVersion.deleted_at.is_(None), Document.deleted_at.is_(None),
-            resource_condition(PUBLIC if public else actor))
+            # public：发布只在集合自己的组织内成立（企业边界 8）。
+            resource_condition(public_viewer(row.organization_id) if public else actor))
         .execution_options(populate_existing=True))).all()
     allowed = {v.id: (v, d, p, resource, chunks) for v, d, p, resource, chunks in versions}
     parts, ready = [], True

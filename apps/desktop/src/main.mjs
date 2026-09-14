@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { CHANNELS, HostError, validate, uiLocation, authorizeSender, isUI,
+import { CHANNELS, HostError, validate, uiLocation, authorizeSender, isUI, smokeLocalRuntimeFailure,
   allowRequest, contentSecurityPolicy, safeFailure } from './policy.mjs'
 import { platformName, secureDirectory } from './platform.mjs'
 import { CredentialBroker } from './credentials.mjs'
@@ -244,11 +244,8 @@ app.whenReady().then(async () => {
     // Tier A smoke: a Windows host without a WSL2 distribution cannot start
     // local mode, and that is a product state, not a host failure. Record the
     // honest capability reason and keep asserting the renderer/host boundary;
-    // machines with WSL run the full local flow below.
-    const WSL_UNAVAILABLE_CODES = new Set(['wsl_missing', 'wsl1_unsupported',
-      'wsl_distro_not_found', 'wsl_unavailable', 'wsl_backend_unavailable',
-      'wsl_runtime_archive_mismatch', 'wsl_runtime_abi_mismatch',
-      'wsl_runtime_provision_failed', 'wsl_runtime_not_installed'])
+    // machines with WSL run the full local flow below. Package/runtime defects
+    // and anything after a successful connect still fail (smokeLocalRuntimeFailure).
     let localRuntime = { state: 'unavailable', reason: null }
     let ready = null, suspended = null, resumed = null, fileResults = null
     let connectionId = null, pdfRendered = false
@@ -305,9 +302,10 @@ app.whenReady().then(async () => {
     resumed = runtime.status(selected.workspaceId)
     localRuntime = { state: 'ready', reason: null }
     } catch (error) {
-      const reason = error instanceof HostError ? error.code : null
-      if (!(localRuntimeKind === 'wsl' && WSL_UNAVAILABLE_CODES.has(reason))) throw error
-      localRuntime = { state: 'unavailable', reason }
+      const unavailable = smokeLocalRuntimeFailure(error,
+        { kind: localRuntimeKind, connected: connectionId !== null })
+      if (!unavailable) throw error
+      localRuntime = unavailable
     }
     const screenshot = await window.webContents.capturePage()
     await writeFile(path.join(directory, 'desktop.png'), screenshot.toPNG())

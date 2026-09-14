@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from conftest import ACTOR, ORG, drain_tasks
+from conftest import ACTOR, ORG, actor_headers, drain_tasks
 from ddp_corpus import federation, federation_tasks
 from ddp_corpus.config import settings
 from ddp_corpus.deps import Actor
@@ -22,6 +22,7 @@ from ddp_corpus.errors import APIError
 from ddp_corpus.main import app as corpus_app
 from ddp_corpus.federation_models import (
     CoverageEntry,
+    CoverageLedger,
     FederationAdmission,
     FederationDelivery,
     FederationExecution,
@@ -220,6 +221,11 @@ class StubPeer:
         self.index_revision = index_revision
         #: 探测回执是否回 403（负面缓存 denied 分支）。
         self.deny_probes = False
+        #: 业务键 -> (请求体, 回执)。真实执行者（`federation.admit`）同键同体复用
+        #: 回执、同键异体 409（delegation_generation 在请求摘要里），lookup 找得到
+        #: 已受理的回执。旧 stub 每次都发新回执、lookup 永远 404，于是"resume 按新
+        #: 代次重发同一个业务键"在远端路径上从来不会红（F-34 #11）。
+        self.accepted: dict[str, tuple[dict, dict]] = {}
 
     def catalog_page(self, request: httpx.Request) -> dict:
         """对等目录读的一页：与 `catalog.snapshot_page` 同分页协议。
@@ -284,6 +290,13 @@ class StubPeer:
                 if self.fail == "admit" or (
                         self.fail_admit_step and body.get("step_id") == self.fail_admit_step):
                     raise httpx.ConnectError("refused", request=request)
+                previous = self.accepted.get(body["idempotency_key"])
+                if previous is not None:
+                    if previous[0] != body:
+                        return httpx.Response(409, json={"error": {
+                            "code": "idempotency_conflict",
+                            "message": "same idempotency key with a different request"}})
+                    return httpx.Response(200, json=previous[1])
                 receipt = bound_peer_receipt(
                     len(self.calls), body=body, key=body["idempotency_key"])
                 executor_task_id = f"remote-exec-{len(self.calls)}"
@@ -291,12 +304,16 @@ class StubPeer:
                 self.executions[executor_task_id] = str(body.get("step_id") or "")
                 if self.foreign_admit_field:
                     receipt[self.foreign_admit_field] = "foreign-value"
+                self.accepted[body["idempotency_key"]] = (body, receipt)
                 return httpx.Response(201, json=receipt)
             if "/evidence-sets/" in path:
                 return httpx.Response(200, json={
                     "schema": "ddp-evidence/1#EvidenceSet",
                     "set_ref": path.rsplit("/", 1)[1], "items": self.items, "complete": True})
             if path.endswith("/admissions/lookup"):
+                key = json.loads(request.content or b"{}").get("idempotency_key")
+                if key in self.accepted:
+                    return httpx.Response(200, json=self.accepted[key][1])
                 return httpx.Response(404, json={"error": {"code": "admission_not_found"}})
             if "/tasks/" in path:
                 executor_task_id = path.rsplit("/", 1)[1]
@@ -532,6 +549,41 @@ def test_go_produced_manifest_digest_is_accepted():
     assert federation_tasks._manifest_digest_matches(manifest) is True
     tampered = dict(manifest, scope_id="go-scope-2")
     assert federation_tasks._manifest_digest_matches(tampered) is False
+
+
+def test_go_produced_manifest_with_children_digest_is_accepted():
+    """远端展开产出的 manifest 带 `child_manifests`，Go 把它编进摘要原像
+    （位于 registry_revision_vector 与 expanded_members 之间，omitempty）。
+
+    期望值与 control-api 的 `TestScopeDigestCrossLanguageFixture` 冻结的是同
+    一个 —— 任何一侧编码漂移，两边之一就会红。`<`/`>`/`&` 验 Go 的 HTML 转义。
+    """
+    node = "node-" + "a" * 48
+    manifest = {
+        "schema": "ddp-scope-coverage/1#ScopeManifest", "scope_id": "go-scope-children",
+        "caller_scope_hash": "sha256:" + "1" * 64,
+        "created_at": "2026-01-01T00:00:00Z", "valid_until": "2030-01-01T00:00:00Z",
+        "registry_revision_vector": [
+            {"node_id": node, "registry_revision": 3, "fetched_at": "2026-01-01T00:00:00Z",
+             "directory_ref": "members", "snapshot_ref": "snap-m"},
+            {"node_id": "node-p", "registry_revision": 4, "fetched_at": "2026-01-01T00:00:00Z",
+             "directory_ref": "collections", "snapshot_ref": "snap-c"}],
+        "child_manifests": [{"node_id": "node-p", "scope_ref": "snap-m",
+                             "enumeration_state": "sealed"}],
+        "expanded_members": [{"origin_node_id": "node-p", "collection_id": "col<1>&",
+                              "operation": "corpus.retrieve"}],
+        "unexpanded_subtrees": [], "enumeration_state": "sealed",
+        "manifest_digest": "sha256:2477d7718bc66f6ce793a05bc6020b9d8ef72e84eba88a0130b6091948704caf",
+    }
+    assert federation_tasks._manifest_digest_matches(manifest) is True
+    # child manifest 的状态必须在摘要里：改它就对不上。
+    tampered = json.loads(json.dumps(manifest))
+    tampered["child_manifests"][0]["enumeration_state"] = "partial"
+    assert federation_tasks._manifest_digest_matches(tampered) is False
+    # 空列表与缺省等价（Go omitempty），不能因为多了一个 `[]` 就改变摘要。
+    bare = {key: value for key, value in manifest.items() if key != "child_manifests"}
+    assert (federation_tasks._go_manifest_digest(dict(bare, child_manifests=[]))
+            == federation_tasks._go_manifest_digest(bare))
 
 
 async def test_coordination_tables_and_tampered_manifest(actor_client, engine):
@@ -1355,33 +1407,66 @@ async def test_resume_reruns_only_incomplete_targets(actor_client, session, monk
 
 async def test_cancel_keeps_denominator_and_never_rewrites_success(
         actor_client, session, monkeypatch):
+    """取消只落在**还没结局**的任务上；已落定的结局（含 failed）一律不改写。
+
+    旧行为：failed 被改写成 cancelled，逐目标的 unreachable/denied 原因全被
+    抹成 `not_attempted/cancelled`，覆盖账本行的 counts 还停在旧值，resume
+    也因此被永久封死 —— "系统做砸了"被改写成了"用户不要了"。
+    """
+    other = "node-" + "c" * 48
     peer = StubPeer(fail="admit")
     install_peer(monkeypatch, peer)
+    # 第三个目标在探索许可的接收方之外：执行期落 denied，它是需要新授权的
+    # 结论，不是"没试过"，取消不许把它洗掉。
     manifest = scope_manifest([member("peer-collection-1", PEER_NODE),
-                               member("peer-collection-2", PEER_NODE)])
+                               member("peer-collection-2", PEER_NODE),
+                               member("other-collection", other)])
     intent = await create_intent(
         actor_client, spec=task_spec(scope="federation_public",
                                      mode="exhaustive_scope", scope_ref="scope-1"),
         consent=exploration(), manifest=manifest)
     root = intent["root_task_id"]
     plan_body = await plan_task(actor_client, root)
-    await approve_task(actor_client, root, plan_body, recipients=(NODE, PEER_NODE))
+    await approve_task(actor_client, root, plan_body, recipients=(NODE, PEER_NODE, other))
     failed = (await submit_task(actor_client, root, plan_body["plan_digest"], "cancel-1")
               ).json()
     assert failed["status"] == "failed"
     before = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
-    assert before["counts"]["total_targets"] == 2 and before["counts"]["incomplete"] == 2
+    assert before["counts"]["total_targets"] == 3 and before["counts"]["incomplete"] == 3
+    before_states = {entry["target_key"]["collection_id"]: (entry["state"], entry["last_error"])
+                     for entry in before["entries"]}
+    assert before_states["other-collection"] == ("denied", "recipient_not_allowed")
 
+    # failed 是已落定的结局：取消原样返回，覆盖记录一条不动。
+    kept = await actor_client.post(f"/api/v1/tasks/{root}/cancel")
+    assert kept.status_code == 200
+    assert kept.json() == failed, "取消不得把 failed 改写成 cancelled"
+    untouched = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
+    assert untouched == before
+
+    # resume 让任务回到 running（排队、worker 还没领）：这时取消才落 cancelled。
+    resumed = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert resumed.status_code == 202, resumed.text
     cancelled = await actor_client.post(f"/api/v1/tasks/{root}/cancel")
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "cancelled"
     assert cancelled.json()["error"] == "cancelled"
     after = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
-    assert after["counts"]["total_targets"] == 2, "取消不得把未完成目标从分母删掉"
-    assert after["counts"]["incomplete"] == 2
-    assert {entry["state"] for entry in after["entries"]} == {"not_attempted"}
+    assert after["counts"]["total_targets"] == 3, "取消不得把未完成目标从分母删掉"
+    assert after["counts"]["incomplete"] == 3
+    after_states = {entry["target_key"]["collection_id"]: (entry["state"], entry["last_error"])
+                    for entry in after["entries"]}
+    assert after_states == {
+        "peer-collection-1": ("not_attempted", "cancelled"),
+        "peer-collection-2": ("not_attempted", "cancelled"),
+        "other-collection": ("denied", "recipient_not_allowed"),
+    }
+    ledger = await session.get(CoverageLedger, root, populate_existing=True)
+    assert ledger.counts_json == after["counts"], "覆盖账本行必须跟着逐目标记录重算"
     again = await actor_client.post(f"/api/v1/tasks/{root}/cancel")
     assert again.json() == cancelled.json()
+    await drain_tasks(corpus_app.state)
+    assert (await actor_client.get(f"/api/v1/tasks/{root}")).json()["status"] == "cancelled"
 
     # 已完成的任务不得被取消改写。
     run = await run_local_task(actor_client, session, key="cancel-success")
@@ -1389,6 +1474,235 @@ async def test_cancel_keeps_denominator_and_never_rewrites_success(
     assert protected.status_code == 200
     assert protected.json() == run["status"]
     assert protected.json()["status"] == "succeeded"
+
+
+# ------------------------------------------------------------------ 执行期边界
+
+async def test_execution_after_planning_probe_ttl_keeps_evidence(actor_client, session):
+    """审批慢于探测 TTL：计划仍在有效期内，成功执行不许被降成 partial。
+
+    旧行为：执行时把规划期探测喂给内核的 `record`，内核按探测派生 succeeded
+    并拒绝"过期探测记成新成功"，except 分支把 entry 重置成空行，于是真实成功
+    的执行落 `partial/probe_receipt_missing`、证据被丢、任务 failed。
+    """
+    _, version, _, _, evidence_rows = await indexed_source(session)
+    await publish_collection(actor_client, version, key="stale-probe-collection")
+    consent = exploration(egress="local_only", recipients=(), payload=(),
+                          budget={"max_probe_requests": 0, "max_egress_bytes": 0})
+    intent = await create_intent(actor_client, spec=task_spec(scope="site_public"),
+                                 consent=consent)
+    root = intent["root_task_id"]
+    plan_body = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan_body)
+    probe_ids = [ref for step in plan_body["steps"] for ref in step.get("probe_refs") or []]
+    assert probe_ids, "本地目标规划时必须留下探测回执"
+    # 用户过了 PROBE_TTL_SECONDS 才提交（计划有效期是 SCOPE_TTL_SECONDS=900）。
+    assert federation.PROBE_TTL_SECONDS < federation_tasks.SCOPE_TTL_SECONDS
+    for probe_id in probe_ids:
+        row = await session.get(FederationProbe, probe_id)
+        stored = json.loads(json.dumps(row.result_json))
+        observed = datetime.fromisoformat(stored["result"]["observed_at"])
+        stored["result"]["observed_at"] = (
+            observed - timedelta(seconds=federation.PROBE_TTL_SECONDS + 60)).isoformat()
+        # 规划期看到的索引修订与执行期实际检索的不同（期间重建过索引）。
+        stored["result"]["retrieval"]["index_revision"] = "planning-time-revision"
+        row.result_json = stored
+    await session.commit()
+
+    executed = await submit_task(actor_client, root, plan_body["plan_digest"], "stale-probe")
+    body = executed.json()
+    assert body["status"] == "succeeded", body
+    assert [item["evidence_id"] for item in body["result"]["evidence"]] \
+        == [evidence_rows[0].id], "成功执行的证据不许因探测回执过期被丢掉"
+    coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
+    assert [(entry["state"], entry["last_error"]) for entry in coverage["entries"]] \
+        == [("succeeded", None)]
+    assert coverage["entries"][0]["probe_receipts"] == probe_ids
+    # 覆盖账本记"实际检索的是哪一版"：执行报了修订就以执行为准，不沿用规划期的。
+    execution = await session.scalar(select(FederationExecution).where(
+        FederationExecution.root_task_id == root))
+    executed_revision = (execution.result_json.get("result") or {}).get("index_revision")
+    assert executed_revision and executed_revision != "planning-time-revision"
+    assert coverage["entries"][0]["actual_index_revision"] == executed_revision
+
+
+async def test_stored_excerpts_trust_the_plan_executor_not_the_probe_row(session):
+    """resume 路径从探测行取正文：本地来源按计划的执行者判，不按行里的 target。
+
+    远端探测行的 `target_node_id` 取自对端回执。坏对端把它报成协调者自己、
+    再塞一个超长 `_excerpt`：按行判来源就会把它当本地正文静默截断进 prompt，
+    绕过对端越界必须显式拒绝的规则（N6）。本地行的长块照常截到契约上限。
+    """
+    actor = Actor(id=ACTOR, kind="user", organization_id=ORG, role="contributor")
+    now = utcnow()
+
+    def probe_row(probe_id, evidence):
+        return FederationProbe(
+            probe_id=probe_id, organization_id=ORG, actor_id=ACTOR,
+            target_node_id=NODE,               # 远端那一行也"自称"是本节点
+            task_spec_digest="sha256:" + "1" * 64, consent_ref="explore-1",
+            probe_kind="evidence_retrieval", collection_id="c", query_digest="",
+            state="succeeded", result_json={"result": {}, "evidence": evidence},
+            expires_at=now + timedelta(minutes=5), created_at=now)
+
+    session.add_all([
+        probe_row("probe-local-long", [{"evidence_id": "local-1", "_excerpt": "L" * 5000}]),
+        probe_row("probe-peer-spoof", [{"evidence_id": "peer-1", "_excerpt": "P" * 5000,
+                                        "excerpt": "p" * 3000}]),
+    ])
+    await session.commit()
+    plan = {"steps": [
+        {"step_id": "retrieve-1", "operation": "retrieve", "executor_node_id": NODE,
+         "probe_refs": ["probe-local-long"]},
+        {"step_id": "retrieve-2", "operation": "retrieve", "executor_node_id": PEER_NODE,
+         "probe_refs": ["probe-peer-spoof"]},
+    ]}
+    excerpts = await federation_tasks._load_excerpts(session, actor, plan)
+    assert excerpts["local-1"] == "L" * federation.EVIDENCE_EXCERPT_CHARS
+    assert excerpts["peer-1"] == "p" * 3000, "对端正文原样交给越界检查，不许被当成本地截断"
+    assert federation.excerpt_reason(excerpts["peer-1"]) == "excerpt_over_contract_bound"
+
+
+def _single_attempt_plans(monkeypatch):
+    """协调任务只给一次机会：模拟崩溃时一轮 drain 就落终态，dedupe 键随之释放。"""
+    from ddp_corpus import queue as queue_module
+
+    real_enqueue = queue_module.enqueue
+
+    async def _enqueue_once(session_, **kwargs):
+        task = await real_enqueue(session_, **kwargs)
+        if task is not None and task.kind == "federation_plan":
+            task.max_attempts = 1
+        return task
+
+    monkeypatch.setattr(queue_module, "enqueue", _enqueue_once)
+
+
+async def crash_before_ledger(actor_client, session, monkeypatch, *, root, plan_digest, key):
+    """受理并跑到落账之前崩溃；清扫把卡住的协调任务落 failed。返回崩溃后状态。
+
+    崩溃点选在 `_answer_result`：取数目标已经真实受理（执行者侧有回执），
+    覆盖账本却还一行都没写 —— 这正是 resume 最难对账的形状。
+    """
+    _single_attempt_plans(monkeypatch)
+    real_answer = federation_tasks._answer_result
+
+    async def _die(*_args, **_kwargs):
+        raise RuntimeError("worker died before the coverage ledger was written")
+
+    monkeypatch.setattr(federation_tasks, "_answer_result", _die)
+    submitted = await actor_client.post("/api/v1/tasks", headers={"Idempotency-Key": key},
+                                        json={"root_task_id": root, "plan_digest": plan_digest})
+    assert submitted.status_code == 202, submitted.text
+    await drain_tasks(corpus_app.state)
+    monkeypatch.setattr(federation_tasks, "_answer_result", real_answer)
+    assert await session.scalar(select(func.count()).select_from(CoverageEntry).where(
+        CoverageEntry.root_task_id == root)) == 0, "崩溃点必须在落账之前"
+    assert await federation_tasks.mark_stalled(session, root, now=utcnow())
+    await session.commit()
+    return (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+
+
+async def test_resume_after_crash_before_ledger_fills_fast_denominator(
+        actor_client, monkeypatch, session):
+    """fast 模式里没被选中的目标在"落账前崩溃 -> resume"时也要进分母。
+
+    旧行为：`retry_only=True` 跳过分母补齐，按全量目标取 entries 直接
+    KeyError —— 不是 APIError/ApplicationError，队列里重试，行一直 running。
+    """
+    monkeypatch.setattr(federation_tasks, "FAST_CANDIDATE_LIMIT", 1)
+    peer = StubPeer()
+    install_peer(monkeypatch, peer)
+    manifest = scope_manifest([member("peer-collection-1", PEER_NODE),
+                               member("peer-collection-2", PEER_NODE)])
+    intent = await create_intent(
+        actor_client, spec=task_spec(scope="federation_public", mode="fast",
+                                     scope_ref="scope-1"),
+        consent=exploration(), manifest=manifest)
+    root = intent["root_task_id"]
+    plan_body = await plan_task(actor_client, root)
+    assert len([step for step in plan_body["steps"] if step["operation"] == "retrieve"]) == 1
+    await approve_task(actor_client, root, plan_body, recipients=(NODE, PEER_NODE))
+    crashed = await crash_before_ledger(actor_client, session, monkeypatch, root=root,
+                                        plan_digest=plan_body["plan_digest"],
+                                        key="crash-fast")
+    assert crashed["status"] == "failed" and crashed["error"] == "coordinator_stalled"
+
+    resumed = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert resumed.status_code == 202, resumed.text
+    await drain_tasks(corpus_app.state)
+    status = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert status["status"] == "succeeded", status
+    coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
+    assert coverage["counts"]["total_targets"] == 2
+    states = sorted((entry["state"], entry["last_error"]) for entry in coverage["entries"])
+    assert states == [("not_attempted", "search_mode_fast"), ("succeeded", None)]
+
+
+class SlowExecutorPeer(ReconcilingStubPeer):
+    """执行者跑得比协调者的轮询耐心慢；`/cancel` 与真实执行者一样落终态。"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.hold = True
+        self.cancelled: set[str] = set()
+
+    def transport(self) -> httpx.MockTransport:
+        inner = super().transport()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if "/tasks/" not in path:
+                return inner.handle_request(request)
+            self.calls.append((request.method, path, request.headers.get("Idempotency-Key")))
+            executor = path.split("/tasks/", 1)[1].split("/", 1)[0]
+            if path.endswith("/cancel"):
+                self.cancelled.add(executor)
+            state = ("cancelled" if executor in self.cancelled
+                     else "running" if self.hold else "succeeded")
+            return httpx.Response(200, json={
+                **peer_status(), "executor_task_id": executor, "state": state,
+                "evidence_set_ref": (f"federation-execution:{executor}"
+                                     if state == "succeeded" else None)})
+
+        return httpx.MockTransport(handler)
+
+
+async def test_remote_poll_timeout_stays_retryable_on_resume(actor_client, monkeypatch):
+    """远端执行超过轮询耐心：记 unreachable，resume 对账到同一条执行接着等。
+
+    旧行为：超时先 `cancel` 对端执行。resume 的对账拿回同一张回执，轮询到
+    cancelled -> `not_attempted`；换代次重新受理又是同键异体 409 —— 这个
+    标着"可重做"的目标永远重做不了。
+    """
+    monkeypatch.setattr(federation_tasks, "PEER_POLL_DEADLINE_SECONDS", 0.0)
+    peer = SlowExecutorPeer()
+    install_peer(monkeypatch, peer)
+    manifest = scope_manifest([member("peer-collection-1", PEER_NODE)])
+    intent = await create_intent(
+        actor_client, spec=task_spec(scope="federation_public", mode="exhaustive_scope",
+                                     scope_ref="scope-1"),
+        consent=exploration(), manifest=manifest)
+    root = intent["root_task_id"]
+    plan_body = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan_body, recipients=(NODE, PEER_NODE))
+    first = (await submit_task(actor_client, root, plan_body["plan_digest"], "slow-peer")
+             ).json()
+    assert first["status"] == "failed"
+    coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
+    assert [(entry["state"], entry["last_error"]) for entry in coverage["entries"]] \
+        == [("unreachable", "peer_execution_timeout")]
+    assert not peer.cancelled, "轮询超时不得取消对端执行"
+
+    peer.hold = False
+    resumed = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert resumed.status_code == 202, resumed.text
+    await drain_tasks(corpus_app.state)
+    status = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert status["status"] == "succeeded", status
+    assert status["result"]["counts"]["succeeded"] == 1
+    assert len(peer.receipts) == 1, "resume 必须对账到同一条受理，不得新造"
+    assert len(peer.admissions) == 1
 
 
 # ------------------------------------------------------------------ 交付
@@ -1415,6 +1729,34 @@ async def test_ack_wrong_digest_and_expired_delivery_cannot_confirm(
     assert replay.json() == expired.json()
     row = await session.get(FederationDelivery, status["delivery_id"])
     assert row.state == "expired"
+
+
+async def test_ack_is_owner_scoped_like_delivery_read(actor_client, session):
+    """同组织的另一个成员拿到 delivery_id + 摘要，也不许替别人确认交付。
+
+    旧行为：`ack_delivery` 只核组织，不核发起人 —— 读取端点对他 404，
+    确认端点却把别人的交付钉成 confirmed（顺带绕过 TTL 过期）。
+    """
+    run = await run_local_task(actor_client, session, key="ack-owner")
+    status, result = run["status"], run["status"]["result"]
+    intruder = actor_headers("actor-mallory")
+    read = await actor_client.get(f"/api/v1/deliveries/{status['delivery_id']}",
+                                  headers=intruder)
+    assert read.status_code == 404
+    stolen = await actor_client.post(
+        f"/api/v1/deliveries/{status['delivery_id']}/ack",
+        headers={**intruder, "Idempotency-Key": "ack-stolen"},
+        json={"result_manifest_digest": result["result_manifest_digest"]})
+    assert stolen.status_code == 404, stolen.text
+    assert stolen.json()["error"]["code"] == read.json()["error"]["code"] \
+        == "delivery_not_found", "越权与不存在同形，不给出存在性探测口"
+    row = await session.get(FederationDelivery, status["delivery_id"], populate_existing=True)
+    assert row.state == "pending" and row.verified_at is None, "越权确认不得落任何写入"
+
+    # 管理员仍可代管；发起人自己当然可以确认。
+    owner = await ack_delivery(actor_client, status["delivery_id"],
+                               result["result_manifest_digest"], "ack-owner-ok")
+    assert owner.status_code == 200 and owner.json()["state"] == "confirmed"
 
 
 async def test_delivery_read_returns_verifiable_bounded_result(actor_client, session):

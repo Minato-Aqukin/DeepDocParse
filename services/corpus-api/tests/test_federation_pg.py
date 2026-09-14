@@ -30,10 +30,10 @@ import asyncio
 import httpx
 import pytest
 import sqlalchemy as sa
-from sqlalchemy import inspect, select, text
+from sqlalchemy import func, inspect, select, text
 
 from conftest import actor_headers, drain_tasks
-from ddp_corpus import db, directory
+from ddp_corpus import db, directory, federation
 from ddp_corpus.cache import FederationCacheEntry  # noqa: F401 — registers metadata
 from ddp_corpus.config import settings
 from ddp_corpus.federation_models import (  # noqa: F401 — registers metadata
@@ -259,6 +259,56 @@ async def test_migration_drill_head_orm_drift_and_one_step_down(pg_engine):
 # ---------------------------------------------------------------------------
 # Scenario 2: coordinator E2E over the queue path
 # ---------------------------------------------------------------------------
+
+async def test_concurrent_planning_of_one_root_probes_once_on_pg(pg_stack, monkeypatch):
+    """同一 root 的两次并发规划：第二次必须等第一次提交，再返回同一份计划。
+
+    旧行为：本地 `run_probe` 中途 `commit`，把 `create_plan` 的事务级咨询锁
+    提前放掉；第二次规划在锁缝里看到 draft，把目录读、探测全做一遍并覆盖
+    计划摘要，拿第一份摘要去审批的人随后 409 plan_changed。SQLite 没有
+    咨询锁，这条只能在真 PostgreSQL 上验。
+    """
+    client, factory, _state = pg_stack
+    run_key = new_id()
+    async with factory() as session:
+        _, version, _, _, _ = await indexed_source(session)
+    collection = await publish_collection(client, version, key=f"pg-plan-race-{run_key}")
+    manifest = scope_manifest([member(collection["collection_id"], node=NODE)])
+    consent = exploration(egress="local_only", recipients=(), payload=(),
+                          budget={"max_probe_requests": 0, "max_egress_bytes": 0})
+    intent = await create_intent(
+        client, spec=task_spec(scope="federation_public", mode="fast"),
+        consent=consent, manifest=manifest, key=f"pg-plan-race-intent-{run_key}")
+    root = intent["root_task_id"]
+
+    real_probe = federation.run_probe
+    probe_calls = 0
+
+    async def slow_probe(*args, **kwargs):
+        nonlocal probe_calls
+        probe_calls += 1
+        result = await real_probe(*args, **kwargs)
+        # 把"探测已落行、计划还没提交"的窗口撑大：锁若在这里已被放掉，
+        # 第二个请求一定能挤进来。
+        await asyncio.sleep(0.5)
+        return result
+
+    monkeypatch.setattr(federation, "run_probe", slow_probe)
+    first, second = await asyncio.wait_for(asyncio.gather(
+        client.post("/api/v1/task-plans", json={"root_task_id": root}),
+        client.post("/api/v1/task-plans", json={"root_task_id": root})), timeout=60)
+    assert first.status_code == second.status_code == 200, (first.text, second.text)
+    assert first.json()["plan_digest"] == second.json()["plan_digest"], \
+        "并发重放必须返回同一份已落定的计划"
+    assert probe_calls == 1, f"同一 root 只许探测一轮，实际 {probe_calls} 次"
+    async with factory() as session:
+        ready_events = await session.scalar(select(func.count()).select_from(
+            FederationTaskEvent).where(FederationTaskEvent.root_task_id == root,
+                                       FederationTaskEvent.type == "plan_ready"))
+        stored = await session.get(FederationRequest, root)
+    assert ready_events == 1
+    assert stored.plan_digest == first.json()["plan_digest"]
+
 
 async def test_coordinator_end_to_end_on_pg_queue_path(pg_stack):
     client, factory, state = pg_stack

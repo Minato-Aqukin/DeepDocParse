@@ -2,6 +2,25 @@ export class HostError extends Error {
   constructor(code) { super(code); this.code = code }
 }
 
+// Codes that mean "this host has no usable WSL2 distribution" — a product
+// state the Tier A smoke may record as `unavailable`. Everything else under
+// `wsl_*` is a defect of *our* package or runtime (backend misconfigured,
+// tarball/ABI mismatch, provisioning or install failed) and must fail the
+// smoke: accepting any `wsl_*` let a broken package pass CI as "no WSL".
+export const WSL_HOST_UNAVAILABLE_CODES = Object.freeze(new Set([
+  'wsl_missing', 'wsl1_unsupported', 'wsl_distro_not_found', 'wsl_unavailable',
+]))
+
+// Smoke classification of a local-runtime failure. Only a failure *before*
+// the local connection was established can be "WSL unavailable"; once local
+// mode connected, a later WSL error (suspend/resume, a crashed runtime) is a
+// real regression, never a capability state.
+export function smokeLocalRuntimeFailure(error, { kind, connected }) {
+  const reason = error instanceof HostError ? error.code : null
+  if (kind !== 'wsl' || connected || !WSL_HOST_UNAVAILABLE_CODES.has(reason)) return null
+  return { state: 'unavailable', reason }
+}
+
 export const CHANNELS = Object.freeze({
   hostStatus: 'ddp:host-status', selectWorkspace: 'ddp:select-workspace',
   startLocal: 'ddp:start-local', stopLocal: 'ddp:stop-local', runtimeStatus: 'ddp:runtime-status',

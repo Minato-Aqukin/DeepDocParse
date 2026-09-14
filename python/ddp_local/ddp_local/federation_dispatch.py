@@ -211,6 +211,10 @@ def _state_from_status(status):
         return "succeeded"
     if execution == "failed":
         return "failed"
+    if execution == "cancelled":
+        # 中心 task_status 的显式终态。不映射就会保留旧投影（submitted），
+        # 界面永远显示一个再也不会结束的"执行中"。
+        return "cancelled"
     if execution in {"queued", "claimed", "running"}:
         return "submitted"
     if planning == "approved":
@@ -238,13 +242,20 @@ async def _explore(runtime, client, plan_id, view, identity, state, seed, scope_
     scope = view["scope"]
     verified = _authorize_bindings(runtime, identity, plan_id, view, scope, "exploration", seed)
     spec = dict(scope["task_spec"])
+    # 中心 `validate_exploration_consent` 要求 TaskSpec 引用**这一份**探索许可。
+    # 本地 prepare 只收未授权的 spec（consent_refs 全空），approve 发出许可却不
+    # 回写 spec；这里在发出前把引用绑上。consent_refs 不进 task_spec_digest，
+    # 所以已批准的计划摘要不变。执行引用由中心审批时写回，不在这里伪造。
+    exploration = view["consents"]["exploration"]
+    spec["consent_refs"] = {**(spec.get("consent_refs") or {}),
+                            "exploration": exploration["consent_id"]}
     # 发出去的 query 必须就是 authorize_dispatch 校验过并返回的那份字节。
     query_binding = next((item for item in scope["payload_bindings"]
                           if item["phase"] == "exploration"
                           and item["payload_kind"] == "query_text"), None)
     if query_binding is not None:
         spec["query"] = verified[query_binding["payload_id"]].decode("utf-8")
-    intent = await client.create_intent(spec, view["consents"]["exploration"], scope_manifest)
+    intent = await client.create_intent(spec, exploration, scope_manifest)
     root = _required_id(intent, "root_task_id")
     state["root_task_id"] = root
     state["task_spec_digest"] = intent.get("task_spec_digest")

@@ -242,6 +242,35 @@ async def test_private_evidence_and_unknown_evidence_are_indistinguishable(actor
     assert denied.json() == unknown.json()
 
 
+async def test_published_resources_never_cross_the_organization_boundary(actor_client, session):
+    """企业边界 8：发布只在本组织内公开。
+
+    旧行为：`resource_condition` 的 published 分支没有组织谓词 —— 别的组织的
+    调用者能读到本组织已发布的资源、版本、证据，并在 site_public 目录里列出它。
+    同组织的调用者行为不变（单组织部署下这就是"全站"）。
+    """
+    doc, resource, version, _, evidence = await seed(session, owner="bob", publication="published",
+                                                     text="published plutonium")
+    same_org = actor_headers("charlie")
+    foreign = actor_headers("mallory", organization_id="org-foreign")
+
+    assert (await actor_client.get(f"/api/v1/resources/{resource.id}", headers=same_org)).status_code == 200
+    listed = (await actor_client.get("/api/v1/resources?scope=site_public", headers=same_org)).json()
+    assert [item["id"] for item in listed["items"]] == [resource.id]
+    assert (await actor_client.get(f"/api/evidence/{evidence.id}", headers=same_org)).status_code == 200
+
+    denied = await actor_client.get(f"/api/v1/resources/{resource.id}", headers=foreign)
+    unknown = await actor_client.get(f"/api/v1/resources/{new_id()}", headers=foreign)
+    assert denied.status_code == unknown.status_code == 404
+    assert denied.json() == unknown.json(), "越界与不存在同形"
+    assert (await actor_client.get(f"/api/v1/resources/{resource.id}/versions/{version.id}",
+                                   headers=foreign)).status_code == 404
+    assert (await actor_client.get("/api/v1/resources?scope=site_public",
+                                   headers=foreign)).json()["items"] == []
+    assert (await actor_client.get(f"/api/evidence/{evidence.id}", headers=foreign)).status_code == 404
+    assert (await actor_client.get(f"/api/documents/{doc.id}", headers=foreign)).status_code == 404
+
+
 @pytest.mark.parametrize("operation", ["reparse", "current-job", "reindex", "verification"])
 async def test_public_reader_cannot_mutate_shared_document_state(actor_client, session, operation):
     from ddp_corpus.models import EvidenceVerification

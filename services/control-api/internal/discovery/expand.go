@@ -66,7 +66,7 @@ type directoryPull struct {
 // reason; the caller keeps them but must mark the subtree partial.
 func (d *PeerDirectory) pullMembers(ctx context.Context, cfg PeerConfig, requests *int, maxRequests int) directoryPull {
 	out := directoryPull{}
-	cursor, snapshotID := "", ""
+	cursor := ""
 	seen := map[string]bool{}
 	first := true
 	var firstCreated time.Time
@@ -80,7 +80,9 @@ func (d *PeerDirectory) pullMembers(ctx context.Context, cfg PeerConfig, request
 		if first {
 			limit = 100
 		}
-		page, reason := d.MembersPage(ctx, cfg, snapshotID, cursor, limit)
+		// Every follow-up page must name the snapshot the first page opened;
+		// both peer endpoints reject a bare cursor with 400.
+		page, reason := d.MembersPage(ctx, cfg, out.snapshotID, cursor, limit)
 		*requests++
 		if reason != "" {
 			out.reason = reason
@@ -128,7 +130,7 @@ type catalogPull struct {
 
 func (d *PeerDirectory) pullCatalog(ctx context.Context, cfg PeerConfig, requests *int, maxRequests int) catalogPull {
 	out := catalogPull{}
-	cursor, snapshotID := "", ""
+	cursor := ""
 	seen := map[string]bool{}
 	firstPage := true
 	var firstCreated time.Time
@@ -142,7 +144,7 @@ func (d *PeerDirectory) pullCatalog(ctx context.Context, cfg PeerConfig, request
 		if firstPage {
 			limit = 100
 		}
-		page, reason := d.CollectionsPage(ctx, cfg, snapshotID, cursor, limit)
+		page, reason := d.CollectionsPage(ctx, cfg, out.snapshotID, cursor, limit)
 		*requests++
 		if reason != "" {
 			out.reason = reason

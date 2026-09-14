@@ -264,11 +264,14 @@ paths:
     post:
       operationId: cancelTask
       description: |
-        显式、幂等取消并对账。未完成目标的覆盖记录置 `not_attempted`（保留在
-        分母里），任务落终态 `status=cancelled`（task_status）—— 与 `failed`
-        分开："用户不想要了"和"系统做砸了"对用户是两件事。已提交完成不得被
-        无条件改成 cancelled，迟到结果不得悄悄发布；取消同时停掉队列里的
-        `federation_plan` 任务。
+        显式、幂等取消并对账。只作用于还没有结局的任务（queued/running）：
+        可重做的目标（planned/in_flight/partial/failed/unreachable/not_attempted）
+        的覆盖记录置 `not_attempted`（保留在分母里），succeeded/unsupported/
+        denied/revoked 这类重做也改变不了的结论照实保留，覆盖账本跟着重算；
+        任务落终态 `status=cancelled`（task_status）—— 与 `failed` 分开：
+        "用户不想要了"和"系统做砸了"对用户是两件事。**已落定的结局
+        （succeeded/failed/cancelled）原样返回、不被改写**，迟到结果不得悄悄
+        发布；取消同时停掉队列里的 `federation_plan` 任务。
       responses:
         '200': {description: 取消后的权威状态（幂等：重复取消返回同一结果）, content: {application/json: {schema: {$ref: '#/components/schemas/TaskStatus'}}}}
         '404': {description: 未知 root_task_id 或对调用者不可见}

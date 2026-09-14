@@ -69,6 +69,11 @@ func (f *fakeDirectory) writeMembers(w http.ResponseWriter, r *http.Request) {
 	if size == 0 {
 		size = 50
 	}
+	// The real handler (handlePeerMembers) only accepts a cursor together with
+	// the snapshot it belongs to; a cursor-only follow-up is a 400.
+	if !f.snapshotMatches(w, r, "members-snapshot", "invalid_peer_page") {
+		return
+	}
 	f.mu.Lock()
 	if r.URL.Query().Get("snapshot_id") == "" {
 		f.pageSize = size
@@ -138,6 +143,10 @@ func (f *fakeDirectory) writeCollections(w http.ResponseWriter, r *http.Request)
 	if size == 0 {
 		size = 50
 	}
+	// corpus snapshot_page rejects a cursor without its snapshot_id the same way.
+	if !f.snapshotMatches(w, r, "catalog-snapshot", "invalid_catalog_request") {
+		return
+	}
 	f.mu.Lock()
 	if r.URL.Query().Get("snapshot_id") == "" {
 		f.pageSize = size
@@ -182,6 +191,20 @@ func (f *fakeDirectory) writeCollections(w http.ResponseWriter, r *http.Request)
 		FirstCursor: cursors[0], TerminalCursor: terminal, Total: &total,
 		Collections: page, NextCursor: next, Complete: complete,
 	})
+}
+
+// snapshotMatches mirrors the peer wire rule both real endpoints enforce: a
+// follow-up page must name the snapshot its cursor belongs to.
+func (f *fakeDirectory) snapshotMatches(w http.ResponseWriter, r *http.Request, snapshotID, code string) bool {
+	q := r.URL.Query()
+	got := q.Get("snapshot_id")
+	if (got == "" && q.Get("cursor") != "") || (got != "" && got != snapshotID) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code}})
+		return false
+	}
+	return true
 }
 
 func (f *fakeDirectory) authority() string {

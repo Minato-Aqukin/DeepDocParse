@@ -77,6 +77,21 @@ func (f *fakePeerServer) countPath(path string) int {
 	return total
 }
 
+// fakeSnapshotMatches applies the rule both real peer endpoints enforce
+// (handlePeerMembers, corpus snapshot_page): a follow-up page names the
+// snapshot its cursor belongs to, otherwise 400. A fake that accepted bare
+// cursors hid a collector that never sent snapshot_id.
+func fakeSnapshotMatches(w http.ResponseWriter, r *http.Request, snapshotID, code string) bool {
+	q := r.URL.Query()
+	got := q.Get("snapshot_id")
+	if (got == "" && q.Get("cursor") != "") || (got != "" && got != snapshotID) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code}})
+		return false
+	}
+	return true
+}
+
 func fakeCursors(count, size int, prefix string) []string {
 	pages := (count + size - 1) / size
 	out := make([]string, pages+1)
@@ -93,6 +108,9 @@ func (f *fakePeerServer) writeMembers(w http.ResponseWriter, r *http.Request) {
 	if status != 0 && status != http.StatusOK {
 		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "peer_unauthenticated"}})
+		return
+	}
+	if !fakeSnapshotMatches(w, r, "peer-members-snapshot", "invalid_peer_page") {
 		return
 	}
 	size := 50
@@ -133,6 +151,9 @@ func (f *fakePeerServer) writeCollections(w http.ResponseWriter, r *http.Request
 	if status != 0 && status != http.StatusOK {
 		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "catalog_snapshot_invalid"}})
+		return
+	}
+	if !fakeSnapshotMatches(w, r, "peer-catalog-snapshot", "invalid_catalog_request") {
 		return
 	}
 	size := 50

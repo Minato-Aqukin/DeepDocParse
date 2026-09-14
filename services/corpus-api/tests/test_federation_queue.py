@@ -42,6 +42,7 @@ from test_federation_probes import (
 )
 from test_federation_tasks import (
     approve_task,
+    crash_before_ledger,
     create_intent,
     exploration,
     plan_task,
@@ -317,6 +318,11 @@ async def test_cancel_before_worker_runs_marks_coordinator_cancelled(
     coverage = (await actor_client.get(f"/api/v1/tasks/{run['root']}/coverage")).json()
     assert coverage["counts"]["total_targets"] == 1
     assert {entry["state"] for entry in coverage["entries"]} == {"not_attempted"}
+    # 取消在"还没跑过"时现建覆盖账本行：counts 必须跟逐目标记录一致，
+    # 不许留一份空的 `{}`。
+    ledger = await session.get(CoverageLedger, run["root"], populate_existing=True)
+    assert ledger.counts_json == coverage["counts"]
+    assert ledger.retrieval_completeness == coverage["retrieval_completeness"]
 
 
 async def test_resume_of_cancelled_task_is_409_and_performs_nothing(
@@ -666,6 +672,38 @@ async def test_dead_queue_task_fails_execution_and_resume_reruns_it(
     assert execution.generation > stale_generation, "补做必须前进代次"
     assert await session.scalar(select(func.count()).select_from(
         FederationAdmission)) == 1, "补做复用同一条受理，不得新造"
+
+
+async def test_resume_reconciles_target_admitted_before_the_crash(
+        actor_client, session, app_state, monkeypatch):
+    """上一轮受理了目标、落账前死掉：resume 必须对账到那条受理，而不是按新代次重发。
+
+    旧行为：是否对账看"库里有没有这个目标的 coverage 行"。落账前崩溃时没有，
+    于是 resume 用前移后的 delegation_generation 重新受理 —— 同一个业务键、
+    请求摘要却变了，执行者只能 409，目标被记成 `failed/idempotency_conflict`，
+    明明已经成功的执行拿不回来。
+    """
+    run = await _local_flow(actor_client, session, key="crash-local")
+    crashed = await crash_before_ledger(actor_client, session, monkeypatch, root=run["root"],
+                                        plan_digest=run["plan"]["plan_digest"],
+                                        key="crash-local")
+    assert crashed["status"] == "failed"
+    executions = list(await session.scalars(select(FederationExecution).where(
+        FederationExecution.root_task_id == run["root"])))
+    assert [row.state for row in executions] == ["succeeded"], "崩溃前执行已经跑完"
+
+    resumed = await actor_client.post(f"/api/v1/tasks/{run['root']}/resume")
+    assert resumed.status_code == 202, resumed.text
+    await drain_tasks(app_state)
+    status = (await actor_client.get(f"/api/v1/tasks/{run['root']}")).json()
+    assert status["status"] == "succeeded", status
+    assert [item["evidence_id"] for item in status["result"]["evidence"]] \
+        == [run["evidence_rows"][0].id]
+    coverage = (await actor_client.get(f"/api/v1/tasks/{run['root']}/coverage")).json()
+    assert [(entry["state"], entry["last_error"]) for entry in coverage["entries"]] \
+        == [("succeeded", None)]
+    assert await session.scalar(select(func.count()).select_from(FederationAdmission).where(
+        FederationAdmission.root_task_id == run["root"])) == 1, "对账复用受理，不得新造"
 
 
 async def test_sweep_does_not_rekill_an_execution_with_a_fresh_retry_task(

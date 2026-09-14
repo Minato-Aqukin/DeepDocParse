@@ -6,14 +6,20 @@ identify bytes, never ownership. `ResourceVersion.document_id` binds existing co
 Authenticated control API actor context is required on every route. Private/draft/withdrawn
 resources are readable and writable only by the matching local organization and owner.
 API keys use the verified `X-DDP-User` subject supplied by control-api; a key id is not a user id. Missing key subject context fails closed. Service/node credentials confer no private resource permission. Published resources are
-readable by authenticated actors while their complete `copied_from` ancestry remains published; missing origins and cycles do not grant public access. Only the owner can change or delete them. Denied
+readable by authenticated actors **of the resource's organization** while their complete `copied_from` ancestry remains published; missing origins and cycles do not grant public access. Only the owner can change or delete them. Denied
 reads return 404 with no resource metadata. Unknown publication states fail closed.
+The organization predicate applies to every published read (resource and version reads, search,
+evidence, crops, bundles, `site_public` listing). The first deployment form is single-organization,
+where this is the whole site; enterprise boundary 8 keeps the predicate anyway so a multi-organization
+deployment never serves one tenant's publications to another. Cross-node sharing is federation
+(peer probes and admissions under the serving node's organization), never a cross-tenant read.
 Legacy documents without any resource mapping remain accessible only to their original
 organization's recorded uploaders. A mapped document must never fall back to this rule.
 Legacy resolution with multiple authorized logical resources requires `resource_id` and
 returns 409 `resource_context_required` rather than choosing a resource arbitrarily.
 
-GET /api/v1/resources (alias /api/resources): scopes `mine` (default), `site_public`.
+GET /api/v1/resources (alias /api/resources): scopes `mine` (default), `site_public`
+(published resources of the caller's organization).
 Returns items, offset, limit, has_more and coverage with scope, complete and local watermark;
 no remote enumeration or global totals are implied. Temporary external parse submissions
 are never listed in site_public.

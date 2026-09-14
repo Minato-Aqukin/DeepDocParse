@@ -8,6 +8,7 @@ chat 上游同样用 respx mock —— 这里不接任何真实模型。负向�
 3. 未就绪时保持旧行为（计划无 answer 步、`answer=null`、`local_model_missing`）；
 4. 生成预算超限必须可见，不截断冒充完整答案。
 """
+import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -15,7 +16,7 @@ import pytest
 import respx
 
 from conftest import SERVICE
-from ddp_corpus import federation_tasks, upstream
+from ddp_corpus import federation, federation_tasks, upstream
 from ddp_corpus.config import settings
 from federation_two_node import TwoNodeFixture
 from test_federation_probes import NODE, configure_federation, indexed_source, publish_collection
@@ -379,6 +380,47 @@ async def test_model_name_alone_is_not_readiness(actor_client, session, monkeypa
     assert answer_step(run["plan"]) is None
     assert run["status"]["result"]["answer_reason"] == "local_model_missing"
     assert chat.call_count == 0
+
+
+@respx.mock
+async def test_long_local_block_is_bounded_like_the_evidence_set_exit(actor_client, session):
+    """本节点自己的长块（表格/代码/公式不切分）按证据集出口同一把尺子截断。
+
+    旧行为：本地路径把完整 `Evidence.content` 喂给 `excerpt_reason`，一个
+    超过 2000 字的块让整份答案落 `excerpt_over_contract_bound` —— 而远端协调者
+    读同一条证据（出口截到 2000）却能生成成功。对端越界仍然显式拒绝（上一条）。
+    """
+    mock_gateway(channels=[gateway_channel()])
+    chat = mock_chat(chat_answer("long block fact [1]"))
+    long_text = "retrieval target text " + "| row | cell | value |" * 150
+    assert len(long_text) > federation.EVIDENCE_EXCERPT_CHARS
+    run = await run_answer_task(actor_client, session, key="long-local", texts=(long_text,))
+
+    result = run["status"]["result"]
+    assert result["answer_reason"] is None, result
+    assert result["answer"] == "long block fact [1]"
+    assert result["claim_evidence_bindings"][0]["evidence_refs"] \
+        == [run["evidence_rows"][0].id]
+    assert chat.call_count == 1
+    prompt = json.loads(json.loads(chat.calls[0].request.content)["messages"][1]["content"])
+    assert prompt["evidence"][0]["text"] == long_text[:federation.EVIDENCE_EXCERPT_CHARS]
+
+
+@respx.mock
+async def test_long_local_block_is_bounded_on_the_live_path_alone(actor_client, session,
+                                                                  monkeypatch):
+    """同一条规则单独钉住"本轮执行拿到的正文"这条路径（上一条两条路径都在喂）。"""
+    async def _nothing_stored(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(federation_tasks, "_load_excerpts", _nothing_stored)
+    mock_gateway(channels=[gateway_channel()])
+    chat = mock_chat(chat_answer("live block fact [1]"))
+    long_text = "retrieval target text " + "| live | cell |" * 200
+    run = await run_answer_task(actor_client, session, key="long-live", texts=(long_text,))
+    assert run["status"]["result"]["answer_reason"] is None, run["status"]["result"]
+    prompt = json.loads(json.loads(chat.calls[0].request.content)["messages"][1]["content"])
+    assert prompt["evidence"][0]["text"] == long_text[:federation.EVIDENCE_EXCERPT_CHARS]
 
 
 @respx.mock

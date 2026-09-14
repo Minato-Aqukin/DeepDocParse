@@ -8,6 +8,16 @@ from ddp_corpus.errors import APIError
 from ddp_corpus.models import Document, DocumentUpload, Resource, ResourceVersion
 
 
+def public_viewer(organization_id: str) -> Actor:
+    """An observer that owns nothing: only the published path of `resource_condition` remains.
+
+    Used to ask "is this published inside that organization?" (catalog pins, derived
+    publication checks, the site_public listing). The organization is required, never
+    blank: publication is organization-scoped (enterprise boundary 8).
+    """
+    return Actor(id="", kind="service", organization_id=organization_id, role="viewer")
+
+
 def resource_condition(actor: Actor, *, write: bool = False):
     owner = and_(Resource.organization_id == actor.organization_id,
                  Resource.owner_id == actor.principal_id, actor.principal_id is not None)
@@ -19,7 +29,12 @@ def resource_condition(actor: Actor, *, write: bool = False):
     child = aliased(Resource)
     public = public.union_all(select(child.id).join(public, child.copied_from == public.c.id)
         .where(child.publication == "published", child.deleted_at.is_(None)))
-    permitted = owner if write else or_(owner, Resource.id.in_(select(public.c.id)))
+    # Publication is organization-scoped (enterprise boundary 8). A single-organization
+    # deployment sees no difference; without it a multi-organization deployment would serve
+    # one tenant's published chunks, evidence and bundles to every other tenant.
+    published = and_(Resource.organization_id == actor.organization_id,
+                     Resource.id.in_(select(public.c.id)))
+    permitted = owner if write else or_(owner, published)
     return and_(Resource.deleted_at.is_(None),
                 Resource.publication.in_(("private", "draft", "published", "withdrawn")), permitted)
 

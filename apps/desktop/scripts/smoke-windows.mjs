@@ -28,7 +28,8 @@
 // A temp directory is used as --user-data-dir / DDP_DESKTOP_SMOKE_DIRECTORY.
 // The main.mjs report (report.json) is copied next to --report as
 // smoke-report.json; diagnostics go to smoke-windows-electron.log. Exit code 0
-// means every assertion passed. Dependency-free: node stdlib only.
+// means every assertion passed. Dependency-free: node stdlib plus the host's
+// own src/policy.mjs (the single list of WSL host-capability codes).
 
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, writeFile, copyFile } from 'node:fs/promises'
@@ -38,6 +39,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { WSL_HOST_UNAVAILABLE_CODES } from '../src/policy.mjs'
 import assert from 'node:assert/strict'
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -138,11 +140,14 @@ export function assertReport(report) {
     return
   }
   // Tier A: a Windows runner without a WSL2 distribution reports the honest
-  // capability reason instead of pretending local mode works.
+  // capability reason instead of pretending local mode works. Only host
+  // capability codes qualify: a `wsl_runtime_*` / `wsl_backend_unavailable`
+  // reason is a broken package and must fail, not pass as "no WSL".
   assert.equal(report.localRuntime?.state, 'unavailable')
-  assert.match(report.localRuntime.reason, /^wsl_[a-z0-9_]+$/,
+  assert.ok(WSL_HOST_UNAVAILABLE_CODES.has(report.localRuntime.reason),
     `unexpected local runtime reason: ${report.localRuntime.reason}`)
   assert.equal(report.sharedClient, null)
+  assert.equal(report.ready ?? null, null, 'an unavailable run cannot carry a ready runtime')
 }
 
 async function main() {

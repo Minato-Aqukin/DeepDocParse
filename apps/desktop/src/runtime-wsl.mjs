@@ -104,7 +104,13 @@ export async function createWslBackend(options = {}) {
 
   const invoke = (args, runOptions = {}) => runProcess({ spawnProcess, executable: wsl, args,
     environment, ...runOptions })
-  const invokeShell = (script, runOptions = {}) => invoke(['-d', selectedDistro, '--', 'bash', '-lc', script], runOptions)
+  // Always `--exec`, never `--`. With `--` wsl.exe hands the rest of the command line to
+  // the distro's *default* shell as one string: that shell (bash, zsh, fish, ...) expands
+  // `$root`/`$tmp`/`$pid` to empty and eats the quoting before our `bash -lc` script even
+  // starts, so provisioning runs `rm -rf ""` and the marker check reads "/INSTALLED.json".
+  // `--exec` runs argv directly without any Linux shell in between.
+  const inDistro = argv => ['-d', selectedDistro, '--exec', ...argv]
+  const invokeShell = (script, runOptions = {}) => invoke(inDistro(['bash', '-lc', script]), runOptions)
 
   async function readMarker() {
     const outcome = await invokeShell(
@@ -169,7 +175,10 @@ export async function createWslBackend(options = {}) {
   }
 
   async function signalInner(pid, name) {
-    await invoke(['-d', selectedDistro, '--', 'kill', `-${name}`, String(pid)], { timeoutMs: killMs })
+    // The shell builtin, not /usr/bin/kill (not every distro image ships procps); argv
+    // reaches it through "$@", so nothing is re-parsed by a shell.
+    await invoke(inDistro(['bash', '-c', 'kill "$@"', 'kill', `-${name}`, String(pid)]),
+      { timeoutMs: killMs })
   }
 
   return {
@@ -187,7 +196,7 @@ export async function createWslBackend(options = {}) {
         + `${runtimeRoot}/app/src/runtime-launcher.py --workspace ${workspace} serve --port 0 --token-file -`
       let child
       try {
-        child = spawnProcess(wsl, ['-d', selectedDistro, '--', 'bash', '-lc', script],
+        child = spawnProcess(wsl, inDistro(['bash', '-lc', script]),
           { shell: false, detached: false, stdio: ['ignore', 'pipe', 'ignore'], env: environment })
       } catch { throw new HostError('runtime_start_failed') }
       const state = { pid: null }

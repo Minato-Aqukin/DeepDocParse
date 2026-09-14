@@ -51,6 +51,14 @@ class CenterStub:
         self.requests.append({"method": request.method, "path": path, "key": key, "body": body,
                               "headers": dict(request.headers)})
         if path == "/api/v1/task-intents":
+            # 与中心 `federation_tasks.validate_exploration_consent` 同一判据：
+            # TaskSpec 必须引用随附的这份探索许可，否则 403 egress_denied。
+            # 旧 stub 不验这一条，于是 App 从没绑过引用也一直是绿的。
+            refs = (body.get("task_spec") or {}).get("consent_refs") or {}
+            if refs.get("exploration") != (body.get("exploration_consent") or {}).get("consent_id"):
+                return httpx.Response(403, json={"error": {
+                    "code": "egress_denied",
+                    "message": "task spec does not reference this exploration consent"}})
             if key in self.intents:
                 stored_body, intent = self.intents[key]
                 if stored_body != body:
@@ -196,6 +204,13 @@ async def test_exploration_execution_flow_delivery_ack(runtime, wired):
     assert explored["probes"] == wired.probes
     assert explored["plan_revision"] == 1
     assert wired.requests[0]["body"]["task_spec"]["query"] == view["scope"]["task_spec"]["query"]
+    # 发出的 TaskSpec 引用的就是用户批准的那份探索许可（中心据此放行），
+    # 执行引用留空、由中心审批时写回；task_spec_digest 不因引用改变。
+    granted = runtime.consents.get(module.federation_identity(runtime), "plan-1")["consents"]
+    sent = wired.requests[0]["body"]
+    assert sent["task_spec"]["consent_refs"] == {
+        "exploration": granted["exploration"]["consent_id"], "execution": None}
+    assert sent["exploration_consent"]["consent_id"] == granted["exploration"]["consent_id"]
 
     submitted = await module.dispatch_plan(runtime, "plan-1", config(), phase="execution")
     assert submitted["state"] == "submitted"
@@ -232,6 +247,22 @@ async def test_exploration_execution_flow_delivery_ack(runtime, wired):
     assert confirmed["delivery"]["state"] == "confirmed"
     assert wired.ack_count == 1
     assert SECRET not in json.dumps(confirmed)
+
+
+async def test_reconcile_maps_center_cancelled_to_a_terminal_local_state(runtime, wired):
+    """中心把任务显式取消：本地投影要落 cancelled，不能停在"执行中"。"""
+    view = prepare_plan(runtime)
+    plan_digest = view["scope"]["plan"]["plan_digest"]
+    wired.plan = view["scope"]["plan"]
+    wired.task_status = status_for(plan_digest)
+    await module.dispatch_plan(runtime, "plan-1", config(), phase="exploration")
+    submitted = await module.dispatch_plan(runtime, "plan-1", config(), phase="execution")
+    assert submitted["state"] == "submitted"
+
+    wired.task_status = status_for(plan_digest, status="cancelled")
+    reconciled = await module.reconcile(runtime, "plan-1", config())
+    assert reconciled["state"] == "cancelled"
+    assert module.load_federation_state(runtime, "plan-1")["state"] == "cancelled"
 
 
 async def test_ack_expired_response_never_marks_local_confirmed(runtime, wired):

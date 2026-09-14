@@ -797,3 +797,59 @@ compose 部署同样是坏的（`MCP_URL: http://mcp:9100`，同一条路径）�
 
 **守卫钉住的是"两边配对"，不是"这个平面能用"。** 真正的覆盖要等
 e2e 里加一段经入口的 MCP 握手。
+
+## F-34 · v3 联邦分支：15 条缺陷，门禁全绿，大半是被"比真实端点更宽松的替身"藏住的
+
+**严重度**：高（其中 6 条让联邦主路径或桌面本地模式在真实环境里必然走不通）
+**发现方式**：2026-09-14 对 `codex/desktop-federation-v3`（相对 main 10 个提交、
+约 4.2 万行）做代码审阅，逐条读实现与它的替身，而不是看测试颜色。
+
+| # | 位置 | 缺陷 | 后果 |
+|---|---|---|---|
+| 1 | control-api `discovery/expand.go` | 翻页局部变量 `snapshotID` 从不赋值，续页只带 cursor | 两个真实 peer 端点都 400，远端目录一律 partial，`federation_public` 永远封不了口 |
+| 2 | corpus-api `_go_manifest_digest` | 重建 Go 摘要原像时漏了 `child_manifests` | 展开过远端目录的 scope 一律 409 `plan_changed` |
+| 3 | ddp_local `_explore` | TaskSpec 的 `consent_refs` 从不绑定已批准的探索许可 | 真实中心一律 403 `egress_denied` |
+| 4 | `_execute_plan` | 规划期探测（TTL 300s）按"新成功"喂给内核 | 审批慢于 5 分钟（计划可有效 900s）时成功执行被降成 partial、证据丢弃 |
+| 5 | desktop `runtime-wsl.mjs` | `wsl.exe -d D -- bash -lc` 经默认 shell 转手，`$root` 先被展开成空 | 真 WSL 上 `rm -rf ""`、读 `/INSTALLED.json`，本地模式起不来 |
+| 6 | desktop `main.mjs` 冒烟 | `wsl_runtime_*` / `wsl_backend_unavailable` 也算"没有 WSL"，且连接成功后的错误也吞 | 坏包在 CI 上照样绿 |
+| 7 | `ack_delivery` | 只核组织、不核发起人 | 同组织他人可替别人确认交付并绕过 TTL |
+| 8 | `policy.resource_condition` | published 分支无组织谓词 | 多组织部署下跨租户读已发布资源（不变式 8） |
+| 9 | `create_plan` → `run_probe` | 探测中途 `commit` 放掉事务级咨询锁 | 并发规划重复外发、覆盖计划摘要 |
+| 10 | `_execute_plan(retry_only)` | resume 不补分母 | 落账前崩溃后 resume 直接 KeyError，行停在 running |
+| 11 | `_execute_plan` | 是否对账看"有没有 coverage 行" | 落账前崩溃的已受理目标被新代次重发，409 `idempotency_conflict` |
+| 12 | `_poll_execution` | 轮询超时先取消对端执行 | 标着可重做的目标永远重做不了 |
+| 13 | `cancel` | failed 被改写成 cancelled，denied 原因被抹，账本 counts 过期 | "系统做砸了"变成"用户不要了"，resume 被封死 |
+| 14 | ddp_local `_state_from_status` | 不认中心的 `cancelled` | 本地永远显示"执行中" |
+| 15 | 本地生成 | 本节点长块（表格/代码不切分）按对端越界规则整份拒绝 | 同一条证据远端协调者能答、本地不能答 |
+
+**为什么没被早点发现**：1、3、5 三条的测试替身都比真实端点**宽松**——
+`fakeDirectory` 接受不带 snapshot_id 的续页、`CenterStub` 不验许可引用、
+WSL 垫片直接 exec argv 而不经默认 shell。2 的跨语言摘要只冻结了"没有
+child_manifests"的样本。6 本身就是一道放行过宽的守卫。4、9–12 需要
+"慢审批 / 并发 / 崩溃 / 慢对端"之一，没有一条用例制造过这些时序。
+
+**处理**：逐条修复，每条都有回归用例且做过变异确认（还原那一行必红）。
+替身改成与真实端点同一判据：`fakeDirectory` 与 `CenterStub` 按真实规则拒绝，
+WSL 垫片按 wsl.exe 语义区分 `--`（默认 shell 转手）与 `--exec`（直接执行）。
+2 加了 Go/Python 两侧冻结同一个摘要值的跨语言夹具。8 先改契约
+（`resource-policy-format.md`：发布只在本组织内公开）；首发是单组织部署，行为不变。
+13 的语义以契约"与 failed 分开"为准：已落定的结局（含 failed）不被取消改写。
+
+独立验收（无阻塞项）追加的三处也已落地：第 15 条的"本地来源"改按协调者自己
+生成的计划（retrieve 步执行者）判，不再信远端探测行里取自对端回执的
+`target_node_id`；测试替身 `StubPeer` 改成与真实执行者同一幂等判据（同键同体
+复用回执、同键异体 409、lookup 找得到已受理回执）—— 旧替身让第 11 条的远端
+一半改回去也不红；执行报了实际检索的索引修订就以它为准记进覆盖账本，
+不沿用规划期（最多 900s 前）的修订。
+
+**残余风险（知道、没修）**：
+
+- 第 12 条之后，远端执行在协调者轮询超时后**继续跑到对端自己的租约/执行时限**，
+  协调者侧没有向对端传播取消的路径（取消协调任务本来也不传给对端）。
+  它不会无限跑，但超时之后用户停不掉那条对端执行。
+- 第 9 条之后，规划期间任何一次**整会话回滚**（例如检索关键词路失败时
+  `ddp_core/search.py` 的回滚）会连带丢掉此前在同一事务里写入的本地探测行、
+  并提前放掉咨询锁。形状原本就有（行对象也会过期），`_or_tsquery` 已清洗输入，概率低。
+- 第 5 条的 `wsl.exe --exec` 对带换行与双引号的脚本如何切分参数，只能在真 WSL2
+  主机上验证：Linux 垫片按 `list2cmdline` 模拟 `--` 的默认 shell 转手，
+  Windows runner 没有发行版、CI 永远走 Tier A。**要靠真机冒烟收口。**
