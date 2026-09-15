@@ -1,4 +1,6 @@
-from ddp_core.agent import QueryDecision, assertions_from_text, gate_candidates
+from ddp_core.agent import (
+    ConflictMarkupError, QueryDecision, assertions_from_text, conflicts_from_text, gate_candidates,
+)
 import pytest
 
 
@@ -85,3 +87,51 @@ def test_multiple_references_stay_with_the_same_sentence():
     result = assertions_from_text("联合结论。[1][2]下一句。", ["ev-1", "ev-2"])
     assert result[0]["evidence_ids"] == ["ev-1", "ev-2"]
     assert result[1]["unsupported"] is True
+
+
+# ---------------------------------------------------- 生成时的矛盾标注（§7.6）
+
+def test_conflict_lines_are_lifted_out_before_assertions():
+    ids = ["ev-a", "ev-b", "ev-c"]
+    text = ("PM-2 的最大输入电压一处写 240 V。[1]\n另一处写 120 V。[2]\n"
+            "CONFLICT: [1] [2]\nCONFLICT: [3] vs [1]")
+    body, groups = conflicts_from_text(text, ids)
+    assert "CONFLICT" not in body
+    assert groups == [["ev-a", "ev-b"], ["ev-c", "ev-a"]]
+    claims = assertions_from_text(body, ids)
+    assert [claim["evidence_ids"] for claim in claims] == [["ev-a"], ["ev-b"]], \
+        "标注行不能变成一条有两个引用支撑的主张"
+
+
+@pytest.mark.parametrize("line", [
+    "Conflict: [1] [2]",            # 小模型不照大小写写
+    "conflict：[1] 与 [2]",          # 全角冒号 + 中文连接词
+    "- CONFLICT: [1] 和 [2]",        # 列表符号开头
+    "* CONFLICT: [2], [1]",
+])
+def test_conflict_marker_variants_never_become_a_two_citation_claim(line):
+    ids = ["ev-a", "ev-b"]
+    body, groups = conflicts_from_text("一处写 240 V。[1]\n另一处写 120 V。[2]\n" + line, ids)
+    assert sorted(groups[0]) == ["ev-a", "ev-b"] and len(groups) == 1
+    claims = assertions_from_text(body, ids)
+    assert [claim["evidence_ids"] for claim in claims] == [["ev-a"], ["ev-b"]], \
+        "标注行的变体没摘掉，就会变成一条有两个引用支撑的主张"
+
+
+def test_text_without_conflict_lines_passes_through_unchanged():
+    for text in ("A conflict of interest was declared. [1]",
+                 "Conflict of interest: none declared. [1]"):
+        body, groups = conflicts_from_text(text, ["ev-a"])
+        assert groups == [] and body == text
+
+
+@pytest.mark.parametrize("line", [
+    "CONFLICT: [1] [9]",            # 越界引用
+    "CONFLICT: [1] [1]",            # 只有一条不同证据
+    "CONFLICT: [1]",                # 不足两条
+    "CONFLICT: [1] [2] the voltage values",   # 夹带正文
+    "CONFLICT:",                    # 空标注
+])
+def test_unverifiable_conflict_lines_are_rejected_not_dropped(line):
+    with pytest.raises(ConflictMarkupError):
+        conflicts_from_text("Value is 240 V. [1]\n" + line, ["ev-a", "ev-b"])

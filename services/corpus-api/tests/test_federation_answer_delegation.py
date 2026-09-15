@@ -191,6 +191,51 @@ async def test_fabricated_binding_ids_reject_the_answer_but_keep_evidence(
 
 
 @respx.mock
+async def test_remote_conflicts_outside_the_sent_evidence_reject_the_answer(
+        actor_client, monkeypatch):
+    mock_gateway_not_ready()
+    peer = peer_with_excerpt()
+    peer.can_generate = True
+    peer.answer_document = {**ready_document(), "conflicts": [{
+        "basis": "generation_reported", "evidence_refs": ["peer-evidence-1", "never-sent"],
+        "semantic_review": "needs_review"}]}
+    install_peer(monkeypatch, peer)
+    root, plan = await start_delegated(actor_client, peer=peer)
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
+    status = (await submit_task(actor_client, root, plan["plan_digest"], "conflict-forged")).json()
+    result = status["result"]
+    assert result["answer"] is None
+    assert result["answer_reason"] == "delegated_conflict_out_of_scope"
+    assert result["conflicts"] == [] and result["evidence"], "证据原样保留"
+    assert status["evidence_sufficiency"] != "conflicting"
+
+
+@respx.mock
+async def test_remote_conflicts_are_accepted_as_generation_reported_only(
+        actor_client, monkeypatch):
+    """对端自报的依据/人审不可信：依据重写成 generation_reported，复核恒为人工态。"""
+    mock_gateway_not_ready()
+    peer = peer_with_excerpt()
+    second = {**peer.items[0], "evidence_id": "peer-evidence-2",
+              "resource_id": "peer-resource-2", "excerpt": "retrieval target other text"}
+    peer.items.append(second)
+    peer.can_generate = True
+    peer.answer_document = {**ready_document(), "conflicts": [{
+        "basis": "version_divergence", "evidence_refs": ["peer-evidence-2", "peer-evidence-1"],
+        "semantic_review": "passed"}]}
+    install_peer(monkeypatch, peer)
+    root, plan = await start_delegated(actor_client, peer=peer)
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
+    status = (await submit_task(actor_client, root, plan["plan_digest"], "conflict-remote")).json()
+    result = status["result"]
+    assert result["answer"] == "peer cited answer [1]"
+    assert result["conflicts"] == [{"basis": "generation_reported",
+                                    "evidence_refs": ["peer-evidence-1", "peer-evidence-2"],
+                                    "semantic_review": "needs_review"}]
+    assert status["evidence_sufficiency"] == "conflicting"
+
+
+@respx.mock
 async def test_empty_citations_are_rejected(actor_client, monkeypatch):
     mock_gateway_not_ready()
     peer = peer_with_excerpt()
@@ -428,3 +473,80 @@ async def test_executor_readiness_is_rechecked_at_admission(actor_client):
     response = await post_executor_answer(actor_client, body)
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "capability_unsupported"
+
+
+# ------------------------------------------------ 矛盾不能盖掉"证据不足"（第五次验收）
+
+def _zero_hit_probes(monkeypatch):
+    """规划期探测照常成功，但没有证据集（零命中）：覆盖记录里没有绑定。"""
+    import test_federation_tasks as tasks_module
+    original = tasks_module.peer_probe
+
+    def zero_hit(**kwargs):
+        body = original(**kwargs)
+        body["retrieval"]["evidence_set_ref"] = None
+        return body
+
+    monkeypatch.setattr(tasks_module, "peer_probe", zero_hit)
+
+
+def _two_versions(peer, *, origin=PEER_NODE):
+    base = {**peer.items[0], "origin_node_id": origin}
+    peer.items[:] = [
+        {**base, "evidence_id": "peer-old", "source_version_id": "peer-version-1",
+         "excerpt_digest": "sha256:" + "1" * 64, "excerpt": "retrieval target says 240 V"},
+        {**base, "evidence_id": "peer-new", "source_version_id": "peer-version-2",
+         "excerpt_digest": "sha256:" + "2" * 64, "excerpt": "retrieval target says 120 V"},
+    ]
+
+
+@respx.mock
+async def test_version_divergence_never_hides_insufficient_or_opens_the_generation_gate(
+        actor_client, monkeypatch):
+    """复现形状：探测零命中（没有绑定），执行期对端返回同一定位的两版不同正文。
+
+    旧行为：矛盾优先于"没有绑定"，账本从 insufficient 被改写成 conflicting，
+    `_answer_result` 只拦 insufficient —— 生成闸被绕过，远端借规则一路藏掉了
+    "证据不足"。现在：充分性保持 insufficient、矛盾记录照样保留，一个 answer
+    受理都不发。
+    """
+    mock_gateway_not_ready()
+    _zero_hit_probes(monkeypatch)
+    peer = peer_with_excerpt()
+    _two_versions(peer)
+    peer.can_generate = True
+    peer.answer_document = ready_document(refs=("peer-old",))
+    install_peer(monkeypatch, peer)
+    root, plan = await start_delegated(actor_client, peer=peer)
+    assert answer_step(plan) is not None, "前提：计划里有委托生成这一步，闸才有意义"
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
+    status = (await submit_task(actor_client, root, plan["plan_digest"], "thin-divergent")).json()
+
+    assert status["status"] == "succeeded"
+    assert status["evidence_sufficiency"] == "insufficient"
+    result = status["result"]
+    assert result["answer"] is None and result["answer_reason"] == "insufficient_evidence"
+    assert [item["basis"] for item in result["conflicts"]] == ["version_divergence"]
+    assert not [body for body in peer.admissions if body.get("step_id") == "answer-1"], \
+        "证据不足时一个 answer 受理都不许发"
+    coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
+    assert coverage["evidence_sufficiency"] == "insufficient"
+    assert coverage["conflicts"] == result["conflicts"]
+    from test_federation_tasks import validate_ledger_contract
+    validate_ledger_contract(coverage)
+
+
+@respx.mock
+async def test_items_a_peer_reports_for_another_origin_cannot_raise_a_divergence(
+        actor_client, monkeypatch):
+    """对端自报"这两条来自本节点"：不可归属的条目不进规则一路，不能把证据标成矛盾。"""
+    mock_gateway_not_ready()
+    peer = peer_with_excerpt()
+    _two_versions(peer, origin=NODE)
+    install_peer(monkeypatch, peer)
+    root, plan = await start_delegated(actor_client, peer=peer)
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
+    status = (await submit_task(actor_client, root, plan["plan_digest"], "forged-origin")).json()
+
+    assert status["result"]["conflicts"] == []
+    assert status["evidence_sufficiency"] != "conflicting"

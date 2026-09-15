@@ -13,9 +13,11 @@ import copy
 from ddp_contracts.enums import (
     COVERAGE_TARGET_STATE_VALUES,
     ENUMERATION_STATE_VALUES,
+    EVIDENCE_CONFLICT_BASIS_VALUES,
     RETRIEVAL_COMPLETENESS_VALUES,
     EVIDENCE_SUFFICIENCY_VALUES,
     SEARCH_MODE_VALUES,
+    VALIDATION_STATE_VALUES,
 )
 
 from ddp_core.application import plans
@@ -315,19 +317,26 @@ def completeness(enumeration_state: str, search_mode: str, entries) -> str:
 
 
 def sufficiency(entries, *, bindings=(), conflicting=False) -> str:
-    """证据充分性只用规则判，不读 LLM 自报信心；unknown 只在还没评估时用。"""
+    """证据充分性只用规则判，不读 LLM 自报信心；unknown 只在还没评估时用。
+
+    **优先级 unknown > insufficient > conflicting > sufficient_by_policy。**
+    矛盾只能把"充分"压成"矛盾"，不能把"不足"改写成"矛盾"：后者会藏掉
+    "证据不足"这个信号，而协调者的生成闸正是按 insufficient 拦的 —— 改写之后
+    模型会拿策略判为不足的证据去生成（第五次验收在真实协调者流程里复现）。
+    矛盾记录本身不受优先级影响，照样进账本、照样可见。
+    """
     if type(conflicting) is not bool:
         reject(message="conflicting must be a boolean")
     if not isinstance(entries, list):
         reject(message="coverage entries must be an array")
     if not isinstance(bindings, (list, tuple)):
         reject(message="bindings must be a sequence")
-    if conflicting:
-        return "conflicting"
     if not entries:
         return "unknown"
     if not bindings:
         return "insufficient"
+    if conflicting:
+        return "conflicting"
     return "sufficient_by_policy"
 
 
@@ -350,8 +359,93 @@ def _counts(entries):
     }
 
 
-def ledger(*, root_task_id, scope_ref, search_mode, enumeration_state, entries) -> dict:
-    """从覆盖记录组装 CoverageLedger；counts 按去重后的目标口径统计。"""
+def conflict(basis: str, evidence_refs) -> dict:
+    """一条 `EvidenceConflict`：去重排序后的引用 + 依据；语义复核恒为人工态。"""
+    _enum(basis, EVIDENCE_CONFLICT_BASIS_VALUES, "evidence conflict basis")
+    if not isinstance(evidence_refs, (list, tuple)):
+        reject(message="conflict evidence refs must be an array")
+    refs = sorted({ref for ref in evidence_refs if isinstance(ref, str) and ref})
+    if len(refs) < 2 or len(refs) != len(set(evidence_refs)):
+        reject(message="a conflict needs at least two distinct evidence refs")
+    return {"basis": basis, "evidence_refs": refs, "semantic_review": "needs_review"}
+
+
+def merge_conflicts(*groups) -> list[dict]:
+    """合并多路矛盾记录：同依据同引用集只留一条，顺序确定（摘要要可复算）。"""
+    merged: dict[tuple, dict] = {}
+    for group in groups:
+        for item in group or ():
+            validate_conflict(item)
+            merged.setdefault((item["basis"], tuple(item["evidence_refs"])), item)
+    return [merged[key] for key in sorted(merged)]
+
+
+def validate_conflict(value) -> None:
+    _obj(value, ("basis", "evidence_refs", "semantic_review"), name="evidence conflict")
+    _enum(value["basis"], EVIDENCE_CONFLICT_BASIS_VALUES, "evidence conflict basis")
+    _enum(value["semantic_review"], VALIDATION_STATE_VALUES, "semantic review")
+    refs = value["evidence_refs"]
+    if (not isinstance(refs, list) or len(refs) < 2 or len(set(refs)) != len(refs)
+            or any(not isinstance(ref, str) or not ref for ref in refs)):
+        reject(message="a conflict needs at least two distinct evidence refs")
+
+
+def version_conflicts(evidence) -> list[dict]:
+    """§7.6 的**规则**一路：同一来源的不同固定版本在同一定位上取回了不同正文。
+
+    分组键是 `(origin_node_id, resource_id, physical_page_index, seq)`：只有同节点、
+    同资源、同物理页、同块序的位置才可比较。组内出现 ≥2 个 `source_version_id`
+    **且** ≥2 个 `excerpt_digest` 才记一条 `version_divergence` —— 版本不同但正文
+    相同不是矛盾。生成物（source_type != source）不参与：它们不是原始证据，不能
+    制造或掩盖原文之间的矛盾。
+
+    **能力边界要说清楚**（它是坐标比较，不是块对齐）：
+    - 两版之间块序整体平移时，不同的逻辑块会落在同一坐标上被拿来比 → 可能误报；
+    - 同一段话在新版里挪了块序 → 测不出。
+    两种情况都只影响"要不要提醒人复核"：记录恒为 `needs_review`，只会把"充分"
+    压成"矛盾"，不裁决哪一版对。
+
+    只看结构，不读语义：它能发现"同一处在两版里写得不一样"，发现不了两份不同
+    资料说法打架 —— 那一路靠生成时标注（`generation_reported`）并交人工复核。
+
+    **调用方负责只喂可归属的条目**：条目里的 `origin_node_id` / `resource_id` /
+    `locator` 是对端自报的；协调者只应把"自报来源 = 返回它的那个目标的节点"的
+    条目交进来，否则坏对端能伪造一条"本节点同资源同定位"的条目去把本地证据
+    标成矛盾。
+    """
+    if not isinstance(evidence, (list, tuple)):
+        reject(message="evidence must be an array")
+    groups: dict[tuple, list[dict]] = {}
+    for item in evidence:
+        if not isinstance(item, dict) or item.get("source_type", "source") != "source":
+            continue
+        locator = item.get("locator") if isinstance(item.get("locator"), dict) else {}
+        page, seq = locator.get("physical_page_index"), locator.get("seq")
+        key = (item.get("origin_node_id"), item.get("resource_id"), page, seq)
+        if (any(not isinstance(part, str) or not part for part in key[:2])
+                or type(page) is not int or type(seq) is not int
+                or not isinstance(item.get("evidence_id"), str) or not item["evidence_id"]):
+            continue
+        groups.setdefault(key, []).append(item)
+    out = []
+    for key in sorted(groups, key=lambda value: tuple(str(part) for part in value)):
+        items = groups[key]
+        versions = {item.get("source_version_id") for item in items}
+        digests = {item.get("excerpt_digest") for item in items}
+        if len(versions) >= 2 and len(digests) >= 2:
+            out.append(conflict("version_divergence",
+                                sorted({item["evidence_id"] for item in items})))
+    return out
+
+
+def ledger(*, root_task_id, scope_ref, search_mode, enumeration_state, entries,
+           conflicts=()) -> dict:
+    """从覆盖记录组装 CoverageLedger；counts 按去重后的目标口径统计。
+
+    `conflicts` 非空时"充分"被压成 `conflicting`；没有证据（unknown）或没有绑定
+    （insufficient）时充分性保持原样、矛盾记录照样写上（见 `sufficiency` 的优先级）。
+    它只能把充分性压低，从来不能抬高，也不能把"不足"改写成"矛盾"。
+    """
     _string(root_task_id, name="root task id")
     _string(scope_ref, name="scope ref")
     _enum(search_mode, SEARCH_MODE_VALUES, "search mode")
@@ -368,7 +462,8 @@ def ledger(*, root_task_id, scope_ref, search_mode, enumeration_state, entries) 
     if retrieval_completeness == "complete" and counts["incomplete"]:
         # 防御性：complete 与缺口计数不可能同时成立。
         retrieval_completeness = "partial"
-    return {
+    recorded = merge_conflicts(conflicts)
+    value = {
         "schema": "ddp-scope-coverage/1#CoverageLedger",
         "root_task_id": root_task_id,
         "scope_ref": scope_ref,
@@ -376,16 +471,21 @@ def ledger(*, root_task_id, scope_ref, search_mode, enumeration_state, entries) 
         "enumeration_state": enumeration_state,
         "retrieval_completeness": retrieval_completeness,
         "evidence_sufficiency": sufficiency(
-            prepared, bindings=[ref for entry in prepared for ref in entry.get("evidence_refs", [])]),
+            prepared, bindings=[ref for entry in prepared for ref in entry.get("evidence_refs", [])],
+            conflicting=bool(recorded)),
         "entries": prepared,
         "counts": counts,
     }
+    if recorded:
+        value["conflicts"] = recorded
+    return value
 
 
 def validate_ledger(value: dict) -> None:
     """校验 ddp-scope-coverage/1#CoverageLedger 及其三条 allOf（fast/complete/计数）。"""
     _obj(value, ("schema", "root_task_id", "scope_ref", "search_mode", "enumeration_state",
-                 "retrieval_completeness", "evidence_sufficiency", "entries", "counts"), name="coverage ledger")
+                 "retrieval_completeness", "evidence_sufficiency", "entries", "counts"),
+         ("conflicts",), name="coverage ledger")
     if value["schema"] != "ddp-scope-coverage/1#CoverageLedger":
         reject(message="unsupported coverage ledger schema")
     _string(value["root_task_id"], name="root task id")
@@ -402,6 +502,17 @@ def validate_ledger(value: dict) -> None:
          name="coverage counts")
     for key, count in value["counts"].items():
         _integer(count, name=f"coverage count {key}")
+    conflicts = value.get("conflicts", [])
+    if not isinstance(conflicts, list):
+        reject(message="coverage conflicts must be an array")
+    for item in conflicts:
+        validate_conflict(item)
+    if conflicts and value["evidence_sufficiency"] == "sufficient_by_policy":
+        # 契约 allOf：有矛盾记录就不许报"充分"（insufficient / unknown 优先，照样合法）。
+        reject(message="a ledger with conflict records cannot claim sufficient_by_policy")
+    if value["evidence_sufficiency"] == "conflicting" and not conflicts:
+        # 契约 allOf：报 conflicting 必须能指出是哪几条证据。
+        reject(message="conflicting sufficiency requires conflict records")
     if value["search_mode"] == "fast" and value["retrieval_completeness"] == "complete":
         reject("partial_retrieval", "fast mode can never claim complete")
     if value["retrieval_completeness"] == "complete":

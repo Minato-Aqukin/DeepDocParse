@@ -218,6 +218,15 @@ Ruff（门禁口径 `F,B` + 既有 ignore）全绿。
    但 `_execute_plan` 的 `ledger(...)` 调用不传它，互相矛盾的两版证据会被
    记为 `sufficient_by_policy`。本轮报告把"观察到冲突"与"账本充分性"分开记，
    不替协调者宣布冲突已处理。
+   **2026-09-15 已接入**：契约 `CoverageLedger.conflicts` 与两条 allOf（有记录就不许报
+   `sufficient_by_policy`；报 `conflicting` 必须有记录）；协调者两路取矛盾 —— 规则一路
+   （同一来源不同版本在同一定位上正文不同，`version_divergence`，只收自报来源 = 返回
+   目标节点的条目）与生成标注一路（`CONFLICT: [n] [m]`，引用须落在本次证据域，
+   `generation_reported`），都只能把"充分"压成"矛盾"、全部 `needs_review`。
+   **`insufficient` / `unknown` 优先于 `conflicting`**：矛盾不能把"不足"改写成"矛盾"
+   （那会藏掉不足信号、绕过生成闸 —— 提交前第五次验收复现），此时矛盾记录照样保留。
+   本夹具的矛盾对是**不同集合的语义矛盾**，规则一路测不出；评测执行器不调模型，
+   所以夹具上仍只记"观察到冲突"，协调者路径的覆盖在 corpus-api 的回归用例里。
 2. **fast 的摘要排序当前没有被用上**：`_select_targets` 给
    `routing.candidates` 传的 descriptors 是空列表，所以真实 fast 实际是
    "本地优先 + 身份顺序 + 上限 8"；报告另记内核摘要排序的位次（三个

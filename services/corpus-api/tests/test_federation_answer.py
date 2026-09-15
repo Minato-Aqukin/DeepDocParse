@@ -424,6 +424,52 @@ async def test_long_local_block_is_bounded_on_the_live_path_alone(actor_client, 
 
 
 @respx.mock
+async def test_generation_reported_conflict_marks_ledger_and_is_lifted_from_the_answer(
+        actor_client, session):
+    """模型标出矛盾引用对：账本 conflicting、结果与覆盖都带记录，标注行不进答案与绑定。"""
+    mock_gateway(channels=[gateway_channel()])
+    mock_chat(chat_answer("One source rates PM-2 at 240 V. [1]\n"
+                          "Another rates PM-2 at 120 V. [2]\nCONFLICT: [1] [2]"))
+    run = await run_answer_task(
+        actor_client, session, key="conflict-generation",
+        texts=("retrieval target text PM-2 is rated 240 V",
+               "retrieval target detail PM-2 is rated 120 V"))
+    status, result = run["status"], run["status"]["result"]
+    ids = sorted(row.id for row in run["evidence_rows"])
+
+    assert result["answer_reason"] is None, result
+    assert "CONFLICT" not in result["answer"]
+    assert [binding["claim_text"] for binding in result["claim_evidence_bindings"]] == [
+        "One source rates PM-2 at 240 V.", "Another rates PM-2 at 120 V."]
+    expected = [{"basis": "generation_reported", "evidence_refs": ids,
+                 "semantic_review": "needs_review"}]
+    assert result["conflicts"] == expected
+    assert status["evidence_sufficiency"] == result["evidence_sufficiency"] == "conflicting"
+    coverage = (await actor_client.get(f"/api/v1/tasks/{run['root']}/coverage")).json()
+    assert coverage["evidence_sufficiency"] == "conflicting"
+    assert coverage["conflicts"] == expected
+    from test_federation_tasks import validate_ledger_contract
+    validate_ledger_contract(coverage)
+    delivery = (await actor_client.get(f"/api/v1/deliveries/{status['delivery_id']}")).json()
+    assert delivery["result"]["conflicts"] == expected, "矛盾记录进交付文档与摘要"
+
+
+@respx.mock
+async def test_unverifiable_conflict_markup_rejects_the_answer(actor_client, session):
+    """`CONFLICT:` 引用越界与伪造主张引用同罪：整份答案拒收，不悄悄丢掉那一行。"""
+    mock_gateway(channels=[gateway_channel()])
+    mock_chat(chat_answer("PM-2 is rated 240 V. [1]\nCONFLICT: [1] [7]"))
+    run = await run_answer_task(actor_client, session, key="conflict-forged",
+                                texts=("retrieval target text PM-2 is rated 240 V",))
+    result = run["status"]["result"]
+    assert result["answer"] is None
+    assert result["answer_reason"] == "unsupported_generation"
+    assert result["claim_evidence_bindings"] == [] and result["conflicts"] == []
+    assert run["status"]["evidence_sufficiency"] == "sufficient_by_policy", \
+        "拒收的标注不能把账本压成 conflicting"
+
+
+@respx.mock
 async def test_readiness_check_is_what_keeps_the_step(actor_client, session, monkeypatch):
     """变异确认的常驻版：判据被强制成"永远就绪"时，同一路径立刻出现 answer 步。
 

@@ -68,3 +68,30 @@ t3code参考HEAD：`b1e223e2b0d87124883b1410ab52dd6a1338e40d`（2026-09-12读取
 - **独立复查（第二轮，同一 reviewer）**：抓到 1 BLOCKING（cancelled 被 resume 复活）、2 MAJOR（终态读改写竞态、死队列任务令执行卡死）、4 MINOR（ack 假确认、执行 actor 越权、脱敏守卫绕过、更新 TOCTOU）；全部修复并复验，F3 残留的「重试后被下一轮 sweep 再判死」反例也已修复（活跃任务优先）并变异确认。最终判定 **PASS**。
 - **仍只能在有 GPU/生产环境的机器上做**：mineru/VQA/TEI/真实生成本身与质量数字、多主机 TLS/凭证交换、生产快照迁移与灰度、AUR/签名基础设施、其他平台；容量目标与 RTO/RPO 仍需用户拍板。
 - 本轮同样没有 commit/push。
+
+## 2026-09-15 证据冲突轴与 T01–T88 台账
+
+- **冲突轴**（计划 §7.6，路由评测发现 1）：契约先行，`ddp-scope-coverage` 的
+  `CoverageLedger` 新增可选 `conflicts`（`EvidenceConflict`：依据 / ≥2 条证据引用 /
+  人工复核态）与双向 allOf，`enums.yaml` 新增 `evidence_conflict_basis`。内核
+  `coverage.version_conflicts`（规则）与 `agent.conflicts_from_text`（生成标注，
+  引用不成立整份拒收）；协调者、远端委托校验、覆盖读取与取消都带上矛盾记录。
+- **验收台账** `ACCEPTANCE-MATRIX-v3.md`：88 条逐项登记状态、证据与缺口
+  （✅ 38 / 🟡 46 / 🔴 4），新门禁 `scripts/check_acceptance_matrix.py` 校对
+  条目完整、汇总计数、每个 ✅ 行的**证据栏**都有可校验的测试引用、引用的文件与用例
+  存在且指得准（17 种台账漂移形状逐一变异确认会红，含两轮验收指出的缺口栏冒充证据、
+  短标题子串、不带反引号的路径、ASCII 省略号、skip/todo 标题）。
+- **提交前第五次验收抓到的两件事**：① 冲突一度优先于"没有绑定"，版本分歧会把
+  `insufficient` 改写成 `conflicting` 并绕过协调者的生成闸（在真实协调者流程里复现）——
+  已改成 unknown > insufficient > conflicting > sufficient_by_policy，契约 allOf 同步放宽为
+  "有矛盾记录就不许报充分"，规则一路只收自报来源 = 返回目标节点的条目，resume 复原
+  上一轮的规则矛盾；② 台账初稿 50 条 ✅ 里抽查的 22 条有 12 条只覆盖了一半判据，已降级。
+- **第六次验收**：同一处的两个版本**分两轮到达**（第一轮 v1，resume 补做的目标带回 v2）
+  时复原的条目不进规则一路，账本照报 `sufficient_by_policy` —— 已改为结果里记内部字段
+  `_attributed_evidence`（可归属证据键，不进交付文档、状态出口剥掉 `_` 字段），resume
+  时复原条目据此参与比较；没有该字段的旧结果仍原样复原已记下的矛盾。T13 补了"已知/未知
+  摘要响应同形"断言。
+- **第七次验收 PASS 后记下的后续项（本次不修，既有问题）**：协调者融合证据时按
+  `(origin, resource, version, evidence_id)` **直接覆盖**，坏对端可以冒用别家的键把已归属
+  条目的信封顶掉（交付结果里别家的证据也能被替换）；对冲突轴的影响只会多出 `needs_review`
+  的矛盾。应改成"非归属条目不许覆盖已归属的键"，单独做、单独验收。

@@ -31,6 +31,8 @@
 - {fixture: valid/coverage-entry-unsupported.json, schema: ddp-scope-coverage/v1.json, def: CoverageEntry, expect: valid}
 - {fixture: valid/coverage-ledger-exhaustive-complete.json, schema: ddp-scope-coverage/v1.json, def: CoverageLedger, expect: valid}
 - {fixture: valid/coverage-ledger-fast-partial.json,        schema: ddp-scope-coverage/v1.json, def: CoverageLedger, expect: valid}
+- {fixture: valid/coverage-ledger-conflicting.json,         schema: ddp-scope-coverage/v1.json, def: CoverageLedger, expect: valid}
+- {fixture: valid/coverage-ledger-insufficient-with-conflicts.json, schema: ddp-scope-coverage/v1.json, def: CoverageLedger, expect: valid}
 
 - fixture: invalid/scope-sealed-with-unexpanded.json
   schema: ddp-scope-coverage/v1.json
@@ -83,6 +85,24 @@
   violates: $.counts.incomplete
   violates_keyword: const
   because: §7.4 判据③ —— 有在途/未尝试/超时/拒绝/撤销的目标时不许写 complete。
+
+- fixture: invalid/coverage-conflicts-not-reported.json
+  schema: ddp-scope-coverage/v1.json
+  def: CoverageLedger
+  expect: invalid
+  violates: $.evidence_sufficiency
+  violates_keyword: enum
+  because: |
+    §7.6 —— 记下了矛盾，却仍报 sufficient_by_policy。路由评测发现的正是这个形状：
+    互相矛盾的两版证据被静默记成"证据满足策略"。
+
+- fixture: invalid/coverage-conflicting-without-record.json
+  schema: ddp-scope-coverage/v1.json
+  def: CoverageLedger
+  expect: invalid
+  violates: $
+  violates_message: "'conflicts' is a required property"
+  because: §7.6 —— 报 conflicting 必须能指出是哪几条证据、凭什么判；凭空的冲突标签和凭空的"充分"一样不可复核。
 
 # ========================================================= task & probe
 - {fixture: valid/exploration-consent-listed.json,     schema: ddp-task-probe/v1.json, def: ExplorationConsent, expect: valid}

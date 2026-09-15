@@ -163,6 +163,21 @@
       ]
     },
 
+    "EvidenceConflict": {
+      "type": "object",
+      "description": "一组互相矛盾、需要人工复核的证据引用。",
+      "x-ddp-doc": "只记录「哪几条证据互相矛盾、凭什么这么判」，不裁决哪一边对。`semantic_review` 恒为人工复核态：结构能证明引用存在，证明不了矛盾在语义上成立。",
+      "properties": {
+        "basis": { "type": "string", "x-ddp-enum": "evidence_conflict_basis" },
+        "evidence_refs": {
+          "type": "array", "minItems": 2, "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "semantic_review": { "type": "string", "x-ddp-enum": "validation_state" }
+      },
+      "required": ["basis", "evidence_refs", "semantic_review"],
+      "additionalProperties": false
+    },
     "CoverageLedger": {
       "type": "object",
       "description": "一次任务的完整覆盖报告。",
@@ -176,6 +191,12 @@
         "retrieval_completeness": { "type": "string", "x-ddp-enum": "retrieval_completeness" },
         "evidence_sufficiency": { "type": "string", "x-ddp-enum": "evidence_sufficiency" },
         "entries": { "type": "array", "items": { "$ref": "#/$defs/CoverageEntry" } },
+        "conflicts": {
+          "description": "证据矛盾的可核验记录（§7.6）。非空时 evidence_sufficiency 不许是 sufficient_by_policy（insufficient / unknown 优先于 conflicting，记录照样保留）；evidence_sufficiency 为 conflicting 时必须非空。",
+          "x-ddp-doc": "**矛盾不是资料不足的变体**：拿到了实质内容但来源互相打架，界面要把两边都摆出来，而不是折叠成「证据不足」或挑一个。依据见 enums.yaml 的 evidence_conflict_basis；两种依据都只能把「充分」压成「矛盾」，不能抬高，也不能把「不足」改写成「矛盾」。",
+          "type": "array",
+          "items": { "$ref": "#/$defs/EvidenceConflict" }
+        },
         "counts": {
           "description": "报告目标总数、适用数、成功数、排除数、未完成数（§7.4）。",
           "type": "object",
@@ -225,6 +246,27 @@
           },
           "then": {
             "properties": { "counts": { "properties": { "incomplete": { "const": 0 } } } }
+          }
+        },
+        {
+          "$comment": "有矛盾记录就不许报 sufficient_by_policy（§7.6）。少了它，互相矛盾的两版证据会被静默记成\"证据满足策略\" —— 路由评测正是这样发现的。**但 insufficient / unknown 优先于 conflicting**：矛盾只能把\"充分\"压成\"矛盾\"，不能把\"不足\"改写成\"矛盾\" —— 那会藏掉\"证据不足\"并放行不该发生的生成（第五次验收复现）。矛盾记录在这两种情况下照样保留、照样可见。",
+          "if": {
+            "properties": { "conflicts": { "type": "array", "minItems": 1 } },
+            "required": ["conflicts"]
+          },
+          "then": {
+            "properties": { "evidence_sufficiency": { "enum": ["conflicting", "insufficient", "unknown"] } }
+          }
+        },
+        {
+          "$comment": "报 conflicting 必须带至少一条矛盾记录：不许凭空宣称有冲突，也不许把冲突藏在一个没有出处的标签后面。",
+          "if": {
+            "properties": { "evidence_sufficiency": { "const": "conflicting" } },
+            "required": ["evidence_sufficiency"]
+          },
+          "then": {
+            "properties": { "conflicts": { "type": "array", "minItems": 1 } },
+            "required": ["conflicts"]
           }
         }
       ]

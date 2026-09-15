@@ -1476,6 +1476,167 @@ async def test_cancel_keeps_denominator_and_never_rewrites_success(
     assert protected.json()["status"] == "succeeded"
 
 
+# ------------------------------------------------------------------ 证据矛盾轴
+
+def validate_ledger_contract(ledger: dict) -> None:
+    """GET coverage 的形状必须过冻结契约（含"有矛盾记录 ⇔ conflicting"双向 allOf）。"""
+    from jsonschema import Draft202012Validator
+    from test_federation_admissions import SCHEMAS
+    schema = SCHEMAS["schemas"]["ddp-scope-coverage/v1.json"]
+    Draft202012Validator({"$ref": "#/$defs/CoverageLedger", "$defs": schema["$defs"]}).validate(ledger)
+
+
+async def test_version_divergence_of_one_source_marks_the_ledger_conflicting(
+        actor_client, monkeypatch):
+    """同一来源的两个固定版本在同一定位上取回不同正文：账本必须报 conflicting。
+
+    旧行为：协调者组账本时从不传冲突轴，两版互相矛盾的证据被记成
+    sufficient_by_policy（路由评测的发现 1）。这里没有生成模型，冲突只能来自规则。
+    """
+    old = {**peer_evidence(evidence_id="peer-old"), "source_version_id": "peer-version-1",
+           "excerpt_digest": "sha256:" + "1" * 64}
+    new = {**peer_evidence(evidence_id="peer-new"), "source_version_id": "peer-version-2",
+           "excerpt_digest": "sha256:" + "2" * 64}
+    peer = StubPeer(items=[old, new])
+    install_peer(monkeypatch, peer)
+    manifest = scope_manifest([member("peer-collection-1", PEER_NODE)])
+    intent = await create_intent(
+        actor_client, spec=task_spec(scope="federation_public", mode="exhaustive_scope",
+                                     scope_ref="scope-1"),
+        consent=exploration(), manifest=manifest)
+    root = intent["root_task_id"]
+    plan_body = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan_body, recipients=(NODE, PEER_NODE))
+    status = (await submit_task(actor_client, root, plan_body["plan_digest"], "divergence")).json()
+
+    assert status["status"] == "succeeded"
+    assert status["evidence_sufficiency"] == "conflicting"
+    expected = [{"basis": "version_divergence", "evidence_refs": ["peer-new", "peer-old"],
+                 "semantic_review": "needs_review"}]
+    assert status["result"]["conflicts"] == expected
+    assert status["result"]["evidence_sufficiency"] == "conflicting"
+    coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
+    assert coverage["evidence_sufficiency"] == "conflicting", \
+        "覆盖读取从逐目标记录重算，必须带回持久化的矛盾记录"
+    assert coverage["conflicts"] == expected
+    validate_ledger_contract(coverage)
+
+
+@pytest.mark.parametrize("legacy_result", [False, True])
+async def test_resume_keeps_the_divergence_found_by_an_earlier_round(
+        actor_client, session, monkeypatch, legacy_result):
+    """第一轮成功的目标在 resume 时被跳过：它那一轮算出的规则矛盾不能在补做后消失。
+
+    少了这一步，补做完剩下的目标后账本会从 conflicting 被重算回 sufficient_by_policy
+    —— 矛盾证据还在结果里，冲突轴却静默消失。`legacy_result` 模拟归属字段上线前
+    完成的结果（没有 `_attributed_evidence`）：只能靠原样复原已记下的矛盾。
+    """
+    old = {**peer_evidence(evidence_id="peer-old"), "source_version_id": "peer-version-1",
+           "excerpt_digest": "sha256:" + "1" * 64}
+    new = {**peer_evidence(evidence_id="peer-new"), "source_version_id": "peer-version-2",
+           "excerpt_digest": "sha256:" + "2" * 64}
+    peer = StubPeer(items=[old, new], fail_admit_step="retrieve-2")
+    install_peer(monkeypatch, peer)
+    manifest = scope_manifest([member("peer-collection-1", PEER_NODE),
+                               member("peer-collection-2", PEER_NODE)])
+    intent = await create_intent(
+        actor_client, spec=task_spec(scope="federation_public", mode="exhaustive_scope",
+                                     scope_ref="scope-1"),
+        consent=exploration(), manifest=manifest)
+    root = intent["root_task_id"]
+    plan_body = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan_body, recipients=(NODE, PEER_NODE))
+    first = (await submit_task(actor_client, root, plan_body["plan_digest"], "diverge-1")).json()
+    assert first["evidence_sufficiency"] == "conflicting"
+    expected = first["result"]["conflicts"]
+    assert [item["basis"] for item in expected] == ["version_divergence"]
+
+    assert "_attributed_evidence" not in first["result"], "内部簿记不许出 HTTP"
+    if legacy_result:
+        row = await session.get(FederationRequest, root)
+        stripped = dict(row.result_json)
+        stripped.pop("_attributed_evidence")
+        row.result_json = stripped
+        await session.commit()
+    # 第二个目标补做时只返回一条无关证据：矛盾只可能来自上一轮。
+    peer.fail_admit_step = None
+    peer.items = [peer_evidence(evidence_id="peer-other", resource_id="peer-r9")]
+    resumed = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert resumed.status_code == 202, resumed.text
+    await drain_tasks(corpus_app.state)
+    status = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert status["retrieval_completeness"] == "complete"
+    assert status["evidence_sufficiency"] == "conflicting"
+    assert status["result"]["conflicts"] == expected
+    coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
+    assert coverage["conflicts"] == expected
+    validate_ledger_contract(coverage)
+
+
+async def test_versions_split_across_resume_rounds_are_still_compared(actor_client, monkeypatch):
+    """同一定位的两个版本分两轮到达（第一轮 v1，resume 补做的目标带回 v2）也必须比较。
+
+    第六次验收复现的形状：复原的条目不进规则一路，两版矛盾的证据都在结果里，
+    账本却照报 sufficient_by_policy —— 与"同一轮到达就判 conflicting"不一致。
+    """
+    old = {**peer_evidence(evidence_id="peer-old"), "source_version_id": "peer-version-1",
+           "excerpt_digest": "sha256:" + "1" * 64}
+    new = {**peer_evidence(evidence_id="peer-new"), "source_version_id": "peer-version-2",
+           "excerpt_digest": "sha256:" + "2" * 64}
+    peer = StubPeer(items=[old], fail_admit_step="retrieve-2")
+    install_peer(monkeypatch, peer)
+    manifest = scope_manifest([member("peer-collection-1", PEER_NODE),
+                               member("peer-collection-2", PEER_NODE)])
+    intent = await create_intent(
+        actor_client, spec=task_spec(scope="federation_public", mode="exhaustive_scope",
+                                     scope_ref="scope-1"),
+        consent=exploration(), manifest=manifest)
+    root = intent["root_task_id"]
+    plan_body = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan_body, recipients=(NODE, PEER_NODE))
+    first = (await submit_task(actor_client, root, plan_body["plan_digest"], "split-1")).json()
+    assert first["evidence_sufficiency"] == "sufficient_by_policy"
+    assert first["result"]["conflicts"] == []
+
+    peer.fail_admit_step = None
+    peer.items = [new]
+    resumed = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert resumed.status_code == 202, resumed.text
+    await drain_tasks(corpus_app.state)
+    status = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert {item["evidence_id"] for item in status["result"]["evidence"]} >= {"peer-old", "peer-new"}
+    assert status["evidence_sufficiency"] == "conflicting"
+    assert status["result"]["conflicts"] == [{
+        "basis": "version_divergence", "evidence_refs": ["peer-new", "peer-old"],
+        "semantic_review": "needs_review"}]
+    assert "_attributed_evidence" not in status["result"]
+    coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
+    assert coverage["evidence_sufficiency"] == "conflicting"
+    validate_ledger_contract(coverage)
+
+
+async def test_same_text_across_versions_is_not_a_conflict(actor_client, monkeypatch):
+    same = "sha256:" + "3" * 64
+    peer = StubPeer(items=[
+        {**peer_evidence(evidence_id="peer-a"), "source_version_id": "v1", "excerpt_digest": same},
+        {**peer_evidence(evidence_id="peer-b"), "source_version_id": "v2", "excerpt_digest": same}])
+    install_peer(monkeypatch, peer)
+    manifest = scope_manifest([member("peer-collection-1", PEER_NODE)])
+    intent = await create_intent(
+        actor_client, spec=task_spec(scope="federation_public", mode="exhaustive_scope",
+                                     scope_ref="scope-1"),
+        consent=exploration(), manifest=manifest)
+    root = intent["root_task_id"]
+    plan_body = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan_body, recipients=(NODE, PEER_NODE))
+    status = (await submit_task(actor_client, root, plan_body["plan_digest"], "same-text")).json()
+    assert status["evidence_sufficiency"] == "sufficient_by_policy"
+    assert status["result"]["conflicts"] == []
+    coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
+    assert "conflicts" not in coverage
+    validate_ledger_contract(coverage)
+
+
 # ------------------------------------------------------------------ 执行期边界
 
 async def test_execution_after_planning_probe_ttl_keeps_evidence(actor_client, session):

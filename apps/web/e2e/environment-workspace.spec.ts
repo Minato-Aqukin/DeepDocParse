@@ -245,6 +245,10 @@ test('系统密钥库不可用时中心配对只用会话凭证，秘密不进�
   expect(fixture.calls.find(call => call.name === 'setCredential')?.input.persist).toBe(false)
   expect(fixture.calls.find(call => call.name === 'clientPairRemote')?.input.environment).toMatchObject({ endpoint: 'https://center.example/team' })
   expect(JSON.stringify([...fixture.drafts])).not.toContain('synthetic-private-token-for-test')
+  // 网页存储（T21）：秘密只许进宿主的会话凭证通道，不许落进渲染进程能读到的存储。
+  const webStorage = await page.evaluate(() => JSON.stringify([
+    Object.entries(localStorage), Object.entries(sessionStorage)]))
+  expect(webStorage).not.toContain('synthetic-private-token-for-test')
   expect(realErrors(errors)).toEqual([])
 })
 

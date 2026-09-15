@@ -824,7 +824,7 @@ EVIDENCE_SUFFICIENCY_META: Final[dict[str, EnumMeta]] = {
     "sufficient_by_policy": {"value": "sufficient_by_policy", "label": "证据满足本次策略要求", "severity": "ok"},
     # 没有足够证据支撑结论，必须如实说不足
     "insufficient": {"value": "insufficient", "label": "证据不足", "severity": "warn"},
-    # 多来源证据互相矛盾（含同一资料的不同版本）。要展示冲突，不要挑一个
+    # 多来源证据互相矛盾（含同一资料的不同版本）。要展示冲突，不要挑一个。优先级低于 insufficient / unknown：证据本身不足时报不足，矛盾记录照样保留
     "conflicting": {"value": "conflicting", "label": "证据存在矛盾", "severity": "warn"},
     # 还没评估（检索未完成 / 评估器不可用）
     "unknown": {"value": "unknown", "label": "证据充分性未知", "severity": "neutral"},
@@ -837,6 +837,39 @@ def evidence_sufficiency_label(value: str | None) -> str | None:
     if not value:
         return None
     meta = EVIDENCE_SUFFICIENCY_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 一条证据矛盾记录**凭什么**成立（计划 §7.6：同时处理矛盾证据，不挑一个）。
+# 两种依据都只能把 `sufficient_by_policy` 压成 `conflicting`，**不能**抬高它，
+# 也**不能**把 `insufficient` / `unknown` 改写成 `conflicting`（那会藏掉"证据不足"
+# 并放行不该发生的生成）—— 这两种情况下矛盾记录照样保留、照样可见。
+# 模型说"有矛盾"最多让界面多一个警告，而模型说"没矛盾"不改变任何东西。
+# 每条记录都要人看（`semantic_review=needs_review`），这里记的是"值得复核的
+# 矛盾"，不是裁决。
+EvidenceConflictBasis = Literal["version_divergence", "generation_reported"]
+
+EVIDENCE_CONFLICT_BASIS_VALUES: Final[tuple[str, ...]] = (
+    "version_divergence",
+    "generation_reported",
+)
+
+EVIDENCE_CONFLICT_BASIS_META: Final[dict[str, EnumMeta]] = {
+    # 规则判定：同一来源（同节点、同资源）的不同固定版本在**同一定位**
+    # （物理页 + 块序）上取回了不同正文。只看结构，不读语义。
+    "version_divergence": {"value": "version_divergence", "label": "同一资料的版本不一致", "severity": "warn"},
+    # 带出处生成时模型标出的矛盾引用对。只在引用全部落在本次证据编号域、
+    # 且至少指向两条不同证据时才采信；引用不成立则整份答案作废。
+    "generation_reported": {"value": "generation_reported", "label": "生成时标出的矛盾", "severity": "warn"},
+}
+
+
+def evidence_conflict_basis_label(value: str | None) -> str | None:
+    """evidence_conflict_basis 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = EVIDENCE_CONFLICT_BASIS_META.get(value)
     return meta["label"] if meta else f"未知取值（{value}）"
 
 

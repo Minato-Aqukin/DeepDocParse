@@ -192,6 +192,29 @@ async def test_admission_same_key_different_digest_is_conflict(actor_client):
     assert response.json()["error"]["code"] == "idempotency_conflict"
 
 
+@pytest.mark.parametrize(("mutate", "code"), [
+    # 许可在规划/批准时有效、到受理时已过期：执行者必须当场再查一遍，不信协调者。
+    (lambda body: body["execution_consent"].update(valid_until="2026-01-01T00:00:01Z"),
+     "consent_expired"),
+    # 计划变了（新修订）而许可仍绑旧摘要：不是同一个批准范围。
+    (lambda body: body["execution_consent"].update(plan_digest="sha256:" + "d" * 64),
+     "plan_changed"),
+    # 接收方变了：本节点不在被批准的接收方里。
+    (lambda body: body["execution_consent"].update(allowed_recipients=["node-other"]),
+     "egress_denied"),
+])
+async def test_admission_rechecks_stale_or_widened_consent_and_writes_nothing(
+        actor_client, session, mutate, code):
+    """T79：admission 自己重新检查许可；过期、换计划修订、换接收方都拒绝，不留受理行。"""
+    body = admission_body(key=f"stale-consent-{code}-{id(mutate)}")
+    mutate(body)
+    response = await post_admission(actor_client, body)
+    assert 400 <= response.status_code < 500, response.text
+    assert response.json()["error"]["code"] == code
+    count = await session.scalar(select(func.count()).select_from(FederationAdmission))
+    assert count == 0, "被拒的许可不得留下受理行"
+
+
 async def test_admission_unsupported_operation_is_rejected_not_faked(actor_client, session):
     """生成未就绪（无模型通道）时 `answer` 当场 capability_unsupported，不收单不伪造。"""
     steps = [

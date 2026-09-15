@@ -1,11 +1,12 @@
 """T11/T12: actual HTTP import/export with the production actor and resource ACL."""
 
 import io
+import json
 from datetime import timedelta
 
 import pytest
-from ddp_bundle_fixture import ORIGINAL, sample_bundle
-from ddp_core.bundle import read_bundle
+from ddp_bundle_fixture import ORIGINAL, sample_bundle, sample_parts
+from ddp_core.bundle import build_bundle, digest, json_bytes, read_bundle
 from ddp_corpus import db
 from ddp_corpus.config import settings
 from ddp_corpus.gc import collect_deleted_objects
@@ -120,6 +121,27 @@ async def test_t13_missing_original_cannot_claim_known_private_content(
     assert app_state.storage.objects == before
     resource = await session.get(Resource, first["resource_id"])
     assert resource.owner_id == "actor-alice"
+
+    # 存在性信息也不许外泄（T13 判据后半句）：摘要指向"别人已有的私有文件"与指向
+    # "从没见过的内容"，响应必须同形 —— 否则摘要本身就成了存在性探针。
+    unknown_source, unknown_files = sample_parts(missing=True)
+    unseen = digest(b"%PDF-1.4\nnever uploaded anywhere\n%%EOF\n")
+    unknown_source["source_digest"] = unseen
+    records = json.loads(unknown_files["evidence.json"])
+    records[0]["evidence"]["source_digest"] = unseen
+    unknown_files["evidence.json"] = json_bytes(records)
+    unknown = await actor_client.post(
+        "/api/bundles/import",
+        content=build_bundle(unknown_source, unknown_files),
+        headers=upload_headers(key="import-unknown", actor_id="actor-bob"),
+    )
+    assert unknown.status_code == response.status_code
+    known_body, unknown_body = response.json(), unknown.json()
+    assert unknown_body["source"]["source_digest"] == unseen
+    assert set(known_body["source"]) == set(unknown_body["source"])
+    known_body.pop("source")
+    unknown_body.pop("source")
+    assert known_body == unknown_body, "已知与未知摘要的响应不同形，等于泄露存在性"
 
 
 async def test_storage_failure_never_publishes_ready_version(

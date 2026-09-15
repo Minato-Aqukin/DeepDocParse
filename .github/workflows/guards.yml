@@ -60,6 +60,10 @@ jobs:
       - name: 联邦任务路由（契约端点 ←→ corpus-api 实际路由）
         run: python scripts/check_federation_routes.py
 
+      # T01–T88 台账：一条不少、汇总与逐行一致、引用的测试名真实存在
+      - name: 验收台账（T01–T88 ←→ 仓库里的测试）
+        run: python scripts/check_acceptance_matrix.py
+
       - name: 数据所有权（企业边界 5）
         run: python scripts/check_data_ownership.py
 

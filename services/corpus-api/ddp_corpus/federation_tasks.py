@@ -547,7 +547,7 @@ def _status_output(row: FederationRequest) -> dict:
         "coverage_ref": row.coverage_ref,
         "delivery_id": row.delivery_id,
         "delivery_state": row.delivery_state,
-        "result": row.result_json or None,
+        "result": _public_result(row.result_json),
         "error": row.error,
         "scope_ref": row.scope_id or None,
         "created_at": _instant(row.created_at),
@@ -1778,12 +1778,26 @@ def _validated_delegated_answer(document, *, evidence_ids: list[str]) -> dict:
             "structural_validation": "passed",
             "semantic_review": "needs_review",
         })
+    # 对端标出的矛盾同样只收"引用落在所发证据里、至少两条不同证据"的；依据一律
+    # 重写成 generation_reported —— 版本分歧由本协调者按规则自己算，不信对端自报。
+    raw_conflicts = document.get("conflicts", [])
+    if not isinstance(raw_conflicts, list):
+        return _delegated_failure("delegated_conflict_out_of_scope")
+    conflicts = []
+    for item in raw_conflicts:
+        refs = item.get("evidence_refs") if isinstance(item, dict) else None
+        if (not isinstance(refs, list) or len(set(map(str, refs))) < 2
+                or not {str(ref) for ref in refs} <= allowed):
+            return _delegated_failure("delegated_conflict_out_of_scope")
+        conflicts.append(coverage_kernel.conflict(
+            "generation_reported", sorted({str(ref) for ref in refs})))
     provider = document.get("provider")
     provider_out = ({**provider, "location": "remote"} if isinstance(provider, dict) else None)
     return {
         "answer": answer.strip(),
         "answer_reason": None,
         "claim_evidence_bindings": validated,
+        "conflicts": coverage_kernel.merge_conflicts(conflicts),
         "provider": provider_out,
         "disclosure": {"remote": True, "payload": ["question", "selected_evidence"]},
         "validation_state": "passed",
@@ -1947,6 +1961,27 @@ def _enumeration_state(row: FederationRequest) -> str:
     if manifest is not None:
         return str(manifest.get("enumeration_state") or "partial")
     return "sealed"   # fixed_resources：固定列表就是完整分母
+
+
+#: 协调者结果里的内部字段：上一轮可归属（自报来源 = 返回目标节点）的证据键，供
+#: resume 时让复原条目参与版本分歧比较。以 `_` 开头，不进交付文档、不出 HTTP。
+_ATTRIBUTED_FIELD = "_attributed_evidence"
+
+
+def _public_result(result: dict | None) -> dict | None:
+    """状态出口只出结果文档字段；内部簿记（`_` 开头）不外泄。"""
+    if not result:
+        return None
+    return {key: value for key, value in result.items() if not str(key).startswith("_")}
+
+
+def _recorded_conflicts(row: FederationRequest) -> list[dict]:
+    """结果文档里持久化的矛盾记录（协调者写入时已校验）；读路径据此复原冲突轴。
+
+    覆盖读取是从逐目标记录重算的；矛盾不在逐目标记录里，不带上它，GET coverage
+    会把刚写成 conflicting 的任务重新算回 sufficient_by_policy。
+    """
+    return coverage_kernel.merge_conflicts((row.result_json or {}).get("conflicts") or [])
 
 
 def _first_error(entries: list[dict]) -> str | None:
@@ -2131,8 +2166,28 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
         select(CoverageEntry).where(CoverageEntry.root_task_id == row.root_task_id))}
     entries = {digest: _entry_from_row(item, row.scope_id) for digest, item in existing.items()}
     evidence: dict[tuple, dict] = {}
-    for item in ((row.result_json or {}).get("evidence") or []):
+    previous = row.result_json or {}
+    # §7.6 规则一路的输入：只收"自报来源 = 返回它的那个目标的节点"的条目。条目
+    # 字段是对端自报的，不这样筛，坏对端就能伪造一条"本节点同资源同定位"的条目
+    # 把本地证据标成矛盾。
+    #
+    # **归属要跨轮次保留**：resume 跳过上一轮已成功的目标，它们的条目只能从结果
+    # 里复原。复原的条目若不参与分组，同一处的两个版本分两轮到达时就永远不会被
+    # 比较，账本照报 sufficient_by_policy（第六次验收复现）。所以上一轮把可归属
+    # 条目的键记进内部字段 `_attributed_evidence`（不进交付文档、不出 HTTP），
+    # 这里据此把复原条目放回规则一路的输入。
+    attributed_keys = {tuple(key) for key in previous.get(_ATTRIBUTED_FIELD) or []
+                       if isinstance(key, list)}
+    attributed: list[dict] = []
+    for item in previous.get("evidence") or []:
         evidence[_evidence_key(item)] = item
+        if _evidence_key(item) in attributed_keys:
+            attributed.append(item)
+    # 没有 `_attributed_evidence` 的旧结果（本字段上线前完成的任务）：复原的条目
+    # 没有归属信息，至少把它记下的规则矛盾原样带回；生成标注的矛盾不复原（本轮
+    # 会重新生成）。
+    restored_divergences = [item for item in _recorded_conflicts(row)
+                            if item["basis"] == "version_divergence"]
     # 本轮真正看到的正文片段（公开结果只出契约字段，`_excerpt` 不进 HTTP 出口）。
     live_excerpts: dict[str, str] = {}
     generation = int(row.delegation_generation or 0)
@@ -2222,6 +2277,8 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
                     local_source = target["origin_node_id"] == node
                     for item in items:
                         evidence[_evidence_key(item)] = _public_item(item)
+                        if item.get("origin_node_id") == target["origin_node_id"]:
+                            attributed.append(_public_item(item))
                         excerpt = _generation_excerpt(item, local_source=local_source)
                         if excerpt is not None:
                             live_excerpts[str(item.get("evidence_id") or "")] = excerpt
@@ -2266,11 +2323,16 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
         return _status_output(await session.get(FederationRequest, root_task_id,
                                                 populate_existing=True))
     ordered = [entries[_target_digest(target)] for target in _ordered_targets(all_targets)]
+    fused = list(evidence.values())
+    # §7.6 规则一路：同一来源不同版本在同一定位上的正文分歧，生成之前就能算。
+    # 它只会把"充分"压成"矛盾"：没有绑定时账本仍是 insufficient，下面的生成闸
+    # 照样拦住（内核 `sufficiency` 的优先级钉着这件事）。
+    divergences = coverage_kernel.merge_conflicts(
+        restored_divergences, coverage_kernel.version_conflicts(attributed))
     ledger = coverage_kernel.ledger(
         root_task_id=row.root_task_id, scope_ref=row.scope_id, search_mode=row.search_mode,
-        enumeration_state=_enumeration_state(row), entries=ordered)
+        enumeration_state=_enumeration_state(row), entries=ordered, conflicts=divergences)
     coverage_kernel.validate_ledger(ledger)
-    fused = list(evidence.values())
     succeeded = ledger["counts"]["succeeded"]
     # 状态轴必须与证据轴一致（N1）：有真实证据就不是失败 —— 即使所有目标都
     # 因内部限额只落 partial（counts.succeeded 可以是 0）。覆盖账本照实带
@@ -2285,6 +2347,14 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
     answer = await _answer_result(
         session, actor, row, plan=plan, fused=fused, live_excerpts=live_excerpts,
         sufficiency=ledger["evidence_sufficiency"], http=http)
+    if answer.get("conflicts"):
+        # 生成一路标出的矛盾（已按本次证据编号域校验）并入账本：只会把充分性压成
+        # conflicting，不会把 insufficient 抬高 —— 没有证据就根本不会走到生成。
+        ledger = coverage_kernel.ledger(
+            root_task_id=row.root_task_id, scope_ref=row.scope_id, search_mode=row.search_mode,
+            enumeration_state=_enumeration_state(row), entries=ordered,
+            conflicts=coverage_kernel.merge_conflicts(divergences, answer["conflicts"]))
+        coverage_kernel.validate_ledger(ledger)
     # 结果文档 = 交付字节的规范原文（**不含摘要字段本身**）。摘要是对这份文档的
     # content_digest，客户端下载后重算它才允许 ack；文档有界且不含正文摘录。
     document = {
@@ -2294,9 +2364,12 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
         "retrieval_completeness": ledger["retrieval_completeness"],
         "evidence_sufficiency": ledger["evidence_sufficiency"],
         "counts": ledger["counts"], "coverage_ref": row.root_task_id,
+        "conflicts": ledger.get("conflicts", []),
         "evidence": fused, "unretrieved_targets": unretrieved,
     }
-    result = {**document, "result_manifest_digest": plans.digest(document)}
+    result = {**document, "result_manifest_digest": plans.digest(document),
+              _ATTRIBUTED_FIELD: sorted({_evidence_key(item) for item in attributed},
+                                        key=lambda key: tuple(str(part) for part in key))}
     await session.execute(delete(CoverageEntry).where(
         CoverageEntry.root_task_id == row.root_task_id))
     ledger_row = await session.get(CoverageLedger, row.root_task_id)
@@ -2558,7 +2631,8 @@ async def cancel(session: AsyncSession, actor: Actor, root_task_id: str, *,
     ledger = coverage_kernel.ledger(
         root_task_id=root_task_id, scope_ref=row.scope_id, search_mode=row.search_mode,
         enumeration_state=_enumeration_state(row),
-        entries=[_entry_from_row(entry, row.scope_id) for entry in entries])
+        entries=[_entry_from_row(entry, row.scope_id) for entry in entries],
+        conflicts=_recorded_conflicts(row))
     ledger_row = await session.get(CoverageLedger, root_task_id)
     if ledger_row is not None:
         ledger_row.retrieval_completeness = ledger["retrieval_completeness"]
@@ -2632,7 +2706,7 @@ async def read_coverage(session: AsyncSession, actor: Actor, root_task_id: str) 
         else _enumeration_state(row)
     return coverage_kernel.ledger(
         root_task_id=root_task_id, scope_ref=row.scope_id, search_mode=row.search_mode,
-        enumeration_state=enumeration, entries=entries)
+        enumeration_state=enumeration, entries=entries, conflicts=_recorded_conflicts(row))
 
 
 async def read_events(session: AsyncSession, actor: Actor, root_task_id: str, *,

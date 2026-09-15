@@ -418,9 +418,14 @@ components:
         answer:
           description: |
             `operation=answer` 完成时的结果文档（`answer` / `claim_evidence_bindings` /
-            `validation_state` / `provider` / `disclosure`）；其它 operation 为 null。
+            `conflicts` / `validation_state` / `provider` / `disclosure`）；其它 operation 为 null。
             协调者**必须**校验返回的绑定是本次发送证据 id 的子集，任何越界/缺失
             引用 → 答案置空并写可见原因，证据保留。
+            `conflicts`（可选，缺省视为空）是生成时标出的矛盾引用组：每组至少两条
+            不同证据、全部落在本次发送的证据 id 内，否则整份答案作废，原因
+            `delegated_conflict_out_of_scope`。对端自报的 `basis` / `semantic_review`
+            不采信 —— 协调者一律重写成 `generation_reported` / `needs_review`，
+            它只能把覆盖账本的"充分"压成"矛盾"（见 ddp-scope-coverage 的 allOf）。
           type: [object, 'null']
         updated_at: {type: string, format: date-time}
     AdmissionEvidence:

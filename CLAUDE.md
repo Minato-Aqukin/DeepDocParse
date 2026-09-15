@@ -21,7 +21,8 @@
 | 理解任务队列 | `docs/refactor/TASK-QUEUE.md` |
 | 部署 | `docs/DEPLOY.md` |
 | 前端视觉 | `../design-previews/DESIGN-GUIDE.md`（REV.04） |
-| 避开已经踩过的坑 | `docs/refactor/FINDINGS.md`（31 条，每条都写了"为什么它没被早点发现"） |
+| 避开已经踩过的坑 | `docs/refactor/FINDINGS.md`（每条都写了"为什么它没被早点发现"） |
+| 查 v3 计划 T01–T88 每条验收判据现在的证据与缺口 | `docs/refactor/ACCEPTANCE-MATRIX-v3.md`（改状态必须带测试名，门禁校对） |
 
 ## 八条不变式
 

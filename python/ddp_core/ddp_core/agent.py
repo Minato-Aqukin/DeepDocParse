@@ -23,6 +23,48 @@ _SENTENCE = re.compile(
     r"|\n+"
 )
 _REFERENCE_GAP = re.compile(r"([。！？!?；;])\s+(?=\[\d+])")
+#: 生成时标注矛盾的独立行：`CONFLICT: [1] [2]`（允许 vs / and / 与 / 和 / 逗号分隔）。
+#: 只认**行首**的 `CONFLICT:` —— 正文中间偶然出现的 conflict 一词不触发。
+#: 大小写、全角冒号与列表符号（`- ` / `* ` / `• `）都算标注行：小模型写成
+#: `Conflict: [1] [2]` 时若不摘掉，它会被当成一条"有两个引用支撑"的主张进绑定。
+_CONFLICT_LINE = re.compile(r"^\s*(?:[-*•]\s*)?CONFLICT\s*[:：](.*)$", re.IGNORECASE)
+_CONFLICT_SEPARATORS = re.compile(r"\[\d+]|\bvs\.?|\band\b|以及|与|和|及|[\s,;，；、/|&-]",
+                                  re.IGNORECASE)
+
+
+class ConflictMarkupError(ValueError):
+    """模型给出了 `CONFLICT:` 行，但引用不成立（越界 / 不足两条 / 夹带正文）。"""
+
+
+def conflicts_from_text(text: str, evidence_ids: list[str]) -> tuple[str, list[list[str]]]:
+    """从生成文本里取出矛盾标注行，返回 `(去掉标注行的正文, 引用组列表)`。
+
+    标注行本身不是主张，必须在断言化之前摘掉 —— 否则 `CONFLICT: [1] [2]` 会被
+    当成一条"有两个引用支撑"的主张写进绑定。引用组只接受本次证据编号域内、
+    至少两条不同证据；**任何一行不成立都抛 ConflictMarkupError**，调用方据此
+    整份拒收：伪造的矛盾引用与伪造的主张引用一样不可复核，不能悄悄丢掉那一行。
+    """
+    kept: list[str] = []
+    groups: list[list[str]] = []
+    for line in text.splitlines():
+        match = _CONFLICT_LINE.match(line)
+        if match is None:
+            kept.append(line)
+            continue
+        body = match.group(1)
+        if _CONFLICT_SEPARATORS.sub("", body):
+            raise ConflictMarkupError("conflict line carries text besides citations")
+        refs: list[str] = []
+        for value in _REFERENCE.findall(body):
+            index = int(value) - 1
+            if not 0 <= index < len(evidence_ids) or not evidence_ids[index]:
+                raise ConflictMarkupError("conflict citation is outside this evidence set")
+            if evidence_ids[index] not in refs:
+                refs.append(evidence_ids[index])
+        if len(refs) < 2:
+            raise ConflictMarkupError("a conflict needs at least two distinct citations")
+        groups.append(refs)
+    return "\n".join(kept).strip(), groups
 
 
 @dataclass(frozen=True)

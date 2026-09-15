@@ -56,6 +56,7 @@ if want guards; then
   run "日志脱敏"          "$PY" scripts/check_log_redaction.py --with-self-test
   run "联邦契约"          "$PY" scripts/check_federation_contracts.py
   run "联邦任务路由"      "$PY" scripts/check_federation_routes.py
+  run "验收台账"          "$PY" scripts/check_acceptance_matrix.py
   run "control 迁移同步"  "$PY" scripts/check_control_migrations.py
   run "配置参考文档"      "$PY" scripts/gen_config_docs.py --check
   run "架构守卫"          "$PY" -m pytest -q

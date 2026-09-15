@@ -943,7 +943,7 @@ const (
 	EvidenceSufficiencySufficientByPolicy EvidenceSufficiency = "sufficient_by_policy"
 	// 没有足够证据支撑结论，必须如实说不足
 	EvidenceSufficiencyInsufficient EvidenceSufficiency = "insufficient"
-	// 多来源证据互相矛盾（含同一资料的不同版本）。要展示冲突，不要挑一个
+	// 多来源证据互相矛盾（含同一资料的不同版本）。要展示冲突，不要挑一个。优先级低于 insufficient / unknown：证据本身不足时报不足，矛盾记录照样保留
 	EvidenceSufficiencyConflicting EvidenceSufficiency = "conflicting"
 	// 还没评估（检索未完成 / 评估器不可用）
 	EvidenceSufficiencyUnknown EvidenceSufficiency = "unknown"
@@ -967,6 +967,41 @@ var EvidenceSufficiencyMeta = map[EvidenceSufficiency]EnumMeta{
 // Valid 报告 s 是不是一个已知的 evidence_sufficiency 取值。
 func (s EvidenceSufficiency) Valid() bool {
 	_, ok := EvidenceSufficiencyMeta[s]
+	return ok
+}
+
+// 一条证据矛盾记录**凭什么**成立（计划 §7.6：同时处理矛盾证据，不挑一个）。
+// 两种依据都只能把 `sufficient_by_policy` 压成 `conflicting`，**不能**抬高它，
+// 也**不能**把 `insufficient` / `unknown` 改写成 `conflicting`（那会藏掉"证据不足"
+// 并放行不该发生的生成）—— 这两种情况下矛盾记录照样保留、照样可见。
+// 模型说"有矛盾"最多让界面多一个警告，而模型说"没矛盾"不改变任何东西。
+// 每条记录都要人看（`semantic_review=needs_review`），这里记的是"值得复核的
+// 矛盾"，不是裁决。
+type EvidenceConflictBasis string
+
+const (
+	// 规则判定：同一来源（同节点、同资源）的不同固定版本在**同一定位**
+	// （物理页 + 块序）上取回了不同正文。只看结构，不读语义。
+	EvidenceConflictBasisVersionDivergence EvidenceConflictBasis = "version_divergence"
+	// 带出处生成时模型标出的矛盾引用对。只在引用全部落在本次证据编号域、
+	// 且至少指向两条不同证据时才采信；引用不成立则整份答案作废。
+	EvidenceConflictBasisGenerationReported EvidenceConflictBasis = "generation_reported"
+)
+
+// EvidenceConflictBasisValues 保持 enums.yaml 里的声明顺序。
+var EvidenceConflictBasisValues = []EvidenceConflictBasis{
+	EvidenceConflictBasisVersionDivergence,
+	EvidenceConflictBasisGenerationReported,
+}
+
+var EvidenceConflictBasisMeta = map[EvidenceConflictBasis]EnumMeta{
+	EvidenceConflictBasisVersionDivergence:  {Value: "version_divergence", Label: "同一资料的版本不一致", Severity: SeverityWarn},
+	EvidenceConflictBasisGenerationReported: {Value: "generation_reported", Label: "生成时标出的矛盾", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 evidence_conflict_basis 取值。
+func (s EvidenceConflictBasis) Valid() bool {
+	_, ok := EvidenceConflictBasisMeta[s]
 	return ok
 }
 

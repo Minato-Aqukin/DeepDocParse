@@ -7,7 +7,9 @@ from ddp_core.application.coverage import (
     MAX_EXCLUSION_BASIS_CHARS,
     MAX_REQUIREMENT_CHARS,
     completeness,
+    conflict,
     ledger,
+    merge_conflicts,
     new_entry,
     record,
     sufficiency,
@@ -15,6 +17,7 @@ from ddp_core.application.coverage import (
     validate_entry,
     validate_ledger,
     validate_manifest,
+    version_conflicts,
 )
 from ddp_core.application.plans import utc_instant
 from ddp_core.application.ports import ApplicationError
@@ -189,7 +192,9 @@ def test_sufficiency_uses_rules_not_confidence():
     assert sufficiency([entry()]) == "insufficient"
     assert sufficiency([evidence], bindings=["ev-1"]) == "sufficient_by_policy"
     assert sufficiency([evidence], bindings=["ev-1"], conflicting=True) == "conflicting"
-    assert sufficiency([evidence], conflicting=True) == "conflicting"
+    # 矛盾不能把"不足"/"未知"改写成"矛盾"：那会藏掉不足信号并放行生成闸。
+    assert sufficiency([evidence], conflicting=True) == "insufficient"
+    assert sufficiency([], conflicting=True) == "unknown"
     with pytest.raises(ApplicationError):
         sufficiency([], conflicting="yes")
 
@@ -249,6 +254,8 @@ def test_contract_invalid_entry_fixtures_are_rejected(name):
 @pytest.mark.parametrize("name", [
     "valid/coverage-ledger-exhaustive-complete.json",
     "valid/coverage-ledger-fast-partial.json",
+    "valid/coverage-ledger-conflicting.json",
+    "valid/coverage-ledger-insufficient-with-conflicts.json",
 ])
 def test_contract_valid_ledger_fixtures_pass(name):
     validate_ledger(fixture(name))
@@ -258,6 +265,8 @@ def test_contract_valid_ledger_fixtures_pass(name):
     "invalid/coverage-fast-claims-complete.json",
     "invalid/coverage-complete-without-sealed.json",
     "invalid/coverage-complete-with-incomplete-count.json",
+    "invalid/coverage-conflicts-not-reported.json",
+    "invalid/coverage-conflicting-without-record.json",
 ])
 def test_contract_invalid_ledger_fixtures_are_rejected(name):
     with pytest.raises(ApplicationError):
@@ -290,3 +299,96 @@ def test_record_deep_copies_and_keeps_used_budget():
     updated = record(original, probe(), now=NOW)
     updated["used_budget"]["requests"] = 4
     assert original["used_budget"]["requests"] == 3
+
+
+# ------------------------------------------------------------ 证据矛盾（§7.6）
+
+def envelope(evidence_id, *, version, digest, resource="res-1", origin="node-b", page=0, seq=3,
+             source_type="source"):
+    return {"evidence_id": evidence_id, "origin_node_id": origin, "resource_id": resource,
+            "source_version_id": version, "excerpt_digest": "sha256:" + digest * 64,
+            "source_type": source_type,
+            "locator": {"kind": "page_block", "physical_page_index": page, "seq": seq}}
+
+
+def test_version_divergence_needs_two_versions_and_two_texts_at_one_locator():
+    diverged = [envelope("ev-new", version="v2", digest="b"), envelope("ev-old", version="v1", digest="a")]
+    assert version_conflicts(diverged) == [
+        {"basis": "version_divergence", "evidence_refs": ["ev-new", "ev-old"],
+         "semantic_review": "needs_review"}]
+    # 版本不同但正文相同：不是矛盾。
+    assert version_conflicts([envelope("e1", version="v1", digest="a"),
+                              envelope("e2", version="v2", digest="a")]) == []
+    # 同一版本两段不同正文：块序不同本来就是两处，不比较。
+    assert version_conflicts([envelope("e1", version="v1", digest="a", seq=1),
+                              envelope("e2", version="v2", digest="b", seq=2)]) == []
+    # 不同资源同一定位：不同资料不按版本规则比较（那一路靠生成标注）。
+    assert version_conflicts([envelope("e1", version="v1", digest="a", resource="r1"),
+                              envelope("e2", version="v2", digest="b", resource="r2")]) == []
+    # 生成物不能制造或掩盖原文矛盾。
+    assert version_conflicts([envelope("e1", version="v1", digest="a"),
+                              envelope("e2", version="v2", digest="b", source_type="generated")]) == []
+    # 缺定位的条目不参与，不猜。
+    broken = envelope("e3", version="v3", digest="c")
+    broken["locator"] = {"kind": "page_block"}
+    assert version_conflicts([envelope("e1", version="v1", digest="a"), broken]) == []
+
+
+def test_ledger_with_conflicts_reports_conflicting_and_only_downgrades():
+    entry = record(new_entry(target_key("node-b", "b:robotics", "corpus.retrieve"), SCOPE, QUERY),
+                   probe(), now=NOW)
+    base = dict(root_task_id="task-1", scope_ref=SCOPE, search_mode="exhaustive_scope",
+                enumeration_state="sealed", entries=[entry])
+    assert ledger(**base)["evidence_sufficiency"] == "sufficient_by_policy"
+    assert "conflicts" not in ledger(**base), "没有矛盾时不写空字段"
+    found = conflict("generation_reported", ["ev-2", "ev-1"])
+    value = ledger(**base, conflicts=[found, dict(found)])
+    assert value["evidence_sufficiency"] == "conflicting"
+    assert value["conflicts"] == [{"basis": "generation_reported", "evidence_refs": ["ev-1", "ev-2"],
+                                   "semantic_review": "needs_review"}], "同依据同引用去重"
+    validate_ledger(value)
+    # 没有证据的账本不会因为一条矛盾记录被写成"充分"或"矛盾"：unknown 优先，
+    # 矛盾记录照样写上。
+    empty = ledger(root_task_id="task-1", scope_ref=SCOPE, search_mode="fast",
+                   enumeration_state="partial", entries=[], conflicts=[found])
+    assert empty["evidence_sufficiency"] == "unknown" and empty["conflicts"]
+    validate_ledger(empty)
+    # 有目标但没有绑定：insufficient 优先（第五次验收复现的形状）。
+    unbound = record(new_entry(target_key("node-b", "b:robotics", "corpus.retrieve"), SCOPE, QUERY),
+                     None, state="failed", error="shard down", now=NOW)
+    thin = ledger(**{**base, "entries": [unbound]}, conflicts=[found])
+    assert thin["evidence_sufficiency"] == "insufficient" and thin["conflicts"]
+    validate_ledger(thin)
+
+
+def test_validate_ledger_keeps_conflict_records_and_axis_in_lockstep():
+    entry = record(new_entry(target_key("node-b", "b:robotics", "corpus.retrieve"), SCOPE, QUERY),
+                   probe(), now=NOW)
+    value = ledger(root_task_id="task-1", scope_ref=SCOPE, search_mode="exhaustive_scope",
+                   enumeration_state="sealed", entries=[entry],
+                   conflicts=[conflict("version_divergence", ["ev-1", "ev-2"])])
+    hidden = copy.deepcopy(value)
+    hidden["evidence_sufficiency"] = "sufficient_by_policy"
+    with pytest.raises(ApplicationError):
+        validate_ledger(hidden)
+    for kept in ("insufficient", "unknown"):
+        coexisting = copy.deepcopy(value)
+        coexisting["evidence_sufficiency"] = kept
+        validate_ledger(coexisting)   # 不足/未知与矛盾记录并存是合法的
+    bare = copy.deepcopy(value)
+    del bare["conflicts"]
+    with pytest.raises(ApplicationError):
+        validate_ledger(bare)
+    single = copy.deepcopy(value)
+    single["conflicts"][0]["evidence_refs"] = ["ev-1"]
+    with pytest.raises(ApplicationError):
+        validate_ledger(single)
+
+
+def test_conflict_records_need_two_distinct_refs_and_a_known_basis():
+    with pytest.raises(ApplicationError):
+        conflict("generation_reported", ["ev-1", "ev-1"])
+    with pytest.raises(ApplicationError):
+        conflict("model_confidence", ["ev-1", "ev-2"])
+    assert merge_conflicts([], None, [conflict("version_divergence", ["b", "a"])]) == [
+        {"basis": "version_divergence", "evidence_refs": ["a", "b"], "semantic_review": "needs_review"}]
