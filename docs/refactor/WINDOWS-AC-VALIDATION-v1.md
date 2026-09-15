@@ -236,8 +236,9 @@ v1 不签名（计划决策 6），所以**一个有构建访问权的蓄意攻�
 
 ## 6. W5：CI workflow（代码静态事实；运行结果见 §9）
 
-`.github/workflows/desktop-windows.yml`，触发 `push` 到 `codex/desktop-federation-v3`
-与 `workflow_dispatch`：
+`.github/workflows/desktop-windows.yml`，触发 `push` 到 `main` 与 `pull_request`
+（两者都按打包链实际读取的输入做路径过滤）以及 `workflow_dispatch`。
+（2026-09-15 前挂在 `codex/desktop-federation-v3` 上；该分支合入 main 后已删除。）
 
 - **为什么两个 job**：W3 的 `build_wsl_runtime.py` 在非 Linux 上主动拒绝
   （`only Linux x86_64 WSL runtimes have been validated`），且要执行随包的 Linux

@@ -34,8 +34,8 @@ jobs:
       CONTROL_TEST_DATABASE_URL: postgres://ddp:ddp@127.0.0.1:5432/deepdocparse?sslmode=disable
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.27"
           cache-dependency-path: services/control-api/go.sum
