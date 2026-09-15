@@ -200,6 +200,7 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
 | POST | `/api/v1/task-intents` | 持久任务需求 + 已批准的探索许可；返回 root_task_id |
 | POST | `/api/v1/task-plans` | 按 scope 清单与探索许可做 Probe、生成 TaskPlan |
 | POST | `/api/v1/task-plans/{root_task_id}/approve` | 批准计划修订 + 执行许可 |
+| GET | `/api/v1/tasks` | 调用者**本人**的任务列表（创建时间倒序、键集游标，坏游标 400 `invalid_cursor`）；只带需求摘要与状态轴，结果按 id 读。管理员也只列自己的 |
 | POST | `/api/v1/tasks` | 受理已批准计划（幂等键）并排入持久队列：202 新受理 / 200 重放，执行由 worker 推进；已取消任务 409 `task_cancelled` |
 | GET | `/api/v1/tasks/{root_task_id}` | 权威状态、结果、覆盖引用、消耗 |
 | GET | `/api/v1/tasks/{root_task_id}/coverage` | `ddp-scope-coverage/1#CoverageLedger` |

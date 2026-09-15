@@ -873,6 +873,92 @@ def evidence_conflict_basis_label(value: str | None) -> str | None:
     return meta["label"] if meta else f"未知取值（{value}）"
 
 
+# 联邦任务结果里 `answer_reason` 的取值：**为什么这次没有答案**（有答案时为 null）。
+# 它和 `evidence_sufficiency` 分开：充分性说"证据够不够"，这里说"答案这一步
+# 具体卡在哪" —— 证据充分但模型没装、远端答案引用越界、预算超了，都要让用户
+# 看得出区别，而不是统一显示成"没有答案"。
+#
+# **代码是封闭集合，细节是后缀**：其中五个代码允许带 `:细节`
+# （`receipt_binding_mismatch:plan_digest`、`delegated_execution_failed:peer_execution_timeout`、
+# `delegated_admission_not_accepted:waiting_input`、`delegated_answer_rejected:…`、
+# `peer_unavailable:http_503`），细节是对端的状态/错误码或出错字段，经过字符集与长度
+# 清洗；其余代码不带后缀。对端给的字符串**永远只进细节**，不会变成新的代码。
+# 查文案前先去掉冒号后缀；协调者写出之前会检查代码已声明（`federation.unavailable_answer`）。
+FederatedAnswerReason = Literal["insufficient_evidence", "local_model_missing", "evidence_excerpt_unavailable", "excerpt_over_contract_bound", "upstream_error", "no_model_output", "budget_exceeded", "unsupported_generation", "delegated_answer_missing", "delegated_answer_rejected", "delegated_bindings_missing", "delegated_binding_out_of_scope", "delegated_conflict_out_of_scope", "evidence_delegation_over_limit", "invalid_admission_receipt", "receipt_binding_mismatch", "delegated_admission_not_accepted", "delegated_execution_failed", "peer_unavailable"]
+
+FEDERATED_ANSWER_REASON_VALUES: Final[tuple[str, ...]] = (
+    "insufficient_evidence",
+    "local_model_missing",
+    "evidence_excerpt_unavailable",
+    "excerpt_over_contract_bound",
+    "upstream_error",
+    "no_model_output",
+    "budget_exceeded",
+    "unsupported_generation",
+    "delegated_answer_missing",
+    "delegated_answer_rejected",
+    "delegated_bindings_missing",
+    "delegated_binding_out_of_scope",
+    "delegated_conflict_out_of_scope",
+    "evidence_delegation_over_limit",
+    "invalid_admission_receipt",
+    "receipt_binding_mismatch",
+    "delegated_admission_not_accepted",
+    "delegated_execution_failed",
+    "peer_unavailable",
+)
+
+FEDERATED_ANSWER_REASON_META: Final[dict[str, EnumMeta]] = {
+    # 证据不足（或没有可引用证据），不给模型凭常识补答的机会
+    "insufficient_evidence": {"value": "insufficient_evidence", "label": "证据不足，未生成答案", "severity": "warn"},
+    # 本节点与计划内远端都没有可用的生成能力（或生成预算为 0）
+    "local_model_missing": {"value": "local_model_missing", "label": "没有可用的生成模型，只返回证据", "severity": "warn"},
+    # 某条证据取不到正文（空白或缺失），不能拿无根片段生成
+    "evidence_excerpt_unavailable": {"value": "evidence_excerpt_unavailable", "label": "有证据取不到原文片段，未生成答案", "severity": "warn"},
+    # 证据正文超过契约上限（2000 字符），显式拒绝而不是静默截断
+    "excerpt_over_contract_bound": {"value": "excerpt_over_contract_bound", "label": "证据片段超出长度上限，未生成答案", "severity": "warn"},
+    # 调生成模型的请求失败或返回非 200
+    "upstream_error": {"value": "upstream_error", "label": "生成服务出错，只返回证据", "severity": "error"},
+    # 模型没有返回可用文本
+    "no_model_output": {"value": "no_model_output", "label": "模型没有输出，只返回证据", "severity": "error"},
+    # 生成结果超出计划的生成 token 预算
+    "budget_exceeded": {"value": "budget_exceeded", "label": "超出生成预算，答案作废", "severity": "error"},
+    # 生成文本的引用结构不成立（无引用、越界引用、矛盾标注不成立）
+    "unsupported_generation": {"value": "unsupported_generation", "label": "生成的答案引用不成立，已作废", "severity": "error"},
+    # 远端执行完成但没有返回答案文档
+    "delegated_answer_missing": {"value": "delegated_answer_missing", "label": "远端没有返回答案", "severity": "error"},
+    # 远端答案校验未通过；远端自报的原因认不出来时放进细节
+    "delegated_answer_rejected": {"value": "delegated_answer_rejected", "label": "远端答案未通过校验", "severity": "error"},
+    # 远端答案没有任何主张绑定
+    "delegated_bindings_missing": {"value": "delegated_bindings_missing", "label": "远端答案没有引用，已作废", "severity": "error"},
+    # 远端答案的引用不在本次发送的证据里
+    "delegated_binding_out_of_scope": {"value": "delegated_binding_out_of_scope", "label": "远端答案引用了未发送的证据，已作废", "severity": "error"},
+    # 远端标出的矛盾引用不在本次发送的证据里
+    "delegated_conflict_out_of_scope": {"value": "delegated_conflict_out_of_scope", "label": "远端标注的矛盾引用不成立，答案已作废", "severity": "error"},
+    # 要委托的证据条数超过受理上限，不截断证据去凑数
+    "evidence_delegation_over_limit": {"value": "evidence_delegation_over_limit", "label": "证据条数超过委托上限，未生成答案", "severity": "warn"},
+    # 远端受理回执缺执行任务号
+    "invalid_admission_receipt": {"value": "invalid_admission_receipt", "label": "远端受理回执无效", "severity": "error"},
+    # 远端回执与本次 root/step/幂等键/计划修订/执行者对不上；细节是出错字段（回执不是对象时为 schema）
+    "receipt_binding_mismatch": {"value": "receipt_binding_mismatch", "label": "远端回执与本次任务对不上，未采用", "severity": "error"},
+    # 远端没有受理答案步骤；细节是回执状态（如 waiting_input / rejected）
+    "delegated_admission_not_accepted": {"value": "delegated_admission_not_accepted", "label": "远端未受理生成请求", "severity": "error"},
+    # 远端答案执行没有成功；细节是对端错误码或状态（含本节点轮询超时 peer_execution_timeout）
+    "delegated_execution_failed": {"value": "delegated_execution_failed", "label": "远端生成步骤未完成", "severity": "error"},
+    # 远端生成节点未登记、连不上、回 HTTP 错误或返回非法响应；细节是对端错误码、http_状态或 transport
+    "peer_unavailable": {"value": "peer_unavailable", "label": "远端生成节点不可用", "severity": "error"},
+}
+
+
+def federated_answer_reason_label(value: str | None) -> str | None:
+    """federated_answer_reason 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = FEDERATED_ANSWER_REASON_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
 # TaskPlan 的规划轴（计划 §8.1）。`invalidated` 是关键一态：
 # 计划过期、输入版本变了、授权被撤销之后，**旧计划不许被执行**，
 # 要重新规划并重新批准（§6.6 接单时重新检查）。

@@ -32,18 +32,22 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from ddp_core.application import coverage as coverage_kernel
 from ddp_core.application import plans, routing
 from ddp_core.application.ports import ApplicationError
+from ddp_contracts.enums import FEDERATED_ANSWER_REASON_VALUES
 
 from ddp_corpus import cache, capabilities, catalog, federation, policy, queue, upstream
 from ddp_corpus.collection_models import Collection
@@ -530,6 +534,94 @@ def _intent_output(row: FederationRequest) -> dict:
         "created_at": _instant(row.created_at),
         "updated_at": _instant(row.updated_at) if row.updated_at else None,
     }
+
+
+TASK_LIST_LIMIT_MAX = 100
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _list_item(row: FederationRequest) -> dict:
+    """列表项只带需求摘要与状态轴；结果、证据、许可原文要按 id 读（再过一遍可见性）。"""
+    # 需求在建任务时已按契约校验过（`plans.validate_spec`）：这几个字段必然存在。
+    # 不用 `or ""` 兜底 —— 兜出来的空串本身就违反契约（minLength 1 / enum）。
+    spec = row.task_spec_json
+    return {
+        "root_task_id": row.root_task_id,
+        "query": spec.get("query") or "",
+        "operation": spec["operation"],
+        "scope_kind": spec["resource_scope"]["kind"],
+        "search_mode": row.search_mode,
+        "status": row.status,
+        "planning_state": row.planning_state,
+        "retrieval_completeness": row.retrieval_completeness,
+        "evidence_sufficiency": row.evidence_sufficiency,
+        "delivery_state": row.delivery_state,
+        "created_at": _instant(row.created_at),
+        "updated_at": _instant(row.updated_at),
+    }
+
+
+def _list_cursor(row: FederationRequest) -> str:
+    """不透明游标：创建时刻（微秒）+ root_task_id。键集翻页，插入新任务不会让下一页重复。"""
+    # 游标必须保留到微秒：同一秒内创建的相邻任务，精度一丢就会在翻页边界被
+    # 跳过或重复。用整数运算，不依赖浮点舍入。
+    micros = (as_aware(row.created_at) - _EPOCH) // timedelta(microseconds=1)
+    raw = json.dumps([micros, row.root_task_id], separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+#: root_task_id 的形状（`new_id()` 是 32 位十六进制；放宽到契约允许的安全字符）。
+#: 游标里的 id 会原样进 SQL 参数：孤立代理字符在 SQLite 上是 UnicodeEncodeError，
+#: NUL 在 PostgreSQL 上是 CharacterNotInRepertoire —— 都会变成 500，而契约说是 400。
+_ROOT_TASK_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _parse_list_cursor(value: str) -> tuple[datetime, str]:
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        # validate=True：非字母表字符报错而不是被静默丢掉。它仍接受标准字母表的 `+/`，
+        # 但合法游标只含数字、ASCII 标点与 `[A-Za-z0-9_-]` 的 id —— 这些字节的 base64
+        # 取不到下标 62/63，所以不存在"同一个合法游标的第二种写法"。
+        raw = base64.b64decode(padded.encode("ascii"), altchars=b"-_", validate=True)
+        micros, root_task_id = json.loads(raw)
+        if type(micros) is not int or not isinstance(root_task_id, str) \
+                or not _ROOT_TASK_ID.fullmatch(root_task_id):
+            raise ValueError("cursor fields")
+        created = _EPOCH + timedelta(microseconds=micros)
+    except (ValueError, TypeError, UnicodeError, OverflowError, OSError):
+        # 静默从头开始会让翻页悄悄重复同一批任务 —— 解析不了的游标必须显式失败。
+        # （游标没有签名：格式合法但被改过的游标会被接受，只是查的仍是本人的任务。）
+        raise APIError(400, "task list cursor is invalid", "invalid_request_error",
+                       "invalid_cursor") from None
+    return created, root_task_id
+
+
+async def list_tasks(session: AsyncSession, actor: Actor, *, limit: int,
+                     cursor: str | None) -> dict:
+    """调用者本人的任务，创建时间倒序。管理员也只列自己的（按 id 仍可读别人的）。"""
+    limit = max(1, min(int(limit), TASK_LIST_LIMIT_MAX))
+    # 只取列表项要用的列：`result_json` / `plan_json` / 许可与范围原文都可能很大，
+    # 整行加载时一页 100 条会拉回几 MB 到十几 MB 用不上的 JSON。
+    query = select(FederationRequest).options(load_only(
+        FederationRequest.root_task_id, FederationRequest.task_spec_json,
+        FederationRequest.search_mode, FederationRequest.status,
+        FederationRequest.planning_state, FederationRequest.retrieval_completeness,
+        FederationRequest.evidence_sufficiency, FederationRequest.delivery_state,
+        FederationRequest.created_at, FederationRequest.updated_at)).where(
+        FederationRequest.organization_id == actor.organization_id,
+        FederationRequest.actor_id == federation.acting_actor(actor))
+    if cursor:
+        created, root_task_id = _parse_list_cursor(cursor)
+        query = query.where(or_(
+            FederationRequest.created_at < created,
+            and_(FederationRequest.created_at == created,
+                 FederationRequest.root_task_id < root_task_id)))
+    rows = list(await session.scalars(query.order_by(
+        FederationRequest.created_at.desc(), FederationRequest.root_task_id.desc())
+        .limit(limit + 1)))
+    page = rows[:limit]
+    return {"items": [_list_item(row) for row in page],
+            "next_cursor": _list_cursor(page[-1]) if len(rows) > limit else None}
 
 
 def _status_output(row: FederationRequest) -> dict:
@@ -1742,6 +1834,42 @@ def _delegated_failure(reason: str) -> dict:
     return {**federation.unavailable_answer(reason), "validation_state": "failed"}
 
 
+_REASON_DETAIL_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def _reason_detail(value) -> str:
+    """对端给的状态/错误码只当**细节**显示：限定字符集与长度。
+
+    对端完全控制这些字符串；原样写进结果就等于让对端往用户界面里塞任意文本，
+    也让答案原因变成一个无法枚举的开放集合。代码本身永远是本节点声明过的那几个。
+    """
+    text = _REASON_DETAIL_CHARS.sub("_", str(value or ""))[:64]
+    return text or "unknown"
+
+
+def _peer_failure(exc: PeerUnavailable) -> dict:
+    """远端生成节点连不上或回错：代码固定，对端错误码/HTTP 状态进细节。"""
+    detail = exc.code or (f"http_{exc.status}" if exc.status is not None else "transport")
+    return _delegated_failure(f"peer_unavailable:{_reason_detail(detail)}")
+
+
+def _remote_answer_reason(reason) -> str:
+    """远端答案文档自报的 answer_reason。
+
+    是本契约声明过的代码就照用（远端也跑同一份契约）；带细节时只保留允许带细节的
+    代码并清洗细节。认不出来的一律归到 `delegated_answer_rejected:细节`，不透传。
+    """
+    text = str(reason or "")
+    head, separator, detail = text.partition(":")
+    if head in FEDERATED_ANSWER_REASON_VALUES:
+        if separator and head in federation.ANSWER_REASONS_WITH_DETAIL and detail:
+            return f"{head}:{_reason_detail(detail)}"
+        return head
+    if not text:
+        return "delegated_answer_rejected"
+    return f"delegated_answer_rejected:{_reason_detail(text)}"
+
+
 def _validated_delegated_answer(document, *, evidence_ids: list[str]) -> dict:
     """校验远端回传的答案文档；任何越界/缺失引用都拒绝，不修补、不降级采用。
 
@@ -1755,8 +1883,7 @@ def _validated_delegated_answer(document, *, evidence_ids: list[str]) -> dict:
     answer = document.get("answer")
     if document.get("validation_state") != "passed" or not isinstance(answer, str) \
             or not answer.strip():
-        reason = document.get("answer_reason")
-        return _delegated_failure(str(reason) if reason else "delegated_answer_rejected")
+        return _delegated_failure(_remote_answer_reason(document.get("answer_reason")))
     bindings = document.get("claim_evidence_bindings")
     if not isinstance(bindings, list) or not bindings:
         return _delegated_failure("delegated_bindings_missing")
@@ -1852,22 +1979,26 @@ async def _delegated_answer(row: FederationRequest, *, plan: dict, step: dict,
                 except PeerUnavailable:
                     receipt = None
             if receipt is None:
-                return _delegated_failure(exc.code or "peer_unavailable")
+                return _peer_failure(exc)
         mismatch = _receipt_binding_error(receipt, **expected)
         if mismatch is not None:
             return _delegated_failure(mismatch)
         if receipt.get("state") != "accepted":
-            return _delegated_failure(str(receipt.get("state") or "not_accepted"))
+            return _delegated_failure(
+                f"delegated_admission_not_accepted:{_reason_detail(receipt.get('state'))}")
         executor_task_id = str(receipt.get("executor_task_id") or "")
         if not executor_task_id:
             return _delegated_failure("invalid_admission_receipt")
         status = await _poll_execution(client, executor_task_id)
         if status.get("state") != "succeeded":
-            return _delegated_failure(str(status.get("error") or status.get("state")))
+            # 超时（本节点合成的 peer_execution_timeout）、对端 failed/cancelled：
+            # 代码固定，具体是哪一种进细节 —— 界面能分清，又不会冒出未声明的代码。
+            return _delegated_failure(f"delegated_execution_failed:"
+                                      f"{_reason_detail(status.get('error') or status.get('state'))}")
         return _validated_delegated_answer(
             status.get("answer"), evidence_ids=[item["evidence_id"] for item in evidence])
     except PeerUnavailable as exc:
-        return _delegated_failure(exc.code or "peer_unavailable")
+        return _peer_failure(exc)
     finally:
         await peers.aclose()
 

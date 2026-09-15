@@ -1005,6 +1005,111 @@ func (s EvidenceConflictBasis) Valid() bool {
 	return ok
 }
 
+// 联邦任务结果里 `answer_reason` 的取值：**为什么这次没有答案**（有答案时为 null）。
+// 它和 `evidence_sufficiency` 分开：充分性说"证据够不够"，这里说"答案这一步
+// 具体卡在哪" —— 证据充分但模型没装、远端答案引用越界、预算超了，都要让用户
+// 看得出区别，而不是统一显示成"没有答案"。
+//
+// **代码是封闭集合，细节是后缀**：其中五个代码允许带 `:细节`
+// （`receipt_binding_mismatch:plan_digest`、`delegated_execution_failed:peer_execution_timeout`、
+// `delegated_admission_not_accepted:waiting_input`、`delegated_answer_rejected:…`、
+// `peer_unavailable:http_503`），细节是对端的状态/错误码或出错字段，经过字符集与长度
+// 清洗；其余代码不带后缀。对端给的字符串**永远只进细节**，不会变成新的代码。
+// 查文案前先去掉冒号后缀；协调者写出之前会检查代码已声明（`federation.unavailable_answer`）。
+type FederatedAnswerReason string
+
+const (
+	// 证据不足（或没有可引用证据），不给模型凭常识补答的机会
+	FederatedAnswerReasonInsufficientEvidence FederatedAnswerReason = "insufficient_evidence"
+	// 本节点与计划内远端都没有可用的生成能力（或生成预算为 0）
+	FederatedAnswerReasonLocalModelMissing FederatedAnswerReason = "local_model_missing"
+	// 某条证据取不到正文（空白或缺失），不能拿无根片段生成
+	FederatedAnswerReasonEvidenceExcerptUnavailable FederatedAnswerReason = "evidence_excerpt_unavailable"
+	// 证据正文超过契约上限（2000 字符），显式拒绝而不是静默截断
+	FederatedAnswerReasonExcerptOverContractBound FederatedAnswerReason = "excerpt_over_contract_bound"
+	// 调生成模型的请求失败或返回非 200
+	FederatedAnswerReasonUpstreamError FederatedAnswerReason = "upstream_error"
+	// 模型没有返回可用文本
+	FederatedAnswerReasonNoModelOutput FederatedAnswerReason = "no_model_output"
+	// 生成结果超出计划的生成 token 预算
+	FederatedAnswerReasonBudgetExceeded FederatedAnswerReason = "budget_exceeded"
+	// 生成文本的引用结构不成立（无引用、越界引用、矛盾标注不成立）
+	FederatedAnswerReasonUnsupportedGeneration FederatedAnswerReason = "unsupported_generation"
+	// 远端执行完成但没有返回答案文档
+	FederatedAnswerReasonDelegatedAnswerMissing FederatedAnswerReason = "delegated_answer_missing"
+	// 远端答案校验未通过；远端自报的原因认不出来时放进细节
+	FederatedAnswerReasonDelegatedAnswerRejected FederatedAnswerReason = "delegated_answer_rejected"
+	// 远端答案没有任何主张绑定
+	FederatedAnswerReasonDelegatedBindingsMissing FederatedAnswerReason = "delegated_bindings_missing"
+	// 远端答案的引用不在本次发送的证据里
+	FederatedAnswerReasonDelegatedBindingOutOfScope FederatedAnswerReason = "delegated_binding_out_of_scope"
+	// 远端标出的矛盾引用不在本次发送的证据里
+	FederatedAnswerReasonDelegatedConflictOutOfScope FederatedAnswerReason = "delegated_conflict_out_of_scope"
+	// 要委托的证据条数超过受理上限，不截断证据去凑数
+	FederatedAnswerReasonEvidenceDelegationOverLimit FederatedAnswerReason = "evidence_delegation_over_limit"
+	// 远端受理回执缺执行任务号
+	FederatedAnswerReasonInvalidAdmissionReceipt FederatedAnswerReason = "invalid_admission_receipt"
+	// 远端回执与本次 root/step/幂等键/计划修订/执行者对不上；细节是出错字段（回执不是对象时为 schema）
+	FederatedAnswerReasonReceiptBindingMismatch FederatedAnswerReason = "receipt_binding_mismatch"
+	// 远端没有受理答案步骤；细节是回执状态（如 waiting_input / rejected）
+	FederatedAnswerReasonDelegatedAdmissionNotAccepted FederatedAnswerReason = "delegated_admission_not_accepted"
+	// 远端答案执行没有成功；细节是对端错误码或状态（含本节点轮询超时 peer_execution_timeout）
+	FederatedAnswerReasonDelegatedExecutionFailed FederatedAnswerReason = "delegated_execution_failed"
+	// 远端生成节点未登记、连不上、回 HTTP 错误或返回非法响应；细节是对端错误码、http_状态或 transport
+	FederatedAnswerReasonPeerUnavailable FederatedAnswerReason = "peer_unavailable"
+)
+
+// FederatedAnswerReasonValues 保持 enums.yaml 里的声明顺序。
+var FederatedAnswerReasonValues = []FederatedAnswerReason{
+	FederatedAnswerReasonInsufficientEvidence,
+	FederatedAnswerReasonLocalModelMissing,
+	FederatedAnswerReasonEvidenceExcerptUnavailable,
+	FederatedAnswerReasonExcerptOverContractBound,
+	FederatedAnswerReasonUpstreamError,
+	FederatedAnswerReasonNoModelOutput,
+	FederatedAnswerReasonBudgetExceeded,
+	FederatedAnswerReasonUnsupportedGeneration,
+	FederatedAnswerReasonDelegatedAnswerMissing,
+	FederatedAnswerReasonDelegatedAnswerRejected,
+	FederatedAnswerReasonDelegatedBindingsMissing,
+	FederatedAnswerReasonDelegatedBindingOutOfScope,
+	FederatedAnswerReasonDelegatedConflictOutOfScope,
+	FederatedAnswerReasonEvidenceDelegationOverLimit,
+	FederatedAnswerReasonInvalidAdmissionReceipt,
+	FederatedAnswerReasonReceiptBindingMismatch,
+	FederatedAnswerReasonDelegatedAdmissionNotAccepted,
+	FederatedAnswerReasonDelegatedExecutionFailed,
+	FederatedAnswerReasonPeerUnavailable,
+}
+
+var FederatedAnswerReasonMeta = map[FederatedAnswerReason]EnumMeta{
+	FederatedAnswerReasonInsufficientEvidence:          {Value: "insufficient_evidence", Label: "证据不足，未生成答案", Severity: SeverityWarn},
+	FederatedAnswerReasonLocalModelMissing:             {Value: "local_model_missing", Label: "没有可用的生成模型，只返回证据", Severity: SeverityWarn},
+	FederatedAnswerReasonEvidenceExcerptUnavailable:    {Value: "evidence_excerpt_unavailable", Label: "有证据取不到原文片段，未生成答案", Severity: SeverityWarn},
+	FederatedAnswerReasonExcerptOverContractBound:      {Value: "excerpt_over_contract_bound", Label: "证据片段超出长度上限，未生成答案", Severity: SeverityWarn},
+	FederatedAnswerReasonUpstreamError:                 {Value: "upstream_error", Label: "生成服务出错，只返回证据", Severity: SeverityError},
+	FederatedAnswerReasonNoModelOutput:                 {Value: "no_model_output", Label: "模型没有输出，只返回证据", Severity: SeverityError},
+	FederatedAnswerReasonBudgetExceeded:                {Value: "budget_exceeded", Label: "超出生成预算，答案作废", Severity: SeverityError},
+	FederatedAnswerReasonUnsupportedGeneration:         {Value: "unsupported_generation", Label: "生成的答案引用不成立，已作废", Severity: SeverityError},
+	FederatedAnswerReasonDelegatedAnswerMissing:        {Value: "delegated_answer_missing", Label: "远端没有返回答案", Severity: SeverityError},
+	FederatedAnswerReasonDelegatedAnswerRejected:       {Value: "delegated_answer_rejected", Label: "远端答案未通过校验", Severity: SeverityError},
+	FederatedAnswerReasonDelegatedBindingsMissing:      {Value: "delegated_bindings_missing", Label: "远端答案没有引用，已作废", Severity: SeverityError},
+	FederatedAnswerReasonDelegatedBindingOutOfScope:    {Value: "delegated_binding_out_of_scope", Label: "远端答案引用了未发送的证据，已作废", Severity: SeverityError},
+	FederatedAnswerReasonDelegatedConflictOutOfScope:   {Value: "delegated_conflict_out_of_scope", Label: "远端标注的矛盾引用不成立，答案已作废", Severity: SeverityError},
+	FederatedAnswerReasonEvidenceDelegationOverLimit:   {Value: "evidence_delegation_over_limit", Label: "证据条数超过委托上限，未生成答案", Severity: SeverityWarn},
+	FederatedAnswerReasonInvalidAdmissionReceipt:       {Value: "invalid_admission_receipt", Label: "远端受理回执无效", Severity: SeverityError},
+	FederatedAnswerReasonReceiptBindingMismatch:        {Value: "receipt_binding_mismatch", Label: "远端回执与本次任务对不上，未采用", Severity: SeverityError},
+	FederatedAnswerReasonDelegatedAdmissionNotAccepted: {Value: "delegated_admission_not_accepted", Label: "远端未受理生成请求", Severity: SeverityError},
+	FederatedAnswerReasonDelegatedExecutionFailed:      {Value: "delegated_execution_failed", Label: "远端生成步骤未完成", Severity: SeverityError},
+	FederatedAnswerReasonPeerUnavailable:               {Value: "peer_unavailable", Label: "远端生成节点不可用", Severity: SeverityError},
+}
+
+// Valid 报告 s 是不是一个已知的 federated_answer_reason 取值。
+func (s FederatedAnswerReason) Valid() bool {
+	_, ok := FederatedAnswerReasonMeta[s]
+	return ok
+}
+
 // TaskPlan 的规划轴（计划 §8.1）。`invalidated` 是关键一态：
 // 计划过期、输入版本变了、授权被撤销之后，**旧计划不许被执行**，
 // 要重新规划并重新批准（§6.6 接单时重新检查）。

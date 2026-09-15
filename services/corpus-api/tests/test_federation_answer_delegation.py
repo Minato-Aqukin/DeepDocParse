@@ -12,6 +12,7 @@
 - `rag.answer.cited` 未就绪的节点绝不会收到 answer 步骤（能力探测诚实）；
 - 证据缺失/摘要不符/空白/越界/超条数 -> waiting_input / input_not_verified，不截断。
 """
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -550,3 +551,117 @@ async def test_items_a_peer_reports_for_another_origin_cannot_raise_a_divergence
 
     assert status["result"]["conflicts"] == []
     assert status["evidence_sufficiency"] != "conflicting"
+
+
+# ------------------------------------------- 委托失败的原因：代码固定，对端字符串只进细节
+
+async def _delegated_reason(actor_client, monkeypatch, peer, key):
+    install_peer(monkeypatch, peer)
+    root, plan = await start_delegated(actor_client, peer=peer)
+    assert answer_step(plan) is not None, "前提：计划里有委托生成这一步"
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
+    safe_key = "reason-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+    result = (await submit_task(actor_client, root, plan["plan_digest"], safe_key)).json()["result"]
+    assert result["answer"] is None and result["evidence"], "失败只作废答案，证据保留"
+    return result["answer_reason"]
+
+
+@pytest.mark.parametrize(("execution", "expected"), [
+    ({"state": "running"}, "delegated_execution_failed:peer_execution_timeout"),
+    ({"state": "cancelled", "error": None}, "delegated_execution_failed:cancelled"),
+    ({"state": "failed", "error": None}, "delegated_execution_failed:failed"),
+    ({"state": "failed", "error": "input_not_verified"}, "delegated_execution_failed:input_not_verified"),
+    ({"state": "failed", "error": "<b>boom</b> 爆了"}, "delegated_execution_failed:_b_boom__b____"),
+])
+@respx.mock
+async def test_remote_execution_failures_map_to_declared_reasons(
+        actor_client, monkeypatch, execution, expected):
+    """第一次验收复现：超时/取消/无错误码的失败曾把 `peer_execution_timeout`、`cancelled`、
+    `failed` 原样写成答案原因 —— 契约里没有，界面只能显示原始代码。"""
+    mock_gateway_not_ready()
+    monkeypatch.setattr(federation_tasks, "PEER_POLL_DEADLINE_SECONDS", 0.0)
+    peer = peer_with_excerpt()
+    peer.can_generate = True
+    peer.answer_document = ready_document()
+    peer.answer_execution = execution
+    assert await _delegated_reason(actor_client, monkeypatch, peer,
+                                   f"exec-{execution['state']}-{execution.get('error')}") == expected
+
+
+@respx.mock
+async def test_remote_admission_not_accepted_has_a_declared_reason(
+        actor_client, monkeypatch):
+    from test_federation_admissions import validate_receipt_contract
+
+    mock_gateway_not_ready()
+    peer = peer_with_excerpt()
+    peer.can_generate = True
+    peer.answer_document = ready_document()
+    peer.answer_receipt_state = "waiting_input"
+    reason = await _delegated_reason(actor_client, monkeypatch, peer, "not-accepted")
+    assert reason == "delegated_admission_not_accepted:waiting_input"
+    answer_receipts = [receipt for body, receipt in peer.accepted.values()
+                       if body.get("step_id") == "answer-1"]
+    assert answer_receipts
+    for receipt in answer_receipts:
+        validate_receipt_contract(receipt)   # 替身回执与真实执行者一样守契约
+
+
+@respx.mock
+async def test_unreachable_generation_peer_has_a_declared_reason(actor_client, monkeypatch):
+    mock_gateway_not_ready()
+    broken = peer_with_excerpt()
+    broken.can_generate = True
+    broken.fail_admit_step = "answer-1"
+    assert await _delegated_reason(actor_client, monkeypatch, broken, "unreachable") \
+        == "peer_unavailable:transport"
+
+
+@pytest.mark.parametrize(("remote_reason", "expected"), [
+    ("budget_exceeded", "budget_exceeded"),                              # 同一份契约里的代码照用
+    ("peer_unavailable:http_503", "peer_unavailable:http_503"),          # 允许带细节的代码保留细节
+    ("upstream_error:secret-detail", "upstream_error"),                  # 不允许带细节的代码丢掉细节
+    ("peer_unavailable:<b>x</b> 爆", "peer_unavailable:_b_x__b___"),     # 允许带细节的也要清洗
+    ("peer_unavailable:" + "x" * 80, "peer_unavailable:" + "x" * 64),    # 细节截到 64
+    ("model exploded <script>", "delegated_answer_rejected:model_exploded__script_"),
+    (None, "delegated_answer_rejected"),
+])
+@respx.mock
+async def test_remote_answer_reason_is_normalized_not_passed_through(
+        actor_client, monkeypatch, remote_reason, expected):
+    mock_gateway_not_ready()
+    peer = peer_with_excerpt()
+    peer.can_generate = True
+    peer.answer_document = {**ready_document(), "answer": None, "claim_evidence_bindings": [],
+                            "validation_state": "failed", "answer_reason": remote_reason}
+    assert await _delegated_reason(actor_client, monkeypatch, peer,
+                                   f"remote-reason-{remote_reason}") == expected
+
+
+def test_undeclared_answer_reasons_are_refused_before_they_reach_a_result():
+    from ddp_corpus import federation
+
+    assert federation.unavailable_answer("peer_unavailable:http_503")["answer_reason"] \
+        == "peer_unavailable:http_503"
+    for reason in ("peer_execution_timeout", "cancelled", "upstream_error:detail",
+                   "peer_unavailable:", "not_accepted", "peer_unavailable:<b>",
+                   "peer_unavailable:" + "x" * 65, "peer_unavailable:a:b"):
+        with pytest.raises(ValueError):
+            federation.unavailable_answer(reason)
+
+
+def test_guard_and_coordinator_agree_on_which_reasons_carry_detail():
+    """守卫的 SUFFIXED_VALUES 与协调者的 ANSWER_REASONS_WITH_DETAIL 是同一张表的两处引用。"""
+    import importlib.util
+    from pathlib import Path
+
+    from ddp_contracts.enums import FEDERATED_ANSWER_REASON_VALUES
+    from ddp_corpus import federation
+
+    path = Path(__file__).resolve().parents[3] / "scripts" / "check_enum_usage.py"
+    spec = importlib.util.spec_from_file_location("check_enum_usage", path)
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    assert guard.SUFFIXED_VALUES["federated_answer_reason"] == set(federation.ANSWER_REASONS_WITH_DETAIL)
+    assert federation.ANSWER_REASONS_WITH_DETAIL <= set(FEDERATED_ANSWER_REASON_VALUES)
+

@@ -27,7 +27,7 @@
 | 节点执行者 | `services/corpus-api/ddp_corpus/federation.py`、`routers/federation.py`、`federation_models.py` | 真实证据 Probe、持久 Admission（幂等/对账/绑定校验）、执行（generation fence）、证据集、精确定位、引用解析 |
 | 协调者 | `services/corpus-api/ddp_corpus/{federation_tasks.py,federation_peers.py,routers/tasks.py}` | intent/plan/approve/task/coverage/events/resume/cancel/delivery ack、探索许可门、快速/穷查、证据融合、本地带出处答案 |
 | 本地运行时 | `python/ddp_local/ddp_local/{federation_client.py,federation_dispatch.py}` + `plan_http.py`/`cli.py` | 批准后按 payload 走 `authorize_dispatch` 外发、丢回执不自动重放、对账与交付确认 |
-| 契约 | `packages/contracts/openapi/federation-tasks-v1.yaml`、`scripts/check_federation_routes.py` | 19 个端点的机器可读契约与双向路由守卫 |
+| 契约 | `packages/contracts/openapi/federation-tasks-v1.yaml`、`scripts/check_federation_routes.py` | 联邦任务端点的机器可读契约与双向路由守卫（2026-09-15 加本人任务列表后为 21 个，以守卫输出为准） |
 | 迁移 | `database/corpus/alembic/versions/0027…0029` | 探测/受理/执行/协调/覆盖/交付/事件表、intent 幂等键、依据列宽 |
 | 控制面 | `services/control-api/internal/api/server.go` | 协调者前缀经入口转发（保持身份头剥离）；`accepting_admissions` 如实透传 |
 

@@ -198,6 +198,24 @@ paths:
         '409': {description: 'plan_changed：计划修订已变，原批准不再适用，需重新批准', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '410': {description: 'scope_expired：范围或计划已过期，需重新规划'}
   /api/v1/tasks:
+    get:
+      operationId: listTasks
+      description: |
+        调用者**本人**发起的任务，按创建时间倒序（同一时刻按 root_task_id 倒序）分页。
+        组织管理员也只列自己的任务 —— 他们仍可按 id 读取组织内别人的任务
+        （`GET /api/v1/tasks/{root_task_id}`），但列表不替任何人汇总别人问过什么。
+
+        列表项只带需求摘要与各状态轴，**不带结果、证据与许可原文**：那些要按 id 读，
+        读的时候再过一遍可见性。游标是不透明字符串，**无法解析**时 400
+        `invalid_cursor`，不静默从头开始（否则翻页会悄悄重复）。游标没有签名：格式合法
+        但被改过的游标会被接受，查的仍只是本人的任务。limit / cursor 超出边界是 422。
+      parameters:
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+        - {name: cursor, in: query, required: false, schema: {type: string, minLength: 1, maxLength: 256}, description: 上一页的 next_cursor}
+      responses:
+        '200': {description: 本人任务的一页, content: {application/json: {schema: {$ref: '#/components/schemas/TaskListPage'}}}}
+        '400': {description: invalid_cursor（游标无法解析）, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '422': {description: limit 或 cursor 超出参数边界}
     post:
       operationId: submitTask
       description: |
@@ -549,6 +567,31 @@ components:
             `excerpt_over_contract_bound`，正文永不无界进 prompt。
             `excerpt` 只在证据集读取时返回，单条 resolve 不返回。
         complete: {type: boolean, description: 'false 表示证据超过 50 条被截断（本切片不提供分页）'}
+    TaskListItem:
+      type: object
+      additionalProperties: false
+      required: [root_task_id, query, operation, scope_kind, search_mode, status, planning_state,
+                 retrieval_completeness, evidence_sufficiency, delivery_state, created_at, updated_at]
+      properties:
+        root_task_id: {type: string, minLength: 1}
+        query: {description: TaskSpec.query 原文（本人发起，列表只给本人看）, type: string}
+        operation: {type: string, minLength: 1}
+        scope_kind: {type: string, enum: [local_only, site_public, federation_public, fixed_resources]}
+        search_mode: {type: string, x-ddp-enum: search_mode}
+        status: {type: string, x-ddp-enum: task_status}
+        planning_state: {type: string, x-ddp-enum: planning_state}
+        retrieval_completeness: {type: string, x-ddp-enum: retrieval_completeness}
+        evidence_sufficiency: {type: string, x-ddp-enum: evidence_sufficiency}
+        delivery_state: {type: string, x-ddp-enum: delivery_state}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    TaskListPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/TaskListItem'}}
+        next_cursor: {type: [string, 'null'], description: 还有下一页时非空；null = 已到末尾}
     TaskStatus:
       type: object
       additionalProperties: false
@@ -567,7 +610,7 @@ components:
         coverage_ref: {type: [string, 'null'], description: 指向 CoverageLedger；没有它就无法判断"未找到"是什么意思}
         delivery_id: {type: [string, 'null']}
         delivery_state: {type: string, x-ddp-enum: delivery_state}
-        result: {type: [object, 'null'], description: 结果摘要；完整结果与证据经 results/resolve 与交付流程取回}
+        result: {type: [object, 'null'], description: '结果摘要；完整结果与证据经 results/resolve 与交付流程取回。没有答案时 `answer_reason` 说明原因，取值见 enums.yaml 的 `federated_answer_reason`：代码封闭，其中五个可带 `:细节` 后缀（对端状态/错误码只进细节、经过清洗）；查文案前先去掉后缀'}
         error: {type: [string, 'null']}
         scope_ref: {type: [string, 'null']}
         created_at: {type: string, format: date-time}

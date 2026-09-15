@@ -5,6 +5,7 @@
 不是对端实现。所有"不许发请求"的断言都直接数 stub 收到的请求 —— 静默外发
 在这类测试里最容易被放过。
 """
+import base64
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -31,7 +32,7 @@ from ddp_corpus.federation_models import (
     FederationTaskEvent,
 )
 from ddp_corpus.federation_peers import PeerDirectory, parse_peers
-from ddp_corpus.models import new_id, utcnow
+from ddp_corpus.models import as_aware, new_id, utcnow
 from ddp_core.application import plans
 from test_federation_probes import (
     BASE,
@@ -221,6 +222,11 @@ class StubPeer:
         self.index_revision = index_revision
         #: 探测回执是否回 403（负面缓存 denied 分支）。
         self.deny_probes = False
+        #: 答案步骤的受理回执状态（None = accepted）。非 accepted 时按契约去掉
+        #: executor_task_id / 已校验摘要，形状与真实执行者的 waiting_input 回执一致。
+        self.answer_receipt_state: str | None = None
+        #: 答案执行轮询时覆盖的字段（例如 {"state": "running"} 模拟一直不结束）。
+        self.answer_execution: dict | None = None
         #: 业务键 -> (请求体, 回执)。真实执行者（`federation.admit`）同键同体复用
         #: 回执、同键异体 409（delegation_generation 在请求摘要里），lookup 找得到
         #: 已受理的回执。旧 stub 每次都发新回执、lookup 永远 404，于是"resume 按新
@@ -302,6 +308,12 @@ class StubPeer:
                 executor_task_id = f"remote-exec-{len(self.calls)}"
                 receipt["executor_task_id"] = executor_task_id
                 self.executions[executor_task_id] = str(body.get("step_id") or "")
+                if self.answer_receipt_state and body.get("step_id") == "answer-1":
+                    receipt["state"] = self.answer_receipt_state
+                    receipt["input_validation"] = "metadata_only"
+                    for field in ("executor_task_id", "verified_input_manifest_digest",
+                                  "accepted_at"):
+                        receipt.pop(field, None)
                 if self.foreign_admit_field:
                     receipt[self.foreign_admit_field] = "foreign-value"
                 self.accepted[body["idempotency_key"]] = (body, receipt)
@@ -331,6 +343,8 @@ class StubPeer:
                 }
                 if is_answer and self.answer_document is not None:
                     status["answer"] = self.answer_document
+                if is_answer and self.answer_execution:
+                    status.update(self.answer_execution)
                 return httpx.Response(200, json=status)
             return httpx.Response(404, json={"error": {"code": "not_found"}})
 
@@ -2117,3 +2131,160 @@ async def test_evidence_set_endpoint_reauthorizes_and_bounds(actor_client, sessi
     await session.commit()
     expired = await actor_client.get(f"{BASE}/evidence-sets/{set_ref}", headers=headers())
     assert expired.status_code == 410
+
+
+# ------------------------------------------------------------------ 本人任务列表
+
+LOCAL_EXPLORATION = dict(egress="local_only", recipients=(), payload=(),
+                         budget={"max_probe_requests": 0, "max_egress_bytes": 0})
+
+
+async def _intent_as(client, headers, query, *, key):
+    body = {"task_spec": task_spec(scope="site_public", mode="fast", query=query),
+            "exploration_consent": exploration(**LOCAL_EXPLORATION)}
+    response = await client.post("/api/v1/task-intents", json=body,
+                                 headers={**headers, "Idempotency-Key": key})
+    assert response.status_code == 201, response.text
+    return response.json()["root_task_id"]
+
+
+async def _set_created(session, root_task_id, at):
+    await session.execute(update(FederationRequest).where(
+        FederationRequest.root_task_id == root_task_id).values(created_at=at))
+    await session.commit()
+
+
+def validate_task_list_contract(page: dict) -> None:
+    from jsonschema import Draft202012Validator
+    from test_federation_admissions import FEDERATION_TASKS_SPEC
+    Draft202012Validator({"$ref": "#/components/schemas/TaskListPage",
+                          "components": FEDERATION_TASKS_SPEC["components"]}).validate(page)
+
+
+async def test_task_list_shows_only_my_tasks_newest_first_with_state_axes(actor_client, session):
+    """列表只给本人：同组织别人、别的组织、管理员自己的列表都互不串。"""
+    base = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    mine = []
+    for index, query in enumerate(["第一问", "第二问", "第三问"]):
+        root = await _intent_as(actor_client, actor_headers(), query, key=f"list-mine-{index}")
+        await _set_created(session, root, base + timedelta(minutes=index))
+        mine.append(root)
+    other_member = await _intent_as(actor_client, actor_headers("actor-mallory"), "别人的问题",
+                                    key="list-mallory")
+    other_org = await _intent_as(actor_client, actor_headers(organization_id="org-other"),
+                                 "别的组织", key="list-other-org")
+    admin_root = await _intent_as(actor_client, actor_headers("actor-admin", role="admin"),
+                                  "管理员自己的", key="list-admin")
+
+    response = await actor_client.get("/api/v1/tasks")
+    assert response.status_code == 200, response.text
+    page = response.json()
+    validate_task_list_contract(page)
+    assert [item["root_task_id"] for item in page["items"]] == list(reversed(mine))
+    assert page["next_cursor"] is None
+    newest = page["items"][0]
+    assert newest["query"] == "第三问" and newest["scope_kind"] == "site_public"
+    assert newest["operation"] == "rag.answer.cited" and newest["search_mode"] == "fast"
+    assert (newest["status"], newest["planning_state"], newest["retrieval_completeness"],
+            newest["evidence_sufficiency"], newest["delivery_state"]) == (
+        "queued", "draft", "not_started", "unknown", "not_requested")
+    assert not {"result", "exploration_consent", "task_spec"} & set(newest), \
+        "列表不带结果与许可原文"
+
+    listed = set()
+    for someone in (actor_headers("actor-mallory"), actor_headers(organization_id="org-other"),
+                    actor_headers("actor-admin", role="admin")):
+        other = (await actor_client.get("/api/v1/tasks", headers=someone)).json()
+        listed |= {item["root_task_id"] for item in other["items"]}
+        assert not set(mine) & {item["root_task_id"] for item in other["items"]}
+    assert listed == {other_member, other_org, admin_root}, "每个人只看得到自己的那一条"
+
+
+async def test_task_list_pages_by_cursor_without_repeats_when_new_tasks_arrive(
+        actor_client, session):
+    base = datetime(2026, 9, 2, 8, 0, 0, 123457, tzinfo=timezone.utc)
+    roots = []
+    for index in range(5):
+        root = await _intent_as(actor_client, actor_headers(), f"问题 {index}", key=f"page-{index}")
+        # 第 2、3 条同一时刻，而且正好跨第一页边界（limit=2 时第一页最后一条是其中之一）：
+        # 键集翻页必须靠 root_task_id 决出先后，否则另一条会被 `created_at <` 跳过。
+        # 间隔只有一微秒：游标的时刻精度差一微秒就会漏行或重复。
+        await _set_created(session, root, base + timedelta(microseconds=(0, 1, 2, 2, 3)[index]))
+        roots.append(root)
+    first = (await actor_client.get("/api/v1/tasks", params={"limit": 2})).json()
+    validate_task_list_contract(first)
+    assert len(first["items"]) == 2 and first["next_cursor"]
+
+    # 两页之间来了一条更新的任务：下一页不许因此重复上一页的内容。
+    await _intent_as(actor_client, actor_headers(), "翻页途中的新问题", key="page-late")
+    seen = [item["root_task_id"] for item in first["items"]]
+    cursor = first["next_cursor"]
+    while cursor:
+        page = (await actor_client.get("/api/v1/tasks", params={"limit": 2, "cursor": cursor})).json()
+        validate_task_list_contract(page)
+        seen += [item["root_task_id"] for item in page["items"]]
+        cursor = page["next_cursor"]
+    assert len(seen) == len(set(seen)) == 5, "翻页不重复、不遗漏"
+    assert set(seen) == set(roots)
+    stamps = [(await session.get(FederationRequest, root, populate_existing=True)) for root in seen]
+    keys = [(as_aware(row.created_at), row.root_task_id) for row in stamps]
+    assert keys == sorted(keys, reverse=True), "创建时间倒序，同一时刻按 id 倒序"
+
+
+@pytest.mark.parametrize("cursor", [
+    "not-base64-%%%",
+    "W10",                                   # base64url("[]")
+    "WyJ4IiwieSJd",                          # ["x","y"]：时刻不是整数
+    "WzEsIiJd",                              # [1,""]：空 id
+    "WzEsIlx1ZDgwMCJd",                      # [1,"\ud800"]：孤立代理字符（SQLite 上曾是 500）
+    "WzEsIlx1MDAwMCJd",                      # [1,"\u0000"]：NUL（PostgreSQL 上曾是 500）
+    "WzEsImEiXQ%%%",                         # 合法游标后面跟垃圾：不许被静默丢掉后接受
+    "WzEsImEiXQ+/",                          # [1,"a"] 后面多出的字节：JSON 解析失败
+])
+async def test_task_list_rejects_a_tampered_cursor_instead_of_restarting(actor_client, cursor):
+    response = await actor_client.get("/api/v1/tasks", params={"cursor": cursor})
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["code"] == "invalid_cursor"
+
+
+@pytest.mark.parametrize("limit", [0, 101])
+async def test_task_list_limit_is_bounded(actor_client, limit):
+    assert (await actor_client.get("/api/v1/tasks", params={"limit": limit})).status_code == 422
+
+
+async def test_task_list_last_full_page_has_no_dangling_cursor(actor_client, session):
+    """条数恰好是 limit 的整数倍：最后一页的 next_cursor 必须是 null，不多给一个空页。"""
+    base = datetime(2026, 9, 4, 8, 0, tzinfo=timezone.utc)
+    for index in range(4):
+        root = await _intent_as(actor_client, actor_headers(), f"整页 {index}", key=f"full-{index}")
+        await _set_created(session, root, base + timedelta(seconds=index))
+    first = (await actor_client.get("/api/v1/tasks", params={"limit": 2})).json()
+    assert len(first["items"]) == 2 and first["next_cursor"]
+    second = (await actor_client.get("/api/v1/tasks", params={
+        "limit": 2, "cursor": first["next_cursor"]})).json()
+    assert len(second["items"]) == 2 and second["next_cursor"] is None
+
+
+async def test_task_list_follows_the_person_not_the_credential(actor_client):
+    """同一个人用 Web 会话与 API key 建的任务出现在同一张列表里（按 principal 认人）。"""
+    web_root = await _intent_as(actor_client, actor_headers(), "网页上问的", key="principal-web")
+    api_key = {**actor_headers(), "X-DDP-Actor": "apikey-42", "X-DDP-Actor-Kind": "api_key",
+               "X-DDP-User": ACTOR, "X-DDP-Api-Key": "apikey-42"}
+    key_root = await _intent_as(actor_client, api_key, "脚本里问的", key="principal-key")
+    for credential in (actor_headers(), api_key):
+        page = (await actor_client.get("/api/v1/tasks", headers=credential)).json()
+        assert {web_root, key_root} <= {item["root_task_id"] for item in page["items"]}
+
+
+def _cursor(micros, root_task_id):
+    raw = json.dumps([micros, root_task_id], separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+async def test_task_list_cursor_id_is_bounded_by_the_column_width(actor_client):
+    """游标里的 id 不超过 root_task_id 的列宽（64）：65 位是 400，不是一次注定查空的查询。"""
+    assert (await actor_client.get("/api/v1/tasks", params={
+        "cursor": _cursor(1, "a" * 64)})).status_code == 200
+    too_long = await actor_client.get("/api/v1/tasks", params={"cursor": _cursor(1, "a" * 65)})
+    assert too_long.status_code == 400 and too_long.json()["error"]["code"] == "invalid_cursor"
+

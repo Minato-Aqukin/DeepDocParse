@@ -409,3 +409,54 @@ async def test_coordinator_end_to_end_on_pg_queue_path(pg_stack):
     assert acked.json()["state"] == "confirmed"
     assert (await client.get(f"/api/v1/tasks/{root}")).json()["delivery_state"] \
         == "confirmed"
+
+
+async def test_task_list_keyset_pages_keep_microsecond_ties_on_pg(pg_stack):
+    """timestamptz 往返后键集翻页仍按 (created_at, root_task_id) 精确到微秒不重不漏。
+
+    SQLite 把时间存成字符串，比较是字典序；PostgreSQL 是真的时间类型。游标里的
+    微秒在两边都得对上，否则同一秒内相邻的任务会在页边界被跳过或重复。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    client, factory, _state = pg_stack
+    run_key = new_id()
+    headers = actor_headers(f"pg-list-{run_key[:20]}")
+    consent = exploration(egress="local_only", recipients=(), payload=(),
+                          budget={"max_probe_requests": 0, "max_egress_bytes": 0})
+    base = datetime(2026, 9, 3, 9, 0, 0, 654321, tzinfo=timezone.utc)
+    roots = []
+    for index, offset in enumerate((0, 1, 2, 2, 3)):
+        response = await client.post(
+            "/api/v1/task-intents",
+            json={"task_spec": task_spec(scope="site_public", mode="fast", query=f"pg {index}"),
+                  "exploration_consent": consent},
+            headers={**headers, "Idempotency-Key": f"pg-list-{run_key}-{index}"})
+        assert response.status_code == 201, response.text
+        root = response.json()["root_task_id"]
+        async with factory() as session:
+            await session.execute(sa.update(FederationRequest).where(
+                FederationRequest.root_task_id == root).values(
+                created_at=base + timedelta(microseconds=offset)))
+            await session.commit()
+        roots.append(root)
+
+    seen, cursor = [], None
+    while True:
+        params = {"limit": 2, **({"cursor": cursor} if cursor else {})}
+        page = await client.get("/api/v1/tasks", params=params, headers=headers)
+        assert page.status_code == 200, page.text
+        body = page.json()
+        seen += [item["root_task_id"] for item in body["items"]]
+        cursor = body["next_cursor"]
+        if not cursor:
+            break
+    assert len(seen) == len(set(seen)) == 5 and set(seen) == set(roots)
+    async with factory() as session:
+        rows = {row.root_task_id: row for row in await session.scalars(
+            select(FederationRequest).where(FederationRequest.root_task_id.in_(roots)))}
+    keys = [(rows[root].created_at, root) for root in seen]
+    assert keys == sorted(keys, reverse=True)
+    # NUL 进 PostgreSQL 的文本参数是 CharacterNotInRepertoire：游标解析必须先挡住（400 不是 500）。
+    nul = await client.get("/api/v1/tasks", params={"cursor": "WzEsIlx1MDAwMCJd"}, headers=headers)
+    assert nul.status_code == 400 and nul.json()["error"]["code"] == "invalid_cursor"

@@ -25,9 +25,18 @@
     degraded = ["xxx"] / {"xxx"}        容器字面量（元素逐个算）
     degraded.add("xxx") / .append(…)    往集合/列表里塞
     return None, "xxx"                  return 里的字面量（**按位置**认）
+    f("xxx") / f(reason="xxx")          登记过的工厂函数的参数（CALL_POSITIONS，按位置与参数名认）
+    str(x or "xxx") / f"xxx:{detail}"   兜底值与 f-string 固定前缀（带 `:细节` 的只认登记过的取值）
+    "xxx:" + y / "xxx:%s" % y / .format 拼接与模板的固定前缀，规则同 f-string
+    result["degraded"] = "xxx"          下标赋值
+
+    **仍然看不见的**（靠 `federation.unavailable_answer` 的运行时检查或验收）：变量中转
+    （`reason = "x"; f(reason)`）、函数别名、以占位符开头的 f-string / `%` / `.format` / 拼接、
+    条件表达式参与的拼接（`("a" if c else "b") + ":" + x`）、`+=`、`setdefault`、
+    字典里值是变量的 `{"answer_reason": var}`。
     compile_degraded / index_status / compile_status / status(受限) 同理
 
-**这七种形状不是一次写全的。** 头一版只认单目标赋值、关键字参数与字典，
+**这些形状不是一次写全的。** 头一版只认单目标赋值、关键字参数与字典，
 而代码里 `degraded` 的真实写点几乎全在另外三种形状里
 （`conversations.py` 的元组解包 4 处、`compilation.py` 的 `.add()` 6 处、
 `indexing.py` 的列表字面量 1 处）—— 也就是说**这把尺子当时一处真正的
@@ -63,6 +72,7 @@ TRACKED = {
     "task_status": "task_status",
     "upload_status": "upload_status",
     "actor_kind": "actor_kind",
+    "answer_reason": "federated_answer_reason",
 }
 
 #: 扫哪些树
@@ -97,6 +107,37 @@ RETURN_POSITIONS = {
     "services/corpus-api/ddp_corpus/compilation.py::one": {2: "compile_degraded"},
     "services/model-gateway/ddp_gateway/services/extraction.py::extract_records":
         {1: "degraded"},
+    # 返回值本身就是答案原因，调用方原样交给 `_delegated_failure` / `unavailable_answer`
+    "services/corpus-api/ddp_corpus/federation.py::excerpt_reason": {-1: "federated_answer_reason"},
+    "services/corpus-api/ddp_corpus/federation_tasks.py::_receipt_binding_error":
+        {-1: "federated_answer_reason"},
+    "services/corpus-api/ddp_corpus/federation_tasks.py::_remote_answer_reason":
+        {-1: "federated_answer_reason"},
+}
+
+#: 调用处**第几个位置参数**是哪个枚举。按函数名认（`federation.unavailable_answer`
+#: 与本地的 `unavailable_answer` 是同一个写点）。联邦答案原因几乎全靠这三个工厂
+#: 函数写出去 —— 不登记它们，这个枚举就一处写点都量不到。
+CALL_POSITIONS = {
+    "unavailable_answer": {0: "federated_answer_reason"},
+    "_unavailable_answer": {0: "federated_answer_reason"},
+    "_delegated_failure": {0: "federated_answer_reason"},
+}
+#: 同一批函数用关键字传参时的参数名（`_delegated_failure(reason="x")` 也是写点）。
+CALL_KEYWORDS = {
+    "unavailable_answer": {"reason": "federated_answer_reason"},
+    "_unavailable_answer": {"reason": "federated_answer_reason"},
+    "_delegated_failure": {"reason": "federated_answer_reason"},
+}
+
+#: 允许带 `:细节` 后缀的**具体取值**（契约里写明了这种形状，如
+#: `receipt_binding_mismatch:plan_digest`）。只比对冒号前的部分；不在这里的取值带后缀即红。
+#: 与 `ddp_corpus.federation.ANSWER_REASONS_WITH_DETAIL` 必须一致（corpus-api 有用例钉着）。
+SUFFIXED_VALUES = {
+    "federated_answer_reason": {
+        "receipt_binding_mismatch", "delegated_execution_failed",
+        "delegated_admission_not_accepted", "delegated_answer_rejected", "peer_unavailable",
+    },
 }
 
 #: 契约声明了、但**确实没有任何代码把它写进这个字段**的取值。
@@ -111,6 +152,9 @@ KNOWN_UNPRODUCED = {
         "upstream_interrupted",
     },
     "compile_degraded": set(),
+    # 联邦答案原因是给用户看的"为什么没有答案"：声明了却没人写出去，就是一句
+    # 永远不会出现的文案；写出去了却没声明，界面上就是一串原始代码。
+    "federated_answer_reason": set(),
 }
 
 #: 哪些枚举要做逐取值覆盖检查。只列不变式 2 的那两个 ——
@@ -161,15 +205,56 @@ def _str_values(node: ast.AST | None) -> list[str]:
         return [v for value in node.values for v in _str_values(value)]
     if isinstance(node, ast.IfExp):
         return _str_values(node.body) + _str_values(node.orelse)
+    # `str(receipt.get("state") or "not_accepted")` —— 包一层 str() 的兜底值
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "str"
+            and len(node.args) == 1 and not node.keywords):
+        return _str_values(node.args[0])
+    # f-string：`f"receipt_binding_mismatch:{field}"` 的取值是冒号前的固定前缀（后缀是细节）；
+    # 全是常量的 f-string 就是那个常量；以常量开头却没有冒号（`f"code_{x}"`）的取值
+    # 算不出来 —— 报成带 `…` 的取值让它红，而不是静默放过。以占位符开头的看不出代码，跳过。
+    if isinstance(node, ast.JoinedStr) and node.values:
+        if all(_const_str(part) is not None for part in node.values):
+            return ["".join(part.value for part in node.values)]
+        return _dynamic_head(_const_str(node.values[0]))
+    # `"peer_unavailable:" + detail` —— 字符串拼接，左边是常量时同 f-string 处理
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _str_values(node.left), _const_str(node.right)
+        if len(left) == 1 and left[0].endswith("…"):
+            return left   # `"code:" + x + "!"`：左结合，代码已在左侧认出来，后面都是细节
+        if len(left) == 1 and right is not None:
+            return [left[0] + right]
+        return _dynamic_head(left[0] if len(left) == 1 else None)
+    # `"code:%s" % detail` / `"code:{}".format(detail)` —— 模板里占位符之前是固定部分
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        template = _const_str(node.left)
+        return _dynamic_head(template.split("%", 1)[0] if template is not None else None)
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "format"):
+        template = _const_str(node.func.value)
+        return _dynamic_head(template.split("{", 1)[0] if template is not None else None)
     return []
 
 
+def _dynamic_head(head: str | None) -> list[str]:
+    """取值带运行时拼接部分时，能认出来的只有开头的常量。
+
+    有冒号 → 代码是冒号前那段，后缀是细节（报成 `代码:…`）；没有冒号 → 整个取值算不出来，
+    报成 `常量…` 让它红（例如 `f"receipt_binding_mismatch_{x}"`）；开头不是常量 → 看不出
+    代码，跳过（靠 `federation.unavailable_answer` 的运行时检查兜住）。
+    """
+    if not head:   # None 或空串：以占位符开头，与 f"{x}" 一样看不出代码
+        return []
+    return [head.split(":", 1)[0] + ":…"] if ":" in head else [head + "…"]
+
+
 def _tracked_name(node: ast.AST, tracked: dict[str, str]) -> str | None:
-    """节点指向的被跟踪名字：`degraded` / `self.degraded` 都算。"""
+    """节点指向的被跟踪名字：`degraded` / `self.degraded` / `result["degraded"]` 都算。"""
     if isinstance(node, ast.Name) and node.id in tracked:
         return node.id
     if isinstance(node, ast.Attribute) and node.attr in tracked:
         return node.attr
+    if isinstance(node, ast.Subscript) and (key := _const_str(node.slice)) in tracked:
+        return key
     return None
 
 
@@ -229,6 +314,17 @@ def scan(path: pathlib.Path) -> list[tuple[str, str, int]]:
                 if kw.arg in tracked:
                     found += [(tracked[kw.arg], v, node.lineno)
                               for v in _str_values(kw.value)]
+            callee_name = node.func.id if isinstance(node.func, ast.Name) else (
+                node.func.attr if isinstance(node.func, ast.Attribute) else None)
+            for kw in node.keywords:
+                enum_name = CALL_KEYWORDS.get(callee_name, {}).get(kw.arg)
+                if enum_name:
+                    found += [(enum_name, v, node.lineno) for v in _str_values(kw.value)]
+            callee = node.func.id if isinstance(node.func, ast.Name) else (
+                node.func.attr if isinstance(node.func, ast.Attribute) else None)
+            for index, enum_name in CALL_POSITIONS.get(callee, {}).items():
+                if index < len(node.args):
+                    found += [(enum_name, v, node.lineno) for v in _str_values(node.args[index])]
             # `degraded.add("x")` / `parts.append("x")` —— 集合与列表的写点
             func = node.func
             if (isinstance(func, ast.Attribute) and func.attr in ("add", "append")
@@ -254,6 +350,15 @@ def main() -> int:
             continue
         for path in sorted(root.rglob("*.py")):
             for enum_name, value, line in scan(path):
+                if ":" in value:
+                    head, _, detail = value.partition(":")
+                    if head not in SUFFIXED_VALUES.get(enum_name, set()):
+                        problems.append(f"{path.relative_to(ROOT)}:{line} {enum_name} 取值 "
+                                        f"{head!r} 不允许带 `:细节` 后缀")
+                    elif not detail:
+                        problems.append(f"{path.relative_to(ROOT)}:{line} {enum_name} 取值 "
+                                        f"{value!r} 的细节是空的")
+                    value = head
                 key = (enum_name, value)
                 if key in ALLOWED_NON_ENUM:
                     continue

@@ -95,3 +95,34 @@ t3code参考HEAD：`b1e223e2b0d87124883b1410ab52dd6a1338e40d`（2026-09-12读取
   `(origin, resource, version, evidence_id)` **直接覆盖**，坏对端可以冒用别家的键把已归属
   条目的信封顶掉（交付结果里别家的证据也能被替换）；对冲突轴的影响只会多出 `needs_review`
   的矛盾。应改成"非归属条目不许覆盖已归属的键"，单独做、单独验收。
+
+## 2026-09-15 联邦任务接进界面之前的两件后端准备（改进项 ① 的 a1）
+
+- **本人任务列表 `GET /api/v1/tasks`**（契约 `listTasks` / `TaskListPage`）：界面要能找回
+  自己发起过的任务，而契约里此前只有按 id 读。只列调用者本人（管理员也一样，按 id 仍可读
+  别人的）；列表项只带需求摘要与状态轴，结果、证据、许可原文仍按 id 读。键集翻页
+  `(created_at, root_task_id)`，游标精确到微秒（同一秒内的相邻任务不在页边界被跳过/重复），
+  坏游标 400 `invalid_cursor` 而不是悄悄从头开始。不加索引：`actor_id` 已有单列索引，
+  单人任务量级下够用。SQLite 与真 PG 各有一条微秒同刻跨页边界的用例。
+- **答案原因进契约 `federated_answer_reason`**：结果里 `answer_reason` 以前是散落在代码里的
+  字符串，界面只能显示原始代码。现在 19 个代码带用户文案，**代码封闭**；其中五个可带
+  `:细节` 后缀（对端状态/错误码、出错字段），细节经过字符集与长度清洗。
+  `check_enum_usage.py` 按调用位置与参数名认写点（`unavailable_answer` / `_unavailable_answer` /
+  `_delegated_failure`）、认 `str(... or "兜底")`、f-string 与字符串拼接的固定前缀、下标赋值，
+  并要求每个代码都至少有一处写点。
+- **提交前验收抓到的两件事**：① 委托生成失败时对端的执行状态/本节点合成的
+  `peer_execution_timeout`/回执状态会被原样写成答案原因（契约里没有，守卫也扫不到）——
+  改成**代码封闭、细节后缀**：`delegated_execution_failed:` / `delegated_admission_not_accepted:` /
+  `peer_unavailable:` / `delegated_answer_rejected:` 加清洗过的细节，`federation.unavailable_answer`
+  写出前检查代码已声明、细节只给允许的五个代码；守卫改为按取值放行后缀、认关键字参数、
+  f-string 前缀拼错也红。② 构造游标里的孤立代理字符（SQLite）与 NUL（PG）会 500 —— 游标里的
+  id 限定为 `[A-Za-z0-9_-]{1,64}`，base64 严格解码。列表查询改为只加载列表项需要的列。
+- **记下的后续项（本次不做）**：列表的复合索引 `(organization_id, actor_id, created_at, root_task_id)`
+  （当前按组织索引扫描再过滤排序，大组织会退化）；`GET /api/v1/tasks/%00` 与
+  `POST /api/v1/task-plans {"root_task_id": "\u0000"}` 在 PG 上 500（既有问题，路径与请求体的
+  root_task_id 同样需要形状校验）；万一某条路径真把未声明的原因交给 `unavailable_answer`，
+  抛出的 ValueError 在队列路径上会重试 3 次后等清扫器（900s）才落成
+  `failed/coordinator_stalled`，原因只留在队列任务里 —— 今天没有路径能走到，但应让
+  `run_queued` 把这类确定性编程错误直接 `_mark_failed`；远端节点未登记时细节是
+  `transport`，与连接失败分不开；旧交付结果里若有已删除的 `not_accepted`，界面会显示原始代码。
+

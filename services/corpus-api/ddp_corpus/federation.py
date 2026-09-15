@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, or_, select, update
@@ -57,6 +58,7 @@ from ddp_core.application.probe import PROBE_KINDS, build_probe, validate_probe
 from ddp_core.application.ports import ApplicationError
 from ddp_core.bundle import digest as byte_digest
 from ddp_core.tokenize import tokens
+from ddp_contracts.enums import FEDERATED_ANSWER_REASON_VALUES
 
 from ddp_corpus import capabilities, catalog, queue, upstream
 from ddp_corpus.config import settings
@@ -352,8 +354,28 @@ def answer_skeleton() -> dict:
             "validation_state": "pending"}
 
 
+#: 允许带 `:细节` 的答案原因（契约 `federated_answer_reason` 的描述写明了这几种形状）。
+#: 细节是对端的状态/错误码或出错字段；其余原因一律不带后缀。
+#: 细节的形状：清洗后的对端状态/错误码或字段名。超出这个形状说明某条路径没清洗就写进来了。
+ANSWER_REASON_DETAIL = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+ANSWER_REASONS_WITH_DETAIL = frozenset({
+    "receipt_binding_mismatch", "delegated_execution_failed",
+    "delegated_admission_not_accepted", "delegated_answer_rejected", "peer_unavailable",
+})
+
+
 def unavailable_answer(reason: str) -> dict:
-    """生成没发生/没得用的显式原因。不能是沉默的空值。"""
+    """生成没发生/没得用的显式原因。不能是沉默的空值。
+
+    **原因必须是契约里声明过的代码**：未声明的原因在界面上就是一串用户看不懂的
+    原始代码。这里在写出之前就检查 —— 出错说明某条代码路径把没登记的字符串
+    （尤其是对端给的状态）直接当成了原因，那是编程错误，要在测试里炸出来。
+    """
+    head, separator, detail = reason.partition(":")
+    if head not in FEDERATED_ANSWER_REASON_VALUES or (
+            separator and (head not in ANSWER_REASONS_WITH_DETAIL
+                           or not ANSWER_REASON_DETAIL.fullmatch(detail))):
+        raise ValueError(f"undeclared federated answer reason: {reason!r}")
     return {**answer_skeleton(), "answer_reason": reason}
 
 
@@ -378,7 +400,9 @@ async def grounded_answer(http, *, query: str, evidence_ids: list[str],
                           excerpts: dict[str, str], max_generation_tokens: int,
                           provider_model: str, provider_endpoint: str,
                           location: str = "local") -> dict:
-    """一次带引用生成 + 结构验收，返回答案字段。**从不抛异常。**
+    """一次带引用生成 + 结构验收，返回答案字段。**生成失败从不抛异常**（原因进 `answer_reason`）；
+    唯一会抛的是 `unavailable_answer` 的 ValueError —— 那表示代码里写了契约没声明的原因，
+    是编程错误，要在测试里炸出来，而不是被当成一种生成失败吞掉。
 
     结构验收只做机器能做的部分：引用必须落在**本次证据的编号域**内
     （`assertions_from_text` 用的是同一份编号），无引用、有一条无支撑、或引用

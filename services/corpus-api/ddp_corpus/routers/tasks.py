@@ -10,7 +10,7 @@ control-api 下发的 actor 上下文头），control-api 会按 `corpusPrefixes
 """
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -88,6 +88,15 @@ async def approve_task_plan(root_task_id: str, body: ApprovalRequest,
     return await federation_tasks.approve(
         session, actor, root_task_id, plan_digest=body.plan_digest,
         execution_consent=body.execution_consent, now=utcnow())
+
+
+@router.get("/tasks")
+async def list_tasks(limit: int = Query(20, ge=1, le=federation_tasks.TASK_LIST_LIMIT_MAX),
+                     cursor: str | None = Query(None, min_length=1, max_length=256),
+                     actor: Actor = Depends(current_actor),
+                     session: AsyncSession = Depends(get_session)):
+    """本人任务列表（契约 `listTasks`）：只带状态轴，结果按 id 读。"""
+    return await federation_tasks.list_tasks(session, actor, limit=limit, cursor=cursor)
 
 
 @router.post("/tasks")

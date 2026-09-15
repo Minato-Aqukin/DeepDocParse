@@ -568,6 +568,41 @@ enums:
         label: 生成时标出的矛盾
         severity: warn
 
+  federated_answer_reason:
+    description: |
+      联邦任务结果里 `answer_reason` 的取值：**为什么这次没有答案**（有答案时为 null）。
+      它和 `evidence_sufficiency` 分开：充分性说"证据够不够"，这里说"答案这一步
+      具体卡在哪" —— 证据充分但模型没装、远端答案引用越界、预算超了，都要让用户
+      看得出区别，而不是统一显示成"没有答案"。
+
+      **代码是封闭集合，细节是后缀**：其中五个代码允许带 `:细节`
+      （`receipt_binding_mismatch:plan_digest`、`delegated_execution_failed:peer_execution_timeout`、
+      `delegated_admission_not_accepted:waiting_input`、`delegated_answer_rejected:…`、
+      `peer_unavailable:http_503`），细节是对端的状态/错误码或出错字段，经过字符集与长度
+      清洗；其余代码不带后缀。对端给的字符串**永远只进细节**，不会变成新的代码。
+      查文案前先去掉冒号后缀；协调者写出之前会检查代码已声明（`federation.unavailable_answer`）。
+    applies_to: [federation]
+    values:
+      - {value: insufficient_evidence, summary: 证据不足（或没有可引用证据），不给模型凭常识补答的机会, label: 证据不足，未生成答案, severity: warn}
+      - {value: local_model_missing, summary: 本节点与计划内远端都没有可用的生成能力（或生成预算为 0）, label: 没有可用的生成模型，只返回证据, severity: warn}
+      - {value: evidence_excerpt_unavailable, summary: 某条证据取不到正文（空白或缺失），不能拿无根片段生成, label: 有证据取不到原文片段，未生成答案, severity: warn}
+      - {value: excerpt_over_contract_bound, summary: 证据正文超过契约上限（2000 字符），显式拒绝而不是静默截断, label: 证据片段超出长度上限，未生成答案, severity: warn}
+      - {value: upstream_error, summary: 调生成模型的请求失败或返回非 200, label: 生成服务出错，只返回证据, severity: error}
+      - {value: no_model_output, summary: 模型没有返回可用文本, label: 模型没有输出，只返回证据, severity: error}
+      - {value: budget_exceeded, summary: 生成结果超出计划的生成 token 预算, label: 超出生成预算，答案作废, severity: error}
+      - {value: unsupported_generation, summary: 生成文本的引用结构不成立（无引用、越界引用、矛盾标注不成立）, label: 生成的答案引用不成立，已作废, severity: error}
+      - {value: delegated_answer_missing, summary: 远端执行完成但没有返回答案文档, label: 远端没有返回答案, severity: error}
+      - {value: delegated_answer_rejected, summary: 远端答案校验未通过；远端自报的原因认不出来时放进细节, label: 远端答案未通过校验, severity: error}
+      - {value: delegated_bindings_missing, summary: 远端答案没有任何主张绑定, label: 远端答案没有引用，已作废, severity: error}
+      - {value: delegated_binding_out_of_scope, summary: 远端答案的引用不在本次发送的证据里, label: 远端答案引用了未发送的证据，已作废, severity: error}
+      - {value: delegated_conflict_out_of_scope, summary: 远端标出的矛盾引用不在本次发送的证据里, label: 远端标注的矛盾引用不成立，答案已作废, severity: error}
+      - {value: evidence_delegation_over_limit, summary: 要委托的证据条数超过受理上限，不截断证据去凑数, label: 证据条数超过委托上限，未生成答案, severity: warn}
+      - {value: invalid_admission_receipt, summary: 远端受理回执缺执行任务号, label: 远端受理回执无效, severity: error}
+      - {value: receipt_binding_mismatch, summary: 远端回执与本次 root/step/幂等键/计划修订/执行者对不上；细节是出错字段（回执不是对象时为 schema）, label: 远端回执与本次任务对不上，未采用, severity: error}
+      - {value: delegated_admission_not_accepted, summary: 远端没有受理答案步骤；细节是回执状态（如 waiting_input / rejected）, label: 远端未受理生成请求, severity: error}
+      - {value: delegated_execution_failed, summary: 远端答案执行没有成功；细节是对端错误码或状态（含本节点轮询超时 peer_execution_timeout）, label: 远端生成步骤未完成, severity: error}
+      - {value: peer_unavailable, summary: 远端生成节点未登记、连不上、回 HTTP 错误或返回非法响应；细节是对端错误码、http_状态或 transport, label: 远端生成节点不可用, severity: error}
+
   planning_state:
     description: |
       TaskPlan 的规划轴（计划 §8.1）。`invalidated` 是关键一态：

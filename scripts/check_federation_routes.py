@@ -6,9 +6,9 @@
 
 ## 它守的是什么
 
-P5 契约 `packages/contracts/openapi/federation-tasks-v1.yaml` 冻结了 19 个
-端点（节点/执行者 9 个含证据集 + 协调者 9 个 + 交付确认 1 个）。这个脚本把它变成
-可执行的检查，
+P5 契约 `packages/contracts/openapi/federation-tasks-v1.yaml` 冻结了 21 个
+端点（节点/执行者 9 个含证据集 + 协调者 10 个含本人任务列表 + 交付读取与确认 2 个；
+数目以脚本输出为准）。这个脚本把它变成可执行的检查，
 与 `scripts/check_contract.py` 同一套路，对象换成 `services/corpus-api`：
 
 - 契约有、app 没有 -> 承诺了没实现。调用方按契约写代码会拿到 404。

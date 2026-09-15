@@ -51,6 +51,7 @@ func TestCoordinatorPrefixesForwardAuthenticatedActorAndStripForgedIdentity(t *t
 		{http.MethodPost, "/api/v1/task-plans"},
 		{http.MethodPost, "/api/v1/task-plans/root-1/approve"},
 		{http.MethodPost, "/api/v1/tasks"},
+		{http.MethodGet, "/api/v1/tasks"},
 		{http.MethodGet, "/api/v1/tasks/root-1"},
 		{http.MethodGet, "/api/v1/tasks/root-1/coverage"},
 		{http.MethodGet, "/api/v1/tasks/root-1/events"},
