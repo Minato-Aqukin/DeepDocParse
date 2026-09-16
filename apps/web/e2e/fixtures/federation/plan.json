@@ -1,0 +1,64 @@
+{
+  "schema": "ddp-plan-admission/1#TaskPlan",
+  "plan_id": "plan-8f14e45fceea167a5a36dedd4bea2543",
+  "revision": 1,
+  "plan_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "task_spec_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "root_coordinator_node_id": "node-center-a",
+  "planning_state": "approved",
+  "steps": [
+    {
+      "step_id": "retrieve-1",
+      "operation": "retrieve",
+      "executor_node_id": "node-center-a",
+      "depends_on": [],
+      "fixed_inputs": [
+        "query"
+      ],
+      "probe_refs": [
+        "probe-1"
+      ]
+    },
+    {
+      "step_id": "retrieve-2",
+      "operation": "retrieve",
+      "executor_node_id": "node-peer-b",
+      "depends_on": [],
+      "fixed_inputs": [
+        "query"
+      ],
+      "probe_refs": [
+        "probe-2"
+      ]
+    },
+    {
+      "step_id": "answer-1",
+      "operation": "answer",
+      "executor_node_id": "node-center-a",
+      "depends_on": [
+        "retrieve-1",
+        "retrieve-2"
+      ]
+    }
+  ],
+  "data_edges": [
+    {
+      "edge_id": "edge-query-2",
+      "from_node_id": "node-center-a",
+      "to_node_id": "node-peer-b",
+      "payload_kind": "query_text",
+      "retention": "temporary",
+      "authorised_by": "exploration:explore-1"
+    }
+  ],
+  "execution_consent_ref": "execute-8f14e45fceea167a5a36dedd4bea2543-r1",
+  "budget": {
+    "max_requests": 8,
+    "max_bytes": 1048576,
+    "max_generation_tokens": 800,
+    "max_hops": 2,
+    "deadline": "2026-09-15T08:15:00Z"
+  },
+  "final_result_writer": "node-center-a",
+  "valid_until": "2026-09-15T08:15:00Z"
+}

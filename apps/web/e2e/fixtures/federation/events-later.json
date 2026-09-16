@@ -1,0 +1,33 @@
+{
+  "root_task_id": "8f14e45fceea167a5a36dedd4bea2543",
+  "next_seq": 6,
+  "complete": true,
+  "events": [
+    {
+      "seq": 4,
+      "type": "execution_started",
+      "at": "2026-09-15T08:00:05Z",
+      "payload": {}
+    },
+    {
+      "seq": 5,
+      "type": "task_completed",
+      "at": "2026-09-15T08:00:09Z",
+      "payload": {
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "conflicting",
+        "delivery_id": "delivery-7",
+        "error": null
+      }
+    },
+    {
+      "seq": 6,
+      "type": "delivery_pending",
+      "at": "2026-09-15T08:00:09Z",
+      "payload": {
+        "delivery_id": "delivery-7",
+        "result_manifest_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    }
+  ]
+}

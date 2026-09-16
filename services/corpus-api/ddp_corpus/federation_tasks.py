@@ -47,7 +47,7 @@ from sqlalchemy.orm import load_only
 from ddp_core.application import coverage as coverage_kernel
 from ddp_core.application import plans, routing
 from ddp_core.application.ports import ApplicationError
-from ddp_contracts.enums import FEDERATED_ANSWER_REASON_VALUES
+from ddp_contracts.enums import FEDERATED_ANSWER_REASON_VALUES, TASK_EVENT_TYPE_VALUES
 
 from ddp_corpus import cache, capabilities, catalog, federation, policy, queue, upstream
 from ddp_corpus.collection_models import Collection
@@ -502,6 +502,9 @@ async def _load_request(session: AsyncSession, actor: Actor,
 
 async def _append_event(session: AsyncSession, root_task_id: str, type_: str,
                         payload: dict, *, now: datetime) -> None:
+    # 事件类型进契约 `task_event_type`：界面按它显示文案。未声明的类型是编程错误。
+    if type_ not in TASK_EVENT_TYPE_VALUES:
+        raise ValueError(f"undeclared task event type: {type_!r}")
     current = await session.scalar(select(func.max(FederationTaskEvent.seq)).where(
         FederationTaskEvent.root_task_id == root_task_id))
     session.add(FederationTaskEvent(id=new_id(), root_task_id=root_task_id,

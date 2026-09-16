@@ -1,0 +1,19 @@
+{
+  "next_cursor": null,
+  "items": [
+    {
+      "root_task_id": "c9f0f895fb98ab9159f51fd0297e236d",
+      "query": "更早的一个问题",
+      "operation": "corpus.retrieve",
+      "scope_kind": "fixed_resources",
+      "search_mode": "fast",
+      "status": "cancelled",
+      "planning_state": "approved",
+      "retrieval_completeness": "partial",
+      "evidence_sufficiency": "unknown",
+      "delivery_state": "not_requested",
+      "created_at": "2026-09-14T08:00:00Z",
+      "updated_at": "2026-09-14T08:01:00Z"
+    }
+  ]
+}

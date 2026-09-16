@@ -126,3 +126,31 @@ t3code参考HEAD：`b1e223e2b0d87124883b1410ab52dd6a1338e40d`（2026-09-12读取
   `run_queued` 把这类确定性编程错误直接 `_mark_failed`；远端节点未登记时细节是
   `transport`，与连接失败分不开；旧交付结果里若有已删除的 `not_accepted`，界面会显示原始代码。
 
+## 2026-09-15 Web 联邦任务：只读展示（改进项 ① 的 a2-1）
+
+- **契约**：新增 `task_event_type`（11 个事件类型，带用户文案），`Event.type` 绑定它；
+  协调者 `_append_event` 写出前检查类型已声明，`test_task_event_types_match_the_contract_both_ways`
+  双向钉住常量与契约。
+- **Web**：侧边栏"联邦任务"（`/tasks` 本人任务列表，服务端游标翻页）与任务详情页
+  （`/tasks/:rootTaskId`）。详情页各状态轴分开摆；结果区**先给证据充分性、矛盾与未查到的范围，
+  再给答案**；答案按纯文本渲染，`[n]` 指回第 n 条证据；本节点证据可在抽屉里打开原文出处，远端证据
+  只显示固定定位；覆盖账本（分母/分子分开）、被批准的计划修订（计划经 `createTaskPlan` 幂等重放读取）、
+  事件时间线（`after=next_seq` 续读）。进行中的任务 2 秒轮询，落定即停；状态以契约 `active` 标记判定。
+  所有取值文案来自契约生成物，未知取值显示原始代码；答案原因去掉 `:细节` 后查表、细节附在括号里。
+- **顺带修掉的既有问题**：`StatusTag` 的 `active` 是 boolean prop，Vue 会把没传的 boolean 转成 `false`，
+  于是 `props.active ?? meta.active` 永远取不到契约的 `active` —— 全站"进行中空心圈"（设计准则三）静默失效。
+  现在默认值显式为 `undefined`，`StatusTag.spec.ts` 钉着（还原即红）。
+- **夹具与契约**：Playwright 夹具 `apps/web/e2e/fixtures/federation/*.json` 由
+  `services/corpus-api/tests/test_web_federation_fixtures.py` 按冻结契约校验（`x-ddp-enum` 展开成真实取值；
+  结果里的证据/绑定/矛盾逐条过 schema；答案原因过协调者的运行时检查；新夹具必须登记角色）。
+  写夹具时它当场抓到一个契约里没有的 `retrieval_completeness` 取值。
+- **已处理的错误不再弹第二遍**：`http.ts` 新增 `suppressErrorToast` 请求开关，任务页的请求全部
+  自己内联说明失败原因（401 仍然踢回登录页）。原因：全局 toast 显示的是后端原文
+  （"task intent not found"），而页面刻意把 404 与无权限合并成一句模糊文案，两条路径口径不一致
+  等于把模糊化绕过去；同屏两个 `role="alert"` 还让 e2e 变成不稳定用例。
+  e2e 用 MutationObserver 记录**出现过**的 toast 再断言为空 —— 直接 `toHaveCount(0)` 是假断言
+  （toast 异步弹出、几秒后消失，去掉开关照样绿，实测确认）。
+- **事件续读抽成纯函数** `collectEvents(read, from, known, {cap, stale})`：按 seq 去重、追平或空页即停、
+  一次刷新最多 20 页、形状不对当场抛、这次续读作废（路由切走）就立刻停。五个变异各自会红。
+- **没做（a2-2）**：从网页创建任务、审阅并批准计划、取消与补做；交付下载与本地校验确认。
+

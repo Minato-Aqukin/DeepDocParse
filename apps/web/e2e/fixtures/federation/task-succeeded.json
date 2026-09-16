@@ -1,0 +1,156 @@
+{
+  "root_task_id": "8f14e45fceea167a5a36dedd4bea2543",
+  "planning_state": "approved",
+  "plan_revision": 1,
+  "plan_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "task_spec_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "search_mode": "exhaustive_scope",
+  "execution_consent_ref": "execute-8f14e45fceea167a5a36dedd4bea2543-r1",
+  "scope_ref": "scope-42",
+  "created_at": "2026-09-15T08:00:00Z",
+  "status": "succeeded",
+  "retrieval_completeness": "partial",
+  "evidence_sufficiency": "conflicting",
+  "coverage_ref": "8f14e45fceea167a5a36dedd4bea2543",
+  "delivery_id": "delivery-7",
+  "delivery_state": "pending",
+  "result": {
+    "answer": "控制器最大输入电压在本站手册里写的是 240 V。[1]\n合作中心的旧版本写的是 120 V。[2]",
+    "answer_reason": null,
+    "claim_evidence_bindings": [
+      {
+        "claim_id": "claim-1",
+        "claim_text": "控制器最大输入电压在本站手册里写的是 240 V。",
+        "evidence_refs": [
+          "evidence-local-1"
+        ],
+        "structural_validation": "passed",
+        "semantic_review": "needs_review"
+      },
+      {
+        "claim_id": "claim-2",
+        "claim_text": "合作中心的旧版本写的是 120 V。",
+        "evidence_refs": [
+          "evidence-peer-1"
+        ],
+        "structural_validation": "passed",
+        "semantic_review": "needs_review"
+      }
+    ],
+    "conflicts": [
+      {
+        "basis": "version_divergence",
+        "evidence_refs": [
+          "evidence-local-1",
+          "evidence-peer-1"
+        ],
+        "semantic_review": "needs_review"
+      }
+    ],
+    "provider": {
+      "model": "qwen3-1.7b",
+      "endpoint": null,
+      "location": "local"
+    },
+    "disclosure": {
+      "remote": false,
+      "payload": [
+        "question",
+        "selected_evidence"
+      ]
+    },
+    "validation_state": "passed",
+    "operation": "rag.answer.cited",
+    "search_mode": "exhaustive_scope",
+    "retrieval_completeness": "partial",
+    "evidence_sufficiency": "conflicting",
+    "counts": {
+      "total_targets": 3,
+      "applicable_targets": 3,
+      "succeeded": 2,
+      "excluded": 0,
+      "incomplete": 1
+    },
+    "coverage_ref": "8f14e45fceea167a5a36dedd4bea2543",
+    "evidence": [
+      {
+        "schema": "ddp-evidence/1#FederatedEvidence",
+        "evidence_id": "evidence-local-1",
+        "origin_node_id": "node-center-a",
+        "authority_node_id": "node-center-a",
+        "resource_id": "res-a",
+        "source_version_id": "version-2",
+        "parse_revision": "parse-3",
+        "source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "excerpt_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "locator": {
+          "kind": "page_block",
+          "physical_page_index": 11,
+          "seq": 3,
+          "bbox": [
+            72,
+            540,
+            523,
+            588
+          ],
+          "page_size": {
+            "width": 595,
+            "height": 842
+          }
+        },
+        "source_type": "source",
+        "derived_from": null,
+        "uploader_ref": null,
+        "retrieval_receipt_ref": "federation-probe:probe-1",
+        "policy_revision": "policy-1",
+        "block_type": "text"
+      },
+      {
+        "schema": "ddp-evidence/1#FederatedEvidence",
+        "evidence_id": "evidence-peer-1",
+        "origin_node_id": "node-peer-b",
+        "authority_node_id": "node-peer-b",
+        "resource_id": "res-b",
+        "source_version_id": "version-1",
+        "parse_revision": "parse-3",
+        "source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "excerpt_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "locator": {
+          "kind": "page_block",
+          "physical_page_index": 11,
+          "seq": 3,
+          "bbox": [
+            72,
+            540,
+            523,
+            588
+          ],
+          "page_size": {
+            "width": 595,
+            "height": 842
+          }
+        },
+        "source_type": "source",
+        "derived_from": null,
+        "uploader_ref": null,
+        "retrieval_receipt_ref": "federation-probe:probe-1",
+        "policy_revision": "policy-1",
+        "block_type": "text"
+      }
+    ],
+    "unretrieved_targets": [
+      {
+        "target_key": {
+          "origin_node_id": "node-peer-c",
+          "collection_id": "collection-c",
+          "operation": "corpus.retrieve"
+        },
+        "state": "unreachable",
+        "last_error": "peer_unavailable"
+      }
+    ],
+    "result_manifest_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "error": null,
+  "updated_at": "2026-09-15T08:00:09Z"
+}

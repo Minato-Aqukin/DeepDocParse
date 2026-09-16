@@ -2,6 +2,20 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { selectedResource, selectedVersion } from './resource-context'
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /**
+     * 这一次请求的失败由调用方自己在页面上说清楚，不要再弹全局 toast。
+     *
+     * 两条路径同时报同一个错有两个坏处：① 页面上出现两个 role="alert"；
+     * ② toast 显示的是后端原文，而页面文案可能是**刻意模糊**的（例如 404 与无权限
+     * 合并成一句，不给出"这个任务存在不存在"的探测口）—— 两者不一致就等于把
+     * 模糊化绕过去了。
+     */
+    suppressErrorToast?: boolean
+  }
+}
+
 /** 统一的 axios 实例：自动带 JWT，401 直接踢回登录页。 */
 export const http = axios.create({ baseURL: '/', timeout: 120_000 })
 
@@ -22,6 +36,14 @@ http.interceptors.response.use(
   (error) => {
     // 后端错误体统一是 OpenAI 风格 {"error": {message, type, code}}
     const detail = error.response?.data?.error
+    if (error.config?.suppressErrorToast) {
+      // 调用方负责展示；401 仍然要踢回登录页（那是全局行为，不是某个页面的错误态）。
+      if (error.response?.status === 401) {
+        localStorage.removeItem(TOKEN_KEY)
+        if (location.hash !== '#/login') location.hash = '#/login'
+      }
+      return Promise.reject(error)
+    }
     if (error.response?.status === 401) {
       localStorage.removeItem(TOKEN_KEY)
       if (location.hash !== '#/login') location.hash = '#/login'

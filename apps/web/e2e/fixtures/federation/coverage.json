@@ -1,0 +1,99 @@
+{
+  "schema": "ddp-scope-coverage/1#CoverageLedger",
+  "root_task_id": "8f14e45fceea167a5a36dedd4bea2543",
+  "scope_ref": "scope-42",
+  "search_mode": "exhaustive_scope",
+  "enumeration_state": "sealed",
+  "retrieval_completeness": "partial",
+  "evidence_sufficiency": "conflicting",
+  "entries": [
+    {
+      "target_key": {
+        "origin_node_id": "node-center-a",
+        "collection_id": "collection-manuals",
+        "operation": "corpus.retrieve"
+      },
+      "scope_ref": "scope-42",
+      "query_or_subquery_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "state": "succeeded",
+      "probe_receipts": [
+        "probe-1"
+      ],
+      "actual_index_revision": "index-17",
+      "search_profile": "bm25+vector",
+      "attempts": 1,
+      "last_error": null,
+      "evidence_refs": [
+        "federation-probe:probe-1"
+      ],
+      "used_budget": {
+        "requests": 1,
+        "bytes": 0
+      },
+      "exclusion_basis": null
+    },
+    {
+      "target_key": {
+        "origin_node_id": "node-peer-b",
+        "collection_id": "collection-b",
+        "operation": "corpus.retrieve"
+      },
+      "scope_ref": "scope-42",
+      "query_or_subquery_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "state": "succeeded",
+      "probe_receipts": [
+        "probe-2"
+      ],
+      "actual_index_revision": "index-9",
+      "search_profile": "bm25",
+      "attempts": 1,
+      "last_error": null,
+      "evidence_refs": [
+        "federation-probe:probe-2"
+      ],
+      "used_budget": {
+        "requests": 1,
+        "bytes": 0
+      },
+      "exclusion_basis": null
+    },
+    {
+      "target_key": {
+        "origin_node_id": "node-peer-c",
+        "collection_id": "collection-c",
+        "operation": "corpus.retrieve"
+      },
+      "scope_ref": "scope-42",
+      "query_or_subquery_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "state": "unreachable",
+      "probe_receipts": [],
+      "actual_index_revision": null,
+      "search_profile": null,
+      "attempts": 2,
+      "last_error": "peer_unavailable",
+      "evidence_refs": [],
+      "used_budget": {
+        "requests": 2,
+        "bytes": 0
+      },
+      "exclusion_basis": null
+    }
+  ],
+  "counts": {
+    "total_targets": 3,
+    "applicable_targets": 3,
+    "succeeded": 2,
+    "excluded": 0,
+    "incomplete": 1
+  },
+  "conflicts": [
+    {
+      "basis": "version_divergence",
+      "evidence_refs": [
+        "evidence-local-1",
+        "evidence-peer-1"
+      ],
+      "semantic_review": "needs_review"
+    }
+  ]
+}

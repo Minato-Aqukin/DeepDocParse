@@ -1,0 +1,79 @@
+{
+  "root_task_id": "1679091c5a880faf6fb5e6087eb1b2dc",
+  "planning_state": "approved",
+  "plan_revision": 1,
+  "plan_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "task_spec_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "search_mode": "fast",
+  "execution_consent_ref": "execute-1679091c5a880faf6fb5e6087eb1b2dc-r1",
+  "scope_ref": "scope-42",
+  "created_at": "2026-09-15T09:00:00Z",
+  "status": "succeeded",
+  "retrieval_completeness": "partial",
+  "evidence_sufficiency": "insufficient",
+  "coverage_ref": "1679091c5a880faf6fb5e6087eb1b2dc",
+  "delivery_id": "delivery-8",
+  "delivery_state": "pending",
+  "result": {
+    "answer": null,
+    "answer_reason": "delegated_execution_failed:peer_execution_timeout",
+    "claim_evidence_bindings": [],
+    "conflicts": [],
+    "provider": null,
+    "disclosure": {
+      "remote": false,
+      "payload": []
+    },
+    "validation_state": "failed",
+    "operation": "rag.answer.cited",
+    "search_mode": "fast",
+    "retrieval_completeness": "partial",
+    "evidence_sufficiency": "insufficient",
+    "counts": {
+      "total_targets": 1,
+      "applicable_targets": 1,
+      "succeeded": 1,
+      "excluded": 0,
+      "incomplete": 0
+    },
+    "coverage_ref": "1679091c5a880faf6fb5e6087eb1b2dc",
+    "evidence": [
+      {
+        "schema": "ddp-evidence/1#FederatedEvidence",
+        "evidence_id": "evidence-local-9",
+        "origin_node_id": "node-center-a",
+        "authority_node_id": "node-center-a",
+        "resource_id": "res-a",
+        "source_version_id": "version-2",
+        "parse_revision": "parse-3",
+        "source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "excerpt_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "locator": {
+          "kind": "page_block",
+          "physical_page_index": 0,
+          "seq": 1,
+          "bbox": [
+            72,
+            540,
+            523,
+            588
+          ],
+          "page_size": {
+            "width": 595,
+            "height": 842
+          }
+        },
+        "source_type": "source",
+        "derived_from": null,
+        "uploader_ref": null,
+        "retrieval_receipt_ref": "federation-probe:probe-1",
+        "policy_revision": "policy-1",
+        "block_type": "text"
+      }
+    ],
+    "unretrieved_targets": [],
+    "result_manifest_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "error": null,
+  "updated_at": "2026-09-15T09:00:04Z"
+}

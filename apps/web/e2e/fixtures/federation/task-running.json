@@ -1,0 +1,20 @@
+{
+  "root_task_id": "8f14e45fceea167a5a36dedd4bea2543",
+  "planning_state": "approved",
+  "plan_revision": 1,
+  "plan_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "task_spec_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "search_mode": "exhaustive_scope",
+  "execution_consent_ref": "execute-8f14e45fceea167a5a36dedd4bea2543-r1",
+  "scope_ref": "scope-42",
+  "created_at": "2026-09-15T08:00:00Z",
+  "status": "running",
+  "retrieval_completeness": "not_started",
+  "evidence_sufficiency": "unknown",
+  "coverage_ref": null,
+  "delivery_id": null,
+  "delivery_state": "not_requested",
+  "result": null,
+  "error": null,
+  "updated_at": "2026-09-15T08:00:05Z"
+}

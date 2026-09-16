@@ -13,7 +13,7 @@ import type { StatusMeta, TagType } from '@/constants/status'
  * 样式全在 assets/ddp/ddp-base.css 的 .ddp-status，这里只做映射，不写颜色。
  * constants/status.ts 一个字都不用改，它仍是全站唯一的文案来源。
  */
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   /** 直接传 parseStatusOf() / indexStatusOf() / confidenceOf() 的返回值 */
   meta?: StatusMeta
   /** 也可以不走文案表，手写一次性的状态（如 API key 的已吊销/可用） */
@@ -21,7 +21,12 @@ const props = defineProps<{
   type?: TagType
   /** 是否"还在动"。传了 meta 时默认取 meta.active */
   active?: boolean
-}>()
+}>(), {
+  // **必须显式给 undefined。** Vue 会把没传的 boolean prop 转成 false，
+  // 于是下面的 `props.active ?? props.meta?.active` 永远取到 false ——
+  // 契约里标了 active 的"进行中"状态全都画成实心点，准则三（空心圈＝进行中）静默失效。
+  active: undefined,
+})
 
 /** Element Plus 的 tag type → 规范里的语义色。是形状之外的第二通道。 */
 const DOT_CLASS: Record<TagType, string> = {

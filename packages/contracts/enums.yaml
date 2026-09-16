@@ -603,6 +603,25 @@ enums:
       - {value: delegated_execution_failed, summary: 远端答案执行没有成功；细节是对端错误码或状态（含本节点轮询超时 peer_execution_timeout）, label: 远端生成步骤未完成, severity: error}
       - {value: peer_unavailable, summary: 远端生成节点未登记、连不上、回 HTTP 错误或返回非法响应；细节是对端错误码、http_状态或 transport, label: 远端生成节点不可用, severity: error}
 
+  task_event_type:
+    description: |
+      联邦任务事件流（`GET /api/v1/tasks/{root_task_id}/events`）里 `Event.type` 的取值。
+      事件是**可恢复的进度记录**，不是状态真相：状态以 `TaskStatus` 各轴为准，事件用来
+      让界面说清"发生了什么、什么时候"，断线后按 `after=next_seq` 续读不丢。
+    applies_to: [federation]
+    values:
+      - {value: intent_created, summary: 任务需求与探索许可已落库, label: 已创建任务, severity: neutral}
+      - {value: plan_ready, summary: 规划完成（Probe 与计划修订已生成），等待批准, label: 计划已生成，等待批准, severity: neutral}
+      - {value: plan_approved, summary: 用户批准了这一修订与执行许可, label: 已批准计划, severity: ok}
+      - {value: execution_started, summary: 执行已受理并排入持久队列, label: 开始执行, severity: progress}
+      - {value: task_resumed, summary: 重新判权后补做未完成目标（执行代次 +1）, label: 补做未完成目标, severity: progress}
+      - {value: task_completed, summary: 执行结束且至少有目标产出证据（查全与否看覆盖账本）, label: 执行结束, severity: ok}
+      - {value: task_failed, summary: 执行失败（没有任何目标产出证据，或协调者被清扫）, label: 执行失败, severity: error}
+      - {value: task_cancelled, summary: 用户显式取消；终态，迟到结果不许覆盖, label: 已取消, severity: warn}
+      - {value: delivery_pending, summary: 结果已固化为交付文档，等待下载后校验确认, label: 结果待确认, severity: neutral}
+      - {value: delivery_confirmed, summary: 客户端校验摘要后确认了交付, label: 结果已确认, severity: ok}
+      - {value: delivery_expired, summary: 交付在有效期内没有被确认, label: 结果交付已过期, severity: warn}
+
   planning_state:
     description: |
       TaskPlan 的规划轴（计划 §8.1）。`invalidated` 是关键一态：

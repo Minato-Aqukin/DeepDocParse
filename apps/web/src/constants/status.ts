@@ -53,11 +53,11 @@ const TAG_OF_SEVERITY: Record<Severity, TagType> = {
   error: 'danger',
 }
 
-function toStatusMeta(meta: EnumMeta): StatusMeta {
+export function toStatusMeta(meta: EnumMeta): StatusMeta {
   return { label: meta.label, type: TAG_OF_SEVERITY[meta.severity], active: meta.active }
 }
 
-function mapMeta<K extends string>(source: Record<K, EnumMeta>): Record<K, StatusMeta> {
+export function mapMeta<K extends string>(source: Record<K, EnumMeta>): Record<K, StatusMeta> {
   return Object.fromEntries(
     Object.entries(source).map(([k, v]) => [k, toStatusMeta(v as EnumMeta)]),
   ) as Record<K, StatusMeta>

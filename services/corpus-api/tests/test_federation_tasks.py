@@ -2288,3 +2288,17 @@ async def test_task_list_cursor_id_is_bounded_by_the_column_width(actor_client):
     too_long = await actor_client.get("/api/v1/tasks", params={"cursor": _cursor(1, "a" * 65)})
     assert too_long.status_code == 400 and too_long.json()["error"]["code"] == "invalid_cursor"
 
+
+def test_task_event_types_match_the_contract_both_ways():
+    """`_EVENT_*` 常量与契约 `task_event_type` 一一对应：多一个界面没有文案，少一个契约里是空话。"""
+    from ddp_contracts.enums import TASK_EVENT_TYPE_VALUES
+
+    produced = {value for name, value in vars(federation_tasks).items()
+                if name.startswith("_EVENT_") and isinstance(value, str)}
+    assert produced == set(TASK_EVENT_TYPE_VALUES)
+
+
+async def test_undeclared_event_type_is_refused_before_it_is_stored(session):
+    with pytest.raises(ValueError):
+        await federation_tasks._append_event(session, "root-x", "task_exploded", {}, now=utcnow())
+

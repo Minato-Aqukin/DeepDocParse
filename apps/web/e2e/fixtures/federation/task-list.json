@@ -1,0 +1,33 @@
+{
+  "next_cursor": "WzE3NTc5MjMyMDAwMDAwMDAsIjE2NzkwOTFjNWE4ODBmYWY2ZmI1ZTYwODdlYjFiMmRjIl0",
+  "items": [
+    {
+      "root_task_id": "1679091c5a880faf6fb5e6087eb1b2dc",
+      "query": "PM-2 的最大输入电压是多少？",
+      "operation": "rag.answer.cited",
+      "scope_kind": "site_public",
+      "search_mode": "fast",
+      "status": "succeeded",
+      "planning_state": "approved",
+      "retrieval_completeness": "partial",
+      "evidence_sufficiency": "insufficient",
+      "delivery_state": "pending",
+      "created_at": "2026-09-15T09:00:00Z",
+      "updated_at": "2026-09-15T09:00:04Z"
+    },
+    {
+      "root_task_id": "8f14e45fceea167a5a36dedd4bea2543",
+      "query": "控制器最大输入电压在各版本手册里是否一致？",
+      "operation": "rag.answer.cited",
+      "scope_kind": "federation_public",
+      "search_mode": "exhaustive_scope",
+      "status": "running",
+      "planning_state": "approved",
+      "retrieval_completeness": "not_started",
+      "evidence_sufficiency": "unknown",
+      "delivery_state": "not_requested",
+      "created_at": "2026-09-15T08:00:00Z",
+      "updated_at": "2026-09-15T08:00:05Z"
+    }
+  ]
+}

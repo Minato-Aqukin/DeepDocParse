@@ -28,8 +28,8 @@
 <!-- counts:begin -->
 | 状态 | 条数 |
 |---|---|
-| ✅ 已验证 | 38 |
-| 🟡 部分 | 46 |
+| ✅ 已验证 | 39 |
+| 🟡 部分 | 45 |
 | 🔴 未验证 | 4 |
 | ⛔ 需外部条件 | 0 |
 | **合计** | **88** |
@@ -111,13 +111,13 @@
 | 测试 | 阶段 | 状态 | 证据 | 缺口 |
 |---|---|---|---|---|
 | T32 跨中心同名用户/节点凭证 | P5 | 🟡 | `test_resource_acl.py::test_t32_same_subject_other_issuer_and_node_creds_not_owner`；`test_federation_two_node.py::test_wrong_peer_token_fails_closed_without_fabrication`；`http.test.mjs`「copied public node metadata without the private signing key never releases a credential」 | 节点间仍是共享 peer token，没有逐节点密钥与受限委托（改进项 ③） |
-| T33 A 无证据、B 有证据 | P5 | 🟡 | `test_federation_two_node.py::test_b_only_evidence_over_real_peer_http`；`test_federation_answer.py::test_two_node_remote_excerpt_reaches_real_prompt`（B 为真实子进程节点） | 判据是"A 原网页返回"：Web 界面没有联邦任务入口；生成用替身模型 |
+| T33 A 无证据、B 有证据 | P5 | 🟡 | `test_federation_two_node.py::test_b_only_evidence_over_real_peer_http`；`test_federation_answer.py::test_two_node_remote_excerpt_reaches_real_prompt`（B 为真实子进程节点） | Web 已能在 A 的任务页展示 B 的证据与答案（Web e2e「执行中的任务轮询到落定：矛盾与未查全在答案之前，引用指回证据，本节点证据可开原文」），但**从网页发起任务**还没接（改进项 ① a2-2）；生成用替身模型 |
 | T34 必要证据分散于 A/B | P5 | 🟡 | `test_federation_two_node.py::test_split_evidence_keeps_origins_and_identity` | 被引用用例的 A/B 是**相同字节**，测的是去重与归属（T44 的场景）；没有"答案必须同时用到两侧证据"的用例，也没有答案层断言"不能只选一个答案字符串" |
 | T35 本地相似但不足的干扰资料 | P5/P6 | 🟡 | `eval/tests/test_routing_eval.py`（`local-similar-decoy`：穷查 100%、fast 33%，合成夹具） | fast 没有"缺子问题且有预算就继续下一批"的扩展逻辑（§7.2）；没有真实语料 |
 | T36 最近节点缺资料/能力 | P5/P6 | 🟡 | `test_federation_answer_delegation.py::test_not_ready_node_never_gets_an_answer_step`；评测 `nearest-node-decoy`（合成） | 距离/可达性排序本身没有实现，只证明了"能力是硬约束" |
 | T37 节点使用不同 embedding | P5 | 🟡 | 设计：各节点在本域检索，融合是证据并集，`_score` 不出 HTTP（`federation_tasks._public_item`） | 没有两节点不同模型的测试 |
 | T38 各允许节点均无支持证据 | P5 | ✅ | `test_federation_answer.py::test_insufficient_evidence_never_generates_and_keeps_bindings_empty`；`test_federation_tasks.py::test_no_evidence_at_all_stays_failed_with_truthful_reason`；评测 `no-evidence-in-scope` | — |
-| T39 部分节点超时或失败 | P5 | 🟡 | `test_federation_tasks.py::test_remote_poll_timeout_stays_retryable_on_resume`；双节点"注册但不可达的 C 留在分母"（`P5-VALIDATION-v3.md`）；`test_federation_probes.py::test_truncated_candidates_report_partial` | API 层 partial 正确；界面标记未接（改进项 ①） |
+| T39 部分节点超时或失败 | P5 | ✅ | API：`test_federation_tasks.py::test_remote_poll_timeout_stays_retryable_on_resume`、`test_federation_probes.py::test_truncated_candidates_report_partial`、双节点`test_federation_two_node.py::test_unreachable_registered_peer_stays_in_denominator`；界面：Web e2e「执行中的任务轮询到落定：矛盾与未查全在答案之前，引用指回证据，本节点证据可开原文」（partial 与未取回目标、覆盖账本里的 unreachable 目标都在答案之前可见）、`apps/web/src/components/federation/__tests__/TaskResultPanel.spec.ts`「只查了部分范围时列出没取回证据的目标与原因」 | — |
 | T43 错 audience、越权委托、恶意端点 | P5/P7 | 🟡 | `test_federation_ssrf.py::test_redirect_to_another_listener_is_not_followed_and_never_sees_the_token` / `test_dns_swapped_response_identity_is_never_treated_as_the_approved_peer`；Go `peer_test.go::TestPeerClientNeverFollowsRedirectOrForwardsCredentials` | 限定 audience 的委托凭证不存在（改进项 ③） |
 | T44 同资料多上传/多副本/多路径 | P5/P6 | 🟡 | `test_federation_two_node.py::test_split_evidence_keeps_origins_and_identity`（归属各自保留）；Go `TestExpandScopeStopsCyclesAndDuplicatePaths`；`test_documents.py::test_duplicate_upload_reuses_content_with_independent_parse_attempts` | **"不制造多个独立证据共识"没有断言**：两份相同副本仍算两条证据，没有支持度去重检查 |
 | T47 真实主张支持与矛盾来源 | P5/P7 | 🔴 | 矛盾轴有规则与生成标注两路（见 T86），全部 `needs_review` | 没有人工标注的主张支持度评测（§14.3），引用存在率不能替代 |

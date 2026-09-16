@@ -851,6 +851,55 @@ export function federatedAnswerReasonLabelOf(value: string | null | undefined): 
   return FEDERATED_ANSWER_REASON_META[value as FederatedAnswerReason]?.label ?? `未知取值（${value}）`
 }
 
+// 联邦任务事件流（`GET /api/v1/tasks/{root_task_id}/events`）里 `Event.type` 的取值。
+// 事件是**可恢复的进度记录**，不是状态真相：状态以 `TaskStatus` 各轴为准，事件用来
+// 让界面说清"发生了什么、什么时候"，断线后按 `after=next_seq` 续读不丢。
+export type TaskEventType = 'intent_created' | 'plan_ready' | 'plan_approved' | 'execution_started' | 'task_resumed' | 'task_completed' | 'task_failed' | 'task_cancelled' | 'delivery_pending' | 'delivery_confirmed' | 'delivery_expired'
+
+export const TASK_EVENT_TYPE_VALUES: readonly TaskEventType[] = [
+  'intent_created',
+  'plan_ready',
+  'plan_approved',
+  'execution_started',
+  'task_resumed',
+  'task_completed',
+  'task_failed',
+  'task_cancelled',
+  'delivery_pending',
+  'delivery_confirmed',
+  'delivery_expired',
+] as const
+
+export const TASK_EVENT_TYPE_META: Record<TaskEventType, EnumMeta> = {
+  // 任务需求与探索许可已落库
+  intent_created: { value: 'intent_created', label: "已创建任务", severity: 'neutral' },
+  // 规划完成（Probe 与计划修订已生成），等待批准
+  plan_ready: { value: 'plan_ready', label: "计划已生成，等待批准", severity: 'neutral' },
+  // 用户批准了这一修订与执行许可
+  plan_approved: { value: 'plan_approved', label: "已批准计划", severity: 'ok' },
+  // 执行已受理并排入持久队列
+  execution_started: { value: 'execution_started', label: "开始执行", severity: 'progress' },
+  // 重新判权后补做未完成目标（执行代次 +1）
+  task_resumed: { value: 'task_resumed', label: "补做未完成目标", severity: 'progress' },
+  // 执行结束且至少有目标产出证据（查全与否看覆盖账本）
+  task_completed: { value: 'task_completed', label: "执行结束", severity: 'ok' },
+  // 执行失败（没有任何目标产出证据，或协调者被清扫）
+  task_failed: { value: 'task_failed', label: "执行失败", severity: 'error' },
+  // 用户显式取消；终态，迟到结果不许覆盖
+  task_cancelled: { value: 'task_cancelled', label: "已取消", severity: 'warn' },
+  // 结果已固化为交付文档，等待下载后校验确认
+  delivery_pending: { value: 'delivery_pending', label: "结果待确认", severity: 'neutral' },
+  // 客户端校验摘要后确认了交付
+  delivery_confirmed: { value: 'delivery_confirmed', label: "结果已确认", severity: 'ok' },
+  // 交付在有效期内没有被确认
+  delivery_expired: { value: 'delivery_expired', label: "结果交付已过期", severity: 'warn' },
+}
+
+export function taskEventTypeLabelOf(value: string | null | undefined): string | null {
+  if (!value) return null
+  return TASK_EVENT_TYPE_META[value as TaskEventType]?.label ?? `未知取值（${value}）`
+}
+
 // TaskPlan 的规划轴（计划 §8.1）。`invalidated` 是关键一态：
 // 计划过期、输入版本变了、授权被撤销之后，**旧计划不许被执行**，
 // 要重新规划并重新批准（§6.6 接单时重新检查）。

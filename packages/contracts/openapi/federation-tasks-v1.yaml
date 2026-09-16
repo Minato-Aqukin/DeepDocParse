@@ -621,7 +621,7 @@ components:
       required: [seq, type, at]
       properties:
         seq: {type: integer, minimum: 1}
-        type: {type: string, minLength: 1}
+        type: {type: string, minLength: 1, x-ddp-enum: task_event_type}
         at: {type: string, format: date-time}
         payload: {type: [object, 'null']}
     EventPage:

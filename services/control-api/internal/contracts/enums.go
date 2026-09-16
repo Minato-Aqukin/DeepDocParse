@@ -1110,6 +1110,71 @@ func (s FederatedAnswerReason) Valid() bool {
 	return ok
 }
 
+// 联邦任务事件流（`GET /api/v1/tasks/{root_task_id}/events`）里 `Event.type` 的取值。
+// 事件是**可恢复的进度记录**，不是状态真相：状态以 `TaskStatus` 各轴为准，事件用来
+// 让界面说清"发生了什么、什么时候"，断线后按 `after=next_seq` 续读不丢。
+type TaskEventType string
+
+const (
+	// 任务需求与探索许可已落库
+	TaskEventTypeIntentCreated TaskEventType = "intent_created"
+	// 规划完成（Probe 与计划修订已生成），等待批准
+	TaskEventTypePlanReady TaskEventType = "plan_ready"
+	// 用户批准了这一修订与执行许可
+	TaskEventTypePlanApproved TaskEventType = "plan_approved"
+	// 执行已受理并排入持久队列
+	TaskEventTypeExecutionStarted TaskEventType = "execution_started"
+	// 重新判权后补做未完成目标（执行代次 +1）
+	TaskEventTypeTaskResumed TaskEventType = "task_resumed"
+	// 执行结束且至少有目标产出证据（查全与否看覆盖账本）
+	TaskEventTypeTaskCompleted TaskEventType = "task_completed"
+	// 执行失败（没有任何目标产出证据，或协调者被清扫）
+	TaskEventTypeTaskFailed TaskEventType = "task_failed"
+	// 用户显式取消；终态，迟到结果不许覆盖
+	TaskEventTypeTaskCancelled TaskEventType = "task_cancelled"
+	// 结果已固化为交付文档，等待下载后校验确认
+	TaskEventTypeDeliveryPending TaskEventType = "delivery_pending"
+	// 客户端校验摘要后确认了交付
+	TaskEventTypeDeliveryConfirmed TaskEventType = "delivery_confirmed"
+	// 交付在有效期内没有被确认
+	TaskEventTypeDeliveryExpired TaskEventType = "delivery_expired"
+)
+
+// TaskEventTypeValues 保持 enums.yaml 里的声明顺序。
+var TaskEventTypeValues = []TaskEventType{
+	TaskEventTypeIntentCreated,
+	TaskEventTypePlanReady,
+	TaskEventTypePlanApproved,
+	TaskEventTypeExecutionStarted,
+	TaskEventTypeTaskResumed,
+	TaskEventTypeTaskCompleted,
+	TaskEventTypeTaskFailed,
+	TaskEventTypeTaskCancelled,
+	TaskEventTypeDeliveryPending,
+	TaskEventTypeDeliveryConfirmed,
+	TaskEventTypeDeliveryExpired,
+}
+
+var TaskEventTypeMeta = map[TaskEventType]EnumMeta{
+	TaskEventTypeIntentCreated:     {Value: "intent_created", Label: "已创建任务", Severity: SeverityNeutral},
+	TaskEventTypePlanReady:         {Value: "plan_ready", Label: "计划已生成，等待批准", Severity: SeverityNeutral},
+	TaskEventTypePlanApproved:      {Value: "plan_approved", Label: "已批准计划", Severity: SeverityOk},
+	TaskEventTypeExecutionStarted:  {Value: "execution_started", Label: "开始执行", Severity: SeverityProgress},
+	TaskEventTypeTaskResumed:       {Value: "task_resumed", Label: "补做未完成目标", Severity: SeverityProgress},
+	TaskEventTypeTaskCompleted:     {Value: "task_completed", Label: "执行结束", Severity: SeverityOk},
+	TaskEventTypeTaskFailed:        {Value: "task_failed", Label: "执行失败", Severity: SeverityError},
+	TaskEventTypeTaskCancelled:     {Value: "task_cancelled", Label: "已取消", Severity: SeverityWarn},
+	TaskEventTypeDeliveryPending:   {Value: "delivery_pending", Label: "结果待确认", Severity: SeverityNeutral},
+	TaskEventTypeDeliveryConfirmed: {Value: "delivery_confirmed", Label: "结果已确认", Severity: SeverityOk},
+	TaskEventTypeDeliveryExpired:   {Value: "delivery_expired", Label: "结果交付已过期", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 task_event_type 取值。
+func (s TaskEventType) Valid() bool {
+	_, ok := TaskEventTypeMeta[s]
+	return ok
+}
+
 // TaskPlan 的规划轴（计划 §8.1）。`invalidated` 是关键一态：
 // 计划过期、输入版本变了、授权被撤销之后，**旧计划不许被执行**，
 // 要重新规划并重新批准（§6.6 接单时重新检查）。

@@ -1,0 +1,33 @@
+{
+  "root_task_id": "8f14e45fceea167a5a36dedd4bea2543",
+  "next_seq": 3,
+  "complete": true,
+  "events": [
+    {
+      "seq": 1,
+      "type": "intent_created",
+      "at": "2026-09-15T08:00:00Z",
+      "payload": {
+        "planning_state": "draft",
+        "scope_ref": "scope-42"
+      }
+    },
+    {
+      "seq": 2,
+      "type": "plan_ready",
+      "at": "2026-09-15T08:00:02Z",
+      "payload": {
+        "plan_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    },
+    {
+      "seq": 3,
+      "type": "plan_approved",
+      "at": "2026-09-15T08:00:04Z",
+      "payload": {
+        "plan_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "execution_consent_ref": "execute-8f14e45fceea167a5a36dedd4bea2543-r1"
+      }
+    }
+  ]
+}

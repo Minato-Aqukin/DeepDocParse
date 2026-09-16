@@ -71,6 +71,18 @@ export const routes: RouteRecordRaw[] = [
     meta: { title: '全文检索', icon: 'Search', group: 'workspace', nav: true },
   },
   {
+    path: '/tasks',
+    name: 'federation-tasks',
+    component: () => import('@/views/TasksView.vue'),
+    meta: { title: '联邦任务', icon: 'Connection', group: 'workspace', nav: true },
+  },
+  {
+    path: '/tasks/:rootTaskId',
+    name: 'federation-task',
+    component: () => import('@/views/TaskDetailView.vue'),
+    meta: { title: '联邦任务', group: 'workspace', nav: false, activeMenu: '/tasks' },
+  },
+  {
     path: '/wiki',
     name: 'wiki',
     component: () => import('@/views/WikiView.vue'),
