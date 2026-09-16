@@ -45,6 +45,11 @@ type Server struct {
 	// Outbound peer directory parsed from FEDERATION_PEERS. Nil means no
 	// outbound expansion: no remote endpoint is contacted.
 	peers *discovery.PeerDirectory
+	// trust overrides the membership reader behind node-credential issuance and
+	// verification lookups (unit tests only); nil means the PostgreSQL store.
+	trust peerTrustReader
+	// now overrides the clock used for credential validity (unit tests only).
+	now func() time.Time
 }
 
 type Deps struct {

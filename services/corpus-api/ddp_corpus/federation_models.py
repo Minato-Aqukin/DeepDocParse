@@ -259,3 +259,23 @@ class FederationDelivery(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
                                                  onupdate=utcnow)
+
+
+class FederationCredentialNonce(Base):
+    """One consumed node credential (`ddp-node-credential/1`), kept until it expires.
+
+    The primary key is the credential's `jti`: a second use of the same credential —
+    sequential or concurrent — collides here and is refused as `credential_replayed`.
+    The row is written only **after** the signature verified, so unauthenticated
+    traffic cannot fill the table. Nothing secret is stored: the jti alone cannot
+    be presented (the verifier needs the signed payload), and the credential token
+    itself is never persisted. The federation sweep deletes rows past `expires_at`.
+    """
+
+    __tablename__ = "federation_credential_nonces"
+
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    issuer_node_id: Mapped[str] = mapped_column(String(64))
+    operation: Mapped[str] = mapped_column(String(32))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

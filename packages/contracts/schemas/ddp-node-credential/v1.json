@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepdocparse.dev/schemas/ddp-node-credential/1",
+  "title": "DDP-NODE-CREDENTIAL v1",
+  "description": "节点对节点请求的签名凭证（计划 §2.1 / §5.1 / §8.4 / §9.5，验收 T32 / T43）。它取代所有登记同伴共用一个 FEDERATION_PEER_TOKEN、并由协调者手持对端 SERVICE_TOKEN 自报 actor 头的旧做法。一张凭证同时是**节点请求证明**（签名 + 请求绑定证明这次 HTTP 请求出自 issuer 节点）与**限定委托**（audience / actor / 唯一操作 / 范围约束 / 短有效期）。规范序列化、线格式、验证顺序与重放策略见 ../../ddp/node-credential-format.md。",
+  "x-ddp-contract": "ddp-node-credential/1",
+  "$defs": {
+    "node_id": {
+      "description": "自治中心的持久身份。控制面由 Ed25519 公钥派生（`node-` + sha256(公钥) 的前 48 位十六进制）；验证方必须重算派生值，对不上即不信任。",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"
+    },
+    "ref_text": {
+      "description": "凭证里所有自由标识符的字符集。**刻意只允许无需 JSON 转义的 ASCII**：Go 的 json.Marshal 会把 < > & 与 U+2028 转义，Python 不会；把字符集收窄到两边编码必然一字不差的范围，比在两份实现里各模拟对方的转义规则可靠（本项目吃过三次两份复制品的亏）。",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:@+=-]{1,128}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "epoch_seconds": {
+      "description": "Unix 秒（整数）。不用 RFC3339 文本：两种语言的时间格式化有精度与时区写法差异，而签名覆盖的是字节。",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 253402300799
+    },
+    "public_key": {
+      "description": "Ed25519 公钥（32 字节）的标准 base64，带 padding。",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{43}=$"
+    },
+    "ActorRef": {
+      "type": "object",
+      "description": "发起这次委托的主体，**限定在发行者组织之内**。",
+      "x-ddp-doc": "**不得跨中心合并**（T32）：接收方从 (issuer_node_id, organization_id, kind, subject) 派生一个带 `peer-` 前缀的本地调用者 id，它永远不等于本地任何用户，也不因为 subject 与本地用户同名就继承那个用户的资产。接收方的组织取自**本节点控制面批准该 issuer 的那条成员记录**，不取自这里的 organization_id。不带角色：发行者组织里的角色在接收方没有意义。不带 API key 或其 id：用户的长期密钥不转发给下游（§8.4）。",
+      "properties": {
+        "organization_id": {"description": "发行者控制面里的组织 id（只用于派生本地调用者 id 与审计）。", "$ref": "#/$defs/ref_text"},
+        "subject": {"description": "发行者组织内的主体：user / api_key 取其用户 id，service 取服务 actor id。", "$ref": "#/$defs/ref_text"},
+        "kind": {"type": "string", "x-ddp-enum": "actor_kind"}
+      },
+      "required": ["organization_id", "subject", "kind"],
+      "additionalProperties": false
+    },
+    "Constraints": {
+      "type": "object",
+      "description": "委托的资源/范围约束。出现的每个字段都必须与请求或被读取的行逐字相等。",
+      "x-ddp-doc": "**约束是上限，不是权限**：满足约束之后执行者仍按自己的资源 ACL 判权。缺省字段不是通配 —— 需要它的操作由 Claims 的 allOf 强制出现。",
+      "properties": {
+        "root_task_id": {"description": "协调者的根任务。执行状态/取消/受理/执行证据集必须属于它。", "$ref": "#/$defs/ref_text"},
+        "step_id": {"description": "受理时必须等于请求体的 step_id。", "$ref": "#/$defs/ref_text"},
+        "scope_ref": {"description": "探测请求体带 scope_ref 时必须相等；请求体不带时凭证也不许带。", "$ref": "#/$defs/ref_text"},
+        "task_spec_digest": {"description": "探测、探测回执与探测证据集必须属于这份需求修订。", "$ref": "#/$defs/digest"}
+      },
+      "required": ["root_task_id"],
+      "additionalProperties": false
+    },
+    "RequestBinding": {
+      "type": "object",
+      "description": "把凭证钉在一次具体的 HTTP 请求上。",
+      "x-ddp-doc": "path 是**相对联邦入口的路由路径**（不含查询串、不含登记 endpoint 的前缀）；body_digest 是实际发送的正文字节的 sha256（GET 为空串的摘要）。凭证在发出前被截获也换不了请求。",
+      "properties": {
+        "method": {"type": "string", "enum": ["GET", "POST"]},
+        "path": {"type": "string", "pattern": "^/api/v1/federation/[A-Za-z0-9._:@+=/-]{1,256}$"},
+        "body_digest": {"$ref": "#/$defs/digest"}
+      },
+      "required": ["method", "path", "body_digest"],
+      "additionalProperties": false
+    },
+    "Claims": {
+      "type": "object",
+      "description": "被签名的凭证正文。线上传的是它的规范序列化字节加签名。",
+      "x-ddp-doc": "**一张凭证只授权一个操作、只用一次、最多 120 秒**。有效期上限、issuer≠audience、签名、公钥派生、成员状态、重放与约束比对都不是 JSON Schema 能表达的，由 `ddp_core.application.node_credentials`（验证方）与控制面 `discovery/credential.go`（签发方）用同一组冻结夹具 `tests/fixtures/federation/node-credential-v1.json` 互相钉住。",
+      "properties": {
+        "schema": {"const": "ddp-node-credential/1#Claims"},
+        "alg": {"description": "只有一个取值。未知算法不是降级到别的算法，而是 credential_invalid。", "const": "Ed25519"},
+        "issuer_node_id": {"$ref": "#/$defs/node_id"},
+        "audience_node_id": {"description": "唯一允许接收它的节点。转交第三个节点（越权转委托）必然 credential_audience_mismatch。", "$ref": "#/$defs/node_id"},
+        "actor": {"$ref": "#/$defs/ActorRef"},
+        "operation": {"type": "string", "x-ddp-enum": "node_credential_operation"},
+        "constraints": {"$ref": "#/$defs/Constraints"},
+        "request": {"$ref": "#/$defs/RequestBinding"},
+        "issued_at": {"$ref": "#/$defs/epoch_seconds"},
+        "expires_at": {"$ref": "#/$defs/epoch_seconds"},
+        "jti": {"description": "至少 128 位随机数的 base64url。接收方验签通过后持久记下直到 expires_at，第二次出现即 credential_replayed。", "type": "string", "pattern": "^[A-Za-z0-9_-]{22,64}$"}
+      },
+      "required": ["schema", "alg", "issuer_node_id", "audience_node_id", "actor", "operation", "constraints", "request", "issued_at", "expires_at", "jti"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"operation": {"enum": ["probe_read", "execution_read", "evidence_set_read", "catalog_read"]}}, "required": ["operation"]},
+          "then": {"properties": {"request": {"properties": {"method": {"const": "GET"}}}}},
+          "else": {"properties": {"request": {"properties": {"method": {"const": "POST"}}}}}
+        },
+        {
+          "if": {"properties": {"operation": {"const": "admission_create"}}, "required": ["operation"]},
+          "then": {"properties": {"constraints": {"required": ["root_task_id", "step_id"]}}}
+        },
+        {
+          "if": {"properties": {"operation": {"enum": ["probe_create", "probe_read"]}}, "required": ["operation"]},
+          "then": {"properties": {"constraints": {"required": ["root_task_id", "task_spec_digest"]}}}
+        }
+      ]
+    },
+    "SignRequest": {
+      "type": "object",
+      "description": "语料服务向**本节点**控制面申请一张出站凭证（POST /internal/federation/node-credentials，服务凭据认证）。",
+      "x-ddp-doc": "**私钥只有控制面一个所有者**（不变式 5）：语料服务从不接触种子文件，只拿到签好的一次性凭证。控制面拒签：audience 不是本组织已批准成员（node_unknown / node_revoked）、audience 是自己、actor 不属于本节点的组织、ttl 越界。issuer、issued_at、expires_at、jti 全由控制面填，调用方给不了。",
+      "properties": {
+        "audience_node_id": {"$ref": "#/$defs/node_id"},
+        "actor": {"$ref": "#/$defs/ActorRef"},
+        "operation": {"type": "string", "x-ddp-enum": "node_credential_operation"},
+        "constraints": {"$ref": "#/$defs/Constraints"},
+        "request": {"$ref": "#/$defs/RequestBinding"},
+        "ttl_seconds": {"type": "integer", "minimum": 1, "maximum": 120}
+      },
+      "required": ["audience_node_id", "actor", "operation", "constraints", "request", "ttl_seconds"],
+      "additionalProperties": false
+    },
+    "SignedCredential": {
+      "type": "object",
+      "description": "控制面签出的凭证。`credential` 原样放进 `X-DDP-Node-Credential` 请求头。",
+      "x-ddp-doc": "调用方必须核对 issuer_node_id 等于自己绑定的本节点身份，否则是 node_identity_mismatch —— 签错身份的凭证在对端只会得到 node_unknown，看起来像对端的问题。",
+      "properties": {
+        "credential": {"type": "string", "maxLength": 4096, "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"},
+        "issuer_node_id": {"$ref": "#/$defs/node_id"},
+        "jti": {"type": "string", "pattern": "^[A-Za-z0-9_-]{22,64}$"},
+        "expires_at": {"$ref": "#/$defs/epoch_seconds"}
+      },
+      "required": ["credential", "issuer_node_id", "jti", "expires_at"],
+      "additionalProperties": false
+    },
+    "PeerTrust": {
+      "type": "object",
+      "description": "接收方语料服务向本节点控制面查询一个签发节点的信任记录（GET /internal/federation/peer-keys/{node_id}）。",
+      "x-ddp-doc": "只有 state=approved 才可信；pending 按 node_unknown、revoked 按 node_revoked 拒绝。organization_id 是**批准它的本地组织**，远端调用者被映射进这个组织、以只读的 viewer 身份按本地 ACL 判权。authority_node_id 是控制面自己的身份，接收方用它复核本节点身份没有漂移。未登记的节点 404。",
+      "properties": {
+        "node_id": {"$ref": "#/$defs/node_id"},
+        "state": {"type": "string", "x-ddp-enum": "node_membership_state"},
+        "public_key": {"$ref": "#/$defs/public_key"},
+        "key_fingerprint": {"$ref": "#/$defs/digest"},
+        "organization_id": {"$ref": "#/$defs/ref_text"},
+        "authority_node_id": {"$ref": "#/$defs/node_id"},
+        "revision": {"type": "integer", "minimum": 1}
+      },
+      "required": ["node_id", "state", "public_key", "key_fingerprint", "organization_id", "authority_node_id", "revision"],
+      "additionalProperties": false
+    },
+    "NodeIdentity": {
+      "type": "object",
+      "description": "本节点控制面的持久身份（GET /internal/federation/identity，服务凭据认证）。语料服务与 worker 启动时据此绑定自己的 node_id。",
+      "x-ddp-doc": "一个自治中心只有一个持久 node_id（§2.1）。语料服务配置了 BUNDLE_NODE_ID 而与此不一致时联邦 Fail Closed（node_identity_mismatch），绝不带着两个身份各自运行。",
+      "properties": {
+        "node_id": {"$ref": "#/$defs/node_id"},
+        "public_key": {"$ref": "#/$defs/public_key"},
+        "key_fingerprint": {"$ref": "#/$defs/digest"}
+      },
+      "required": ["node_id", "public_key", "key_fingerprint"],
+      "additionalProperties": false
+    }
+  }
+}

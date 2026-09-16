@@ -5,7 +5,7 @@ description = "DeepDocParse 语料 API：文档 / evidence / citation / 检索 /
 requires-python = ">=3.11"
 dependencies = [
     # 语料侧要 ORM，所以是带 [db] 的那一层
-    "ddp-core[db]",
+    "ddp-core[db,federation]",
     "ddp-contracts",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",

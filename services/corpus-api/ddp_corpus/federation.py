@@ -60,7 +60,7 @@ from ddp_core.bundle import digest as byte_digest
 from ddp_core.tokenize import tokens
 from ddp_contracts.enums import FEDERATED_ANSWER_REASON_VALUES
 
-from ddp_corpus import capabilities, catalog, queue, upstream
+from ddp_corpus import capabilities, catalog, node_identity, queue, upstream
 from ddp_corpus.config import settings
 from ddp_corpus.deps import Actor
 from ddp_corpus.document_context import search_contexts
@@ -124,13 +124,14 @@ def api_error(exc: ApplicationError) -> APIError:
 
 
 def local_node_id() -> str:
-    """本节点的联邦身份。
+    """本节点的联邦身份：控制面持久密钥派生的那一个（`node_identity`）。
 
-    与 Bundle 的固定来源身份共用 `BUNDLE_NODE_ID`：一次部署只有一个持久
-    节点身份，第二个身份源只会让"这到底是谁"变得没有答案。没配置就 Fail
-    Closed —— 一个没有身份的节点不该以任何名字接单或发出证据。
+    一次部署只有一个持久节点身份，第二个身份源只会让"这到底是谁"变得没有
+    答案 —— 旧实现直接读 `BUNDLE_NODE_ID`，与控制面的密钥身份没有任何绑定，
+    两者不一致时本地目标被当成远端。现在 BUNDLE_NODE_ID 只是可选的核对值；
+    没绑定或不一致一律 Fail Closed（503）。
     """
-    node = (settings.bundle_node_id or "").strip()
+    node = node_identity.local_node_id()
     if not NODE_PATTERN.fullmatch(node):
         raise APIError(503, "configure a persistent node identity (BUNDLE_NODE_ID)",
                        "server_error", "node_identity_unconfigured")

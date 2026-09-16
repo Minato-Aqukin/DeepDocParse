@@ -267,18 +267,38 @@ class Settings(BaseSettings):
     # 本节点是否接受 peer 的 admission。关掉时能力清单里的 accepting_admissions
     # 如实报 false，admission 端点也会拒绝（不排队、不占算力）。
     federation_admissions_enabled: bool = True
-    # **本节点接受 peer 调用时校验的固定信任域凭据。**
-    # 留空 = 没有配置任何 peer 信任，federation 写端点一律 401 peer_unauthenticated
-    # （Fail Closed）：一个没有登记任何对端凭据的节点不该被任何人当执行者用。
+    # 节点对节点端点的认证方式（契约 enums.yaml 的 peer_auth_mode）。
+    # **node_credential（默认，唯一的生产形态）**：出站每个请求向本节点控制面申请
+    # 一张单次、≤120s、限定 audience/actor/操作/范围的 Ed25519 凭证；入站按控制面
+    # 成员目录里已批准节点的公钥验签、记 jti 防重放，远端调用者映射成本地只读的
+    # peer-* 主体再按本地 ACL 判权（packages/contracts/ddp/node-credential-format.md）。
+    # shared_token_insecure：旧的共享 FEDERATION_PEER_TOKEN + 对端 SERVICE_TOKEN +
+    # 自报 actor 头。所有同伴共用一个秘密、同名用户被直接合并 —— **只给没有控制面的
+    # 开发夹具**：必须同时 ALLOW_INSECURE_DEFAULTS=true 才能启动，/readyz 如实报降级。
+    federation_peer_auth: str = "node_credential"
+    # **仅 shared_token_insecure 档位使用**：本节点接受 peer 调用时校验的共享凭据。
+    # 留空 = 一律 401 peer_unauthenticated（Fail Closed）。
     # **绝不回显、绝不入日志、绝不进错误消息**；比较用 hmac.compare_digest。
     federation_peer_token: str = ""
 
     # 协调者出站时登记的远端节点目录（P5-INTERFACES-v3 §5）。JSON 对象：
-    # {"<node_id>": {"endpoint": "https://…", "service_token": "…", "peer_token": "…"}}
+    # node_credential 档位：{"<node_id>": {"endpoint": "https://…"}} —— **不许带任何口令**，
+    # 带了就是配置错误（留着不用的秘密迟早被复制到别处）；
+    # shared_token_insecure 档位：{"<node_id>": {"endpoint": "…", "service_token": "…", "peer_token": "…"}}。
     # **Fail Closed**：没登记的节点一个请求也不发（连 DNS 都不解析）；endpoint
-    # 必须是 HTTPS 且无 userinfo/query/fragment。三个凭据字段绝不回显、不入日志、
-    # 不进错误消息 —— 它们就是"对方凭什么信我们"的全部。
+    # 必须是 HTTPS 且无 userinfo/query/fragment。凭据字段绝不回显、不入日志、
+    # 不进错误消息。登记在这里只决定"往哪发"；能不能签出凭证还要控制面批准该节点。
     federation_peers: str = ""
+    # 入站验签时对**已批准**节点信任记录的缓存秒数，也就是控制面撤销一个节点后
+    # 本节点最迟多久拒绝它的新请求。0 = 每个请求都查控制面；上限 60。
+    # 未知 / pending / revoked 从不缓存（新批准立即生效，撤销不会被旧的否定结果挡住）。
+    federation_peer_key_cache_seconds: int = 5
+    # 出站凭证的有效期（秒，1..120）。凭证单次使用，这个值只需覆盖一次请求的
+    # 往返加两台主机的时钟偏差；调大不会减少签发次数，只会让被截获的凭证活得更久。
+    federation_credential_ttl_seconds: int = 60
+    # 启动时向控制面绑定本节点持久身份失败后的重试间隔（秒）。绑定成功之前所有
+    # 联邦端点与出站都 503 node_identity_unavailable —— 慢启动不会让节点换个身份跑。
+    federation_identity_retry_seconds: int = 5
     # 只给本地回路集成用的逃生口：允许 http://127.0.0.1 或 http://[::1] 的
     # peer endpoint。**只认字面回环地址**，不接受 localhost 或任何域名。
     # 生产保持 false —— 打开它等于允许明文外发问题与证据。
@@ -392,6 +412,25 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _check_federation_peer_auth(self):
+        """认证档位只能取契约里的值；缓存与有效期有硬上界。
+
+        一个拼错的档位（`node-credential`）若被当成"不是共享口令"就放行，等于
+        没人知道自己跑在哪种认证下；缓存上限决定撤销多久生效，不能无界。
+        """
+        from ddp_contracts import PEER_AUTH_MODE_VALUES
+
+        if self.federation_peer_auth not in PEER_AUTH_MODE_VALUES:
+            raise ValueError(f"FEDERATION_PEER_AUTH 必须是 {PEER_AUTH_MODE_VALUES} 之一")
+        if not 0 <= self.federation_peer_key_cache_seconds <= 60:
+            raise ValueError("FEDERATION_PEER_KEY_CACHE_SECONDS 必须在 0..60（它就是撤销生效的最长延迟）")
+        if not 1 <= self.federation_credential_ttl_seconds <= 120:
+            raise ValueError("FEDERATION_CREDENTIAL_TTL_SECONDS 必须在 1..120")
+        if self.federation_identity_retry_seconds < 1:
+            raise ValueError("FEDERATION_IDENTITY_RETRY_SECONDS 必须是正整数秒")
+        return self
+
+    @model_validator(mode="after")
     def _check_federation_sweep(self):
         """清扫间隔与卡死阈值必须为正。
 
@@ -453,6 +492,15 @@ def assert_secrets_configured() -> None:
     这不会在运行时报任何错，只会安静地把整套鉴权变成摆设 —— 正是
     必须在启动时拦下来的那类问题。
     """
+    if settings.federation_peer_auth == "shared_token_insecure":
+        # 共享口令档位与占位密钥是同一类东西：能跑，但鉴权是摆设。它只许在
+        # 显式声明"我知道这不安全"的部署里启动，而且每次启动都说出来。
+        if not settings.allow_insecure_defaults:
+            raise RuntimeError(
+                "拒绝启动：FEDERATION_PEER_AUTH=shared_token_insecure 只给没有控制面的开发夹具，"
+                "必须同时设置 ALLOW_INSECURE_DEFAULTS=true。生产请用 node_credential。")
+        print("[config] WARNING: FEDERATION_PEER_AUTH=shared_token_insecure —— 节点间认证是"
+              "共享口令，远端 actor 头未签名且同名用户会被合并")
     if settings.allow_insecure_defaults:
         print("[config] WARNING: ALLOW_INSECURE_DEFAULTS 已开启，占位密钥检查被跳过")
         return

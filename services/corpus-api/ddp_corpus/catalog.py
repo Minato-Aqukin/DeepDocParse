@@ -343,9 +343,15 @@ async def published_snapshot_page(session, actor, snapshot_id, cursor, limit=Non
     origin is this node's persistent identity. An unset identity fails closed
     instead of emitting origin-less descriptors that could never be validated.
     """
-    origin = (settings.bundle_node_id or "").strip()
-    if not origin:
-        raise error("node_identity_unavailable", 503)
+    from ddp_corpus import node_identity
+
+    try:
+        # The one node identity (bound from control-api), not a second source.
+        origin = node_identity.local_node_id()
+    except APIError as exc:
+        if exc.code == "node_identity_unconfigured":
+            raise error("node_identity_unavailable", 503) from None
+        raise
     if actor.kind != "service" or not actor.organization_id:
         raise error("service_identity_required", 403)
     return await snapshot_page(session, actor, PEER_DIRECTORY_SCOPE,

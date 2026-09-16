@@ -1456,7 +1456,7 @@ def snapshot_state_label(value: str | None) -> str | None:
 #
 # **`unreachable` 类错误绝不能被前端翻译成「对方没有资料」**（§9.6 原文）：
 # 那是把"我没查到"说成"那里没有"。
-FederationError = Literal["discovery_incomplete", "scope_expired", "capability_unknown", "capability_unsupported", "input_not_verified", "egress_denied", "plan_changed", "offer_expired", "admission_unknown", "idempotency_conflict", "partial_retrieval", "insufficient_evidence", "budget_exhausted", "source_revoked", "delivery_expired", "local_model_missing", "protocol_incompatible", "task_cancelled"]
+FederationError = Literal["discovery_incomplete", "scope_expired", "capability_unknown", "capability_unsupported", "input_not_verified", "egress_denied", "plan_changed", "offer_expired", "admission_unknown", "idempotency_conflict", "partial_retrieval", "insufficient_evidence", "budget_exhausted", "source_revoked", "delivery_expired", "local_model_missing", "protocol_incompatible", "task_cancelled", "credential_invalid", "credential_expired", "credential_replayed", "credential_audience_mismatch", "credential_operation_denied", "credential_scope_denied", "node_unknown", "node_revoked", "node_identity_mismatch", "node_identity_unavailable", "credential_unavailable"]
 
 FEDERATION_ERROR_VALUES: Final[tuple[str, ...]] = (
     "discovery_incomplete",
@@ -1477,6 +1477,17 @@ FEDERATION_ERROR_VALUES: Final[tuple[str, ...]] = (
     "local_model_missing",
     "protocol_incompatible",
     "task_cancelled",
+    "credential_invalid",
+    "credential_expired",
+    "credential_replayed",
+    "credential_audience_mismatch",
+    "credential_operation_denied",
+    "credential_scope_denied",
+    "node_unknown",
+    "node_revoked",
+    "node_identity_mismatch",
+    "node_identity_unavailable",
+    "credential_unavailable",
 )
 
 FEDERATION_ERROR_META: Final[dict[str, EnumMeta]] = {
@@ -1520,6 +1531,36 @@ FEDERATION_ERROR_META: Final[dict[str, EnumMeta]] = {
     # running** —— 重跑必须是一条新任务（新授权、新覆盖分母），而不是
     # 拿旧计划接着跑。返回 409，任务状态原样不动。
     "task_cancelled": {"value": "task_cancelled", "label": "任务已取消，不能恢复", "severity": "error"},
+    # 节点凭证缺失字段、不是规范序列化、base64 不严格、算法不是 Ed25519、
+    # 有效期超过上限，或签名验不过（篡改）。一律 401，不区分是哪一步 ——
+    # 分开报等于给伪造者一个逐步试错的口。
+    "credential_invalid": {"value": "credential_invalid", "label": "节点凭证无效", "severity": "error"},
+    # 凭证已过期或签发时间在未来（超出时钟偏差容忍）
+    "credential_expired": {"value": "credential_expired", "label": "节点凭证已过期", "severity": "error"},
+    # 同一个 jti 第二次出现。凭证是**单次使用**的：执行者在验签通过后
+    # 持久记下 jti 直到过期，并发重放由唯一约束仲裁（401）。
+    "credential_replayed": {"value": "credential_replayed", "label": "节点凭证被重放", "severity": "error"},
+    # 凭证的 audience 不是接收它的这个节点。转手给第三个节点（越权转委托）就是这个码
+    "credential_audience_mismatch": {"value": "credential_audience_mismatch", "label": "凭证不是发给本节点的", "severity": "error"},
+    # 凭证授权的操作不是本端点的操作（403）
+    "credential_operation_denied": {"value": "credential_operation_denied", "label": "凭证不允许该操作", "severity": "error"},
+    # 凭证的请求绑定（方法/路径/正文摘要）或范围约束（root_task_id / step_id /
+    # scope_ref / task_spec_digest）不覆盖这次请求或它要读的那一行（403）；
+    # 以别的协调者名义提交计划也是这个码。
+    "credential_scope_denied": {"value": "credential_scope_denied", "label": "凭证范围不覆盖该请求", "severity": "error"},
+    # 签发节点不在本节点控制面的成员目录里，或尚未被管理员批准（401）
+    "node_unknown": {"value": "node_unknown", "label": "未知或未批准的节点", "severity": "error"},
+    # 签发节点已被管理员撤销。撤销对新请求生效的延迟以公钥缓存上限为界（401）
+    "node_revoked": {"value": "node_revoked", "label": "节点已被撤销", "severity": "error"},
+    # 语料服务配置的节点身份（BUNDLE_NODE_ID）与控制面持久密钥派生的身份不一致，
+    # 或控制面报告的本节点身份变了。**Fail Closed（503）**：否则本地目标会被当成远端
+    "node_identity_mismatch": {"value": "node_identity_mismatch", "label": "本节点身份不一致（联邦已停用）", "severity": "error"},
+    # 还没从控制面取到本节点持久身份（503），联邦端点与出站一律拒绝
+    "node_identity_unavailable": {"value": "node_identity_unavailable", "label": "本节点身份尚未确定", "severity": "error"},
+    # 本节点控制面在凭证链路上不可用：出站时签不出凭证（不可达、拒签、响应形状不对），
+    # 或入站时查不到签发节点的信任记录（503）。**是本节点的问题，不是对端没有资料**
+    # —— 协调者记 unreachable 并保留可重试。
+    "credential_unavailable": {"value": "credential_unavailable", "label": "本节点凭证服务不可用", "severity": "error"},
 }
 
 
@@ -1529,6 +1570,85 @@ def federation_error_label(value: str | None) -> str | None:
     if not value:
         return None
     meta = FEDERATION_ERROR_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 一张节点凭证授权的**唯一**操作（DDP-NODE-CREDENTIAL）。每个节点对节点
+# 端点恰好对应一个值；凭证只签一个操作，拿读执行状态的凭证去受理任务是
+# `credential_operation_denied`。
+NodeCredentialOperation = Literal["probe_create", "probe_read", "admission_create", "admission_lookup", "execution_read", "execution_cancel", "evidence_set_read", "resource_locate", "result_resolve", "catalog_read"]
+
+NODE_CREDENTIAL_OPERATION_VALUES: Final[tuple[str, ...]] = (
+    "probe_create",
+    "probe_read",
+    "admission_create",
+    "admission_lookup",
+    "execution_read",
+    "execution_cancel",
+    "evidence_set_read",
+    "resource_locate",
+    "result_resolve",
+    "catalog_read",
+)
+
+NODE_CREDENTIAL_OPERATION_META: Final[dict[str, EnumMeta]] = {
+    # POST /api/v1/federation/probes
+    "probe_create": {"value": "probe_create", "label": "发起探测", "severity": "neutral"},
+    # GET /api/v1/federation/probes/{probe_id}
+    "probe_read": {"value": "probe_read", "label": "读取探测回执", "severity": "neutral"},
+    # POST /api/v1/federation/admissions
+    "admission_create": {"value": "admission_create", "label": "提交接单", "severity": "neutral"},
+    # POST /api/v1/federation/admissions/lookup
+    "admission_lookup": {"value": "admission_lookup", "label": "对账接单", "severity": "neutral"},
+    # GET /api/v1/federation/tasks/{executor_task_id}
+    "execution_read": {"value": "execution_read", "label": "读取执行状态", "severity": "neutral"},
+    # POST /api/v1/federation/tasks/{executor_task_id}/cancel
+    "execution_cancel": {"value": "execution_cancel", "label": "取消执行", "severity": "neutral"},
+    # GET /api/v1/federation/evidence-sets/{set_ref}
+    "evidence_set_read": {"value": "evidence_set_read", "label": "读取证据集", "severity": "neutral"},
+    # POST /api/v1/federation/resources/locate
+    "resource_locate": {"value": "resource_locate", "label": "定位资源版本", "severity": "neutral"},
+    # POST /api/v1/federation/results/resolve
+    "result_resolve": {"value": "result_resolve", "label": "解析证据引用", "severity": "neutral"},
+    # GET /api/v1/federation/published-collections
+    "catalog_read": {"value": "catalog_read", "label": "读取发布目录", "severity": "neutral"},
+}
+
+
+def node_credential_operation_label(value: str | None) -> str | None:
+    """node_credential_operation 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = NODE_CREDENTIAL_OPERATION_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 语料服务节点对节点端点的认证方式。`node_credential` 是唯一的生产形态；
+# `shared_token_insecure` 只给没有控制面的开发夹具，**必须显式配置且同时
+# 打开 ALLOW_INSECURE_DEFAULTS**，并在 /readyz 与能力声明里如实报成降级。
+PeerAuthMode = Literal["node_credential", "shared_token_insecure"]
+
+PEER_AUTH_MODE_VALUES: Final[tuple[str, ...]] = (
+    "node_credential",
+    "shared_token_insecure",
+)
+
+PEER_AUTH_MODE_META: Final[dict[str, EnumMeta]] = {
+    # 控制面持有节点私钥，按请求签发限定 audience/actor/操作/范围/有效期的单次凭证
+    "node_credential": {"value": "node_credential", "label": "节点签名凭证", "severity": "ok"},
+    # 旧的共享 peer token + 服务凭据 + actor 头。所有登记同伴共用一个秘密、
+    # 调用方身份未签名、同名用户会被直接合并 —— 只许开发用
+    "shared_token_insecure": {"value": "shared_token_insecure", "label": "共享口令（不安全，仅开发）", "severity": "warn"},
+}
+
+
+def peer_auth_mode_label(value: str | None) -> str | None:
+    """peer_auth_mode 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = PEER_AUTH_MODE_META.get(value)
     return meta["label"] if meta else f"未知取值（{value}）"
 
 

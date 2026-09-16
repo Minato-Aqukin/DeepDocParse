@@ -21,6 +21,7 @@ func (s *Server) mountDiscovery(mux *http.ServeMux) {
 	s.mountClient(mux)
 	s.mountScopes(mux)
 	s.mountPeer(mux)
+	s.mountNodeCredentials(mux)
 	mux.Handle("GET /api/v1/federation/node", httpx.Wrap(s.handleFederationNode))
 	for _, path := range []string{"/api/v1/capabilities", "/api/v1/federation/capabilities", "/api/v1/client/handshake"} {
 		mux.Handle("GET "+path, s.discoveryAuth(httpx.Wrap(s.handleCapabilities)))
