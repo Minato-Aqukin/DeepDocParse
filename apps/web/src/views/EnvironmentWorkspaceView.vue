@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vu
 import { RouterLink } from 'vue-router'
 import PdfCanvas from '@/components/viewer/PdfCanvas.vue'
 import LocalWikiPanel from '@/components/LocalWikiPanel.vue'
+import FederationPlanPanel from '@/components/FederationPlanPanel.vue'
 import { isDark, toggleTheme } from '@/composables/useTheme'
 import { unwrap, workspaceError, type ClientView, type ConnectionSummary, type Json } from '@/platform/desktop'
 import { DraftWriter } from '@/platform/draft-writer'
@@ -21,6 +22,7 @@ const modelCatalog = shallowRef<Record<string, Json> | null>(null), loadingModel
 const resourceWindow = shallowRef<Record<string, Json> | null>(null), taskWindow = shallowRef<Record<string, Json> | null>(null)
 const loadingWindow = ref(false), remoteSearchAllowed = ref(false)
 const current = computed(() => connections.value.find(item => item.connectionId === selected.value))
+const centers = computed(() => connections.value.filter(item => item.kind === 'remote'))
 const ready = computed(() => view.value?.transport === 'ready')
 const record = (value: unknown): Record<string, Json> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, Json> : {}
 const rows = (value: unknown): Record<string, Json>[] => Array.isArray(value) ? value.map(record) : []
@@ -104,7 +106,7 @@ async function select(connectionId: string) {
       if (status.error) error.value = saveStatus.value
     })
     draftDurable = true; question.value = text(data.question)
-    section.value = ['resources', 'conversation', 'wiki', 'tasks', 'models'].includes(text(data.section)) ? text(data.section) : 'resources'
+    section.value = ['resources', 'conversation', 'wiki', 'tasks', 'models', 'plans'].includes(text(data.section)) ? text(data.section) : 'resources'
     selectedVersion.value = text(data.selectedVersion); pendingKey.value = text(data.pendingKey)
     sourceWidth.value = typeof data.sourceWidth === 'number' ? Math.max(300, Math.min(data.sourceWidth, 600)) : 380
     pageIdx.value = typeof data.pageIdx === 'number' ? Math.max(0, data.pageIdx) : 0
@@ -311,7 +313,7 @@ onBeforeUnmount(() => {
       <strong>DeepDocParse</strong><span>{{ current?.label || '工作区' }}</span>
       <span v-if="current" class="identity">{{ current.environment.workspaceId }}</span>
       <span class="top-spacer" />
-      <span v-if="current">{{ current.kind === 'local' ? '本机执行 · 资料不外发' : '中心执行 · 按操作确认外发' }}</span>
+      <span v-if="current">{{ current.kind === 'local' ? '本机执行 · 原件不外发，远端计划须逐项批准' : '中心执行 · 按操作确认外发' }}</span>
       <el-button text :aria-label="isDark ? '切到浅色' : '切到深色'" @click="toggleTheme()">{{ isDark ? '浅色' : '深色' }}</el-button>
     </header>
     <aside class="workspace-nav">
@@ -321,7 +323,7 @@ onBeforeUnmount(() => {
       <el-button v-if="bridge" text @click="pairing = !pairing">配对中心…</el-button>
       <template v-if="current">
         <h2>内容</h2>
-        <button v-for="entry in [['resources','资源'],['conversation','问答'],['wiki','Wiki'],['tasks','任务'],['models','本地模型']]" :key="entry[0]" class="nav-item" :aria-current="section === entry[0] ? 'page' : undefined" @click="section = entry[0]!">{{ entry[1] }}</button>
+        <button v-for="entry in [['resources','资源'],['conversation','问答'],['wiki','Wiki'],['tasks','任务'],['plans','远端计划'],['models','本地模型']]" :key="entry[0]" class="nav-item" :aria-current="section === entry[0] ? 'page' : undefined" @click="section = entry[0]!">{{ entry[1] }}</button>
         <p class="muted">{{ credentialMode }}</p>
         <el-button text @click="disconnect">断开连接</el-button>
       </template>
@@ -371,6 +373,8 @@ onBeforeUnmount(() => {
         </template>
         <LocalWikiPanel v-if="section === 'wiki' && current.kind === 'local' && bridge" :key="selected" :bridge="bridge" :connection-id="selected" :ready="ready" :pending="!!pendingKey || busy" :sources="wikiSources" :query="wikiQuery" :command="wikiCommand" @evidence="showEvidence" />
         <p v-else-if="section === 'wiki'" class="muted">中心 Wiki 需要完整执行计划与外发许可，此入口尚未开放。</p>
+        <FederationPlanPanel v-if="section === 'plans' && current.kind === 'local' && bridge" :key="'plans-' + selected" :bridge="bridge" :connection-id="selected" :ready="ready" :pending="!!pendingKey || busy" :centers="centers" :resources="resources" />
+        <p v-else-if="section === 'plans'" class="muted">远端计划从本机工作区发起：计划、批准、对账与交付记录保存在本机。请先切到一个本机工作区。</p>
         <template v-if="section === 'conversation'">
           <h1>问答</h1>
           <p class="scope-line">检索范围：{{ selectedVersion ? text(activeResource?.filename) || text(activeResource?.title) || selectedVersion : '此工作区的可用资源' }} <el-button v-if="selectedVersion" text @click="selectedVersion = ''; evidence = null; clearOriginal()">使用工作区全部资料</el-button></p>

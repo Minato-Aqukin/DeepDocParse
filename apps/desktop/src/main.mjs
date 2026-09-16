@@ -126,6 +126,19 @@ app.whenReady().then(async () => {
         filters: [{ name: 'DDP bundle', extensions: ['zip'] }] })
       return selected.canceled ? null : selected.filePath
     },
+    // A grant needs a user action the renderer cannot script: a native dialog that
+    // restates the stored scope (recipient, endpoint, exact payload bytes, expiry).
+    confirmApproval: async summary => {
+      const payloads = summary.payloads.map(item => `  ${item.kind} → ${item.recipient}（${item.bytes} 字节，${String(item.digest).slice(0, 19)}…）`)
+      const transports = summary.transports.map(item => `  ${item.recipient} · ${item.endpoint}`)
+      const answer = await dialog.showMessageBox(window, { type: 'warning', title: '批准外发',
+        message: summary.phase === 'exploration' ? '批准探索：把以下内容发给中心，用于探测与规划' : '批准执行：按已审阅计划提交给中心',
+        detail: [`计划 ${summary.planId}`, `范围摘要 ${String(summary.scopeDigest).slice(0, 23)}…`, '外发内容：', ...payloads,
+          '接收方：', ...transports, `本地输入 ${summary.inputs} 项（只锁定摘要，不上传原件）`,
+          `保留策略 ${summary.retention} · 输出位置 ${summary.outputLocations.join('、')}`, `有效期至 ${summary.validUntil}`].join('\n'),
+        buttons: ['取消', '批准'], defaultId: 0, cancelId: 0, noLink: true })
+      return answer.response === 1
+    },
   }).initialize()
   const hostStatus = () => {
     const storage = credentials.policy()
@@ -182,6 +195,11 @@ app.whenReady().then(async () => {
     clientReadDraft: input => clients.readDraft(input), clientSaveDraft: input => clients.saveDraft(input),
     clientUnsubscribe: input => clients.unsubscribe(input), clientImportFile: input => clients.importFile(input),
     clientExportBundle: input => clients.exportBundle(input), clientReadOriginal: input => clients.readOriginal(input),
+    clientPlanPropose: input => clients.planPropose(input), clientPlanList: input => clients.planList(input),
+    clientPlanGet: input => clients.planGet(input), clientPlanApprove: input => clients.planApprove(input),
+    clientPlanRevoke: input => clients.planRevoke(input), clientPlanDispatch: input => clients.planDispatch(input),
+    clientPlanReconcile: input => clients.planReconcile(input), clientPlanFetchDelivery: input => clients.planFetchDelivery(input),
+    clientPlanConfirmDelivery: input => clients.planConfirmDelivery(input),
   }
   for (const [method, channel] of Object.entries(CLIENT_CHANNELS)) ipcMain.handle(channel, async (event, input) => {
     try {

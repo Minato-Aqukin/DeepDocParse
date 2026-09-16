@@ -2,8 +2,53 @@ import { HostError, object } from './policy.mjs'
 export const CLIENT_CHANNELS = Object.freeze(Object.fromEntries([
   'clientList', 'clientConnectLocal', 'clientPairRemote', 'clientWake', 'clientDisconnect',
   'clientSubscribe', 'clientUnsubscribe', 'clientCommand', 'clientQuery', 'clientImportFile', 'clientExportBundle', 'clientReadOriginal', 'clientReceipt', 'clientReadDraft', 'clientSaveDraft',
+  'clientPlanPropose', 'clientPlanList', 'clientPlanGet', 'clientPlanApprove', 'clientPlanRevoke',
+  'clientPlanDispatch', 'clientPlanReconcile', 'clientPlanFetchDelivery', 'clientPlanConfirmDelivery',
 ].map(name => [name, 'ddp:' + name])))
 const fail = () => { throw new HostError('invalid_arguments') }
+const DIGEST = /^sha256:[0-9a-f]{64}$/
+/**
+ * Plan operations. The renderer names a local connection, a paired center connection
+ * and imported versions; it never supplies a TaskSpec, TaskPlan, node, endpoint, path,
+ * credential or payload binding. Unknown fields fail before any host work.
+ */
+const PLAN_FIELDS = Object.freeze({
+  clientPlanPropose: ['centerConnectionId', 'query', 'inputs', 'retention', 'validMinutes', 'idempotencyKey'],
+  clientPlanList: [], clientPlanGet: ['planId'], clientPlanReconcile: ['planId'], clientPlanFetchDelivery: ['planId'],
+  clientPlanApprove: ['planId', 'phase', 'scopeDigest', 'userConfirmed', 'idempotencyKey'],
+  clientPlanRevoke: ['planId', 'idempotencyKey'],
+  clientPlanDispatch: ['planId', 'phase', 'idempotencyKey'],
+  clientPlanConfirmDelivery: ['planId', 'deliveryId', 'resultManifestDigest', 'idempotencyKey'],
+})
+function planArguments(method, input) {
+  object(input, ['connectionId', ...PLAN_FIELDS[method]]); id(input.connectionId)
+  if (Object.hasOwn(input, 'idempotencyKey') && (typeof input.idempotencyKey !== 'string'
+      || !/^[A-Za-z0-9_-]{8,128}$/.test(input.idempotencyKey))) fail()
+  if (Object.hasOwn(input, 'planId')) id(input.planId)
+  if (Object.hasOwn(input, 'phase') && !['exploration', 'execution'].includes(input.phase)) fail()
+  if (method === 'clientPlanApprove' && (input.userConfirmed !== true || typeof input.scopeDigest !== 'string'
+      || !DIGEST.test(input.scopeDigest))) fail()
+  if (method === 'clientPlanConfirmDelivery') {
+    id(input.deliveryId, 255)
+    if (typeof input.resultManifestDigest !== 'string' || !DIGEST.test(input.resultManifestDigest)) fail()
+  }
+  if (method === 'clientPlanPropose') {
+    id(input.centerConnectionId)
+    if (typeof input.query !== 'string' || !input.query.trim() || input.query.length > 4096
+        || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(input.query)) fail()
+    if (!['temporary', 'task_pinned'].includes(input.retention)) fail()
+    if (!Number.isInteger(input.validMinutes) || input.validMinutes < 5 || input.validMinutes > 1440) fail()
+    if (!Array.isArray(input.inputs) || input.inputs.length > 20) fail()
+    const refs = new Set()
+    for (const item of input.inputs) {
+      object(item, ['ref', 'digest', 'sizeBytes']); id(item.ref)
+      if (typeof item.digest !== 'string' || !DIGEST.test(item.digest) || !Number.isSafeInteger(item.sizeBytes)
+          || item.sizeBytes < 1 || item.sizeBytes > 32 * 1024 * 1024 || refs.has(item.ref)) fail()
+      refs.add(item.ref)
+    }
+  }
+  return input
+}
 function id(value, maximum = 128) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(value) || value.length > maximum) fail()
 }
@@ -27,6 +72,7 @@ export function clientArguments(method, input) {
     return { ...input, environment: { ...input.environment, endpoint: url.href.replace(/\/$/, '') } }
   }
   if (method === 'clientUnsubscribe') { object(input, ['subscriptionId']); id(input.subscriptionId); return input }
+  if (Object.hasOwn(PLAN_FIELDS, method)) return planArguments(method, input)
   const fields = { clientWake: [], clientDisconnect: [], clientSubscribe: ['subscriptionId'],
     clientCommand: ['name', 'payload', 'idempotencyKey'], clientReceipt: ['idempotencyKey'],
     clientQuery: ['name', 'payload'], clientImportFile: ['kind', 'idempotencyKey'],

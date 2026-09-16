@@ -38,3 +38,30 @@ export interface DesktopClientBridge {
   clientExportBundle(input: { connectionId: string; versionId: string }): Promise<Result<{ saved: boolean }>>
   clientReadOriginal(input: { connectionId: string; versionId: string }): Promise<Result<Uint8Array>>
 }
+export type PlanPhase = 'exploration' | 'execution'
+/** Plan view plus the runtime's persisted federation mirror and a host-side rehash of the local result. */
+export interface PlanDetail {
+  plan: Json
+  federation: Json | null
+  verification: { state: 'passed' | 'failed' | 'unavailable'; expected: string | null; actual: string | null }
+}
+/**
+ * Remote plan flow through the owned local runtime's consent ledger. Connection IDs name a
+ * local workspace connection and a paired center; no TaskSpec, plan, node, endpoint, path or
+ * credential crosses this boundary. Approval additionally requires a native host dialog.
+ */
+export interface DesktopClientBridge {
+  clientPlanPropose(input: { connectionId: string; centerConnectionId: string; query: string;
+    inputs: { ref: string; digest: string; sizeBytes: number }[]; retention: 'temporary' | 'task_pinned';
+    validMinutes: number; idempotencyKey: string }): Promise<Result<Json>>
+  clientPlanList(input: { connectionId: string }): Promise<Result<Json>>
+  clientPlanGet(input: { connectionId: string; planId: string }): Promise<Result<PlanDetail>>
+  clientPlanApprove(input: { connectionId: string; planId: string; phase: PlanPhase; scopeDigest: string;
+    userConfirmed: true; idempotencyKey: string }): Promise<Result<Json>>
+  clientPlanRevoke(input: { connectionId: string; planId: string; idempotencyKey: string }): Promise<Result<Json>>
+  clientPlanDispatch(input: { connectionId: string; planId: string; phase: PlanPhase; idempotencyKey: string }): Promise<Result<Json>>
+  clientPlanReconcile(input: { connectionId: string; planId: string }): Promise<Result<PlanDetail>>
+  clientPlanFetchDelivery(input: { connectionId: string; planId: string }): Promise<Result<PlanDetail>>
+  clientPlanConfirmDelivery(input: { connectionId: string; planId: string; deliveryId: string;
+    resultManifestDigest: string; idempotencyKey: string }): Promise<Result<Json>>
+}

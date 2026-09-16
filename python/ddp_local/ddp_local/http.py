@@ -263,7 +263,7 @@ def create_app(
 
     @app.get("/api/v1/client/receipts/{key:path}")
     async def client_receipt(key: str):
-        return runtime.store.receipt(key)
+        return runtime.receipt(key)
 
     @app.get("/api/v1/resources")
     async def resources():

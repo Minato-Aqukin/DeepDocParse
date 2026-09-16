@@ -1,6 +1,6 @@
 import type { DesktopClientBridge, Result } from '../../../desktop/bridge'
 
-export type { ClientView, ConnectionSummary, Json, Result } from '../../../desktop/bridge'
+export type { ClientView, ConnectionSummary, Json, PlanDetail, Result } from '../../../desktop/bridge'
 export interface DesktopBridge extends DesktopClientBridge {
   hostStatus(): Promise<Result<{ secrets: { backend: string; persistentAvailable: boolean }; lifecycle: string }>>
   selectWorkspace(): Promise<Result<{ workspaceId: string; name: string } | null>>
@@ -24,6 +24,21 @@ const reasons: Record<string, string> = {
   wiki_response_too_large: 'Wiki 修订超过当前读取大小限制。', wiki_source_unavailable: 'Wiki 的固定来源已经不可用，请重新选择来源。',
   wiki_generation_invalid: '模型输出未通过 Wiki 格式或引用检查，此次没有发布修订。', unsupported_generation: '生成内容缺少有效的原始出处，此次没有发布。',
   out_of_memory: '本机内存不足，模型已经停止；可以查看任务后重新启动。', cursor_expired: '目录已更新或快照已失效，请重新读取首页。',
+  // Remote plan flow. Each code names why nothing was sent, or what must be reconciled.
+  approval_cancelled: '已取消批准，没有授予任何外发许可。', approval_unavailable: '当前宿主无法显示系统确认框，不能批准外发。',
+  plan_changed: '计划内容与审阅时不一致，请重新审阅后再操作。', consent_required: '该阶段尚未批准，未发送任何内容。',
+  consent_revoked: '批准已撤销；需要准备并批准新计划。', consent_expired: '计划或批准已过期；需要准备新计划。',
+  budget_exceeded: '超出已批准的请求或外发字节预算，未发送。', policy_denied: '接收方、地址或数据边超出已批准范围，未发送。',
+  input_changed: '本地输入与锁定摘要不一致，未发送。', local_only: '工作区处于仅本地模式，禁止外发。',
+  center_not_paired: '尚未配对计划中的中心。', center_not_current: '中心连接未就绪；重新连接并核对节点身份后再操作。',
+  center_identity_changed: '中心地址或身份与已审阅计划不一致，已拒绝发送。', center_binding_required: '计划没有唯一的已审阅接收方，不能派发。',
+  center_unavailable: '当前连接无法取得中心凭证。', delivery_unverified: '交付结果没有通过本地摘要重算，不能确认。',
+  dispatch_already_reserved: '这次发送已经占用预算，请先对账再重试。', idempotency_conflict: '操作编号已用于另一项操作，请重新发起。',
+  connection_not_current: '本机工作区连接未就绪，已保留草稿。', unreachable: '中心暂时无法连接，未确认任何结果。',
+  delivery_expired: '交付已过期，结果没有保存到本机。', delivery_not_found: '中心暂时没有这份交付，可以稍后再取。',
+  delivery_id_missing: '中心尚未给出交付编号。', result_manifest_mismatch: '取回的结果与中心声明的摘要不一致，没有保存。',
+  result_unavailable: '中心没有返回可校验的结果。', ack_not_confirmed: '中心没有确认这次交付，可以再次确认。',
+  egress_denied: '中心拒绝了这次外发许可。', invalid_response: '中心返回的内容无法识别。',
 }
 export function workspaceError(error: unknown): string {
   const code = error instanceof Error ? error.message : ''

@@ -17,6 +17,15 @@ contextBridge.exposeInMainWorld('ddpDesktop', Object.freeze({
   clientImportFile: input => ipcRenderer.invoke('ddp:clientImportFile', input),
   clientExportBundle: input => ipcRenderer.invoke('ddp:clientExportBundle', input),
   clientReadOriginal: input => ipcRenderer.invoke('ddp:clientReadOriginal', input),
+  clientPlanPropose: input => ipcRenderer.invoke('ddp:clientPlanPropose', input),
+  clientPlanList: input => ipcRenderer.invoke('ddp:clientPlanList', input),
+  clientPlanGet: input => ipcRenderer.invoke('ddp:clientPlanGet', input),
+  clientPlanApprove: input => ipcRenderer.invoke('ddp:clientPlanApprove', input),
+  clientPlanRevoke: input => ipcRenderer.invoke('ddp:clientPlanRevoke', input),
+  clientPlanDispatch: input => ipcRenderer.invoke('ddp:clientPlanDispatch', input),
+  clientPlanReconcile: input => ipcRenderer.invoke('ddp:clientPlanReconcile', input),
+  clientPlanFetchDelivery: input => ipcRenderer.invoke('ddp:clientPlanFetchDelivery', input),
+  clientPlanConfirmDelivery: input => ipcRenderer.invoke('ddp:clientPlanConfirmDelivery', input),
   onClientView: listener => {
     if (typeof listener !== 'function') throw new TypeError('listener_required')
     const receive = (_event, message) => listener(message)

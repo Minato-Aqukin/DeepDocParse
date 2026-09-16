@@ -31,6 +31,7 @@ from ddp_local.federation_client import (
 )
 
 FEDERATION_KIND = "federation_plan"
+FEDERATION_COMMAND_KIND = "federation_command"
 PHASES = ("exploration", "execution")
 CENTER_REFS_ENV = "DDP_FEDERATION_CENTERS"
 CENTER_REF_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
@@ -65,18 +66,82 @@ def _load(runtime, identity, plan_id):
     return json.loads(row["body"]) if row else None
 
 
-def _save(runtime, identity, plan_id, state):
+def _command_index_id(identity, key):
+    owner = canonical_bytes(identity).decode()
+    return "federation-command:" + hashlib.sha256(canonical_bytes([owner, key])).hexdigest()
+
+
+def _save(runtime, identity, plan_id, state, *, command_key=None):
     document = {**state, "updated_at": time.time()}
     body = canonical_bytes(document)
     if len(body) > MAX_STATE_BYTES:
         reject("output_too_large", "federation state exceeds the local transport budget")
     with runtime.store.tx():
+        if command_key is not None:
+            # Receipt lookup for a key whose response was lost. Recorded in the same
+            # transaction as the command, before any request leaves this process.
+            index = _command_index_id(identity, command_key)
+            row = runtime.store.db.execute(
+                "SELECT body FROM outputs WHERE id=? AND kind=?", (index, FEDERATION_COMMAND_KIND),
+            ).fetchone()
+            if row is not None and json.loads(row["body"]).get("plan_id") != plan_id:
+                reject("idempotency_conflict", "same key refers to a different plan")
+            if row is None:
+                runtime.store.db.execute(
+                    "INSERT INTO outputs(id,kind,body,created_at) VALUES(?,?,?,?)",
+                    (index, FEDERATION_COMMAND_KIND, canonical_bytes({"plan_id": plan_id}).decode(),
+                     time.time()),
+                )
         runtime.store.db.execute(
             "INSERT INTO outputs(id,kind,body,created_at) VALUES(?,?,?,?) "
             "ON CONFLICT(id) DO UPDATE SET body=excluded.body, created_at=excluded.created_at",
             (federation_state_id(identity, plan_id), FEDERATION_KIND, body.decode(), time.time()),
         )
     return document
+
+
+def federation_receipt(runtime, key):
+    """Recorded dispatch/ack key -> persisted federation state; None when never admitted."""
+    identity = federation_identity(runtime)
+    with runtime.store.lock:
+        row = runtime.store.db.execute(
+            "SELECT body FROM outputs WHERE id=? AND kind=?",
+            (_command_index_id(identity, key), FEDERATION_COMMAND_KIND),
+        ).fetchone()
+    if row is None:
+        return None
+    return load_federation_state(runtime, json.loads(row["body"])["plan_id"])
+
+
+def federation_summary(runtime, plan_id):
+    """Small mirror summary for plan lists; None before the first dispatch."""
+    state = _load(runtime, federation_identity(runtime), plan_id)
+    if state is None:
+        return None
+    delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
+    error = state.get("last_error") if isinstance(state.get("last_error"), dict) else {}
+    reconciled = state.get("reconcile") if isinstance(state.get("reconcile"), dict) else {}
+    return {"state": state.get("state"), "phase": state.get("phase"),
+            "root_task_id": state.get("root_task_id"),
+            "delivery_state": delivery.get("state"), "delivery_verified": delivery.get("verified"),
+            "delivery_reason": delivery.get("reason"), "last_error": error.get("code"),
+            "reconciled_at": reconciled.get("at"), "updated_at": state.get("updated_at")}
+
+
+def delivery_result_bytes(runtime, plan_id):
+    """Exact canonical bytes of the locally verified result, for independent rehashing."""
+    state = load_federation_state(runtime, plan_id)
+    delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
+    if delivery.get("verified") is not True or not isinstance(delivery.get("result"), dict):
+        reject("not_found", "plan has no locally verified delivery result")
+    return canonical_bytes(delivery["result"])
+
+
+def _require_reviewed_endpoint(runtime, identity, plan_id, config):
+    """A plan with a reviewed transport may only reach that exact center endpoint."""
+    transports = runtime.consents.get(identity, plan_id)["scope"].get("transport_bindings") or []
+    if transports and config.endpoint not in {item["endpoint"] for item in transports}:
+        reject("policy_denied", "center endpoint differs from the reviewed transport binding")
 
 
 def load_federation_state(runtime, plan_id):
@@ -157,21 +222,27 @@ def _payload_bytes(runtime, scope, binding):
     reject("policy_denied", "this local adapter cannot resolve that payload category")
 
 
-def _current_transport(scope, binding):
+def _current_transport(scope, binding, config):
     if not binding.get("transport_ref"):
         return None
-    return next(
+    reviewed = next(
         (item for item in scope.get("transport_bindings", [])
          if item["transport_ref"] == binding["transport_ref"]),
         None,
     )
+    if reviewed is None:
+        return None
+    # The endpoint that actually receives the bytes comes from the caller's center
+    # configuration. Handing the ledger the reviewed value itself made its
+    # "current transport equals approval" comparison true by construction.
+    return {**reviewed, "endpoint": config.endpoint}
 
 
 def _send_key(seed, plan_id, phase, payload_id):
     return "dispatch-" + digest([seed, plan_id, phase, payload_id]).removeprefix("sha256:")[:64]
 
 
-def _authorize_bindings(runtime, identity, plan_id, view, scope, phase, seed):
+def _authorize_bindings(runtime, identity, plan_id, view, scope, phase, seed, config):
     bindings = [item for item in scope["payload_bindings"] if item["phase"] == phase]
     if not bindings:
         reject("policy_denied", "no approved payload is bound to this dispatch phase")
@@ -186,7 +257,7 @@ def _authorize_bindings(runtime, identity, plan_id, view, scope, phase, seed):
             confirmed_scope_digest=view["scope_digest"], current_spec=scope["task_spec"],
             current_plan=scope["plan"], input_bytes=inputs,
             output_location=scope["output_locations"][0], retention=scope["retention"],
-            local_only=False, current_transport=_current_transport(scope, binding),
+            local_only=False, current_transport=_current_transport(scope, binding, config),
         )
     return verified
 
@@ -240,7 +311,8 @@ def _merge_delivery(state, status):
 
 async def _explore(runtime, client, plan_id, view, identity, state, seed, scope_manifest):
     scope = view["scope"]
-    verified = _authorize_bindings(runtime, identity, plan_id, view, scope, "exploration", seed)
+    verified = _authorize_bindings(runtime, identity, plan_id, view, scope, "exploration", seed,
+                                   client.config)
     spec = dict(scope["task_spec"])
     # 中心 `validate_exploration_consent` 要求 TaskSpec 引用**这一份**探索许可。
     # 本地 prepare 只收未授权的 spec（consent_refs 全空），approve 发出许可却不
@@ -278,7 +350,13 @@ async def _execute(runtime, client, plan_id, view, identity, state, seed):
     root = state.get("root_task_id")
     if not isinstance(root, str) or not root:
         reject("consent_required", "submit needs an exploration result; run dispatch exploration first")
-    _authorize_bindings(runtime, identity, plan_id, view, scope, "execution", seed)
+    center_digest = state.get("center_plan_digest")
+    if isinstance(center_digest, str) and center_digest != scope["plan"]["plan_digest"]:
+        # The execution consent names the reviewed revision. A center that planned a
+        # different one would receive consent for a plan the user never saw: refuse
+        # before reserving budget or sending anything, and keep the reason visible.
+        reject("plan_changed", "center planned a different revision than the one approved")
+    _authorize_bindings(runtime, identity, plan_id, view, scope, "execution", seed, client.config)
     center_plan = state.get("center_plan") if isinstance(state.get("center_plan"), dict) else {}
     plan_digest = state.get("center_plan_digest") or scope["plan"]["plan_digest"]
     if center_plan.get("planning_state") != "approved":
@@ -318,6 +396,7 @@ async def dispatch_plan(runtime, plan_id, config, *, phase, operation_key=None,
         reject("consent_revoked", "approval was revoked; prepare and approve a new plan")
     if phase not in view["consents"]:
         reject("consent_required", "this dispatch phase has no explicit user approval")
+    _require_reviewed_endpoint(runtime, identity, plan_id, config)
     state = _load(runtime, identity, plan_id) or _new_state(plan_id, view)
     state["phase"] = phase
     state["center_ref"] = center_ref
@@ -328,7 +407,7 @@ async def dispatch_plan(runtime, plan_id, config, *, phase, operation_key=None,
             return state
         _remember_command(state, operation_key, request)
         # 先落命令再出网：崩溃后同键重放只返回状态，不产生无记录的第二次发送。
-        _save(runtime, identity, plan_id, state)
+        _save(runtime, identity, plan_id, state, command_key=operation_key)
     seed = operation_key or uuid.uuid4().hex
     client = CenterFederationClient(config, actor_headers=actor_headers)
     try:
@@ -361,6 +440,7 @@ async def reconcile(runtime, plan_id, config, *, actor_headers=None):
     state = _load(runtime, identity, plan_id)
     if state is None:
         reject("not_found", "plan has no local federation state")
+    _require_reviewed_endpoint(runtime, identity, plan_id, config)
     root = state.get("root_task_id")
     if not isinstance(root, str) or not root:
         state["reconcile"] = {"at": time.time(), "result": "no_root_task"}
@@ -416,6 +496,7 @@ async def fetch_delivery(runtime, plan_id, config, *, actor_headers=None):
     state = _load(runtime, identity, plan_id)
     if state is None:
         reject("not_found", "plan has no local federation state")
+    _require_reviewed_endpoint(runtime, identity, plan_id, config)
     root = state.get("root_task_id")
     if not isinstance(root, str) or not root:
         reject("not_found", "plan has no center task to fetch")
@@ -496,7 +577,7 @@ async def fetch_delivery(runtime, plan_id, config, *, actor_headers=None):
 
 
 async def confirm_delivery(runtime, plan_id, delivery_id, result_manifest_digest, config, *,
-                           actor_headers=None):
+                           actor_headers=None, operation_key=None):
     """本地校验通过后才向中心 ack；digest 不符或不曾校验就拒绝，交付保持 pending。
 
     ack 的回执状态才是确认的判据：只有 `state=confirmed` 才落本地 confirmed，
@@ -508,6 +589,11 @@ async def confirm_delivery(runtime, plan_id, delivery_id, result_manifest_digest
     if state is None:
         reject("not_found", "plan has no local federation state")
     delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
+    request = {"action": "ack", "delivery_id": delivery_id, "digest": result_manifest_digest}
+    if operation_key is not None and _command_matches(state, operation_key, request):
+        # Same key: this ack was already recorded (and possibly sent). Report stored
+        # state; a new key may re-send the center's idempotent ack after a lost reply.
+        return state
     if delivery.get("state") == "confirmed" and delivery.get("id") == delivery_id:
         return state
     if delivery.get("id") != delivery_id:
@@ -516,6 +602,10 @@ async def confirm_delivery(runtime, plan_id, delivery_id, result_manifest_digest
         reject("plan_changed", "delivery is not pending")
     if not delivery.get("verified") or delivery.get("result_manifest_digest") != result_manifest_digest:
         reject("plan_changed", "refusing to confirm a delivery whose bytes were not verified locally")
+    _require_reviewed_endpoint(runtime, identity, plan_id, config)
+    if operation_key is not None:
+        _remember_command(state, operation_key, request)
+        state = _save(runtime, identity, plan_id, state, command_key=operation_key)
     client = CenterFederationClient(config, actor_headers=actor_headers)
     try:
         receipt = await client.ack_delivery(delivery_id, result_manifest_digest)
