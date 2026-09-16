@@ -36,10 +36,18 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
+import contract_yaml  # noqa: E402 —— 契约 YAML 的唯一读取口（重复键报错）
+
 HERE = Path(__file__).resolve().parent
 CONTRACTS = HERE.parent
 ROOT = CONTRACTS.parent.parent
 SOURCE = CONTRACTS / "enums.yaml"
+
+def ident(value: str) -> str:
+    """把枚举取值变成合法标识符片段：`rag.answer.cited` -> `rag_answer_cited`。"""
+    return value.replace(".", "_")
+
 
 SEVERITIES = ("neutral", "progress", "ok", "warn", "error")
 BANNER_LINES = [
@@ -51,12 +59,13 @@ BANNER_LINES = [
 # --------------------------------------------------------------------- 载入
 
 def load() -> dict:
-    spec = yaml.safe_load(SOURCE.read_text(encoding="utf-8"))
+    spec = contract_yaml.load(SOURCE)
     problems: list[str] = []
     for name, block in spec["enums"].items():
         if not block.get("description", "").strip():
             problems.append(f"{name} 没有 description")
         seen = set()
+        identifiers: dict[str, str] = {}
         for item in block["values"]:
             v = item.get("value")
             if not v:
@@ -65,8 +74,16 @@ def load() -> dict:
             if v in seen:
                 problems.append(f"{name}.{v} 重复")
             seen.add(v)
-            if not re.fullmatch(r"[a-z][a-z0-9_]*", v):
-                problems.append(f"{name}.{v} 不是 snake_case")
+            # 允许点分段（`rag.answer.cited` 这类 operation 名），每段仍是 snake_case。
+            # 生成常量名时点会换成下划线（见 `ident`），所以标识符照样合法。
+            if not re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*", v):
+                problems.append(f"{name}.{v} 不是 snake_case（允许点分段）")
+            # `a.b` 与 `a_b` 会生成同一个常量名：Go 那边是两条重复声明，
+            # 只有真正 `go build` 才报错（`--check` 与 gofmt 都看不出来）。
+            if ident(v) in identifiers:
+                problems.append(f"{name}.{v} 与 {identifiers[ident(v)]!r} 会生成同一个常量名 "
+                                f"{ident(v)!r} —— 换一个取值")
+            identifiers[ident(v)] = v
             # 缺 label 的枚举值 = 用户看不懂的枚举值。这是硬错误，不是警告
             for field in ("summary", "label", "severity"):
                 if not str(item.get(field, "")).strip():
@@ -130,7 +147,8 @@ def render_ts(spec: dict) -> str:
             # 用 json.dumps 转义，不要 repr —— 文案里出现引号时 repr 会给出
             # Python 语法的字符串，塞进 TS 里就是语法错误
             label = json.dumps(v["label"], ensure_ascii=False)
-            out.append(f"  {v['value']}: {{ value: '{v['value']}', "
+            # 键用引号包起来：点分段的取值不是合法的 TS 标识符
+            out.append(f"  {json.dumps(v['value'])}: {{ value: '{v['value']}', "
                        f"label: {label}, severity: '{v['severity']}'{active} }},")
         out += ["}", ""]
         subset = block.get("contract_subset") or {}
@@ -172,17 +190,17 @@ def render_go(spec: dict) -> str:
         out += [f"type {T} string", "", "const ("]
         for v in values:
             out += wrap_comment(v["summary"], "\t//")
-            out.append(f'\t{T}{pascal(v["value"])} {T} = "{v["value"]}"')
+            out.append(f'\t{T}{pascal(ident(v["value"]))} {T} = "{v["value"]}"')
         out += [")", ""]
         out += [f"// {T}Values 保持 enums.yaml 里的声明顺序。",
                 f"var {T}Values = []{T}{{"]
-        out += [f'\t{T}{pascal(v["value"])},' for v in values]
+        out += [f'\t{T}{pascal(ident(v["value"]))},' for v in values]
         out += ["}", ""]
         out += [f"var {T}Meta = map[{T}]EnumMeta{{"]
         for v in values:
             active = ", Active: true" if v.get("active") else ""
             label = json.dumps(v["label"], ensure_ascii=False)
-            out.append(f'\t{T}{pascal(v["value"])}: {{Value: "{v["value"]}", '
+            out.append(f'\t{T}{pascal(ident(v["value"]))}: {{Value: "{v["value"]}", '
                        f'Label: {label}, Severity: Severity{pascal(v["severity"])}{active}}},')
         out += ["}", ""]
         out += [f"// Valid 报告 s 是不是一个已知的 {name} 取值。",

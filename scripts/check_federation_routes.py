@@ -51,6 +51,9 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import contract_yaml  # noqa: E402 —— 先把 scripts/ 放进 sys.path 才能导入同目录模块
+
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = ROOT / "packages" / "contracts" / "openapi" / "federation-tasks-v1.yaml"
 
@@ -80,7 +83,7 @@ def guarded(path: str) -> bool:
 
 
 def contract_endpoints() -> set[tuple[str, str]]:
-    spec = yaml.safe_load(SPEC.read_text(encoding="utf-8"))
+    spec = contract_yaml.load(SPEC)
     return {(normalize(path), method.lower())
             for path, item in (spec.get("paths") or {}).items()
             for method in item

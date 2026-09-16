@@ -2302,3 +2302,53 @@ async def test_undeclared_event_type_is_refused_before_it_is_stored(session):
     with pytest.raises(ValueError):
         await federation_tasks._append_event(session, "root-x", "task_exploded", {}, now=utcnow())
 
+
+# ------------------------------------------------ 协调者 operation 是闭集（改进项 ② 的 G1）
+
+@pytest.mark.parametrize("operation", ["wiki.pages", "rag.answer", "corpus.Retrieve", "", "回答"])
+async def test_unknown_coordinator_operation_is_refused_before_anything_is_stored(
+        actor_client, session, operation):
+    """认不出来的 operation 当场拒绝：放进去不会报错，只会被顺手配一个 answer 步。"""
+    body = {"task_spec": task_spec(scope="site_public", mode="fast",
+                                   operation=operation or "rag.answer.cited"),
+            "exploration_consent": exploration(**LOCAL_EXPLORATION)}
+    body["task_spec"]["operation"] = operation
+    key = "bad-op-" + hashlib.sha256(operation.encode("utf-8")).hexdigest()[:16]
+    response = await actor_client.post("/api/v1/task-intents", json=body,
+                                       headers={"Idempotency-Key": key})
+    # 空串先被内核的形状校验挡掉（409 invalid_plan）；其余在闭集这一关 400。
+    assert response.status_code in (400, 409, 422), response.text
+    if response.status_code == 400:
+        assert response.json()["error"]["code"] == "capability_unsupported"
+    assert await session.scalar(select(func.count()).select_from(FederationRequest)) == 0
+
+
+async def test_retrieve_only_task_never_gets_an_answer_step_or_a_generation_budget(
+        actor_client, session, monkeypatch):
+    """`corpus.retrieve` 是"只取证据"：即使本地生成就绪，也不配 answer 步、不留生成预算。
+
+    旧行为：规划不看 operation，本地模型就绪就追加 answer 步 —— 用户要的是证据，
+    系统白跑一次生成，还把生成结果当成这次任务的答案。
+    """
+    async def _ready(_http, *, now):
+        return True
+
+    monkeypatch.setattr(federation_tasks, "_generation_available", _ready)
+    resource, _, _, _, _ = await indexed_source(session)
+    spec = task_spec(scope="fixed_resources", mode="fast", operation="corpus.retrieve",
+                     resource_refs=[resource.id])
+    intent = await create_intent(actor_client, spec=spec, consent=exploration(**LOCAL_EXPLORATION),
+                                 key="retrieve-only")
+    plan_body = await plan_task(actor_client, intent["root_task_id"])
+    assert "answer" not in [step["operation"] for step in plan_body["steps"]]
+    assert plan_body["budget"]["max_generation_tokens"] == 0
+
+    await approve_task(actor_client, intent["root_task_id"], plan_body)
+    status = (await submit_task(actor_client, intent["root_task_id"],
+                                plan_body["plan_digest"], "retrieve-only-exec")).json()
+    result = status["result"]
+    assert result["answer"] is None
+    assert result["answer_reason"] is None, "没要答案就不是'没有模型'，不该编一个原因"
+    assert status["evidence_sufficiency"] in ("sufficient_by_policy", "insufficient"), status
+    assert result["counts"]["total_targets"] >= 1, "目标照常进覆盖账本"
+

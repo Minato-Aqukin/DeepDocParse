@@ -1,6 +1,7 @@
 """Versioned Wiki invariants use actual routes and persistent SQL rows."""
 import hashlib
 import json
+from datetime import timedelta
 
 import httpx
 import respx
@@ -8,21 +9,24 @@ from sqlalchemy import func, select
 
 from ddp_corpus.models import (
     ClaimEvidenceBinding, DependencyManifest, Document, Evidence, ParseJob, Resource,
-    ResourceVersion, Wiki, WikiHumanEdit, WikiRevision, WikiWriteKey,
+    ResourceVersion, Wiki, WikiHumanEdit, WikiRevision, WikiWriteKey, utcnow,
 )
 from tests.conftest import ACTOR, CHAT, ORG, actor_headers
 
 
-async def source(session, *, owner=ACTOR, publication="private", text="Original fact."):
+async def source(session, *, owner=ACTOR, publication="private", text="Original fact.",
+                 organization=ORG):
     digest = hashlib.sha256(text.encode()).hexdigest()
-    document = Document(uploaded_by=owner, organization_id=ORG, doc_id=digest, filename="manual.pdf")
+    document = Document(uploaded_by=owner, organization_id=organization, doc_id=digest,
+                        filename="manual.pdf")
     session.add(document)
     await session.flush()
     job = ParseJob(document_id=document.id, engine="borndigital", options_hash="v1", status="succeeded")
     session.add(job)
     await session.flush()
     document.current_job_id = job.id
-    resource = Resource(owner_id=owner, uploaded_by=owner, organization_id=ORG, publication=publication)
+    resource = Resource(owner_id=owner, uploaded_by=owner, organization_id=organization,
+                        publication=publication)
     session.add(resource)
     await session.flush()
     version = ResourceVersion(resource_id=resource.id, document_id=document.id, parse_job_id=job.id,
@@ -293,3 +297,74 @@ async def test_unattributed_legacy_knowledge_quarantined(actor_client, session):
     session.add(KnowledgeEntity(canonical_name="Private generated concept", normalized_name="private"))
     await session.commit()
     assert (await actor_client.get("/api/knowledge/entities")).json()["entities"] == []
+
+
+@respx.mock
+async def test_published_wiki_listing_has_an_organization_boundary(actor_client, session):
+    """已发布 Wiki 的列表查询必须带组织谓词（不变式 8）。
+
+    旧行为：已发布分支不带组织条件，靠后面逐条 404 兜底 —— 别的组织的行会占掉这一页
+    的名额，本组织的 Wiki 因此可能根本不出现在列表里（静默少给，不是报错）。
+    """
+    resource, version, evidence, _ = await source(session, publication="published")
+    model(evidence)
+    response = await actor_client.post("/api/wikis", json=body(resource, version),
+                                       headers={"Idempotency-Key": "org-boundary"})
+    assert response.status_code == 201, response.text
+    created = response.json()
+    wiki_id, revision_id = created["wiki"]["id"], created["revision"]["id"]
+    published = await actor_client.post(f"/api/wikis/{wiki_id}/publish",
+                                        json={"base_revision_id": revision_id})
+    assert published.status_code == 200, published.text
+
+    # 别的组织有一大批更新的已发布 Wiki：查询不带组织谓词时，它们会把这一页
+    # （limit 200）占满，本组织的 Wiki 直接从列表里消失 —— 静默少给，不是报错。
+    later = utcnow() + timedelta(hours=1)
+    session.add_all([Wiki(owner_id="actor-filler", organization_id="org-filler",
+                          title="别处的", current_revision_id=revision_id,
+                          published_revision_id=revision_id, created_at=later)
+                     for _ in range(200)])
+    await session.commit()
+
+    # 别的组织里有一份**自己的**已发布 Wiki（独立资源与依赖）：加了组织谓词之后，
+    # 他们该看见自己的那份，看不见我们的。
+    their_resource, their_version, their_evidence, _ = await source(
+        session, owner="actor-elsewhere", organization="org-elsewhere",
+        publication="published", text="Their own fact.")
+    model(their_evidence)
+    outsider_headers = actor_headers("actor-elsewhere", organization_id="org-elsewhere")
+    theirs = await actor_client.post("/api/wikis", json=body(their_resource, their_version),
+                                     headers={**outsider_headers, "Idempotency-Key": "theirs"})
+    assert theirs.status_code == 201, theirs.text
+    their_wiki = theirs.json()["wiki"]["id"]
+    await actor_client.post(f"/api/wikis/{their_wiki}/publish",
+                            json={"base_revision_id": theirs.json()["revision"]["id"]},
+                            headers=outsider_headers)
+
+    mine = (await actor_client.get("/api/wikis")).json()
+    assert [item["wiki"]["id"] for item in mine] == [wiki_id], "本组织的已发布 Wiki 不许被挤掉"
+    outsider = await actor_client.get("/api/wikis", headers=outsider_headers)
+    assert outsider.status_code == 200
+    listed = [item["wiki"]["id"] for item in outsider.json()]
+    assert their_wiki in listed, "他们还得看得见自己的那份"
+    assert wiki_id not in listed, "别的组织的已发布 Wiki 不该进这张列表"
+    # 谓词不能收得过头：**同组织的非所有者**要能看到已发布的那份
+    # （上面那条查询者恰好是所有者本人，测不到这件事）。
+    colleague = (await actor_client.get("/api/wikis", headers=actor_headers("bob"))).json()
+    assert [item["wiki"]["id"] for item in colleague] == [wiki_id]
+    # 直读同样有组织边界，不只靠依赖资源那一层兜底。上面那份 Wiki 的 404 其实来自
+    # 依赖资源的组织校验，钉不住 `get_wiki` 自己的谓词 —— 所以再造一份**没有依赖行**的
+    # 已发布 Wiki（将来真允许无依赖的 Wiki 时就是这条路径漏出去）。
+    bare = Wiki(owner_id=ACTOR, organization_id=ORG, title="无依赖")
+    session.add(bare)
+    await session.flush()
+    bare_revision = WikiRevision(wiki_id=bare.id, title="无依赖", created_by=ACTOR, kind="generated")
+    session.add(bare_revision)
+    await session.flush()
+    bare.current_revision_id = bare.published_revision_id = bare_revision.id
+    await session.commit()
+    assert (await actor_client.get(f"/api/wikis/{bare.id}")).status_code == 200, "所有者自己读得到"
+    leaked = await actor_client.get(f"/api/wikis/{bare.id}", headers=outsider_headers)
+    assert leaked.status_code == 404, "别的组织不该读到，哪怕这份 Wiki 没有依赖可判权"
+    assert (await actor_client.get(f"/api/wikis/{wiki_id}", headers=outsider_headers)).status_code == 404
+

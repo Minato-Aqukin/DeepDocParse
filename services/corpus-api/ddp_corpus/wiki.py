@@ -35,8 +35,18 @@ def is_owner(wiki: Wiki, actor: Actor) -> bool:
 
 
 async def get_wiki(session: AsyncSession, actor: Actor, wiki_id: str, *, write=False) -> Wiki:
+    """按 id 读一个 Wiki。**组织边界显式写在这里**（不变式 8）。
+
+    "已发布"不等于"跨组织可读"：别的组织的已发布 Wiki 以前靠依赖资源那一层的组织校验
+    间接挡住（`dependency_state` → `require_resource`），那是一道更薄、也更容易被将来
+    的改动绕开的防线 —— 例如哪天允许没有依赖的 Wiki，它就直接漏了。
+    """
     wiki = await session.get(Wiki, wiki_id, populate_existing=True)
-    if wiki is None or (not is_owner(wiki, actor) and (write or not wiki.published_revision_id)):
+    visible = is_owner(wiki, actor) if wiki is not None else False
+    if wiki is not None and not visible:
+        visible = (wiki.organization_id == actor.organization_id
+                   and not write and bool(wiki.published_revision_id))
+    if wiki is None or not visible:
         fail(404, "not_found", "wiki not found")
     return wiki
 
@@ -466,9 +476,14 @@ async def publish(session, actor, wiki_id, base_id):
 
 
 async def list_wikis(session, actor):
-    rows = (await session.execute(select(Wiki).where(or_(
-        (Wiki.owner_id == actor.principal_id) & (Wiki.organization_id == actor.organization_id),
-        Wiki.published_revision_id.is_not(None))).order_by(Wiki.created_at.desc()).limit(200))).scalars()
+    # **组织边界在查询里**（不变式 8）：已发布分支以前不带组织谓词，靠后面逐条
+    # `revision_out` 的 404 兜底 —— 别的组织的行会占掉这 200 条的名额，本组织的
+    # Wiki 因此可能根本不出现在列表里（静默少给，不是报错）。
+    rows = (await session.execute(select(Wiki).where(
+        Wiki.organization_id == actor.organization_id,
+        or_(Wiki.owner_id == actor.principal_id,
+            Wiki.published_revision_id.is_not(None))
+    ).order_by(Wiki.created_at.desc()).limit(200))).scalars()
     result = []
     for row in rows:
         try:

@@ -14,9 +14,13 @@
 用法：
     python scripts/check_contract.py          # 退出码 0/1
 """
+import sys
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import contract_yaml  # noqa: E402 —— 同目录模块
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = ROOT / "packages" / "contracts" / "openapi" / "gateway-v1.yaml"
@@ -42,7 +46,7 @@ def gateway_endpoints() -> set[tuple[str, str]]:
 
 
 def contract_endpoints(spec_path: Path) -> set[tuple[str, str]]:
-    spec = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
+    spec = contract_yaml.load(spec_path)
     return {(path, method.lower())
             for path, item in (spec.get("paths") or {}).items()
             for method in item

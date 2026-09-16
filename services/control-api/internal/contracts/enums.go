@@ -1110,6 +1110,41 @@ func (s FederatedAnswerReason) Valid() bool {
 	return ok
 }
 
+// 协调者入口（`POST /api/v1/task-intents`）**受理哪些 TaskSpec.operation**。
+// 这是一个闭集：认不出来的 operation 当场拒绝，不许落库。
+//
+// 为什么必须闭集：规划只按 operation 决定要不要加生成步骤。以前不看 operation，
+// 本地模型就绪时**任何** operation 都会被追加一个 `answer` 步 —— 提交
+// `corpus.retrieve`（只取证据）会白跑一次生成，提交一个没实现的 operation
+// （例如 `wiki.pages`）会拿回一个 RAG 答案。那是静默错义，不是报错。
+//
+// 本地运行时的 TaskSpec 还有别的 operation（本机自己的计划许可），不受这里约束。
+type FederationTaskOperation string
+
+const (
+	// 只按范围取证据，不生成结论
+	FederationTaskOperationCorpusRetrieve FederationTaskOperation = "corpus.retrieve"
+	// 取证据并生成带出处的回答
+	FederationTaskOperationRagAnswerCited FederationTaskOperation = "rag.answer.cited"
+)
+
+// FederationTaskOperationValues 保持 enums.yaml 里的声明顺序。
+var FederationTaskOperationValues = []FederationTaskOperation{
+	FederationTaskOperationCorpusRetrieve,
+	FederationTaskOperationRagAnswerCited,
+}
+
+var FederationTaskOperationMeta = map[FederationTaskOperation]EnumMeta{
+	FederationTaskOperationCorpusRetrieve: {Value: "corpus.retrieve", Label: "只取证据", Severity: SeverityNeutral},
+	FederationTaskOperationRagAnswerCited: {Value: "rag.answer.cited", Label: "带出处的回答", Severity: SeverityNeutral},
+}
+
+// Valid 报告 s 是不是一个已知的 federation_task_operation 取值。
+func (s FederationTaskOperation) Valid() bool {
+	_, ok := FederationTaskOperationMeta[s]
+	return ok
+}
+
 // 联邦任务事件流（`GET /api/v1/tasks/{root_task_id}/events`）里 `Event.type` 的取值。
 // 事件是**可恢复的进度记录**，不是状态真相：状态以 `TaskStatus` 各轴为准，事件用来
 // 让界面说清"发生了什么、什么时候"，断线后按 `after=next_seq` 续读不丢。

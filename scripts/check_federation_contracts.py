@@ -53,6 +53,9 @@ except ModuleNotFoundError:                                   # pragma: no cover
 
 import yaml
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import contract_yaml  # noqa: E402 —— 同目录模块
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CONTRACTS = ROOT / "packages" / "contracts"
 SCHEMA_DIR = CONTRACTS / "schemas"
@@ -81,7 +84,7 @@ def fail(msg: str) -> None:
 # ------------------------------------------------------------------ 载入枚举
 
 def load_enums() -> dict[str, list[str]]:
-    spec = yaml.safe_load((CONTRACTS / "enums.yaml").read_text(encoding="utf-8"))
+    spec = contract_yaml.load(CONTRACTS / "enums.yaml")
     return {name: [v["value"] for v in block["values"]]
             for name, block in spec["enums"].items()}
 
@@ -158,7 +161,7 @@ def subschema(schema: dict, rel: str, def_name: str) -> dict | None:
 
 
 def check_fixtures(schemas: dict[str, dict]) -> int:
-    entries = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+    entries = contract_yaml.load(MANIFEST)
     seen_files: set[str] = set()
     checked = 0
 

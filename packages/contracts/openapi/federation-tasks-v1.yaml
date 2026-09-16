@@ -154,6 +154,11 @@ paths:
         探索许可门先于任何远端 Probe。同键同请求体返回已持久化的同一 TaskIntent
         （本实现固定 201），同键不同请求体 409 idempotency_conflict —— HTTP 重试
         不得造出第二个 root task。
+
+        只受理 `federation_task_operation` 这个**闭集**里的 operation
+        （`corpus.retrieve` 只取证据，`rag.answer.cited` 取证据并生成带出处的回答）；
+        别的 operation 一律 400 `capability_unsupported`，不落库。规划按它决定要不要
+        配生成步骤 —— 不闭集的后果不是报错，是"只取证据"的任务被顺手生成一个答案。
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TaskIntentInput'}}}}
       responses:
@@ -575,7 +580,7 @@ components:
       properties:
         root_task_id: {type: string, minLength: 1}
         query: {description: TaskSpec.query 原文（本人发起，列表只给本人看）, type: string}
-        operation: {type: string, minLength: 1}
+        operation: {type: string, minLength: 1, x-ddp-enum: federation_task_operation}
         scope_kind: {type: string, enum: [local_only, site_public, federation_public, fixed_resources]}
         search_mode: {type: string, x-ddp-enum: search_mode}
         status: {type: string, x-ddp-enum: task_status}
@@ -610,7 +615,7 @@ components:
         coverage_ref: {type: [string, 'null'], description: 指向 CoverageLedger；没有它就无法判断"未找到"是什么意思}
         delivery_id: {type: [string, 'null']}
         delivery_state: {type: string, x-ddp-enum: delivery_state}
-        result: {type: [object, 'null'], description: '结果摘要；完整结果与证据经 results/resolve 与交付流程取回。没有答案时 `answer_reason` 说明原因，取值见 enums.yaml 的 `federated_answer_reason`：代码封闭，其中五个可带 `:细节` 后缀（对端状态/错误码只进细节、经过清洗）；查文案前先去掉后缀'}
+        result: {type: [object, 'null'], description: '结果摘要；完整结果与证据经 results/resolve 与交付流程取回。没有答案时分两种：**没请求生成**（operation 是 `corpus.retrieve`）`answer` 与 `answer_reason` 都为 null；**请求了但没生成出来**则 `answer_reason` 说明原因，取值见 enums.yaml 的 `federated_answer_reason`：代码封闭，其中五个可带 `:细节` 后缀（对端状态/错误码只进细节、经过清洗）；查文案前先去掉后缀'}
         error: {type: [string, 'null']}
         scope_ref: {type: [string, 'null']}
         created_at: {type: string, format: date-time}

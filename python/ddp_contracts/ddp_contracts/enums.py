@@ -959,6 +959,39 @@ def federated_answer_reason_label(value: str | None) -> str | None:
     return meta["label"] if meta else f"未知取值（{value}）"
 
 
+# 协调者入口（`POST /api/v1/task-intents`）**受理哪些 TaskSpec.operation**。
+# 这是一个闭集：认不出来的 operation 当场拒绝，不许落库。
+#
+# 为什么必须闭集：规划只按 operation 决定要不要加生成步骤。以前不看 operation，
+# 本地模型就绪时**任何** operation 都会被追加一个 `answer` 步 —— 提交
+# `corpus.retrieve`（只取证据）会白跑一次生成，提交一个没实现的 operation
+# （例如 `wiki.pages`）会拿回一个 RAG 答案。那是静默错义，不是报错。
+#
+# 本地运行时的 TaskSpec 还有别的 operation（本机自己的计划许可），不受这里约束。
+FederationTaskOperation = Literal["corpus.retrieve", "rag.answer.cited"]
+
+FEDERATION_TASK_OPERATION_VALUES: Final[tuple[str, ...]] = (
+    "corpus.retrieve",
+    "rag.answer.cited",
+)
+
+FEDERATION_TASK_OPERATION_META: Final[dict[str, EnumMeta]] = {
+    # 只按范围取证据，不生成结论
+    "corpus.retrieve": {"value": "corpus.retrieve", "label": "只取证据", "severity": "neutral"},
+    # 取证据并生成带出处的回答
+    "rag.answer.cited": {"value": "rag.answer.cited", "label": "带出处的回答", "severity": "neutral"},
+}
+
+
+def federation_task_operation_label(value: str | None) -> str | None:
+    """federation_task_operation 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = FEDERATION_TASK_OPERATION_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
 # 联邦任务事件流（`GET /api/v1/tasks/{root_task_id}/events`）里 `Event.type` 的取值。
 # 事件是**可恢复的进度记录**，不是状态真相：状态以 `TaskStatus` 各轴为准，事件用来
 # 让界面说清"发生了什么、什么时候"，断线后按 `after=next_seq` 续读不丢。

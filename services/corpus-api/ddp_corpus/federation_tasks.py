@@ -47,7 +47,11 @@ from sqlalchemy.orm import load_only
 from ddp_core.application import coverage as coverage_kernel
 from ddp_core.application import plans, routing
 from ddp_core.application.ports import ApplicationError
-from ddp_contracts.enums import FEDERATED_ANSWER_REASON_VALUES, TASK_EVENT_TYPE_VALUES
+from ddp_contracts.enums import (
+    FEDERATED_ANSWER_REASON_VALUES,
+    FEDERATION_TASK_OPERATION_VALUES,
+    TASK_EVENT_TYPE_VALUES,
+)
 
 from ddp_corpus import cache, capabilities, catalog, federation, policy, queue, upstream
 from ddp_corpus.collection_models import Collection
@@ -96,6 +100,8 @@ EVIDENCE_BYTES_PER_TARGET = 64 * 1024
 #: 计数用本仓共享的 `ddp_core.tokenize.tokens`（确定性、可复核）；它是**上限
 #: 口径**，不是模型侧的真实 token 数。
 GENERATION_TOKEN_BUDGET = 1024
+#: 唯一会带生成步骤的协调者 operation（契约 `federation_task_operation`）。
+ANSWER_OPERATION = "rag.answer.cited"
 #: 生成提示词与结构验收的**唯一实现**在 `federation`（远端执行者与本地生成
 #: 共用同一份）。这里保留模块级别名，避免历史引用点漂移。
 ANSWER_SYSTEM_PROMPT = federation.ANSWER_SYSTEM_PROMPT
@@ -440,6 +446,12 @@ async def create_intent(session: AsyncSession, actor: Actor, *, task_spec,
         plans.validate_spec(task_spec)
     except ApplicationError as exc:
         raise federation.api_error(exc) from None
+    if task_spec["operation"] not in FEDERATION_TASK_OPERATION_VALUES:
+        # 闭集（契约 `federation_task_operation`）：认不出来的 operation 当场拒绝。
+        # 放进去的后果不是报错而是静默错义 —— 规划会按"有没有生成能力"给它配一个
+        # `answer` 步，于是调用方拿回一个它没要的 RAG 答案。
+        raise APIError(400, f"unsupported coordinator operation {task_spec['operation']!r}",
+                       "invalid_request_error", "capability_unsupported")
     consent = validate_exploration_consent(exploration_consent, task_spec, now=now)
     kind = task_spec["resource_scope"]["kind"]
     manifest = None
@@ -1323,7 +1335,9 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
     deadline = plans.utc_instant(valid_until)
     # 本地生成就绪与否决定计划里有没有 answer 步与 token 额度。判据只来自
     # 能力清单，不来自模型名（"注册即就绪"是这个项目反复吃亏的地方）。
-    generation_ready = await _generation_available(http, now=now)
+    wants_answer = task_spec["operation"] == ANSWER_OPERATION
+    # 不要答案就别问本地生成能力：那一问会打一次能力探测，还会把生成预算算进根预算。
+    generation_ready = wants_answer and await _generation_available(http, now=now)
     # 探索阶段的额度用**全量目标**做上界：目录摘要要先把远端目录读回来才拿得到，
     # 而读目录本身要先占发现额度。摘要只改变 fast 选谁、不改变选多少，所以这个
     # 上界一定覆盖最终选择；计划声明的预算是按最终选择 + 已消耗的发现请求重算的。
@@ -1360,7 +1374,7 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
             session, actor, row, targets=selected, now=now, http=http, index=index,
             peers=peers, budget=root_budget, manifest=manifest,
             descriptors=_descriptor_index(descriptors))
-        if task_spec.get("operation") == "rag.answer.cited" and not generation_ready:
+        if wants_answer and not generation_ready:
             # 本地没有生成能力：在探索许可与根预算之内问候选执行节点
             # "你能不能生成带出处的答案"。没有任何 ready 节点就保持诚实的
             # 无答案结果（不伪造答案，也不再多发一个字节）。
@@ -1381,6 +1395,8 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
     except ApplicationError as exc:
         raise federation.api_error(exc) from None
     steps, edges = _drop_answer_steps(steps, edges)
+    # 只取证据的任务不会走到这里的任何一支：`generation_ready` 与 `delegated` 都只在
+    # `wants_answer` 时才可能为真 —— 既不白跑一次生成，也不留生成预算。
     if generation_ready:
         # 本地就绪：保持既有本地生成路径。
         steps = _append_local_answer_step(steps, coordinator=node)
@@ -2258,8 +2274,12 @@ async def _grounded_answer(http, *, query: str, fused: list[dict],
 async def _answer_result(session: AsyncSession, actor: Actor, row: FederationRequest, *,
                          plan: dict, fused: list[dict], live_excerpts: dict[str, str],
                          sufficiency: str, http) -> dict:
-    """执行阶段的答案决定：不生成 / 证据不足 / 本地生成 / 委托生成，都可见。"""
+    """执行阶段的答案决定：不要答案 / 没有模型 / 证据不足 / 本地生成 / 委托生成，都可见。"""
     node = federation.local_node_id()
+    if row.task_spec_json["operation"] != ANSWER_OPERATION:
+        # 只取证据：没有答案也**没有原因** —— "没模型"和"你没要答案"是两件事，
+        # 界面据此说"这个任务只取证据，不生成回答"。
+        return federation.answer_skeleton()
     answer_step = next((step for step in plan["steps"]
                         if step["operation"] == "answer"), None)
     if answer_step is None:

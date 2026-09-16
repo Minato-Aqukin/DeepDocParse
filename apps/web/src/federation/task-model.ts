@@ -7,6 +7,7 @@
  */
 import { TASK_STATUS_META } from '@deepdocparse/contracts'
 import type {
+  FederationTaskOperation,
   CoverageTargetState,
   DeliveryState,
   EnumerationState,
@@ -21,7 +22,8 @@ import type {
 } from '@deepdocparse/contracts'
 
 export type ScopeKind = 'site_public' | 'federation_public' | 'fixed_resources'
-export type TaskOperation = 'rag.answer.cited' | 'corpus.retrieve'
+/** 协调者受理的 operation 闭集，取值来自契约生成物，不在前端另写一份。 */
+export type TaskOperation = FederationTaskOperation
 export type ProbePayload = 'query_text' | 'subquery_text' | 'entity_names' | 'resource_names'
   | 'collection_filters' | 'evidence_excerpts' | 'source_files'
 
