@@ -1,0 +1,55 @@
+# 把一次 desktop-windows 构建的安装包转成 GitHub Release。
+#
+# 为什么单独一个工作流：release 资产必须从持有文件的地方上传。
+# 安装包只存在于构建机（已销毁）和 artifact blob 里 —— 本地链路到 blob
+# 只有几十 KB/s，475MB 拉不下来。所以下载（artifact）和上传（release）
+# 都在 GitHub 机房内网完成，不经过本地。
+#
+# 用法：Actions 页选 release → Run workflow → 填已成功的 desktop-windows
+# 运行 ID 与 tag。只发 setup 安装版（NSIS）；便携版留在 artifact 里。
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: '已成功的 desktop-windows 运行 ID（取其 windows-installers 构件）'
+        required: true
+      tag:
+        description: '发行版 tag（不存在则创建）'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 取回安装包构件
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ inputs.run_id }}" -n windows-installers -D dist/release
+          ls -la dist/release
+
+      # 防拿错包：SHA256SUMS 是打包机现场算的，对着它验不过就直接红。
+      - name: 校验安装包哈希
+        run: |
+          cd dist/release
+          sha256sum -c SHA256SUMS
+
+      - name: 发布 Release（仅 setup 安装版）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist/release
+          SETUP=(DeepDocParse-*-setup.exe)
+          if [ ${#SETUP[@]} -ne 1 ]; then echo "setup exe 数量不对" >&2; exit 1; fi
+          gh release create "${{ inputs.tag }}" \
+            --title "DeepDocParse ${{ inputs.tag }}（Windows 桌面版）" \
+            --notes "Windows 安装版（NSIS）。SHA256 见同页 ${SETUP[0]}.sha256。构建来源：desktop-windows 运行 ${{ inputs.run_id }}。" \
+            "${SETUP[0]}" "${SETUP[0]}.sha256" SHA256SUMS
