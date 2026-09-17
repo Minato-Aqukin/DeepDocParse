@@ -1712,6 +1712,39 @@ const (
 	// running** —— 重跑必须是一条新任务（新授权、新覆盖分母），而不是
 	// 拿旧计划接着跑。返回 409，任务状态原样不动。
 	FederationErrorTaskCancelled FederationError = "task_cancelled"
+	// 节点凭证缺失字段、不是规范序列化、base64 不严格、算法不是 Ed25519、
+	// 有效期超过上限，或签名验不过（篡改）。一律 401，不区分是哪一步 ——
+	// 分开报等于给伪造者一个逐步试错的口。
+	FederationErrorCredentialInvalid FederationError = "credential_invalid"
+	// 凭证已过期或签发时间在未来（超出时钟偏差容忍）
+	FederationErrorCredentialExpired FederationError = "credential_expired"
+	// 同一个 jti 第二次出现。凭证是**单次使用**的：执行者在验签通过后
+	// 持久记下 jti 直到过期，并发重放由唯一约束仲裁（401）。
+	FederationErrorCredentialReplayed FederationError = "credential_replayed"
+	// 凭证的 audience 不是接收它的这个节点。转手给第三个节点（越权转委托）就是这个码
+	FederationErrorCredentialAudienceMismatch FederationError = "credential_audience_mismatch"
+	// 凭证授权的操作不是本端点的操作（403）
+	FederationErrorCredentialOperationDenied FederationError = "credential_operation_denied"
+	// 凭证的请求绑定（方法/路径/正文摘要）或范围约束（root_task_id / step_id /
+	// scope_ref / task_spec_digest）不覆盖这次请求或它要读的那一行（403）；
+	// 以别的协调者名义提交计划也是这个码。
+	FederationErrorCredentialScopeDenied FederationError = "credential_scope_denied"
+	// 签发节点不在本节点控制面的成员目录里，或尚未被管理员批准（401）
+	FederationErrorNodeUnknown FederationError = "node_unknown"
+	// 签发节点已被管理员撤销。撤销对新请求生效的延迟以公钥缓存上限为界（401）
+	FederationErrorNodeRevoked FederationError = "node_revoked"
+	// 语料服务配置的节点身份（BUNDLE_NODE_ID）与控制面持久密钥派生的身份不一致，
+	// 或控制面报告的本节点身份变了。**Fail Closed（503）**：否则本地目标会被当成远端
+	FederationErrorNodeIdentityMismatch FederationError = "node_identity_mismatch"
+	// 还没从控制面取到本节点持久身份（503），联邦端点与出站一律拒绝
+	FederationErrorNodeIdentityUnavailable FederationError = "node_identity_unavailable"
+	// 没有可用的本节点身份配置（503）：shared 开发档位或测试跟随模式下
+	// BUNDLE_NODE_ID 为空或形状不对。先配好持久身份再谈联邦。
+	FederationErrorNodeIdentityUnconfigured FederationError = "node_identity_unconfigured"
+	// 本节点控制面在凭证链路上不可用：出站时签不出凭证（不可达、拒签、响应形状不对），
+	// 或入站时查不到签发节点的信任记录（503）。**是本节点的问题，不是对端没有资料**
+	// —— 协调者记 unreachable 并保留可重试。
+	FederationErrorCredentialUnavailable FederationError = "credential_unavailable"
 )
 
 // FederationErrorValues 保持 enums.yaml 里的声明顺序。
@@ -1734,32 +1767,147 @@ var FederationErrorValues = []FederationError{
 	FederationErrorLocalModelMissing,
 	FederationErrorProtocolIncompatible,
 	FederationErrorTaskCancelled,
+	FederationErrorCredentialInvalid,
+	FederationErrorCredentialExpired,
+	FederationErrorCredentialReplayed,
+	FederationErrorCredentialAudienceMismatch,
+	FederationErrorCredentialOperationDenied,
+	FederationErrorCredentialScopeDenied,
+	FederationErrorNodeUnknown,
+	FederationErrorNodeRevoked,
+	FederationErrorNodeIdentityMismatch,
+	FederationErrorNodeIdentityUnavailable,
+	FederationErrorNodeIdentityUnconfigured,
+	FederationErrorCredentialUnavailable,
 }
 
 var FederationErrorMeta = map[FederationError]EnumMeta{
-	FederationErrorDiscoveryIncomplete:   {Value: "discovery_incomplete", Label: "节点范围未能完整确定", Severity: SeverityWarn},
-	FederationErrorScopeExpired:          {Value: "scope_expired", Label: "检索范围已过期", Severity: SeverityWarn},
-	FederationErrorCapabilityUnknown:     {Value: "capability_unknown", Label: "对方能力未知（需预检）", Severity: SeverityWarn},
-	FederationErrorCapabilityUnsupported: {Value: "capability_unsupported", Label: "对方不支持该操作", Severity: SeverityNeutral},
-	FederationErrorInputNotVerified:      {Value: "input_not_verified", Label: "输入尚未校验通过", Severity: SeverityError},
-	FederationErrorEgressDenied:          {Value: "egress_denied", Label: "该数据不允许发往此接收方", Severity: SeverityError},
-	FederationErrorPlanChanged:           {Value: "plan_changed", Label: "执行计划已变更，需重新批准", Severity: SeverityWarn},
-	FederationErrorOfferExpired:          {Value: "offer_expired", Label: "执行意向已过期", Severity: SeverityWarn},
-	FederationErrorAdmissionUnknown:      {Value: "admission_unknown", Label: "受理状态未知（正在对账）", Severity: SeverityWarn},
-	FederationErrorIdempotencyConflict:   {Value: "idempotency_conflict", Label: "幂等键冲突（请求内容不一致）", Severity: SeverityError},
-	FederationErrorPartialRetrieval:      {Value: "partial_retrieval", Label: "检索未覆盖全部范围", Severity: SeverityWarn},
-	FederationErrorInsufficientEvidence:  {Value: "insufficient_evidence", Label: "证据不足", Severity: SeverityWarn},
-	FederationErrorBudgetExhausted:       {Value: "budget_exhausted", Label: "预算已用尽", Severity: SeverityWarn},
-	FederationErrorSourceRevoked:         {Value: "source_revoked", Label: "来源已撤销", Severity: SeverityWarn},
-	FederationErrorDeliveryExpired:       {Value: "delivery_expired", Label: "结果已过期未领取", Severity: SeverityError},
-	FederationErrorLocalModelMissing:     {Value: "local_model_missing", Label: "本地缺少所需模型", Severity: SeverityError},
-	FederationErrorProtocolIncompatible:  {Value: "protocol_incompatible", Label: "协议版本不兼容", Severity: SeverityError},
-	FederationErrorTaskCancelled:         {Value: "task_cancelled", Label: "任务已取消，不能恢复", Severity: SeverityError},
+	FederationErrorDiscoveryIncomplete:        {Value: "discovery_incomplete", Label: "节点范围未能完整确定", Severity: SeverityWarn},
+	FederationErrorScopeExpired:               {Value: "scope_expired", Label: "检索范围已过期", Severity: SeverityWarn},
+	FederationErrorCapabilityUnknown:          {Value: "capability_unknown", Label: "对方能力未知（需预检）", Severity: SeverityWarn},
+	FederationErrorCapabilityUnsupported:      {Value: "capability_unsupported", Label: "对方不支持该操作", Severity: SeverityNeutral},
+	FederationErrorInputNotVerified:           {Value: "input_not_verified", Label: "输入尚未校验通过", Severity: SeverityError},
+	FederationErrorEgressDenied:               {Value: "egress_denied", Label: "该数据不允许发往此接收方", Severity: SeverityError},
+	FederationErrorPlanChanged:                {Value: "plan_changed", Label: "执行计划已变更，需重新批准", Severity: SeverityWarn},
+	FederationErrorOfferExpired:               {Value: "offer_expired", Label: "执行意向已过期", Severity: SeverityWarn},
+	FederationErrorAdmissionUnknown:           {Value: "admission_unknown", Label: "受理状态未知（正在对账）", Severity: SeverityWarn},
+	FederationErrorIdempotencyConflict:        {Value: "idempotency_conflict", Label: "幂等键冲突（请求内容不一致）", Severity: SeverityError},
+	FederationErrorPartialRetrieval:           {Value: "partial_retrieval", Label: "检索未覆盖全部范围", Severity: SeverityWarn},
+	FederationErrorInsufficientEvidence:       {Value: "insufficient_evidence", Label: "证据不足", Severity: SeverityWarn},
+	FederationErrorBudgetExhausted:            {Value: "budget_exhausted", Label: "预算已用尽", Severity: SeverityWarn},
+	FederationErrorSourceRevoked:              {Value: "source_revoked", Label: "来源已撤销", Severity: SeverityWarn},
+	FederationErrorDeliveryExpired:            {Value: "delivery_expired", Label: "结果已过期未领取", Severity: SeverityError},
+	FederationErrorLocalModelMissing:          {Value: "local_model_missing", Label: "本地缺少所需模型", Severity: SeverityError},
+	FederationErrorProtocolIncompatible:       {Value: "protocol_incompatible", Label: "协议版本不兼容", Severity: SeverityError},
+	FederationErrorTaskCancelled:              {Value: "task_cancelled", Label: "任务已取消，不能恢复", Severity: SeverityError},
+	FederationErrorCredentialInvalid:          {Value: "credential_invalid", Label: "节点凭证无效", Severity: SeverityError},
+	FederationErrorCredentialExpired:          {Value: "credential_expired", Label: "节点凭证已过期", Severity: SeverityError},
+	FederationErrorCredentialReplayed:         {Value: "credential_replayed", Label: "节点凭证被重放", Severity: SeverityError},
+	FederationErrorCredentialAudienceMismatch: {Value: "credential_audience_mismatch", Label: "凭证不是发给本节点的", Severity: SeverityError},
+	FederationErrorCredentialOperationDenied:  {Value: "credential_operation_denied", Label: "凭证不允许该操作", Severity: SeverityError},
+	FederationErrorCredentialScopeDenied:      {Value: "credential_scope_denied", Label: "凭证范围不覆盖该请求", Severity: SeverityError},
+	FederationErrorNodeUnknown:                {Value: "node_unknown", Label: "未知或未批准的节点", Severity: SeverityError},
+	FederationErrorNodeRevoked:                {Value: "node_revoked", Label: "节点已被撤销", Severity: SeverityError},
+	FederationErrorNodeIdentityMismatch:       {Value: "node_identity_mismatch", Label: "本节点身份不一致（联邦已停用）", Severity: SeverityError},
+	FederationErrorNodeIdentityUnavailable:    {Value: "node_identity_unavailable", Label: "本节点身份尚未确定", Severity: SeverityError},
+	FederationErrorNodeIdentityUnconfigured:   {Value: "node_identity_unconfigured", Label: "本节点身份未配置", Severity: SeverityError},
+	FederationErrorCredentialUnavailable:      {Value: "credential_unavailable", Label: "本节点凭证服务不可用", Severity: SeverityError},
 }
 
 // Valid 报告 s 是不是一个已知的 federation_error 取值。
 func (s FederationError) Valid() bool {
 	_, ok := FederationErrorMeta[s]
+	return ok
+}
+
+// 一张节点凭证授权的**唯一**操作（DDP-NODE-CREDENTIAL）。每个节点对节点
+// 端点恰好对应一个值；凭证只签一个操作，拿读执行状态的凭证去受理任务是
+// `credential_operation_denied`。
+type NodeCredentialOperation string
+
+const (
+	// POST /api/v1/federation/probes
+	NodeCredentialOperationProbeCreate NodeCredentialOperation = "probe_create"
+	// GET /api/v1/federation/probes/{probe_id}
+	NodeCredentialOperationProbeRead NodeCredentialOperation = "probe_read"
+	// POST /api/v1/federation/admissions
+	NodeCredentialOperationAdmissionCreate NodeCredentialOperation = "admission_create"
+	// POST /api/v1/federation/admissions/lookup
+	NodeCredentialOperationAdmissionLookup NodeCredentialOperation = "admission_lookup"
+	// GET /api/v1/federation/tasks/{executor_task_id}
+	NodeCredentialOperationExecutionRead NodeCredentialOperation = "execution_read"
+	// POST /api/v1/federation/tasks/{executor_task_id}/cancel
+	NodeCredentialOperationExecutionCancel NodeCredentialOperation = "execution_cancel"
+	// GET /api/v1/federation/evidence-sets/{set_ref}
+	NodeCredentialOperationEvidenceSetRead NodeCredentialOperation = "evidence_set_read"
+	// POST /api/v1/federation/resources/locate
+	NodeCredentialOperationResourceLocate NodeCredentialOperation = "resource_locate"
+	// POST /api/v1/federation/results/resolve
+	NodeCredentialOperationResultResolve NodeCredentialOperation = "result_resolve"
+	// GET /api/v1/federation/published-collections
+	NodeCredentialOperationCatalogRead NodeCredentialOperation = "catalog_read"
+)
+
+// NodeCredentialOperationValues 保持 enums.yaml 里的声明顺序。
+var NodeCredentialOperationValues = []NodeCredentialOperation{
+	NodeCredentialOperationProbeCreate,
+	NodeCredentialOperationProbeRead,
+	NodeCredentialOperationAdmissionCreate,
+	NodeCredentialOperationAdmissionLookup,
+	NodeCredentialOperationExecutionRead,
+	NodeCredentialOperationExecutionCancel,
+	NodeCredentialOperationEvidenceSetRead,
+	NodeCredentialOperationResourceLocate,
+	NodeCredentialOperationResultResolve,
+	NodeCredentialOperationCatalogRead,
+}
+
+var NodeCredentialOperationMeta = map[NodeCredentialOperation]EnumMeta{
+	NodeCredentialOperationProbeCreate:     {Value: "probe_create", Label: "发起探测", Severity: SeverityNeutral},
+	NodeCredentialOperationProbeRead:       {Value: "probe_read", Label: "读取探测回执", Severity: SeverityNeutral},
+	NodeCredentialOperationAdmissionCreate: {Value: "admission_create", Label: "提交接单", Severity: SeverityNeutral},
+	NodeCredentialOperationAdmissionLookup: {Value: "admission_lookup", Label: "对账接单", Severity: SeverityNeutral},
+	NodeCredentialOperationExecutionRead:   {Value: "execution_read", Label: "读取执行状态", Severity: SeverityNeutral},
+	NodeCredentialOperationExecutionCancel: {Value: "execution_cancel", Label: "取消执行", Severity: SeverityNeutral},
+	NodeCredentialOperationEvidenceSetRead: {Value: "evidence_set_read", Label: "读取证据集", Severity: SeverityNeutral},
+	NodeCredentialOperationResourceLocate:  {Value: "resource_locate", Label: "定位资源版本", Severity: SeverityNeutral},
+	NodeCredentialOperationResultResolve:   {Value: "result_resolve", Label: "解析证据引用", Severity: SeverityNeutral},
+	NodeCredentialOperationCatalogRead:     {Value: "catalog_read", Label: "读取发布目录", Severity: SeverityNeutral},
+}
+
+// Valid 报告 s 是不是一个已知的 node_credential_operation 取值。
+func (s NodeCredentialOperation) Valid() bool {
+	_, ok := NodeCredentialOperationMeta[s]
+	return ok
+}
+
+// 语料服务节点对节点端点的认证方式。`node_credential` 是唯一的生产形态；
+// `shared_token_insecure` 只给没有控制面的开发夹具，**必须显式配置且同时
+// 打开 ALLOW_INSECURE_DEFAULTS**，并在 /readyz 与能力声明里如实报成降级。
+type PeerAuthMode string
+
+const (
+	// 控制面持有节点私钥，按请求签发限定 audience/actor/操作/范围/有效期的单次凭证
+	PeerAuthModeNodeCredential PeerAuthMode = "node_credential"
+	// 旧的共享 peer token + 服务凭据 + actor 头。所有登记同伴共用一个秘密、
+	// 调用方身份未签名、同名用户会被直接合并 —— 只许开发用
+	PeerAuthModeSharedTokenInsecure PeerAuthMode = "shared_token_insecure"
+)
+
+// PeerAuthModeValues 保持 enums.yaml 里的声明顺序。
+var PeerAuthModeValues = []PeerAuthMode{
+	PeerAuthModeNodeCredential,
+	PeerAuthModeSharedTokenInsecure,
+}
+
+var PeerAuthModeMeta = map[PeerAuthMode]EnumMeta{
+	PeerAuthModeNodeCredential:      {Value: "node_credential", Label: "节点签名凭证", Severity: SeverityOk},
+	PeerAuthModeSharedTokenInsecure: {Value: "shared_token_insecure", Label: "共享口令（不安全，仅开发）", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 peer_auth_mode 取值。
+func (s PeerAuthMode) Valid() bool {
+	_, ok := PeerAuthModeMeta[s]
 	return ok
 }
 

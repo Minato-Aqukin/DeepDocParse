@@ -11,13 +11,17 @@
 5. 回收清扫把过期租约的执行标 `lease_expired`，`resume` 只补做可重做的目标，
    不产生第二条受理；
 6. `FEDERATION_EXECUTION_INLINE=true` 的旧行为仍然可用（逃生口，非生产路径）。
+
+认证形态：联邦端点（admission / tasks 读写取消）只认节点凭证，调用方是
+受信任的同组织远端节点（`PeerCaller` 现签）；协调者本地接口（`/api/v1/tasks`
+等）仍是本地用户身份，不走凭证。
 """
 from datetime import timedelta
 
 import pytest
 from sqlalchemy import func, select, update
 
-from conftest import drain_tasks
+from conftest import ORG, drain_tasks
 from ddp_contracts import TASK_STATUS_VALUES, task_status_label
 from ddp_corpus import federation, federation_tasks, reconcile
 from ddp_corpus.config import settings
@@ -30,13 +34,14 @@ from ddp_corpus.federation_models import (
     FederationExecution,
     FederationRequest,
 )
+from ddp_corpus.main import app
 from ddp_corpus.models import Task, new_id, utcnow
 from ddp_corpus.queue import is_terminal
-from test_federation_admissions import admission_body, post_admission
+from node_credentials_fixture import caller, install
+from test_federation_admissions import admission_body, exec_constraints, post_admission
 from test_federation_probes import (
     NODE,
     configure_federation,
-    headers,
     indexed_source,
     publish_collection,
 )
@@ -61,15 +66,27 @@ def _federation_config(monkeypatch):
     monkeypatch.setattr(settings, "federation_execution_inline", False)
 
 
+@pytest.fixture
+def _peer_auth(monkeypatch, app_state):
+    """本节点 NODE；远端调用方是控制面批准的同组织成员，组织取自信任记录。"""
+    return install(monkeypatch, app, node_id=NODE, organization_id=ORG)
+
+
+def peer(client, **over):
+    """一个同组织远端节点对本节点的调用方：每次调用现签一张凭证。"""
+    return caller(client, audience_node_id=NODE, **over)
+
+
 # ------------------------------------------------------------------ 队列往返
 
 async def test_admit_persists_execution_and_queue_task_in_one_transaction(
-        actor_client, session, app_state):
+        client, actor_client, session, app_state, _peer_auth):
     """受理返回时执行还在队列上；换一个会话（模拟重启）能看到同一行任务。"""
     _, version, _, _, evidence_rows = await indexed_source(session)
     collection = await publish_collection(actor_client, version)
-    response = await post_admission(
-        actor_client, admission_body(collection_id=collection["collection_id"]))
+    p = peer(client)
+    body = admission_body(collection_id=collection["collection_id"])
+    response = await post_admission(p, body)
     assert response.status_code == 201, response.text
     receipt = response.json()
 
@@ -87,7 +104,7 @@ async def test_admit_persists_execution_and_queue_task_in_one_transaction(
         assert task.status == "queued"
         assert task.payload["executor_task_id"] == receipt["executor_task_id"]
         assert task.payload["actor"]["organization_id"] == "org-test"
-        assert task.payload["actor"]["actor_id"] == "actor-alice"
+        assert task.payload["actor"]["actor_id"] == p.actor_id
 
     assert await drain_tasks(app_state) >= 1
     execution = await session.get(FederationExecution, receipt["executor_task_id"],
@@ -149,7 +166,7 @@ def test_actor_binding_round_trips_and_rejects_tampering():
 
 
 async def test_admission_replay_does_not_enqueue_a_second_task(
-        actor_client, session, app_state, monkeypatch):
+        client, session, app_state, monkeypatch, _peer_auth):
     calls = {"count": 0}
     real_execute = federation.execute
 
@@ -158,9 +175,10 @@ async def test_admission_replay_does_not_enqueue_a_second_task(
         return await real_execute(*args, **kwargs)
 
     monkeypatch.setattr(federation, "execute", _counting)
+    p = peer(client)
     body = admission_body(key="queue-replay")
-    first = await post_admission(actor_client, body)
-    second = await post_admission(actor_client, body)
+    first = await post_admission(p, body)
+    second = await post_admission(p, body)
     assert first.status_code == 201 and second.status_code == 200
     assert first.json() == second.json()
 
@@ -171,7 +189,8 @@ async def test_admission_replay_does_not_enqueue_a_second_task(
     assert calls["count"] == 1, "同键重放不得执行第二次"
 
 
-async def test_admission_is_atomic_with_the_queue_task(actor_client, session, monkeypatch):
+async def test_admission_is_atomic_with_the_queue_task(
+        client, session, monkeypatch, _peer_auth):
     """入队失败 -> 受理整体回滚：绝不允许"受理行在、队列任务不在"的半截状态。
 
     这正是企业边界 7 要防的形态 —— 已受理却没排队 = 永远停在 queued。
@@ -183,7 +202,7 @@ async def test_admission_is_atomic_with_the_queue_task(actor_client, session, mo
         raise IntegrityError("INSERT tasks", {}, Exception("queue down"))
 
     monkeypatch.setattr(federation.queue, "enqueue", _boom)
-    response = await post_admission(actor_client, admission_body(key="atomic-fail"))
+    response = await post_admission(peer(client), admission_body(key="atomic-fail"))
     assert response.status_code == 409, response.text
     assert await session.scalar(select(func.count()).select_from(FederationAdmission)) == 0
     assert await session.scalar(select(func.count()).select_from(FederationExecution)) == 0
@@ -191,19 +210,20 @@ async def test_admission_is_atomic_with_the_queue_task(actor_client, session, mo
 
 
 async def test_cancel_queued_execution_cancels_task_and_blocks_execution(
-        actor_client, session, app_state):
+        client, actor_client, session, app_state, _peer_auth):
     _, version, *_ = await indexed_source(session)
     collection = await publish_collection(actor_client, version)
-    created = await post_admission(
-        actor_client, admission_body(key="queue-cancel",
-                                     collection_id=collection["collection_id"]))
+    p = peer(client)
+    body = admission_body(key="queue-cancel", collection_id=collection["collection_id"])
+    created = await post_admission(p, body)
     task_id = created.json()["executor_task_id"]
     queue_task = await session.scalar(select(Task).where(
         Task.dedupe_key == f"federation-execution:{task_id}"))
     assert queue_task is not None and queue_task.status == "queued"
     queue_task_id = queue_task.id
 
-    cancelled = await actor_client.post(f"{BASE_CANCEL}/{task_id}/cancel", headers=headers())
+    cancelled = await p.post(f"{BASE_CANCEL}/{task_id}/cancel",
+                               constraints=exec_constraints(body))
     assert cancelled.status_code == 200, cancelled.text
     assert cancelled.json()["state"] == "cancelled"
     assert cancelled.json()["error"] == "cancelled"
@@ -219,37 +239,42 @@ async def test_cancel_queued_execution_cancels_task_and_blocks_execution(
 
 
 async def test_execution_read_and_cancel_are_actor_scoped(
-        actor_client, session, app_state):
-    """同组织另一个调用者读/取消别人的执行，与不存在同形 404。
+        client, actor_client, session, _peer_auth):
+    """同组织另一个调用者读/取消别人的执行，与不存在同形 404.
 
     旧行为只按 organization_id 过滤：同组织的 bob 能读到 alice 的执行
     （含证据/答案）并把它取消。绑定取受理时的 actor（`admission.actor_id`），
     协调者用同一身份轮询不受影响。
+
+    凭证形态下"另一个调用者"是同一个可信节点的另一个远端主体（subject 不同，
+    组织仍取自信任记录）；越权与不存在同形 404，不给出存在性探测口。
     """
     _, version, *_ = await indexed_source(session)
     collection = await publish_collection(actor_client, version)
-    created = await post_admission(
-        actor_client, admission_body(key="actor-scope",
-                                     collection_id=collection["collection_id"]))
+    owner = peer(client)
+    intruder = peer(client, subject="user-intruder")
+    body = admission_body(key="actor-scope", collection_id=collection["collection_id"])
+    created = await post_admission(owner, body)
     assert created.status_code == 201, created.text
     task_id = created.json()["executor_task_id"]
+    scope = exec_constraints(body)
 
-    owner = await actor_client.get(f"{BASE_CANCEL}/{task_id}", headers=headers())
-    assert owner.status_code == 200
+    seen = await owner.get(f"{BASE_CANCEL}/{task_id}", constraints=scope)
+    assert seen.status_code == 200
 
-    intruder = await actor_client.get(f"{BASE_CANCEL}/{task_id}", headers=headers("bob"))
-    assert intruder.status_code == 404
-    assert intruder.json()["error"]["code"] == "task_not_found"
-    unknown = await actor_client.get(f"{BASE_CANCEL}/no-such-execution", headers=headers("bob"))
+    denied_read = await intruder.get(f"{BASE_CANCEL}/{task_id}", constraints=scope)
+    assert denied_read.status_code == 404
+    assert denied_read.json()["error"]["code"] == "task_not_found"
+    unknown = await intruder.get(f"{BASE_CANCEL}/no-such-execution")
     assert unknown.status_code == 404
-    assert unknown.json() == intruder.json(), "越权与不存在必须同形，不给出存在性探测口"
+    assert unknown.json() == denied_read.json(), "越权与不存在必须同形，不给出存在性探测口"
 
-    denied = await actor_client.post(f"{BASE_CANCEL}/{task_id}/cancel", headers=headers("bob"))
+    denied = await intruder.post(f"{BASE_CANCEL}/{task_id}/cancel", constraints=scope)
     assert denied.status_code == 404
     assert (await session.get(FederationExecution, task_id,
                               populate_existing=True)).state == "queued"
 
-    allowed = await actor_client.post(f"{BASE_CANCEL}/{task_id}/cancel", headers=headers())
+    allowed = await owner.post(f"{BASE_CANCEL}/{task_id}/cancel", constraints=scope)
     assert allowed.status_code == 200 and allowed.json()["state"] == "cancelled"
 
 
@@ -768,7 +793,7 @@ async def test_sweep_does_not_rekill_an_execution_with_a_fresh_retry_task(
 
 
 async def test_worker_reclaims_a_running_execution_with_expired_lease(
-        actor_client, session, app_state):
+        client, actor_client, session, app_state, _peer_auth):
     """worker 崩溃留下的 running+过期租约：队列任务被重新领取时必须接管执行。
 
     这是 `federation.execute` 的过期租约接管分支；没有它，崩溃后执行行永远
@@ -777,7 +802,7 @@ async def test_worker_reclaims_a_running_execution_with_expired_lease(
     _, version, _, _, evidence_rows = await indexed_source(session)
     collection = await publish_collection(actor_client, version)
     created = await post_admission(
-        actor_client, admission_body(key="reclaim",
+        peer(client), admission_body(key="reclaim",
                                      collection_id=collection["collection_id"]))
     task_id = created.json()["executor_task_id"]
     await session.execute(update(FederationExecution).where(
@@ -826,16 +851,17 @@ async def test_execute_plan_never_overwrites_a_cancelled_row(
 # ------------------------------------------------------------------ 逃生口
 
 async def test_inline_mode_keeps_request_inline_behaviour(
-        actor_client, session, monkeypatch):
+        client, actor_client, session, monkeypatch, _peer_auth):
     """FEDERATION_EXECUTION_INLINE=true：受理后立刻执行、不排队（旧行为）。"""
     monkeypatch.setattr(settings, "federation_execution_inline", True)
     _, version, _, _, evidence_rows = await indexed_source(session)
     collection = await publish_collection(actor_client, version)
-    receipt = (await post_admission(
-        actor_client, admission_body(key="inline-mode",
-                                     collection_id=collection["collection_id"]))).json()
-    detail = (await actor_client.get(
-        f"/api/v1/federation/tasks/{receipt['executor_task_id']}", headers=headers())).json()
+    p = peer(client)
+    body = admission_body(key="inline-mode", collection_id=collection["collection_id"])
+    receipt = (await post_admission(p, body)).json()
+    detail = (await p.get(
+        f"/api/v1/federation/tasks/{receipt['executor_task_id']}",
+        constraints=exec_constraints(body))).json()
     assert detail["state"] == "succeeded"
     assert await session.scalar(select(func.count()).select_from(Task).where(
         Task.kind == "federation_execute")) == 0, "内联模式不排队"

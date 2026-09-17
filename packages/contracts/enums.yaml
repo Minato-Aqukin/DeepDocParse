@@ -898,6 +898,100 @@ enums:
           拿旧计划接着跑。返回 409，任务状态原样不动。
         label: 任务已取消，不能恢复
         severity: error
+      # ---- 节点凭证（DDP-NODE-CREDENTIAL，计划 §8.4 / T32 / T43）----
+      # 401 一族：这张凭证本身不能用；403 一族：凭证有效但不覆盖这次请求。
+      # **节点认证通过不是资源权限**：凭证全部通过之后执行者仍按自己的
+      # 资源 ACL 判权，无权照旧是同形 404，不在这里另起一个码。
+      - value: credential_invalid
+        summary: |
+          节点凭证缺失字段、不是规范序列化、base64 不严格、算法不是 Ed25519、
+          有效期超过上限，或签名验不过（篡改）。一律 401，不区分是哪一步 ——
+          分开报等于给伪造者一个逐步试错的口。
+        label: 节点凭证无效
+        severity: error
+      - {value: credential_expired,  summary: 凭证已过期或签发时间在未来（超出时钟偏差容忍）, label: 节点凭证已过期, severity: error}
+      - value: credential_replayed
+        summary: |
+          同一个 jti 第二次出现。凭证是**单次使用**的：执行者在验签通过后
+          持久记下 jti 直到过期，并发重放由唯一约束仲裁（401）。
+        label: 节点凭证被重放
+        severity: error
+      - value: credential_audience_mismatch
+        summary: 凭证的 audience 不是接收它的这个节点。转手给第三个节点（越权转委托）就是这个码
+        label: 凭证不是发给本节点的
+        severity: error
+      - {value: credential_operation_denied, summary: 凭证授权的操作不是本端点的操作（403）, label: 凭证不允许该操作, severity: error}
+      - value: credential_scope_denied
+        summary: |
+          凭证的请求绑定（方法/路径/正文摘要）或范围约束（root_task_id / step_id /
+          scope_ref / task_spec_digest）不覆盖这次请求或它要读的那一行（403）；
+          以别的协调者名义提交计划也是这个码。
+        label: 凭证范围不覆盖该请求
+        severity: error
+      - value: node_unknown
+        summary: 签发节点不在本节点控制面的成员目录里，或尚未被管理员批准（401）
+        label: 未知或未批准的节点
+        severity: error
+      - value: node_revoked
+        summary: 签发节点已被管理员撤销。撤销对新请求生效的延迟以公钥缓存上限为界（401）
+        label: 节点已被撤销
+        severity: error
+      - value: node_identity_mismatch
+        summary: |
+          语料服务配置的节点身份（BUNDLE_NODE_ID）与控制面持久密钥派生的身份不一致，
+          或控制面报告的本节点身份变了。**Fail Closed（503）**：否则本地目标会被当成远端
+        label: 本节点身份不一致（联邦已停用）
+        severity: error
+      - {value: node_identity_unavailable, summary: 还没从控制面取到本节点持久身份（503），联邦端点与出站一律拒绝, label: 本节点身份尚未确定, severity: error}
+      - value: node_identity_unconfigured
+        summary: |
+          没有可用的本节点身份配置（503）：shared 开发档位或测试跟随模式下
+          BUNDLE_NODE_ID 为空或形状不对。先配好持久身份再谈联邦。
+        label: 本节点身份未配置
+        severity: error
+      - value: credential_unavailable
+        summary: |
+          本节点控制面在凭证链路上不可用：出站时签不出凭证（不可达、拒签、响应形状不对），
+          或入站时查不到签发节点的信任记录（503）。**是本节点的问题，不是对端没有资料**
+          —— 协调者记 unreachable 并保留可重试。
+        label: 本节点凭证服务不可用
+        severity: error
+
+  node_credential_operation:
+    description: |
+      一张节点凭证授权的**唯一**操作（DDP-NODE-CREDENTIAL）。每个节点对节点
+      端点恰好对应一个值；凭证只签一个操作，拿读执行状态的凭证去受理任务是
+      `credential_operation_denied`。
+    applies_to: [federation, discovery]
+    values:
+      - {value: probe_create,      summary: 'POST /api/v1/federation/probes',                        label: 发起探测,       severity: neutral}
+      - {value: probe_read,        summary: 'GET /api/v1/federation/probes/{probe_id}',              label: 读取探测回执,   severity: neutral}
+      - {value: admission_create,  summary: 'POST /api/v1/federation/admissions',                    label: 提交接单,       severity: neutral}
+      - {value: admission_lookup,  summary: 'POST /api/v1/federation/admissions/lookup',             label: 对账接单,       severity: neutral}
+      - {value: execution_read,    summary: 'GET /api/v1/federation/tasks/{executor_task_id}',       label: 读取执行状态,   severity: neutral}
+      - {value: execution_cancel,  summary: 'POST /api/v1/federation/tasks/{executor_task_id}/cancel',  label: 取消执行,    severity: neutral}
+      - {value: evidence_set_read, summary: 'GET /api/v1/federation/evidence-sets/{set_ref}',        label: 读取证据集,     severity: neutral}
+      - {value: resource_locate,   summary: 'POST /api/v1/federation/resources/locate',              label: 定位资源版本,   severity: neutral}
+      - {value: result_resolve,    summary: 'POST /api/v1/federation/results/resolve',               label: 解析证据引用,   severity: neutral}
+      - {value: catalog_read,      summary: 'GET /api/v1/federation/published-collections',          label: 读取发布目录,   severity: neutral}
+
+  peer_auth_mode:
+    description: |
+      语料服务节点对节点端点的认证方式。`node_credential` 是唯一的生产形态；
+      `shared_token_insecure` 只给没有控制面的开发夹具，**必须显式配置且同时
+      打开 ALLOW_INSECURE_DEFAULTS**，并在 /readyz 与能力声明里如实报成降级。
+    applies_to: [federation]
+    values:
+      - value: node_credential
+        summary: 控制面持有节点私钥，按请求签发限定 audience/actor/操作/范围/有效期的单次凭证
+        label: 节点签名凭证
+        severity: ok
+      - value: shared_token_insecure
+        summary: |
+          旧的共享 peer token + 服务凭据 + actor 头。所有登记同伴共用一个秘密、
+          调用方身份未签名、同名用户会被直接合并 —— 只许开发用
+        label: 共享口令（不安全，仅开发）
+        severity: warn
 
   node_membership_state:
     description: 控制域管理员批准的直接节点成员状态，批准不授予资源权限或证明远端持有密钥。

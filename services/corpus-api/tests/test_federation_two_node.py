@@ -49,9 +49,17 @@ B_TEXT = "beta federation keyword fact"
 
 
 @pytest.fixture
-async def two_node(tmp_path, request):
+async def two_node(tmp_path, request, monkeypatch):
+    # B 是固定身份 node-a/node-b、没有控制面的真子进程：绑不上持久身份、
+    # 验不了 Ed25519 信任链，只能走开发档位 shared_token_insecure（B 读进程
+    # 环境变量，A 侧见下面的 autouse 夹具）。节点凭证形态由进程内 PeerCaller
+    # 用例与 test_federation_peer_client.py 覆盖；这里量的是真实回环 HTTP 上的
+    # 拓扑/幂等/取消/续跑行为， credential 密码学本身不在这里重复验证。
     # 默认 B 没有模型运行时（诚实的不就绪形态）。`parametrize(..., indirect=True)`
     # 传入一个字符串时，B 会挂上真实的 loopback 模型桩（能力探测与生成都走 HTTP）。
+    monkeypatch.setenv("FEDERATION_PEER_AUTH", "shared_token_insecure")
+    monkeypatch.setenv("ALLOW_INSECURE_DEFAULTS", "true")
+    answer = getattr(request, "param", None)
     answer = getattr(request, "param", None)
     fixture = await TwoNodeFixture.create(tmp_path, b_texts=(B_TEXT,),
                                           b_generate_answer=answer)
@@ -65,6 +73,8 @@ async def two_node(tmp_path, request):
 def _node_a_federation_config(two_node, monkeypatch):
     """Point node A at the real node B endpoint; A is the only in-process node."""
     monkeypatch.setattr(settings, "bundle_node_id", NODE_A)
+    # 与 two_node 夹具同档位：真子进程 B 没有控制面，A 侧也必须用共享口令。
+    monkeypatch.setattr(settings, "federation_peer_auth", "shared_token_insecure")
     monkeypatch.setattr(settings, "federation_peer_token", PEER_TOKEN_A)
     monkeypatch.setattr(settings, "federation_admissions_enabled", True)
     monkeypatch.setattr(settings, "federation_peers", two_node.peers_json())

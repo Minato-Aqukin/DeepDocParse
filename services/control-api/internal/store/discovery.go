@@ -42,6 +42,29 @@ func (s *Store) BindNodeIdentity(ctx context.Context, v PublicNodeIdentity) erro
 	}
 	return nil
 }
+
+// PeerTrustRecord is what a receiving corpus needs to authenticate an inbound
+// node credential: the member's registered public key, its approval state and
+// the member revision. Pending and revoked members are returned with their
+// state — the verifier refuses them with distinct codes — and never omitted.
+type PeerTrustRecord struct {
+	NodeID    string
+	PublicKey string
+	State     string
+	Revision  int64
+}
+
+// PeerTrust reads one direct member of an organization's directory. It is the
+// single source of node-to-node trust; there is no second table of peer keys.
+func (s *Store) PeerTrust(ctx context.Context, org, nodeID string) (*PeerTrustRecord, error) {
+	var v PeerTrustRecord
+	err := s.pool.QueryRow(ctx, `SELECT node_id,public_key,state,public_revision FROM control.node_members WHERE organization_id=$1 AND node_id=$2`, org, nodeID).Scan(&v.NodeID, &v.PublicKey, &v.State, &v.Revision)
+	if err != nil {
+		return nil, norows(err)
+	}
+	return &v, nil
+}
+
 func lockDirectory(ctx context.Context, tx pgx.Tx, org string) (int64, error) {
 	_, err := tx.Exec(ctx, `INSERT INTO control.node_directories(organization_id) VALUES($1) ON CONFLICT DO NOTHING`, org)
 	if err != nil {

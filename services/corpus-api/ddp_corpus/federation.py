@@ -60,7 +60,7 @@ from ddp_core.bundle import digest as byte_digest
 from ddp_core.tokenize import tokens
 from ddp_contracts.enums import FEDERATED_ANSWER_REASON_VALUES
 
-from ddp_corpus import capabilities, catalog, queue, upstream
+from ddp_corpus import capabilities, catalog, node_identity, queue, upstream
 from ddp_corpus.config import settings
 from ddp_corpus.deps import Actor
 from ddp_corpus.document_context import search_contexts
@@ -124,13 +124,14 @@ def api_error(exc: ApplicationError) -> APIError:
 
 
 def local_node_id() -> str:
-    """本节点的联邦身份。
+    """本节点的联邦身份：控制面持久密钥派生的那一个（`node_identity`）。
 
-    与 Bundle 的固定来源身份共用 `BUNDLE_NODE_ID`：一次部署只有一个持久
-    节点身份，第二个身份源只会让"这到底是谁"变得没有答案。没配置就 Fail
-    Closed —— 一个没有身份的节点不该以任何名字接单或发出证据。
+    一次部署只有一个持久节点身份，第二个身份源只会让"这到底是谁"变得没有
+    答案 —— 旧实现直接读 `BUNDLE_NODE_ID`，与控制面的密钥身份没有任何绑定，
+    两者不一致时本地目标被当成远端。现在 BUNDLE_NODE_ID 只是可选的核对值；
+    没绑定或不一致一律 Fail Closed（503）。
     """
-    node = (settings.bundle_node_id or "").strip()
+    node = node_identity.local_node_id()
     if not NODE_PATTERN.fullmatch(node):
         raise APIError(503, "configure a persistent node identity (BUNDLE_NODE_ID)",
                        "server_error", "node_identity_unconfigured")
@@ -757,6 +758,12 @@ def acting_actor(actor: Actor) -> str:
 #: worker 进程；授权真正需要的只有组织/身份/类型/角色/principal。
 _ACTOR_BINDING_FIELDS = ("organization_id", "actor_id", "kind", "role", "principal_id")
 
+#: 允许 principal 缺席的调用者类型：远端节点主体没有 principal（它的身份
+#: 就是 `peer-…` 派生 id，组织取自信任记录），`acting_actor` 对它恒取 id，
+#: 所以 None 回环后授权判定不变。其余类型（user/api_key）的 principal 缺席
+#: 仍然是拒绝 —— 那是 payload 坏了，不是合法形态。
+_OPTIONAL_PRINCIPAL_KINDS = ("peer",)
+
 
 def actor_binding(actor: Actor) -> dict:
     """把调用者压成**可持久化的最小身份**，供队列任务在 worker 进程里重建。
@@ -784,7 +791,11 @@ def actor_from_binding(binding: dict) -> Actor:
     if not isinstance(binding, dict):
         raise ValueError("actor binding must be an object")
     missing = [name for name in _ACTOR_BINDING_FIELDS
-               if name not in binding or not isinstance(binding[name], str)]
+               if name not in binding
+               or (binding[name] is None
+                   and not (name == "principal_id"
+                            and binding.get("kind") in _OPTIONAL_PRINCIPAL_KINDS))
+               or (binding[name] is not None and not isinstance(binding[name], str))]
     if missing:
         raise ValueError(f"actor binding missing fields: {missing}")
     principal = binding["principal_id"] or None

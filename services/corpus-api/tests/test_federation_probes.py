@@ -21,10 +21,21 @@ from conftest import ACTOR, ORG, SERVICE, actor_headers
 from ddp_corpus import upstream
 from ddp_corpus.config import settings
 from ddp_corpus.federation_models import FederationProbe
+from ddp_corpus.main import app
 from ddp_corpus.models import Chunk, Evidence, new_id, utcnow
 from ddp_core.anchor import digest_of
 from ddp_core.application.plans import content_digest
 from ddp_core.tokenize import tokenized
+from node_credentials_fixture import (
+    OTHER_KEY,
+    OTHER_NODE_ID,
+    OTHER_PUBLIC_KEY,
+    PEER_NODE_ID,
+    PEER_PUBLIC_KEY,
+    caller,
+    install,
+    trust_record,
+)
 from test_client_projection import asset
 
 NODE = "node-" + "f" * 48
@@ -128,6 +139,39 @@ async def post_probe(client, body, *, key="probe-key", who=ACTOR, **header_over)
         headers={**headers(who, **header_over), "Idempotency-Key": key}, json=body)
 
 
+@pytest.fixture
+def _peer_auth(monkeypatch, app_state):
+    """本节点 NODE；PEER_NODE_ID 是控制面批准的同组织成员，组织取自信任记录。"""
+    return install(monkeypatch, app, node_id=NODE, organization_id=ORG)
+
+
+def peer(client, **over):
+    """一个同组织远端节点对本节点的调用方：每次调用现签一张凭证。"""
+    return caller(client, audience_node_id=NODE, **over)
+
+
+async def post_probe_peer(client, body, *, key="probe-key", peer_caller=None, **over):
+    """经 PeerCaller 现签的联邦探测 POST（新 helper，旧 post_probe 保持原样供外部 import）。"""
+    caller_obj = peer_caller if peer_caller is not None else peer(client, **over)
+    return await caller_obj.post(f"{BASE}/probes", json_body=body,
+                                 headers={"Idempotency-Key": key})
+
+
+async def get_probe_peer(client, probe_id, *, task_spec_digest, peer_caller=None,
+                         root_task_id="root-1", **over):
+    """经 PeerCaller 现签的联邦探测回读；凭证约束带上该回执的需求修订。"""
+    caller_obj = peer_caller if peer_caller is not None else peer(client, **over)
+    return await caller_obj.get(f"{BASE}/probes/{probe_id}",
+                                constraints={"root_task_id": root_task_id,
+                                             "task_spec_digest": task_spec_digest})
+
+
+def stranger(client, **over):
+    """另一个组织的远端节点调用方（信任记录组织为 other-org）。"""
+    return caller(client, audience_node_id=NODE, issuer_node_id=OTHER_NODE_ID,
+                  key=OTHER_KEY, **over)
+
+
 async def test_federation_tables_are_registered(engine):
     """main.py 的 import 链必须让 Base.metadata 认识这些表（否则 create_all 悄悄少建）。"""
     async with engine.connect() as conn:
@@ -137,10 +181,10 @@ async def test_federation_tables_are_registered(engine):
 
 
 async def test_published_collection_probe_returns_real_evidence_and_index_revision(
-        actor_client, session):
+        client, session, _peer_auth):
     _, version, _, _, evidence_rows = await indexed_source(session)
-    collection = await publish_collection(actor_client, version)
-    response = await post_probe(actor_client, probe_body(collection["collection_id"]))
+    collection = await publish_collection(client, version)
+    response = await post_probe_peer(client, probe_body(collection["collection_id"]))
     assert response.status_code == 201, response.text
     probe = response.json()
     validate_probe_contract(probe)
@@ -163,25 +207,37 @@ async def test_published_collection_probe_returns_real_evidence_and_index_revisi
     assert excerpt["source_type"] == "source" and excerpt["derived_from"] is None
 
 
-async def test_probe_denied_for_draft_and_foreign_collections(actor_client, session):
+async def test_peer_probe_draft_and_foreign_collections_are_hidden(client, session, _peer_auth):
+    # 旧 test_probe_denied_for_draft_and_foreign_collections → 新：本地 owner/bob/other-org 自报头在 peer 模型不可区分；
+    # 草稿 owner 原 409 collection_not_published 改为同组织 peer 404 collection_not_found（peer viewer 不可管理，未发布与不存在同形），bob/异组织仍 404。
     _, version, *_ = await indexed_source(session)
-    draft = await actor_client.post("/api/v1/collections",
+    draft = await client.post("/api/v1/collections",
         headers={**headers(), "Idempotency-Key": "draft-collection"},
         json={"name": "Draft", "licence": "CC-BY-4.0", "languages": ["en"],
               "topics": [], "version_ids": [version.id]})
     assert draft.status_code == 201, draft.text
     draft_id = draft.json()["collection_id"]
 
-    owner = await post_probe(actor_client, probe_body(draft_id), key="draft-owner")
-    assert owner.status_code == 409
-    assert owner.json()["error"]["code"] == "collection_not_published"
+    owner_peer = peer(client)
+    same_org = await post_probe_peer(client, probe_body(draft_id), key="draft-owner",
+                                     peer_caller=owner_peer)
+    assert same_org.status_code == 404
+    assert same_org.json()["error"]["code"] == "collection_not_found"
 
-    other_actor = await post_probe(actor_client, probe_body(draft_id), key="draft-bob", who="bob")
-    assert other_actor.status_code == 404
+    _peer_auth.records[OTHER_NODE_ID] = trust_record(
+        OTHER_NODE_ID, OTHER_PUBLIC_KEY, organization_id="other-org", authority_node_id=NODE)
+    foreign_peer = stranger(client)
+    foreign_draft = await post_probe_peer(
+        client, probe_body(draft_id), key="draft-org", peer_caller=foreign_peer)
+    assert foreign_draft.status_code == 404
+    assert foreign_draft.json()["error"]["code"] == "collection_not_found"
 
-    other_org = await post_probe(actor_client, probe_body(draft_id), key="draft-org",
-                                 org="other-org")
-    assert other_org.status_code == 404
+    published = await publish_collection(client, version, key="peer-foreign-published")
+    foreign_published = await post_probe_peer(
+        client, probe_body(published["collection_id"]), key="draft-org-published",
+        peer_caller=foreign_peer)
+    assert foreign_published.status_code == 404
+    assert foreign_published.json()["error"]["code"] == "collection_not_found"
 
 
 async def test_probe_requires_peer_credentials(actor_client, session):
@@ -194,21 +250,21 @@ async def test_probe_requires_peer_credentials(actor_client, session):
     assert response.json()["error"]["code"] == "peer_unauthenticated"
 
 
-async def test_probe_wrong_target_node_is_conflict(actor_client, session):
+async def test_probe_wrong_target_node_is_conflict(client, session, _peer_auth):
     _, version, *_ = await indexed_source(session)
-    collection = await publish_collection(actor_client, version)
-    response = await post_probe(actor_client, probe_body(collection["collection_id"],
-                                                         target="node-other"))
+    collection = await publish_collection(client, version)
+    response = await post_probe_peer(client, probe_body(collection["collection_id"],
+                                                        target="node-other"))
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "wrong_target"
 
 
-async def test_truncated_candidates_report_partial(actor_client, session):
+async def test_truncated_candidates_report_partial(client, session, _peer_auth):
     _, version, *_ = await indexed_source(
         session, texts=("retrieval target one", "retrieval target two"))
-    collection = await publish_collection(actor_client, version)
-    response = await post_probe(
-        actor_client, probe_body(collection["collection_id"], candidate_limit=1),
+    collection = await publish_collection(client, version)
+    response = await post_probe_peer(
+        client, probe_body(collection["collection_id"], candidate_limit=1),
         key="truncated-probe")
     assert response.status_code == 201, response.text
     retrieval = response.json()["retrieval"]
@@ -216,81 +272,89 @@ async def test_truncated_candidates_report_partial(actor_client, session):
     assert "truncated_by_limit" in retrieval["internal_limits"]
 
 
-async def test_expired_probe_is_not_served(actor_client, session):
+async def test_expired_probe_is_not_served(client, session, _peer_auth):
     _, version, *_ = await indexed_source(session)
-    collection = await publish_collection(actor_client, version)
-    created = await post_probe(actor_client, probe_body(collection["collection_id"]),
-                               key="expiring-probe")
+    collection = await publish_collection(client, version)
+    body = probe_body(collection["collection_id"])
+    created = await post_probe_peer(client, body, key="expiring-probe")
     assert created.status_code == 201
     probe_id = created.json()["probe_id"]
     await session.execute(update(FederationProbe)
                           .where(FederationProbe.probe_id == probe_id)
                           .values(expires_at=utcnow() - timedelta(seconds=1)))
     await session.commit()
-    got = await actor_client.get(f"{BASE}/probes/{probe_id}", headers=headers())
+    got = await get_probe_peer(client, probe_id, task_spec_digest=body["task_spec_digest"])
     assert got.status_code == 410
     assert got.json()["error"]["code"] == "probe_expired"
 
 
-async def test_probe_receipt_is_scoped_to_the_acting_actor(actor_client, session):
-    """同组织、不同调用者读别人的探测回执必须与不存在的 id 完全同形（404）。
-
-    回执里有问题摘要与证据摘录，组织级过滤不够 —— `actor_id` 是持久化时就写下
-    的授权依据（协调者持久化远端回执时也记原始 actor，所以同调用者回读不变）。
-    """
+async def test_peer_probe_receipt_is_scoped_to_the_acting_peer_subject(client, session, _peer_auth):
+    # 旧 test_probe_receipt_is_scoped_to_the_acting_actor → 新：本地 bob/other-org 自报头改为同节点不同 subject 的 peer 与异组织 peer；同组织 peer 可读已发布但读不到别人的回执（404 同形）。
     _, version, *_ = await indexed_source(session)
-    collection = await publish_collection(actor_client, version)
-    created = await post_probe(actor_client, probe_body(collection["collection_id"]),
-                               key="actor-scoped-probe")
+    collection = await publish_collection(client, version)
+    body = probe_body(collection["collection_id"])
+    owner_peer = peer(client)
+    created = await post_probe_peer(client, body, key="actor-scoped-probe",
+                                    peer_caller=owner_peer)
     assert created.status_code == 201, created.text
     probe_id = created.json()["probe_id"]
 
-    owner = await actor_client.get(f"{BASE}/probes/{probe_id}", headers=headers())
+    owner = await get_probe_peer(client, probe_id, task_spec_digest=body["task_spec_digest"],
+                                 peer_caller=owner_peer)
     assert owner.status_code == 200, owner.text
     assert owner.json()["probe_id"] == probe_id
 
-    same_org = await actor_client.get(f"{BASE}/probes/{probe_id}", headers=headers("bob"))
-    unknown = await actor_client.get(f"{BASE}/probes/{'0' * 24}", headers=headers("bob"))
+    other_subject = peer(client, subject="user-other")
+    same_org = await get_probe_peer(client, probe_id, task_spec_digest=body["task_spec_digest"],
+                                    peer_caller=other_subject)
+    unknown = await get_probe_peer(client, "0" * 24, task_spec_digest=body["task_spec_digest"],
+                                   peer_caller=other_subject)
     assert same_org.status_code == 404, same_org.text
     assert same_org.status_code == unknown.status_code
     assert same_org.json()["error"]["code"] == "probe_not_found"
     assert same_org.json()["error"]["code"] == unknown.json()["error"]["code"]
 
-    foreign = await actor_client.get(f"{BASE}/probes/{probe_id}", headers=headers(org="other-org"))
+    _peer_auth.records[OTHER_NODE_ID] = trust_record(
+        OTHER_NODE_ID, OTHER_PUBLIC_KEY, organization_id="other-org", authority_node_id=NODE)
+    foreign = await get_probe_peer(client, probe_id, task_spec_digest=body["task_spec_digest"],
+                                   peer_caller=stranger(client))
     assert foreign.status_code == 404, foreign.text
     assert foreign.json()["error"]["code"] == "probe_not_found"
 
 
 async def test_capability_probe_reports_readiness_and_real_input_validation(
-        actor_client, monkeypatch):
+        client, monkeypatch, _peer_auth):
     from ddp_corpus import capabilities
 
     async def _no_gateway(_http):
         return None
 
     monkeypatch.setattr(capabilities, "_fetch_gateway", _no_gateway)
-    ok = await post_probe(actor_client,
-        probe_body(kind="capability_input", query="what is X"), key="cap-ok")
+    p = peer(client)
+    ok = await post_probe_peer(client,
+        probe_body(kind="capability_input", query="what is X"), key="cap-ok",
+        peer_caller=p)
     assert ok.status_code == 201, ok.text
     validate_probe_contract(ok.json())
     assert ok.json()["capability_check"]["input_validation"] == "content_verified"
     assert ok.json()["retrieval"] is None
 
-    bad = await post_probe(actor_client, probe_body(
+    bad = await post_probe_peer(client, probe_body(
         kind="capability_input", query="what is X", digest="sha256:" + "0" * 64),
-        key="cap-bad")
+        key="cap-bad", peer_caller=p)
     assert bad.status_code == 409
     assert bad.json()["error"]["code"] == "input_not_verified"
 
-    plain = await post_probe(actor_client, probe_body(
-        kind="capability_input", query="what is X", include_digest=False), key="cap-plain")
+    plain = await post_probe_peer(client, probe_body(
+        kind="capability_input", query="what is X", include_digest=False), key="cap-plain",
+        peer_caller=p)
     assert plain.status_code == 201
     assert plain.json()["capability_check"]["input_validation"] == "metadata_only"
 
 
 @respx.mock
 async def test_capability_probe_reports_requested_operation_and_can_generate(
-        actor_client, monkeypatch):
+        client, monkeypatch, _peer_auth):
     """`operation` 缺省 corpus.retrieve；问 rag.answer.cited 时按同一份清单回答。
 
     `can_generate` 只有该 operation readiness=ready 才为 true —— 这正是协调者
@@ -308,10 +372,11 @@ async def test_capability_probe_reports_requested_operation_and_can_generate(
             "readiness": "ready", "supports": {"instruct": True},
             "observed_at": now.isoformat(),
             "valid_until": (now + timedelta(seconds=60)).isoformat()}]}))
-    ready = await post_probe(
-        actor_client,
+    p = peer(client)
+    ready = await post_probe_peer(
+        client,
         probe_body(kind="capability_input", operation="rag.answer.cited"),
-        key="cap-generate")
+        key="cap-generate", peer_caller=p)
     assert ready.status_code == 201, ready.text
     body = ready.json()
     validate_probe_contract(body)
@@ -320,15 +385,16 @@ async def test_capability_probe_reports_requested_operation_and_can_generate(
     assert body["can_generate"] is True
 
     # 检索路仍按缺省报告 corpus.retrieve，且 can_generate 保持 false。
-    retrieve = await post_probe(
-        actor_client, probe_body(kind="capability_input"), key="cap-retrieve-default")
+    retrieve = await post_probe_peer(
+        client, probe_body(kind="capability_input"), key="cap-retrieve-default",
+        peer_caller=p)
     assert retrieve.status_code == 201
     assert retrieve.json()["capability_check"]["operation"] == "corpus.retrieve"
     assert retrieve.json()["can_generate"] is False
 
 
 async def test_capability_probe_for_generation_is_unknown_without_model_observation(
-        actor_client, monkeypatch):
+        client, monkeypatch, _peer_auth):
     """观测不到模型通道时，生成型 operation 必须是 unknown/不可生成。
 
     拿检索库的 ready 去冒充模型侧就绪，就是"能力声明虚高"（F5）的同一个病。
@@ -339,8 +405,8 @@ async def test_capability_probe_for_generation_is_unknown_without_model_observat
         return None
 
     monkeypatch.setattr(capabilities, "_fetch_gateway", _no_gateway)
-    probed = await post_probe(
-        actor_client,
+    probed = await post_probe_peer(
+        client,
         probe_body(kind="capability_input", operation="rag.answer.cited"),
         key="cap-generate-unknown")
     assert probed.status_code == 201, probed.text
@@ -349,12 +415,12 @@ async def test_capability_probe_for_generation_is_unknown_without_model_observat
     assert body["can_generate"] is False
 
 
-async def test_dropped_member_reports_subset_only(actor_client, session, monkeypatch):
+async def test_dropped_member_reports_subset_only(client, session, monkeypatch, _peer_auth):
     """发布后某个成员读不到时，探测只能报"只查了子集"（T85），不得当成功。"""
     from ddp_corpus import federation
 
     _, version, *_ = await indexed_source(session)
-    collection = await publish_collection(actor_client, version)
+    collection = await publish_collection(client, version)
     real_search_contexts = federation.search_contexts
 
     async def _drop_members(session_, actor_, document_id=None, *, version_ids=None):
@@ -363,8 +429,8 @@ async def test_dropped_member_reports_subset_only(actor_client, session, monkeyp
         return await real_search_contexts(session_, actor_, document_id, version_ids=version_ids)
 
     monkeypatch.setattr(federation, "search_contexts", _drop_members)
-    response = await post_probe(actor_client, probe_body(collection["collection_id"]),
-                                key="subset-probe")
+    response = await post_probe_peer(client, probe_body(collection["collection_id"]),
+                                     key="subset-probe")
     assert response.status_code == 201, response.text
     retrieval = response.json()["retrieval"]
     assert retrieval["status"] == "partial"
@@ -372,29 +438,31 @@ async def test_dropped_member_reports_subset_only(actor_client, session, monkeyp
     assert retrieval["evidence_set_ref"] is None
 
 
-async def test_probe_replay_is_idempotent(actor_client, session):
+async def test_probe_replay_is_idempotent(client, session, _peer_auth):
     _, version, *_ = await indexed_source(session)
-    collection = await publish_collection(actor_client, version)
+    collection = await publish_collection(client, version)
     body = probe_body(collection["collection_id"])
-    first = await post_probe(actor_client, body, key="replay-probe")
-    second = await post_probe(actor_client, body, key="replay-probe")
+    p = peer(client)
+    first = await post_probe_peer(client, body, key="replay-probe", peer_caller=p)
+    second = await post_probe_peer(client, body, key="replay-probe", peer_caller=p)
     assert first.status_code == 201 and second.status_code == 201
     assert first.json() == second.json()
 
-    conflict = await post_probe(actor_client, probe_body(collection["collection_id"],
-                                                         query="another query"),
-                                key="replay-probe")
+    conflict = await post_probe_peer(client, probe_body(collection["collection_id"],
+                                                        query="another query"),
+                                     key="replay-probe", peer_caller=p)
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "idempotency_conflict"
 
 
 async def test_probe_duplicate_insert_race_replays_and_conflicts(
-        actor_client, session, monkeypatch):
+        client, session, monkeypatch, _peer_auth):
     """N4：两个请求都通过了存在性预检时，唯一约束必须映射成重放/409 而不是 500。"""
     _, version, *_ = await indexed_source(session)
-    collection = await publish_collection(actor_client, version)
+    collection = await publish_collection(client, version)
     body = probe_body(collection["collection_id"])
-    first = await post_probe(actor_client, body, key="race-probe")
+    p = peer(client)
+    first = await post_probe_peer(client, body, key="race-probe", peer_caller=p)
     assert first.status_code == 201, first.text
 
     real_get = AsyncSession.get
@@ -407,13 +475,13 @@ async def test_probe_duplicate_insert_race_replays_and_conflicts(
         return await real_get(self, entity, ident, *args, **kwargs)
 
     monkeypatch.setattr(AsyncSession, "get", _flaky_get)
-    replay = await post_probe(actor_client, body, key="race-probe")
+    replay = await post_probe_peer(client, body, key="race-probe", peer_caller=p)
     assert replay.status_code == 201, replay.text
     assert replay.json() == first.json()
 
     misses["remaining"] = 1
-    conflict = await post_probe(actor_client, probe_body(collection["collection_id"],
-                                                         query="another query"),
-                                key="race-probe")
+    conflict = await post_probe_peer(client, probe_body(collection["collection_id"],
+                                                        query="another query"),
+                                     key="race-probe", peer_caller=p)
     assert conflict.status_code == 409, conflict.text
     assert conflict.json()["error"]["code"] == "idempotency_conflict"

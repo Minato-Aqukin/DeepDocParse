@@ -11,14 +11,17 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from conftest import ORG
 from ddp_corpus import federation, federation_tasks
 from ddp_corpus.config import settings
 from ddp_corpus.deps import Actor
 from ddp_corpus.federation_models import FederationProbe
-from ddp_corpus.federation_peers import PeerDirectory, parse_peers
+from ddp_corpus.federation_peers import Delegation, PeerDirectory, parse_peers
+from ddp_corpus.main import app
 from ddp_corpus.models import utcnow
+from node_credentials_fixture import LocalControlSigner, caller, install
 from test_federation_probes import (
-    NODE, configure_federation, indexed_source, post_probe, probe_body,
+    NODE, configure_federation, indexed_source, post_probe_peer, probe_body,
     publish_collection,
 )
 from test_federation_tasks import (
@@ -32,6 +35,17 @@ def _config(monkeypatch):
     configure_federation(monkeypatch)
     monkeypatch.setattr(settings, "federation_peers", "")
     monkeypatch.setattr(settings, "federation_allow_loopback", False)
+
+
+@pytest.fixture
+def _peer_auth(monkeypatch, app_state):
+    """本节点 NODE；PEER_NODE_ID 是控制面批准的同组织成员，组织取自信任记录。"""
+    return install(monkeypatch, app, node_id=NODE, organization_id=ORG)
+
+
+def peer(client, **over):
+    """一个同组织远端节点对本节点的调用方：每次调用现签一张凭证。"""
+    return caller(client, audience_node_id=NODE, **over)
 
 
 def _flaky_get_once(monkeypatch):
@@ -49,8 +63,10 @@ def _flaky_get_once(monkeypatch):
     return real_get
 
 
-async def test_create_plan_survives_a_local_probe_commit_collision(
-        actor_client, session, monkeypatch):
+async def test_create_plan_survives_a_local_probe_commit_collision_same_actor(
+        actor_client, session, monkeypatch, app_state):
+    # 旧 primed 经共享口令 HTTP 以同本地 actor 落行 → 新经同本地 actor 直接 run_probe 落行（联邦端点现为 peer-only，同组织 peer 与本地 actor 的 probe_id 不同，无碰撞，计数会变 2）。
+    from ddp_corpus.models import utcnow as _utcnow
     _resource, version, _job, _doc, _evidence = await indexed_source(session)
     collection = await publish_collection(actor_client, version, key="n8-local-probe")
     spec = task_spec(scope="site_public", mode="fast")
@@ -62,9 +78,14 @@ async def test_create_plan_survives_a_local_probe_commit_collision(
     target = {"origin_node_id": NODE, "collection_id": collection["collection_id"],
               "operation": federation_tasks.RETRIEVAL_OPERATION}
     key = federation_tasks._probe_key(root, target)
-    primed = await post_probe(actor_client, probe_body(collection["collection_id"],
-                                                       query="retrieval target"), key=key)
-    assert primed.status_code == 201, primed.text
+    local_actor = Actor(id="actor-alice", kind="user", organization_id=ORG,
+                        role="contributor")
+    primed = await federation.run_probe(
+        session, local_actor, probe_body(collection["collection_id"],
+                                         query="retrieval target"),
+        now=_utcnow(), http=app_state.http, index=app_state.search_index,
+        idempotency_key=key)
+    assert primed["probe_kind"] == "evidence_retrieval"
 
     _flaky_get_once(monkeypatch)
     response = await actor_client.post("/api/v1/task-plans", json={"root_task_id": root})
@@ -78,12 +99,14 @@ async def test_create_plan_survives_a_local_probe_commit_collision(
 
 async def test_create_plan_survives_a_remote_probe_savepoint_collision(
         actor_client, session, monkeypatch):
-    peer = StubPeer(items=[{**peer_evidence(), "excerpt": "peer excerpt"}])
+    stub = StubPeer(items=[{**peer_evidence(), "excerpt": "peer excerpt"}])
     peers = parse_peers(json.dumps({PEER_NODE: {
-        "endpoint": "https://peer.example", "service_token": "s", "peer_token": "p"}}))
+        "endpoint": "https://peer.example"}}), shared_token=False)
 
-    def factory(actor):
-        return PeerDirectory(peers, actor=actor, transport=peer.transport())
+    def factory(actor, delegation=None):
+        return PeerDirectory(peers, actor=actor, transport=stub.transport(),
+                             signer=LocalControlSigner(issuer_node_id=NODE),
+                             delegation=delegation, shared_token=False)
 
     monkeypatch.setattr(federation_tasks, "peer_directory", factory)
 

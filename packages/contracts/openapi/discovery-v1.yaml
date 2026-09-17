@@ -128,9 +128,62 @@ paths:
         '200': {description: Stable page, terminal cursor returns empty complete page, content: {application/json: {schema: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/MemberSnapshotPage'}}}}
         '404': {description: Snapshot, caller scope or cursor mismatch; no hidden counts}
         '410': {description: scope_expired; create a new scope instead of joining directory revisions}
+  # ------------------------------------------------ internal: node credentials (ddp-node-credential/1)
+  # Only the local corpus service and worker call these, with the internal service credential.
+  # Control is the single owner of the node private key (invariant 5): corpus never sees the seed.
+  /internal/federation/identity:
+    get:
+      operationId: internalNodeIdentity
+      security: [{service: []}]
+      description: |
+        This autonomous centre's persistent node identity. corpus-api and corpus-worker bind their
+        federation identity to it at startup; a configured BUNDLE_NODE_ID that differs fails closed
+        (node_identity_mismatch) instead of running with two identities.
+      responses:
+        '200': {description: Persistent identity, content: {application/json: {schema: {$ref: '../schemas/ddp-node-credential/v1.json#/$defs/NodeIdentity'}}}}
+        '401': {description: invalid_service_token}
+        '503': {description: node_identity_unavailable}
+  /internal/federation/node-credentials:
+    post:
+      operationId: internalIssueNodeCredential
+      security: [{service: []}]
+      description: |
+        Sign one single-use outbound credential for the local corpus service. Control fills issuer,
+        issued_at, expires_at and a random 128-bit jti; the caller cannot choose them. Refused when
+        the audience is not an approved member of this centre's organization (node_unknown 403 /
+        node_revoked 403), is this node itself, the actor belongs to another organization
+        (credential_scope_denied 403), or the request violates the SignRequest shape (400
+        credential_invalid). Rate limited per audience (429 rate_limited). Every issuance is logged
+        with audience, operation, root_task_id and jti; the credential itself is never logged.
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '../schemas/ddp-node-credential/v1.json#/$defs/SignRequest'}}}}
+      responses:
+        '200': {description: Signed credential, content: {application/json: {schema: {$ref: '../schemas/ddp-node-credential/v1.json#/$defs/SignedCredential'}}}}
+        '400': {description: credential_invalid}
+        '401': {description: invalid_service_token}
+        '403': {description: node_unknown / node_revoked / credential_scope_denied}
+        '429': {description: rate_limited}
+        '503': {description: node_identity_unavailable}
+  /internal/federation/peer-keys/{node_id}:
+    parameters: [{$ref: '#/components/parameters/NodeId'}]
+    get:
+      operationId: internalPeerTrust
+      security: [{service: []}]
+      description: |
+        Trust record the receiving corpus service uses to authenticate an inbound credential. Pending
+        and revoked members are returned with their state (the verifier refuses them); unregistered
+        nodes are 404. organization_id is the local organization that approved the node; remote
+        callers act inside it as read-only peer principals under the local resource ACL.
+        Responses are never cached by control; the verifier's cache bound is its own documented
+        configuration (FEDERATION_PEER_KEY_CACHE_SECONDS).
+      responses:
+        '200': {description: Trust record, content: {application/json: {schema: {$ref: '../schemas/ddp-node-credential/v1.json#/$defs/PeerTrust'}}}}
+        '401': {description: invalid_service_token}
+        '404': {description: node_unknown}
+        '503': {description: node_identity_unavailable}
 components:
   securitySchemes:
     session: {type: http, scheme: bearer, bearerFormat: JWT}
+    service: {type: http, scheme: bearer, description: Internal service credential (SERVICE_TOKEN); never a user or node credential}
     userKey: {type: http, scheme: bearer, description: User API key with read scope; never a node credential}
     peer: {type: apiKey, in: header, name: X-DDP-Peer-Token, description: Node-level shared directory credential; fail closed when unconfigured}
   parameters:

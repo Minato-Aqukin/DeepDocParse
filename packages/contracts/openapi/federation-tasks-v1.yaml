@@ -7,8 +7,25 @@ info:
     ../../docs/refactor/P5-INTERFACES-v3.md §2–§3）。
 
     节点/执行者端点由**每个中心**暴露；协调者端点只在入口中心暴露。
-    认证是服务凭据 `Authorization: Bearer SERVICE_TOKEN`，调用者上下文沿用
-    `deps.actor` 头（`X-DDP-Organization` / `X-DDP-Actor` / `X-DDP-Role` …）；
+
+    **两种认证，按端点分开**：
+
+    - 协调者端点（task-intents / task-plans / tasks / deliveries）经本中心入口转发，
+      认证是服务凭据 `Authorization: Bearer SERVICE_TOKEN` + 入口下发的 actor 头。
+    - 节点对节点端点（`security: nodeCredential`）**只认** `X-DDP-Node-Credential`：
+      本节点控制面签发的单次、短期、限定 audience/actor/操作/范围的 Ed25519 凭证
+      （`../schemas/ddp-node-credential/v1.json`，规则见 `../ddp/node-credential-format.md`）。
+      它们**不接受** SERVICE_TOKEN 与 actor 头：远端调用者由凭证派生为本节点的
+      `peer-*` 只读主体，映射进批准该节点的本地组织，再按本地资源 ACL 判权 ——
+      节点认证通过不代表资源权限，同名用户不跨中心合并（T32）。每个端点对应的
+      凭证操作写在 `x-ddp-node-credential-operation`。认证失败 401
+      （credential_invalid / credential_expired / credential_replayed /
+      credential_audience_mismatch / node_unknown / node_revoked），越权 403
+      （credential_operation_denied / credential_scope_denied），本节点身份未绑定或
+      不一致 503（node_identity_unavailable / node_identity_mismatch）。
+      旧的共享 `X-DDP-Peer-Token` 只在显式的 `FEDERATION_PEER_AUTH=shared_token_insecure`
+      开发档位下存在，并在 /readyz 报成降级。
+
     所有写操作必须带 `Idempotency-Key`。
 
     schema 绑定类型直接 `$ref ../schemas/*.json`。**生成枚举不在本文件另写取值**：
@@ -21,6 +38,8 @@ paths:
   /api/v1/federation/probes:
     post:
       operationId: createFederationProbe
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: probe_create
       description: |
         按探索许可执行一次真实 Probe（capability_input / resource_locate /
         evidence_retrieval）。`target_node_id` 必须等于本节点身份，否则 409
@@ -32,22 +51,26 @@ paths:
       responses:
         '201': {description: 实际 Probe 回执；没有探索许可就不该存在这个回执, content: {application/json: {schema: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/ProbeResult'}}}}
         '400': {description: 请求形状不合法或引用了不可用的输入}
-        '401': {description: 缺少或错误的服务凭据}
-        '403': {description: 缺少可信调用者上下文，或探索许可不覆盖本次外发}
+        '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
+        '403': {description: 凭证操作或范围不覆盖本请求（credential_operation_denied / credential_scope_denied），或探索许可不覆盖本次外发}
         '409': {description: 'wrong_target：target_node_id 不是本节点身份；或幂等键与请求正文不一致'}
         '422': {description: ProbeRequest 校验失败}
   /api/v1/federation/probes/{probe_id}:
     parameters: [{$ref: '#/components/parameters/ProbeId'}]
     get:
       operationId: readFederationProbe
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: probe_read
       responses:
         '200': {description: 保留中的 Probe 回执；可复用性按 observed_at / query_digest / index_revision 判定，过期或缺失一律重新探测, content: {application/json: {schema: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/ProbeResult'}}}}
-        '401': {description: 缺少或错误的服务凭据}
+        '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
         '404': {description: 不存在或对调用者不可见（不借状态码泄露存在性）}
         '410': {description: 'probe_expired：过期或已清理的单次 Probe 回执不得复用（P5-INTERFACES-v3 §2）'}
   /api/v1/federation/admissions:
     post:
       operationId: createFederationAdmission
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: admission_create
       description: |
         执行者持久受理。同键同 request_digest 返回已有 receipt（200，不复算执行）；
         同键不同摘要 409 idempotency_conflict（T80）。accepted 必须同时有
@@ -73,32 +96,38 @@ paths:
         '200': {description: 同键同摘要：返回已有 receipt（幂等复用，不是一次新执行）, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/AdmissionReceipt'}}}}
         '201': {description: 新受理：持久写 receipt 与 execution 行, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/AdmissionReceipt'}}}}
         '400': {description: 请求形状不合法}
-        '401': {description: 缺少或错误的服务凭据}
-        '403': {description: 缺少可信调用者上下文}
+        '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
+        '403': {description: 凭证操作或范围不覆盖本请求（credential_operation_denied / credential_scope_denied）}
         '409': {description: 'idempotency_conflict（同键异摘要）或 plan_changed（重算摘要与请求不一致）', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '422': {description: AdmissionRequest 校验失败}
   /api/v1/federation/admissions/lookup:
     post:
       operationId: lookupFederationAdmission
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: admission_lookup
       description: 幂等键放在受认证请求体里，不放 URL（计划 §9.5）；用于回执丢失后的对账。
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AdmissionLookup'}}}}
       responses:
         '200': {description: 该幂等键的持久 receipt, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/AdmissionReceipt'}}}}
-        '401': {description: 缺少或错误的服务凭据}
-        '403': {description: 缺少可信调用者上下文}
+        '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
+        '403': {description: 凭证操作或范围不覆盖本请求（credential_operation_denied / credential_scope_denied）}
         '404': {description: 该幂等键没有已持久 receipt；unknown ≠ 已执行，不得因此换节点重做}
   /api/v1/federation/tasks/{executor_task_id}:
     parameters: [{$ref: '#/components/parameters/ExecutorTaskId'}]
     get:
       operationId: readFederationExecution
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: execution_read
       responses:
         '200': {description: 执行者的权威执行状态；lease/generation 与结果引用分离, content: {application/json: {schema: {$ref: '#/components/schemas/ExecutionStatus'}}}}
-        '401': {description: 缺少或错误的服务凭据}
+        '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
         '404': {description: 未知 executor_task_id 或对调用者不可见}
   /api/v1/federation/tasks/{executor_task_id}/cancel:
     parameters: [{$ref: '#/components/parameters/ExecutorTaskId'}]
     post:
       operationId: cancelFederationExecution
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: execution_cancel
       description: |
         幂等取消。排队/在途的执行落终态 `state=cancelled`（task_status）；
         succeeded/failed/cancelled 等终态不因重复取消改变。取消同时停掉队列里的
@@ -106,27 +135,31 @@ paths:
       requestBody: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/Empty'}}}}
       responses:
         '200': {description: 幂等取消后的权威执行状态；重复取消返回同一结果, content: {application/json: {schema: {$ref: '#/components/schemas/ExecutionStatus'}}}}
-        '401': {description: 缺少或错误的服务凭据}
+        '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
         '404': {description: 未知 executor_task_id 或对调用者不可见}
   /api/v1/federation/resources/locate:
     post:
       operationId: locateFederationResource
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: resource_locate
       description: 校验指定版本（缺省则解析当前可读版本）的可读性与权威归属；不返回临时 URL——位置不是证据身份。
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LocateRequest'}}}}
       responses:
         '200': {description: 版本可读性与来源/权威节点, content: {application/json: {schema: {$ref: '#/components/schemas/LocateResult'}}}}
-        '401': {description: 缺少或错误的服务凭据}
-        '403': {description: 缺少可信调用者上下文}
+        '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
+        '403': {description: 凭证操作或范围不覆盖本请求（credential_operation_denied / credential_scope_denied）}
         '404': {description: 资源不存在或无权访问（降敏，不泄露存在性）}
   /api/v1/federation/results/resolve:
     post:
       operationId: resolveFederationEvidence
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: result_resolve
       description: 把稳定原始引用解析成一条可验证证据（含 locator 与摘要）；虚构、过期、越权的引用一律失败。
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ResolveRequest'}}}}
       responses:
         '200': {description: 授权范围内的证据信封, content: {application/json: {schema: {$ref: '../schemas/ddp-evidence/v1.json#/$defs/FederatedEvidence'}}}}
-        '401': {description: 缺少或错误的服务凭据}
-        '403': {description: 缺少可信调用者上下文}
+        '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
+        '403': {description: 凭证操作或范围不覆盖本请求（credential_operation_denied / credential_scope_denied）}
         '404': {description: 引用不存在或对调用者不可见}
         '410': {description: 'source_revoked：来源已撤销或转为私有，停止新授权并重判派生依赖'}
   /api/v1/federation/evidence-sets/{set_ref}:
@@ -135,16 +168,39 @@ paths:
          description: '`federation-probe:<probe_id>` 或 `federation-execution:<executor_task_id>`；伪造引用一律 404'}
     get:
       operationId: readFederationEvidenceSet
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: evidence_set_read
       description: |
         读取一次 Probe 或执行留下的真实片段。**逐条重新授权后才返回**（本地证据走
         `results/resolve` 同一条路径，远端证据按存它的组织/调用者绑定）；有任意一条
         越权就整集 404，不借部分返回泄露存在性。最多 50 条，complete=false 表示被截断。
       responses:
         '200': {description: 授权范围内的证据集, content: {application/json: {schema: {$ref: '#/components/schemas/EvidenceSet'}}}}
-        '401': {description: 缺少或错误的服务凭据}
-        '403': {description: 缺少可信调用者上下文}
+        '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
+        '403': {description: 凭证操作或范围不覆盖本请求（credential_operation_denied / credential_scope_denied）}
         '404': {description: 集合不存在、伪造或对调用者不可见（降敏，不泄露存在性）}
         '410': {description: 'probe_expired：探测回执过期，不得复用'}
+  /api/v1/federation/published-collections:
+    get:
+      operationId: readFederationPublishedCollections
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: catalog_read
+      description: |
+        对等目录读：本节点**自发布**集合描述符的一页（与控制面代理的
+        `GET /api/v1/federation/collections` 同一个生产者 `catalog.published_snapshot_page`，
+        同一个分页协议：首请求不带 snapshot_id 建快照，之后带快照与游标跟随，终止页
+        complete=true）。协调者规划期用它排序；**读不到只影响排序，不删除任何成员**。
+      parameters:
+        - {name: snapshot_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: cursor, in: query, schema: {type: string, maxLength: 128}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 100}}
+      responses:
+        '200': {description: 本节点自发布集合描述符的一页（origin_node_id 恒为本节点）}
+        '401': {description: 节点凭证无效/过期/重放/audience 不符，或签发节点未知/已撤销}
+        '403': {description: 凭证操作或范围不覆盖本请求}
+        '404': {description: 快照或游标不可用}
+        '410': {description: 快照已过期，请重新建快照}
+        '503': {description: 本节点身份未绑定或与控制面不一致}
   # ---------------------------------------------------------------- 协调者
   /api/v1/task-intents:
     post:
@@ -333,6 +389,7 @@ paths:
 components:
   securitySchemes:
     service: {type: http, scheme: bearer, description: 内网同伴服务凭据（SERVICE_TOKEN），不是用户会话}
+    nodeCredential: {type: apiKey, in: header, name: X-DDP-Node-Credential, description: '本节点控制面签发的单次 Ed25519 节点凭证（ddp-node-credential/1）。不是用户会话，也不是共享口令；audience 必须是接收节点，操作必须等于端点的 x-ddp-node-credential-operation。'}
   parameters:
     IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
     ProbeId: {name: probe_id, in: path, required: true, schema: {type: string, minLength: 1}}
@@ -646,7 +703,7 @@ components:
         `federation_error` 一致。对外按可见权限降敏，不得借错误码暴露
         私有资源是否存在（§8.4）；`unreachable` 类错误绝不能被翻译成
         「对方没有资料」。
-      enum: [discovery_incomplete, scope_expired, capability_unknown, capability_unsupported, input_not_verified, egress_denied, plan_changed, offer_expired, admission_unknown, idempotency_conflict, partial_retrieval, insufficient_evidence, budget_exhausted, source_revoked, delivery_expired, local_model_missing, protocol_incompatible, task_cancelled]
+      enum: [discovery_incomplete, scope_expired, capability_unknown, capability_unsupported, input_not_verified, egress_denied, plan_changed, offer_expired, admission_unknown, idempotency_conflict, partial_retrieval, insufficient_evidence, budget_exhausted, source_revoked, delivery_expired, local_model_missing, protocol_incompatible, task_cancelled, credential_invalid, credential_expired, credential_replayed, credential_audience_mismatch, credential_operation_denied, credential_scope_denied, node_unknown, node_revoked, node_identity_mismatch, node_identity_unavailable, credential_unavailable]
     Error:
       type: object
       additionalProperties: false

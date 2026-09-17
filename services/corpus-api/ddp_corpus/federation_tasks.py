@@ -66,7 +66,7 @@ from ddp_corpus.federation_models import (
     FederationRequest,
     FederationTaskEvent,
 )
-from ddp_corpus.federation_peers import PeerDirectory, PeerUnavailable
+from ddp_corpus.federation_peers import Delegation, PeerDirectory, PeerUnavailable
 from ddp_corpus.models import ResourceVersion, as_aware, new_id, utcnow
 
 #: 取数目标统一用这个 operation 进覆盖账本；与节点能力清单的 operation 同名。
@@ -141,14 +141,19 @@ def _egress_denied(message: str) -> APIError:
     return APIError(403, message, "invalid_request_error", "egress_denied")
 
 
-def peer_directory(actor: Actor) -> PeerDirectory:
+def peer_directory(actor: Actor, delegation: Delegation) -> PeerDirectory:
     """按登记的目录建出站客户端。测试 monkeypatch 它注入 ASGI transport。
 
     目录配置坏掉是部署问题（管理员配错 JSON / endpoint），不是调用方错误：
     503 并说明是哪条登记坏了，而不是 500。
+
+    **`delegation` 是必填位置参数，不是可选项**：节点凭证的范围约束从它取
+    （`root_task_id` 必带，探测再加 `task_spec_digest`）。做成可选的话，忘了传
+    的调用点会拿到一个签不出凭证的目录，表现是每个远端目标都 unreachable ——
+    一条"本节点配置不全"被伪装成"对端连不上"，正是本项目最怕的那类静默失败。
     """
     try:
-        return PeerDirectory.from_settings(actor=actor)
+        return PeerDirectory.from_settings(actor=actor, delegation=delegation)
     except PeerUnavailable as exc:
         raise APIError(503, str(exc), "server_error", "peer_directory_invalid") from None
 
@@ -1349,7 +1354,10 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
         root_budget = routing.RootBudget(planning_budget, now=_ts(now))
     except ApplicationError as exc:
         raise federation.api_error(exc) from None
-    peers = peer_directory(actor)
+    # 规划阶段的出站全部属于这一个根任务与这一份需求修订：凭证的范围约束从这里取，
+    # 不从将要发出的请求体里抄 —— 抄的话，请求体被换掉时凭证会跟着换，对端就核对不出来。
+    peers = peer_directory(actor, Delegation(root_task_id=root_task_id,
+                                             task_spec_digest=row.task_spec_digest))
     delegated: str | None = None
     answer_outcomes: dict[str, str] = {}
     descriptor_notes: dict = {}
@@ -1982,7 +1990,8 @@ async def _delegated_answer(row: FederationRequest, *, plan: dict, step: dict,
     key = body["idempotency_key"]
     expected = {"key": key, "root_task_id": row.root_task_id, "step_id": step["step_id"],
                 "plan_digest": plan["plan_digest"], "executor_node_id": executor}
-    peers = peer_directory(actor)
+    peers = peer_directory(actor, Delegation(root_task_id=row.root_task_id,
+                                             task_spec_digest=row.task_spec_digest))
     try:
         client = peers.client(executor)
         # 先对账再受理：resume/重放不得为同一个 (root, step) 触发第二次生成。
@@ -2355,7 +2364,8 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
     scope_id = row.scope_id
     exploration_consent = row.exploration_consent_json
     request_created_at = as_aware(row.created_at)
-    peers = peer_directory(actor)
+    peers = peer_directory(actor, Delegation(root_task_id=root_task_id,
+                                             task_spec_digest=row.task_spec_digest))
     try:
         for target in candidates:
             key = (target["origin_node_id"], target["collection_id"], target["operation"])

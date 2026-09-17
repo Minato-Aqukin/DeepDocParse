@@ -81,7 +81,7 @@ FEDERATION_TABLES = (
     "federation_probes", "federation_admissions", "federation_executions",
     "federation_requests", "federation_task_events", "coverage_ledgers",
     "coverage_entries", "federation_deliveries", "federation_cache_entries",
-    "tasks",
+    "federation_credential_nonces", "tasks",
 )
 
 
@@ -245,6 +245,11 @@ async def test_migration_drill_head_orm_drift_and_one_step_down(pg_engine):
             # One step back from the P6 head is exactly the cache table's migration.
             assert "federation_cache_entries" not in after, \
                 "0032 downgrade must drop federation_cache_entries"
+        if down == "0032":
+            # One step back from the node-credential head is exactly the replay ledger.
+            assert "federation_credential_nonces" not in after, \
+                "0033 downgrade must drop federation_credential_nonces"
+            assert "federation_cache_entries" in after
     finally:
         # Never leave the scratch DB mid-drill, even when an assertion above fired.
         await asyncio.to_thread(checked_alembic, "upgrade", "head", dsn=dsn)
@@ -253,6 +258,7 @@ async def test_migration_drill_head_orm_drift_and_one_step_down(pg_engine):
         assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == head
         restored = set(await conn.run_sync(lambda sync: inspect(sync).get_table_names()))
     assert "federation_cache_entries" in restored
+    assert "federation_credential_nonces" in restored
     assert await _orm_drift(engine) == [], "ORM drift after the down/up drill"
 
 

@@ -373,3 +373,56 @@
   violates: $.next_cursor
   violates_keyword: const
   because: 终止页不得同时声明还存在下一页。
+
+# ====================================================== node credential（§8.4 / T32 / T43）
+- {fixture: valid/node-credential-claims.json,       schema: ddp-node-credential/v1.json, def: Claims,      expect: valid}
+- {fixture: valid/node-credential-sign-request.json, schema: ddp-node-credential/v1.json, def: SignRequest, expect: valid}
+- {fixture: valid/node-credential-peer-trust.json,   schema: ddp-node-credential/v1.json, def: PeerTrust,   expect: valid}
+
+- fixture: invalid/node-credential-read-over-post.json
+  schema: ddp-node-credential/v1.json
+  def: Claims
+  expect: invalid
+  violates: $.request.method
+  violates_keyword: const
+  because: 读操作只走 GET。一张读执行状态的凭证绑在 POST 上说明它是为写端点签的，不许靠方法混用。
+
+- fixture: invalid/node-credential-admission-without-step.json
+  schema: ddp-node-credential/v1.json
+  def: Claims
+  expect: invalid
+  violates: $.constraints
+  violates_message: "'step_id' is a required property"
+  because: T43 越权委托 —— 受理凭证必须钉死 step_id，否则一张为取数步骤签的凭证能拿去受理同一根任务里的任意步骤。
+
+- fixture: invalid/node-credential-probe-without-spec.json
+  schema: ddp-node-credential/v1.json
+  def: Claims
+  expect: invalid
+  violates: $.constraints
+  violates_message: "'task_spec_digest' is a required property"
+  because: 探测凭证必须绑定需求修订，否则同一根任务换一份需求也能复用它去探测。
+
+- fixture: invalid/node-credential-unknown-operation.json
+  schema: ddp-node-credential/v1.json
+  def: Claims
+  expect: invalid
+  violates: $.operation
+  violates_keyword: enum
+  because: 操作只能取 node_credential_operation 的十个值；同时是 x-ddp-enum 注入的体检（注入失效时任意字符串都会通过）。
+
+- fixture: invalid/node-credential-actor-forwards-role.json
+  schema: ddp-node-credential/v1.json
+  def: Claims
+  expect: invalid
+  violates: $.actor
+  violates_keyword: additionalProperties
+  because: T32 —— 发行者组织里的角色在接收方没有意义，带上它就是在邀请接收方按名字合并权限；API key 也同理不许出现。
+
+- fixture: invalid/node-credential-sign-request-long-ttl.json
+  schema: ddp-node-credential/v1.json
+  def: SignRequest
+  expect: invalid
+  violates: $.ttl_seconds
+  violates_keyword: maximum
+  because: 凭证是短期的（≤120s）；小时级的委托凭证等于把节点信任变成了一张可转手的长期票据。

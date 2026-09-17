@@ -214,9 +214,14 @@ async def sweep_federation_once(sessionmaker: async_sessionmaker, *,
     """
     from ddp_corpus import federation_tasks, queue  # 延迟导入避免模块环
 
+    from ddp_corpus import node_auth
+
     at = now or utcnow()
-    stats = {"executions": 0, "requests": 0, "cancelled_tasks": 0}
+    stats = {"executions": 0, "requests": 0, "cancelled_tasks": 0, "credential_nonces": 0}
     async with sessionmaker() as session:
+        # 过期的节点凭证 jti：它们本来就过不了时间窗，留着只占地方。
+        # 放在最前面且单独 commit —— 清扫失败不该拖住活性回收那几步。
+        stats["credential_nonces"] = await node_auth.sweep_nonces(session, now=at)
         executor_ids = (await session.execute(select(
             FederationExecution.executor_task_id).where(
             FederationExecution.state.in_(("queued", "running")),
