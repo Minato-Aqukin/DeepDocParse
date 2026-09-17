@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import StatusTag from '@/components/common/StatusTag.vue'
-import type { TagType } from '@/constants/status'
+import PlanSummary from '@/components/federation/PlanSummary.vue'
+import { DELIVERY_STATE, PLANNING_STATE, metaOf, retentionLabel } from '@/constants/federation'
+import type { StatusMeta } from '@/constants/status'
+import type { TaskPlan } from '@/federation/task-model'
 import { unwrap, workspaceError, type ConnectionSummary, type DesktopBridge, type Json, type PlanDetail } from '@/platform/desktop'
 import { DraftWriter } from '@/platform/draft-writer'
 
 type Row = Record<string, Json>
-type Tag = { label: string; type: TagType; active: boolean }
 const props = defineProps<{ bridge: DesktopBridge; connectionId: string; ready: boolean; pending: boolean
   centers: ConnectionSummary[]; resources: Row[] }>()
 const row = (value: unknown): Row => value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {}
@@ -34,32 +36,47 @@ const readyInputs = computed(() => props.resources.filter(item => item.state ===
 const locked = computed(() => !props.ready || props.pending || busy.value || !!planKey.value)
 const revoked = computed(() => plan.value.revoked === true || plan.value.planning_state === 'invalidated')
 const fedState = computed(() => text(federation.value?.state))
+/**
+ * 计划修订（步骤 / 数据边 / 中继 / 保留 / 预算）的展示**只有一份实现**：
+ * `components/federation/PlanSummary.vue`（铁律 4）。桌面端与 Web 协调者拿到的是同一份
+ * DDP TaskPlan（`ddp-plan-admission/1#TaskPlan`），所以这里只做形状收窄，不再画第二张表。
+ * 桌面端多出来的是"这一步会把什么发给谁、经过谁中继、对方保留多久"里**许可**的那一半：
+ * 按阶段的载荷绑定、已审阅的传输绑定、锁定但不外发的本地输入 —— 那几节在下面。
+ */
+const revision = computed<TaskPlan | null>(() => {
+  const candidate = scope.value.plan as unknown as TaskPlan | undefined
+  if (!candidate || typeof candidate !== 'object') return null
+  return typeof candidate.plan_digest === 'string' && Array.isArray(candidate.steps)
+    && Array.isArray(candidate.data_edges) && !!candidate.budget && typeof candidate.budget === 'object'
+    ? candidate : null
+})
 
-const PLANNING: Record<string, Tag> = {
-  ready: { label: '待批准', type: 'info', active: true }, exploring: { label: '已批准探索', type: 'info', active: true },
-  approved: { label: '已批准执行', type: 'success', active: false }, invalidated: { label: '已撤销或过期', type: 'primary', active: false },
-}
-const FEDERATION: Record<string, Tag> = {
-  prepared: { label: '尚未派发', type: 'primary', active: false }, exploring: { label: '中心规划中', type: 'info', active: true },
+/**
+ * `planning_state` / `delivery_state` / `retention_class` 的取值与中文都是契约生成物
+ * （`enums.yaml` → `@deepdocparse/contracts`），这里只查表，**不许再写第二份中文**（铁律 1）。
+ * 手写过一版，四个取值里三个与契约不一样，而且漏了 `draft`/`awaiting_approval`。
+ *
+ * 下面两张表是**本机运行时自己的状态**，契约里没有对应枚举：
+ * `FEDERATION` 是 `ddp_local` 派发状态机（`federation_dispatch.py` 的 `state`），
+ * `VERIFY` 是宿主对本地交付字节重算摘要的结果（`bridge.d.ts` 的 `PlanDetail.verification`）。
+ * 两张表都走 `tag()` 的兜底：认不出来的取值原样显示代码，不留白（不变式 2）。
+ */
+const FEDERATION: Record<string, StatusMeta> = {
+  prepared: { label: '尚未派发', type: 'primary' }, exploring: { label: '中心规划中', type: 'info', active: true },
   planned: { label: '中心计划已就绪', type: 'info', active: true }, explore_unknown: { label: '探索结果未知 · 需对账', type: 'warning', active: true },
   submitted: { label: '中心执行中', type: 'info', active: true }, submit_unknown: { label: '提交结果未知 · 需对账', type: 'warning', active: true },
-  approved: { label: '中心已批准', type: 'info', active: true }, succeeded: { label: '中心已完成', type: 'success', active: false },
-  failed: { label: '失败', type: 'danger', active: false }, cancelled: { label: '已取消', type: 'primary', active: false },
-  delivered: { label: '已交付', type: 'success', active: false },
+  approved: { label: '中心已批准', type: 'info', active: true }, succeeded: { label: '中心已完成', type: 'success' },
+  failed: { label: '失败', type: 'danger' }, cancelled: { label: '已取消', type: 'primary' },
+  delivered: { label: '已交付', type: 'success' },
 }
-const DELIVERY: Record<string, Tag> = {
-  not_requested: { label: '未请求交付', type: 'primary', active: false }, pending: { label: '待取回确认', type: 'info', active: true },
-  transferring: { label: '传输中', type: 'info', active: true }, confirmed: { label: '已确认交付', type: 'success', active: false },
-  expired: { label: '交付已过期', type: 'danger', active: false },
+const VERIFY: Record<string, StatusMeta> = {
+  passed: { label: '本地重算摘要一致', type: 'success' }, failed: { label: '本地重算摘要不一致', type: 'danger' },
+  unavailable: { label: '尚无可校验的本地结果', type: 'primary' },
 }
-const VERIFY: Record<string, Tag> = {
-  passed: { label: '本地重算摘要一致', type: 'success', active: false }, failed: { label: '本地重算摘要不一致', type: 'danger', active: false },
-  unavailable: { label: '尚无可校验的本地结果', type: 'primary', active: false },
-}
-const tag = (table: Record<string, Tag>, value: string): Tag => table[value] ?? { label: value || '未知', type: 'warning', active: false }
+const tag = (table: Record<string, StatusMeta>, value: string): StatusMeta => table[value] ?? { label: `未知取值（${value || '—'}）`, type: 'warning' }
+/** `payload_kind` 内联在 `ddp-plan-admission/1.json` 里，不是 `enums.yaml` 的枚举；认不出的原样显示。 */
 const PAYLOAD: Record<string, string> = { query_text: '检索词原文', source_files: '原始文件', evidence_excerpts: '证据片段' }
 const PHASE: Record<string, string> = { exploration: '探索', execution: '执行' }
-const RETENTION: Record<string, string> = { temporary: '临时（任务结束即可清理）', task_pinned: '任务期间保留', persistent: '长期保留' }
 // Codes where the operation may have happened: keep the key and reconcile by receipt.
 const UNCERTAIN = new Set(['outcome_unknown', 'host_operation_failed', 'connection_failed', 'disposed', 'receipt_required'])
 
@@ -220,19 +237,18 @@ onBeforeUnmount(() => { void persist(); alive = false; generation++ })
       <p class="muted">下列状态来自本机镜像；中心的最新状态以「对账」结果为准。</p>
       <button v-for="item in rows(listing.items)" :key="text(item.plan_id)" class="plan-row" :aria-current="item.plan_id === selectedPlan ? 'true' : undefined" @click="open(text(item.plan_id))">
         <code class="ddp-mono">{{ item.plan_id }}</code>
-        <StatusTag v-bind="tag(PLANNING, text(item.planning_state))" />
-        <StatusTag v-if="item.federation" v-bind="tag(FEDERATION, text(row(item.federation).state))" />
-        <StatusTag v-if="row(item.federation).delivery_state" v-bind="tag(DELIVERY, text(row(item.federation).delivery_state))" />
+        <StatusTag :meta="metaOf(PLANNING_STATE, text(item.planning_state))" />
+        <StatusTag v-if="item.federation" :meta="tag(FEDERATION, text(row(item.federation).state))" />
+        <StatusTag v-if="row(item.federation).delivery_state" :meta="metaOf(DELIVERY_STATE, text(row(item.federation).delivery_state))" />
       </button>
       <p v-if="!rows(listing.items).length" class="muted">尚无计划。</p>
     </section>
 
     <article v-if="detail" class="plan-review" aria-label="计划审阅">
-      <div class="heading"><h2>审阅 <code class="ddp-mono">{{ plan.plan_id }}</code></h2><StatusTag v-bind="tag(PLANNING, text(plan.planning_state))" /></div>
+      <div class="heading"><h2>审阅 <code class="ddp-mono">{{ plan.plan_id }}</code></h2><StatusTag :meta="metaOf(PLANNING_STATE, text(plan.planning_state))" /></div>
       <dl class="facts">
         <dt>范围摘要</dt><dd class="ddp-mono">{{ plan.scope_digest }}</dd>
-        <dt>有效期至</dt><dd class="ddp-mono">{{ row(scope.plan).valid_until }}</dd>
-        <dt>保留策略</dt><dd>{{ RETENTION[text(scope.retention)] || scope.retention }}</dd>
+        <dt>保留策略</dt><dd>{{ retentionLabel(text(scope.retention)) }}</dd>
         <dt>输出位置</dt><dd class="ddp-mono">{{ (scope.output_locations as string[] | undefined)?.join('、') }}</dd>
       </dl>
 
@@ -252,14 +268,10 @@ onBeforeUnmount(() => { void persist(); alive = false; generation++ })
         <dt>中心工作区</dt><dd class="ddp-mono">{{ item.workspace_id }}</dd><dt>用户</dt><dd class="ddp-mono">{{ item.subject }}</dd>
       </dl>
 
-      <h3>数据边</h3>
-      <div class="table-wrap"><table>
-        <thead><tr><th>编号</th><th>来源 → 去向</th><th>内容</th><th>保留</th></tr></thead>
-        <tbody><tr v-for="edge in rows(row(scope.plan).data_edges)" :key="text(edge.edge_id)">
-          <td class="ddp-mono">{{ edge.edge_id }}</td><td class="ddp-mono">{{ edge.from_node_id }} → {{ edge.to_node_id }}</td>
-          <td>{{ PAYLOAD[text(edge.payload_kind)] || edge.payload_kind }}</td><td>{{ RETENTION[text(edge.retention)] || edge.retention }}</td>
-        </tr></tbody>
-      </table></div>
+      <h3>计划修订 · 谁执行、数据流向哪里</h3>
+      <!-- 与 Web 协调者同一份只读展示组件；数据边与预算不在这里重画一遍。 -->
+      <PlanSummary v-if="revision" :plan="revision" />
+      <p v-else class="ddp-degraded is-danger">本机镜像里的计划结构不完整，步骤与数据边无法展示。不要据此批准。</p>
 
       <h3>锁定的本地输入 · 不外发</h3>
       <div class="table-wrap"><table>
@@ -269,10 +281,9 @@ onBeforeUnmount(() => { void persist(); alive = false; generation++ })
       </table></div>
       <p v-if="!rows(scope.input_manifest).length" class="muted">未锁定本地输入。</p>
 
-      <h3>预算</h3>
-      <dl class="facts budget">
-        <dt>请求上限</dt><dd class="ddp-num">{{ count(row(row(scope.plan).budget).max_requests) }}</dd>
-        <dt>外发字节上限</dt><dd class="ddp-num">{{ count(row(row(scope.plan).budget).max_bytes) }}</dd>
+      <!-- 计划总预算在上面的计划修订里；这里只有探索许可自己的预算，它不在 TaskPlan 上。 -->
+      <h3>探索阶段预算</h3>
+      <dl class="facts exploration-budget">
         <dt>探索请求上限</dt><dd class="ddp-num">{{ count(row(row(scope.exploration).budget).max_probe_requests) }}</dd>
         <dt>探索字节上限</dt><dd class="ddp-num">{{ count(row(row(scope.exploration).budget).max_egress_bytes) }}</dd>
       </dl>
@@ -285,7 +296,7 @@ onBeforeUnmount(() => { void persist(); alive = false; generation++ })
       <p class="muted">批准会弹出系统确认框，再次列出上面的接收方与外发内容；只有在系统确认框里批准才生效。</p>
 
       <h3>派发与对账</h3>
-      <p class="status-line"><StatusTag v-if="federation" v-bind="tag(FEDERATION, fedState)" /><span v-else class="muted">尚未派发</span>
+      <p class="status-line"><StatusTag v-if="federation" :meta="tag(FEDERATION, fedState)" /><span v-else class="muted">尚未派发</span>
         <span v-if="federation?.root_task_id" class="muted">中心任务 <code class="ddp-mono">{{ federation.root_task_id }}</code></span>
         <span v-if="federation" class="muted">最近对账 <span class="ddp-num">{{ clock(row(federation.reconcile).at) }}</span></span></p>
       <p v-if="federation?.last_error" role="alert" class="error">{{ workspaceError(new Error(text(row(federation.last_error).code))) }} <code class="ddp-mono">{{ row(federation.last_error).code }}</code></p>
@@ -298,11 +309,11 @@ onBeforeUnmount(() => { void persist(); alive = false; generation++ })
       </div>
 
       <h3>交付</h3>
-      <p class="status-line"><StatusTag v-if="delivery.state" v-bind="tag(DELIVERY, text(delivery.state))" /><span v-else class="muted">尚无交付</span>
+      <p class="status-line"><StatusTag v-if="delivery.state" :meta="metaOf(DELIVERY_STATE, text(delivery.state))" /><span v-else class="muted">尚无交付</span>
         <span v-if="delivery.id" class="muted">交付 <code class="ddp-mono">{{ delivery.id }}</code></span></p>
       <p v-if="delivery.reason" role="alert" class="error">{{ workspaceError(new Error(text(delivery.reason))) }} <code class="ddp-mono">{{ delivery.reason }}</code></p>
       <dl v-if="detail.verification.expected || detail.verification.state !== 'unavailable'" class="facts">
-        <dt>本地校验</dt><dd><StatusTag v-bind="tag(VERIFY, detail.verification.state)" /></dd>
+        <dt>本地校验</dt><dd><StatusTag :meta="tag(VERIFY, detail.verification.state)" /></dd>
         <dt>中心声明摘要</dt><dd class="ddp-mono">{{ detail.verification.expected }}</dd>
         <dt>本地重算摘要</dt><dd class="ddp-mono">{{ detail.verification.actual || '—' }}</dd>
       </dl>

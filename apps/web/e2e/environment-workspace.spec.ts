@@ -93,8 +93,16 @@ async function desktopFixture(page: Page, imported = false, options: { center?: 
             payload_bindings: [{ payload_id: 'exploration-query', phase: 'exploration', ...payload }, { payload_id: 'execution-query', phase: 'execution', edge_id: 'edge-query', ...payload }],
             transport_bindings: [{ transport_ref: 'center', recipient_node_id: 'node-center', environment_id: 'node-center', workspace_id: 'org-1',
               profile_id: 'profile-center', issuer: 'node-center', subject: 'user-alice', endpoint: 'https://center.example/team' }],
-            plan: { plan_id: id, plan_digest: 'sha256:' + 'c'.repeat(64), valid_until: '2030-01-01T00:00:00Z',
-              budget: { max_requests: 4, max_bytes: bytes * 4 }, data_edges: [{ edge_id: 'edge-query', from_node_id: 'local-env-0', to_node_id: 'node-center', payload_kind: 'query_text', retention: input.retention }] },
+            // 形状照 `ddp_local/plan_templates.py::center_query_scope` 生成的 TaskPlan 写全：
+            // 界面上的计划修订用的是与 Web 协调者同一个 PlanSummary，缺字段就会静默少画一块。
+            plan: { schema: 'ddp-plan-admission/1#TaskPlan', plan_id: id, revision: 1, plan_digest: 'sha256:' + 'c'.repeat(64),
+              task_spec_digest: 'sha256:' + '9'.repeat(64), root_coordinator_node_id: 'local-env-0', planning_state: 'ready',
+              steps: [{ step_id: 'retrieve-1', operation: 'retrieve', executor_node_id: 'node-center', depends_on: [],
+                fixed_inputs: input.inputs.map((item: Plan) => item.ref) }],
+              final_result_writer: 'local-env-0', execution_consent_ref: null, valid_until: '2030-01-01T00:00:00Z',
+              budget: { max_requests: 4, max_bytes: bytes * 4, max_generation_tokens: 0, max_hops: 1, deadline: '2030-01-01T00:00:00Z' },
+              data_edges: [{ edge_id: 'edge-query', from_node_id: 'local-env-0', to_node_id: 'node-center', payload_kind: 'query_text',
+                retention: input.retention, authorised_by: 'local:local-env-0' }] },
             exploration: { budget: { max_probe_requests: 2, max_egress_bytes: bytes * 2 } } } })
         planLedger.receipts.set(input.idempotencyKey, () => planLedger.plans.get(id))
         return ok(planLedger.plans.get(id))
@@ -390,17 +398,23 @@ test('远端计划主路径：审阅实际外发内容，分阶段批准后派�
   await expect(outgoing).toContainText(String(Buffer.byteLength('控制器工作温度是多少？')))
   await expect(review).toContainText('检索词原文：控制器工作温度是多少？')
   await expect(review).toContainText('https://center.example/team')
-  await expect(review).toContainText('local-env-0 → node-center')
   await expect(review).toContainText('version-0')
-  await expect(review).toContainText('临时（任务结束即可清理）')
+  // 保留类别、规划态与交付态的中文都来自契约生成物；这里断言的就是契约里的那一份。
+  await expect(review).toContainText('临时数据')
   await expect(review).toContainText('local:workspace-0')
-  await expect(review).toContainText('2030-01-01T00:00:00Z')
-  await expect(review.locator('.budget')).toContainText('4')
+  // 计划修订这一节由 Web 协调者同一个 PlanSummary 画：步骤、执行者、数据边、中继、总预算。
+  const revision = review.getByRole('region', { name: '执行计划' })
+  await expect(revision).toContainText('retrieve-1')
+  await expect(revision).toContainText('本节点（local-env-0）')
+  await expect(revision).toContainText('远端 node-center')
+  await expect(revision).toContainText('edge-query')
+  await expect(revision).toContainText('2030-01-01T00:00:00Z')
+  await expect(revision.locator('.budget')).toContainText('4')
   await expect(review.getByRole('button', { name: '派发探索', exact: true })).toBeDisabled()
   await expect(review.getByRole('button', { name: '批准执行…', exact: true })).toBeDisabled()
 
   await review.getByRole('button', { name: '批准探索…', exact: true }).click()
-  await expect(review).toContainText('已批准探索')
+  await expect(review).toContainText('正在探测')
   expect(fixture.calls.find(call => call.name === 'clientPlanApprove')!.input).toMatchObject({ planId: 'plan-1', phase: 'exploration',
     scopeDigest: 'sha256:' + 'd'.repeat(64), userConfirmed: true })
   await review.getByRole('button', { name: '派发探索', exact: true }).click()
@@ -411,14 +425,14 @@ test('远端计划主路径：审阅实际外发内容，分阶段批准后派�
   await expect(review).toContainText('中心执行中')
   await review.getByRole('button', { name: '对账', exact: true }).click()
   await expect(review).toContainText('中心已完成')
-  await expect(review).toContainText('待取回确认')
+  await expect(review).toContainText('待领取')
   await expect(review.getByRole('button', { name: '确认交付', exact: true })).toBeDisabled()
   await review.getByRole('button', { name: '取回交付并校验', exact: true }).click()
   await expect(review).toContainText('本地重算摘要一致')
   await expect(review).toContainText('中心生成内容 · 待复核')
   await review.getByRole('button', { name: '确认交付', exact: true }).click()
-  await expect(review).toContainText('已确认交付')
-  await expect(page.getByRole('button', { name: /plan-1/ })).toContainText('已确认交付')
+  await expect(review.getByText('已交付', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /plan-1/ })).toContainText('已交付')
   await page.screenshot({ path: info.outputPath('federation-plan-review.png'), fullPage: true, animations: 'disabled' })
 
   expect(fixture.calls.filter(call => call.name === 'clientPlanConfirmDelivery')).toHaveLength(1)
