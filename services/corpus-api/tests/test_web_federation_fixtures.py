@@ -8,6 +8,7 @@
 jsonschema 不认识 `x-ddp-enum`，不展开的话"写错一个枚举值"这一整类问题验不出来。
 """
 import copy
+import importlib.util
 import json
 from pathlib import Path
 
@@ -19,7 +20,26 @@ from ddp_core.application import coverage as coverage_kernel
 from ddp_corpus import federation
 from test_federation_admissions import FEDERATION_TASKS_SPEC, SCHEMAS
 
-FIXTURES = Path(__file__).resolve().parents[3] / "apps/web/e2e/fixtures/federation"
+ROOT = Path(__file__).resolve().parents[3]
+FIXTURES = ROOT / "apps/web/e2e/fixtures/federation"
+
+def _load_module(path: Path):
+    """按路径加载一个仓库脚本。
+
+    **不往 `sys.path` 里插 `scripts/`**：那会让那三十个脚本在整个测试会话里都能被
+    裸名导入，将来某个测试模块重名就会静默导入错东西（本仓库已经因为隐式命名空间包
+    导错过 conftest，F-29）。
+    """
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# 契约 YAML 一律走共用读取口：重复键当场报错而不是静默丢内容。
+# `scope-v1.yaml` 没有任何守卫在读，这里是它唯一的重复键防线。
+contract_yaml = _load_module(ROOT / "scripts" / "contract_yaml.py")
+SCOPE_SPEC = contract_yaml.load(ROOT / "packages/contracts/openapi/scope-v1.yaml")
 
 #: 夹具文件 → 它扮演的响应。新增夹具必须登记，否则下面的完整性用例会红。
 ROLES = {
@@ -28,10 +48,13 @@ ROLES = {
     "task-running.json": "TaskStatus",
     "task-succeeded.json": "TaskStatus",
     "task-insufficient.json": "TaskStatus",
+    "task-queued.json": "TaskStatus",
     "events-first.json": "EventPage",
     "events-later.json": "EventPage",
     "plan.json": "TaskPlan",
+    "plan-ready.json": "TaskPlan",
     "coverage.json": "CoverageLedger",
+    "scope-sealed.json": "ScopeEnvelope",
 }
 
 
@@ -63,12 +86,25 @@ def _openapi(name: str) -> Draft202012Validator:
     return Draft202012Validator({"$ref": f"#/components/schemas/{name}", "components": COMPONENTS})
 
 
+def _scope_envelope() -> Draft202012Validator:
+    """ScopeEnvelope 跨文件引用 `ddp-scope-coverage` 的 $defs —— 把两边接到同一个文档里。
+
+    不接的话 jsonschema 解不开 `../schemas/...#/$defs/ScopeManifest`，会去读网络
+    （离线就抛），或者更糟：把整个 manifest 当成无约束对象放过去。
+    """
+    envelope = _expand_enums(copy.deepcopy(SCOPE_SPEC["components"]["schemas"]["ScopeEnvelope"]))
+    coverage = _expand_enums(SCHEMAS["schemas"]["ddp-scope-coverage/v1.json"])
+    envelope["properties"]["manifest"] = {"$ref": "#/$defs/ScopeManifest"}
+    return Draft202012Validator({**envelope, "$defs": coverage["$defs"]})
+
+
 VALIDATORS = {
     "TaskListPage": _openapi("TaskListPage"),
     "TaskStatus": _openapi("TaskStatus"),
     "EventPage": _openapi("EventPage"),
     "TaskPlan": _ddp("ddp-plan-admission/v1.json", "TaskPlan"),
     "CoverageLedger": _ddp("ddp-scope-coverage/v1.json", "CoverageLedger"),
+    "ScopeEnvelope": _scope_envelope(),
 }
 EVIDENCE = _ddp("ddp-evidence/v1.json", "FederatedEvidence")
 BINDING = _ddp("ddp-evidence/v1.json", "ClaimEvidenceBinding")

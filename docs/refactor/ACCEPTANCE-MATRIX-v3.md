@@ -111,7 +111,7 @@
 | 测试 | 阶段 | 状态 | 证据 | 缺口 |
 |---|---|---|---|---|
 | T32 跨中心同名用户/节点凭证 | P5 | 🟡 | `test_resource_acl.py::test_t32_same_subject_other_issuer_and_node_creds_not_owner`；`test_federation_two_node.py::test_wrong_peer_token_fails_closed_without_fabrication`；`http.test.mjs`「copied public node metadata without the private signing key never releases a credential」 | 节点间仍是共享 peer token，没有逐节点密钥与受限委托（改进项 ③） |
-| T33 A 无证据、B 有证据 | P5 | 🟡 | `test_federation_two_node.py::test_b_only_evidence_over_real_peer_http`；`test_federation_answer.py::test_two_node_remote_excerpt_reaches_real_prompt`（B 为真实子进程节点） | Web 已能在 A 的任务页展示 B 的证据与答案（Web e2e「执行中的任务轮询到落定：矛盾与未查全在答案之前，引用指回证据，本节点证据可开原文」），但**从网页发起任务**还没接（改进项 ① a2-2）；生成用替身模型 |
+| T33 A 无证据、B 有证据 | P5 | 🟡 | `test_federation_two_node.py::test_b_only_evidence_over_real_peer_http`；`test_federation_answer.py::test_two_node_remote_excerpt_reaches_real_prompt`（B 为真实子进程节点）；网页整条链路：Web e2e「创建任务：不勾问题原文就真的不外发，而且没有远端目标时许可必须是 local_only」「批准计划：许可覆盖到中继节点，受理用的是界面上显示的那一份摘要」「执行中的任务轮询到落定：矛盾与未查全在答案之前，引用指回证据，本节点证据可开原文」 | 生成用替身模型；跨真实两节点的**网页**端到端没跑过（e2e 里协调者是替身） |
 | T34 必要证据分散于 A/B | P5 | 🟡 | `test_federation_two_node.py::test_split_evidence_keeps_origins_and_identity` | 被引用用例的 A/B 是**相同字节**，测的是去重与归属（T44 的场景）；没有"答案必须同时用到两侧证据"的用例，也没有答案层断言"不能只选一个答案字符串" |
 | T35 本地相似但不足的干扰资料 | P5/P6 | 🟡 | `eval/tests/test_routing_eval.py`（`local-similar-decoy`：穷查 100%、fast 33%，合成夹具） | fast 没有"缺子问题且有预算就继续下一批"的扩展逻辑（§7.2）；没有真实语料 |
 | T36 最近节点缺资料/能力 | P5/P6 | 🟡 | `test_federation_answer_delegation.py::test_not_ready_node_never_gets_an_answer_step`；评测 `nearest-node-decoy`（合成） | 距离/可达性排序本身没有实现，只证明了"能力是硬约束" |

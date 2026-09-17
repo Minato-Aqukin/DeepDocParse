@@ -74,3 +74,35 @@ export const SCOPE_KIND_LABEL: Record<string, string> = {
   federation_public: '联邦公开范围',
   fixed_resources: '指定资源',
 }
+
+/**
+ * 外发许可里可勾选的载荷类别（`ddp-task-probe/v1.json` 的 `allowed_payload`）。
+ *
+ * 这张表不是 `enums.yaml` 的生成物 —— 取值内联在 JSON schema 里，所以前端只能抄一份。
+ * **抄的东西会漂**：schema 加一类外发而这里没加，用户就授不了权（那类目标被记成 denied，
+ * 看起来像"对方拒绝"）；这里多一个 schema 没有的，请求直接 403。
+ * `__tests__/federation.spec.ts` 对着 schema 文件逐字比对钉死这件事。
+ */
+export const PROBE_PAYLOAD_LABEL: Record<string, string> = {
+  query_text: '问题原文',
+  subquery_text: '拆解后的子问题',
+  entity_names: '实体名',
+  resource_names: '资源名',
+  collection_filters: '集合筛选条件',
+  evidence_excerpts: '证据摘录',
+  source_files: '原文件',
+}
+
+/** 计划数据边上实际外发的内容（`ddp-plan-admission/v1.json` 的 `payload_kind`）。 */
+export const PAYLOAD_KIND_LABEL: Record<string, string> = {
+  query_text: '问题原文',
+  evidence_excerpts: '证据摘录',
+  source_files: '原文件',
+  parsed_layout: '版面解析结果',
+  embeddings: '向量',
+  answer_text: '答案文本',
+  wiki_draft: 'Wiki 草稿',
+}
+
+export const probePayloadLabel = (value: string) => PROBE_PAYLOAD_LABEL[value] ?? value
+export const payloadKindLabel = (value: string) => PAYLOAD_KIND_LABEL[value] ?? value

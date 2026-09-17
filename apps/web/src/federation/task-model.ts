@@ -328,3 +328,195 @@ export async function collectEvents(
 export function citationIndex(evidence: FederatedEvidence[]): Map<string, number> {
   return new Map(evidence.map((item, index) => [item.evidence_id, index + 1]))
 }
+
+// ---------------------------------------------------------------- 组装
+
+export interface TaskDraft {
+  query: string
+  operation: TaskOperation
+  scopeKind: ScopeKind
+  /** federation_public 必须先取得的范围清单；其余范围由协调者本地枚举 */
+  scope?: ScopeEnvelope
+  resourceRefs: string[]
+  mode: SearchMode
+  /** 允许发给远端的内容。**问题本身也是外发**（ExplorationConsent.allowed_payload） */
+  payload: ProbePayload[]
+  maxProbeRequests: number
+  maxEgressBytes: number
+}
+
+const MINUTE = 60_000
+
+function iso(ms: number): string {
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
+}
+
+/** 范围里不属于本节点的来源节点（排序去重）。本地目标不走外发许可门。 */
+export function remoteNodesOf(scope: ScopeEnvelope | undefined, localNodeId: string): string[] {
+  if (!scope) return []
+  const nodes = new Set(scope.manifest.expanded_members.map((member) => member.origin_node_id))
+  nodes.delete(localNodeId)
+  return [...nodes].sort()
+}
+
+/** 穷查必须绑定一个已封存的范围引用（TaskSpec allOf）：只有联邦范围清单能给出分母。 */
+export function exhaustiveAllowed(draft: Pick<TaskDraft, 'scopeKind' | 'scope'>): boolean {
+  return draft.scopeKind === 'federation_public' && !!draft.scope
+}
+
+export interface IntentBody {
+  task_spec: TaskSpec
+  exploration_consent: ExplorationConsent
+  scope_manifest?: ScopeManifest
+}
+
+/**
+ * 按用户在界面上的选择生成 TaskIntentInput。
+ *
+ * 两个"看起来可以合并、实际必须分开"的判断：
+ *
+ * - **执行策略看范围种类，不看有没有远端目标。** `local_only` 执行禁止
+ *   `federation_public` 范围（`plans.validate_spec`），而联邦范围完全可能一个
+ *   远端成员都没有（清单里只有本节点）。按"有没有远端"选执行策略的话，这种范围
+ *   会被协调者当场拒掉。
+ * - **外发许可看有没有远端接收方，不看范围种类。** 没有远端接收方就必须
+ *   `local_only` + 载荷/接收方/预算全空（契约 allOf，I03）。
+ *
+ * 用户不勾"问题原文"时照样生成，协调者会把远端目标如实记成 denied ——
+ * 界面不替用户偷偷补上外发项。
+ */
+export function buildIntent(draft: TaskDraft, options: {
+  localNodeId: string
+  grantedBy: string
+  workspaceRef: string
+  nonce: string
+  now: number
+  validMinutes?: number
+}): IntentBody {
+  const query = draft.query.trim()
+  if (!query) throw new Error('问题不能为空')
+  if (!options.localNodeId) throw new Error('还没拿到本节点身份，请稍后重试')
+  if (!options.grantedBy || !options.workspaceRef) throw new Error('还没拿到账号信息，请稍后重试')
+  if (draft.scopeKind === 'federation_public' && !draft.scope) {
+    throw new Error('联邦范围需要先生成范围清单')
+  }
+  if (draft.scopeKind === 'fixed_resources' && draft.resourceRefs.length === 0) {
+    throw new Error('至少选择一份资源')
+  }
+  if (draft.mode === 'exhaustive_scope' && !exhaustiveAllowed(draft)) {
+    throw new Error('穷查只能绑定已生成的联邦范围清单')
+  }
+  const federated = draft.scopeKind === 'federation_public'
+  const remote = federated ? remoteNodesOf(draft.scope, options.localNodeId) : []
+  const explorationId = `explore-${options.nonce}`
+  const resourceScope: TaskSpec['resource_scope'] = { kind: draft.scopeKind }
+  if (federated && draft.scope) resourceScope.scope_ref = draft.scope.manifest.scope_id
+  if (draft.scopeKind === 'fixed_resources') resourceScope.resource_refs = [...new Set(draft.resourceRefs)].sort()
+  const spec: TaskSpec = {
+    schema: 'ddp-task-probe/1#TaskSpec',
+    protocol: 'ddp-task/1',
+    operation: draft.operation,
+    workspace_ref: options.workspaceRef,
+    query,
+    resource_scope: resourceScope,
+    search_policy: { mode: draft.mode, ordering: 'local_first' },
+    execution_policy: federated
+      ? { mode: 'trusted_federation', coordinator_ref: options.localNodeId }
+      : { mode: 'local_only' },
+    consent_refs: { exploration: explorationId, execution: null },
+    requirements: { citations: draft.operation === 'rag.answer.cited' ? 'required' : 'not_required' },
+    budget_ref: `budget-${options.nonce}`,
+  }
+  const validUntil = options.now + (options.validMinutes ?? 30) * MINUTE
+  const scopeValid = draft.scope ? Date.parse(draft.scope.manifest.valid_until) : Number.POSITIVE_INFINITY
+  const consent: ExplorationConsent = {
+    schema: 'ddp-task-probe/1#ExplorationConsent',
+    consent_id: explorationId,
+    granted_by: options.grantedBy,
+    granted_at: iso(options.now),
+    valid_until: iso(Math.min(validUntil, scopeValid)),
+    egress_mode: remote.length ? 'listed_nodes' : 'local_only',
+    allowed_payload: remote.length ? [...new Set(draft.payload)].sort() : [],
+    allowed_recipients: remote,
+    budget: remote.length
+      ? { max_probe_requests: Math.max(0, Math.floor(draft.maxProbeRequests)),
+          max_egress_bytes: Math.max(0, Math.floor(draft.maxEgressBytes)) }
+      : { max_probe_requests: 0, max_egress_bytes: 0 },
+  }
+  const body: IntentBody = { task_spec: spec, exploration_consent: consent }
+  if (federated && draft.scope) body.scope_manifest = draft.scope.manifest
+  return body
+}
+
+/**
+ * 执行许可必须覆盖计划里的**每一个**端点：执行者、数据边两端、以及中继
+ * （中继也是数据接收方，DataEdge.relay_via 的描述）。与协调者 `approve` 的判据
+ * 逐项一致 —— 少一个就 egress_denied；多一个就是用户批准了计划里没有的外发。
+ * 所以只从计划推，不接受额外输入。
+ */
+export function recipientsOf(plan: Pick<TaskPlan, 'steps' | 'data_edges'>): string[] {
+  const nodes = new Set<string>()
+  for (const step of plan.steps) nodes.add(step.executor_node_id)
+  for (const edge of plan.data_edges) {
+    nodes.add(edge.from_node_id)
+    nodes.add(edge.to_node_id)
+    for (const relay of edge.relay_via ?? []) nodes.add(relay)
+  }
+  return [...nodes].sort()
+}
+
+/**
+ * 许可只有一个保留类别，而协调者要求它与**每一条**数据边的保留类别相同。
+ * 计划里各边不一致时一份许可批不了 —— 显式报出来，不替用户挑一个。
+ * 没有数据边（纯本地计划）时没有外发，用最保守的 temporary。
+ */
+export function retentionOf(plan: Pick<TaskPlan, 'data_edges'>): RetentionClass {
+  const classes = new Set(plan.data_edges.map((edge) => edge.retention))
+  if (classes.size > 1) throw new Error('计划里的数据边保留策略不一致，无法用一份执行许可批准')
+  return [...classes][0] ?? 'temporary'
+}
+
+export function buildExecutionConsent(plan: TaskPlan, options: {
+  rootTaskId: string
+  grantedBy: string
+  now: number
+}): ExecutionConsent {
+  if (!options.grantedBy) throw new Error('还没拿到账号信息，请稍后重试')
+  const planValid = Date.parse(plan.valid_until)
+  if (!(planValid > options.now)) throw new Error('计划已过期，请重新规划')
+  return {
+    schema: 'ddp-plan-admission/1#ExecutionConsent',
+    consent_id: `execute-${options.rootTaskId}-r${plan.revision}`,
+    plan_digest: plan.plan_digest,
+    granted_by: options.grantedBy,
+    granted_at: iso(options.now),
+    valid_until: plan.valid_until,
+    allowed_recipients: recipientsOf(plan),
+    allowed_edges: plan.data_edges.map((edge) => edge.edge_id).sort(),
+    retention: retentionOf(plan),
+  }
+}
+
+/**
+ * 取消只对**还没落定**的任务有意义，判据与轮询用的是同一个 —— 契约的 `active` 标记。
+ * 手写一份 `queued|claimed|running` 的话，契约新增一个进行中状态时这里会把它
+ * 当成终态、按钮消失，而那个任务其实还在跑。
+ */
+export function canCancel(status: Pick<TaskStatus, 'status'>): boolean {
+  return !isSettled(status)
+}
+
+/**
+ * 续跑的判据要与协调者 `resume` 一致，否则按钮点下去必定 403。
+ *
+ * 协调者要求：**有一份已批准的计划**（`planning_state === 'approved'`），
+ * 且没被取消。在此之上界面只在"还有东西可补"时才给按钮：失败的任务，
+ * 或者成功但没查全的任务。取消是显式终态，重跑必须走一条新任务。
+ */
+export function canResume(
+  status: Pick<TaskStatus, 'status' | 'planning_state' | 'retrieval_completeness'>,
+): boolean {
+  if (status.planning_state !== 'approved') return false
+  if (status.status === 'failed') return true
+  return status.status === 'succeeded' && status.retrieval_completeness !== 'complete'
+}

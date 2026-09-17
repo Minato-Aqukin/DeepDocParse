@@ -6,6 +6,7 @@ import { tasksApi } from '@/api/tasks'
 import StatusTag from '@/components/common/StatusTag.vue'
 import CoveragePanel from '@/components/federation/CoveragePanel.vue'
 import EventTimeline from '@/components/federation/EventTimeline.vue'
+import PlanApproval from '@/components/federation/PlanApproval.vue'
 import PlanSummary from '@/components/federation/PlanSummary.vue'
 import TaskResultPanel from '@/components/federation/TaskResultPanel.vue'
 import { usePolling } from '@/composables/usePolling'
@@ -19,6 +20,8 @@ import {
   searchModeLabel,
 } from '@/constants/federation'
 import {
+  canCancel,
+  canResume,
   collectEvents,
   isSettled,
   type CoverageLedger,
@@ -43,6 +46,8 @@ const events = ref<TaskEvent[]>([])
 const error = ref('')
 const planError = ref('')
 const coverageError = ref('')
+const actionError = ref('')
+const acting = ref<'' | 'cancel' | 'resume'>('')
 const loading = ref(false)
 let nextSeq = 0
 let generation = 0
@@ -129,6 +134,44 @@ async function load() {
   }
 }
 
+/**
+ * 还没受理过。受理会立刻把状态推到 `running`（`execute_task`），所以 `queued`
+ * 唯一地表示"计划还没被提交执行" —— 权威的那个标记（受理幂等键）是内部字段，
+ * 状态响应里没有。批准入口只在这个窗口里给：已经跑起来的任务再点"批准并执行"
+ * 只会拿到 409。
+ */
+const awaitingSubmission = computed(() => status.value?.status === 'queued'
+  && (status.value.planning_state === 'ready' || status.value.planning_state === 'approved'))
+
+/** 改了状态就立刻重读一次权威状态，并按新状态决定要不要继续轮询。 */
+async function afterAction() {
+  actionError.value = ''
+  polling.stop()
+  try {
+    await refresh()
+    error.value = ''
+  } catch (cause) {
+    error.value = problem(cause, '状态刷新失败，显示的是上一次取得的状态')
+  }
+  if (status.value && !isSettled(status.value)) polling.start()
+}
+
+async function act(kind: 'cancel' | 'resume') {
+  acting.value = kind
+  actionError.value = ''
+  try {
+    await (kind === 'cancel' ? tasksApi.cancel(rootTaskId.value) : tasksApi.resume(rootTaskId.value))
+    // 续跑跑的是**同一份**已批准计划（协调者只把 generation 前移，不重新规划）。
+    // 仍然丢掉本地这份重读一次：页面上显示的计划永远不该比协调者手里的旧。
+    if (kind === 'resume') plan.value = null
+    await afterAction()
+  } catch (cause) {
+    actionError.value = problem(cause, kind === 'cancel' ? '取消失败' : '续跑失败')
+  } finally {
+    acting.value = ''
+  }
+}
+
 watch(rootTaskId, load, { immediate: true })
 onBeforeUnmount(() => { generation++ })
 
@@ -158,6 +201,21 @@ const settledLabel = computed(() => (status.value && !isSettled(status.value) ? 
         <span v-if="settledLabel" class="muted">· {{ settledLabel }}</span>
       </p>
       <p v-if="status.error" class="ddp-degraded is-danger" role="status">执行出错：<span class="ddp-mono">{{ status.error }}</span></p>
+
+      <div v-if="canCancel(status) || canResume(status)" class="task-actions">
+        <el-button v-if="canCancel(status)" :loading="acting === 'cancel'"
+          :disabled="!!acting" @click="act('cancel')">取消任务</el-button>
+        <el-button v-if="canResume(status)" :loading="acting === 'resume'"
+          :disabled="!!acting" @click="act('resume')">补做未完成目标</el-button>
+      </div>
+      <p v-if="actionError" role="alert" class="error">{{ actionError }}</p>
+
+      <section v-if="awaitingSubmission" class="block">
+        <h2>批准计划</h2>
+        <p v-if="planError" class="ddp-degraded is-danger">{{ planError }}</p>
+        <PlanApproval v-if="plan" :root-task-id="rootTaskId" :plan="plan" @changed="afterAction" />
+        <p v-else-if="!planError" class="muted">计划还没生成。</p>
+      </section>
 
       <section class="block">
         <h2>结果</h2>
@@ -206,5 +264,6 @@ h2 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
 .meta { margin: 0; color: var(--ddp-ink-2); font-size: 13.5px; }
 .muted { color: var(--ddp-ink-3); margin: 0; }
 .error { border-left: 2px solid var(--ddp-danger); padding-left: 12px; color: var(--ddp-danger); margin: 0; }
+.task-actions { display: flex; flex-wrap: wrap; gap: 12px; }
 .block { padding-top: 20px; border-top: var(--ddp-bw) solid var(--ddp-line); }
 </style>
