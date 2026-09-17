@@ -39,19 +39,26 @@ jobs:
           ls -la dist/release
 
       # 防拿错包：SHA256SUMS 是打包机现场算的，对着它验不过就直接红。
+      # 构件里套了一层目录（upload-artifact 保留了 dist/desktop/windows 结构），
+      # 所以用 find 定位，不写死路径。
       - name: 校验安装包哈希
         run: |
-          cd dist/release
-          sha256sum -c SHA256SUMS
+          SUMS=$(find dist/release -name SHA256SUMS | head -n 1)
+          if [ -z "$SUMS" ]; then echo "构件里没有 SHA256SUMS" >&2; exit 1; fi
+          echo "校验清单：$SUMS"
+          (cd "$(dirname "$SUMS")" && sha256sum -c "$(basename "$SUMS")")
 
       - name: 发布 Release（仅 setup 安装版）
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cd dist/release
-          SETUP=(DeepDocParse-*-setup.exe)
-          if [ ${#SETUP[@]} -ne 1 ]; then echo "setup exe 数量不对" >&2; exit 1; fi
+          SETUP=$(find dist/release -name 'DeepDocParse-*-setup.exe' | head -n 1)
+          if [ -z "$SETUP" ] || [ "$(find dist/release -name 'DeepDocParse-*-setup.exe' | wc -l)" -ne 1 ]; then
+            echo "setup exe 数量不对" >&2; exit 1
+          fi
+          DIR="$(dirname "$SETUP")"
+          BASE="$(basename "$SETUP")"
           gh release create "${{ inputs.tag }}" \
             --title "DeepDocParse ${{ inputs.tag }}（Windows 桌面版）" \
-            --notes "Windows 安装版（NSIS）。SHA256 见同页 ${SETUP[0]}.sha256。构建来源：desktop-windows 运行 ${{ inputs.run_id }}。" \
-            "${SETUP[0]}" "${SETUP[0]}.sha256" SHA256SUMS
+            --notes "Windows 安装版（NSIS）。SHA256 见同页 ${BASE}.sha256。构建来源：desktop-windows 运行 ${{ inputs.run_id }}。" \
+            "$DIR/$BASE" "$DIR/$BASE.sha256" "$DIR/SHA256SUMS"
