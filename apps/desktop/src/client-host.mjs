@@ -16,6 +16,20 @@ const binding = entry => JSON.stringify([entry.environment.workspaceId, entry.en
 const emptyView = () => ({ transport: 'disconnected', snapshot: 'loading', reason: null, projection: null })
 const LIMIT = 32 * 1024 * 1024
 
+/** What the native approval dialog shows, derived from the runtime's stored scope only. */
+export function approvalSummary(plan, phase) {
+  const scope = plan?.scope ?? {}, list = value => Array.isArray(value) ? value : []
+  return {
+    planId: plan.plan_id, phase, scopeDigest: plan.scope_digest,
+    payloads: list(scope.payload_bindings).filter(item => item?.phase === phase)
+      .map(item => ({ kind: item.payload_kind, recipient: item.recipient_node_id, bytes: item.size_bytes, digest: item.digest })),
+    transports: list(scope.transport_bindings).map(item => ({ recipient: item.recipient_node_id, endpoint: item.endpoint,
+      workspace: item.workspace_id, subject: item.subject })),
+    inputs: list(scope.input_manifest).length, retention: scope.retention, outputLocations: list(scope.output_locations),
+    validUntil: scope.plan?.valid_until ?? null,
+  }
+}
+
 export function clientFailure(error) {
   const known = error instanceof HostError || error instanceof ConnectionFault || error instanceof OperationFault
   const local = ['draft_conflict', 'idempotency_conflict'].includes(error?.message)
@@ -145,6 +159,24 @@ export class ClientHost {
     entry.handle = this.registry.acquire(entry.environment, entry.profile, provider)
     entry.unsubscribe = entry.handle.connection.subscribe(view => this.#changed(entry, view))
   }
+  /**
+   * The center credential for an approved plan's reviewed transport. Only the owned
+   * local runtime ever receives it (inside its dispatch/reconcile/ack request body);
+   * the renderer, drafts, receipts and connection metadata never do.
+   */
+  async #planCenter(binding) {
+    const remote = [...this.#entries.values()].find(item => item.kind === 'remote'
+      && item.environment.environmentId === binding.environmentId && item.profile.profileId === binding.profileId)
+    if (!remote) throw new OperationFault('center_not_paired')
+    if (remote.environment.authorityNodeId !== binding.recipientNodeId || remote.environment.workspaceId !== binding.workspaceId
+        || remote.profile.issuer !== binding.issuer || remote.profile.subject !== binding.subject
+        || remote.environment.endpoint !== binding.endpoint) throw new OperationFault('center_identity_changed')
+    // Ready means this generation proved the node's Ed25519 identity at this endpoint.
+    if (this.#closing || !remote.handle || remote.view.transport !== 'ready') throw new OperationFault('center_not_current')
+    const credential = await this.credentials.withCredential({ environmentId: remote.environment.environmentId,
+      profileId: remote.profile.profileId }, secret => secret).catch(() => { throw new OperationFault('authentication_required') })
+    return { endpoint: remote.environment.endpoint, credential }
+  }
   #provider(entry) {
     if (entry.kind === 'local') return new HttpProvider({ ownedLoopback: true, localCommands: true,
       inspect: async () => {
@@ -155,6 +187,7 @@ export class ClientHost {
           authorityNodeId: actual.authority_node_id, capabilities: current.handshake.capabilities }
       },
       credential: async () => this.runtime.connection(entry.workspaceId).token,
+      planCenter: binding => this.#planCenter(binding),
     })
     // HttpProvider verifies the Ed25519 node challenge before asking for a credential.
     return new HttpProvider({ credential: async () => this.credentials.withCredential({
@@ -264,6 +297,47 @@ export class ClientHost {
     if (this.#connection(entry) !== connection || this.runtime.connection(entry.workspaceId).url !== current.url)
       throw new HostError('disposed')
     return { bytes: Buffer.concat(chunks), contentType: response.headers.get('content-type') ?? '' }
+  }
+  // -- Remote plan flow: every step goes through the owned local runtime's ledger ----
+  #planConnection(connectionId) { return this.#local(this.#entry(connectionId)).connection }
+  async planPropose({ connectionId, centerConnectionId, query, inputs, retention, validMinutes, idempotencyKey }) {
+    const connection = this.#planConnection(connectionId)
+    const remote = this.#entry(centerConnectionId)
+    if (remote.kind !== 'remote') throw new HostError('center_not_paired')
+    if (!remote.handle || remote.view.transport !== 'ready') throw new HostError('center_not_current')
+    // The recipient comes from host-held pairing metadata, never from the renderer.
+    const center = { recipient_node_id: remote.environment.authorityNodeId, environment_id: remote.environment.environmentId,
+      workspace_id: remote.environment.workspaceId, profile_id: remote.profile.profileId, issuer: remote.profile.issuer,
+      subject: remote.profile.subject, endpoint: remote.environment.endpoint }
+    return connection.execute('plan.propose', { center, query, retention, valid_seconds: validMinutes * 60,
+      inputs: inputs.map(item => ({ ref: item.ref, digest: item.digest, size_bytes: item.sizeBytes })) }, idempotencyKey)
+  }
+  async planList({ connectionId }) { return this.#planConnection(connectionId).query('plan.list', {}) }
+  async planGet({ connectionId, planId }) { return this.#planConnection(connectionId).query('plan.get', { plan_id: planId }) }
+  async planApprove({ connectionId, planId, phase, scopeDigest, userConfirmed, idempotencyKey }) {
+    const entry = this.#entry(connectionId), connection = this.#planConnection(connectionId)
+    if (userConfirmed !== true) throw new HostError('approval_cancelled')
+    const { plan } = await connection.query('plan.get', { plan_id: planId })
+    // The renderer's click is not proof of a user action. The grant needs a native
+    // dialog showing the stored scope, which renderer script cannot answer.
+    if (plan.scope_digest !== scopeDigest) throw new HostError('plan_changed')
+    if (typeof this.confirmApproval !== 'function') throw new HostError('approval_unavailable')
+    if (await this.confirmApproval(approvalSummary(plan, phase)) !== true) throw new HostError('approval_cancelled')
+    if (this.#connection(entry) !== connection) throw new HostError('disposed')
+    return connection.execute('plan.approve', { plan_id: planId, phase, confirmed_scope_digest: scopeDigest,
+      user_confirmed: true }, idempotencyKey)
+  }
+  async planRevoke({ connectionId, planId, idempotencyKey }) {
+    return this.#planConnection(connectionId).execute('plan.revoke', { plan_id: planId }, idempotencyKey)
+  }
+  async planDispatch({ connectionId, planId, phase, idempotencyKey }) {
+    return this.#planConnection(connectionId).execute('plan.dispatch', { plan_id: planId, phase }, idempotencyKey)
+  }
+  async planReconcile({ connectionId, planId }) { return this.#planConnection(connectionId).query('plan.reconcile', { plan_id: planId }) }
+  async planFetchDelivery({ connectionId, planId }) { return this.#planConnection(connectionId).query('plan.delivery.fetch', { plan_id: planId }) }
+  async planConfirmDelivery({ connectionId, planId, deliveryId, resultManifestDigest, idempotencyKey }) {
+    return this.#planConnection(connectionId).execute('plan.delivery.confirm', { plan_id: planId, delivery_id: deliveryId,
+      result_manifest_digest: resultManifestDigest }, idempotencyKey)
   }
   async importFile({ connectionId, kind, idempotencyKey }) {
     const entry = this.#entry(connectionId), { connection } = this.#local(entry)

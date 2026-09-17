@@ -140,11 +140,8 @@ class ConsentStore:
             policies.update(self.source_policy_resolver(scope))
         return policies
 
-    def prepare(self, identity, scope, *, operation_key):
-        """Prepare is side-effect free except local persistence; it cannot grant."""
-        owner = self._owner(identity)
-        # Copy before deriving digests, so later caller mutations cannot change a grant.
-        scope = json.loads(canonical_bytes(scope))
+    @staticmethod
+    def _scope_shape(scope):
         obj(scope, ("task_spec", "plan", "input_manifest", "payload_bindings", "output_locations", "retention", "exploration"), ("transport_bindings",))
         if "transport_bindings" in scope and (not isinstance(scope["transport_bindings"], list) or not 1 <= len(scope["transport_bindings"]) <= 100):
             reject("invalid_plan", "transport bindings must be a bounded list")
@@ -154,34 +151,94 @@ class ConsentStore:
             reject("invalid_plan", "task consent references are required")
         if not isinstance(scope["plan"].get("data_edges"), list) or "valid_until" not in scope["plan"]:
             reject("invalid_plan", "plan edges and expiry are required")
+
+    def _admit(self, owner, identity, scope):
+        """Validate and persist one scope inside the caller's transaction."""
+        plan, spec = scope["plan"], scope["task_spec"]
+        if plan.get("planning_state") not in {"draft", "ready", "awaiting_approval"} or any(spec["consent_refs"].values()) or plan.get("execution_consent_ref"):
+            reject("consent_required", "prepare cannot import grants or approved state")
+        if spec.get("workspace_ref") != identity["workspace_id"]:
+            reject("unauthorized", "task workspace differs from authenticated identity")
+        plan["task_spec_digest"] = task_spec_digest(spec)
+        plan["plan_digest"] = task_plan_digest(plan)
+        validate_plan(plan, spec, local_node_id=self.local_node_id, now=self.clock())
+        validate_scope(scope, local_node_id=self.local_node_id, now=self.clock(), source_policies=self._policies(scope))
+        if self._local_only() and spec["execution_policy"]["mode"] != "local_only":
+            reject("local_only", "workspace policy forbids preparing remote plans")
+        self._validate_inputs(scope)
+        checksum = digest(scope)
+        existing = self.db.execute("SELECT * FROM plans WHERE owner=? AND plan_id=?", (owner, plan["plan_id"])).fetchone()
+        if existing:
+            if existing["scope_digest"] != checksum:
+                reject("plan_changed", "plan identity is immutable; prepare a new revision identifier")
+            return self._view(existing)
+        self.db.execute("INSERT INTO plans(owner,plan_id,scope_digest,scope_json,created_at) VALUES(?,?,?,?,?)", (owner, plan["plan_id"], checksum, canonical_bytes(scope).decode(), self.clock()))
+        return self._view(self._row(owner, plan["plan_id"]))
+
+    def prepare(self, identity, scope, *, operation_key):
+        """Prepare is side-effect free except local persistence; it cannot grant."""
+        owner = self._owner(identity)
+        # Copy before deriving digests, so later caller mutations cannot change a grant.
+        scope = json.loads(canonical_bytes(scope))
+        self._scope_shape(scope)
         request = {"action": "prepare", "scope": json.loads(canonical_bytes(scope))}
         with self.tx():
             previous = self._existing_command(owner, operation_key, request)
             if previous:
                 return self._view(self._row(owner, previous["plan_id"]))
-            plan, spec = scope["plan"], scope["task_spec"]
-            if plan.get("planning_state") not in {"draft", "ready", "awaiting_approval"} or any(spec["consent_refs"].values()) or plan.get("execution_consent_ref"):
-                reject("consent_required", "prepare cannot import grants or approved state")
-            if spec.get("workspace_ref") != identity["workspace_id"]:
-                reject("unauthorized", "task workspace differs from authenticated identity")
-            plan["task_spec_digest"] = task_spec_digest(spec)
-            plan["plan_digest"] = task_plan_digest(plan)
-            validate_plan(plan, spec, local_node_id=self.local_node_id, now=self.clock())
-            validate_scope(scope, local_node_id=self.local_node_id, now=self.clock(), source_policies=self._policies(scope))
-            if self._local_only() and spec["execution_policy"]["mode"] != "local_only":
-                reject("local_only", "workspace policy forbids preparing remote plans")
-            self._validate_inputs(scope)
-            checksum = digest(scope)
-            existing = self.db.execute("SELECT * FROM plans WHERE owner=? AND plan_id=?", (owner, plan["plan_id"])).fetchone()
-            if existing:
-                if existing["scope_digest"] != checksum:
-                    reject("plan_changed", "plan identity is immutable; prepare a new revision identifier")
-                result = self._view(existing)
-            else:
-                self.db.execute("INSERT INTO plans(owner,plan_id,scope_digest,scope_json,created_at) VALUES(?,?,?,?,?)", (owner, plan["plan_id"], checksum, canonical_bytes(scope).decode(), self.clock()))
-                result = self._view(self._row(owner, plan["plan_id"]))
-            self._command(owner, operation_key, request, {"plan_id": plan["plan_id"]})
+            result = self._admit(owner, identity, scope)
+            self._command(owner, operation_key, request, {"plan_id": scope["plan"]["plan_id"]})
             return result
+
+    def propose(self, identity, request, build, *, operation_key):
+        """Persist a trusted template's scope for a typed request; cannot grant.
+
+        The command digest covers the typed request, not the generated scope: the
+        template draws a fresh plan ID and expiry, so a same-key replay must return
+        the first plan instead of comparing two different generated scopes.
+        """
+        owner = self._owner(identity)
+        request = json.loads(canonical_bytes(request))
+        command = {"action": "propose", "request": request}
+        with self.tx():
+            previous = self._existing_command(owner, operation_key, command)
+            if previous:
+                return self._view(self._row(owner, previous["plan_id"]))
+            scope = json.loads(canonical_bytes(build(request, self.clock())))
+            self._scope_shape(scope)
+            result = self._admit(owner, identity, scope)
+            self._command(owner, operation_key, command, {"plan_id": scope["plan"]["plan_id"]})
+            return result
+
+    def list_plans(self, identity, *, limit=50):
+        """Newest-first summaries for recovery views; never another owner's plans."""
+        owner = self._owner(identity)
+        if type(limit) is not int or not 1 <= limit <= 50:
+            reject("invalid_plan", "plan list limit must be 1-50")
+        with self.lock:
+            rows = self.db.execute("SELECT * FROM plans WHERE owner=? ORDER BY created_at DESC, plan_id LIMIT ?", (owner, limit)).fetchall()
+            total = self.db.execute("SELECT COUNT(*) FROM plans WHERE owner=?", (owner,)).fetchone()[0]
+        items = []
+        for row in rows:
+            view = self._view(row)
+            scope = view["scope"]
+            items.append({"plan_id": view["plan_id"], "scope_digest": view["scope_digest"],
+                          "planning_state": view["planning_state"], "revoked": view["revoked"],
+                          "approved_phases": sorted(view["consents"]), "created_at": row["created_at"],
+                          "valid_until": scope["plan"]["valid_until"],
+                          "recipients": sorted({item["recipient_node_id"] for item in scope["payload_bindings"]}),
+                          "query": scope["task_spec"].get("query") if isinstance(scope["task_spec"].get("query"), str) else None})
+        return {"items": items, "visible_total": total}
+
+    def command_receipt(self, identity, operation_key):
+        """Admitted prepare/propose/approve/revoke key -> current plan view, else None."""
+        owner = self._owner(identity)
+        self._key(operation_key)
+        with self.lock:
+            row = self.db.execute("SELECT result_json FROM commands WHERE owner=? AND command_key=?", (owner, operation_key)).fetchone()
+            if not row:
+                return None
+            return self._view(self._row(owner, json.loads(row["result_json"])["plan_id"]))
 
     def _view(self, row):
         scope = json.loads(row["scope_json"])

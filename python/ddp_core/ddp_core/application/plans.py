@@ -254,7 +254,10 @@ def validate_plan(plan, spec, *, local_node_id, now):
 
 def validate_scope(scope, *, local_node_id, now, source_policies):
     """source_policies is a trusted adapter snapshot, never a model/request claim."""
-    obj(scope, ("task_spec", "plan", "input_manifest", "payload_bindings", "output_locations", "retention", "exploration"))
+    # transport_bindings is optional. It used to be missing here, so every scope that
+    # carried one failed this shape check and the reviewed-transport rules below were
+    # unreachable; ConsentStore.prepare already admitted the field.
+    obj(scope, ("task_spec", "plan", "input_manifest", "payload_bindings", "output_locations", "retention", "exploration"), ("transport_bindings",))
     spec, plan = scope["task_spec"], scope["plan"]
     nodes = validate_plan(plan, spec, local_node_id=local_node_id, now=now)
     strings(scope["output_locations"])

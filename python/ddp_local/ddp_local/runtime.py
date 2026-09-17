@@ -123,7 +123,8 @@ class LocalRuntime:
                              "corpus.retrieve", "evidence.read", "bundle.export", "bundle.import",
                              "rag.answer.cited", "wiki.build", "client.snapshot", "client.events",
                              "client.receipt", "plan.prepare", "plan.approve", "plan.read", "plan.revoke",
-                             "plan.dispatch", "plan.reconcile", "plan.federation.read", "plan.delivery.ack"],
+                             "plan.dispatch", "plan.reconcile", "plan.federation.read", "plan.delivery.ack",
+                             "plan.propose", "plan.list", "plan.delivery.result"],
         }
 
     @staticmethod
@@ -499,13 +500,34 @@ class LocalRuntime:
         return await fetch_delivery(self, plan_id, config, actor_headers=actor_headers)
 
     async def federation_confirm_delivery(self, plan_id, delivery_id, result_manifest_digest,
-                                          config, *, actor_headers=None):
+                                          config, *, actor_headers=None, operation_key=None):
         from ddp_local.federation_dispatch import confirm_delivery
 
         return await confirm_delivery(self, plan_id, delivery_id, result_manifest_digest, config,
-                                      actor_headers=actor_headers)
+                                      actor_headers=actor_headers, operation_key=operation_key)
 
     def federation_state(self, plan_id):
         from ddp_local.federation_dispatch import load_federation_state
 
         return load_federation_state(self, plan_id)
+
+    def receipt(self, operation_key):
+        """One receipt lookup for every admitted local write key.
+
+        Tasks answer first; plan ledger commands return the current plan view and
+        recorded dispatch/ack keys return the persisted federation state. Absence is
+        still `not_found` and never creates or repeats work.
+        """
+        from ddp_local.federation_dispatch import federation_identity, federation_receipt
+
+        try:
+            return self.store.receipt(operation_key)
+        except ApplicationError as exc:
+            if exc.code != "not_found":
+                raise
+        found = self.consents.command_receipt(federation_identity(self), operation_key)
+        if found is None:
+            found = federation_receipt(self, operation_key)
+        if found is None:
+            raise ApplicationError("not_found", "operation has not been admitted here")
+        return found

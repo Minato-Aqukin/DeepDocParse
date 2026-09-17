@@ -48,6 +48,11 @@ export class OperationFault extends Error {
   readonly code: string
   constructor(code: string) { super(code); this.code = code }
 }
+/** Public transport reviewed inside an approved plan. It never carries a credential. */
+export interface CenterBinding {
+  recipientNodeId: string; environmentId: string; workspaceId: string
+  profileId: string; issuer: string; subject: string; endpoint: string
+}
 export interface HttpProviderOptions {
   /** Local: verified bootstrap from the owned launcher. Remote: public node descriptor. */
   inspect?: (environment: Environment, signal: AbortSignal) => Promise<Identity>
@@ -58,6 +63,30 @@ export interface HttpProviderOptions {
   ownedLoopback?: boolean
   /** Explicitly selects the existing local task endpoints. Remote writes await plan approval. */
   localCommands?: boolean
+  /**
+   * Host-owned credential lookup for the center named by an approved plan's reviewed
+   * transport. Asked only after the local ledger shows the approval; the returned
+   * endpoint must be the reviewed one. The credential goes only to the owned local
+   * runtime, in a request body, and is never part of a command payload or receipt.
+   */
+  planCenter?: (binding: CenterBinding, signal: AbortSignal) => Promise<{ endpoint: string; credential: string }>
+}
+const PLAN_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/
+const DIGEST = /^sha256:[0-9a-f]{64}$/
+const planIdOf = (value: unknown): string => {
+  if (typeof value !== 'string' || !PLAN_ID.test(value)) throw new OperationFault('unsupported_operation')
+  return value
+}
+const exactKeys = (value: unknown, keys: string[]): ObjectValue => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new OperationFault('unsupported_operation')
+  const raw = value as ObjectValue
+  if (Object.keys(raw).length !== keys.length || keys.some(key => !Object.hasOwn(raw, key)))
+    throw new OperationFault('unsupported_operation')
+  return raw
+}
+async function sha256(bytes: Uint8Array): Promise<string> {
+  return 'sha256:' + [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource))]
+    .map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
 /** No token persistence, redirects, ambient cookies, proxy logging or automatic write retry. */
@@ -73,7 +102,7 @@ export class HttpProvider implements Provider {
     return url.href.replace(/\/$/, '')
   }
   private async request(environment: Environment, path: string, signal: AbortSignal, token?: string,
-                        body?: Json, key?: string, missingIsNull = false, method?: 'PATCH'): Promise<unknown> {
+                        body?: Json, key?: string, missingIsNull = false, method?: 'PATCH', raw = false): Promise<unknown> {
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (token) headers.Authorization = `Bearer ${token}`
     if (key) headers['Idempotency-Key'] = key
@@ -106,6 +135,8 @@ export class HttpProvider implements Provider {
     } finally { await reader.cancel() }
     const bytes = new Uint8Array(total); let offset = 0
     for (const part of parts) { bytes.set(part,offset); offset += part.length }
+    // Exact bytes for callers that must hash what the server stored, not a reserialization.
+    if (raw && response.ok) return bytes
     let parsed: unknown
     try { parsed = JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)) }
     catch { throw new ConnectionFault('protocol_incompatible') }
@@ -159,9 +190,45 @@ export class HttpProvider implements Provider {
     if (actual.environmentId !== environment.environmentId || actual.workspaceId !== environment.workspaceId ||
         actual.authorityNodeId !== environment.authorityNodeId) throw new ConnectionFault('identity_mismatch')
     if (actor.issuer !== profile.issuer || actor.subject !== profile.subject) throw new ConnectionFault('profile_mismatch')
-    const request = (path: string, extraSignal: AbortSignal, body?: Json, key?: string, missingIsNull?: boolean, method?: 'PATCH') =>
-      this.request(environment, path, AbortSignal.any([sessionSignal, extraSignal]), credential, body, key, missingIsNull, method)
+    const request = (path: string, extraSignal: AbortSignal, body?: Json, key?: string, missingIsNull?: boolean, method?: 'PATCH', raw?: boolean) =>
+      this.request(environment, path, AbortSignal.any([sessionSignal, extraSignal]), credential, body, key, missingIsNull, method, raw)
     const options = this.options
+    const planPath = (planId: string, suffix = '') => '/api/v1/plans/' + encodeURIComponent(planId) + suffix
+    /** Resolve the credential only for the reviewed center of a plan the local ledger holds. */
+    const reviewedCenter = async (plan: ObjectValue, abort: AbortSignal) => {
+      const transports = object(plan.scope).transport_bindings
+      if (!Array.isArray(transports) || transports.length !== 1) throw new OperationFault('center_binding_required')
+      const t = object(transports[0]), text = (value: unknown, maximum = 512) => {
+        if (typeof value !== 'string' || !value || value.length > maximum) throw new OperationFault('center_binding_required')
+        return value
+      }
+      const binding: CenterBinding = { recipientNodeId: text(t.recipient_node_id), environmentId: text(t.environment_id),
+        workspaceId: text(t.workspace_id), profileId: text(t.profile_id), issuer: text(t.issuer), subject: text(t.subject),
+        endpoint: text(t.endpoint, 2048) }
+      if (!options.planCenter) throw new OperationFault('center_unavailable')
+      const center = await options.planCenter(binding, abort)
+      if (!center || center.endpoint !== binding.endpoint) throw new OperationFault('center_identity_changed')
+      if (typeof center.credential !== 'string' || center.credential.length < 16 || /[\r\n]/.test(center.credential))
+        throw new OperationFault('authentication_required')
+      return { endpoint: center.endpoint, credential: center.credential } as Json
+    }
+    /** Rehash the locally stored result bytes; the stored `verified` flag alone is not proof. */
+    const verifyDelivery = async (planId: string, federation: unknown, abort: AbortSignal) => {
+      const delivery = federation && typeof federation === 'object' ? (federation as ObjectValue).delivery : null
+      const record = delivery && typeof delivery === 'object' && !Array.isArray(delivery) ? delivery as ObjectValue : {}
+      const expected = typeof record.result_manifest_digest === 'string' && DIGEST.test(record.result_manifest_digest)
+        ? record.result_manifest_digest : null
+      if (record.verified !== true || !expected) return { state: 'unavailable', expected, actual: null } as Json
+      const bytes = await request(planPath(planId, '/delivery/result'), abort, undefined, undefined, false, undefined, true)
+      if (!(bytes instanceof Uint8Array)) throw new ConnectionFault('protocol_incompatible')
+      const actual = await sha256(bytes)
+      return { state: actual === expected ? 'passed' : 'failed', expected, actual } as Json
+    }
+    const approvedFor = (plan: ObjectValue, phase: string) => {
+      const consents = plan.consents
+      return plan.revoked === false && plan.planning_state !== 'invalidated' && !!consents && typeof consents === 'object'
+        && !Array.isArray(consents) && Object.hasOwn(consents, phase)
+    }
     return {
       actor: { issuer: profile.issuer, subject: profile.subject },
       async snapshot(abort) { return projection(await request('/api/v1/client/snapshot',abort)) },
@@ -190,6 +257,24 @@ export class HttpProvider implements Provider {
           return await request('/api/v1/client/query',abort,{name,payload}) as Json
         }
         if (name === 'corpus.search') return await request('/api/v1/search',abort,payload) as Json
+        if (name === 'plan.list') {
+          const body = Object.keys(raw).length ? exactKeys(raw, ['limit']) : {}
+          if (body.limit !== undefined && (!Number.isInteger(body.limit) || Number(body.limit) < 1 || Number(body.limit) > 50))
+            throw new OperationFault('unsupported_operation')
+          return await request('/api/v1/plans' + (body.limit ? '?limit=' + Number(body.limit) : ''), abort) as Json
+        }
+        if (['plan.get', 'plan.reconcile', 'plan.delivery.fetch'].includes(name)) {
+          const planId = planIdOf(exactKeys(raw, ['plan_id']).plan_id)
+          const plan = object(await request(planPath(planId), abort))
+          let federation: unknown
+          if (name === 'plan.get') federation = await request(planPath(planId, '/federation'), abort, undefined, undefined, true)
+          else {
+            // Reads of an accepted remote task stay available after revocation: T27.
+            const center = await reviewedCenter(plan, abort)
+            federation = await request(planPath(planId, name === 'plan.reconcile' ? '/reconcile' : '/delivery/fetch'), abort, { center })
+          }
+          return { plan, federation, verification: await verifyDelivery(planId, federation, abort) } as Json
+        }
         if (name === 'models.list' && Object.keys(raw).length === 0)
           return await request('/api/v1/models',abort) as Json
         const wikiId = (value: unknown) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value)
@@ -235,6 +320,54 @@ export class HttpProvider implements Provider {
         if (path) return await request(path,abort,payload,key) as Json
         if (name === 'task.cancel' && typeof raw.task_id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(raw.task_id))
           return await request('/api/v1/tasks/'+raw.task_id+'/cancel',abort,{},key) as Json
+        if (name === 'plan.propose') {
+          // The runtime's template builds the whole scope; only these typed fields cross.
+          exactKeys(raw, ['center', 'query', 'inputs', 'retention', 'valid_seconds'])
+          exactKeys(raw.center, ['recipient_node_id', 'environment_id', 'workspace_id', 'profile_id', 'issuer', 'subject', 'endpoint'])
+          if (!Array.isArray(raw.inputs)) throw new OperationFault('unsupported_operation')
+          for (const item of raw.inputs) exactKeys(item, ['ref', 'digest', 'size_bytes'])
+          return await request('/api/v1/plans/propose', abort, raw as Json, key) as Json
+        }
+        if (name === 'plan.approve') {
+          const body = exactKeys(raw, ['plan_id', 'phase', 'confirmed_scope_digest', 'user_confirmed'])
+          if (!['exploration', 'execution'].includes(String(body.phase)) || body.user_confirmed !== true
+              || typeof body.confirmed_scope_digest !== 'string' || !DIGEST.test(body.confirmed_scope_digest))
+            throw new OperationFault('unsupported_operation')
+          return await request(planPath(planIdOf(body.plan_id), '/approve'), abort, { phase: body.phase as string,
+            confirmed_scope_digest: body.confirmed_scope_digest, user_confirmed: true }, key) as Json
+        }
+        if (name === 'plan.revoke')
+          return await request(planPath(planIdOf(exactKeys(raw, ['plan_id']).plan_id), '/revoke'), abort, {}, key) as Json
+        if (name === 'plan.dispatch') {
+          const body = exactKeys(raw, ['plan_id', 'phase'])
+          const planId = planIdOf(body.plan_id)
+          if (!['exploration', 'execution'].includes(String(body.phase))) throw new OperationFault('unsupported_operation')
+          const plan = object(await request(planPath(planId), abort))
+          // No approval for this phase in the local ledger: refuse before any credential
+          // lookup or dispatch request. The runtime rechecks it again before sending.
+          if (!approvedFor(plan, String(body.phase))) throw new OperationFault('approved_plan_required')
+          const center = await reviewedCenter(plan, abort)
+          return await request(planPath(planId, '/dispatch'), abort, { center, phase: body.phase as string }, key) as Json
+        }
+        if (name === 'plan.delivery.confirm') {
+          const body = exactKeys(raw, ['plan_id', 'delivery_id', 'result_manifest_digest'])
+          const planId = planIdOf(body.plan_id)
+          if (typeof body.delivery_id !== 'string' || !body.delivery_id || body.delivery_id.length > 255
+              || typeof body.result_manifest_digest !== 'string' || !DIGEST.test(body.result_manifest_digest))
+            throw new OperationFault('unsupported_operation')
+          const federation = object(await request(planPath(planId, '/federation'), abort))
+          const delivery = object(federation.delivery ?? {})
+          if (delivery.id !== body.delivery_id || delivery.result_manifest_digest !== body.result_manifest_digest)
+            throw new OperationFault('delivery_unverified')
+          // Already confirmed: repeat confirmation is a local read, never another ack.
+          if (delivery.state === 'confirmed') return federation as Json
+          const verification = object(await verifyDelivery(planId, federation, abort))
+          if (verification.state !== 'passed') throw new OperationFault('delivery_unverified')
+          const plan = object(await request(planPath(planId), abort))
+          const center = await reviewedCenter(plan, abort)
+          return await request(planPath(planId, '/delivery/ack'), abort, { delivery_id: body.delivery_id,
+            result_manifest_digest: body.result_manifest_digest, center }, key) as Json
+        }
         throw new OperationFault('unsupported_operation')
       },
       async receipt(key,abort) { return await request('/api/v1/client/receipts/'+encodeURIComponent(key),abort,undefined,undefined,true) as Json | null },

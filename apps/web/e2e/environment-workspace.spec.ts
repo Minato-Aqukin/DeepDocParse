@@ -13,7 +13,7 @@ test('无桌面宿主的未登录浏览器只能看到配对入口，不请求�
   expect(realErrors(errors)).toEqual([])
 })
 
-async function desktopFixture(page: Page, imported = false, options: { center?: boolean; windows?: boolean; wiki?: boolean } = {}) {
+async function desktopFixture(page: Page, imported = false, options: { center?: boolean; windows?: boolean; wiki?: boolean; plans?: boolean } = {}) {
   const drafts = new Map<string, { revision: number; value: unknown }>()
   const calls: { name: string; input: Record<string, unknown> }[] = []
   const subscriptions = new Map<string, string>()
@@ -33,9 +33,27 @@ async function desktopFixture(page: Page, imported = false, options: { center?: 
     environment: { environmentId: `environment-${i}`, workspaceId: `workspace-${i}`, authorityNodeId: `node-${i}` },
     profile: { profileId: `profile-${i}`, issuer: `node-${i}`, subject: `owner-${i}` }, revision: 0,
     view: { transport: 'ready', snapshot: 'current', reason: null, projection: { cursor: 'cursor-0', sequence: 0,
-      state: { resources: [{ id: options.center ? `resource-${i}` : `version-${i}`, resource_id: `resource-${i}`, version_id: `version-${i}`, filename: `${label}的技术手册.pdf`, state: 'ready' }], tasks: [], capabilities: { generation: { available: false } },
+      state: { resources: [{ id: options.center ? `resource-${i}` : `version-${i}`, resource_id: `resource-${i}`, version_id: `version-${i}`, filename: `${label}的技术手册.pdf`, state: 'ready',
+        ...(options.plans ? { source_digest: 'a'.repeat(64), size_bytes: 2048 } : {}) }], tasks: [], capabilities: { generation: { available: false } },
         ...(options.windows ? { snapshot_id: `snapshot-${i}`, cache_complete: false, windows: { resources: { visible_total: 2, items_loaded: 1, has_more: true, next_cursor: 'next-1' } } } : {}) } } },
   }))
+  // A paired, identity-proven center that local plans can name as their only recipient.
+  const centerSummary = { connectionId: 'connection-center', kind: 'remote', label: '研究中心', workspaceId: null,
+    environment: { environmentId: 'node-center', workspaceId: 'org-1', authorityNodeId: 'node-center' },
+    profile: { profileId: 'profile-center', issuer: 'node-center', subject: 'user-alice' }, revision: 0,
+    view: { transport: 'ready', snapshot: 'current', reason: null, projection: { cursor: 'c-0', sequence: 0, state: { resources: [], tasks: [] } } } }
+  if (options.plans) summaries.push(centerSummary as never)
+  // Local runtime plan ledger double: the same refusals the host relies on (approval per
+  // phase bound to the scope digest, verified-only confirmation). Real rules: ddp_local tests.
+  type Plan = Record<string, any>
+  const planLedger = { plans: new Map<string, Plan>(), federation: new Map<string, Plan>(), receipts: new Map<string, () => unknown>(),
+    tamper: false, loseDispatch: false, cancelApproval: false }
+  const planDetail = (id: string) => {
+    const federation = planLedger.federation.get(id) ?? null, delivery = federation?.delivery
+    const expected = delivery?.verified ? delivery.result_manifest_digest : null
+    return { plan: planLedger.plans.get(id), federation, verification: { state: expected ? (planLedger.tamper ? 'failed' : 'passed') : 'unavailable',
+      expected, actual: expected ? (planLedger.tamper ? 'sha256:' + 'e'.repeat(64) : expected) : null } }
+  }
   let loseReply = false
   let wikiCurrent = 'revision-1'
   const wikiRevisions = new Map<string, Record<string, unknown>>([['revision-1', {
@@ -52,7 +70,7 @@ async function desktopFixture(page: Page, imported = false, options: { center?: 
     if (name === 'hostStatus') return ok({ secrets: { backend: 'basic_text', persistentAvailable: false }, lifecycle: 'close_stops_owned_local_tasks' })
     if (name === 'clientSubscribe') { subscriptions.set(input.subscriptionId, input.connectionId); return ok(summary) }
     if (name === 'clientUnsubscribe') { subscriptions.delete(input.subscriptionId); return ok(null) }
-    const draftKey = input.key === 'wiki-editor' ? input.connectionId + ':wiki-editor' : input.connectionId
+    const draftKey = input.key && input.key !== 'workspace' ? input.connectionId + ':' + input.key : input.connectionId
     if (name === 'clientReadDraft') return ok(drafts.get(draftKey) ?? null)
     if (name === 'clientSaveDraft') {
       const previous = drafts.get(draftKey)
@@ -61,7 +79,71 @@ async function desktopFixture(page: Page, imported = false, options: { center?: 
     }
     if (name === 'clientWake' || name === 'clientDisconnect') return ok(summary)
     if (name === 'setCredential') return ok({ stored: 'session' })
-    if (name === 'clientPairRemote') return ok({ ...summaries[0], kind: 'remote', label: input.label })
+    if (name === 'clientPairRemote') return ok(options.plans ? centerSummary : { ...summaries[0], kind: 'remote', label: input.label })
+    if (name.startsWith('clientPlan')) {
+      const fail = (code: string) => ({ ok: false, error: { code } })
+      const plan = planLedger.plans.get(input.planId)
+      if (name === 'clientPlanPropose') {
+        if (planLedger.receipts.has(input.idempotencyKey)) return ok(planLedger.receipts.get(input.idempotencyKey)!())
+        const id = 'plan-' + (planLedger.plans.size + 1), bytes = Buffer.byteLength(input.query)
+        const payload = { recipient_node_id: 'node-center', payload_kind: 'query_text', size_bytes: bytes, digest: 'sha256:' + 'b'.repeat(64), transport_ref: 'center' }
+        planLedger.plans.set(id, { plan_id: id, scope_digest: 'sha256:' + 'd'.repeat(64), planning_state: 'ready', revoked: false, consents: {},
+          scope: { task_spec: { query: input.query }, retention: input.retention, output_locations: ['local:workspace-0'],
+            input_manifest: input.inputs.map((item: Plan) => ({ ref: item.ref, digest: item.digest, size_bytes: item.sizeBytes })),
+            payload_bindings: [{ payload_id: 'exploration-query', phase: 'exploration', ...payload }, { payload_id: 'execution-query', phase: 'execution', edge_id: 'edge-query', ...payload }],
+            transport_bindings: [{ transport_ref: 'center', recipient_node_id: 'node-center', environment_id: 'node-center', workspace_id: 'org-1',
+              profile_id: 'profile-center', issuer: 'node-center', subject: 'user-alice', endpoint: 'https://center.example/team' }],
+            // 形状照 `ddp_local/plan_templates.py::center_query_scope` 生成的 TaskPlan 写全：
+            // 界面上的计划修订用的是与 Web 协调者同一个 PlanSummary，缺字段就会静默少画一块。
+            plan: { schema: 'ddp-plan-admission/1#TaskPlan', plan_id: id, revision: 1, plan_digest: 'sha256:' + 'c'.repeat(64),
+              task_spec_digest: 'sha256:' + '9'.repeat(64), root_coordinator_node_id: 'local-env-0', planning_state: 'ready',
+              steps: [{ step_id: 'retrieve-1', operation: 'retrieve', executor_node_id: 'node-center', depends_on: [],
+                fixed_inputs: input.inputs.map((item: Plan) => item.ref) }],
+              final_result_writer: 'local-env-0', execution_consent_ref: null, valid_until: '2030-01-01T00:00:00Z',
+              budget: { max_requests: 4, max_bytes: bytes * 4, max_generation_tokens: 0, max_hops: 1, deadline: '2030-01-01T00:00:00Z' },
+              data_edges: [{ edge_id: 'edge-query', from_node_id: 'local-env-0', to_node_id: 'node-center', payload_kind: 'query_text',
+                retention: input.retention, authorised_by: 'local:local-env-0' }] },
+            exploration: { budget: { max_probe_requests: 2, max_egress_bytes: bytes * 2 } } } })
+        planLedger.receipts.set(input.idempotencyKey, () => planLedger.plans.get(id))
+        return ok(planLedger.plans.get(id))
+      }
+      if (name === 'clientPlanList') return ok({ visible_total: planLedger.plans.size, items: [...planLedger.plans.values()].map(item => ({
+        plan_id: item.plan_id, planning_state: item.planning_state,
+        federation: planLedger.federation.has(item.plan_id) ? { state: planLedger.federation.get(item.plan_id)!.state, delivery_state: planLedger.federation.get(item.plan_id)!.delivery?.state ?? null } : null })) })
+      if (!plan) return fail('not_found')
+      const federation = planLedger.federation.get(plan.plan_id)
+      if (name === 'clientPlanGet') return ok(planDetail(plan.plan_id))
+      if (name === 'clientPlanApprove') {
+        if (input.userConfirmed !== true || input.scopeDigest !== plan.scope_digest) return fail('plan_changed')
+        if (planLedger.cancelApproval) { planLedger.cancelApproval = false; return fail('approval_cancelled') }
+        plan.consents[input.phase] = { consent_id: 'consent-' + input.phase }
+        plan.planning_state = plan.consents.execution ? 'approved' : 'exploring'
+        return ok(plan)
+      }
+      if (name === 'clientPlanDispatch') {
+        if (plan.revoked || !plan.consents[input.phase]) return fail('approved_plan_required')
+        planLedger.federation.set(plan.plan_id, { ...(federation ?? {}), plan_id: plan.plan_id, root_task_id: 'root-1', center_plan_digest: plan.scope.plan.plan_digest,
+          state: input.phase === 'exploration' ? 'planned' : 'submitted', reconcile: { at: 1789000000 }, delivery: null })
+        planLedger.receipts.set(input.idempotencyKey, () => planLedger.federation.get(plan.plan_id))
+        if (planLedger.loseDispatch) { planLedger.loseDispatch = false; return fail('outcome_unknown') }
+        return ok(planLedger.federation.get(plan.plan_id))
+      }
+      if (name === 'clientPlanReconcile') {
+        if (federation?.state === 'submitted') planLedger.federation.set(plan.plan_id, { ...federation, state: 'succeeded', delivery: { id: 'delivery-1', state: 'pending' } })
+        return ok(planDetail(plan.plan_id))
+      }
+      if (name === 'clientPlanFetchDelivery') {
+        planLedger.federation.set(plan.plan_id, { ...federation, delivery: { ...federation!.delivery, verified: true, result_manifest_digest: 'sha256:' + 'f'.repeat(64),
+          result: { schema: 'ddp-answer/1', answer: '控制器工作温度为 40°C。' } } })
+        return ok(planDetail(plan.plan_id))
+      }
+      if (name === 'clientPlanConfirmDelivery') {
+        const detail = planDetail(plan.plan_id)
+        if (detail.verification.state !== 'passed' || input.resultManifestDigest !== federation?.delivery?.result_manifest_digest) return fail('delivery_unverified')
+        planLedger.federation.set(plan.plan_id, { ...federation, delivery: { ...federation!.delivery, state: 'confirmed' } })
+        return ok(planLedger.federation.get(plan.plan_id))
+      }
+    }
     if (name === 'clientQuery') {
       if (input.name === 'wiki.list') return ok({ items: options.wiki ? [{ wiki: wikiDocument().wiki, revision: { id: wikiCurrent, page_count: 1 } }] : [], visible_total: options.wiki ? 1 : 0, has_more: false, next_cursor: null })
       if (input.name === 'wiki.get') return ok(wikiDocument(input.payload.revision_id))
@@ -89,19 +171,21 @@ async function desktopFixture(page: Page, imported = false, options: { center?: 
       }
       return ok({ answer: '<img src="https://outside.invalid/private-question"> 控制器工作温度为40°C。[1]', evidence: [] })
     }
-    if (name === 'clientReceipt') return ok(null)
+    if (name === 'clientReceipt') return ok(planLedger.receipts.get(input.idempotencyKey)?.() ?? null)
     throw new Error(`Unexpected fixture operation ${name}`)
   })
   await page.addInitScript(() => {
     const listeners = new Set<(event: unknown) => void>()
     const call = (name: string, input?: unknown) => (window as unknown as { desktopTestCall: (value: unknown) => Promise<unknown> }).desktopTestCall({ name, input })
     const methods = ['clientList', 'hostStatus', 'clientSubscribe', 'clientUnsubscribe', 'clientReadDraft',
-      'clientSaveDraft', 'clientWake', 'clientDisconnect', 'clientQuery', 'clientCommand', 'clientReceipt', 'clientReadOriginal', 'setCredential', 'clientPairRemote']
+      'clientSaveDraft', 'clientWake', 'clientDisconnect', 'clientQuery', 'clientCommand', 'clientReceipt', 'clientReadOriginal', 'setCredential', 'clientPairRemote',
+      'clientPlanPropose', 'clientPlanList', 'clientPlanGet', 'clientPlanApprove', 'clientPlanRevoke', 'clientPlanDispatch',
+      'clientPlanReconcile', 'clientPlanFetchDelivery', 'clientPlanConfirmDelivery']
     window.ddpDesktop = Object.fromEntries(methods.map(name => [name, (input: unknown) => call(name, input)])) as never
     window.ddpDesktop!.onClientView = listener => { listeners.add(listener as never); return () => listeners.delete(listener as never) }
     ;(window as unknown as { emitDesktopView: (event: unknown) => void }).emitDesktopView = event => listeners.forEach(listener => listener(event))
   })
-  return { drafts, calls, summaries, subscriptions, loseNextReply: () => { loseReply = true } }
+  return { drafts, calls, summaries, subscriptions, planLedger, loseNextReply: () => { loseReply = true } }
 }
 
 test('桌面根路径进入业务工作台，身份切换恢复各自草稿且旧订阅不能污染当前状态', async ({ page }) => {
@@ -272,5 +356,138 @@ test('Wiki 编辑草稿跨刷新保留，保存基于固定修订，历史查看
   await page.getByLabel('人工编辑草稿', { exact: true }).fill('不能直接覆盖新版')
   await expect(page.getByRole('button', { name: '保存人工编辑为新修订', exact: true })).toBeDisabled()
   expect(fixture.calls.filter(call => call.name === 'clientCommand')).toHaveLength(1)
+  expect(realErrors(errors)).toEqual([])
+})
+
+const PLAN_SECRET = 'synthetic-center-token-for-plan-e2e'
+async function proposePlan(page: Page) {
+  await page.getByRole('button', { name: '远端计划', exact: true }).click()
+  await page.getByLabel('接收方（已配对中心）').selectOption('connection-center')
+  await page.getByLabel('检索词（批准后会原文发送给该中心）').fill('控制器工作温度是多少？')
+  await page.getByRole('checkbox', { name: /甲的技术手册\.pdf/ }).check()
+  await page.getByRole('button', { name: '生成待审阅计划', exact: true }).click()
+  const review = page.getByRole('article', { name: '计划审阅' })
+  await expect(review).toBeVisible()
+  return review
+}
+
+test('远端计划主路径：审阅实际外发内容，分阶段批准后派发、对账、本地重算交付摘要再确认，凭证不进网页存储', async ({ page }, info) => {
+  const fixture = await desktopFixture(page, false, { plans: true }), errors = watchErrors(page)
+  await page.goto('/#/workspaces')
+  // Pair the center first so a real secret exists in this session to look for later.
+  await page.getByRole('button', { name: '配对中心…', exact: true }).click()
+  await page.getByLabel('名称', { exact: true }).fill('研究中心')
+  await page.getByLabel('HTTPS 地址', { exact: true }).fill('https://center.example/team')
+  await page.getByLabel('节点身份', { exact: true }).fill('node-center')
+  await page.getByLabel('工作区编号', { exact: true }).fill('org-1')
+  await page.getByLabel('用户编号', { exact: true }).fill('user-alice')
+  await page.getByLabel('API 凭证', { exact: true }).fill(PLAN_SECRET)
+  await page.getByRole('button', { name: '验证并连接', exact: true }).click()
+  await page.getByRole('button', { name: /甲的工作区/ }).click()
+
+  const review = await proposePlan(page)
+  const proposal = fixture.calls.find(call => call.name === 'clientPlanPropose')!.input
+  expect(proposal).toEqual({ connectionId: 'connection-0', centerConnectionId: 'connection-center', query: '控制器工作温度是多少？',
+    inputs: [{ ref: 'version-0', digest: 'sha256:' + 'a'.repeat(64), sizeBytes: 2048 }], retention: 'temporary', validMinutes: 120,
+    idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{8,128}$/) })
+  // The review shows what would actually leave this machine, to whom, and under which limits.
+  const outgoing = review.getByRole('table').first()
+  await expect(outgoing.getByRole('row')).toHaveCount(3)
+  await expect(outgoing).toContainText('探索'); await expect(outgoing).toContainText('执行')
+  await expect(outgoing).toContainText('检索词原文'); await expect(outgoing).toContainText('node-center')
+  await expect(outgoing).toContainText(String(Buffer.byteLength('控制器工作温度是多少？')))
+  await expect(review).toContainText('检索词原文：控制器工作温度是多少？')
+  await expect(review).toContainText('https://center.example/team')
+  await expect(review).toContainText('version-0')
+  // 保留类别、规划态与交付态的中文都来自契约生成物；这里断言的就是契约里的那一份。
+  await expect(review).toContainText('临时数据')
+  await expect(review).toContainText('local:workspace-0')
+  // 计划修订这一节由 Web 协调者同一个 PlanSummary 画：步骤、执行者、数据边、中继、总预算。
+  const revision = review.getByRole('region', { name: '执行计划' })
+  await expect(revision).toContainText('retrieve-1')
+  await expect(revision).toContainText('本节点（local-env-0）')
+  await expect(revision).toContainText('远端 node-center')
+  await expect(revision).toContainText('edge-query')
+  await expect(revision).toContainText('2030-01-01T00:00:00Z')
+  await expect(revision.locator('.budget')).toContainText('4')
+  await expect(review.getByRole('button', { name: '派发探索', exact: true })).toBeDisabled()
+  await expect(review.getByRole('button', { name: '批准执行…', exact: true })).toBeDisabled()
+
+  await review.getByRole('button', { name: '批准探索…', exact: true }).click()
+  await expect(review).toContainText('正在探测')
+  expect(fixture.calls.find(call => call.name === 'clientPlanApprove')!.input).toMatchObject({ planId: 'plan-1', phase: 'exploration',
+    scopeDigest: 'sha256:' + 'd'.repeat(64), userConfirmed: true })
+  await review.getByRole('button', { name: '派发探索', exact: true }).click()
+  await expect(review).toContainText('中心计划已就绪')
+  await expect(review.getByRole('button', { name: '派发执行', exact: true })).toBeDisabled()
+  await review.getByRole('button', { name: '批准执行…', exact: true }).click()
+  await review.getByRole('button', { name: '派发执行', exact: true }).click()
+  await expect(review).toContainText('中心执行中')
+  await review.getByRole('button', { name: '对账', exact: true }).click()
+  await expect(review).toContainText('中心已完成')
+  await expect(review).toContainText('待领取')
+  await expect(review.getByRole('button', { name: '确认交付', exact: true })).toBeDisabled()
+  await review.getByRole('button', { name: '取回交付并校验', exact: true }).click()
+  await expect(review).toContainText('本地重算摘要一致')
+  await expect(review).toContainText('中心生成内容 · 待复核')
+  await review.getByRole('button', { name: '确认交付', exact: true }).click()
+  await expect(review.getByText('已交付', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /plan-1/ })).toContainText('已交付')
+  await page.screenshot({ path: info.outputPath('federation-plan-review.png'), fullPage: true, animations: 'disabled' })
+
+  expect(fixture.calls.filter(call => call.name === 'clientPlanConfirmDelivery')).toHaveLength(1)
+  // The renderer never names an endpoint or a credential for any plan operation.
+  for (const call of fixture.calls.filter(call => call.name.startsWith('clientPlan')))
+    expect(Object.keys(call.input).some(key => ['endpoint', 'credential', 'secret', 'url', 'path'].includes(key))).toBe(false)
+  expect(JSON.stringify(fixture.calls.filter(call => call.name !== 'setCredential'))).not.toContain(PLAN_SECRET)
+  expect(JSON.stringify([...fixture.drafts])).not.toContain(PLAN_SECRET)
+  const webStorage = await page.evaluate(() => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage)]))
+  expect(webStorage).not.toContain(PLAN_SECRET)
+  expect(realErrors(errors)).toEqual([])
+})
+
+test('远端计划失败路径：取消批准不授权，回执未知保留编号并在刷新后从本机镜像恢复，摘要不一致不许确认', async ({ page }) => {
+  const fixture = await desktopFixture(page, false, { plans: true }), errors = watchErrors(page)
+  await page.goto('/#/workspaces')
+  let review = await proposePlan(page)
+  fixture.planLedger.cancelApproval = true
+  await review.getByRole('button', { name: '批准探索…', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('已取消批准，没有授予任何外发许可。')
+  await expect(review.getByRole('button', { name: '派发探索', exact: true })).toBeDisabled()
+  await expect(page.getByText('有一项计划操作结果未知', { exact: false })).toHaveCount(0)
+
+  await review.getByRole('button', { name: '批准探索…', exact: true }).click()
+  fixture.planLedger.loseDispatch = true
+  await review.getByRole('button', { name: '派发探索', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('提交结果未确认')
+  await expect(page.getByText('有一项计划操作结果未知', { exact: false })).toBeVisible()
+  await expect(review.getByRole('button', { name: '批准执行…', exact: true })).toBeDisabled()
+  const dispatches = fixture.calls.filter(call => call.name === 'clientPlanDispatch')
+  expect(dispatches).toHaveLength(1)
+  const unknownKey = dispatches[0]!.input.idempotencyKey
+  expect(fixture.drafts.get('connection-0:federation-plan')?.value).toMatchObject({ planKey: unknownKey, selectedPlan: 'plan-1' })
+
+  // Restart of the renderer: the accepted task is recovered from the local mirror, not re-sent.
+  await page.reload()
+  review = page.getByRole('article', { name: '计划审阅' })
+  await expect(review).toBeVisible()
+  await expect(page.getByRole('button', { name: /plan-1/ })).toContainText('中心计划已就绪')
+  await expect(review).toContainText('root-1')
+  await expect(page.getByText('有一项计划操作结果未知', { exact: false })).toBeVisible()
+  await page.getByRole('button', { name: '查询回执', exact: true }).click()
+  await expect(page.getByText('有一项计划操作结果未知', { exact: false })).toHaveCount(0)
+  expect(fixture.calls.filter(call => call.name === 'clientPlanDispatch')).toHaveLength(1)
+  expect(fixture.calls.find(call => call.name === 'clientReceipt')?.input.idempotencyKey).toBe(unknownKey)
+
+  await review.getByRole('button', { name: '批准执行…', exact: true }).click()
+  await review.getByRole('button', { name: '派发执行', exact: true }).click()
+  await review.getByRole('button', { name: '对账', exact: true }).click()
+  fixture.planLedger.tamper = true
+  await review.getByRole('button', { name: '取回交付并校验', exact: true }).click()
+  await expect(review).toContainText('本地重算摘要不一致')
+  await expect(review).toContainText('sha256:' + 'e'.repeat(64))
+  await expect(review.getByRole('button', { name: '确认交付', exact: true })).toBeDisabled()
+  await expect(review.getByText('中心生成内容 · 待复核')).toHaveCount(0)
+  expect(fixture.calls.filter(call => call.name === 'clientPlanConfirmDelivery')).toHaveLength(0)
   expect(realErrors(errors)).toEqual([])
 })

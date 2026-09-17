@@ -251,7 +251,10 @@ export class Connection {
     }
   }
   async query(name: string, payload: Json): Promise<Json> {
-    if (!['corpus.search', 'evidence.get', 'models.list', 'resource.page', 'task.page', 'wiki.list', 'wiki.get', 'wiki.revisions'].includes(name))
+    // plan.reconcile / plan.delivery.fetch only read the center and refresh the local
+    // mirror; repeating them never repeats a center write, so they are not ledger commands.
+    if (!['corpus.search', 'evidence.get', 'models.list', 'resource.page', 'task.page', 'wiki.list', 'wiki.get', 'wiki.revisions',
+      'plan.list', 'plan.get', 'plan.reconcile', 'plan.delivery.fetch'].includes(name))
       throw new ConnectionFault('protocol_incompatible')
     canonical(payload)
     const session = this.session, controller = this.controller
