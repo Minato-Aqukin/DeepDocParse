@@ -77,6 +77,29 @@ def actor_headers(actor_id: str = ACTOR, *, role: str = "contributor",
     return headers
 
 
+@pytest.fixture(autouse=True)
+def node_identity_isolation():
+    """每条用例都从"身份跟着 BUNDLE_NODE_ID"开始，跑完清干净。
+
+    生产里本节点身份是启动时向控制面绑定来的（`node_identity.bind`）；进程内
+    单测没有控制面，而绝大多数用例关心的也不是绑定本身，所以用
+    `follow_configuration_for_tests()` 把 `local_node_id()` 接回配置值 ——
+    与合仓前"直接读 BUNDLE_NODE_ID"的可观察行为一致。
+
+    **绑定本身另有专门用例**（`test_federation_node_auth.py` 直接对着一个严格
+    的假控制面调 `bind`），那里会先 `reset()`。
+
+    绑定状态是**进程级**的：不逐条重置的话，一条用例把它标成 mismatch 就会让
+    之后所有用例莫名 503，且换个执行顺序现象就变 —— 这类串味在本仓库出现过。
+    """
+    from ddp_corpus import node_identity
+
+    node_identity.reset()
+    node_identity.follow_configuration_for_tests()
+    yield
+    node_identity.reset()
+
+
 @pytest.fixture
 async def engine():
     eng = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool,

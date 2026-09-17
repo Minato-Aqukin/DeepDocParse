@@ -22,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
+from ddp_corpus import node_identity
 from ddp_corpus.config import assert_secrets_configured, settings
 from ddp_corpus.db import get_engine, get_sessionmaker
 from ddp_corpus.errors import install_error_handlers
@@ -88,9 +89,16 @@ async def lifespan(app: FastAPI):
     app.state.federation_sweeper = asyncio.create_task(
         sweep_federation_loop(get_sessionmaker(), app.state.redis)
     )
+    # 本节点持久身份：向**本节点**控制面绑定控制面密钥派生出来的那一个 node_id。
+    # **不阻塞启动**（控制面可能比本服务晚起），但在绑上之前每个联邦端点与每次
+    # 出站都 503 node_identity_unavailable，/readyz 如实报状态 —— 绝不"先用
+    # BUNDLE_NODE_ID 顶着"，那正是要消灭的第二个身份源。
+    app.state.node_identity_binder = asyncio.create_task(
+        node_identity.keep_bound(app.state.http)
+    )
     yield
     for task in (app.state.reconciler, app.state.outbox_deliverer,
-                 app.state.federation_sweeper):
+                 app.state.federation_sweeper, app.state.node_identity_binder):
         task.cancel()
         try:
             await task
@@ -176,5 +184,9 @@ async def readyz():
             checks["redis"] = f"error: {type(exc).__name__}"
 
     ready = all(v == "ok" for v in checks.values())
+    # 联邦身份与认证档位如实报出来（不变式 2）。**它不参与 ready**：联邦是可选
+    # 能力，控制面没起来时本节点的检索/问答照常可用 —— 但"节点凭证跑在共享口令
+    # 档位"和"身份还没绑上/对不上"必须看得见，而不是只体现在联邦端点的 503 里。
     return JSONResponse(status_code=200 if ready else 503,
-                        content={"ready": ready, "checks": checks})
+                        content={"ready": ready, "checks": checks,
+                                 "federation": node_identity.status()})

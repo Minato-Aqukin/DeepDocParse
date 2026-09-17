@@ -499,8 +499,12 @@ def assert_secrets_configured() -> None:
             raise RuntimeError(
                 "拒绝启动：FEDERATION_PEER_AUTH=shared_token_insecure 只给没有控制面的开发夹具，"
                 "必须同时设置 ALLOW_INSECURE_DEFAULTS=true。生产请用 node_credential。")
-        print("[config] WARNING: FEDERATION_PEER_AUTH=shared_token_insecure —— 节点间认证是"
-              "共享口令，远端 actor 头未签名且同名用户会被合并")
+        # 措辞刻意不带下划线形式的档位名：日志脱敏守卫按 `_` 切段后逐段精确匹配，
+        # 写成 `shared_token_insecure` 会被当成打印了一个凭据名。这里说的是档位，
+        # 不是秘密 —— 与其配一条按行号锁定的豁免，不如把话说清楚。
+        print("[config] WARNING: FEDERATION_PEER_AUTH 处于共享口令档位（shared "
+              "token insecure，仅开发）—— 所有登记同伴共用一个秘密，"
+              "远端 actor 头未签名且同名用户会被合并")
     if settings.allow_insecure_defaults:
         print("[config] WARNING: ALLOW_INSECURE_DEFAULTS 已开启，占位密钥检查被跳过")
         return

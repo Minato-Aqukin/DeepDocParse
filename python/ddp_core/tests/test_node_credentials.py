@@ -271,4 +271,4 @@ def test_sign_request_refuses_what_could_never_become_a_valid_credential():
                   "constraints": {"root_task_id": "root-1"}, "method": "GET",
                   "path": "/api/v1/federation/tasks/exec-1", "body": b"", "ttl_seconds": 60}
         kwargs.update(over)
-        assert _code(lambda: nc.sign_request(**kwargs)) == "credential_invalid"
+        assert _code(lambda kwargs=kwargs: nc.sign_request(**kwargs)) == "credential_invalid"

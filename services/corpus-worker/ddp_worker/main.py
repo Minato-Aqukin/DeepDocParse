@@ -15,6 +15,7 @@ import httpx
 
 from ddp_corpus.config import assert_secrets_configured, settings
 from ddp_corpus.db import get_sessionmaker
+from ddp_corpus import node_identity
 from ddp_corpus.queue import backlog
 from ddp_corpus.service_client import new_http_client
 from ddp_corpus.storage import MinioStorage
@@ -53,9 +54,18 @@ async def run(kinds: list[str]) -> None:
 
     stopping = asyncio.Event()
     install_signal_handlers(stopping)
+    # 与 API 进程同一份绑定：federation_execute/federation_plan 处理器读
+    # `node_identity.local_node_id()`，不绑定就 503。后台重试直到绑上；
+    # shared 档位直接返回，测试跟随配置（`follow_configuration_for_tests`）。
+    binder = asyncio.create_task(node_identity.keep_bound(http))
     try:
         await loop(pools, state, stopping)
     finally:
+        binder.cancel()
+        try:
+            await binder
+        except asyncio.CancelledError:
+            pass
         await http.aclose()
 
 

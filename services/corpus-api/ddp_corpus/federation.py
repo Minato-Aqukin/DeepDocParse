@@ -758,6 +758,12 @@ def acting_actor(actor: Actor) -> str:
 #: worker 进程；授权真正需要的只有组织/身份/类型/角色/principal。
 _ACTOR_BINDING_FIELDS = ("organization_id", "actor_id", "kind", "role", "principal_id")
 
+#: 允许 principal 缺席的调用者类型：远端节点主体没有 principal（它的身份
+#: 就是 `peer-…` 派生 id，组织取自信任记录），`acting_actor` 对它恒取 id，
+#: 所以 None 回环后授权判定不变。其余类型（user/api_key）的 principal 缺席
+#: 仍然是拒绝 —— 那是 payload 坏了，不是合法形态。
+_OPTIONAL_PRINCIPAL_KINDS = ("peer",)
+
 
 def actor_binding(actor: Actor) -> dict:
     """把调用者压成**可持久化的最小身份**，供队列任务在 worker 进程里重建。
@@ -785,7 +791,11 @@ def actor_from_binding(binding: dict) -> Actor:
     if not isinstance(binding, dict):
         raise ValueError("actor binding must be an object")
     missing = [name for name in _ACTOR_BINDING_FIELDS
-               if name not in binding or not isinstance(binding[name], str)]
+               if name not in binding
+               or (binding[name] is None
+                   and not (name == "principal_id"
+                            and binding.get("kind") in _OPTIONAL_PRINCIPAL_KINDS))
+               or (binding[name] is not None and not isinstance(binding[name], str))]
     if missing:
         raise ValueError(f"actor binding missing fields: {missing}")
     principal = binding["principal_id"] or None

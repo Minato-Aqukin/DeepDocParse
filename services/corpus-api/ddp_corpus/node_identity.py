@@ -154,16 +154,23 @@ async def keep_bound(http: httpx.AsyncClient | None = None) -> None:
 
 
 def status() -> dict:
-    """给 /readyz 与能力声明：认证档位、身份状态、降级。不影响就绪（联邦是可选能力）。"""
+    """给 /readyz 的联邦身份与认证档位。不影响就绪（联邦是可选能力）。
+
+    **降级就是 `peer_auth` 本身**：`shared_token_insecure` 是契约枚举
+    `peer_auth_mode` 里 `severity: warn` 的那个取值，带着用户可见文案
+    「共享口令（不安全，仅开发）」。这里刻意不再另起一个手写的 `degraded`
+    字符串 —— 那会是同一件事的第二份真相，而且没有枚举守卫看着它。
+    `node_identity` 取 unbound / unavailable / mismatch / bound，
+    后三者说明联邦端点此刻为什么在 503。
+    """
     if shared_token_mode():
         return {"peer_auth": "shared_token_insecure", "node_identity": "configured",
-                "node_id": _configured() or None, "degraded": "shared_peer_token"}
+                "node_id": _configured() or None}
     identity = _state["status"]
     node_id = _state["node_id"] if identity == "bound" else None
     if _state["follow_configuration"]:
         identity, node_id = "bound", _configured() or None
-    return {"peer_auth": "node_credential", "node_identity": identity, "node_id": node_id,
-            "degraded": None}
+    return {"peer_auth": "node_credential", "node_identity": identity, "node_id": node_id}
 
 
 def ready() -> bool:

@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ddp_corpus import node_identity
 from ddp_corpus.config import settings
 from ddp_corpus.db import get_session
 from ddp_corpus.deps import Actor, current_actor, get_storage
@@ -94,7 +95,11 @@ async def _snapshot(session, storage, resource, version) -> VerifiedBundle:
         files = {name: await _get_bytes(storage, expected + name) for name in names}
         return validate_parts(manifest, files)
 
-    if not NODE_ID.fullmatch(settings.bundle_node_id):
+    # Bundle 的来源身份取**唯一那个**节点身份（控制面密钥派生、启动时绑定），
+    # 不再直接读 BUNDLE_NODE_ID：两个身份源不一致时导出的 Bundle 会声称自己
+    # 出自一个谁也验不了的节点，而且不报错。
+    node = node_identity.local_node_id()
+    if not NODE_ID.fullmatch(node):
         raise APIError(
             503,
             "configure BUNDLE_NODE_ID to a persistent unique node identity",
@@ -105,8 +110,8 @@ async def _snapshot(session, storage, resource, version) -> VerifiedBundle:
     if document is None:
         raise APIError(409, "missing resource document", "server_error", "bundle_binding_invalid")
     source = dict(
-        origin_node_id=settings.bundle_node_id,
-        authority_node_id=settings.bundle_node_id,
+        origin_node_id=node,
+        authority_node_id=node,
         resource_id=resource.id,
         source_version_id=version.id,
         source_digest="sha256:" + version.source_digest,

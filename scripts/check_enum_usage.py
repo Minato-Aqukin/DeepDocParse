@@ -73,6 +73,10 @@ TRACKED = {
     "upload_status": "upload_status",
     "actor_kind": "actor_kind",
     "answer_reason": "federated_answer_reason",
+    # 节点对节点的认证档位（`node_identity.status()` -> /readyz）。它同时**就是**
+    # 联邦侧的降级信号：`shared_token_insecure` 在契约里带 severity: warn。
+    # 登记在这里，写错档位名（`node-credential`）当场红。
+    "peer_auth": "peer_auth_mode",
 }
 
 #: 扫哪些树

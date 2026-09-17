@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -23,7 +24,9 @@ from ddp_corpus import cache, federation_tasks
 from ddp_corpus.cache import FederationCacheEntry
 from ddp_corpus.config import settings
 from ddp_corpus.federation_models import FederationProbe
+from ddp_corpus.federation_peers import PeerDirectory, parse_peers
 from ddp_corpus.models import as_aware, utcnow
+from node_credentials_fixture import LocalControlSigner
 from test_federation_probes import NODE, configure_federation, indexed_source, publish_collection
 from test_federation_tasks import (
     PEER_NODE,
@@ -32,7 +35,6 @@ from test_federation_tasks import (
     calls_to,
     create_intent,
     exploration,
-    install_peer,
     member,
     peer_descriptor,
     plan_task,
@@ -47,6 +49,27 @@ def _federation_config(monkeypatch):
     configure_federation(monkeypatch)
     monkeypatch.setattr(settings, "federation_peers", "")
     monkeypatch.setattr(settings, "federation_allow_loopback", False)
+
+
+def install_peer(monkeypatch, peer: StubPeer) -> None:
+    """协调者出站：node_credential 档位（endpoint-only 登记 + 本地签发替身）。
+
+    覆盖从 test_federation_tasks 导入的旧共享口令版本（那份文件不许碰）。
+    工厂签名与生产 `federation_tasks.peer_directory(actor, delegation)` 一致：
+    委托范围（root_task_id / task_spec_digest）按调用点传入，不从请求体里抄。
+    无 signer/delegation 时出站直接 credential_unavailable，连网络都到不了，
+    所以这里必须注入 LocalControlSigner 并透传 delegation，否则原来量的
+    "请求发出去后如何"根本走不到 stub。
+    """
+    peers = parse_peers(json.dumps({PEER_NODE: {"endpoint": "https://peer.example"}}),
+                        shared_token=False)
+
+    def factory(actor, delegation=None):
+        return PeerDirectory(peers, actor=actor, transport=peer.transport(),
+                             signer=LocalControlSigner(issuer_node_id=NODE),
+                             delegation=delegation, shared_token=False)
+
+    monkeypatch.setattr(federation_tasks, "peer_directory", factory)
 
 
 # ------------------------------------------------------------------ 夹具构造

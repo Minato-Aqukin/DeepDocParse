@@ -34,6 +34,15 @@ from ddp_corpus.federation_models import (
 from ddp_corpus.federation_peers import PeerDirectory, parse_peers
 from ddp_corpus.models import as_aware, new_id, utcnow
 from ddp_core.application import plans
+from node_credentials_fixture import (
+    OTHER_KEY,
+    OTHER_NODE_ID,
+    OTHER_PUBLIC_KEY,
+    LocalControlSigner,
+    caller,
+    install,
+    trust_record,
+)
 from test_federation_probes import (
     BASE,
     NODE,
@@ -395,14 +404,28 @@ def peer_status() -> dict:
 
 
 def install_peer(monkeypatch, peer: StubPeer) -> None:
-    peers = parse_peers(json.dumps({PEER_NODE: {
-        "endpoint": "https://peer.example", "service_token": "peer-service",
-        "peer_token": "peer-trust"}}))
+    """出站 stub：node_credential 档位 —— 目录只登记 endpoint，请求经生产
+    `PeerClient` 现签（签发方是本节点控制面的测试替身）。"""
+    peers = parse_peers(json.dumps({PEER_NODE: {"endpoint": "https://peer.example"}}))
+    signer = LocalControlSigner(issuer_node_id=NODE)
 
-    def factory(actor: Actor) -> PeerDirectory:
-        return PeerDirectory(peers, actor=actor, transport=peer.transport())
+    def factory(actor: Actor, delegation=None) -> PeerDirectory:
+        return PeerDirectory(peers, actor=actor, transport=peer.transport(),
+                             signer=signer, delegation=delegation,
+                             shared_token=False)
 
     monkeypatch.setattr(federation_tasks, "peer_directory", factory)
+
+
+@pytest.fixture
+def _peer_auth(monkeypatch, app_state):
+    """入站：本节点 NODE；PEER_NODE_ID 是控制面批准的同组织成员。"""
+    return install(monkeypatch, corpus_app, node_id=NODE, organization_id=ORG)
+
+
+def peer_caller(client, **over):
+    """一个同组织远端节点对本节点的调用方：每次调用现签一张凭证。"""
+    return caller(client, audience_node_id=NODE, **over)
 
 
 def calls_to(peer: StubPeer, suffix: str) -> int:
@@ -715,15 +738,16 @@ async def test_exhaustive_sealed_scope_reaches_complete(actor_client, session):
 TEXTS_12 = tuple(f"retrieval target text number {index}" for index in range(12))
 
 
-async def test_truncated_retrieve_stays_partial_and_never_completes(
-        actor_client, session):
-    """F1/T85：probe 与 execution 都自报 truncated_by_limit 时不许洗成 succeeded。
+async def test_truncated_retrieve_stays_partial_and_execution_detail_is_actor_bound(
+        actor_client, client, session, _peer_auth):
+    """映射：旧 `test_truncated_retrieve_stays_partial_and_never_completes`。
 
-    旧行为：probe 阶段记 partial，执行阶段用 `state="succeeded"` 覆盖成成功，
-    counts.incomplete=0、retrieval_completeness=complete —— 一次被截断的检索
-    被账本洗成了"全范围查完"。
+    截断诚实性（partial 不洗成 succeeded）不变；变的只有执行明细的读取身份：
+    旧档位里 peer 冒用受理人 alice 的 actor 头读到 200。节点凭证下远端主体恒为
+    peer-*（冒充不了受理人），`require_execution` 按受理调用者绑定同形 404。
+    旧断言 `detail == 200 + internal_limits/degraded` → 新断言 `404 task_not_found`；
+    行内限制仍从本地执行行直接断言。
     """
-    from test_federation_probes import BASE, headers as peer_headers
 
     _, version, _, _, _ = await indexed_source(session, texts=TEXTS_12)
     collection = await publish_collection(actor_client, version, key="truncated")
@@ -752,11 +776,12 @@ async def test_truncated_retrieve_stays_partial_and_never_completes(
         FederationExecution.root_task_id == root).execution_options(populate_existing=True))
     # 执行回执自己也要对协调者可见地报告限制（契约 ExecutionStatus 新增字段）。
     assert "truncated_by_limit" in (execution.result_json or {}).get("internal_limits", [])
-    detail = await actor_client.get(f"{BASE}/tasks/{execution.executor_task_id}",
-                                    headers=peer_headers())
-    assert detail.status_code == 200, detail.text
-    assert "truncated_by_limit" in detail.json()["internal_limits"]
-    assert "degraded" in detail.json()
+    # 同组织远端节点读受理人绑定的执行行：与不存在同形 404，不给存在性探测口。
+    bound = await peer_caller(client).get(
+        f"{BASE}/tasks/{execution.executor_task_id}",
+        constraints={"root_task_id": root, "step_id": execution.step_id})
+    assert bound.status_code == 404, bound.text
+    assert bound.json()["error"]["code"] == "task_not_found"
 
     coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
     entry = coverage["entries"][0]
@@ -2095,42 +2120,60 @@ async def test_execution_consent_must_cover_every_edge_and_executor(
 
 # ------------------------------------------------------------------ 证据集端点
 
-async def test_evidence_set_endpoint_reauthorizes_and_bounds(actor_client, session):
+async def test_evidence_set_endpoint_is_actor_bound_for_peers(
+        actor_client, client, session, _peer_auth):
+    """映射：旧 `test_evidence_set_endpoint_reauthorizes_and_bounds`。
+
+    旧档位里 peer 冒用 alice/bob 的 actor 头：本人读 200、别人读 404。
+    节点凭证下远端主体恒为 peer-*（组织取自信任记录，不取自报主体），读不到
+    受理人 alice 绑定的集合 —— 本人读与伪造引用同形 404：
+    旧断言 `本人 200 + 条目` → 新断言 `404 evidence_set_not_found`；
+    `bob 404` → 同组织另一主体同样 404（peer 模型里不可区分）；
+    `other-org 404` → 跨组织陌生节点 404（按信任状态表达）；
+    `forged 404`、`expired 410` 不变（过期先于归属检查）。
+    """
     run = await run_local_task(actor_client, session, key="evidence-set")
     probe = await session.scalar(select(FederationProbe).where(
         FederationProbe.organization_id == ORG).execution_options(populate_existing=True))
     set_ref = probe.result_json["result"]["retrieval"]["evidence_set_ref"]
     assert set_ref
-    response = await actor_client.get(f"{BASE}/evidence-sets/{set_ref}", headers=headers())
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["schema"] == "ddp-evidence/1#EvidenceSet" and body["complete"] is True
-    assert [item["evidence_id"] for item in body["items"]] == [run["evidence_rows"][0].id]
+    owner = peer_caller(client)
+    owned = await owner.get(f"{BASE}/evidence-sets/{set_ref}")
+    assert owned.status_code == 404, owned.text
+    assert owned.json()["error"]["code"] == "evidence_set_not_found"
 
     execution = await session.scalar(select(FederationExecution).where(
         FederationExecution.root_task_id == run["root"]))
-    execution_set = await actor_client.get(
-        f"{BASE}/evidence-sets/{execution.evidence_set_ref}", headers=headers())
-    assert execution_set.status_code == 200, execution_set.text
-    assert [item["evidence_id"] for item in execution_set.json()["items"]] \
-        == [run["evidence_rows"][0].id]
+    execution_set = await owner.get(f"{BASE}/evidence-sets/{execution.evidence_set_ref}")
+    assert execution_set.status_code == 404, execution_set.text
+    # 执行集先过执行行的调用者绑定：码是 task_not_found（与探测集的
+    # evidence_set_not_found 同为 404 同形，不给存在性探测口）。
+    assert execution_set.json()["error"]["code"] == "task_not_found"
 
-    forged = await actor_client.get(f"{BASE}/evidence-sets/federation-probe:forged",
-                                    headers=headers())
+    forged = await owner.get(f"{BASE}/evidence-sets/federation-probe:forged")
     assert forged.status_code == 404
-    other_actor = await actor_client.get(f"{BASE}/evidence-sets/{set_ref}",
-                                         headers=headers("bob"))
-    assert other_actor.status_code == 404
-    other_org = await actor_client.get(f"{BASE}/evidence-sets/{set_ref}",
-                                       headers=headers(org="other-org"))
-    assert other_org.status_code == 404
+    assert forged.json()["error"]["code"] == "evidence_set_not_found"
+    # 同组织另一主体：peer 模型里不可区分，同样 404。
+    same_org = await peer_caller(client, subject="user-other").get(
+        f"{BASE}/evidence-sets/{set_ref}")
+    assert same_org.status_code == 404
+    assert same_org.json()["error"]["code"] == "evidence_set_not_found"
+    # 跨组织陌生节点：按信任状态拒绝，与不存在同形。
+    _peer_auth.records[OTHER_NODE_ID] = trust_record(
+        OTHER_NODE_ID, OTHER_PUBLIC_KEY, organization_id="other-org",
+        authority_node_id=NODE)
+    stranger = peer_caller(client, issuer_node_id=OTHER_NODE_ID, key=OTHER_KEY)
+    foreign = await stranger.get(f"{BASE}/evidence-sets/{set_ref}")
+    assert foreign.status_code == 404
+    assert foreign.json()["error"]["code"] == "evidence_set_not_found"
 
     await session.execute(update(FederationProbe).where(
         FederationProbe.probe_id == probe.probe_id).values(
         expires_at=utcnow() - timedelta(seconds=1)))
     await session.commit()
-    expired = await actor_client.get(f"{BASE}/evidence-sets/{set_ref}", headers=headers())
+    expired = await owner.get(f"{BASE}/evidence-sets/{set_ref}")
     assert expired.status_code == 410
+    assert expired.json()["error"]["code"] == "probe_expired"
 
 
 # ------------------------------------------------------------------ 本人任务列表

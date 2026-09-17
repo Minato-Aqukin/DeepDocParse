@@ -450,11 +450,12 @@ class TwoNodeFixture:
         from ddp_corpus.config import settings
         from ddp_corpus.federation_peers import PeerDirectory, parse_peers
 
-        def factory(actor):
+        def factory(actor, delegation=None):
             peers = parse_peers(settings.federation_peers,
                                 allow_loopback=settings.federation_allow_loopback)
             return PeerDirectory(peers, actor=actor,
-                                 transport=_CountingTransport(self.outbound))
+                                 transport=_CountingTransport(self.outbound),
+                                 delegation=delegation)
 
         monkeypatch.setattr(federation_tasks, "peer_directory", factory)
 

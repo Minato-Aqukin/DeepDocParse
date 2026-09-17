@@ -1456,7 +1456,7 @@ def snapshot_state_label(value: str | None) -> str | None:
 #
 # **`unreachable` 类错误绝不能被前端翻译成「对方没有资料」**（§9.6 原文）：
 # 那是把"我没查到"说成"那里没有"。
-FederationError = Literal["discovery_incomplete", "scope_expired", "capability_unknown", "capability_unsupported", "input_not_verified", "egress_denied", "plan_changed", "offer_expired", "admission_unknown", "idempotency_conflict", "partial_retrieval", "insufficient_evidence", "budget_exhausted", "source_revoked", "delivery_expired", "local_model_missing", "protocol_incompatible", "task_cancelled", "credential_invalid", "credential_expired", "credential_replayed", "credential_audience_mismatch", "credential_operation_denied", "credential_scope_denied", "node_unknown", "node_revoked", "node_identity_mismatch", "node_identity_unavailable", "credential_unavailable"]
+FederationError = Literal["discovery_incomplete", "scope_expired", "capability_unknown", "capability_unsupported", "input_not_verified", "egress_denied", "plan_changed", "offer_expired", "admission_unknown", "idempotency_conflict", "partial_retrieval", "insufficient_evidence", "budget_exhausted", "source_revoked", "delivery_expired", "local_model_missing", "protocol_incompatible", "task_cancelled", "credential_invalid", "credential_expired", "credential_replayed", "credential_audience_mismatch", "credential_operation_denied", "credential_scope_denied", "node_unknown", "node_revoked", "node_identity_mismatch", "node_identity_unavailable", "node_identity_unconfigured", "credential_unavailable"]
 
 FEDERATION_ERROR_VALUES: Final[tuple[str, ...]] = (
     "discovery_incomplete",
@@ -1487,6 +1487,7 @@ FEDERATION_ERROR_VALUES: Final[tuple[str, ...]] = (
     "node_revoked",
     "node_identity_mismatch",
     "node_identity_unavailable",
+    "node_identity_unconfigured",
     "credential_unavailable",
 )
 
@@ -1557,6 +1558,9 @@ FEDERATION_ERROR_META: Final[dict[str, EnumMeta]] = {
     "node_identity_mismatch": {"value": "node_identity_mismatch", "label": "本节点身份不一致（联邦已停用）", "severity": "error"},
     # 还没从控制面取到本节点持久身份（503），联邦端点与出站一律拒绝
     "node_identity_unavailable": {"value": "node_identity_unavailable", "label": "本节点身份尚未确定", "severity": "error"},
+    # 没有可用的本节点身份配置（503）：shared 开发档位或测试跟随模式下
+    # BUNDLE_NODE_ID 为空或形状不对。先配好持久身份再谈联邦。
+    "node_identity_unconfigured": {"value": "node_identity_unconfigured", "label": "本节点身份未配置", "severity": "error"},
     # 本节点控制面在凭证链路上不可用：出站时签不出凭证（不可达、拒签、响应形状不对），
     # 或入站时查不到签发节点的信任记录（503）。**是本节点的问题，不是对端没有资料**
     # —— 协调者记 unreachable 并保留可重试。

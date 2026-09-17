@@ -42,6 +42,7 @@ func (s *Store) BindNodeIdentity(ctx context.Context, v PublicNodeIdentity) erro
 	}
 	return nil
 }
+
 // PeerTrustRecord is what a receiving corpus needs to authenticate an inbound
 // node credential: the member's registered public key, its approval state and
 // the member revision. Pending and revoked members are returned with their

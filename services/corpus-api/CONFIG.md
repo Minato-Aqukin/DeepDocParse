@@ -16,7 +16,7 @@
 **`VITE_DEFAULT_ENGINE` 要与 `DEFAULT_PARSE_ENGINE`、`infra/registry/models.yaml`
 三者对齐** —— 任一处对不上，上传会在网关侧收 404 unknown_engine。
 
-共 **86** 项。
+共 **90** 项。
 
 ## 本层资源
 
@@ -133,8 +133,12 @@
 | 环境变量 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `FEDERATION_ADMISSIONS_ENABLED` | `bool` | `True` | 本节点是否接受 peer 的 admission。关掉时能力清单里的 accepting_admissions 如实报 false，admission 端点也会拒绝（不排队、不占算力）。 |
-| `FEDERATION_PEER_TOKEN` | `str` | `''` | **本节点接受 peer 调用时校验的固定信任域凭据。** 留空 = 没有配置任何 peer 信任，federation 写端点一律 401 peer_unauthenticated （Fail Closed）：一个没有登记任何对端凭据的节点不该被任何人当执行者用。 **绝不回显、绝不入日志、绝不进错误消息**；比较用 hmac.compare_digest。 |
-| `FEDERATION_PEERS` | `str` | `''` | 协调者出站时登记的远端节点目录（P5-INTERFACES-v3 §5）。JSON 对象： {"<node_id>": {"endpoint": "https://…", "service_token": "…", "peer_token": "…"}} **Fail Closed**：没登记的节点一个请求也不发（连 DNS 都不解析）；endpoint 必须是 HTTPS 且无 userinfo/query/fragment。三个凭据字段绝不回显、不入日志、 不进错误消息 —— 它们就是"对方凭什么信我们"的全部。 |
+| `FEDERATION_PEER_AUTH` | `str` | `'node_credential'` | 节点对节点端点的认证方式（契约 enums.yaml 的 peer_auth_mode）。 **node_credential（默认，唯一的生产形态）**：出站每个请求向本节点控制面申请 一张单次、≤120s、限定 audience/actor/操作/范围的 Ed25519 凭证；入站按控制面 成员目录里已批准节点的公钥验签、记 jti 防重放，远端调用者映射成本地只读的 peer-* 主体再按本地 ACL 判权（packages/contracts/ddp/node-credential-format.md）。 shared_token_insecure：旧的共享 FEDERATION_PEER_TOKEN + 对端 SERVICE_TOKEN + 自报 actor 头。所有同伴共用一个秘密、同名用户被直接合并 —— **只给没有控制面的 开发夹具**：必须同时 ALLOW_INSECURE_DEFAULTS=true 才能启动，/readyz 如实报降级。 |
+| `FEDERATION_PEER_TOKEN` | `str` | `''` | **仅 shared_token_insecure 档位使用**：本节点接受 peer 调用时校验的共享凭据。 留空 = 一律 401 peer_unauthenticated（Fail Closed）。 **绝不回显、绝不入日志、绝不进错误消息**；比较用 hmac.compare_digest。 |
+| `FEDERATION_PEERS` | `str` | `''` | 协调者出站时登记的远端节点目录（P5-INTERFACES-v3 §5）。JSON 对象： node_credential 档位：{"<node_id>": {"endpoint": "https://…"}} —— **不许带任何口令**， 带了就是配置错误（留着不用的秘密迟早被复制到别处）； shared_token_insecure 档位：{"<node_id>": {"endpoint": "…", "service_token": "…", "peer_token": "…"}}。 **Fail Closed**：没登记的节点一个请求也不发（连 DNS 都不解析）；endpoint 必须是 HTTPS 且无 userinfo/query/fragment。凭据字段绝不回显、不入日志、 不进错误消息。登记在这里只决定"往哪发"；能不能签出凭证还要控制面批准该节点。 |
+| `FEDERATION_PEER_KEY_CACHE_SECONDS` | `int` | `5` | 入站验签时对**已批准**节点信任记录的缓存秒数，也就是控制面撤销一个节点后 本节点最迟多久拒绝它的新请求。0 = 每个请求都查控制面；上限 60。 未知 / pending / revoked 从不缓存（新批准立即生效，撤销不会被旧的否定结果挡住）。 |
+| `FEDERATION_CREDENTIAL_TTL_SECONDS` | `int` | `60` | 出站凭证的有效期（秒，1..120）。凭证单次使用，这个值只需覆盖一次请求的 往返加两台主机的时钟偏差；调大不会减少签发次数，只会让被截获的凭证活得更久。 |
+| `FEDERATION_IDENTITY_RETRY_SECONDS` | `int` | `5` | 启动时向控制面绑定本节点持久身份失败后的重试间隔（秒）。绑定成功之前所有 联邦端点与出站都 503 node_identity_unavailable —— 慢启动不会让节点换个身份跑。 |
 | `FEDERATION_ALLOW_LOOPBACK` | `bool` | `False` | 只给本地回路集成用的逃生口：允许 http://127.0.0.1 或 http://[::1] 的 peer endpoint。**只认字面回环地址**，不接受 localhost 或任何域名。 生产保持 false —— 打开它等于允许明文外发问题与证据。 |
 | `FEDERATION_EXECUTION_INLINE` | `bool` | `False` | 联邦执行的执行位置。**默认 false = 走 `corpus.tasks` 持久队列**： admit / POST /tasks 先把受理行/执行行/协调行与队列任务写进同一个事务， 再由 corpus-worker 领取执行 —— 受理进程重启不会让已受理的执行永远停在 queued/running（企业边界 7）。true = 旧行为：在请求进程内直接执行 （`execute` 仍带 generation fencing，超时有墙钟上限）。只给没有 worker 的 单进程部署与双节点验收夹具用：它恢复不了的崩溃场景正是队列要解决的那个， 生产必须保持 false。 |
 | `FEDERATION_SWEEP_INTERVAL` | `int` | `30` | 回收清扫间隔（秒）。像 outbox 一样起一个循环：过期租约的联邦执行、 卡死超过 deadline 的协调任务由它落成显式失败，绝不永远停在 running。 |

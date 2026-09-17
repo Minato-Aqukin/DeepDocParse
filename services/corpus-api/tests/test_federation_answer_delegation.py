@@ -20,10 +20,24 @@ import httpx
 import pytest
 import respx
 
-from conftest import SERVICE, drain_tasks
-from ddp_core.application.plans import canonical_bytes, content_digest, task_plan_digest
+from conftest import ORG, SERVICE, drain_tasks
+from ddp_core.application.plans import (
+    canonical_bytes,
+    content_digest,
+    task_plan_digest,
+    task_spec_digest,
+)
 from ddp_corpus import federation_tasks
 from ddp_corpus.config import settings
+from ddp_corpus.federation_peers import PeerDirectory, parse_peers
+from ddp_corpus.main import app
+from ddp_corpus.models import new_id
+from node_credentials_fixture import (
+    PEER_NODE_ID,
+    LocalControlSigner,
+    caller,
+    install,
+)
 from test_federation_admissions import admission_body
 from test_federation_answer import chat_answer, gateway_channel, mock_chat, mock_gateway
 from test_federation_probes import (
@@ -40,7 +54,6 @@ from test_federation_tasks import (
     create_intent,
     execution_consent,
     exploration,
-    install_peer,
     member,
     plan_task,
     probe_keys,
@@ -50,6 +63,35 @@ from test_federation_tasks import (
 )
 
 GATEWAY_CAP = f"{SERVICE}/v1/capabilities"
+
+
+def install_peer(monkeypatch, peer: StubPeer) -> None:
+    """协调者出站：node_credential 档位（endpoint-only 登记 + 本地签发替身）。
+
+    覆盖从 test_federation_tasks 导入的旧共享口令版本（那份文件不许碰）。
+    工厂签名与生产 `federation_tasks.peer_directory(actor, delegation)` 一致：
+    委托范围（root_task_id / task_spec_digest）按调用点传入，不从请求体里抄。
+    """
+    peers = parse_peers(json.dumps({PEER_NODE: {"endpoint": "https://peer.example"}}),
+                        shared_token=False)
+
+    def factory(actor, delegation=None):
+        return PeerDirectory(peers, actor=actor, transport=peer.transport(),
+                             signer=LocalControlSigner(issuer_node_id=NODE),
+                             delegation=delegation, shared_token=False)
+
+    monkeypatch.setattr(federation_tasks, "peer_directory", factory)
+
+
+@pytest.fixture
+def _peer_auth(monkeypatch, app_state):
+    """执行者入站：本节点 NODE；PEER_NODE_ID 是控制面批准的同组织成员。"""
+    return install(monkeypatch, app, node_id=NODE, organization_id=ORG)
+
+
+def _peer(client, **over):
+    """一个同组织远端节点对本节点的调用方：每次调用现签一张凭证。"""
+    return caller(client, audience_node_id=NODE, **over)
 
 
 @pytest.fixture(autouse=True)
@@ -334,6 +376,13 @@ def executor_answer_body(*, key, evidence=None, budget=64, step_inputs=None):
     ]
     body = admission_body(key=key, operation="answer", step_id="answer-1", steps=steps)
     body["plan"]["budget"]["max_generation_tokens"] = budget
+    # 入站凭证要求"计划写着谁在协调，签名证明的就是谁在发"：执行者侧的协调者是
+    # 远端签发节点（PEER_NODE_ID），不是本节点 NODE。步骤的执行者仍是本节点。
+    # center_only 策略只允许 {本地, coordinator_ref} 两节点在场，所以 task_spec 的
+    # coordinator_ref 必须同步指向远端协调者，否则 validate_plan 报 policy_denied。
+    body["task_spec"]["execution_policy"]["coordinator_ref"] = PEER_NODE_ID
+    body["plan"]["task_spec_digest"] = task_spec_digest(body["task_spec"])
+    body["plan"]["root_coordinator_node_id"] = PEER_NODE_ID
     body["plan"]["plan_digest"] = task_plan_digest(body["plan"])
     body["execution_consent"]["plan_digest"] = body["plan"]["plan_digest"]
     if evidence is not None:
@@ -344,10 +393,21 @@ def executor_answer_body(*, key, evidence=None, budget=64, step_inputs=None):
 
 
 async def post_executor_answer(client, body, *, key=None):
-    return await client.post(f"{BASE}/admissions",
-                             headers={**headers(),
-                                      "Idempotency-Key": key or body["idempotency_key"]},
-                             json=body)
+    # 联邦端点只认节点凭证：约束（root_task_id/step_id）从请求体自动取，
+    # Idempotency-Key 经 headers 参数传（必须与体内的 idempotency_key 一致）。
+    # jti 按调用显式发新值：PeerCaller 默认 jti 取自 (path, 秒, 计数, id)，
+    # 同一用例内两次 POST 落在同一秒且前一个调用方已被回收时地址复用会撞 jti，
+    # 第二次调用会被重放账本以 401 打掉 —— 那是测试装配的假失败，不是产品行为。
+    return await _peer(client).post(
+        f"{BASE}/admissions", json_body=body,
+        headers={"Idempotency-Key": key or body["idempotency_key"]}, jti=new_id())
+
+
+async def get_executor_task(client, executor_task_id, *, root_task_id, step_id="answer-1"):
+    # GET 无请求体，约束只能显式传；within 只比对凭证里带了的键 + 恒比 root。
+    return await _peer(client).request(
+        "GET", f"{BASE}/tasks/{executor_task_id}",
+        constraints={"root_task_id": root_task_id, "step_id": step_id}, jti=new_id())
 
 
 def evidence_item(evidence_id="ev-1", excerpt="retrieval target text"):
@@ -357,11 +417,11 @@ def evidence_item(evidence_id="ev-1", excerpt="retrieval target text"):
 
 @respx.mock
 async def test_executor_verifies_evidence_before_accepting_answer(
-        actor_client, session, app_state):
+        client, session, app_state, _peer_auth):
     mock_gateway(channels=[gateway_channel()])
     chat = mock_chat(chat_answer("verified answer [1]"))
     body = executor_answer_body(key="exec-answer", evidence=[evidence_item()])
-    response = await post_executor_answer(actor_client, body)
+    response = await post_executor_answer(client, body)
     assert response.status_code == 201, response.text
     receipt = response.json()
     assert receipt["state"] == "accepted"
@@ -372,8 +432,9 @@ async def test_executor_verifies_evidence_before_accepting_answer(
     assert receipt["verified_input_manifest_digest"] == expected
 
     await drain_tasks(app_state)
-    detail = (await actor_client.get(f"{BASE}/tasks/{receipt['executor_task_id']}",
-                                     headers=headers())).json()
+    detail = (await get_executor_task(client, receipt['executor_task_id'],
+                                      root_task_id=body["root_task_id"],
+                                      step_id="answer-1")).json()
     assert detail["state"] == "succeeded"
     assert detail["operation"] == "answer"
     document = detail["answer"]
@@ -386,10 +447,10 @@ async def test_executor_verifies_evidence_before_accepting_answer(
 
 @respx.mock
 async def test_executor_missing_evidence_waits_without_occupying_work(
-        actor_client, session):
+        client, session, _peer_auth):
     mock_gateway(channels=[gateway_channel()])
     body = executor_answer_body(key="exec-no-evidence", evidence=[])
-    response = await post_executor_answer(actor_client, body)
+    response = await post_executor_answer(client, body)
     assert response.status_code == 201, response.text
     receipt = response.json()
     assert receipt["state"] == "waiting_input"
@@ -410,54 +471,55 @@ async def test_executor_missing_evidence_waits_without_occupying_work(
                    "digest": content_digest(("x" * 2001).encode())}, "over-2000"),
 ])
 async def test_executor_unverifiable_evidence_is_rejected_not_truncated(
-        actor_client, mutate, label):
+        client, mutate, label, _peer_auth):
     mock_gateway(channels=[gateway_channel()])
     body = executor_answer_body(key="exec-" + label, evidence=[mutate(evidence_item())])
-    response = await post_executor_answer(actor_client, body)
+    response = await post_executor_answer(client, body)
     assert response.status_code == 409, response.text
     assert response.json()["error"]["code"] == "input_not_verified"
 
 
 @respx.mock
 async def test_executor_duplicate_evidence_ids_and_count_bounds_are_rejected(
-        actor_client):
+        client, _peer_auth):
     mock_gateway(channels=[gateway_channel()])
     duplicate = [evidence_item("ev-1"), evidence_item("ev-1", excerpt="other text")]
     response = await post_executor_answer(
-        actor_client, executor_answer_body(key="exec-dupe", evidence=duplicate))
+        client, executor_answer_body(key="exec-dupe", evidence=duplicate))
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "input_not_verified"
 
     too_many = [evidence_item(f"ev-{index}", excerpt=f"text {index}")
                 for index in range(51)]
     response = await post_executor_answer(
-        actor_client, executor_answer_body(key="exec-many", evidence=too_many))
+        client, executor_answer_body(key="exec-many", evidence=too_many))
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "input_not_verified"
 
 
 @respx.mock
-async def test_executor_without_generation_budget_rejects_answer(actor_client):
+async def test_executor_without_generation_budget_rejects_answer(client, _peer_auth):
     mock_gateway(channels=[gateway_channel()])
     body = executor_answer_body(key="exec-no-budget", evidence=[evidence_item()],
                                 budget=0)
-    response = await post_executor_answer(actor_client, body)
+    response = await post_executor_answer(client, body)
     assert response.status_code == 429, response.text
     assert response.json()["error"]["code"] == "budget_exceeded"
 
 
 @respx.mock
 async def test_executor_generation_without_citations_is_a_visible_empty_answer(
-        actor_client, app_state):
+        client, app_state, _peer_auth):
     mock_gateway(channels=[gateway_channel()])
     mock_chat(chat_answer("这段答案没有任何引用。"))
     body = executor_answer_body(key="exec-uncited", evidence=[evidence_item()])
-    response = await post_executor_answer(actor_client, body)
+    response = await post_executor_answer(client, body)
     assert response.status_code == 201, response.text
     receipt = response.json()
     await drain_tasks(app_state)
-    detail = (await actor_client.get(f"{BASE}/tasks/{receipt['executor_task_id']}",
-                                     headers=headers())).json()
+    detail = (await get_executor_task(client, receipt['executor_task_id'],
+                                      root_task_id=body["root_task_id"],
+                                      step_id="answer-1")).json()
     document = detail["answer"]
     assert document["answer"] is None
     assert document["answer_reason"] == "unsupported_generation"
@@ -466,12 +528,12 @@ async def test_executor_generation_without_citations_is_a_visible_empty_answer(
 
 
 @respx.mock
-async def test_executor_readiness_is_rechecked_at_admission(actor_client):
+async def test_executor_readiness_is_rechecked_at_admission(client, _peer_auth):
     """能力清单说未知时，即使请求带齐证据也只能 capability_unsupported。"""
     respx.get(GATEWAY_CAP).mock(return_value=httpx.Response(200, json={
         "capability_status": "unknown", "profiles": [], "model_channels": []}))
     body = executor_answer_body(key="exec-not-ready", evidence=[evidence_item()])
-    response = await post_executor_answer(actor_client, body)
+    response = await post_executor_answer(client, body)
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "capability_unsupported"
 

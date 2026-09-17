@@ -112,6 +112,46 @@ def diff(declared: set[tuple[str, str]],
     return sorted(declared - implemented), sorted(implemented - declared)
 
 
+def contract_operations() -> dict[tuple[str, str], str]:
+    """(方法, 归一化路径) -> `x-ddp-node-credential-operation`。
+
+    凭证里绑定的操作必须等于端点声明的这一个，否则"签对了请求、走错了门"。
+    实现侧的对照表是 `ddp_corpus/routers/federation.py::ROUTE_OPERATIONS`。
+    """
+    spec = contract_yaml.load(SPEC)
+    out: dict[tuple[str, str], str] = {}
+    for path, item in (spec.get("paths") or {}).items():
+        if not isinstance(item, dict):
+            continue
+        for method, operation in item.items():
+            if method.lower() not in _HTTP_METHODS or not isinstance(operation, dict):
+                continue
+            code = operation.get("x-ddp-node-credential-operation")
+            if code is None:
+                continue
+            out[(method.lower(), normalize(path))] = code
+    return out
+
+
+def implemented_operations() -> dict[tuple[str, str], str]:
+    from ddp_corpus.routers.federation import ROUTE_OPERATIONS  # noqa: PLC0415
+
+    return {(method.lower(), normalize(path)): operation
+            for (method, path), operation in ROUTE_OPERATIONS.items()}
+
+
+def diff_operations(declared: dict[tuple[str, str], str],
+                    implemented: dict[tuple[str, str], str]
+                    ) -> tuple[list, list, list]:
+    """返回 (缺失, 多余, 操作不一致)。比较函数坏掉时主检查会沉默地全绿，
+    所以自检里对三种都要做变异。"""
+    missing = sorted(set(declared) - set(implemented))
+    extra = sorted(set(implemented) - set(declared))
+    mismatched = sorted(key for key in set(declared) & set(implemented)
+                        if declared[key] != implemented[key])
+    return missing, extra, mismatched
+
+
 def self_test() -> int:
     declared = contract_endpoints()
     if not declared:
@@ -146,6 +186,31 @@ def self_test() -> int:
         return 1
 
     print("路由守卫自检通过：missing / extra / 路径参数归一化三组变异都有效")
+
+    # 变异 4：实现的操作码与契约不一致 -> 必须且只能报这一条 mismatched
+    ops = {("get", "/api/v1/federation/probes/{}"): "probe_read"}
+    missing, extra, mismatched = diff_operations(
+        {**ops, ("post", "/api/v1/federation/admissions"): "admission_create"},
+        {**ops, ("post", "/api/v1/federation/admissions"): "probe_create"})
+    if missing or extra or mismatched != [("post", "/api/v1/federation/admissions")]:
+        print(f"::error::自检失败：操作码不一致的变异没报准 "
+              f"missing={missing} extra={extra} mismatched={mismatched}",
+              file=sys.stderr)
+        return 1
+
+    # 变异 5：契约多一条操作声明 -> 必须报 missing；实现多一条 -> 必须报 extra
+    missing, extra, mismatched = diff_operations(
+        {**ops, ("post", "/api/v1/federation/admissions"): "admission_create"}, ops)
+    if missing != [("post", "/api/v1/federation/admissions")] or extra or mismatched:
+        print("::error::自检失败：操作声明缺失的变异没报准", file=sys.stderr)
+        return 1
+    missing, extra, mismatched = diff_operations(
+        ops, {**ops, ("post", "/api/v1/federation/admissions"): "admission_create"})
+    if missing or extra != [("post", "/api/v1/federation/admissions")] or mismatched:
+        print("::error::自检失败：实现多 map 一条的变异没报准", file=sys.stderr)
+        return 1
+
+    print("操作码守卫自检通过：mismatched / missing / extra 三组变异都有效")
     return 0
 
 
@@ -194,6 +259,27 @@ def main() -> int:
               f"corpus-api 缺失 {len(missing)} 条，契约外 {len(extra)} 条")
         return 1
     print(f"联邦任务路由守卫通过：{len(declared)} 个端点，契约与 corpus-api 一致")
+
+    declared_ops = contract_operations()
+    if not declared_ops:
+        print(f"::error::{SPEC.relative_to(ROOT)} 里一条 "
+              f"x-ddp-node-credential-operation 都没有 —— 守卫本身就失去了意义")
+        return 1
+    implemented_ops = implemented_operations()
+    missing_ops, extra_ops, mismatched_ops = diff_operations(declared_ops, implemented_ops)
+    for key in missing_ops:
+        print(f"::error::契约声明了操作码、实现 ROUTE_OPERATIONS 里没有："
+              f"{key[0].upper()} {key[1]}（期望 {declared_ops[key]}）")
+    for key in extra_ops:
+        print(f"::error::实现 ROUTE_OPERATIONS 多了契约里没有的操作映射："
+              f"{key[0].upper()} {key[1]}（实现 {implemented_ops[key]}）")
+    for key in mismatched_ops:
+        print(f"::error::凭证操作码两边不一致：{key[0].upper()} {key[1]} "
+              f"契约是 {declared_ops[key]}，实现是 {implemented_ops[key]} —— "
+              f"签对了请求、走错了门")
+    if missing_ops or extra_ops or mismatched_ops:
+        return 1
+    print(f"凭证操作码守卫通过：{len(declared_ops)} 个端点，契约与实现一致")
     return 0
 
 

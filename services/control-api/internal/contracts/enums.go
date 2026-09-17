@@ -1738,6 +1738,9 @@ const (
 	FederationErrorNodeIdentityMismatch FederationError = "node_identity_mismatch"
 	// 还没从控制面取到本节点持久身份（503），联邦端点与出站一律拒绝
 	FederationErrorNodeIdentityUnavailable FederationError = "node_identity_unavailable"
+	// 没有可用的本节点身份配置（503）：shared 开发档位或测试跟随模式下
+	// BUNDLE_NODE_ID 为空或形状不对。先配好持久身份再谈联邦。
+	FederationErrorNodeIdentityUnconfigured FederationError = "node_identity_unconfigured"
 	// 本节点控制面在凭证链路上不可用：出站时签不出凭证（不可达、拒签、响应形状不对），
 	// 或入站时查不到签发节点的信任记录（503）。**是本节点的问题，不是对端没有资料**
 	// —— 协调者记 unreachable 并保留可重试。
@@ -1774,6 +1777,7 @@ var FederationErrorValues = []FederationError{
 	FederationErrorNodeRevoked,
 	FederationErrorNodeIdentityMismatch,
 	FederationErrorNodeIdentityUnavailable,
+	FederationErrorNodeIdentityUnconfigured,
 	FederationErrorCredentialUnavailable,
 }
 
@@ -1806,6 +1810,7 @@ var FederationErrorMeta = map[FederationError]EnumMeta{
 	FederationErrorNodeRevoked:                {Value: "node_revoked", Label: "节点已被撤销", Severity: SeverityError},
 	FederationErrorNodeIdentityMismatch:       {Value: "node_identity_mismatch", Label: "本节点身份不一致（联邦已停用）", Severity: SeverityError},
 	FederationErrorNodeIdentityUnavailable:    {Value: "node_identity_unavailable", Label: "本节点身份尚未确定", Severity: SeverityError},
+	FederationErrorNodeIdentityUnconfigured:   {Value: "node_identity_unconfigured", Label: "本节点身份未配置", Severity: SeverityError},
 	FederationErrorCredentialUnavailable:      {Value: "credential_unavailable", Label: "本节点凭证服务不可用", Severity: SeverityError},
 }
 

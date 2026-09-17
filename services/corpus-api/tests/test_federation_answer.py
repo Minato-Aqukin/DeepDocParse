@@ -535,7 +535,12 @@ async def test_insufficient_evidence_never_generates_and_keeps_bindings_empty(
 # ------------------------------- 真双节点：B 的正文真的跨节点进入 prompt
 
 @pytest.fixture
-async def two_node(tmp_path):
+async def two_node(tmp_path, monkeypatch):
+    # B 是固定身份 node-b、没有控制面的真子进程：绑不上持久身份、验不了
+    # Ed25519 信任链，只能走开发档位 shared_token_insecure（B 读进程环境变量）。
+    # 节点凭证形态由进程内 PeerCaller 用例与 test_federation_peer_client.py 覆盖。
+    monkeypatch.setenv("FEDERATION_PEER_AUTH", "shared_token_insecure")
+    monkeypatch.setenv("ALLOW_INSECURE_DEFAULTS", "true")
     fixture = await TwoNodeFixture.create(
         tmp_path, b_texts=("beta federation keyword fact",))
     try:
@@ -554,6 +559,8 @@ async def test_two_node_remote_excerpt_reaches_real_prompt(
     没有正文，prompt 里只有 `(excerpt unavailable)`。
     """
     monkeypatch.setattr(settings, "bundle_node_id", "node-a")
+    # 与 two_node 夹具同档位：真子进程 B 没有控制面，A 侧也必须用共享口令。
+    monkeypatch.setattr(settings, "federation_peer_auth", "shared_token_insecure")
     monkeypatch.setattr(settings, "federation_peer_token", "peer-a")
     monkeypatch.setattr(settings, "federation_admissions_enabled", True)
     monkeypatch.setattr(settings, "federation_peers", two_node.peers_json())

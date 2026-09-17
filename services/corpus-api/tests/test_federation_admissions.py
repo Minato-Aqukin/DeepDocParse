@@ -6,6 +6,12 @@ GPU, the no-fake-generation discipline (an `answer` step is rejected with
 `capability_unsupported` unless this node's generation is actually ready;
 positive answer paths live in `test_federation_answer_delegation.py`), and
 generation-fenced cancellation.
+
+认证形态：联邦端点只认节点凭证（`peer_unauthenticated` 另有专测）。
+调用方是受信任的同组织远端节点（`PeerCaller` 现签），不是本地用户。
+凭证约束覆盖 root_task_id + step_id；plan.root_coordinator_node_id 必须等于
+签名节点（越权委托 403 credential_scope_denied），所以 admission_body 的
+coordinator 缺省就是签发节点。
 """
 import json
 from pathlib import Path
@@ -15,20 +21,33 @@ import yaml
 from jsonschema import Draft202012Validator
 from sqlalchemy import func, select
 
-from conftest import ACTOR, ORG, actor_headers, drain_tasks
+from conftest import ORG, drain_tasks
 from ddp_corpus import federation
 from ddp_corpus.config import settings
 from ddp_corpus.federation_models import FederationAdmission, FederationExecution
+from ddp_corpus.main import app
 from ddp_corpus.models import new_id, utcnow
 from ddp_core.application.plans import content_digest, task_plan_digest, task_spec_digest
+from node_credentials_fixture import PEER_NODE_ID, caller, install
 from test_federation_probes import (
-    BASE, NODE, configure_federation, headers, indexed_source, publish_collection,
+    BASE, NODE, configure_federation, indexed_source, publish_collection,
 )
 
 
 @pytest.fixture(autouse=True)
 def _federation_config(monkeypatch):
     configure_federation(monkeypatch)
+
+
+@pytest.fixture
+def _peer_auth(monkeypatch, app_state):
+    """本节点 NODE；PEER_NODE_ID 是控制面批准的同组织成员，组织取自信任记录。"""
+    return install(monkeypatch, app, node_id=NODE, organization_id=ORG)
+
+
+def peer(client, **over):
+    """一个同组织远端节点对本节点的调用方：每次调用现签一张凭证。"""
+    return caller(client, audience_node_id=NODE, **over)
 
 EXPIRY = "2030-01-01T00:00:00Z"
 SCHEMAS = json.loads((Path(__file__).resolve().parents[3]
@@ -53,13 +72,13 @@ def validate_execution_status_contract(status: dict) -> None:
 def admission_body(*, key="admission-key", query="retrieval target", collection_id=None,
                    inputs=None, operation="retrieve", step_id="retrieve-1", steps=None,
                    root_task_id="task-1", consent_id="consent-1", target_node=NODE,
-                   execution_mode="center_only"):
+                   coordinator=PEER_NODE_ID, execution_mode="center_only"):
     task_spec = {
         "schema": "ddp-task-probe/1#TaskSpec", "protocol": "ddp-task/1",
         "operation": "rag.answer.cited", "workspace_ref": "workspace-a", "query": query,
         "resource_scope": {"kind": "fixed_resources", "resource_refs": ["resource-1"]},
         "search_policy": {"mode": "fast", "ordering": "local_first"},
-        "execution_policy": {"mode": execution_mode, "coordinator_ref": NODE},
+        "execution_policy": {"mode": execution_mode, "coordinator_ref": coordinator},
         "consent_refs": {"exploration": None, "execution": consent_id},
         "budget_ref": "budget-1",
     }
@@ -71,7 +90,7 @@ def admission_body(*, key="admission-key", query="retrieval target", collection_
                   "depends_on": [], "fixed_inputs": fixed_inputs}]
     plan = {
         "schema": "ddp-plan-admission/1#TaskPlan", "plan_id": "plan-1", "revision": 1,
-        "task_spec_digest": task_spec_digest(task_spec), "root_coordinator_node_id": NODE,
+        "task_spec_digest": task_spec_digest(task_spec), "root_coordinator_node_id": coordinator,
         "planning_state": "approved", "steps": steps, "data_edges": [],
         "execution_consent_ref": consent_id,
         "budget": {"max_requests": 4, "max_bytes": 4096, "max_generation_tokens": 0,
@@ -94,35 +113,45 @@ def admission_body(*, key="admission-key", query="retrieval target", collection_
             "inputs": inputs}
 
 
-async def post_admission(client, body, *, who=ACTOR, key=None, **header_over):
-    return await client.post(f"{BASE}/admissions",
-        headers={**headers(who, **header_over),
-                 "Idempotency-Key": key or body["idempotency_key"]}, json=body)
+async def post_admission(p, body, *, key=None, constraints=None, **credential_over):
+    """经 PeerCaller 现签一张节点凭证提交受理。
+
+    constraints 缺省从请求体自动取 root_task_id + step_id；请求体里没有的
+    字段（lookup 只有 idempotency_key）由调用方显式传。
+    """
+    return await p.post(f"{BASE}/admissions", json_body=body, constraints=constraints,
+        headers={"Idempotency-Key": key or body["idempotency_key"]}, **credential_over)
+
+
+def exec_constraints(body):
+    """读/取消/lookup 用的凭证约束：必须与受理行的根任务 + 步骤一致。"""
+    return {"root_task_id": body["root_task_id"], "step_id": body["step_id"]}
 
 
 async def test_admission_accepted_only_with_verified_inputs_and_runs_retrieve(
-        actor_client, session, app_state):
+        client, actor_client, session, app_state, _peer_auth):
     _, version, _, _, evidence_rows = await indexed_source(session)
     collection = await publish_collection(actor_client, version)
+    p = peer(client)
     body = admission_body(collection_id=collection["collection_id"])
-    response = await post_admission(actor_client, body)
+    response = await post_admission(p, body)
     assert response.status_code == 201, response.text
     receipt = response.json()
     validate_receipt_contract(receipt)
     assert receipt["state"] == "accepted"
     assert receipt["input_validation"] == "content_verified"
     assert receipt["executor_task_id"] and receipt["verified_input_manifest_digest"]
-    assert receipt["accepted_at"] and receipt["issuer_node_id"] == NODE
+    assert receipt["accepted_at"] and receipt["issuer_node_id"] == PEER_NODE_ID
     assert receipt["executor_node_id"] == NODE
 
     # 受理返回时执行还排在 `federation_execute` 队列上（受理 201 不等执行），
     # 跑一轮队列后状态才落 succeeded。
-    queued = await actor_client.get(f"{BASE}/tasks/{receipt['executor_task_id']}",
-                                    headers=headers())
+    queued = await p.get(f"{BASE}/tasks/{receipt['executor_task_id']}",
+                         constraints=exec_constraints(body))
     assert queued.json()["state"] == "queued"
     assert await drain_tasks(app_state) >= 1
-    status = await actor_client.get(f"{BASE}/tasks/{receipt['executor_task_id']}",
-                                   headers=headers())
+    status = await p.get(f"{BASE}/tasks/{receipt['executor_task_id']}",
+                         constraints=exec_constraints(body))
     assert status.status_code == 200, status.text
     detail = status.json()
     validate_execution_status_contract(detail)
@@ -135,13 +164,14 @@ async def test_admission_accepted_only_with_verified_inputs_and_runs_retrieve(
     assert row.result_json["evidence"][0]["_excerpt"] == "retrieval target text"
 
 
-async def test_admission_waiting_input_when_content_cannot_be_verified(actor_client, session):
+async def test_admission_waiting_input_when_content_cannot_be_verified(
+        client, session, _peer_auth):
     body = admission_body(
         key="waiting-key",
         inputs=[{"ref": "input-1", "digest": "sha256:" + "a" * 64, "size_bytes": 10}],
         steps=[{"step_id": "retrieve-1", "operation": "retrieve", "executor_node_id": NODE,
                 "depends_on": [], "fixed_inputs": ["input-1"]}])
-    response = await post_admission(actor_client, body)
+    response = await post_admission(peer(client), body)
     assert response.status_code == 201, response.text
     receipt = response.json()
     validate_receipt_contract(receipt)
@@ -155,17 +185,17 @@ async def test_admission_waiting_input_when_content_cannot_be_verified(actor_cli
     assert count == 0
 
 
-async def test_admission_input_digest_mismatch_is_rejected(actor_client):
+async def test_admission_input_digest_mismatch_is_rejected(client, _peer_auth):
     body = admission_body(key="mismatch-key")
     body["inputs"] = [{"ref": "query", "digest": "sha256:" + "b" * 64,
                        "size_bytes": len("retrieval target")}]
-    response = await post_admission(actor_client, body)
+    response = await post_admission(peer(client), body)
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "input_changed"
 
 
 async def test_admission_replay_returns_same_receipt_without_second_execution(
-        actor_client, session, app_state, monkeypatch):
+        client, session, app_state, monkeypatch, _peer_auth):
     calls = {"count": 0}
     real_execute = federation.execute
 
@@ -174,20 +204,22 @@ async def test_admission_replay_returns_same_receipt_without_second_execution(
         return await real_execute(*args, **kwargs)
 
     monkeypatch.setattr(federation, "execute", _counting)
+    p = peer(client)
     body = admission_body(key="replay-admission")
-    first = await post_admission(actor_client, body)
-    second = await post_admission(actor_client, body)
+    first = await post_admission(p, body)
+    second = await post_admission(p, body)
     assert first.status_code == 201 and second.status_code == 200
     assert first.json() == second.json()
     await drain_tasks(app_state)
     assert calls["count"] == 1, "同键同摘要的重放不得再跑一次执行"
 
 
-async def test_admission_same_key_different_digest_is_conflict(actor_client):
+async def test_admission_same_key_different_digest_is_conflict(client, _peer_auth):
+    p = peer(client)
     body = admission_body(key="conflict-admission")
-    assert (await post_admission(actor_client, body)).status_code == 201
+    assert (await post_admission(p, body)).status_code == 201
     changed = admission_body(key="conflict-admission", query="a different query")
-    response = await post_admission(actor_client, changed)
+    response = await post_admission(p, changed)
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "idempotency_conflict"
 
@@ -204,18 +236,19 @@ async def test_admission_same_key_different_digest_is_conflict(actor_client):
      "egress_denied"),
 ])
 async def test_admission_rechecks_stale_or_widened_consent_and_writes_nothing(
-        actor_client, session, mutate, code):
+        client, session, mutate, code, _peer_auth):
     """T79：admission 自己重新检查许可；过期、换计划修订、换接收方都拒绝，不留受理行。"""
     body = admission_body(key=f"stale-consent-{code}-{id(mutate)}")
     mutate(body)
-    response = await post_admission(actor_client, body)
+    response = await post_admission(peer(client), body)
     assert 400 <= response.status_code < 500, response.text
     assert response.json()["error"]["code"] == code
     count = await session.scalar(select(func.count()).select_from(FederationAdmission))
     assert count == 0, "被拒的许可不得留下受理行"
 
 
-async def test_admission_unsupported_operation_is_rejected_not_faked(actor_client, session):
+async def test_admission_unsupported_operation_is_rejected_not_faked(
+        client, session, _peer_auth):
     """生成未就绪（无模型通道）时 `answer` 当场 capability_unsupported，不收单不伪造。"""
     steps = [
         {"step_id": "retrieve-1", "operation": "retrieve", "executor_node_id": NODE,
@@ -225,56 +258,59 @@ async def test_admission_unsupported_operation_is_rejected_not_faked(actor_clien
     ]
     body = admission_body(key="answer-key", operation="answer", step_id="answer-1",
                           steps=steps)
-    response = await post_admission(actor_client, body)
+    response = await post_admission(peer(client), body)
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "capability_unsupported"
     count = await session.scalar(select(func.count()).select_from(FederationAdmission))
     assert count == 0, "被拒的操作不得留下受理行"
 
 
-async def test_admission_targeting_another_node_is_wrong_target(actor_client):
+async def test_admission_targeting_another_node_is_wrong_target(client, _peer_auth):
     # trusted_federation 允许计划里出现远端执行者；此时本节点必须拒绝别人的 step。
     body = admission_body(key="wrong-node", target_node="node-other",
                           execution_mode="trusted_federation")
-    response = await post_admission(actor_client, body)
+    response = await post_admission(peer(client), body)
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "wrong_target"
 
 
-async def test_admission_requires_peer_credentials(actor_client):
+async def test_admission_requires_peer_credentials(client):
     body = admission_body(key="no-peer-admission")
-    response = await actor_client.post(f"{BASE}/admissions",
-        headers={**actor_headers(), "Idempotency-Key": body["idempotency_key"]}, json=body)
+    response = await client.post(f"{BASE}/admissions",
+        headers={"Idempotency-Key": body["idempotency_key"]}, json=body)
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "peer_unauthenticated"
 
 
-async def test_disabled_admissions_endpoint_fails_closed(actor_client, monkeypatch):
+async def test_disabled_admissions_endpoint_fails_closed(client, monkeypatch, _peer_auth):
     """开关关着时端点必须拒绝，不能"能力清单说不接单、端点照样收单"。"""
     monkeypatch.setattr(settings, "federation_admissions_enabled", False)
-    response = await post_admission(actor_client, admission_body(key="disabled-key"))
+    response = await post_admission(peer(client), admission_body(key="disabled-key"))
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "admissions_disabled"
 
 
-async def test_lookup_returns_receipt_and_unknown_key_is_404(actor_client):
+async def test_lookup_returns_receipt_and_unknown_key_is_404(client, _peer_auth):
+    p = peer(client)
     body = admission_body(key="lookup-key")
-    created = await post_admission(actor_client, body)
+    created = await post_admission(p, body)
     assert created.status_code == 201
-    found = await actor_client.post(f"{BASE}/admissions/lookup", headers=headers(),
-                                    json={"idempotency_key": "lookup-key"})
+    found = await p.post(f"{BASE}/admissions/lookup",
+                         json_body={"idempotency_key": "lookup-key"},
+                         constraints=exec_constraints(body))
     assert found.status_code == 200 and found.json() == created.json()
-    missing = await actor_client.post(f"{BASE}/admissions/lookup", headers=headers(),
-                                      json={"idempotency_key": "nope"})
+    missing = await p.post(f"{BASE}/admissions/lookup",
+                           json_body={"idempotency_key": "nope"},
+                           constraints=exec_constraints(body))
     assert missing.status_code == 404
 
 
-def queued_execution(*, task_id, admission_id):
+def queued_execution(*, task_id, admission_id, actor_id):
     admission = FederationAdmission(
-        admission_id=admission_id, organization_id=ORG, actor_id=ACTOR,
+        admission_id=admission_id, organization_id=ORG, actor_id=actor_id,
         idempotency_key=f"key-{admission_id}", request_digest="sha256:" + "1" * 64,
         plan_digest="sha256:" + "2" * 64, root_task_id="task-cancel", step_id="retrieve-1",
-        delegation_generation=0, issuer_node_id=NODE, executor_node_id=NODE,
+        delegation_generation=0, issuer_node_id=PEER_NODE_ID, executor_node_id=NODE,
         state="accepted", input_validation="content_verified",
         executor_task_id=task_id, verified_input_manifest_digest="sha256:" + "3" * 64,
         effective_policy_ref="policy-1", receipt_json={}, receipt_revision=1,
@@ -287,18 +323,21 @@ def queued_execution(*, task_id, admission_id):
     return admission, execution
 
 
-async def test_cancel_is_idempotent_and_generation_fenced(actor_client, session):
+async def test_cancel_is_idempotent_and_generation_fenced(client, session, _peer_auth):
+    p = peer(client)
     task_id, admission_id = new_id(), new_id()
-    admission, execution = queued_execution(task_id=task_id, admission_id=admission_id)
+    admission, execution = queued_execution(
+        task_id=task_id, admission_id=admission_id, actor_id=p.actor_id)
     session.add_all([admission, execution])
     await session.commit()
+    cancel_constraints = {"root_task_id": "task-cancel", "step_id": "retrieve-1"}
 
-    first = await actor_client.post(f"{BASE}/tasks/{task_id}/cancel", headers=headers())
+    first = await p.post(f"{BASE}/tasks/{task_id}/cancel", constraints=cancel_constraints)
     assert first.status_code == 200, first.text
     assert first.json()["state"] == "cancelled" and first.json()["error"] == "cancelled"
     assert first.json()["generation"] == 2
 
-    second = await actor_client.post(f"{BASE}/tasks/{task_id}/cancel", headers=headers())
+    second = await p.post(f"{BASE}/tasks/{task_id}/cancel", constraints=cancel_constraints)
     assert second.status_code == 200 and second.json() == first.json()
 
     # 旧代次的完成写不进来：取消是终态，迟到结果不得覆盖。
@@ -312,23 +351,26 @@ async def test_cancel_is_idempotent_and_generation_fenced(actor_client, session)
     assert row.result_json.get("result") is None
 
 
-async def test_cancel_does_not_rewrite_a_finished_execution(actor_client, session, app_state):
+async def test_cancel_does_not_rewrite_a_finished_execution(
+        client, actor_client, session, app_state, _peer_auth):
     _, version, *_ = await indexed_source(session)
     collection = await publish_collection(actor_client, version)
-    created = await post_admission(
-        actor_client, admission_body(key="finished-key", collection_id=collection["collection_id"]))
+    p = peer(client)
+    body = admission_body(key="finished-key", collection_id=collection["collection_id"])
+    created = await post_admission(p, body)
     assert created.status_code == 201
     await drain_tasks(app_state)
     task_id = created.json()["executor_task_id"]
-    before = await actor_client.get(f"{BASE}/tasks/{task_id}", headers=headers())
+    before = await p.get(f"{BASE}/tasks/{task_id}", constraints=exec_constraints(body))
     assert before.json()["state"] == "succeeded"
-    after = await actor_client.post(f"{BASE}/tasks/{task_id}/cancel", headers=headers())
+    after = await p.post(f"{BASE}/tasks/{task_id}/cancel", constraints=exec_constraints(body))
     assert after.status_code == 200
     assert after.json()["state"] == "succeeded"
     assert after.json() == before.json()
 
 
-async def test_late_timeout_never_overwrites_a_committed_success(actor_client, session, app_state):
+async def test_late_timeout_never_overwrites_a_committed_success(
+        client, actor_client, session, app_state, _peer_auth):
     """F9：同代次的迟到超时写入不得翻掉已提交的 succeeded。
 
     旧行为：`_finish_execution` 只按 generation 围栏；execute 提交成功之后
@@ -337,7 +379,7 @@ async def test_late_timeout_never_overwrites_a_committed_success(actor_client, s
     _, version, *_ = await indexed_source(session)
     collection = await publish_collection(actor_client, version)
     created = await post_admission(
-        actor_client,
+        peer(client),
         admission_body(key="late-timeout", collection_id=collection["collection_id"]))
     assert created.status_code == 201, created.text
     await drain_tasks(app_state)

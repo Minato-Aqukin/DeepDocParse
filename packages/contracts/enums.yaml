@@ -943,6 +943,12 @@ enums:
         label: 本节点身份不一致（联邦已停用）
         severity: error
       - {value: node_identity_unavailable, summary: 还没从控制面取到本节点持久身份（503），联邦端点与出站一律拒绝, label: 本节点身份尚未确定, severity: error}
+      - value: node_identity_unconfigured
+        summary: |
+          没有可用的本节点身份配置（503）：shared 开发档位或测试跟随模式下
+          BUNDLE_NODE_ID 为空或形状不对。先配好持久身份再谈联邦。
+        label: 本节点身份未配置
+        severity: error
       - value: credential_unavailable
         summary: |
           本节点控制面在凭证链路上不可用：出站时签不出凭证（不可达、拒签、响应形状不对），
