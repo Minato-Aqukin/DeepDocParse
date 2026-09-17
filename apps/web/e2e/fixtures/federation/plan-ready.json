@@ -1,0 +1,47 @@
+{
+  "schema": "ddp-plan-admission/1#TaskPlan",
+  "plan_id": "plan-1679091c5a880faf6fb5e6087eb1b2dc",
+  "revision": 1,
+  "plan_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "task_spec_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "root_coordinator_node_id": "node-center-a",
+  "planning_state": "ready",
+  "steps": [
+    {
+      "step_id": "retrieve-1",
+      "operation": "retrieve",
+      "executor_node_id": "node-center-a",
+      "depends_on": [],
+      "fixed_inputs": [
+        "query"
+      ]
+    },
+    {
+      "step_id": "retrieve-2",
+      "operation": "retrieve",
+      "executor_node_id": "node-peer-b",
+      "depends_on": []
+    }
+  ],
+  "data_edges": [
+    {
+      "edge_id": "edge-query-2",
+      "from_node_id": "node-center-a",
+      "to_node_id": "node-peer-b",
+      "payload_kind": "query_text",
+      "relay_via": [
+        "node-relay-c"
+      ],
+      "retention": "temporary",
+      "authorised_by": "exploration:explore-2"
+    }
+  ],
+  "budget": {
+    "max_requests": 8,
+    "max_bytes": 1048576,
+    "max_hops": 2,
+    "deadline": "2026-09-15T08:15:00Z"
+  },
+  "final_result_writer": "node-center-a",
+  "valid_until": "2026-09-15T08:15:00Z"
+}

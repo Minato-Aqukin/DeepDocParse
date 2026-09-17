@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import { tasksApi } from '@/api/tasks'
 import StatusTag from '@/components/common/StatusTag.vue'
+import TaskComposer from '@/components/federation/TaskComposer.vue'
 import {
   EVIDENCE_SUFFICIENCY,
   RETRIEVAL_COMPLETENESS,
@@ -17,9 +19,11 @@ import type { TaskListItem } from '@/federation/task-model'
  * 本人发起的联邦任务（`GET /api/v1/tasks`）。列表只有状态轴；结果、证据与覆盖账本进详情页读。
  * 翻页用服务端给的不透明游标：记下走过的游标栈，"上一页"回到栈里的上一个，不自己算偏移。
  */
+const router = useRouter()
 const items = ref<TaskListItem[]>([])
 const loading = ref(false)
 const error = ref('')
+const composing = ref(false)
 const cursors = ref<(string | undefined)[]>([undefined])
 const next = ref<string | null>(null)
 let generation = 0
@@ -55,6 +59,12 @@ function back() {
   void load()
 }
 
+/** 建完直接进详情页：规划状态、计划与批准入口都在那边，列表上看不到。 */
+function created(rootTaskId: string) {
+  composing.value = false
+  void router.push({ name: 'federation-task', params: { rootTaskId } })
+}
+
 onMounted(load)
 onBeforeUnmount(() => { generation++ })
 </script>
@@ -66,8 +76,17 @@ onBeforeUnmount(() => { generation++ })
         <h1>联邦任务</h1>
         <p>你发起的跨节点检索与带出处回答。每个任务都保留执行计划、覆盖账本与原始证据。</p>
       </div>
-      <el-button :disabled="loading" @click="load">刷新</el-button>
+      <div class="header-actions">
+        <el-button :disabled="loading" @click="load">刷新</el-button>
+        <el-button type="primary" @click="composing = !composing">
+          {{ composing ? '收起' : '新建任务' }}
+        </el-button>
+      </div>
     </header>
+    <section v-if="composing" class="compose">
+      <h2>新建联邦任务</h2>
+      <TaskComposer @created="created" />
+    </section>
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <p v-if="loading" role="status">正在读取任务…</p>
     <p v-else-if="!error && !items.length" class="muted">还没有联邦任务。</p>
@@ -104,6 +123,9 @@ onBeforeUnmount(() => { generation++ })
 <style scoped>
 .tasks { max-width: 1120px; margin: auto; }
 header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.header-actions { display: flex; gap: 12px; flex-shrink: 0; }
+.compose { padding: 20px 0 24px; border-top: var(--ddp-bw) solid var(--ddp-line); border-bottom: var(--ddp-bw) solid var(--ddp-line); margin-bottom: 24px; }
+.compose h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; }
 h1 { font-size: 27px; font-weight: 600; margin: 0; }
 header p { color: var(--ddp-ink-2); margin: 8px 0 0; }
 .muted { color: var(--ddp-ink-3); }

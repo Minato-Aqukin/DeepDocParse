@@ -1,0 +1,20 @@
+{
+  "root_task_id": "1679091c5a880faf6fb5e6087eb1b2dc",
+  "planning_state": "ready",
+  "plan_revision": 1,
+  "plan_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "task_spec_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "search_mode": "fast",
+  "execution_consent_ref": null,
+  "scope_ref": "scope-42",
+  "created_at": "2026-09-15T08:00:00Z",
+  "status": "queued",
+  "retrieval_completeness": "not_started",
+  "evidence_sufficiency": "unknown",
+  "coverage_ref": null,
+  "delivery_id": null,
+  "delivery_state": "not_requested",
+  "result": null,
+  "error": null,
+  "updated_at": "2026-09-15T08:00:01Z"
+}

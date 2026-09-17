@@ -1,0 +1,42 @@
+{
+  "manifest": {
+    "schema": "ddp-scope-coverage/1#ScopeManifest",
+    "scope_id": "scope-42",
+    "caller_scope_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "created_at": "2026-09-15T07:59:00Z",
+    "valid_until": "2026-09-15T08:29:00Z",
+    "registry_revision_vector": [
+      {
+        "node_id": "node-center-a",
+        "registry_revision": 17,
+        "fetched_at": "2026-09-15T07:59:00Z"
+      },
+      {
+        "node_id": "node-peer-b",
+        "registry_revision": 5,
+        "fetched_at": "2026-09-15T07:59:00Z"
+      }
+    ],
+    "expanded_members": [
+      {
+        "origin_node_id": "node-center-a",
+        "collection_id": "manuals",
+        "operation": "corpus.retrieve"
+      },
+      {
+        "origin_node_id": "node-peer-b",
+        "collection_id": "datasheets",
+        "operation": "corpus.retrieve"
+      }
+    ],
+    "unexpanded_subtrees": [],
+    "enumeration_state": "sealed",
+    "manifest_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "first_cursor": "",
+  "terminal_cursor": "",
+  "total_targets": 2,
+  "content_snapshot": "not_frozen",
+  "expired": false,
+  "effective_enumeration_state": "sealed"
+}
