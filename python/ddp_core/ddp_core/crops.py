@@ -1,25 +1,26 @@
-"""出处区域截图：按 bbox 从原件里裁一块图。**两侧共用的唯一一份。**
+"""出处区域截图：按 bbox 从原件里裁一块图。**各消费方共用的唯一实现。**
 
 搬进 ddp_core 之前这套坐标换算有**三份**（gateway / Web / mcp_server），
 靠注释互相叮嘱"这套规则只有一个正确写法"。而写错的后果不是崩，
 是裁出一张与文本无关的图并带着"已验证"标记 —— 这个项目定义的最恶劣错误。
 现在只剩一份，物理上不可能再漂。
 
-Web 层在这之上还有一层**对象存储缓存**（裁剪很贵：渲染整页再切），
-那层是产品层概念，留在 `DeepDocParse-Web/backend/app/crops.py`。
+语料层在这之上还有一层对象存储缓存，位于 `services/corpus-api/ddp_corpus/crops.py`。
 
 坐标规则与 mcp_server / Web 层的裁剪完全一致，**这套规则只有一个正确写法**：
 比例 = 渲染位图的像素宽 / layout 的 `page_size` 宽。
 
 **不能图省事用 pdfium 报的页尺寸**：遇到 CropBox 偏移或旋转页会裁到错误区域，
 产出"带着已验证标记的假出处" —— 这是这个项目最不能接受的一种错误
-（同一句警告写在 docs/layout-format.md 的坐标系一节）。
+（同一句警告写在 packages/contracts/ddp/layout-format.md 的坐标系一节）。
 
 渲染是 CPU 密集的同步代码，调用方一律 `asyncio.to_thread`。
 """
 import functools
 import io
 import threading
+from collections import defaultdict
+from contextlib import closing
 
 # **PDFium 不是线程安全的。** 下面三个入口都会被 `asyncio.to_thread` 并发调用
 # （vlm_ocr.py 对整篇文档的每一页 gather 一次），两个线程同时开文档/渲染就段错误。
@@ -67,11 +68,10 @@ def render_crop(pdf_bytes: bytes, page_idx: int, bbox: list,
 def render_crops(
     pdf_bytes: bytes, requests: list[tuple[int, list, list | None]],
 ) -> list[bytes | None]:
-    """一次打开 PDF，且每页只渲染一次，批量产出原子裁图。
+    """一次打开 PDF，每页只渲染一次，裁完即释放整页位图。
 
-    编译层会给一份长文档的每个 Evidence 建裁图。逐原子调
-    `render_crop` 会重复打开同一 PDF、重复渲染同一页 N 次；这不是小优化，
-    而是编译是否能处理手册的边界。返回顺序与 requests 一致，单个失败为 None。
+    按页聚合请求而不缓存整篇文档的像素，避免长文档裁图的内存随页数增长。
+    返回顺序与 requests 一致，单个失败为 None；依赖缺失必须抛出。
     """
     if not requests:
         return []
@@ -81,36 +81,43 @@ def render_crops(
 
         doc = pdfium.PdfDocument(pdf_bytes)
         try:
-            rendered: dict[int, object | None] = {}
-            for index, (page_idx, bbox, page_size) in enumerate(requests):
+            by_page: dict[int, list[int]] = defaultdict(list)
+            for index, (page_idx, _bbox, _page_size) in enumerate(requests):
+                if isinstance(page_idx, int) and 0 <= page_idx < len(doc):
+                    by_page[page_idx].append(index)
+            for page_idx, indices in by_page.items():
                 try:
-                    if not isinstance(page_idx, int) or page_idx < 0 or page_idx >= len(doc):
-                        continue
-                    page = doc[page_idx]
-                    if page_idx not in rendered:
-                        try:
-                            rendered[page_idx] = page.render(scale=RENDER_SCALE).to_pil()
-                        except Exception:
-                            rendered[page_idx] = None
-                    img = rendered[page_idx]
-                    if img is None:
-                        continue
-                    sx = img.width / (page_size[0] if page_size else page.get_width())
-                    sy = img.height / (page_size[1] if page_size else page.get_height())
-                    x0, y0, x1, y1 = bbox
-                    box = (
-                        max(0, int((x0 - CROP_MARGIN) * sx)),
-                        max(0, int((y0 - CROP_MARGIN) * sy)),
-                        min(img.width, int((x1 + CROP_MARGIN) * sx)),
-                        min(img.height, int((y1 + CROP_MARGIN) * sy)),
-                    )
-                    if box[2] <= box[0] or box[3] <= box[1]:
-                        continue
-                    buf = io.BytesIO()
-                    img.crop(box).save(buf, format="PNG")
-                    out[index] = buf.getvalue()
+                    with (
+                        closing(doc[page_idx]) as page,
+                        closing(page.render(scale=RENDER_SCALE)) as bitmap,
+                        closing(bitmap.to_pil()) as img,
+                    ):
+                        for index in indices:
+                            _, bbox, page_size = requests[index]
+                            try:
+                                sx = img.width / (page_size[0] if page_size else page.get_width())
+                                sy = img.height / (page_size[1] if page_size else page.get_height())
+                                x0, y0, x1, y1 = bbox
+                                box = (
+                                    max(0, int((x0 - CROP_MARGIN) * sx)),
+                                    max(0, int((y0 - CROP_MARGIN) * sy)),
+                                    min(img.width, int((x1 + CROP_MARGIN) * sx)),
+                                    min(img.height, int((y1 + CROP_MARGIN) * sy)),
+                                )
+                                if box[2] <= box[0] or box[3] <= box[1]:
+                                    continue
+                                with closing(img.crop(box)) as region, io.BytesIO() as buf:
+                                    region.save(buf, format="PNG")
+                                    out[index] = buf.getvalue()
+                            except ImportError:
+                                raise
+                            except Exception:
+                                # 畸形 bbox/page_size 只废掉这个原子。
+                                continue
+                except ImportError:
+                    raise
                 except Exception:
-                    # 畸形 bbox/page_size 只废掉这个原子，不能抹掉整批有效裁图。
+                    # 坏页不能抹掉其他页已经产出的裁图。
                     continue
         finally:
             doc.close()
@@ -131,9 +138,14 @@ def render_page(pdf_bytes: bytes, page_idx: int, scale: float = RENDER_SCALE) ->
         try:
             if page_idx >= len(doc):
                 return None
-            buf = io.BytesIO()
-            doc[page_idx].render(scale=scale).to_pil().save(buf, format="PNG")
-            return buf.getvalue()
+            with (
+                closing(doc[page_idx]) as page,
+                closing(page.render(scale=scale)) as bitmap,
+                closing(bitmap.to_pil()) as img,
+                io.BytesIO() as buf,
+            ):
+                img.save(buf, format="PNG")
+                return buf.getvalue()
         finally:
             doc.close()
     except ImportError:
@@ -150,7 +162,11 @@ def page_sizes(pdf_bytes: bytes) -> list[tuple[float, float]]:
 
         doc = pdfium.PdfDocument(pdf_bytes)
         try:
-            return [(doc[i].get_width(), doc[i].get_height()) for i in range(len(doc))]
+            sizes = []
+            for index in range(len(doc)):
+                with closing(doc[index]) as page:
+                    sizes.append((page.get_width(), page.get_height()))
+            return sizes
         finally:
             doc.close()
     except ImportError:

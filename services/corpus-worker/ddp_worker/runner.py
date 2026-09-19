@@ -9,9 +9,9 @@
 
 ## 心跳与 fencing
 
-跑任务的同时开一个心跳协程续租。心跳返回 False（说明这条任务已经被别人
-接管）时**立刻取消任务协程** —— 继续跑不会出错，但算出来的结果写不进去
-（generation 对不上），纯粹白烧 GPU。
+跑任务的同时开一个心跳协程续租。租约被接管、续租异常或外层被取消时，
+都必须先取消并等待 handler 退出，不能留下继续调用模型或写库的孤儿协程。
+续租异常沿用任务失败/退避路径；被接管则不再写终态。
 """
 import asyncio
 import logging
@@ -65,37 +65,31 @@ async def run_one(task: Task, pool: Pool, state: WorkerState) -> None:
     """跑一条任务：起心跳 -> 跑 handler -> 落终态。"""
     sessionmaker = get_sessionmaker()
     generation = task.generation
-    stop = asyncio.Event()
 
     async def beat() -> None:
-        """续租。**返回 False 就停手** —— 见模块 docstring。"""
-        while not stop.is_set():
-            try:
-                await asyncio.wait_for(stop.wait(), settings.task_heartbeat_seconds)
-                return
-            except TimeoutError:
-                pass
+        """续租失败必须被主协程观察，不能独自停止而让 handler 继续跑。"""
+        while True:
+            await asyncio.sleep(settings.task_heartbeat_seconds)
             async with sessionmaker() as session:
                 if not await heartbeat(session, task.id, generation):
                     log.warning("任务 %s 已被接管（generation 变了），停手", task.id)
-                    stop.set()
                     return
 
     beater = asyncio.create_task(beat())
+    runner = asyncio.create_task(pool.handler(task, state))
     try:
-        runner = asyncio.create_task(pool.handler(task, state))
-        waiter = asyncio.create_task(stop.wait())
-        done, _ = await asyncio.wait({runner, waiter}, return_when=asyncio.FIRST_COMPLETED)
-        if runner not in done:
-            # 租约被抢走：取消任务协程，什么都不写
+        try:
+            done, _ = await asyncio.wait({runner, beater}, return_when=asyncio.FIRST_COMPLETED)
+            if beater in done:
+                # 正常返回表示失去租约；异常则交给既有失败路径持久化。
+                beater.result()
+                return
+            degraded = runner.result()
+        finally:
+            # 在落终态/重排之前收完子协程，外层取消也必须走这条清理路径。
             runner.cancel()
-            try:
-                await runner
-            except (asyncio.CancelledError, Exception):   # noqa: BLE001
-                pass
-            return
-        waiter.cancel()
-        degraded = runner.result()
+            beater.cancel()
+            await asyncio.gather(runner, beater, return_exceptions=True)
         async with sessionmaker() as session:
             await succeed(session, task.id, generation, degraded=degraded)
     except StaleGeneration:
@@ -107,13 +101,6 @@ async def run_one(task: Task, pool: Pool, state: WorkerState) -> None:
                 await fail(session, task.id, generation, f"{type(exc).__name__}: {exc}")
             except StaleGeneration:
                 log.warning("任务 %s 落失败时 generation 已变，丢弃", task.id)
-    finally:
-        stop.set()
-        beater.cancel()
-        try:
-            await beater
-        except asyncio.CancelledError:
-            pass
 
 
 async def loop(pools: dict[str, Pool], state: WorkerState, stopping: asyncio.Event) -> None:

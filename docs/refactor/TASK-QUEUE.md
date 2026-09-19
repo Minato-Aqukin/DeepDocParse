@@ -43,6 +43,11 @@ queued → claimed(generation, lease_until) → running → succeeded / failed
 `services/corpus-worker/tests/test_queue.py::test_stale_worker_cannot_overwrite_a_newer_result`
 钉着它（做过变异确认：去掉 `generation` 条件必红）。
 
+`run_one` 同时等待 handler 与心跳。心跳返回失去租约时，不再写成功或失败；
+心跳抛异常时，先取消并等待 handler 退出，再沿既有 `fail()` 路径记录错误并退避重排。
+外层任务被取消时同样等待两个子协程回收，保留未完成任务供租约过期后接管。
+成功路径也先停止心跳，避免落终态时仍有续租事务并行写入。
+
 ## 两层 claim 不是重复
 
 索引任务上有两层：

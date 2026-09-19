@@ -22,7 +22,6 @@
 """
 import asyncio
 import base64
-import io
 import ipaddress
 import json
 import os
@@ -33,11 +32,12 @@ from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
 import httpx
-import pypdfium2 as pdfium
 import redis.asyncio as redis
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from rank_bm25 import BM25Okapi
+
+from ddp_core.crops import render_crop
 
 from ddp_mcp import corpus as corpus_plane
 from ddp_mcp.corpus import (
@@ -53,8 +53,6 @@ REDIS_URL = os.environ.get("REDIS_URL", "")
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 SHORT_DOC_CHARS = 3000   # 短于此的文档直接全文作证据
 TOP_K = 3                # BM25 命中块数
-CROP_MARGIN = 12         # bbox 裁剪外扩（页面坐标单位）
-RENDER_SCALE = 2.0       # PDF 渲染倍率（72dpi 基准 x2 = 144dpi）
 
 mcp = FastMCP("DeepDocParse")
 
@@ -204,41 +202,15 @@ async def _vqa(image_data_uri: str, question: str) -> str:
     return resp.json()["choices"][0]["message"]["content"]
 
 
-def _render_crop(pdf_bytes: bytes, page_idx: int, bbox: list,
-                 page_size: list) -> str | None:
-    """同步渲染（调用方必须丢线程池，见 _crop_page_region）。失败返回 None。"""
-    try:
-        doc = pdfium.PdfDocument(pdf_bytes)
-        try:
-            page = doc[page_idx]
-            bitmap = page.render(scale=RENDER_SCALE)
-            img = bitmap.to_pil()
-            # bbox 坐标基于 middle_json 的 page_size，换算到渲染像素
-            sx = img.width / (page_size[0] if page_size else page.get_width())
-            sy = img.height / (page_size[1] if page_size else page.get_height())
-            x0, y0, x1, y1 = bbox
-            box = (max(0, int((x0 - CROP_MARGIN) * sx)), max(0, int((y0 - CROP_MARGIN) * sy)),
-                   min(img.width, int((x1 + CROP_MARGIN) * sx)),
-                   min(img.height, int((y1 + CROP_MARGIN) * sy)))
-            region = img.crop(box)
-            buf = io.BytesIO()
-            region.save(buf, format="PNG")
-            return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-        finally:
-            doc.close()
-    except Exception:
-        return None  # 裁剪属增强路径，失败不阻断文本证据返回
 
 
 async def _crop_page_region(pdf_bytes: bytes, page_idx: int, bbox: list,
-                            page_size: list) -> str | None:
-    """按 layout bbox 裁剪 PDF 页面区域，返回 PNG data URI；失败返回 None。
-
-    **必须丢线程池**：整页渲染(2x)+PIL 裁剪+PNG 编码是纯 CPU，动辄几百毫秒到数秒。
-    直接在协程里跑会把整个 MCP server 的事件循环卡住 —— 所有并发 ask_document 一起停摆。
-    （Web 层的同款逻辑 DeepDocParse-Web/backend/app/crops.py 一直是这么做的。）
-    """
-    return await asyncio.to_thread(_render_crop, pdf_bytes, page_idx, bbox, page_size)
+                            page_size: list | None) -> str | None:
+    """共享核心裁图与 PDFium 串行锁；在线程池渲染，避免阻塞 MCP 事件循环。"""
+    png = await asyncio.to_thread(render_crop, pdf_bytes, page_idx, bbox, page_size)
+    if png is None:
+        return None
+    return "data:image/png;base64," + base64.b64encode(png).decode()
 
 
 # --------------------------------------------------------------- ask_document 的边界

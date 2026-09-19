@@ -320,17 +320,17 @@ async def test_crop_runs_off_the_event_loop(mcp_env):
     pdf_bytes = fixture("sample.pdf").read_bytes()
     loop_thread = threading.current_thread()
     seen: list[threading.Thread] = []
-    original = mcp_env._render_crop
+    original = mcp_env.render_crop
 
     def spy(*args, **kwargs):
         seen.append(threading.current_thread())
         return original(*args, **kwargs)
 
-    mcp_env._render_crop = spy
+    mcp_env.render_crop = spy
     try:
         data_uri = await mcp_env._crop_page_region(pdf_bytes, 0, [69, 71, 375, 98], [612, 792])
     finally:
-        mcp_env._render_crop = original
+        mcp_env.render_crop = original
 
     assert data_uri and data_uri.startswith("data:image/png;base64,")
     assert seen and seen[0] is not loop_thread, \

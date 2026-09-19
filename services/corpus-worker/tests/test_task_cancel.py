@@ -10,6 +10,7 @@
 第 3 条是刻意的：取消会把 generation +1，所以迟到的成功通常先被代次围栏拦下。
 只有把代次围栏拿掉之后仍然会被状态守卫拦住，那两道闸才算都真的存在。
 """
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -144,3 +145,75 @@ async def test_runner_tolerates_a_cancelled_lease(session):
     row = await session.get(Task, task.id, populate_existing=True)
     assert row.status == "cancelled", "runner 绝不能把被取消的任务写回 succeeded"
     assert row.error == "cancelled"
+
+
+async def test_runner_stops_handler_when_heartbeat_fails(session, monkeypatch):
+    from ddp_worker import runner
+
+    await enqueue(session, kind="index", payload={})
+    await session.commit()
+    [task] = await claim(session, ["index"])
+    started, stopped, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    handler_task = None
+
+    async def handler(claimed, state):
+        nonlocal handler_task
+        handler_task = asyncio.current_task()
+        started.set()
+        try:
+            await release.wait()
+        finally:
+            stopped.set()
+
+    async def broken_heartbeat(*args):
+        await started.wait()
+        raise RuntimeError("heartbeat database unavailable")
+
+    monkeypatch.setattr(settings, "task_heartbeat_seconds", 0.001)
+    monkeypatch.setattr(runner, "heartbeat", broken_heartbeat)
+    state = WorkerState(http=None, storage=None, search_index=None)
+    try:
+        await asyncio.wait_for(run_one(task, Pool("index", handler, 1), state), timeout=2)
+        assert stopped.is_set(), "a handler without a renewable lease must stop before requeue"
+        row = await session.get(Task, task.id, populate_existing=True)
+        assert row.status == "queued"
+        assert "heartbeat database unavailable" in row.error
+        assert row.lease_until is None
+    finally:
+        release.set()
+        if handler_task is not None:
+            await asyncio.gather(handler_task, return_exceptions=True)
+
+
+async def test_cancelling_runner_joins_handler_before_returning(session):
+    await enqueue(session, kind="index", payload={})
+    await session.commit()
+    [task] = await claim(session, ["index"])
+    started, stopped, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    handler_task = None
+
+    async def handler(claimed, state):
+        nonlocal handler_task
+        handler_task = asyncio.current_task()
+        started.set()
+        try:
+            await release.wait()
+        finally:
+            stopped.set()
+
+    state = WorkerState(http=None, storage=None, search_index=None)
+    operation = asyncio.create_task(run_one(task, Pool("index", handler, 1), state))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        operation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await operation
+        assert stopped.is_set(), "run_one returned while its handler could still write"
+        row = await session.get(Task, task.id, populate_existing=True)
+        assert row.status == "claimed", "interrupted work must remain reclaimable after expiry"
+    finally:
+        operation.cancel()
+        release.set()
+        await asyncio.gather(operation, return_exceptions=True)
+        if handler_task is not None:
+            await asyncio.gather(handler_task, return_exceptions=True)

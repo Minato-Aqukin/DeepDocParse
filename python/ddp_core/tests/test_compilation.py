@@ -81,54 +81,33 @@ def test_unknown_code_detection_is_contract_violation():
 
 
 def test_render_crops_isolates_bad_atom_and_bad_page(monkeypatch):
-    import sys
-    from types import SimpleNamespace
+    import io
 
-    class Image:
-        width = height = 100
+    import pypdfium2 as pdfium
+    from PIL import Image
 
-        def crop(self, _box):
-            return self
+    from ddp_paths import FIXTURES
 
-        def save(self, buf, *, format):
-            buf.write(b"png")
+    get_page = pdfium.PdfDocument.get_page
 
-    class Page:
-        def __init__(self, broken=False):
-            self.broken = broken
+    def load_page(doc, index):
+        if index == 1:
+            raise RuntimeError("bad page")
+        return get_page(doc, index)
 
-        def render(self, *, scale):
-            if self.broken:
-                raise RuntimeError("bad page")
-            return SimpleNamespace(to_pil=lambda: Image())
-
-        def get_width(self):
-            return 100
-
-        def get_height(self):
-            return 100
-
-    class Doc:
-        pages = [Page(), Page(broken=True), Page()]
-
-        def __len__(self):
-            return len(self.pages)
-
-        def __getitem__(self, index):
-            return self.pages[index]
-
-        def close(self):
-            pass
-
-    monkeypatch.setitem(sys.modules, "pypdfium2",
-                        SimpleNamespace(PdfDocument=lambda _data: Doc()))
-    result = render_crops(b"pdf", [
-        (0, [0, 0, 10], [100, 100]),
-        (0, [0, 0, 10, 10], [100, 100]),
-        (1, [0, 0, 10, 10], [100, 100]),
-        (2, [0, 0, 10, 10], [100, 100]),
+    monkeypatch.setattr(pdfium.PdfDocument, "get_page", load_page)
+    result = render_crops((FIXTURES / "long-doc.pdf").read_bytes(), [
+        (0, [0, 0, 10], [612, 792]),
+        (2, [20, 20, 30, 30], [612, 792]),
+        (1, [20, 20, 30, 30], [612, 792]),
+        (0, [20, 20, 50, 40], [612, 792]),
+        (2, [20, 20, 40, 50], [612, 792]),
+        (99, [20, 20, 30, 30], [612, 792]),
     ])
-    assert result == [None, b"png", None, b"png"]
+    assert [index for index, png in enumerate(result) if png is None] == [0, 2, 5]
+    for index, size in [(1, (68, 68)), (3, (108, 88)), (4, (88, 108))]:
+        with Image.open(io.BytesIO(result[index])) as image:
+            assert image.size == size
 
 
 def test_figure_without_caption_is_still_a_visual_atom():
