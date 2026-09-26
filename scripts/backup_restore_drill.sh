@@ -30,7 +30,9 @@ MINIO_CONTAINER="${DRILL_MINIO_CONTAINER:-ddp-recovery-drill-minio}"
 PG_VOLUME="${DRILL_PG_VOLUME:-ddp-recovery-drill-pgdata}"
 MINIO_VOLUME="${DRILL_MINIO_VOLUME:-ddp-recovery-drill-miniodata}"
 PG_IMAGE="${DRILL_PG_IMAGE:-pgvector/pgvector:pg16}"
-MINIO_IMAGE="${DRILL_MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e}"
+# MinIO 已撤回社区镜像：默认用 infra/images/minio.Dockerfile 现编（与开发栈同一钉住版本）。
+# 设了 DRILL_MINIO_IMAGE 就直接用那个镜像，不构建。
+MINIO_IMAGE="${DRILL_MINIO_IMAGE:-ddp-minio:RELEASE.2025-10-15T17-29-55Z}"
 PG_PASSWORD="drill-password"
 BUCKET="deepdocparse"
 
@@ -72,6 +74,13 @@ for port in "$PG_PORT" "$MINIO_PORT"; do
 done
 
 # ------------------------------------------------------------------ 容器
+if [ -z "${DRILL_MINIO_IMAGE:-}" ]; then
+  note "构建 $MINIO_IMAGE（infra/images/minio.Dockerfile；国内可设 GOPROXY）"
+  docker build -q -t "$MINIO_IMAGE" \
+    --build-arg GOPROXY="${GOPROXY:-https://proxy.golang.org,direct}" \
+    -f "$ROOT/infra/images/minio.Dockerfile" "$ROOT/infra/images" >/dev/null \
+    || fail "MinIO 镜像构建失败"
+fi
 say "1/6 起 scratch Postgres（:$PG_PORT）与 scratch MinIO（:$MINIO_PORT）"
 docker rm -f "$PG_CONTAINER" "$MINIO_CONTAINER" >/dev/null 2>&1 || true
 docker volume rm "$PG_VOLUME" "$MINIO_VOLUME" >/dev/null 2>&1 || true
@@ -92,10 +101,10 @@ for _ in $(seq 1 60); do
 done
 [ "$ready" -eq 1 ] || fail "scratch Postgres 60 秒内没有 ready"
 for _ in $(seq 1 60); do
-  if docker exec "$MINIO_CONTAINER" mc ready local >/dev/null 2>&1; then break; fi
+  if curl -fsS --max-time 2 "http://127.0.0.1:$MINIO_PORT/minio/health/ready" >/dev/null 2>&1; then break; fi
   sleep 1
 done
-docker exec "$MINIO_CONTAINER" mc ready local >/dev/null 2>&1 \
+curl -fsS --max-time 2 "http://127.0.0.1:$MINIO_PORT/minio/health/ready" >/dev/null 2>&1 \
   || fail "scratch MinIO 60 秒内没有 ready"
 note "PG_DSN=postgres://ddp:${PG_PASSWORD}@127.0.0.1:$PG_PORT/deepdocparse"
 note "MINIO_ENDPOINT=127.0.0.1:$MINIO_PORT"

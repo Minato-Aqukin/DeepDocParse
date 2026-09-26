@@ -88,11 +88,14 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       # 最小集：build_desktop.py 要 packaging.requirements；两个根测试额外要 pytest。
+      # ddp_local（连同 ddp_core / ddp_contracts）：发行守卫里的 schema 漂移守卫要真开
+      # 一个 LocalRuntime/ConsentStore 看它实际写的 user_version，维护栅栏用例同理。
       # jsonschema 不装 —— 这套门禁（W3/W4）用不到 check_federation_contracts。
       - name: 安装构建与守卫的最小依赖
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest packaging
+          python -m pip install pytest packaging \
+                                -e python/ddp_contracts -e python/ddp_core -e python/ddp_local
 
       - name: 发行守卫（W4 更新/打包 + W3 运行时）
         run: python -m pytest -q tests/test_desktop_release.py tests/test_wsl_runtime_build.py

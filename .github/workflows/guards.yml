@@ -41,7 +41,8 @@ jobs:
                       -e "services/model-gateway[dev]" \
                       -e services/corpus-worker \
                       -e "services/corpus-api[dev]" \
-                      -e "services/mcp[dev]"
+                      -e "services/mcp[dev]" \
+                      -e python/ddp_local
           # jsonschema 目前是 mcp SDK 的传递依赖，但 scripts/check_federation_contracts.py
           # 直接依赖它 —— **显式装**，别指望别人的依赖树替我们保证门禁能跑。
           pip install jsonschema

@@ -100,22 +100,14 @@ install_minio() {
     done
   fi
 
+  # 上游已撤回全部社区发行（dl.min.io 410，镜像仓库拒绝匿名拉取）：只装预上传的二进制。
   if [ -n "$candidate" ] && [ -f "$candidate" ]; then
     log "安装预上传的 MinIO：$candidate"
     install -m 0755 "$candidate" /usr/local/bin/minio
-  else
-    local tmp_minio
-    tmp_minio="$(mktemp /tmp/ddp-minio.XXXXXX)"
-    log "未找到预上传的 MinIO，尝试从官方地址下载（最多 5 分钟）"
-    if curl -fL --retry 2 --connect-timeout 20 --max-time 300 \
-      -o "$tmp_minio" https://dl.min.io/server/minio/release/linux-amd64/minio; then
-      install -m 0755 "$tmp_minio" /usr/local/bin/minio
-    fi
-    rm -f -- "$tmp_minio"
   fi
 
   /usr/local/bin/minio --version >/dev/null 2>&1 || die \
-    "MinIO 下载失败。请把 linux-amd64 的 minio 上传到本脚本同目录后重跑"
+    "没有 MinIO：本地按 infra/images/minio.Dockerfile 钉住的版本 go install 出 linux-amd64 二进制，上传到本脚本同目录后重跑"
   log "MinIO 安装完成：$(/usr/local/bin/minio --version | head -1)"
 }
 

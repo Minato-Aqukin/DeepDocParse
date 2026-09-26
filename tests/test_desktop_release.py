@@ -1166,6 +1166,11 @@ def make_fake_repo(tmp_path):
     (root / "apps/web/dist").mkdir(parents=True)
     (root / "apps/web/dist/index.html").write_text("<html></html>\n")
     (root / "LICENSE").write_text("license\n")
+    # The builder reads the workspace schema declaration from the checkout when
+    # ddp_local is not installed (the minimal release job): ship the real one.
+    schemas = root / "python/ddp_local/ddp_local/workspace_schemas.py"
+    schemas.parent.mkdir(parents=True)
+    schemas.write_text((ROOT / "python/ddp_local/ddp_local/workspace_schemas.py").read_text())
     return root
 
 

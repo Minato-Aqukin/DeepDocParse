@@ -12,9 +12,11 @@
 > （默认注释掉）。不打开的话索引会失败并写 `index_error`、检索退回 BM25 并标
 > `degraded=embedding_unavailable` —— 那是可见降级，不是坏了，但问答就没东西可检索。
 >
-> **MinIO 要自己准备**：dl.min.io 与所有国内镜像、GitHub 代理 2026-08-29 实测
-> 全不可用或龟速（20 分钟 6MB）。本地下好后
-> `autodl push <id> ./minio /usr/local/bin/minio`，再 `chmod +x`。
+> **MinIO 要自己准备**：上游已撤回全部社区发行（dl.min.io 410，Docker Hub 与
+> quay.io 都拉不到）。本地按 `infra/images/minio.Dockerfile` 钉住的模块版本编：
+> `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go install github.com/minio/minio@<那个版本>`
+> （产物在 `$(go env GOPATH)/bin`，交叉编译时在其下的 `linux_amd64/`），
+> 再 `autodl push <id> ./minio /usr/local/bin/minio`，`chmod +x`。
 
 ## 模型线：DeepSeek-OCR-2
 

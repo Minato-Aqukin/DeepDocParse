@@ -94,8 +94,9 @@ bash infra/autodl/stack.bash doctor      # 别跳过
 
 由此推出两条做法：
 
-- **MinIO 从源码编**（`go install github.com/minio/minio@latest` 走 goproxy.cn，
-  两分钟）。它是纯 Go 项目，这比想办法把预编译包弄进来快得多。
+- **MinIO 从源码编**（走 goproxy.cn，两分钟）。上游 2026-09 已撤回全部社区发行、仓库归档，
+  `@latest` 不再有意义：按 `infra/images/minio.Dockerfile` 钉住的模块版本编，
+  开发栈与 CI 也是用这个 Dockerfile 现编的。
 - **cloudflared 用 Cloudflare 自家的 deb**，别走 GitHub；也别 `go install`
   ——它的 go.mod 有 replace，`go install pkg@latest` 会直接拒绝。
 - 没有 redis-stack 就**没有 RediSearch**：网关那份块级向量索引退到 scan 兜底。

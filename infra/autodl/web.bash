@@ -75,17 +75,12 @@ if [ "${1:-}" = "--install" ]; then
   apt-get install -y -qq postgresql-15 postgresql-15-pgvector
   [ -d /usr/lib/postgresql/15 ] && pass "PostgreSQL 15 + pgvector" || fail "PG 装不上"
 
-  # MinIO。**dl.min.io 与所有国内镜像、GitHub 代理 2026-08-29 实测全不可用或龟速
-  # （20 分钟 6MB）。** 所以这里只做一次尝试，失败就明确告诉你手动推 ——
-  # 静默重试半小时比直接说"拿不到"更浪费机时。
-  if [ ! -x /usr/local/bin/minio ]; then
-    curl -fsSL --retry 2 --max-time 300 -o /usr/local/bin/minio \
-      https://dl.min.io/server/minio/release/linux-amd64/minio && chmod +x /usr/local/bin/minio
-  fi
+  # MinIO。上游已撤回全部社区发行（dl.min.io 410，镜像仓库拒绝匿名拉取），
+  # 没有地方可下：在本地按 infra/images/minio.Dockerfile 钉住的版本编好再推上来。
   if /usr/local/bin/minio --version >/dev/null 2>&1; then
     pass "MinIO $(/usr/local/bin/minio --version | head -1 | awk '{print $3}')"
   else
-    fail "MinIO 拉不下来 —— 在本地下好后： autodl push <id> ./minio /usr/local/bin/minio && chmod +x"
+    fail "没有 MinIO —— 本地按 infra/images/minio.Dockerfile 的版本 go install 出 linux-amd64 二进制后： autodl push <id> ./minio /usr/local/bin/minio && chmod +x"
   fi
 
   # Node（前端构建）。走阿里云 nodejs 镜像，官方源在这里很慢

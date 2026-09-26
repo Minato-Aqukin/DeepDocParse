@@ -611,10 +611,11 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
     refusing = (decision.degraded in {"no_evidence_in_turn", "inherited_evidence_incomplete"}
                 or not evidence_ids)
     if settings.qa_verify_parse and verify_pair and not refusing:
-        async def checked_verification():
-            await authorize()
-            return await verify_parse_consistency(http, verify_pair[0], verify_pair[1])
-        verify_task = asyncio.create_task(checked_verification())
+        # 只做视觉 HTTP，不碰数据库：回答出错/客户端断开时这个任务会被取消，取消落在
+        # 查询中途会让 SQLAlchemy（2.1 起）把那条连接判废。访问权刚在上面 authorize()
+        # 里查过，建任务前没有任何 await，重查一遍并不更新鲜。
+        verify_task = asyncio.create_task(
+            verify_parse_consistency(http, verify_pair[0], verify_pair[1]))
 
     yield _sse("meta", {
         "query_decision": {
