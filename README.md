@@ -68,25 +68,32 @@ cd apps/web && npm run dev # 前端 http://localhost:5173
 当前已实测解析、关键词检索与证据；真实本地生成模型及完整桌面发行仍在 v3 实施中。
 
 ```bash
-./scripts/check.sh          # 全量门禁 22 项，与 CI 同一套判据
+./scripts/check.sh          # 默认：guards python go web（包含前端生产构建）
 ./scripts/check.sh guards   # 只跑守卫
+./scripts/check.sh web-e2e  # 可选浏览器门禁，需先安装 Playwright Chromium
+./scripts/check.sh --help
 ```
 
-单项：
+依赖安装、解释器选择、默认门禁与浏览器 / PostgreSQL / GPU / CI 的覆盖边界，
+见 [开发与验证指南](docs/DEVELOPMENT.md)。未配置的真实服务检查会明确提示跳过；
+本地默认门禁通过不代表完整 CI 或部署验收通过。
+
+单项（先激活开发虚拟环境；各包必须在自己的目录运行 pytest）：
 
 ```bash
-cd python/ddp_core        && pytest -q      # 27
-cd services/model-gateway && pytest -q      # 149 + 6 skip
-cd services/corpus-api    && pytest -q      # 280
-cd services/corpus-worker && pytest -q      # 10
-cd services/mcp           && pytest -q      # 12
-cd eval                   && pytest -q      # 45
-cd services/control-api   && go test ./...  # 58（4 条要真 PostgreSQL）
-cd apps/web && npm run test:unit && npm run test:e2e   # 26 + 72
+cd python/ddp_core        && pytest -q
+cd python/ddp_local       && pytest -q
+cd services/model-gateway && pytest -q
+cd services/corpus-api    && pytest -q
+cd services/corpus-worker && pytest -q
+cd services/mcp           && pytest -q
+cd eval                   && pytest -q
+cd services/control-api   && go test ./...  # 真库用例需独立 PostgreSQL 测试库
+cd apps/web && npm run test:unit && npm run test:e2e
 
 # 端到端（要先 scripts/dev.sh up）——**这一条抓到过七个单测看不见的缺陷**
-scripts/check_db_boundary.sh      # 数据所有权 + schema 实情，对着真库 23 条
-python scripts/e2e_stack.py       # 真实用户路径 24 条
+scripts/check_db_boundary.sh      # 数据所有权 + schema 实情，对着真库
+python scripts/e2e_stack.py       # 真实用户路径
 ```
 
 ## 许可

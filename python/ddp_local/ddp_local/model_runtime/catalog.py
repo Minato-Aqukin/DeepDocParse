@@ -42,8 +42,18 @@ def validate_catalog(value):
             raise ApplicationError("model_format_unsupported", "artifact format is not supported by this catalog")
         if artifact.get("license") not in {"Apache-2.0", "MIT"}:
             raise ApplicationError("model_license_unsupported", "artifact license requires review")
-        if artifact.get("backend") != "llama.cpp" or artifact.get("device") != "cpu":
-            raise ApplicationError("model_backend_unsupported", "only the declared CPU backend is available")
+        if artifact.get("backend") != "llama.cpp" or artifact.get("device") not in {"cpu", "gpu"}:
+            raise ApplicationError("model_backend_unsupported", "only reviewed local llama.cpp backends are available")
+        if artifact["kind"] == "runtime" and artifact["device"] == "gpu":
+            if (artifact.get("gpu_api") != "vulkan" or type(artifact.get("default_gpu_layers")) is not int
+                    or not 1 <= artifact["default_gpu_layers"] <= 999):
+                raise ApplicationError("model_backend_unsupported", "GPU runtime requires an explicit Vulkan offload profile")
+        if "runtime_ids" in artifact:
+            allowed = artifact["runtime_ids"]
+            if (artifact["kind"] != "model" or not isinstance(allowed, list) or not allowed
+                    or any(not isinstance(item, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,95}", item) for item in allowed)
+                    or len(set(allowed)) != len(allowed) or artifact.get("runtime_id") not in allowed):
+                raise ApplicationError("model_manifest_invalid", "model runtime choices must include its explicit default")
 
 
 def manifest_digest(artifact):

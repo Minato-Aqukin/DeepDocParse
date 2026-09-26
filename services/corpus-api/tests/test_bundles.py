@@ -11,8 +11,9 @@ from ddp_corpus import db
 from ddp_corpus.config import settings
 from ddp_corpus.gc import collect_deleted_objects
 from ddp_corpus.models import Document, Resource, ResourceVersion, utcnow
+from ddp_corpus.versions import next_document_version
 from sqlalchemy import func, select
-from tests.conftest import actor_headers
+from tests.conftest import actor_headers, drain_tasks
 
 
 def upload_headers(key="import-1", **kwargs):
@@ -25,6 +26,17 @@ async def import_one(client, **kwargs):
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+async def import_settled(client, app_state, **kwargs):
+    """Import, then let the worker finish the index task the import enqueues.
+
+    An active task protects its document from GC by design; GC tests must isolate the
+    reference they are about, so the import's own index task runs to completion first.
+    """
+    result = await import_one(client, **kwargs)
+    await drain_tasks(app_state)
+    return result
 
 
 async def test_t11_import_export_keeps_source_version_evidence_and_private_local_owner(
@@ -279,7 +291,7 @@ async def test_native_export_freezes_parse_revision_and_reports_unbound_parse(
 async def test_last_deleted_bundle_reference_is_collected_after_grace(
     actor_client, session, app_state
 ):
-    result = await import_one(actor_client)
+    result = await import_settled(actor_client, app_state)
     resource = await session.get(Resource, result["resource_id"])
     version = await session.get(ResourceVersion, result["source_version_id"])
     resource.deleted_at = version.deleted_at = utcnow() - timedelta(
@@ -299,7 +311,7 @@ async def test_t03_running_task_retains_deleted_bundle_until_terminal(
 ):
     from ddp_corpus.models import Task
 
-    result = await import_one(actor_client)
+    result = await import_settled(actor_client, app_state)
     resource = await session.get(Resource, result["resource_id"])
     version = await session.get(ResourceVersion, result["source_version_id"])
     resource.deleted_at = version.deleted_at = utcnow() - timedelta(
@@ -325,7 +337,7 @@ async def test_t03_running_task_retains_deleted_bundle_until_terminal(
 async def test_t03_durable_citation_protects_unique_original(actor_client, session, app_state):
     from ddp_corpus.models import Citation, Evidence, ParseJob, new_id
 
-    result = await import_one(actor_client)
+    result = await import_settled(actor_client, app_state)
     resource = await session.get(Resource, result["resource_id"])
     version = await session.get(ResourceVersion, result["source_version_id"])
     job = ParseJob(
@@ -334,6 +346,7 @@ async def test_t03_durable_citation_protects_unique_original(actor_client, sessi
         engine="borndigital",
         status="succeeded",
         options_hash="local-parse",
+        document_version=await next_document_version(session, version.document_id),
     )
     session.add(job)
     await session.flush()
@@ -359,7 +372,7 @@ async def test_t03_durable_citation_protects_unique_original(actor_client, sessi
 async def test_gc_partial_failure_keeps_durable_remaining_keys_and_retries(
     actor_client, session, app_state, monkeypatch
 ):
-    result = await import_one(actor_client)
+    result = await import_settled(actor_client, app_state)
     resource = await session.get(Resource, result["resource_id"])
     version = await session.get(ResourceVersion, result["source_version_id"])
     resource.deleted_at = version.deleted_at = utcnow() - timedelta(
@@ -403,7 +416,7 @@ async def test_t03_wiki_revision_references_protect_unique_source_without_old_ci
         new_id,
     )
 
-    result = await import_one(actor_client)
+    result = await import_settled(actor_client, app_state)
     resource = await session.get(Resource, result["resource_id"])
     version = await session.get(ResourceVersion, result["source_version_id"])
     job = ParseJob(
@@ -412,6 +425,7 @@ async def test_t03_wiki_revision_references_protect_unique_source_without_old_ci
         engine="borndigital",
         status="succeeded",
         options_hash="local-parse",
+        document_version=await next_document_version(session, version.document_id),
     )
     wiki = Wiki(id=new_id(), owner_id="actor-alice", organization_id="org-test", title="Saved Wiki")
     session.add_all([job, wiki])

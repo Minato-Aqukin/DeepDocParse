@@ -1,24 +1,27 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { documentsApi, downloadAs, downloadViaSignedUrl } from '@/api'
+import { documentContext } from '@/api/resource-context'
 import StatCard from '@/components/common/StatCard.vue'
 import DocumentFilters from '@/components/document/DocumentFilters.vue'
 import DocumentTable from '@/components/document/DocumentTable.vue'
 import UploadDialog from '@/components/document/UploadDialog.vue'
-import { useAuthStore } from '@/stores/auth'
 import { usePolling } from '@/composables/usePolling'
+import { approvedPlanLabel, isDesktop } from '@/platform/desktop'
+import { useAuthStore } from '@/stores/auth'
 import { useDocumentsStore } from '@/stores/documents'
 import type { DocumentInfo, DownloadFormat } from '@/types/api'
 import type { DocumentFilters as Filters } from '@/stores/documents'
 import { validateAndReindex } from '@/utils/reindex'
-
 const router = useRouter()
 const store = useDocumentsStore()
 
 const auth = useAuthStore()
+// 中心只读：上传按钮禁用并写明原因（按钮留在界面上，plan §1.5）。
+const readonlyHint = computed(() => (isDesktop() && auth.readOnly ? approvedPlanLabel() : ''))
 const uploadVisible = ref(false)
 const selected = ref<DocumentInfo[]>([])
 
@@ -32,27 +35,27 @@ async function reload() {
 
 function open(doc: DocumentInfo) {
   if (doc.status !== 'succeeded') return ElMessage.info('解析尚未完成')
-  router.push({ name: 'workbench', params: { id: doc.id } })
+  router.push({ name: 'workbench', params: { id: doc.id },
+    query: { ...documentContext(doc), job: doc.current_job_id ?? undefined } })
 }
 
 async function download(doc: DocumentInfo, format: DownloadFormat) {
-  if (format === 'source') return downloadViaSignedUrl(doc.id, doc.filename)
-  await downloadAs(documentsApi.exportUrl(doc.id, format), doc.filename)
+  const context = documentContext(doc)
+  if (format === 'source') return downloadViaSignedUrl(doc.id, doc.filename, context)
+  await downloadAs(documentsApi.exportUrl(doc.id, format, doc.current_job_id ?? undefined), doc.filename, context)
 }
 
 async function reindex(doc: DocumentInfo) {
-  await validateAndReindex(doc.id)
+  await validateAndReindex(doc.id, documentContext(doc))
   ElMessage.success('已排队重建索引')
   await reload()
 }
 
 async function remove(doc: DocumentInfo) {
-  // 说清楚这是从**整个服务器的语料**里移除，不是"删掉我的那份副本" ——
-  // 语料共享之后这两件事已经不是一回事了
   await ElMessageBox.confirm(
     `删除你对「${doc.filename}」的资源记录？其他人的独立资源会保留。`,
     '确认', { type: 'warning' })
-  await documentsApi.remove(doc.id)
+  await documentsApi.remove(doc.id, documentContext(doc))
   await reload()
 }
 
@@ -68,7 +71,7 @@ async function removeSelected() {
   const failed: string[] = []
   for (const doc of selected.value) {
     try {
-      await documentsApi.remove(doc.id)
+      await documentsApi.remove(doc.id, documentContext(doc))
     } catch {
       // http 拦截器已经弹过每条的具体原因，这里只统计
       failed.push(doc.filename)
@@ -116,8 +119,14 @@ onMounted(reload)
       <div class="actions">
         <el-button :loading="store.loading" @click="reload">刷新</el-button>
         <!-- 按**能力**显示，不按角色名。只读成员看不到这个按钮 ——
-             让他点进去再吃一个 403 也能工作，但那会让人以为是自己操作错了 -->
-        <el-tooltip v-if="!auth.canUpload" content="只读成员不能上传文档">
+             让他点进去再吃一个 403 也能工作，但那会让人以为是自己操作错了。
+             中心只读（桌面）：按钮留在界面上但禁用，文案换成联邦任务说明。 -->
+        <el-tooltip v-if="readonlyHint" :content="readonlyHint">
+          <span><el-button type="primary" disabled>
+            <el-icon><component is="Upload" /></el-icon> 上传
+          </el-button></span>
+        </el-tooltip>
+        <el-tooltip v-else-if="!auth.canUpload" content="只读成员不能上传文档">
           <span><el-button type="primary" disabled>
             <el-icon><component is="Upload" /></el-icon> 上传
           </el-button></span>
@@ -131,10 +140,11 @@ onMounted(reload)
     <DocumentTable
       :items="store.items"
       :loading="store.loading"
-      selectable
+      :selectable="!readonlyHint"
       @open="open"
       @download="download"
-      @reparse="router.push({ name: 'versions', params: { id: $event.id } })"
+      @reparse="router.push({ name: 'versions', params: { id: $event.id },
+        query: { resource_id: $event.resource_id ?? undefined } })"
       @reindex="reindex"
       @remove="remove"
       @selection="selected = $event"

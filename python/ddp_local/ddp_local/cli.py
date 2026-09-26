@@ -75,6 +75,8 @@ def parser():
         command.add_argument("artifact_id")
         if action == "install":
             command.add_argument("--key", required=True)
+        if action == "run":
+            command.add_argument("--runtime-id", help="explicit reviewed CPU or GPU runtime; no automatic fallback")
     imported = actions.add_parser("import")
     imported.add_argument("artifact_id")
     imported.add_argument("file")
@@ -100,12 +102,29 @@ def parser():
             command.add_argument("page_key")
     for command in ("init", "capabilities", "resources", "tasks"):
         sub.add_parser(command)
+    resource_versions = sub.add_parser("resource-versions",
+        help="list immutable versions under one logical resource")
+    resource_versions.add_argument("resource_id")
     upload = sub.add_parser("upload")
     upload.add_argument("file")
     upload.add_argument("--key", required=True)
+    append = sub.add_parser("append-version",
+        help="parse a new immutable version under an existing logical resource")
+    append.add_argument("resource_id")
+    append.add_argument("file")
+    append.add_argument("--key", required=True)
+    withdraw = sub.add_parser("withdraw-version",
+        help="revoke a source version without rewriting history; Wiki keeps stale reads")
+    withdraw.add_argument("version_id")
+    delete_version = sub.add_parser("delete-version",
+        help="delete one version unless a Wiki dependency or active task retains it")
+    delete_version.add_argument("version_id")
+    delete_resource = sub.add_parser("delete-resource",
+        help="delete a whole logical resource once nothing retains it")
+    delete_resource.add_argument("resource_id")
     work = sub.add_parser("work")
     work.add_argument("--once", action="store_true")
-    for command in ("search", "answer", "wiki"):
+    for command in ("search", "answer"):
         query = sub.add_parser(command)
         query.add_argument("query")
         query.add_argument("--version", action="append", dest="version_ids")
@@ -263,7 +282,7 @@ def main(argv=None):
                 result = runtime.model_installer.import_file(args.artifact_id, args.file)
             else:
                 async def foreground_model():
-                    result = await runtime.start_model(args.artifact_id)
+                    result = await runtime.start_model(args.artifact_id, runtime_id=args.runtime_id)
                     print(json.dumps(result), flush=True)
                     try:
                         while runtime.model_process.process.poll() is None:
@@ -295,20 +314,29 @@ def main(argv=None):
             result = runtime.capabilities()
         elif command == "resources":
             result = {"items": runtime.store.versions()}
+        elif command == "resource-versions":
+            result = {"items": runtime.store.resource_versions(args.resource_id)}
         elif command == "tasks":
             result = {"items": runtime.store.tasks()}
         elif command == "upload":
             result = runtime.upload_file(args.file, operation_key=args.key)
+        elif command == "append-version":
+            result = runtime.append_version_file(args.resource_id, args.file, operation_key=args.key)
+        elif command == "withdraw-version":
+            result = runtime.withdraw_version(args.version_id)
+        elif command == "delete-version":
+            result = runtime.delete_version(args.version_id)
+        elif command == "delete-resource":
+            result = runtime.delete_resource(args.resource_id)
         elif command == "work":
             result = asyncio.run(runtime.work_once() if args.once else runtime.work_forever())
         elif command == "search":
             result = runtime.search(args.query, version_ids=args.version_ids)
-        elif command in {"answer", "wiki"}:
+        elif command == "answer":
             result = asyncio.run(
                 runtime.answer(
                     args.query,
                     version_ids=args.version_ids,
-                    wiki=command == "wiki",
                     execution_policy="remote_allowed" if args.allow_remote else "local_only",
                     allow_remote=args.allow_remote,
                 )

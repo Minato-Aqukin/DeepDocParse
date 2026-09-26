@@ -88,6 +88,26 @@ async def test_persistent_pages_relations_attempts_and_restart_replay(ready):
         runtime.store.db.execute('DELETE FROM versions WHERE id=?', (body['sources'][0]['source_version_id'],))
 
 
+async def test_wiki_freeze_retrieves_late_evidence_within_selected_sources_and_budgets(ready):
+    from ddp_core.bundle import json_bytes
+
+    runtime, body = ready
+    task = runtime.upload_stream(io.BytesIO((ROOT / "tests/fixtures/code-corpus.pdf").read_bytes()),
+                                 filename="code.pdf", operation_key="long-wiki-source")
+    await runtime.work_once()
+    version = runtime.store.version(task["version_id"])
+    source = {"resource_id": version["resource_id"], "source_version_id": version["id"]}
+    limits = {"max_evidence": 2, "max_input_chars": 5000}
+    frozen = runtime.wikis.freeze([source], limits, query="HttpRequestParser TARGET_IDENTIFIER")
+    assert any("HttpRequestParser" in item["excerpt"] for item in frozen)
+    assert all(item["version_id"] == version["id"] for item in frozen)
+    assert len(frozen) <= limits["max_evidence"]
+    assert len(json_bytes(frozen).decode()) <= limits["max_input_chars"]
+    with pytest.raises(ApplicationError) as insufficient:
+        runtime.wikis.freeze([*body["sources"], source], {**limits, "max_evidence": 1})
+    assert insufficient.value.code == "wiki_budget_exceeded"
+
+
 async def test_concurrent_edit_cas_preserves_history_and_human_provenance(ready):
     runtime, body = ready
     protocol(runtime)
@@ -225,7 +245,7 @@ def test_v1_migration_is_atomic_and_preserves_existing_resources(tmp_path, monke
     monkeypatch.setattr(wiki_store, 'SCHEMA', original)
     runtime = LocalRuntime(directory)
     try:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 2
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 3
         assert db.execute('SELECT title FROM resources WHERE id=?', ('old-resource',)).fetchone()[0] == 'Old title'
     finally:
         runtime.close()
@@ -260,3 +280,43 @@ async def test_wiki_metadata_windows_bound_scope_and_do_not_silently_hide_rows(r
         runtime.wikis.revisions(built[0]['wiki']['id'], cursor=first['next_cursor'])
     with pytest.raises(ApplicationError):
         runtime.wikis.list(limit=101)
+
+async def test_withdrawn_source_marks_stale_and_rebuild_keeps_human_text(ready):
+    runtime, body = ready
+    protocol(runtime)
+    built = await runtime.build_wiki(body, operation_key='withdraw-base')
+    wid, rev = built['wiki']['id'], built['revision']
+    edited = await runtime.edit_wiki(wid, rev['pages'][0]['page_key'],
+        {'base_revision_id': rev['id'], 'paragraphs': [{'id': 'keep', 'text': 'Manual note'}]},
+        operation_key='withdraw-edit')
+    assert edited['revision']['pages'][0]['human_paragraphs']
+    withdrawn = runtime.withdraw_version(body['sources'][0]['source_version_id'])
+    assert withdrawn['state'] == 'withdrawn'
+    stale = runtime.wikis.get(wid)['revision']
+    assert stale['stale'] and all(p['stale'] for p in stale['pages'])
+    assert stale['stale_reasons'][rev['pages'][0]['page_key']] == ['source_withdrawn']
+    with pytest.raises(ApplicationError) as frozen_denied:
+        runtime.wikis.freeze(body['sources'], {'max_evidence': 40, 'max_input_chars': 16000})
+    assert frozen_denied.value.code == 'version_not_ready'
+    with pytest.raises(ApplicationError) as edit_denied:
+        await runtime.edit_wiki(wid, stale['id'],
+            {'base_revision_id': stale['id'], 'paragraphs': [{'id': 'late', 'text': 'Too late'}]},
+            operation_key='withdraw-late-edit')
+    assert edit_denied.value.code == 'wiki_source_unavailable'
+    with pytest.raises(ApplicationError) as source_denied:
+        runtime.store.authorize_versions([body['sources'][0]['source_version_id']])
+    assert source_denied.value.code == 'version_not_ready'
+    with pytest.raises(ApplicationError) as retained:
+        runtime.delete_version(body['sources'][0]['source_version_id'])
+    assert retained.value.code == 'source_in_use'
+    with pytest.raises(ApplicationError) as in_progress_denied:
+        runtime.delete_resource(body['sources'][0]['resource_id'])
+    assert in_progress_denied.value.code == 'source_in_use'
+    with pytest.raises(ApplicationError) as rebuild_denied:
+        await runtime.build_wiki({**body, 'base_revision_id': edited['revision']['id']},
+            wiki_id=wid, operation_key='withdraw-rebuild')
+    assert rebuild_denied.value.code == 'version_not_ready'
+    current = runtime.wikis.get(wid)['revision']
+    assert current['id'] == edited['revision']['id']
+    assert current['pages'][0]['human_paragraphs'][0]['text'] == 'Manual note'
+    assert current['stale']

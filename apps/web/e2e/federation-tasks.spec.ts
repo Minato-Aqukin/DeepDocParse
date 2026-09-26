@@ -101,7 +101,7 @@ test('执行中的任务轮询到落定：矛盾与未查全在答案之前，�
   const afters: string[] = []
   const planBodies: unknown[] = []
   await api(page, (url) => url.pathname.startsWith(`/api/v1/tasks/${ROOT}`) || url.pathname === '/api/v1/task-plans'
-    || url.pathname === '/api/evidence/evidence-local-1', async (url, route) => {
+    || url.pathname === `/api/v1/task-plans/${ROOT}` || url.pathname === '/api/evidence/evidence-local-1', async (url, route) => {
     if (url.pathname === `/api/v1/tasks/${ROOT}`) {
       reads++
       return route.fulfill({ json: fixture(settle ? 'task-succeeded.json' : 'task-running.json') })
@@ -114,6 +114,7 @@ test('执行中的任务轮询到落定：矛盾与未查全在答案之前，�
       return route.fulfill({ json: { root_task_id: ROOT, events: [], next_seq: Number(after), complete: true } })
     }
     if (url.pathname.endsWith('/coverage')) return route.fulfill({ json: fixture('coverage.json') })
+    if (url.pathname === `/api/v1/task-plans/${ROOT}`) return route.fulfill({ json: fixture('plan.json') })
     if (url.pathname === '/api/v1/task-plans') {
       planBodies.push(route.request().postDataJSON())
       return route.fulfill({ json: fixture('plan.json') })
@@ -161,29 +162,31 @@ test('执行中的任务轮询到落定：矛盾与未查全在答案之前，�
   await page.locator('#evidence-1').getByRole('button', { name: '查看原文出处' }).click()
   await expect(page.getByText('最大输入电压：240 V')).toBeVisible()
 
-  // 落定后停止轮询；计划只读一次，而且读的是这个任务
+  // 落定后停止轮询；计划走契约的只读 GET 读一次，不再 POST 重放（写在 planBodies 里的还是零条）
   const settledReads = reads
   await page.waitForTimeout(4_500)
   expect(reads).toBe(settledReads)
-  expect(planBodies).toEqual([{ root_task_id: ROOT }])
+  expect(planBodies).toEqual([])
   expect(afters.slice(0, 2)).toEqual(['0', '3'])
   expect(realErrors(errors)).toEqual([])
 })
 
 test('没有答案时说出契约里的原因；覆盖账本读不到时显示原因而不是空白', async ({ page }) => {
-  await api(page, (url) => url.pathname.startsWith(`/api/v1/tasks/${ROOT2}`) || url.pathname === '/api/v1/task-plans', async (url, route) => {
+  await api(page, (url) => url.pathname.startsWith(`/api/v1/tasks/${ROOT2}`) || url.pathname === '/api/v1/task-plans' || url.pathname === `/api/v1/task-plans/${ROOT2}`, async (url, route) => {
     if (url.pathname === `/api/v1/tasks/${ROOT2}`) return route.fulfill({ json: fixture('task-insufficient.json') })
     if (url.pathname.endsWith('/events')) return route.fulfill({ json: { root_task_id: ROOT2, events: [], next_seq: 0, complete: true } })
     if (url.pathname.endsWith('/coverage')) {
       return route.fulfill({ status: 500, json: { error: { message: 'ledger store down', type: 'server_error', code: 'upstream_error' } } })
     }
+    if (url.pathname === `/api/v1/task-plans/${ROOT2}`) {
+      return route.fulfill({ status: 409, json: { error: { message: 'no plan yet', type: 'invalid_request_error', code: 'plan_changed' } } })
+    }
     return route.fulfill({ status: 409, json: { error: { message: 'plan changed', type: 'invalid_request_error', code: 'plan_changed' } } })
   })
   await page.goto(`/#/tasks/${ROOT2}`)
-  await expect(page.getByText('证据不足：本次取得的原文不足以支撑结论')).toBeVisible()
+  await expect(page.getByText('执行计划读取失败：plan_changed（no plan yet）')).toBeVisible()
   await expect(page.getByText('没有生成回答：远端生成步骤未完成（peer_execution_timeout）')).toBeVisible()
   await expect(page.getByText('覆盖账本读取失败：upstream_error（ledger store down）')).toBeVisible()
-  await expect(page.getByText('执行计划读取失败：plan_changed（plan changed）')).toBeVisible()
   await expect(page.getByText('执行计划没读到，暂时判断不了这条证据是否在本节点')).toBeVisible()
 })
 
@@ -230,7 +233,8 @@ test('创建任务：不勾问题原文就真的不外发，而且没有远端�
   const errors = watchErrors(page)
   const intents: Record<string, unknown>[] = []
   await api(page, (url) => ['/api/v1/tasks', '/api/v1/capabilities', '/api/v1/federation/scopes',
-    '/api/v1/task-intents', '/api/v1/task-plans'].includes(url.pathname), async (url, route) => {
+    '/api/v1/task-intents', '/api/v1/task-plans', `/api/v1/task-plans/${ROOT2}`].includes(url.pathname)
+    || url.pathname.startsWith(`/api/v1/tasks/${ROOT2}`), async (url, route) => {
     if (url.pathname === '/api/v1/tasks' && route.request().method() === 'GET') return route.fulfill({ json: fixture('task-list-last-page.json') })
     if (url.pathname === '/api/v1/capabilities') return route.fulfill({ json: HANDSHAKE })
     if (url.pathname === '/api/v1/federation/scopes') return route.fulfill({ status: 201, json: fixture('scope-sealed.json') })
@@ -238,6 +242,8 @@ test('创建任务：不勾问题原文就真的不外发，而且没有远端�
       intents.push(route.request().postDataJSON())
       return route.fulfill({ status: 201, json: { root_task_id: ROOT2, planning_state: 'draft', status: 'queued' } })
     }
+    if (url.pathname === `/api/v1/tasks/${ROOT2}`) return route.fulfill({ json: fixture('task-queued.json') })
+    if (url.pathname.endsWith('/events')) return route.fulfill({ json: { root_task_id: ROOT2, events: [], next_seq: 0, complete: true } })
     return route.fulfill({ json: stillValid(fixture('plan-ready.json')) })
   })
 
@@ -290,6 +296,7 @@ test('批准计划：许可覆盖到中继节点，受理用的是界面上显�
       return route.fulfill({ json: submitted ? { ...fixture('task-queued.json'), status: 'running', planning_state: 'approved' } : fixture('task-queued.json') })
     }
     if (url.pathname === `/api/v1/tasks/${ROOT2}/events`) return route.fulfill({ json: { root_task_id: ROOT2, events: [], next_seq: 0, complete: true } })
+    if (url.pathname === `/api/v1/task-plans/${ROOT2}`) return route.fulfill({ json: plan })
     if (url.pathname === '/api/v1/task-plans') return route.fulfill({ json: plan })
     if (url.pathname === `/api/v1/task-plans/${ROOT2}/approve`) {
       approval = route.request().postDataJSON()

@@ -1,6 +1,6 @@
 # P5 联邦业务接口冻结（v3）
 
-> 2026-09-13。本文件是 P5（Probe / TaskPlan / Admission / 覆盖账本 / 快速与穷查 /
+> 2026-09-23 更新。本文件是 P5（Probe / TaskPlan / Admission / 覆盖账本 / 快速与穷查 /
 > 交付）并行实现的唯一接口依据。执行权威仍是工作区
 > `DeepDocParse_桌面与可验证联邦路由升级计划_v3.md` §6–§9；本文件只把其中的
 > 对象、签名与端点冻结成各方可同时编码的形状。冲突时以计划原文为准，并回来改这里。
@@ -9,21 +9,16 @@
 
 本切片实现计划 §11 的 **P5**：探测前探索许可、真实能力/资源/证据 Probe、类型化
 任务图、持久 Admission 与幂等对账、快速/范围穷查、覆盖账本、跨中心证据融合与
-整项答案委托、交付回执。
+整项答案与 Wiki 委托、交付回执，以及这些入口共用的持久根预算。
 
-**非目标（本轮不做，须在报告里如实列出）**：
-- P6 递归目录/多级预算/路径环路/缓存（A/B→P→R）。
-- P7 安装包、真实 GPU profile、生产迁移。
-- ~~把联邦执行挂到 `corpus.tasks` worker 队列~~：**P5 队列切片已实现**
-  （2026-09：`federation.admit` 与协调者受理都在同一个事务里排
-  `federation_execute` / `federation_plan` 持久任务，worker 领取执行；
-  `FEDERATION_EXECUTION_INLINE=true` 只保留给没有 worker 的部署）。
-  细节与验证记录见 `P5-QUEUE-VALIDATION-v3.md`。
-- ~~`task_status` 新增 `cancelled` 枚举~~：**已连同 worker 状态机落地** ——
-  `queue.cancel` 幂等落终态、generation fencing、`claim` 不领取 cancelled、
-  worker handler 不写覆盖；协调任务/执行行的取消都以 `cancelled` 表达。
-- 跨节点密钥交换（P4 未完成）：远端 peer 认证采用管理员配置的固定信任域凭据
-  （计划 §5.1 "登记密钥/认证方法"），没有配置的节点一律 Fail Closed。
+**相邻边界**：递归目录与缓存见 P6；发行、设备兼容与生产恢复见 P7 的实际验证记录，
+不能由本文件的接口存在性推导真实 GPU、发行或生产验收通过。
+
+- 正式受理与 `federation_execute` / `federation_plan` 持久任务在同一事务内写入，
+  由 worker 领取执行。`FEDERATION_EXECUTION_INLINE=true` 仅用于明确选定的单进程验证；
+  队列语义见 `P5-QUEUE-VALIDATION-v3.md`。
+- 取消是持久终态；worker 的 generation fencing 与条件写入拒绝迟到结果。
+- Peer 只采用已批准节点的单次受众限定凭证，旧共享口令配置被拒绝；见 §5。
 
 ## 1. 共享内核（`python/ddp_core/ddp_core/application/`）
 
@@ -199,13 +194,14 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
 |---|---|---|
 | POST | `/api/v1/task-intents` | 持久任务需求 + 已批准的探索许可；返回 root_task_id |
 | POST | `/api/v1/task-plans` | 按 scope 清单与探索许可做 Probe、生成 TaskPlan |
+| GET | `/api/v1/task-plans/{root_task_id}` | 只读取得本人最新计划修订；不触发 Probe、重新规划或外发 |
 | POST | `/api/v1/task-plans/{root_task_id}/approve` | 批准计划修订 + 执行许可 |
 | GET | `/api/v1/tasks` | 调用者**本人**的任务列表（创建时间倒序、键集游标，坏游标 400 `invalid_cursor`）；只带需求摘要与状态轴，结果按 id 读。管理员也只列自己的 |
 | POST | `/api/v1/tasks` | 受理已批准计划（幂等键）并排入持久队列：202 新受理 / 200 重放，执行由 worker 推进；已取消任务 409 `task_cancelled` |
 | GET | `/api/v1/tasks/{root_task_id}` | 权威状态、结果、覆盖引用、消耗 |
 | GET | `/api/v1/tasks/{root_task_id}/coverage` | `ddp-scope-coverage/1#CoverageLedger` |
 | GET | `/api/v1/tasks/{root_task_id}/events` | 带序号的可恢复事件 |
-| POST | `/api/v1/tasks/{root_task_id}/resume` | 重判权后补做未完成目标；已取消任务 409 `task_cancelled`（终态不许复活） |
+| POST | `/api/v1/tasks/{root_task_id}/resume` | 重判权、对账未知受理、补做未完成目标；fast 还可暂存下一批并要求重新批准；已取消任务 409 `task_cancelled` |
 | POST | `/api/v1/tasks/{root_task_id}/cancel` | 显式、幂等取消；`cancelled` 是终态，迟到写入一律被状态守卫拒绝 |
 
 - **探索许可门**：没有有效 `ExplorationConsent`（或 `egress_mode=local_only`）时，
@@ -215,15 +211,18 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
 - **执行许可门**：`/tasks` 必须校验 `ExecutionConsent.plan_digest` 与提交的 plan
   修订一致、接收方集合覆盖所有数据边（含 relay），否则 `egress_denied`。
 - **fast**：按 `routing.candidates` 取有界候选，统一融合，结果
-  `retrieval_completeness="partial"`，响应显式列出未检索目标。
+  `retrieval_completeness="partial"`，响应显式列出未检索目标。显式续查从持久候选图
+  选择尚未批准的下一目标，即使上一轮有命中也不把它当作问题已完整回答的证明。
+  新修订有新的 digest 与步骤 ID，清除旧执行许可，先返回 `planning_state=ready`；
+  只读对账或加载计划均不批准或执行它。批准后再次显式 resume 才可执行。
+  旧交付保持不可变，新修订使用新的交付 ID；固定文档任务不会自动扩展资料范围。
 - **exhaustive_scope**：以 `ScopeManifest.expanded_members` 为分母，逐目标 Probe；
   失败的记 `unreachable/failed` 并保留在分母；全部成功且 enumeration sealed 才
   允许 `complete`。
-- **answer 步骤（本切片：协调者本地生成）**：规划时按能力清单生产者
-  （`capabilities.collect_capability_profiles`）判定本层 `rag.answer.cited` 是否
-  `ready`；就绪才在计划里保留一个 `executor_node_id` 为协调者的 `answer` 步
-  （`depends_on` 为全部 retrieve 步，`fixed_inputs` 含 query），根预算给固定的
-  生成 token 额度。执行时用融合证据的编号上下文调用 OpenAI 兼容 chat 上游
+- **answer 步骤**：规划时按能力清单生产者
+  （`capabilities.collect_capability_profiles`）判断 `rag.answer.cited` 的实际就绪状态。
+  可以使用协调者本地模型，或选择已探测、可接单的生成节点；全部 evidence 数据边及
+  answer 返回边必须纳入执行许可。执行时用融合证据的编号上下文调用 OpenAI 兼容上游
   （`upstream.chat_request`），并以 `ddp_core.agent.assertions_from_text` 做结构
   校验：无断言、有断言无支撑、或引用不在本次融合证据集合内，一律拒绝
   （`answer=null`、`validation_state=failed`、`unsupported_generation`），
@@ -234,14 +233,29 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
   `upstream_error`、`no_model_output`、`budget_exceeded` 等）并保留证据，
   **不把检索任务标失败**。远端执行者的证据回传仍走 `routing.plan_steps` 生成的
   `evidence_excerpts` 数据边，由协调者消费。
-- **仍然待做**：把整项答案委托给已接单的生成节点（admission
-  `operation=answer`，把证据/子图经类型化数据边外发给远端生成者）。本切片只
-  实现协调者本地生成，`plan_steps` 因远端 `can_generate` 生成的 answer 步在
-  规划时被显式丢弃。任何节点都无生成能力时，仍只返回证据与
-  `evidence_sufficiency`，**不伪造答案**。
+- **远端生成**：执行者正式接单后才生成；委托返回的证据绑定必须是实际传入证据的子集。
+  没有模型、授权数据边不完整、输入摘要不匹配或结构校验失败均明确拒绝，不能用空答案
+  冒充成功，也不能用模型输出新建原始证据。
+- **Wiki**：使用同一固定原始证据集合规划与生成版本化 Wiki，可委托 `wiki_pages` 给
+  仅有生成能力的节点。计划同时记录 evidence 外发与 wiki_draft 返回边；中心保留不可变
+  修订、人工段落、关系和依赖。`semantic_review=needs_review` 不表示已完成人工支持度评审。
+  桌面用固定的 `wiki.list/get/revisions` 只读查询打开交付中的 Wiki 修订；外源引用保持
+  原始节点身份，不改写成入口节点的裸证据 ID，也不从模型文字构造外部请求。
 - **交付**：结果默认 `retention=temporary`，`delivery_state` 为 `not_requested`
   （留在中心）或 `pending`（等待客户端 `POST /api/v1/deliveries/{id}/ack`）。
   TTL 到期未确认 → `expired`，不得显示"已保存本地"。
+
+### 根预算与续查持久性（0037）
+
+`federation_root_ledgers` 每个 root 一行，固定调用者预算与服务端上限的交集、deadline，
+并保存 requests / bytes / generation_tokens / hops / discovery / probes / egress_bytes。
+发现分页、健康探测、Probe、执行请求、轮询与证据读取都走同一账本；缓存命中本身不
+伪装成一次网络调用。出站前独立事务扣账，业务事务回滚、进程退出、重新规划和 resume
+不退还或重置已扣额度。BigInteger 计数与条件 UPDATE 处理大字节量及并发争抢。
+
+生成 token 是获准输出上限的预占，不宣称是模型实际 usage；bytes 是受限应用层载荷，
+不宣称涵盖 TCP/TLS 开销。读取状态只合并持久消耗，不能借读取动作补发写请求。
+根账本故意不对正在被业务事务锁住的 request 行设置外键，避免独立扣账等待父行锁。
 
 ## 4. 持久化（corpus alembic 0027）
 
@@ -274,20 +288,22 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
 
 ## 5. Peer 目录与凭据（Fail Closed）
 
-`settings.federation_peers`：JSON 对象
-`{node_id: {"endpoint": "https://…", "service_token": "…", "peer_token": "…"}}`，
-由管理员按节点接入流程登记（计划 §5.1）。`service_token` 是对端要求的服务凭据
-（`Authorization`），`peer_token` 是对端 `FEDERATION_PEER_TOKEN` 接受的同伴凭据
-（`X-DDP-Peer-Token`）。约束：
+`settings.federation_peers` 只保存 `{node_id: {"endpoint": "https://…"}}`，
+不保存对端 service_token 或 peer_token。地址登记只决定“往哪发”；控制面的已批准
+成员与公钥记录决定能否签发/接受凭证，见
+`packages/contracts/ddp/node-credential-format.md`。
+
+- 每次物理请求由本节点控制面签发 Ed25519 凭证，绑定 audience、最终 actor、操作、
+  范围和有效期；入站验签、校验本机受众与操作，并用 jti 防重放。
+- 有效期 `FEDERATION_CREDENTIAL_TTL_SECONDS` 为 1..120 秒；已批准公钥缓存
+  `FEDERATION_PEER_KEY_CACHE_SECONDS` 为 0..60 秒，也界定撤销的新请求生效延迟。
+  未知、pending、revoked 不缓存为可用成员。
+- 旧 `FEDERATION_PEER_AUTH` / `FEDERATION_PEER_TOKEN` 或 peer 目录里的口令字段
+  均为配置错误，没有回退到共享密钥的认证档位。
 - endpoint 必须是 HTTPS、无 userinfo/query/fragment；HTTP 只允许显式的
-  `federation_allow_loopback` 测试开关配合 `127.0.0.1/[::1]`。
-- token 绝不回显、绝不入日志、绝不进错误消息；比较用 `hmac.compare_digest`。
-- 未登记节点：`unreachable`（覆盖账本如实记缺口），不发请求；请求携带目标
-  `X-DDP-Target-Node`，接收方校验 token 后只服务自己的数据。
-- 出站 HTTP 必须 `trust_env=False`、`follow_redirects=False`（仓库铁律 8）。
-- **已知局限**：一个同伴凭据由所有已登记同伴共享（每个节点的
-  `FEDERATION_PEER_TOKEN` 是单值）。按同伴颁发限定 audience/操作/有效期的委托凭证
-  属于 P4 未完成的密钥交换，不在本切片内谎称已完成。
+  `federation_allow_loopback` 测试开关配合字面 `127.0.0.1/[::1]`。
+- 未登记节点不发请求；远端 actor 映射为受限本地 peer 主体，再由来源节点 ACL 判权。
+- 凭证不回显、不入日志；出站 HTTP 必须 `trust_env=False`、`follow_redirects=False`。
 
 ## 6. 文件归属（并行避免冲突）
 

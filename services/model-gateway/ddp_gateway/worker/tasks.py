@@ -107,8 +107,15 @@ async def poll_and_archive(ctx: dict, task_id: str) -> None:
 
     try:
         result = await client.fetch_result(endpoint, native_id)
+    except httpx.HTTPStatusError as exc:
+        # 不带 URL：进程内引擎的 native_id 就是 control 的稳定文件 URL，路径里的 token
+        # 是下载原件的凭证，而这条错误原样落进解析任务、展示给用户（2026-09-24 E 实测：
+        # 回源时 corpus 重启，错误里带出了完整的 /files/{token}）。
+        await _finish(ctx, task_id, task, "failed",
+                      f"取文件或解析结果失败：HTTP {exc.response.status_code}")
+        return
     except (RuntimeError, MineruTaskNotFound, httpx.HTTPError) as exc:
-        await _finish(ctx, task_id, task, "failed", str(exc))
+        await _finish(ctx, task_id, task, "failed", str(exc) or type(exc).__name__)
         return
     if result is None:  # completed 但结果尚未落地：给 mineru 一次喘息后重取
         await asyncio.sleep(settings.poll_initial_delay)

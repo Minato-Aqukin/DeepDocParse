@@ -1,12 +1,23 @@
-# DeepDocParse Electron host spike
+# DeepDocParse desktop host
 
-This host loads the existing Vue workbench. It does not add a second business UI.
-`HOST-CONTRACT.md` and `bridge.d.ts` define the narrow preload/main boundary.
-The shared client runtime owns SQLite projections, drafts and receipts in the main
-process. The Vue workbench can select a local workspace, import PDF/bundles, search,
-open original evidence and export verified bundles without receiving a token.
-Remote pairing and capability-gated read queries are available through the typed
-bridge; remote mutations and file transfers still require approved-plan integration.
+The host loads the Web AppShell (`apps/web`) from `ddp://app`; there is no second
+business UI. `HOST-CONTRACT.md` and `bridge.d.ts` define the preload/main boundary,
+and `docs/refactor/DESKTOP-APPSHELL-PLAN.md` the product shape.
+
+One **data source** is current at a time: an owned local workspace (the
+`ddp_local` runtime, which serves the center content API subset with the same paths
+and shapes — `packages/contracts/ddp/local-content-subset.md`) or a connected center.
+The page talks to `ddp://app/api/**`; the host forwards it to the current source
+with a host-held credential (local process token or center JWT), so the renderer
+never holds a token or a presigned object URL (center object URLs are rewritten to
+`ddp://app/_object/<id>`). A center is a **read-only mirror**: requests other than GET/HEAD are
+refused in the host with `approved_plan_required` and no network I/O; writes go
+through a local federated-task plan approved in a native dialog. Switching sources
+reloads the page.
+
+Unpackaged builds accept `http://127.0.0.1` / `http://[::1]` center endpoints for
+the local stack (`loopbackCenters`); packaged builds require https. The endpoint
+must be the center's public base URL — the one its node proof signs.
 
 ## Build and run
 

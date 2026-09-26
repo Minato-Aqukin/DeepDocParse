@@ -3,11 +3,15 @@ import { ElMessage } from 'element-plus'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { conversationsApi } from '@/api'
+import type { ResourceContext } from '@/api/resource-context'
 import StatusTag from '@/components/common/StatusTag.vue'
 import type { EvidenceDetail } from '@/types/api'
 import { fetchAuthedImage } from '@/utils/markdown'
+import { approvedPlanLabel, onLocalSource, onReadOnlySource } from '@/platform/desktop'
 
-const props = withDefaults(defineProps<{ evidenceId: string; closeLabel?: string }>(), {
+const props = withDefaults(defineProps<{
+  evidenceId: string; context?: ResourceContext; closeLabel?: string
+}>(), {
   closeLabel: '返回解析结果',
 })
 defineEmits<{ (e: 'close'): void }>()
@@ -19,6 +23,7 @@ const loading = ref(false)
 const reviewing = ref(false)
 const errorText = ref('')
 let alive = true
+let loadGeneration = 0
 
 const reviewMeta = computed(() => ({
   unreviewed: { label: '待人工复核', type: 'info' as const },
@@ -27,33 +32,54 @@ const reviewMeta = computed(() => ({
   questioned: { label: '人工标疑', type: 'warning' as const },
 })[detail.value?.review_state ?? 'unreviewed'])
 
+const sourceLink = computed(() => {
+  const source = detail.value
+  if (!source) return undefined
+  return {
+    path: `/documents/${source.document.id}`,
+    query: {
+      resource_id: source.resource_id ?? undefined,
+      version_id: source.source_version_id ?? undefined,
+      job: source.parse_job_id,
+      page: String(source.page_idx + 1),
+      chunk: source.chunk_id ?? undefined,
+    },
+  }
+})
+
 function revokeCrop() {
   if (cropObjectUrl.value) URL.revokeObjectURL(cropObjectUrl.value)
   cropObjectUrl.value = ''
 }
 
 async function load() {
+  const mine = ++loadGeneration
   loading.value = true
   errorText.value = ''
   revokeCrop()
+  detail.value = undefined
   try {
-    detail.value = (await conversationsApi.evidence(props.evidenceId)).data
-    if (detail.value.crop_url) {
-      const objectUrl = await fetchAuthedImage(detail.value.crop_url)
+    const fetched = (await conversationsApi.evidence(props.evidenceId, props.context)).data
+    if (!alive || mine !== loadGeneration) return
+    detail.value = fetched
+    if (fetched.crop_url) {
+      const objectUrl = await fetchAuthedImage(fetched.crop_url, props.context)
       if (!objectUrl) return
-      if (!alive) URL.revokeObjectURL(objectUrl)
+      if (!alive || mine !== loadGeneration) URL.revokeObjectURL(objectUrl)
       else cropObjectUrl.value = objectUrl
     }
   } catch (error) {
+    if (!alive || mine !== loadGeneration) return
     detail.value = undefined
     errorText.value = `证据加载失败：${String(error)}`
   } finally {
-    loading.value = false
+    if (alive && mine === loadGeneration) loading.value = false
   }
 }
 
 async function review(verdict: 'pass' | 'reject' | 'question') {
-  if (!detail.value || reviewing.value) return
+  // 核对是 POST：桌面中心只读，宿主会拒绝；表单已禁用，这里再挡一次。
+  if (!detail.value || reviewing.value || onReadOnlySource.value) return
   reviewing.value = true
   const reasonCode = {
     pass: 'source_checked', reject: 'evidence_incorrect', question: 'needs_follow_up',
@@ -61,7 +87,7 @@ async function review(verdict: 'pass' | 'reject' | 'question') {
   try {
     await conversationsApi.verifyEvidence(detail.value.id, {
       verdict, reason_code: reasonCode, reason_text: reasonText.value.trim() || undefined,
-    })
+    }, props.context)
     reasonText.value = ''
     await load()
     ElMessage.success(verdict === 'pass' ? '已标记通过' : verdict === 'reject' ? '已驳回' : '已标记存疑')
@@ -72,9 +98,11 @@ async function review(verdict: 'pass' | 'reject' | 'question') {
   }
 }
 
-watch(() => props.evidenceId, load, { immediate: true })
+watch(() => [props.evidenceId, props.context?.resource_id, props.context?.version_id],
+  load, { immediate: true })
 onBeforeUnmount(() => {
   alive = false
+  loadGeneration++
   revokeCrop()
 })
 </script>
@@ -94,10 +122,15 @@ onBeforeUnmount(() => {
     <template v-if="detail">
       <nav class="layers" aria-label="证据定位层级">
         <span><b>文档</b>{{ detail.document.filename }}</span>
-        <span><b>页</b>第 {{ detail.page_idx + 1 }} 页</span>
+        <span title="PDF 物理页序，从 1 开始；不是印刷页码"><b>PDF 页</b>第 {{ detail.page_idx + 1 }} 页</span>
         <span><b>块</b><code>#{{ detail.seq }}</code></span>
         <span><b>原子</b>{{ detail.kind }} · {{ detail.source_type === 'generated' ? '生成理解' : '原文' }}</span>
       </nav>
+      <router-link v-if="sourceLink" :to="sourceLink">打开固定版本原文</router-link>
+      <p v-if="!detail.chunk_id" class="locator-note" role="note">
+        这条证据不在当前索引里（历史出处或索引已按新规则重建）：内容与坐标按它自己的固定解析版本保留，
+        当前检索不会再命中它，也不会被接到新的分块上。
+      </p>
 
       <section class="source-block">
         <div class="section-title">
@@ -117,21 +150,25 @@ onBeforeUnmount(() => {
         </div>
         <div class="crop-scroll">
           <img v-if="cropObjectUrl" :src="cropObjectUrl" alt="证据原子 1:1 裁图" />
-          <el-empty v-else description="没有可用裁图，左栏仍保留整页 bbox" />
+          <el-empty v-else-if="!detail.bbox"
+                    :description="`这条证据没有区域坐标（bbox 缺失），只能定位到 PDF 第 ${detail.page_idx + 1} 页，不能当作区域精确的出处`" />
+          <el-empty v-else description="没有可用裁图；可打开固定版本原文，按上面的 bbox 在该页定位" />
         </div>
       </section>
 
-      <section class="review">
+      <!-- 本机工作区不记录人工核对（local-content-subset：verification 不支持），不给一个点了必失败的表单。 -->
+      <section v-if="!onLocalSource" class="review">
         <div class="section-title"><span>人工核对</span><span>只做标注，不修改内容</span></div>
         <el-input
           v-model="reasonText" type="textarea" :rows="2"
           placeholder="可选：记录通过 / 驳回 / 标疑的理由"
         />
         <div class="review-actions">
-          <el-button :loading="reviewing" @click="review('pass')">通过</el-button>
-          <el-button :loading="reviewing" @click="review('question')">标疑</el-button>
-          <el-button type="danger" plain :loading="reviewing" @click="review('reject')">驳回</el-button>
+          <el-button :loading="reviewing" :disabled="onReadOnlySource" @click="review('pass')">通过</el-button>
+          <el-button :loading="reviewing" :disabled="onReadOnlySource" @click="review('question')">标疑</el-button>
+          <el-button type="danger" plain :loading="reviewing" :disabled="onReadOnlySource" @click="review('reject')">驳回</el-button>
         </div>
+        <p v-if="onReadOnlySource" class="readonly-hint" role="note">{{ approvedPlanLabel() }}</p>
       </section>
 
       <section v-if="detail.verifications.length" class="history">
@@ -161,12 +198,14 @@ h3 { margin: 0; font-size: 18px; font-weight: 600; }
 .source-block, .crop-section, .review, .history { display: grid; gap: 10px; }
 .source-block p { margin: 0; white-space: pre-wrap; line-height: 1.7; }
 .derived { border-left: 2px solid var(--ddp-cite); padding-left: 10px; color: var(--ddp-ink-2); }
+.locator-note { margin: 0; border-left: 2px solid var(--ddp-warn); padding-left: 10px; color: var(--ddp-ink-2); font-size: 13px; }
 code { font-family: var(--ddp-font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .crop-scroll { overflow: auto; min-height: 140px; max-height: 360px; border: 1px solid var(--ddp-line); background: var(--ddp-panel); }
 /* 1 CSS px 对应图片 1 原始像素；绝不 max-width:100% 或 object-fit 缩放。 */
 .crop-scroll img { display: block; width: auto; height: auto; max-width: none; }
 .review-actions { justify-content: flex-end; }
 .review-actions :deep(.el-button) { min-height: 44px; }
+.readonly-hint { color: var(--ddp-ink-3); font-size: 13px; margin: 6px 0 0; }
 .history-row { padding-block: 8px; border-top: 1px solid var(--ddp-line); font-size: 13px; }
 .history-row span:last-child { color: var(--ddp-ink-2); }
 @media (max-width: 900px) {

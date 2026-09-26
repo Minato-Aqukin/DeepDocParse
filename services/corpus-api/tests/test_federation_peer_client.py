@@ -3,10 +3,9 @@
 全部出站行为都由注入的 `httpx.MockTransport` 覆盖 —— 不需要真网络，也不会
 因为本机有代理而变绿（`trust_env=False` 由构造参数钉着）。
 
-默认档位是 **node_credential**：每次出站现向本节点控制面要一张只覆盖这一次
-请求的凭证，请求里**没有**对端 SERVICE_TOKEN、**没有**自报的 actor 头。
-文件末尾单独一节仍然覆盖 `shared_token_insecure`（开发夹具档位），因为那条路
-还在，而"还在但没人测"正是它悄悄回归的方式。
+唯一形态是 **node_credential**：每次出站现向本节点控制面要一张只覆盖这一次
+请求的凭证，请求里**没有**对端 SERVICE_TOKEN、**没有**自报的 actor 头、
+**没有**共享 peer 口令。旧共享字段只剩拒绝用例（配置错误即失败）。
 """
 import json
 
@@ -39,8 +38,6 @@ from node_credentials_fixture import (
 NODE = PEER_NODE_ID                       # 出站的对端（audience）
 ABSENT = "node-" + "d" * 48
 ENDPOINT = "https://peer.example"
-SERVICE_TOKEN = "peer-service-secret"
-PEER_TOKEN = "peer-trust-secret"
 LOCAL_NODE = "node-" + "a" * 48           # 本节点（凭证的 issuer）
 ROOT_TASK = "root-1"
 
@@ -50,14 +47,8 @@ DELEGATION = Delegation(root_task_id=ROOT_TASK, task_spec_digest="sha256:" + "1"
 
 
 def peer_entry(**over) -> str:
-    """node_credential 档位的登记：只有 endpoint。"""
+    """peer 登记：只有 endpoint，没有任何口令字段。"""
     value = {"endpoint": ENDPOINT}
-    value.update(over)
-    return json.dumps({NODE: value})
-
-
-def shared_entry(**over) -> str:
-    value = {"endpoint": ENDPOINT, "service_token": SERVICE_TOKEN, "peer_token": PEER_TOKEN}
     value.update(over)
     return json.dumps({NODE: value})
 
@@ -66,17 +57,10 @@ def directory(transport, *, peers: str | None = None, actor: Actor | None = None
               signer=None, delegation: Delegation | None = DELEGATION,
               **over) -> PeerDirectory:
     return PeerDirectory(
-        parse_peers(peers if peers is not None else peer_entry(), shared_token=False),
-        actor=actor or ACTOR_OBJECT, transport=transport, shared_token=False,
+        parse_peers(peers if peers is not None else peer_entry()),
+        actor=actor or ACTOR_OBJECT, transport=transport,
         signer=signer or LocalControlSigner(issuer_node_id=LOCAL_NODE),
         delegation=delegation, **over)
-
-
-def shared_directory(transport, *, peers: str | None = None,
-                     actor: Actor | None = None) -> PeerDirectory:
-    return PeerDirectory(
-        parse_peers(peers if peers is not None else shared_entry(), shared_token=True),
-        actor=actor or ACTOR_OBJECT, transport=transport, shared_token=True)
 
 
 def decode(token: str) -> dict:
@@ -110,27 +94,28 @@ def test_endpoint_validation_is_fail_closed():
 
 
 def test_parse_peers_rejects_bad_registrations_loudly():
-    assert parse_peers("", shared_token=False) == {}
+    assert parse_peers("") == {}
     for raw in ("not json", "[]", json.dumps({"BAD NODE": {"endpoint": ENDPOINT}}),
                 peer_entry(extra="field"), peer_entry(endpoint="http://insecure.example")):
         with pytest.raises(PeerUnavailable):
-            parse_peers(raw, shared_token=False)
-    parsed = parse_peers(peer_entry(), shared_token=False)
+            parse_peers(raw)
+    parsed = parse_peers(peer_entry())
     assert parsed[NODE] == PeerConfig(node_id=NODE, endpoint=ENDPOINT)
 
 
-def test_node_credential_registration_refuses_leftover_shared_secrets():
+def test_peer_registration_refuses_any_shared_secret_fields():
     """**不用的秘密不许留在配置里** —— 留着迟早被复制到别处。
 
-    反过来，共享口令档位缺了任何一个口令也是配置错误，不是"那就不带"。
+    旧共享字段（service_token / peer_token / 任何未知字段）一律是配置错误，
+    不是"忽略多余字段"；没有共享档位可回退。
     """
-    with pytest.raises(PeerUnavailable) as info:
-        parse_peers(shared_entry(), shared_token=False)
-    assert "service_token" in str(info.value) and "peer_token" in str(info.value)
-    for raw in (shared_entry(service_token=""), shared_entry(peer_token=""),
-                peer_entry()):
-        with pytest.raises(PeerUnavailable):
-            parse_peers(raw, shared_token=True)
+    for raw in (peer_entry(service_token="s", peer_token="p"),
+                peer_entry(service_token="s"),
+                peer_entry(peer_token="p"),
+                peer_entry(extra="field")):
+        with pytest.raises(PeerUnavailable) as info:
+            parse_peers(raw)
+        assert "endpoint" in str(info.value)
 
 
 def test_unknown_node_is_never_contacted():
@@ -316,10 +301,9 @@ def test_credentials_never_leak_into_errors_or_followed_redirects():
         message = str(info.value)
         # "credential" 是合法消息用词（"cannot request a node credential" ——
         # admission_create 缺 step_id，签发校验在出站前就拦下），禁的是头全名与
-        # 秘密值：头名、共享口令、私钥派生值一个字都不许进错误消息。
+        # 秘密值：节点凭证头名、私钥派生值一个字都不许进错误消息。
         assert nc.HEADER.lower() not in message.lower()
-        for secret in (SERVICE_TOKEN, PEER_TOKEN,
-                       _private_hex(LOCAL_KEY), _private_hex(PEER_KEY)):
+        for secret in (_private_hex(LOCAL_KEY), _private_hex(PEER_KEY)):
             assert secret not in message, "秘密值泄露进错误消息"
         assert info.value.status is None and info.value.node_id == NODE
         assert info.value.code == "credential_invalid"
@@ -408,13 +392,14 @@ async def test_response_size_cap_and_method_paths():
     assert calls[0][3]["constraints"]["task_spec_digest"] == DELEGATION.task_spec_digest
 
 
-# -------------------------------------------------- 共享口令档位（仅开发夹具）
+# -------------------------------------------------- 旧共享形态只剩拒绝
 
-async def test_shared_token_mode_still_forwards_the_old_headers():
-    """旧形态原样保留，但**只在显式配置下可达**（启动检查在 config 里另测）。
+async def test_legacy_shared_headers_are_never_sent():
+    """出站永远只带单次节点凭证：旧的共享头一个都不发。
 
-    它一直是"任何同伴都能冒充任何同伴"的那条路，留着是为了没有控制面的开发
-    夹具；这条用例钉住它仍然只在 `shared_token=True` 时发生。
+    这是干净切换的正向钉子 —— 以前这里断言"共享档位会转发旧头"，现在旧头
+    在任何构造路径下都不可达（PeerConfig 已没有口令字段，parse_peers 拒绝
+    旧字段，PeerClient 没有 shared 分支）。
     """
     seen = {}
 
@@ -422,30 +407,25 @@ async def test_shared_token_mode_still_forwards_the_old_headers():
         seen.update(dict(request.headers))
         return httpx.Response(201, json={"ok": True})
 
-    peers = shared_directory(httpx.MockTransport(handler))
+    peers = directory(httpx.MockTransport(handler))
     await peers.client(NODE).probe({"schema": "x"}, idempotency_key="probe-key")
     await peers.aclose()
-    assert seen["authorization"] == f"Bearer {SERVICE_TOKEN}"
-    assert seen["x-ddp-peer-token"] == PEER_TOKEN
-    assert seen["x-ddp-organization"] == ORG and seen["x-ddp-actor"] == ACTOR
-    assert seen["x-ddp-role"] == "contributor"
-    assert nc.HEADER.lower() not in seen
+    for gone in ("authorization", "x-ddp-peer-token", "x-ddp-organization",
+                 "x-ddp-actor", "x-ddp-actor-kind", "x-ddp-role",
+                 "x-ddp-user", "x-ddp-api-key"):
+        assert gone not in seen, gone
+    assert nc.HEADER.lower() in seen
 
 
-async def test_shared_token_mode_reads_the_catalog_over_the_internal_route():
-    """共享口令档位持有对端 SERVICE_TOKEN，所以走 `/internal/…`；
-    node_credential 档位没有它，走节点对节点端点。两条路都要被钉住。"""
+async def test_catalog_read_always_uses_the_node_to_node_route():
+    """目录读只走节点对节点端点：`/internal/…` 是本节点内部生产者路径。"""
     paths = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         paths.append(request.url.path)
         return httpx.Response(200, json={"collections": [], "complete": True})
 
-    shared = shared_directory(httpx.MockTransport(handler))
-    await shared.client(NODE).published_collections()
-    await shared.aclose()
-    node = directory(httpx.MockTransport(handler))
-    await node.client(NODE).published_collections()
-    await node.aclose()
-    assert paths == ["/internal/federation/published-collections",
-                     "/api/v1/federation/published-collections"]
+    peers = directory(httpx.MockTransport(handler))
+    await peers.client(NODE).published_collections()
+    await peers.aclose()
+    assert paths == ["/api/v1/federation/published-collections"]

@@ -42,7 +42,8 @@ from pathlib import Path
 
 import httpx
 
-from ddp_gateway.services import borndigital, crops, extraction, layout
+from ddp_core import crops
+from ddp_gateway.services import borndigital, extraction, layout
 
 # **直接从 extraction 里取，不复制一份。**
 # 标定的全部意义在于"复现线上那条路径"：prompt 换个说法、下限差两个字，

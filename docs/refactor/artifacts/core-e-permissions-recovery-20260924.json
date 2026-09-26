@@ -1,0 +1,1435 @@
+{
+ "phase": "E — permissions, recovery, unified browser acceptance",
+ "date": "2026-09-24",
+ "stack": {
+  "where": ".dev-logs/b-stack-20260924 (local only): control-api (Go, rebuilt from this tree), corpus-api, corpus-worker, model-gateway + worker, PG/Redis/MinIO containers ddp-b-*, Vite web 45173",
+  "models": {
+   "parse": "borndigital (text-layer PDFs only)",
+   "embedding": "bge-m3 Q8_0 on llama.cpp CPU (-c 8192)",
+   "chat": "qwen3-1.7b Q8_0 on llama.cpp CPU (-c 16384, --reasoning-budget 0, text only)",
+   "vision": "none (COMPILE_VISION_ENABLED=false; answers stay verified=false)",
+   "rerank": "disabled (default); enabled only in the authorization-order probe"
+  },
+  "accounts": [
+   "b-admin (admin)",
+   "b-alice (contributor)",
+   "b-bob (contributor)"
+  ]
+ },
+ "gc_red_item": {
+  "finding": "The 8 test_bundles GC failures do not come from the uncommitted gc.py change: with HEAD gc.py the same 8 fail. The in-progress bundle import (paused scope) now enqueues an index task (active task protects the document: protection clause 8 in _protected) and creates a ParseJob that collides with rows the tests insert (UNIQUE parse_jobs.document_id, document_version). The gc.py diff itself only adds protections (remote-compute tmp inputs, live bundle replicas).",
+  "single_center_gc_on_the_real_stack": "All 4 documents tombstoned in B (resources deleted 04:18-04:23 UTC) were collected after the 1 h grace: object_key cleared, gc_pending_keys empty, and no bucket key among 4352 mentions their document/version/job ids (.dev-logs/e-20260924/gc_probe.py, gc_objects.py).",
+  "rejected_upload_originals": "Boundary, not fixed: upload-control-format.md already states 'Multipart/object garbage collection remains an operational follow-up'. Rejected/expired/failed upload sessions keep their bytes; control does not delete objects and corpus GC only sees Documents."
+ },
+ "api_key_upload_ownership": "Not reachable as described in A: /api/uploads is session-only (an sk- key gets 401 api_key_on_session_route). Key ingestion is /v1/parse, which stamps owner = the key's user; the user sees it under 'mine' and other users get 404 (roles probe).",
+ "roles_and_keys": {
+  "result": "32/32",
+  "checks": [
+   {
+    "name": "contributor bob can issue a parse-scoped key",
+    "ok": true,
+    "detail": {
+     "status": 201,
+     "code": null
+    }
+   },
+   {
+    "name": "admin downgrades bob to viewer",
+    "ok": true,
+    "detail": null
+   },
+   {
+    "name": "old JWT immediately carries the new role (re-read per request)",
+    "ok": true,
+    "detail": "viewer"
+   },
+   {
+    "name": "old JWT: viewer cannot create an upload (no storage allocated)",
+    "ok": true,
+    "detail": {
+     "status": 403,
+     "code": "insufficient_role"
+    }
+   },
+   {
+    "name": "old JWT: viewer cannot issue a parse-scoped key",
+    "ok": true,
+    "detail": {
+     "status": 403,
+     "code": "insufficient_role"
+    }
+   },
+   {
+    "name": "old JWT: viewer cannot build a Wiki (checked before any model call)",
+    "ok": true,
+    "detail": {
+     "status": 403,
+     "code": "insufficient_role"
+    }
+   },
+   {
+    "name": "old JWT: viewer cannot create a resource copy",
+    "ok": true,
+    "detail": {
+     "status": 403,
+     "code": "insufficient_role"
+    }
+   },
+   {
+    "name": "old JWT: viewer still reads own resources",
+    "ok": true,
+    "detail": 200
+   },
+   {
+    "name": "key issued before the downgrade cannot parse once its owner is a viewer",
+    "ok": true,
+    "detail": {
+     "status": 403,
+     "code": "insufficient_role"
+    }
+   },
+   {
+    "name": "set bob back to contributor",
+    "ok": true,
+    "detail": null
+   },
+   {
+    "name": "old JWT regains contributor capabilities after the upgrade",
+    "ok": true,
+    "detail": {
+     "status": 201,
+     "code": null
+    }
+   },
+   {
+    "name": "API key refused on session route GET /api/v1/resources",
+    "ok": true,
+    "detail": {
+     "status": 401,
+     "code": "api_key_on_session_route"
+    }
+   },
+   {
+    "name": "API key refused on session route POST /api/uploads",
+    "ok": true,
+    "detail": {
+     "status": 401,
+     "code": "api_key_on_session_route"
+    }
+   },
+   {
+    "name": "API key refused on session route GET /api/search",
+    "ok": true,
+    "detail": {
+     "status": 401,
+     "code": "api_key_on_session_route"
+    }
+   },
+   {
+    "name": "API key parse accepted for its contributor owner",
+    "ok": true,
+    "detail": {
+     "status": 202,
+     "code": null,
+     "body": "{\"task_id\":\"a95400f7be0a4c0a9043dbfcda79caec\"}"
+    }
+   },
+   {
+    "name": "key-submitted parse lands in the key owner's own resources (owner = user, not key id)",
+    "ok": true,
+    "detail": {
+     "task_id": "a95400f7be0a4c0a9043dbfcda79caec",
+     "resource": "9ff7f6d330904976802e949d9891fc75",
+     "owner_id": "4e63606933c1b17259efeb1e9230d797"
+    }
+   },
+   {
+    "name": "another user cannot read the key owner's private resource",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "resource_not_found"
+    }
+   },
+   {
+    "name": "revoked key is refused",
+    "ok": true,
+    "detail": {
+     "revoke": 204,
+     "status": 401,
+     "code": "api_key_revoked"
+    }
+   },
+   {
+    "name": "key owner deletes the probe resource from the session UI path",
+    "ok": true,
+    "detail": {
+     "status": 204,
+     "code": null
+    }
+   },
+   {
+    "name": "admin removes bob",
+    "ok": true,
+    "detail": {
+     "status": 204,
+     "code": null
+    }
+   },
+   {
+    "name": "removed member's JWT refused on auth",
+    "ok": true,
+    "detail": {
+     "status": 401,
+     "code": "membership_revoked"
+    }
+   },
+   {
+    "name": "removed member's JWT refused on v1",
+    "ok": true,
+    "detail": {
+     "status": 401,
+     "code": "membership_revoked"
+    }
+   },
+   {
+    "name": "removed member's JWT refused on v1…",
+    "ok": true,
+    "detail": {
+     "status": 401,
+     "code": "membership_revoked"
+    }
+   },
+   {
+    "name": "removed member cannot log in to the organization",
+    "ok": true,
+    "detail": {
+     "status": 401,
+     "code": "invalid_credentials"
+    }
+   },
+   {
+    "name": "admin re-adds bob as contributor",
+    "ok": true,
+    "detail": {
+     "status": 201,
+     "code": null
+    }
+   },
+   {
+    "name": "re-added bob reads his resource again",
+    "ok": true,
+    "detail": {
+     "status": 200,
+     "code": null
+    }
+   },
+   {
+    "name": "sole admin cannot demote themself",
+    "ok": true,
+    "detail": {
+     "status": 409,
+     "code": "last_admin"
+    }
+   },
+   {
+    "name": "sole admin cannot remove themself",
+    "ok": true,
+    "detail": {
+     "status": 409,
+     "code": "last_admin"
+    }
+   },
+   {
+    "name": "contributor alice cannot change roles",
+    "ok": true,
+    "detail": null
+   },
+   {
+    "name": "concurrent cross-demotion never leaves the organization without an admin",
+    "ok": true,
+    "detail": [
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     }
+    ]
+   },
+   {
+    "name": "concurrent cross-demotion: exactly one of the two demotions is refused each round",
+    "ok": true,
+    "detail": [
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     },
+     {
+      "admin_demotes_alice": 200,
+      "alice_demotes_admin": 409,
+      "admins_left": [
+       "b-admin"
+      ]
+     }
+    ]
+   },
+   {
+    "name": "roles restored",
+    "ok": true,
+    "detail": {
+     "b-admin": "admin",
+     "b-alice": "contributor",
+     "b-bob": "contributor"
+    }
+   }
+  ],
+  "concurrent_cross_demotion_rounds": [
+   {
+    "admin_demotes_alice": 200,
+    "alice_demotes_admin": 409,
+    "admins_left": [
+     "b-admin"
+    ]
+   },
+   {
+    "admin_demotes_alice": 200,
+    "alice_demotes_admin": 409,
+    "admins_left": [
+     "b-admin"
+    ]
+   },
+   {
+    "admin_demotes_alice": 200,
+    "alice_demotes_admin": 409,
+    "admins_left": [
+     "b-admin"
+    ]
+   },
+   {
+    "admin_demotes_alice": 200,
+    "alice_demotes_admin": 409,
+    "admins_left": [
+     "b-admin"
+    ]
+   },
+   {
+    "admin_demotes_alice": 200,
+    "alice_demotes_admin": 409,
+    "admins_left": [
+     "b-admin"
+    ]
+   },
+   {
+    "admin_demotes_alice": 200,
+    "alice_demotes_admin": 409,
+    "admins_left": [
+     "b-admin"
+    ]
+   },
+   {
+    "admin_demotes_alice": 200,
+    "alice_demotes_admin": 409,
+    "admins_left": [
+     "b-admin"
+    ]
+   },
+   {
+    "admin_demotes_alice": 200,
+    "alice_demotes_admin": 409,
+    "admins_left": [
+     "b-admin"
+    ]
+   }
+  ],
+  "observation_viewer_renames_own_resource": {
+   "status": 200,
+   "code": null
+  }
+ },
+ "access_matrix": {
+  "result": "46/46",
+  "note": "corpus-api ran behind .dev-logs/e-20260924/record_proxy.py with RERANK_ENABLED=true for this probe, so every embedding/rerank/chat request it sent is on file (proxy-log.jsonl, not copied here)",
+  "checks": [
+   {
+    "name": "P starts private",
+    "ok": true,
+    "detail": null
+   },
+   {
+    "name": "owner alice (private): every read path of P answers 200",
+    "ok": true,
+    "detail": {
+     "resource": 200,
+     "versions": 200,
+     "document": 200,
+     "doc_search": 200,
+     "evidence": 200,
+     "crop": 200,
+     "crop_revalidate": 304,
+     "download_url": 200,
+     "backlinks": 200
+    }
+   },
+   {
+    "name": "bob on alice's private P: every read path of P answers 404",
+    "ok": true,
+    "detail": {
+     "resource": 404,
+     "versions": 404,
+     "document": 404,
+     "doc_search": 404,
+     "evidence": 404,
+     "crop": 404,
+     "crop_revalidate": 404,
+     "download_url": 404,
+     "backlinks": 404
+    }
+   },
+   {
+    "name": "private P not in site_public",
+    "ok": true,
+    "detail": null
+   },
+   {
+    "name": "bob cannot open a conversation on private P",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "document_not_found"
+    }
+   },
+   {
+    "name": "bob's Wiki naming private P is refused",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "resource_not_found"
+    }
+   },
+   {
+    "name": "…and no embedding/rerank/chat request left the corpus for those refusals",
+    "ok": true,
+    "detail": []
+   },
+   {
+    "name": "bob cannot append a version to private P (refused before storage allocation)",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "resource_not_found"
+    }
+   },
+   {
+    "name": "precondition: for alice the top-1 hit of the probe query is her private ESP32 version",
+    "ok": true,
+    "detail": [
+     "esp32-datasheet.pdf"
+    ]
+   },
+   {
+    "name": "bob's limit=1 search is filled from his own readable documents (filter before limit)",
+    "ok": true,
+    "detail": [
+     [
+      "controller-manual.pdf",
+      "98e1b9e72ca24c2d8369bb3973ffaac9"
+     ]
+    ]
+   },
+   {
+    "name": "search sends only the query text to the embedding model",
+    "ok": true,
+    "detail": [
+     {
+      "input": [
+       "ESP32 chip reset"
+      ],
+      "model": "bge-m3"
+     }
+    ]
+   },
+   {
+    "name": "alice publishes P",
+    "ok": true,
+    "detail": {
+     "status": 200,
+     "code": null
+    }
+   },
+   {
+    "name": "published P listed in bob's site_public",
+    "ok": true,
+    "detail": null
+   },
+   {
+    "name": "bob on published P: every read path of P answers 200",
+    "ok": true,
+    "detail": {
+     "resource": 200,
+     "versions": 200,
+     "document": 200,
+     "doc_search": 200,
+     "evidence": 200,
+     "crop": 200,
+     "crop_revalidate": 304,
+     "download_url": 200,
+     "backlinks": 200
+    }
+   },
+   {
+    "name": "bob's presigned original URL serves the PDF",
+    "ok": true,
+    "detail": 206
+   },
+   {
+    "name": "published P appears in bob's cross-document search",
+    "ok": true,
+    "detail": [
+     "pico-datasheet.pdf"
+    ]
+   },
+   {
+    "name": "public read grants no write: bob rename on P",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "resource_not_found"
+    }
+   },
+   {
+    "name": "public read grants no write: bob withdraw on P",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "resource_not_found"
+    }
+   },
+   {
+    "name": "public read grants no write: bob delete on P",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "resource_not_found"
+    }
+   },
+   {
+    "name": "public read grants no write: bob reindex on P",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "resource_not_found"
+    }
+   },
+   {
+    "name": "public read grants no write: bob add version on P",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "resource_not_found"
+    }
+   },
+   {
+    "name": "public read grants no write: bob upload target on P",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "resource_not_found"
+    }
+   },
+   {
+    "name": "P unchanged after bob's write attempts",
+    "ok": true,
+    "detail": null
+   },
+   {
+    "name": "bob asks on published P",
+    "ok": true,
+    "detail": {
+     "status": 200,
+     "code": null,
+     "events": [
+      "assertions",
+      "citations",
+      "delta",
+      "done",
+      "meta"
+     ]
+    }
+   },
+   {
+    "name": "QA model input carries no evidence from alice's private ESP32",
+    "ok": true,
+    "detail": {
+     "chat_calls": 4
+    }
+   },
+   {
+    "name": "QA rerank input (if called) carries only P candidates",
+    "ok": true,
+    "detail": {
+     "rerank_calls": 1
+    }
+   },
+   {
+    "name": "bob builds a Wiki from published P",
+    "ok": true,
+    "detail": {
+     "status": 201,
+     "code": null
+    }
+   },
+   {
+    "name": "Wiki model input carries no evidence from alice's private ESP32",
+    "ok": true,
+    "detail": {
+     "chat_calls": 2
+    }
+   },
+   {
+    "name": "bob makes a metadata copy of published P",
+    "ok": true,
+    "detail": {
+     "status": 201,
+     "code": null
+    }
+   },
+   {
+    "name": "alice withdraws P",
+    "ok": true,
+    "detail": {
+     "status": 200,
+     "code": null
+    }
+   },
+   {
+    "name": "owner alice (withdrawn): every read path of P answers 200",
+    "ok": true,
+    "detail": {
+     "resource": 200,
+     "versions": 200,
+     "document": 200,
+     "doc_search": 200,
+     "evidence": 200,
+     "crop": 200,
+     "crop_revalidate": 304,
+     "download_url": 200,
+     "backlinks": 200
+    }
+   },
+   {
+    "name": "bob on withdrawn P: every read path of P answers 404",
+    "ok": true,
+    "detail": {
+     "resource": 404,
+     "versions": 404,
+     "document": 404,
+     "doc_search": 404,
+     "evidence": 404,
+     "crop": 404,
+     "crop_revalidate": 404,
+     "download_url": 404,
+     "backlinks": 404
+    }
+   },
+   {
+    "name": "withdrawn P gone from bob's site_public",
+    "ok": true,
+    "detail": null
+   },
+   {
+    "name": "withdrawn P gone from bob's cross-document search",
+    "ok": true,
+    "detail": []
+   },
+   {
+    "name": "every evidence that reached bob's answer (candidates + citations) is now 404 (24)",
+    "ok": true,
+    "detail": {
+     "01cb79ccc31c4518953809c0412cdf9a": 404,
+     "049d33c5d68c427eb08f9be2cd4e166d": 404,
+     "04fea1c0db4144b0a87801aec5d42f54": 404,
+     "0834beb5470c4b56a459088a474ee577": 404,
+     "14d681c6392942308b5a1b4d6d99db2d": 404,
+     "221a8f4d02ae4110980caf79af0b3418": 404,
+     "2a5df640eae44f4db911fcba10d52426": 404,
+     "313e535657a14d4cba1d2b2f50087de0": 404,
+     "40924dbd45c44975a798e20dedbdc224": 404,
+     "40937a68b9b94984a6a800c31cdfa033": 404,
+     "441af64df6cb47268a1155d434412268": 404,
+     "474e11f1bc0d4f75a79d4dfa96bfd0e4": 404,
+     "5594d737fde14533b6764596a16c25d7": 404,
+     "6c5860fecfa74bbf91bc4014a448b979": 404,
+     "7bd30f02e2a64cb2a47e54ed77b8b21b": 404,
+     "8653fb17253b4e45964c7dea9b15fc71": 404,
+     "9969c5bcbefa4c66b3ab314cfd499314": 404,
+     "a344d9dfb2c54a42821a8ceaf7ff9d4d": 404,
+     "b0f8f23250454da0a8d8560cc8191d4a": 404,
+     "b4bb7a9e4c3d45a8ae1938c66c185cb2": 404,
+     "bec438f372324015977f74f6bc3ae718": 404,
+     "e61a04d0774a419d8333a208f0b2636a": 404,
+     "e98334378bd145adab9992ca381e56f9": 404,
+     "ff539ad5d18a4df8b47689edbd01ff66": 404
+    }
+   },
+   {
+    "name": "bob's conversation history on withdrawn P is closed",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "document_not_found"
+    }
+   },
+   {
+    "name": "bob's follow-up on withdrawn P is refused",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "document_not_found"
+    }
+   },
+   {
+    "name": "bob's own Wiki derived from P is closed (current)",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "resource_not_found"
+    }
+   },
+   {
+    "name": "bob's own Wiki derived from P is closed (fixed revision)",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "resource_not_found"
+    }
+   },
+   {
+    "name": "bob cannot rebuild that Wiki on withdrawn P",
+    "ok": true,
+    "detail": {
+     "status": 404,
+     "code": "resource_not_found"
+    }
+   },
+   {
+    "name": "…and none of those refusals reached a model",
+    "ok": true,
+    "detail": []
+   },
+   {
+    "name": "bob's metadata copy does not keep withdrawn P's content readable",
+    "ok": true,
+    "detail": {
+     "resource": 404,
+     "document": 404,
+     "doc_search": 404,
+     "evidence": 404,
+     "download_url": 404,
+     "conversation": 404
+    }
+   },
+   {
+    "name": "alice republishes P",
+    "ok": true,
+    "detail": {
+     "status": 200,
+     "code": null
+    }
+   },
+   {
+    "name": "bob's Wiki is readable again (publication is re-evaluated on every read, nothing destroyed)",
+    "ok": true,
+    "detail": {
+     "status": 200,
+     "code": null
+    }
+   },
+   {
+    "name": "alice sets P back to private",
+    "ok": true,
+    "detail": {
+     "status": 200,
+     "code": null
+    }
+   },
+   {
+    "name": "bob still lists and can delete his closed copy",
+    "ok": true,
+    "detail": {
+     "listed": true,
+     "status": 204,
+     "code": null
+    }
+   }
+  ],
+  "presigned_url_after_withdrawal": {
+   "status": 206,
+   "expires_at": "2026-09-24T19:35:33.754556207+08:00"
+  }
+ },
+ "recovery": {
+  "R1_control_killed_mid_delivery": {
+   "what": "corpus-api stopped; upload verified, DocumentSubmitted retrying; SIGKILL control-api; restart control, then corpus",
+   "outcome": "event redelivered (attempts=4, delivered), exactly one processed_events row, one resource; ingest ready -> parse succeeded -> index ready",
+   "data": {
+    "user": "b-alice",
+    "user_id": "952489a8cf96dcbe04121c83ac560adc",
+    "upload_id": "333ff2b5fcc98ef35235b3a981fdba65",
+    "sha256": "d4588152960f97e261eac79ac1deaa7ca64c90263f3c2d69d9a0a8f71b09a54e",
+    "bytes": 4008,
+    "pages": 1,
+    "timelines": [
+     [
+      {
+       "t": 0.0,
+       "state": [
+        "ready",
+        "ready",
+        "succeeded",
+        "pending",
+        1
+       ]
+      },
+      {
+       "t": 39.4,
+       "state": [
+        "ready",
+        "ready",
+        "succeeded",
+        "indexing",
+        1
+       ]
+      },
+      {
+       "t": 40.5,
+       "state": [
+        "ready",
+        "ready",
+        "succeeded",
+        "ready",
+        1
+       ]
+      }
+     ]
+    ]
+   }
+  },
+  "R1b_worker_indexes_after_callback_fix": {
+   "outcome": "upload -> index ready in 5.4 s, index task claimed by the worker (before the fix: no task row, the API reconciler indexed ~40-60 s later)",
+   "data": {
+    "user": "b-alice",
+    "user_id": "952489a8cf96dcbe04121c83ac560adc",
+    "upload_id": "fe4855e65ee8defb6f0fef46d8ab42ed",
+    "sha256": "daaa973fb2e585f7e132d8f36dae97b43cc001658bd7e824a1abdeff2be7585f",
+    "bytes": 4117,
+    "pages": 1,
+    "timelines": [
+     [
+      {
+       "t": 0.2,
+       "state": [
+        "verifying",
+        null,
+        null,
+        null,
+        0
+       ]
+      },
+      {
+       "t": 1.8,
+       "state": [
+        "ready",
+        "pending",
+        null,
+        null,
+        0
+       ]
+      },
+      {
+       "t": 2.8,
+       "state": [
+        "ready",
+        "ready",
+        "pending",
+        "none",
+        1
+       ]
+      },
+      {
+       "t": 3.3,
+       "state": [
+        "ready",
+        "ready",
+        "succeeded",
+        "pending",
+        1
+       ]
+      },
+      {
+       "t": 4.4,
+       "state": [
+        "ready",
+        "ready",
+        "succeeded",
+        "indexing",
+        1
+       ]
+      },
+      {
+       "t": 5.4,
+       "state": [
+        "ready",
+        "ready",
+        "succeeded",
+        "ready",
+        1
+       ]
+      }
+     ]
+    ]
+   }
+  },
+  "R2_gateway_worker_down_then_corpus_down_during_source_fetch": {
+   "what": "gateway worker stopped at submit; corpus-api stopped; gateway worker started (its source download goes through control -> corpus file-access)",
+   "outcome": "explicit parse failure visible on the version (502 from the source URL); before the fix the error text carried the full /files/{token} URL. User 'reparse' with the same parameters reused the same job and reached ready; no automatic retry of source downloads (boundary)",
+   "data": {
+    "user": "b-bob",
+    "user_id": "4e63606933c1b17259efeb1e9230d797",
+    "upload_id": "88915b316df1f271fb1067591e828ad8",
+    "sha256": "94f236641ef30776a725826042469454cdb3c1168d23fa4de0df2c7f03b95121",
+    "bytes": 4046,
+    "pages": 1,
+    "timelines": [
+     [
+      {
+       "t": 0.2,
+       "state": [
+        "ready",
+        "ready",
+        "failed",
+        "none",
+        1
+       ]
+      }
+     ],
+     [
+      {
+       "t": 0.0,
+       "state": [
+        "ready",
+        "ready",
+        "succeeded",
+        "ready",
+        1
+       ]
+      }
+     ]
+    ]
+   }
+  },
+  "R3_worker_SIGKILL_mid_index_api_up": {
+   "outcome": "restarted worker re-claimed the task after the 300 s lease (task generation 2, attempts 2), document index generation 2 -> 3, ready with 540 chunks",
+   "data": {
+    "user": "b-bob",
+    "user_id": "4e63606933c1b17259efeb1e9230d797",
+    "upload_id": "6812713e4af387bcbfb51b6f1264c3e5",
+    "sha256": "369938928232a61dd9cbb2566c6583d21e76ad460436aad702adba08451ca571",
+    "bytes": 337044,
+    "pages": 90,
+    "signals": [
+     {
+      "signal": "KILL",
+      "pid": 434250,
+      "db_before": {
+       "id": "c67f5297e5c2492e8d93565029a8adaa",
+       "status": "succeeded",
+       "index_status": "indexing",
+       "index_generation": "2",
+       "index_lease_until": "2026-09-24 11:36:18.398857+00",
+       "index_error": "",
+       "chunks": "0",
+       "service_task_id": "3d46d31ab9bf4b05b0789d5fa2747251",
+       "tasks": [
+        {
+         "id": "d1af90a1a1884cdbbbe108b72b7f680b",
+         "status": "claimed",
+         "generation": "1",
+         "attempts": "1",
+         "claimed_by": "Minato:434250",
+         "lease_until": "2026-09-24 11:36:18.386361+00",
+         "error": ""
+        }
+       ]
+      }
+     }
+    ],
+    "db_waits": [
+     {
+      "reached": "ready",
+      "db": {
+       "id": "c67f5297e5c2492e8d93565029a8adaa",
+       "status": "succeeded",
+       "index_status": "ready",
+       "index_generation": "3",
+       "index_lease_until": "",
+       "index_error": "",
+       "chunks": "540",
+       "service_task_id": "3d46d31ab9bf4b05b0789d5fa2747251",
+       "tasks": [
+        {
+         "id": "d1af90a1a1884cdbbbe108b72b7f680b",
+         "status": "succeeded",
+         "generation": "2",
+         "attempts": "2",
+         "claimed_by": "Minato:436536",
+         "lease_until": "2026-09-24 11:42:18.432788+00",
+         "error": ""
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "R3b_worker_SIGKILL_mid_index_api_down": {
+   "outcome": "corpus-api (reconciler) stopped before the kill; the restarted worker alone took over after the lease and finished (ready, 540 chunks) — worker takeover does not depend on the API",
+   "data": {
+    "user": "b-bob",
+    "user_id": "4e63606933c1b17259efeb1e9230d797",
+    "upload_id": "f3a09445ba1b0c4041565da3b085659c",
+    "sha256": "7a6c61b507ae2b1fb5210533741627e2dddaf5f4037db2ce311138e90b0eef2a",
+    "bytes": 339408,
+    "pages": 90,
+    "signals": [
+     {
+      "signal": "CONT",
+      "pid": 436536,
+      "db_before": {
+       "id": "83cc161aea5e47a48e931b467ca462f0",
+       "status": "succeeded",
+       "index_status": "indexing",
+       "index_generation": "2",
+       "index_lease_until": "2026-09-24 11:43:09.691727+00",
+       "index_error": "",
+       "chunks": "0",
+       "service_task_id": "839e9e1fa2c74d83a7730897d67fec4b",
+       "tasks": [
+        {
+         "id": "5397b01e6556420bbf5dc4fe605511b4",
+         "status": "claimed",
+         "generation": "1",
+         "attempts": "1",
+         "claimed_by": "Minato:436536",
+         "lease_until": "2026-09-24 11:43:09.678153+00",
+         "error": ""
+        }
+       ]
+      }
+     },
+     {
+      "signal": "KILL",
+      "pid": 436536,
+      "db_before": {
+       "id": "83cc161aea5e47a48e931b467ca462f0",
+       "status": "succeeded",
+       "index_status": "indexing",
+       "index_generation": "2",
+       "index_lease_until": "2026-09-24 11:43:09.691727+00",
+       "index_error": "",
+       "chunks": "0",
+       "service_task_id": "839e9e1fa2c74d83a7730897d67fec4b",
+       "tasks": [
+        {
+         "id": "5397b01e6556420bbf5dc4fe605511b4",
+         "status": "claimed",
+         "generation": "1",
+         "attempts": "1",
+         "claimed_by": "Minato:436536",
+         "lease_until": "2026-09-24 11:43:09.678153+00",
+         "error": ""
+        }
+       ]
+      }
+     }
+    ],
+    "db_waits": [
+     {
+      "reached": "ready",
+      "db": {
+       "id": "83cc161aea5e47a48e931b467ca462f0",
+       "status": "succeeded",
+       "index_status": "ready",
+       "index_generation": "3",
+       "index_lease_until": "",
+       "index_error": "",
+       "chunks": "540",
+       "service_task_id": "839e9e1fa2c74d83a7730897d67fec4b",
+       "tasks": [
+        {
+         "id": "5397b01e6556420bbf5dc4fe605511b4",
+         "status": "succeeded",
+         "generation": "2",
+         "attempts": "2",
+         "claimed_by": "Minato:460601",
+         "lease_until": "2026-09-24 11:49:09.738363+00",
+         "error": ""
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "R4_zombie_worker_SIGSTOP": {
+   "outcome": "worker frozen at index generation 2; the API reconciler took over at generation 3 and finished (ready, 540 chunks, chunk digest c0013372…); SIGCONT: the old executor logged '任务已被接管（generation 变了），停手', generation stayed 3, chunk digest unchanged",
+   "data": {
+    "user": "b-bob",
+    "user_id": "4e63606933c1b17259efeb1e9230d797",
+    "upload_id": "dcf53c9bb089bd9d4e6f67f237dd469b",
+    "sha256": "b043808ca3b013e497c5b42bde33a047b0393bb4562a6e9fc007bc30ec02bb60",
+    "bytes": 337294,
+    "pages": 90,
+    "signals": [
+     {
+      "signal": "STOP",
+      "pid": 460601,
+      "db_before": {
+       "id": "27a60702a60f4cf7a13d297d27768467",
+       "status": "succeeded",
+       "index_status": "indexing",
+       "index_generation": "2",
+       "index_lease_until": "2026-09-24 11:49:52.825664+00",
+       "index_error": "",
+       "chunks": "0",
+       "service_task_id": "1c049a26b21e4c829d3e5ced6b0e341d",
+       "tasks": [
+        {
+         "id": "c34f24cb37514ecea3ab116dce3a4787",
+         "status": "claimed",
+         "generation": "1",
+         "attempts": "1",
+         "claimed_by": "Minato:460601",
+         "lease_until": "2026-09-24 11:49:52.812137+00",
+         "error": ""
+        }
+       ]
+      }
+     }
+    ],
+    "db_waits": [
+     {
+      "reached": "ready",
+      "db": {
+       "id": "27a60702a60f4cf7a13d297d27768467",
+       "status": "succeeded",
+       "index_status": "ready",
+       "index_generation": "3",
+       "index_lease_until": "",
+       "index_error": "",
+       "chunks": "540",
+       "service_task_id": "1c049a26b21e4c829d3e5ced6b0e341d",
+       "tasks": [
+        {
+         "id": "c34f24cb37514ecea3ab116dce3a4787",
+         "status": "claimed",
+         "generation": "1",
+         "attempts": "1",
+         "claimed_by": "Minato:460601",
+         "lease_until": "2026-09-24 11:49:52.812137+00",
+         "error": ""
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "R5_corpus_SIGKILL_mid_wiki_build": {
+   "key": "e-kill-f0bd20c0cbfc4da8b75a7e60d21da76a",
+   "body": {
+    "title": "RP2040 memory (recovery probe)",
+    "max_pages": 1,
+    "max_evidence": 24,
+    "sources": [
+     {
+      "resource_id": "0341f9d5fc404cf8bb8b04d391a3c9de",
+      "source_version_id": "77c1392bb1ad42c5aff771ee836b92b3"
+     }
+    ]
+   },
+   "wikis_before": [
+    "6a225a2bbefc4d2d9c48440d8cc96a33",
+    "b6c4b6cbcfa8484fa5380b5bfc509c67",
+    "db3c9b2b5fbc40ff95d2953d7ebe1a00"
+   ],
+   "client": {
+    "status": 502,
+    "code": "{\"error\":{\"message\":\"上游服务 corpus-api 不可达\",\"type\":\"upstream_error\",\"code\":\"upstream_unreachable\"}}\n"
+   },
+   "new_wikis_after_restart": [],
+   "replay_same_key": {
+    "status": 201,
+    "body": null,
+    "wiki_id": "72d9957ac5b845faa210892aabe68eca"
+   },
+   "outcome": "client got 502 upstream_unreachable; no Wiki left behind; replaying the same Idempotency-Key built it (201)"
+  },
+  "R6_corpus_SIGKILL_mid_answer": {
+   "conversation_id": "e0c854e9338a4bd2829e2744501644a5",
+   "events_seen": [
+    "meta",
+    "delta"
+   ],
+   "killed_at": 1790250835.8449442,
+   "client_error": null,
+   "messages_after_restart": [
+    {
+     "role": "user",
+     "degraded": null,
+     "content": "What is the size of the RP2040 on-chip SRAM?"
+    }
+   ],
+   "outcome": "control closed the SSE response cleanly after meta+delta: no error reached the client, the partial text vanished, only the question was persisted. Fixed in the web client (see defects)"
+  }
+ },
+ "defects_fixed": [
+  {
+   "id": 1,
+   "where": "control-api internal/api/middleware.go apiKeyGate",
+   "what": "a parse key issued before its owner was downgraded to viewer kept creating resources through /v1/parse; the gate now applies the issuance rule AllowedScopes to the owner's current role (403 insufficient_role + audit apikey.role_denied)",
+   "test": "apikey_gate_test.go::TestGateDeniesScopeTheOwnersCurrentRoleNoLongerAllows (mutation-checked)"
+  },
+  {
+   "id": 2,
+   "where": "corpus-api ddp_corpus/policy.py resource_condition + resource-policy-format.md",
+   "what": "a metadata copy made while the source was public kept the withdrawn source's resource, evidence, crops, search hits, original download and new conversations readable to the copier; owner reads now require a readable lineage (writes stay owner-only). Follow-up: a parent with no local row (bundle 'remote:' placeholder) keeps the owner's copy readable",
+   "test": "test_resource_acl.py::test_copier_loses_withdrawn_source_content_but_keeps_managing_the_copy (mutation-checked); bundles t03/t11 guard the placeholder rule"
+  },
+  {
+   "id": 3,
+   "where": "corpus-api routers/internal.py parse_callback",
+   "what": "the index task enqueued after archiving was never committed (rolled back with the request session on PostgreSQL), so the worker never got index tasks after a parse and the API reconciler indexed every upload up to 60 s later. The shared SQLite suite could not see it (pysqlite RELEASE of an outermost SAVEPOINT commits)",
+   "test": "test_documents.py::test_parse_callback_commits_the_index_task_it_enqueues on a PostgreSQL-like SQLite engine (mutation-checked)"
+  },
+  {
+   "id": 4,
+   "where": "model-gateway worker/tasks.py poll_and_archive",
+   "what": "a failed source download stored str(HTTPStatusError) — the full control /files/{token} URL, a bearer credential for the original — as the user-visible parse error",
+   "test": "test_layout.py::test_failed_source_download_does_not_put_the_file_url_into_the_task_error (mutation-checked)"
+  },
+  {
+   "id": 5,
+   "where": "web api/conversations.ts askStream + components/ask/AskPanel.vue",
+   "what": "an answer stream that ends without done/error is reported (stream_incomplete); after an interrupted stream the panel re-reads the conversation; a question with no answer after it is marked 没有回答",
+   "test": "api/__tests__/ask-stream.spec.ts, ask/__tests__/AskPanel.interrupted.spec.ts (mutation-checked)"
+  },
+  {
+   "id": 6,
+   "where": "web components/ask/AskPanel.vue",
+   "what": "the first question of a brand-new conversation vanished when its answer was interrupted: the activeId watcher's empty reload of the just-created conversation overwrote the local bubble",
+   "test": "AskPanel.interrupted.spec.ts new-conversation case (mutation-checked)"
+  },
+  {
+   "id": 7,
+   "where": "corpus-api routers/conversations.py list_conversations + resource-policy-format.md",
+   "what": "two resources with the same bytes share a Document; the workbench of one listed the other's conversation, answered from it and its citations 404ed (证据加载失败). The list now follows the resource context",
+   "test": "test_resource_acl.py::test_conversation_list_follows_the_resource_context (mutation-checked)"
+  }
+ ],
+ "browser_final_pass": {
+  "version": "final tree; every service restarted on it before the pass (control binary rebuilt); b-bob; no database edits, no script-created resources; the only operator action is killing/restarting corpus-api for the failure step",
+  "steps": [
+   [
+    "core-e-f01-login",
+    "logout, log in through the form"
+   ],
+   [
+    "core-e-f02-upload-stage",
+    "upload rev1 controller manual: 计算摘要 → 已上传，校验中 → 字节已就绪，登记中"
+   ],
+   [
+    "core-e-f03-upload-ready",
+    "new resource v1: 解析 已完成 · 索引 可问答 within seconds (worker)"
+   ],
+   [
+    "core-e-f04-search",
+    "全文检索 'What is the reset delay?' → 第 1 版 hit, 17 ms sentence"
+   ],
+   [
+    "core-e-f05-answer-interrupted",
+    "first question in a new conversation; corpus-api SIGKILLed while the answer streamed → toast 回答在完成前中断…, 上游服务 corpus-api 不可达, question marked 没有回答"
+   ],
+   [
+    "core-e-f06-after-restart",
+    "after restart and reload the persisted question still reads 没有回答"
+   ],
+   [
+    "core-e-f07-reask",
+    "re-ask → 'The reset delay of the controller is 17 milliseconds.' + citation"
+   ],
+   [
+    "core-e-f08-citation-locate",
+    "citation → red box on PDF page 1, evidence preview with bbox and 1:1 crop"
+   ],
+   [
+    "core-e-f09-wiki-build-dialog",
+    "Wiki build dialog with the new v1 as the fixed source"
+   ],
+   [
+    "core-e-f10-wiki-built",
+    "Wiki in 23 s: watchdog 7 s and reset delay 17 ms, each with a citation"
+   ],
+   [
+    "core-e-f11-wiki-claim-evidence",
+    "claim → evidence preview of the v1 original"
+   ],
+   [
+    "core-e-f12-append-v2",
+    "追加版本 rev2 → v2 解析 已完成 · 索引 可问答"
+   ],
+   [
+    "core-e-f13-wiki-stale",
+    "Wiki: 部分来源已经变化… (来源有了新版本), pages 待更新"
+   ],
+   [
+    "core-e-f14-wiki-rebuilt-v2",
+    "rebuild dialog hints 已有更新的 v2; new revision on v2, no longer stale"
+   ],
+   [
+    "core-e-f15-v2-claim-evidence",
+    "the v2 claim is vague and bound to the page-number footer 'i' (model quality + 2-page doc below the ≥3-page furniture rule)"
+   ],
+   [
+    "core-e-f16-history-v1-evidence",
+    "上一修订 (17 ms) opens with its v1 evidence and crop, writes disabled"
+   ],
+   [
+    "core-e-f17-fixed-v1-original",
+    "打开固定版本原文 → workbench 第 1 版, cited paragraph highlighted"
+   ],
+   [
+    "core-e-f18-qa-v2",
+    "workbench 第 2 版 → 'The reset delay of the controller is 23 milliseconds.' + citation"
+   ]
+  ]
+ },
+ "gates_on_final_tree": {
+  "corpus-api": "878 passed / 19 failed / 13 errors / 23 skipped — failure set identical to D (bundles GC 8, capabilities wiki.pages, federation, remote_compute; paused scope)",
+  "ddp_core": "267 passed",
+  "model-gateway": "187 passed, 6 skipped",
+  "corpus-worker": "19 passed",
+  "ddp_local": "150 passed",
+  "mcp": "52 passed",
+  "eval": "84 passed",
+  "web": "Vitest 116 passed (22 files); production build incl. vue-tsc OK",
+  "go": "gofmt clean, go vet OK, go test ./... OK (PostgreSQL-backed tests skip without CONTROL_TEST_DATABASE_URL), go build OK",
+  "guards": "12/13 — the red one is the desktop test tests/test_desktop_release.py::test_idle_runtime_fences_maintenance_even_when_active_override_is_requested"
+ },
+ "independent_acceptance": "general-purpose sub-agent, local brief e-acceptance.md: items 1-5 PASS with a mutation check each, then two deltas (new-conversation race, conversation list scoping) PASS; no blocking issues. Non-blocking notes: non-status transport errors still use str(exc) (host only, no token path).",
+ "boundaries_recorded": [
+  "Already-issued presigned original URLs keep working until they expire after withdrawal (observed 206; browser URLs ≤ 15 min, corpus source URLs 5 min). Crops are served with 'private, immutable' — a browser that already fetched one keeps its copy; the server re-checks before every read.",
+  "Revocation removes derived content: the copier's own Wiki and conversations built on a withdrawn source disappear from their lists without a note, and come back when the source is republished.",
+  "No session kill switch: a live member's JWT stays valid until its 7-day expiry; removal (401 membership_revoked) and role changes take effect on the next request. There is no disable-user API.",
+  "Role governs uploads, keys, Wiki writes and copies; ownership alone governs rename/publish/delete of one's own resource (a viewer could still rename theirs).",
+  "Gateway source downloads are not retried: corpus/control down while the gateway fetches the original → explicit parse failure; the user re-parses (same job reused). Gateway Redis loss is bounded by the 24 h result TTL [code reading, not exercised].",
+  "Re-submitting the same URL to /v1/parse after deleting its resource returns 404 document_not_found although the gateway accepted the job (external API path, not fixed).",
+  "Index lease 300 s: a crashed index is resumed only after the lease expires (≈5 min), by whichever entry claims first (restarted worker or API reconciler).",
+  "Rejected/expired/failed upload originals are not collected (contract: operational follow-up)."
+ ]
+}

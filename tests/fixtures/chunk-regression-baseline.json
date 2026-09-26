@@ -1,6 +1,6 @@
 {
  "_note": "分块回归的冻结基线。改分块规则 = 改出处的分块边界：老文档的 citations 按旧块序存的 seq 会指到别的块。改这个文件必须与代码改动同一次提交，并说明老出处怎么处理。守卫见 scripts/check_chunk_regression.py。",
- "recorded_at": "2026-09-01",
+ "recorded_at": "2026-09-24",
  "recorded_from": "ddp_core.chunking.layout_to_chunks(tests/fixtures/chunk-regression-layout.json)",
  "recorded_fields": [
   "seq",
@@ -20,6 +20,11 @@
    "at": "2026-09-01",
    "blocks": 10,
    "note": "合仓时重记。与 08-26 那份差一个块：eae7c3d（feat: add evidence compilation primitives，2026-08-28）起，没有 caption 的 figure 也会产出一个原子 —— 阶段 5 的 VLM 理解正是为了让「只有图、没有文字」的区域进索引，丢掉它视觉链路就永远没有输入。**这是有意的行为变更，但基线当时没跟着更新，而这把尺子又不在 CI 里，所以它从 08-28 起一直是红的、没人看见。合仓时补记基线并把守卫挂进 CI。**"
+  },
+  {
+   "at": "2026-09-24",
+   "blocks": 15,
+   "note": "ddp-chunk/3：只合并版面相邻的块。原有 10 块逐字段不变（夹具里的块本来就相邻），所以旧夹具量不到这条规则；新增第 3 页（两栏、远处段落、无坐标块、页脚页码），把相邻判据钉进基线。浏览器实测起因：正文与几百点外的页脚页码并成一块，出处 bbox 撑满整页。同一版还跳过只有项目符号/标点的块：第 3 页左栏第一段里夹了一个 “•” 块，它不得出块（出块即 16 块），也不得打断两段左栏正文的合并。三页底部各加了一条页脚 “Chunk regression manual · page N”：去掉数字后同一文字在 3 页同一条带里重复，按页眉页脚跳过，不得出块（出块即 18 块）；第 3 页只出现一次的页码 “7” 照旧成块。"
   }
  ],
  "chunks": [
@@ -146,6 +151,66 @@
     100
    ],
    "block_type": "equation",
+   "table_html": null
+  },
+  {
+   "seq": 10,
+   "text": "Two-column body, left column first paragraph. (0) Two-column body, left column first paragraph. (1)\nLeft column second paragraph after one blank line. (0) Left column second paragraph after one blank line. (1)",
+   "page_idx": 2,
+   "bbox": [
+    50,
+    60,
+    290,
+    146
+   ],
+   "block_type": "text",
+   "table_html": null
+  },
+  {
+   "seq": 11,
+   "text": "Right column top paragraph. (0) Right column top paragraph. (1)\nRight column continues directly below. (0) Right column continues directly below. (1)",
+   "page_idx": 2,
+   "bbox": [
+    320,
+    60,
+    560,
+    136
+   ],
+   "block_type": "text",
+   "table_html": null
+  },
+  {
+   "seq": 12,
+   "text": "Paragraph far down the page after a large gap.",
+   "page_idx": 2,
+   "bbox": [
+    50,
+    500,
+    560,
+    518
+   ],
+   "block_type": "text",
+   "table_html": null
+  },
+  {
+   "seq": 13,
+   "text": "Block without coordinates.\nAnother block without coordinates.",
+   "page_idx": 2,
+   "bbox": null,
+   "block_type": "text",
+   "table_html": null
+  },
+  {
+   "seq": 14,
+   "text": "7",
+   "page_idx": 2,
+   "bbox": [
+    300,
+    760,
+    306,
+    770
+   ],
+   "block_type": "text",
    "table_html": null
   }
  ]

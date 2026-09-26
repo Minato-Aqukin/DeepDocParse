@@ -427,6 +427,16 @@ class ObjectChecker:
 # ---------------------------------------------------------------- 主流程
 
 async def run(args: argparse.Namespace) -> int:
+    if args.apply and not getattr(args, "allow_live_target", False):
+        lowered = (args.target or "").lower()
+        # 默认 dev 端口/容器名一律视为"可能是 dev 或生产"，必须显式确认。
+        # 隔离克隆用高位随机端口（如 Main 的 25438 恢复库），不在此列；
+        # 库名本身不做判据（克隆库也叫 deepdocparse）。
+        live_markers = ("ddp-postgres-1", ":5432", ":15432")
+        if any(marker in lowered for marker in live_markers):
+            print("::error::--apply 的 target 看起来像 dev/生产默认库 —— "
+                  "只允许在隔离克隆上运行；确认后加 --allow-live-target", file=sys.stderr)
+            return 2
     report = Report(started_at=datetime.now(UTC).isoformat(),
                     source=_redact(args.source), dry_run=not args.apply)
 
@@ -522,6 +532,8 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true",
                         help="真正写入。**缺省是 dry-run** —— 默认不改数据")
     parser.add_argument("--report", help="迁移报告写到哪个 json")
+    parser.add_argument("--allow-live-target", action="store_true",
+                        help="显式确认 target 是隔离克隆/演练库。缺省拒绝一切看起来像 dev/生产默认库的 target")
     parser.add_argument("--object-endpoint", help="对象存储地址（给了才做存在性抽样）")
     parser.add_argument("--object-access-key", default=os.environ.get("OBJECT_ACCESS_KEY", ""))
     parser.add_argument("--object-secret-key", default=os.environ.get("OBJECT_SECRET_KEY", ""))

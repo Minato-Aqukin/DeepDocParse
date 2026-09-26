@@ -75,6 +75,7 @@ class DocumentInfo(BaseModel):
     id: str
     resource_id: str | None = None
     source_version_id: str | None = None
+    source_version_no: int | None = None
     filename: str
     doc_id: str
     origin: str
@@ -116,6 +117,7 @@ def _doc_info(document: Document, job: ParseJob | None, *,
     index_state = job if context.resource_id else document
     return DocumentInfo(
         id=document.id, resource_id=context.resource_id, source_version_id=context.version_id,
+        source_version_no=context.version_no,
         filename=context.filename, doc_id=document.doc_id,
         origin=document.origin, mime=document.mime, size_bytes=document.size_bytes,
         page_count=job.page_count if job else 0,

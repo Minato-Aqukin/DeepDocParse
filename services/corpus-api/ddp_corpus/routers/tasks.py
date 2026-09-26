@@ -2,7 +2,7 @@
 
 **这些是入口端点，不是 peer 端点**：认证走 `deps.current_actor`（服务凭据 +
 control-api 下发的 actor 上下文头），control-api 会按 `corpusPrefixes` 转发。
-节点到节点的调用全部在 `routers/federation.py`（额外要 X-DDP-Peer-Token）。
+节点到节点的调用全部在 `routers/federation.py`（只认单次节点凭证）。
 
 形状与 `packages/contracts/openapi/federation-tasks-v1.yaml` 的
 `TaskIntentInput` / `PlanningRequest` / `ApprovalRequest` / `ExecutionRequest`
@@ -12,8 +12,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from ddp_core.application import plans
+from ddp_core.application.ports import ApplicationError
 
 from ddp_corpus import federation_tasks
 from ddp_corpus.db import get_session
@@ -24,11 +27,38 @@ router = APIRouter(prefix="/api/v1")
 Digest = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
+class TaskIntentBudget(BaseModel):
+    """Caller-owned, nonoverlapping allowance; omitted tokens authorize none."""
+    model_config = ConfigDict(extra="forbid")
+    max_requests: int = Field(strict=True, ge=1)
+    max_bytes: int = Field(strict=True, ge=4096)
+    max_hops: int = Field(strict=True, ge=1)
+    deadline: AwareDatetime
+    max_generation_tokens: int = Field(default=0, strict=True, ge=0)
+
+    @field_validator("deadline", mode="before")
+    @classmethod
+    def require_timestamp(cls, value):
+        try:
+            plans.instant(value)
+        except ApplicationError:
+            raise ValueError("deadline must be a timezone-bearing RFC3339 timestamp") from None
+        return value
+
+
 class TaskIntentInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     task_spec: dict[str, Any]
     exploration_consent: dict[str, Any]
     scope_manifest: dict[str, Any] | None = None
+    budget: TaskIntentBudget | None = None
+
+    @field_validator("budget", mode="before")
+    @classmethod
+    def require_budget_object(cls, value):
+        if value is None:
+            raise ValueError("budget must be an object when supplied")
+        return value
 
 
 class PlanningRequest(BaseModel):
@@ -68,7 +98,9 @@ async def create_task_intent(body: TaskIntentInput, actor: Actor = Depends(curre
     return await federation_tasks.create_intent(
         session, actor, task_spec=body.task_spec,
         exploration_consent=body.exploration_consent,
-        scope_manifest=body.scope_manifest, now=utcnow(),
+        scope_manifest=body.scope_manifest,
+        budget=body.budget.model_dump(mode="json") if body.budget is not None else None,
+        now=utcnow(),
         idempotency_key=idempotency_key)
 
 
@@ -79,6 +111,12 @@ async def create_task_plan(body: PlanningRequest, request: Request,
     return await federation_tasks.create_plan(
         session, actor, body.root_task_id, now=utcnow(), http=_http(request),
         index=_index(request))
+
+
+@router.get("/task-plans/{root_task_id}")
+async def read_task_plan(root_task_id: str, actor: Actor = Depends(current_actor),
+                         session: AsyncSession = Depends(get_session)):
+    return await federation_tasks.read_plan(session, actor, root_task_id)
 
 
 @router.post("/task-plans/{root_task_id}/approve")

@@ -38,11 +38,16 @@ func (s *Server) handleCreateUpload(w http.ResponseWriter, r *http.Request) erro
 		return err
 	}
 
+	// 字段顺序即请求摘要的序列化顺序：新增字段只能加在末尾，且必须 omitempty ——
+	// 否则所有老请求的摘要都会变，升级后同键重试一律被判成幂等冲突。
 	var body struct {
-		Filename string  `json:"filename"`
-		Size     int64   `json:"size"`
-		MIME     string  `json:"mime"`
-		SHA256   *string `json:"sha256"`
+		Filename         string  `json:"filename"`
+		Size             int64   `json:"size"`
+		MIME             string  `json:"mime"`
+		SHA256           *string `json:"sha256"`
+		Purpose          string  `json:"purpose"`
+		RemoteComputeID  *string `json:"remote_compute_id"`
+		TargetResourceID *string `json:"target_resource_id,omitempty"`
 	}
 	if err := httpx.DecodeJSON(r, &body); err != nil {
 		return err
@@ -77,6 +82,38 @@ func (s *Server) handleCreateUpload(w http.ResponseWriter, r *http.Request) erro
 	if idem != "" && body.SHA256 == nil {
 		return apierr.BadRequest("digest_required", "幂等上传必须声明完整文件 sha256")
 	}
+	purpose := body.Purpose
+	if purpose == "" {
+		purpose = "permanent"
+	}
+	if purpose != "permanent" && purpose != "temporary_compute" {
+		return apierr.BadRequest("bad_purpose", "purpose 只能是 permanent 或 temporary_compute")
+	}
+	// 追加目标是上传身份的一部分：进创建摘要（同键换目标 = 幂等冲突），在会话
+	// 行上冻结，事件载荷只从行上取 —— finalize 没有、也不接受这个字段。
+	if body.TargetResourceID != nil {
+		if purpose != "permanent" {
+			return apierr.BadRequest("invalid_upload_target", "只有永久上传可以指定目标资源")
+		}
+		if !validResourceID(*body.TargetResourceID) {
+			return apierr.BadRequest("invalid_upload_target", "target_resource_id 格式无效")
+		}
+		// 同键重放直接交给 ClaimUpload 取回原会话：原上传一旦登记成功，目标里
+		// 就已经有这份内容了，再做一次准入只会把合法的重试判成冲突。
+		replay := false
+		if idem != "" {
+			_, lookupErr := s.store.UploadByCreationKey(r.Context(), actor.OrganizationID, string(actor.Kind), actor.ID, idem)
+			if lookupErr != nil && !errors.Is(lookupErr, store.ErrNotFound) {
+				return lookupErr
+			}
+			replay = lookupErr == nil
+		}
+		if !replay {
+			if err := s.uploadTargetAdmission(r.Context(), actor, *body.TargetResourceID, body.SHA256); err != nil {
+				return err
+			}
+		}
+	}
 	partSize := s.cfg.UploadPartSize
 	if partSize <= 0 || (body.Size+partSize-1)/partSize > 10000 {
 		return apierr.BadRequest("bad_upload", "分片数量超过限制")
@@ -88,10 +125,12 @@ func (s *Server) handleCreateUpload(w http.ResponseWriter, r *http.Request) erro
 	}
 	candidate := &store.UploadSession{
 		OrganizationID: actor.OrganizationID, ActorID: actor.ID, ActorKind: string(actor.Kind),
-		// A random immutable key, containing no caller filename or business key.
-		ObjectKey: fmt.Sprintf("uploads/%s/%s", actor.OrganizationID, auth.NewID()),
+		// Temporary compute inputs live under the agreed tmp prefix so GC can
+		// scope deletion to this record id; permanent uploads keep a random key.
+		ObjectKey: tmpObjectKey(actor.OrganizationID, purpose, body.RemoteComputeID, auth.NewID()),
 		Filename:  body.Filename, MIME: body.MIME, DeclaredSize: body.Size, DeclaredSHA256: body.SHA256,
 		ExpiresAt: time.Now().Add(s.cfg.UploadTTL), CreateIdempotencyKey: idemArg, RequestDigest: &digest, PartSize: &partSize,
+		Purpose: purpose, RemoteComputeID: body.RemoteComputeID, TargetResourceID: body.TargetResourceID,
 	}
 	sess, created, err := s.store.ClaimUpload(r.Context(), candidate, int(body.Size/bytesPerPageEstimate)+1)
 	if errors.Is(err, store.ErrUploadIdempotencyConflict) {
@@ -111,7 +150,7 @@ func (s *Server) handleCreateUpload(w http.ResponseWriter, r *http.Request) erro
 		return err
 	}
 	if created {
-		s.store.Audit(r.Context(), actor.OrganizationID, actor.ID, string(actor.Kind), "upload.created", sess.ID, actor.RequestID, map[string]any{"filename": body.Filename, "size": body.Size, "mime": body.MIME})
+		s.store.Audit(r.Context(), actor.OrganizationID, actor.ID, string(actor.Kind), "upload.created", sess.ID, actor.RequestID, map[string]any{"filename": body.Filename, "size": body.Size, "mime": body.MIME, "target_resource_id": body.TargetResourceID})
 	}
 	code := http.StatusOK
 	if created {
@@ -400,7 +439,36 @@ func (s *Server) writeUpload(w http.ResponseWriter, r *http.Request, u *store.Up
 	return httpx.JSON(w, code, out)
 }
 
+// validResourceID 只放行语料资源 id 的字符集：它会进 URL 路径与事件载荷，
+// 不能夹带分隔符或控制字符。
+func validResourceID(id string) bool {
+	if len(id) < 1 || len(id) > 128 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// tmpObjectKey mints the immutable object key for an upload session.
+// Temporary compute inputs live under the agreed tmp prefix so reference-safe
+// GC can scope deletion to one compute record id; permanent uploads keep the
+// existing random uploads/ key shape unchanged.
+func tmpObjectKey(orgID, purpose string, remoteComputeID *string, random string) string {
+	if purpose == "temporary_compute" && remoteComputeID != nil && *remoteComputeID != "" {
+		return "tmp-remote-compute/" + orgID + "/" + *remoteComputeID + "/source.bin"
+	}
+	return "uploads/" + orgID + "/" + random
+}
+
 func uploadResponse(u *store.UploadSession, parts []objectstore.Part, partSize int64) map[string]any {
+	purpose := u.Purpose
+	if purpose == "" {
+		purpose = "permanent"
+	}
 	out := map[string]any{
 		"id":               u.ID,
 		"allocation_state": u.AllocationState,
@@ -409,12 +477,28 @@ func uploadResponse(u *store.UploadSession, parts []objectstore.Part, partSize i
 		"filename":         u.Filename,
 		"mime":             u.MIME,
 		"declared_size":    u.DeclaredSize,
+		"purpose":          purpose,
 		"part_size":        partSize,
 		"expires_at":       u.ExpiresAt,
+	}
+	if u.RemoteComputeID != nil && *u.RemoteComputeID != "" {
+		out["remote_compute_id"] = *u.RemoteComputeID
+	}
+	// Declared digest is echoed so host resume can verify purpose /
+	// remote_compute_id / filename / declared_size / declared_sha256 binding
+	// without guessing; verified_sha256 below remains the only server-computed
+	// proof and the sole gate for parse enqueue.
+	if u.DeclaredSHA256 != nil && *u.DeclaredSHA256 != "" {
+		out["declared_sha256"] = *u.DeclaredSHA256
 	}
 	if u.RequestDigest != nil {
 		out["request_digest"] = *u.RequestDigest
 	}
+	// 追加目标与登记确认一律下发（null 也是有意义的读取结果）：客户端据此判断
+	// "字节已就绪但尚未登记"，而不是把 upload ready 误当成已入库。
+	out["target_resource_id"] = u.TargetResourceID
+	out["ingest_status"] = u.IngestStatus
+	out["ingest_error"] = u.IngestError
 	inputState := "waiting_input"
 	if u.Status == "verifying" {
 		inputState = "content_verifying"

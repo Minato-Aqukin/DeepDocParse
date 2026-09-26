@@ -27,6 +27,21 @@ export type TaskOperation = FederationTaskOperation
 export type ProbePayload = 'query_text' | 'subquery_text' | 'entity_names' | 'resource_names'
   | 'collection_filters' | 'evidence_excerpts' | 'source_files'
 
+/**
+ * wiki.pages 任务的 Wiki 需求（`TaskSpec.requirements.wiki`）。
+ *
+ * 后端（CoordinatorClosure 落地中）尚未受理 wiki.pages 提交：前端按此形状备好
+ * 需求输入（`TaskSpec.requirements.wiki={wiki_id?,base_revision_id?,title?,max_pages?}`），
+ * 提交入口保持禁用并明确提示“中心暂不支持”，待协调者规划/执行分支落地后再启用。
+ * 不提前编造别的字段。
+ */
+export interface WikiTaskRequirements {
+  /** 首次创建可省略；更新必须带上要基于的 Wiki。 */
+  wiki_id?: string
+  base_revision_id?: string | null
+  title?: string
+  max_pages?: number
+}
 export interface TargetKey { origin_node_id: string; collection_id: string; operation: string }
 
 export interface ScopeManifest {
@@ -64,8 +79,22 @@ export interface TaskSpec {
   search_policy: { mode: SearchMode; ordering: 'local_first' }
   execution_policy: { mode: 'local_only' | 'trusted_federation'; coordinator_ref?: string }
   consent_refs: { exploration: string; execution: null }
-  requirements?: { citations: 'required' | 'not_required' }
+  requirements?: { citations: 'required' | 'not_required'; wiki?: WikiTaskRequirements }
   budget_ref: string
+}
+
+/**
+ * 联邦 Wiki 结果引用（`commit_federated_revision` 落库后的 `wiki.revision_out` 引用）。
+ *
+ * 按 WikiClosure 确认：`generate_federated` 的 draft 是内部中间态，不直接给前端；
+ * 前端只渲染落库后的 `revision_out`（= `versionedWikiApi` 的 `WikiRevisionDocument`
+ * 形状）。TaskStatus.result 里如带 `wiki`，只认 `{ wiki_id, revision_id }` 引用，
+ * 经 `versionedWikiApi.read/readRevision` 读取同一形状后渲染。stale 按页布尔值、
+ * merge_conflicts 在 revision 层；不要按旧草稿形状取顶层 validation_state/conflicts。
+ */
+export interface FederatedWikiRef {
+  wiki_id: string
+  revision_id: string
 }
 
 export interface ExplorationConsent {
@@ -343,6 +372,8 @@ export interface TaskDraft {
   payload: ProbePayload[]
   maxProbeRequests: number
   maxEgressBytes: number
+  /** wiki.pages 的 Wiki 需求输入（`TaskSpec.requirements.wiki` 形状）。提交前保持禁用。 */
+  wiki?: WikiTaskRequirements
 }
 
 const MINUTE = 60_000
@@ -406,6 +437,13 @@ export function buildIntent(draft: TaskDraft, options: {
   if (draft.mode === 'exhaustive_scope' && !exhaustiveAllowed(draft)) {
     throw new Error('穷查只能绑定已生成的联邦范围清单')
   }
+  if (draft.operation === 'wiki.pages') {
+    if (!draft.wiki || !draft.wiki.title?.trim()) throw new Error('Wiki 草稿需要填写标题')
+    if (draft.wiki.max_pages !== undefined
+      && (!Number.isInteger(draft.wiki.max_pages) || draft.wiki.max_pages < 1 || draft.wiki.max_pages > 12)) {
+      throw new Error('Wiki 页数上限为 1–12')
+    }
+  }
   const federated = draft.scopeKind === 'federation_public'
   const remote = federated ? remoteNodesOf(draft.scope, options.localNodeId) : []
   const explorationId = `explore-${options.nonce}`
@@ -424,7 +462,17 @@ export function buildIntent(draft: TaskDraft, options: {
       ? { mode: 'trusted_federation', coordinator_ref: options.localNodeId }
       : { mode: 'local_only' },
     consent_refs: { exploration: explorationId, execution: null },
-    requirements: { citations: draft.operation === 'rag.answer.cited' ? 'required' : 'not_required' },
+    requirements: {
+      citations: draft.operation === 'rag.answer.cited' ? 'required' : 'not_required',
+      ...(draft.operation === 'wiki.pages' && draft.wiki
+        ? { wiki: {
+          ...(draft.wiki.wiki_id ? { wiki_id: draft.wiki.wiki_id } : {}),
+          ...(draft.wiki.base_revision_id ? { base_revision_id: draft.wiki.base_revision_id } : {}),
+          ...(draft.wiki.title?.trim() ? { title: draft.wiki.title.trim() } : {}),
+          ...(draft.wiki.max_pages !== undefined ? { max_pages: draft.wiki.max_pages } : {}),
+        } }
+        : {}),
+    },
     budget_ref: `budget-${options.nonce}`,
   }
   const validUntil = options.now + (options.validMinutes ?? 30) * MINUTE

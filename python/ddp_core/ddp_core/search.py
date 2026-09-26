@@ -4,7 +4,7 @@
 生产用 PgVectorIndex（pgvector 的 <=> 与 tsvector），单测注入 MemoryIndex。
 模型层不写 SQL，检索 SQL 全部收在这里。
 
-融合用 Reciprocal Rank Fusion 而不是加权分数相加：向量距离与 ts_rank 量纲完全不同，
+融合用 Reciprocal Rank Fusion 而不是加权分数相加：向量距离与关键词覆盖分量纲完全不同，
 加权要调两个超参且换 embedding 模型就失效；RRF 只看名次，无量纲、无需调参。
 
 v1.1 两处改动：
@@ -22,6 +22,7 @@ v1.1 两处改动：
 """
 import math
 import re
+from collections import Counter
 from typing import Protocol
 
 from sqlalchemy import bindparam, text
@@ -78,14 +79,42 @@ def exact_code_ids(candidates: list[tuple[str, str, str]], query: str) -> list[s
     return [cid for _, cid, _ in sorted(matching, key=lambda item: (item[2], item[0]))]
 
 
+# 查询侧不参与关键词路的语法功能词：英文冠词/助动词/情态词/代词/介词/连词/疑问词，
+# 以及同类的中文双字虚词（单字的"的""在"等 tokenize 已经滤掉）。
+#
+# 关键词路按 1/df 加权，而问句里的这些词在一份技术手册里恰恰**稀有**："does" 在 ESP32
+# 手册 2295 块里只出现 2 次，于是它比 cpu（37 次）重近 20 倍 —— 真栈实测，问 ESP32 的
+# CPU 时免责声明页凭 does/its 排关键词路第一，真答案掉出前 8（2026-09-24，C 阶段）。
+# 这不是 tokenize.py 拒绝的那种停用词表：索引侧照旧保留每一个词，这里只列语法功能词
+# 这个**封闭集合**，不含任何实词。**与技术缩写同形的词故意不列**：can（CAN 总线）、
+# if（中频 IF）、us（微秒）、am（调幅 AM）、i（I/O、I²C 切出来的 i）。
+_QUERY_FUNCTION_WORDS = frozenset("""
+a an the is are was were be been being do does did have has had having
+could will would shall should may might must
+me my we our you your he him his she her it its they them their
+this that these those what which who whom whose how when where why
+of to in on at by for with from into onto about as than and or but so nor there here then
+什么 哪些 哪个 哪里 多少 如何 怎么 怎样 为什么 是否 能否 可以 根据 按照 关于 以及 或者 还是
+这个 那个 这些 那些 我们 你们 他们 它们 其中
+""".split())
+
+
+def _deduped_terms(query: str) -> list[str]:
+    """与索引侧共用 tokenizer 和 tsquery 清洗；重复查询词只计一次，功能词不计（见上）。"""
+    raw = (_TSQUERY_UNSAFE.sub(" ", _query_tokens(query)) or "")
+    return list(dict.fromkeys(t for t in raw.split() if t and t not in _QUERY_FUNCTION_WORDS))
+
+
+
 def _or_tsquery(query: str) -> str:
     """query -> OR 形式的 tsquery 串。
 
     与索引侧同一个 tokenizer 切词（`ddp_core.tokenize`），再用 `|` 连起来。
     空串会让 `to_tsquery` 抛错，所以兜一个不可能命中的占位符 ——
     **不能返回空**，那会让整条关键词路以异常的形式静默消失。
+    去重见 `_deduped_terms`：只影响排序权重，不改变 OR 召回集合。
     """
-    terms = [t for t in (_TSQUERY_UNSAFE.sub(" ", _query_tokens(query)) or "").split() if t]
+    terms = _deduped_terms(query)
     return " | ".join(terms) if terms else "zzzz_no_match_zzzz"
 
 
@@ -139,20 +168,22 @@ class PgVectorIndex:
             scope += " AND c.parse_job_id IN :authorized_job_ids"
         params = {"document_id": document_id,
                   "qvec": str(list(vector)) if vector else None,
-                  # 查询侧切词必须与索引侧同一个 tokenizer（见模块 docstring 第 1 条），
-                  # 再拼成 OR 形式的 tsquery（见下面 kw_sql 的长注释）
-                  "q": _or_tsquery(query), "n": candidates,
+                  # 每个命中词按授权作用域内的块频率归一化；重复页眉不能靠词频抢占候选。
+                  "qterms": " ".join(_deduped_terms(query)),
+                  "q": _or_tsquery(query),
+                  "n": candidates,
                   # <=> 是余弦距离 = 1 - 相似度
                   "max_dist": 1.0 - min_similarity}
 
         # 带距离下限：无阈值的 top-k 会让"完全无关的问题"也拿到出处（见 config 注释）。
         # 顺带把距离取回来 —— 出处要给用户看"有多相关"，RRF 分做不到（见 Hit 的注释）
+        # 并列时按 id 次序，保证同一输入的输出顺序恒定（融合只看名次，名次必须稳定）。
         vec_sql = text(f"""
             SELECT c.id, c.embedding <=> CAST(:qvec AS vector) AS dist
             FROM chunks c JOIN documents d ON d.id = c.document_id
             WHERE {scope} AND d.deleted_at IS NULL AND c.embedding IS NOT NULL
               AND c.embedding <=> CAST(:qvec AS vector) < :max_dist
-            ORDER BY c.embedding <=> CAST(:qvec AS vector) LIMIT :n
+            ORDER BY c.embedding <=> CAST(:qvec AS vector), c.id ASC LIMIT :n
         """)
         # 同一把尺子也量关键词路。拼进 SQL 而不是用 `:qvec IS NULL OR ...`：
         # vector=None 时 CAST(NULL AS vector) 的参数类型推断在不同驱动上行为不一，
@@ -170,18 +201,34 @@ class PgVectorIndex:
         #     对 "买方 北极星 科技 有限公司 注册 地址 …" -> false
         #     换成 OR                                  -> true
         # 而单测的 MemoryIndex 用的是 `任一词命中`（OR）—— 于是**单测绿、生产红**，
-        # 正好落在下面那条注释自己警告的坑里。相关度由 ts_rank_cd 排序把关，
-        # 召回由相似度下限（kw_floor）把关，OR 不会把噪声灌进来。
+        # 相关度由关键词覆盖排序和相似度下限（kw_floor）共同约束。
+        # 每词每块只计一次，贡献为 1 / 授权块中的 df；不依赖任意“过半才高频”的阈值。
+        # 统计在 ACL 之后、相似度过滤之前进行；OR 召回、code 路与 RRF 保持不变。
         kw_sql = text(f"""
+            WITH scoped AS (
+                SELECT c.id, to_tsvector('simple', c.text_tokenized) AS words
+                FROM chunks c JOIN documents d ON d.id = c.document_id
+                WHERE {scope} AND d.deleted_at IS NULL
+            ),
+            qterms AS (
+                SELECT DISTINCT unnest(string_to_array(:qterms, ' ')) AS t
+            ),
+            dfs AS (
+                SELECT qterms.t, COUNT(*) AS df
+                FROM qterms CROSS JOIN scoped
+                WHERE qterms.t <> ''
+                  AND scoped.words @@ to_tsquery('simple', qterms.t)
+                GROUP BY qterms.t
+            )
             SELECT c.id, {"c.embedding <=> CAST(:qvec AS vector)" if vector else "NULL"} AS dist,
                    c.block_type, c.text
-            FROM chunks c JOIN documents d ON d.id = c.document_id,
-                 to_tsquery('simple', :q) tsq
-            WHERE {scope} AND d.deleted_at IS NULL
-              AND to_tsvector('simple', c.text_tokenized) @@ tsq
+            FROM scoped s JOIN chunks c ON c.id = s.id
+            WHERE s.words @@ to_tsquery('simple', :q)
               {kw_floor}
-            ORDER BY ts_rank_cd(to_tsvector('simple', c.text_tokenized), tsq)
-                     DESC LIMIT :n
+            ORDER BY (
+                SELECT SUM(1.0 / dfs.df) FROM dfs
+                WHERE s.words @@ to_tsquery('simple', dfs.t)
+            ) DESC, c.id ASC LIMIT :n
         """)
 
         if authorized_document_ids is not None:
@@ -214,12 +261,14 @@ class PgVectorIndex:
             code_ids = []
 
         # 标识符精确命中的 code 路按固定权重多贡献 RRF 名次，等价于
-        # “精确词面比 dense/通用词频更强”，但不把不可比较的 ts_rank 与
+        # “精确词面比 dense/通用关键词更强”，但不把不可比较的关键词覆盖分与
         # 余弦分数硬相加。权重 2 由同集合改造前后评测钉着。
         scores = _rrf([vec_ids, kw_ids, *([code_ids] * EXACT_CODE_WEIGHT)])
         if not scores:
             return []
-        top_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)[:limit]
+        # RRF 分只由名次决定，并列常见（两路都排第一恒为 0.0328）：并列保 id，
+        # 否则同一输入每次刷新都可能换位置（见 citations 表 rank 列的注释）。
+        top_ids = sorted(scores, key=lambda cid: (-scores[cid], cid))[:limit]
         return await _load_hits(session, top_ids, scores, similarity)
 
 
@@ -301,16 +350,18 @@ class MemoryIndex:
                        sorted(scored_vec, key=lambda p: p[1], reverse=True)[:candidates]
                        if s > min_similarity]
 
-        # 与 PgVectorIndex **同一个 tokenizer、同一种匹配语义（OR）**。
-        # 对齐 tokenizer 还不够 —— 曾经这边是 OR、那边是 websearch_to_tsquery 的 AND，
-        # 于是单测绿而生产红，正是这一层存在的意义所要防的事
-        terms = [t for t in _query_tokens(query).split() if t]
-        scored_kw = [(c.id, sum((getattr(c, "text_tokenized", "") or c.text).lower().count(t)
-                                for t in terms)) for c, _ in rows
-                     # 测得出相似度就必须过线；测不出（无向量/向量化挂了）才放行
-                     if similar_enough.get(c.id, True)]
-        kw_ids = [cid for cid, n in sorted(scored_kw, key=lambda p: p[1], reverse=True)[:candidates]
-                  if n > 0]
+        # 与 PG 共用 tokenizer，按授权块的查询词覆盖度计分，而非反复出现的词频。
+        terms = set(_deduped_terms(query))
+        matched = [
+            (c.id, terms.intersection(_deduped_terms(getattr(c, "text_tokenized", "") or c.text)))
+            for c, _ in rows
+        ]
+        doc_freqs = Counter(term for _, words in matched for term in words)
+        ranked = sorted(
+            ((cid, math.fsum(1.0 / doc_freqs[term] for term in words))
+             for cid, words in matched if words and similar_enough.get(cid, True)),
+            key=lambda pair: (-pair[1], pair[0]))
+        kw_ids = [cid for cid, _ in ranked[:candidates]]
 
         by_id = {c.id: c for c, _ in rows}
         code_ids = exact_code_ids(
@@ -318,7 +369,7 @@ class MemoryIndex:
         scores = _rrf([vec_ids, kw_ids, *([code_ids] * EXACT_CODE_WEIGHT)])
         if not scores:
             return []
-        top_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)[:limit]
+        top_ids = sorted(scores, key=lambda cid: (-scores[cid], cid))[:limit]
         return [Hit(chunk_id=cid, document_id=by_id[cid].document_id,
                     parse_job_id=by_id[cid].parse_job_id, seq=by_id[cid].seq,
                     page_idx=by_id[cid].page_idx, bbox=by_id[cid].bbox,

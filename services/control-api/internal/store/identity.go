@@ -265,13 +265,26 @@ func (s *Store) Members(ctx context.Context, orgID string) ([]Member, error) {
 // 而恢复要直接改库。这是那种"看起来多余、真出事时救命"的约束。
 var ErrLastAdmin = errors.New("organization must keep at least one admin")
 
+func lockMemberRoles(ctx context.Context, tx pgx.Tx, orgID string) (int, error) {
+	// Lock the organization, not an aggregate. Every membership mutation must
+	// observe the administrator count after the preceding mutation commits.
+	var locked bool
+	if err := tx.QueryRow(ctx, `
+		SELECT true FROM control.organizations WHERE id = $1 FOR UPDATE`,
+		orgID).Scan(&locked); err != nil {
+		return 0, norows(err)
+	}
+	var admins int
+	err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM control.memberships
+		WHERE organization_id = $1 AND role = 'admin'`, orgID).Scan(&admins)
+	return admins, err
+}
+
 func (s *Store) SetMemberRole(ctx context.Context, orgID, userID string, role rbac.Role) error {
 	return s.InTx(ctx, func(tx pgx.Tx) error {
-		// FOR UPDATE：两个管理员同时把对方降级时，没有锁的话两条都会成功
-		var admins int
-		if err := tx.QueryRow(ctx, `
-			SELECT count(*) FROM control.memberships
-			WHERE organization_id = $1 AND role = 'admin' FOR UPDATE`, orgID).Scan(&admins); err != nil {
+		admins, err := lockMemberRoles(ctx, tx, orgID)
+		if err != nil {
 			return err
 		}
 		var current string
@@ -283,7 +296,7 @@ func (s *Store) SetMemberRole(ctx context.Context, orgID, userID string, role rb
 		if current == string(rbac.Admin) && role != rbac.Admin && admins <= 1 {
 			return ErrLastAdmin
 		}
-		_, err := tx.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 			UPDATE control.memberships SET role = $3
 			WHERE organization_id = $1 AND user_id = $2`, orgID, userID, string(role))
 		return err
@@ -292,10 +305,8 @@ func (s *Store) SetMemberRole(ctx context.Context, orgID, userID string, role rb
 
 func (s *Store) RemoveMember(ctx context.Context, orgID, userID string) error {
 	return s.InTx(ctx, func(tx pgx.Tx) error {
-		var admins int
-		if err := tx.QueryRow(ctx, `
-			SELECT count(*) FROM control.memberships
-			WHERE organization_id = $1 AND role = 'admin' FOR UPDATE`, orgID).Scan(&admins); err != nil {
+		admins, err := lockMemberRoles(ctx, tx, orgID)
+		if err != nil {
 			return err
 		}
 		var current string
@@ -307,31 +318,41 @@ func (s *Store) RemoveMember(ctx context.Context, orgID, userID string) error {
 		if current == string(rbac.Admin) && admins <= 1 {
 			return ErrLastAdmin
 		}
-		_, err := tx.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 			DELETE FROM control.memberships WHERE organization_id = $1 AND user_id = $2`,
 			orgID, userID)
 		return err
 	})
 }
 
-// AddMember 把一个已有账号加进组织。
+// AddMember 把已有账号加入组织；已有成员的角色变更遵循相同的最后管理员保护。
 func (s *Store) AddMember(ctx context.Context, orgID, username string, role rbac.Role) (*Member, error) {
-	var m Member
-	m.Role = role
-	err := s.pool.QueryRow(ctx, `
-		WITH target AS (SELECT id, username, email FROM control.users WHERE username = $2),
-		     ins AS (
-		       INSERT INTO control.memberships (organization_id, user_id, role)
-		       SELECT $1, id, $3 FROM target
-		       ON CONFLICT (organization_id, user_id) DO UPDATE SET role = EXCLUDED.role
-		       RETURNING user_id, joined_at
-		     )
-		SELECT t.id, t.username, t.email, i.joined_at
-		FROM ins i JOIN target t ON t.id = i.user_id`,
-		orgID, username, string(role)).
-		Scan(&m.UserID, &m.Username, &m.Email, &m.JoinedAt)
+	m := Member{Role: role}
+	err := s.InTx(ctx, func(tx pgx.Tx) error {
+		admins, err := lockMemberRoles(ctx, tx, orgID)
+		if err != nil {
+			return err
+		}
+		var current string
+		if err := tx.QueryRow(ctx, `
+			SELECT u.id, u.username, u.email, COALESCE(m.role, '')
+			FROM control.users u
+			LEFT JOIN control.memberships m ON m.user_id = u.id AND m.organization_id = $1
+			WHERE u.username = $2`, orgID, username).
+			Scan(&m.UserID, &m.Username, &m.Email, &current); err != nil {
+			return norows(err)
+		}
+		if current == string(rbac.Admin) && role != rbac.Admin && admins <= 1 {
+			return ErrLastAdmin
+		}
+		return tx.QueryRow(ctx, `
+			INSERT INTO control.memberships (organization_id, user_id, role)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (organization_id, user_id) DO UPDATE SET role = EXCLUDED.role
+			RETURNING joined_at`, orgID, m.UserID, string(role)).Scan(&m.JoinedAt)
+	})
 	if err != nil {
-		return nil, norows(err)
+		return nil, err
 	}
 	return &m, nil
 }

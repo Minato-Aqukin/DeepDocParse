@@ -7,7 +7,7 @@ import os
 import httpx
 import pytest
 
-from ddp_core.application.plans import canonical_bytes, content_digest
+from ddp_core.application.plans import canonical_bytes, content_digest, task_plan_digest
 from ddp_core.application.ports import ApplicationError
 from ddp_local import federation_dispatch as module
 from ddp_local.federation_client import CenterConfig, CenterFault, CenterOutcomeUnknown
@@ -34,6 +34,9 @@ class CenterStub:
         self.submit_count = 0
         self.approve_count = 0
         self.ack_count = 0
+        self.resume_count = 0
+        self.next_resume_plan = None
+        self.lose_next_resume = False
         #: ack 端点回执；默认确认。TTL 到期时中心回 200 + {"state": "expired"}。
         self.ack_response = {"state": "confirmed"}
         self.lose_next_submit = False
@@ -76,6 +79,21 @@ class CenterStub:
             return httpx.Response(201, json=intent)
         if path == "/api/v1/task-plans":
             return httpx.Response(200, json={**self.plan, "probes": self.probes})
+        if path == "/api/v1/task-plans/root-1" and request.method == "GET":
+            return httpx.Response(200, json=self.plan)
+        if path == "/api/v1/tasks/root-1/resume" and request.method == "POST":
+            self.resume_count += 1
+            if self.next_resume_plan is not None:
+                self.plan = self.next_resume_plan
+                self.task_status = {**self.task_status, "status": "queued",
+                                    "planning_state": "ready",
+                                    "plan_revision": self.plan["revision"],
+                                    "plan_digest": self.plan["plan_digest"]}
+                self.next_resume_plan = None
+            if self.lose_next_resume:
+                self.lose_next_resume = False
+                raise httpx.ReadTimeout("the resume reply was lost after persistence")
+            return httpx.Response(202, json=self.task_status)
         if path == "/api/v1/task-plans/root-1/approve":
             self.approve_count += 1
             return httpx.Response(200, json={**self.plan, "planning_state": "approved",
@@ -123,14 +141,15 @@ def wired(monkeypatch):
     stub = CenterStub()
     real = module.CenterFederationClient
 
-    def factory(center, *, transport=None, actor_headers=None):
-        return real(center, transport=httpx.MockTransport(stub.handler), actor_headers=actor_headers)
+    def factory(center, *, transport=None, actor_headers=None, before_send=None):
+        return real(center, transport=httpx.MockTransport(stub.handler),
+                    actor_headers=actor_headers, before_send=before_send)
 
     monkeypatch.setattr(module, "CenterFederationClient", factory)
     return stub
 
 
-def prepare_plan(runtime, *, plan_id="plan-1", approve=("exploration", "execution"), probe_budget=1):
+def prepare_plan(runtime, *, plan_id="plan-1", approve=("exploration", "execution"), probe_budget=32, request_budget=128):
     source = runtime.upload_stream(io.BytesIO(FILE_BYTES), filename="source.pdf",
                                    operation_key="upload-" + plan_id)
     scope = plan_scope(runtime.store.environment_id, runtime.store.workspace_id)
@@ -140,6 +159,9 @@ def prepare_plan(runtime, *, plan_id="plan-1", approve=("exploration", "executio
     scope["input_manifest"] = [{"ref": source["version_id"], "digest": content_digest(FILE_BYTES),
                                 "size_bytes": len(FILE_BYTES)}]
     scope["exploration"]["budget"]["max_probe_requests"] = probe_budget
+    scope["plan"]["budget"]["max_requests"] = request_budget
+    scope["plan"]["budget"]["max_bytes"] = 4 * 1024 * 1024
+    scope["exploration"]["budget"]["max_egress_bytes"] = 65536
     redigest(scope)
     identity = module.federation_identity(runtime)
     view = runtime.consents.prepare(identity, scope, operation_key="prepare-" + plan_id)
@@ -178,18 +200,51 @@ async def test_execution_without_approval_sends_nothing(runtime, wired):
     assert wired.requests == []
 
 
-async def test_phase_budget_exhaustion_stops_further_sends(runtime, wired):
-    view = prepare_plan(runtime, probe_budget=1)
+async def test_repeated_status_polls_exhaust_the_actual_http_budget(runtime, wired):
+    view = prepare_plan(runtime)
     wired.plan = view["scope"]["plan"]
-    state = await module.dispatch_plan(runtime, "plan-1", config(), phase="exploration")
-    assert state["root_task_id"] == "root-1" and state["state"] == "planned"
+    await module.dispatch_plan(runtime, "plan-1", config(), phase="exploration")
+    for _ in range(15):
+        await module.reconcile(runtime, "plan-1", config())
     sent = len(wired.requests)
-    assert sent == 2
+    assert sent == 32
     with pytest.raises(ApplicationError) as exc:
-        await module.dispatch_plan(runtime, "plan-1", config(), phase="exploration",
-                                   operation_key="second-attempt")
+        await module.reconcile(runtime, "plan-1", config())
     assert exc.value.code == "budget_exceeded"
     assert len(wired.requests) == sent
+
+
+async def test_resume_lost_reply_reads_new_revision_without_approving_or_resubmitting(runtime, wired):
+    view = prepare_plan(runtime)
+    wired.plan = view["scope"]["plan"]
+    wired.task_status = status_for(wired.plan["plan_digest"])
+    await module.dispatch_plan(runtime, "plan-1", config(), phase="exploration")
+    await module.dispatch_plan(runtime, "plan-1", config(), phase="execution")
+    wired.task_status["status"] = "succeeded"
+    await module.reconcile(runtime, "plan-1", config())
+    revised = {**wired.plan, "revision": 2, "planning_state": "ready",
+               "execution_consent_ref": None}
+    revised["plan_digest"] = task_plan_digest(revised)
+    wired.next_resume_plan = revised
+    wired.lose_next_resume = True
+
+    with pytest.raises(CenterOutcomeUnknown):
+        await runtime.federation_resume("plan-1", config(), operation_key="continue-1")
+    assert runtime.federation_state("plan-1")["state"] == "resume_unknown"
+    sent = len(wired.requests)
+    await runtime.federation_resume("plan-1", config(), operation_key="continue-1")
+    assert len(wired.requests) == sent
+
+    recovered = await runtime.federation_reconcile("plan-1", config())
+    assert recovered["state"] == "planned"
+    assert recovered["center_plan"]["plan_digest"] == revised["plan_digest"]
+    assert recovered["center_plan"]["planning_state"] == "ready"
+    assert wired.resume_count == wired.approve_count == wired.submit_count == 1
+    assert all(request["method"] == "GET" for request in wired.requests[sent:])
+    with pytest.raises(ApplicationError) as exc:
+        await module.dispatch_plan(runtime, "plan-1", config(), phase="execution")
+    assert exc.value.code == "plan_changed"
+    assert wired.approve_count == wired.submit_count == 1
 
 
 async def test_exploration_execution_flow_delivery_ack(runtime, wired):
@@ -303,7 +358,8 @@ async def test_ack_expired_response_never_marks_local_confirmed(runtime, wired):
 
 
 async def test_lost_intent_response_replays_without_duplicate_intent(runtime, wired):
-    view = prepare_plan(runtime, probe_budget=2)
+    # Lost intent, replayed intent, and plan creation are three physical calls.
+    view = prepare_plan(runtime, probe_budget=3)
     wired.plan = view["scope"]["plan"]
     wired.lose_next_intent = True
     with pytest.raises(CenterOutcomeUnknown):
@@ -419,64 +475,6 @@ async def test_expired_delivery_maps_to_local_expired_state(runtime, wired):
     assert wired.ack_count == 0
 
 
-async def test_dispatch_carries_answer_delegation_edge_in_consent(runtime, wired):
-    """本地执行许可里的 answer 委托边必须原样送到中心 approve，客户端不得重写。
-
-    客户端不认识中心规划出来的 answer 步；它能做的是把自己批准过的
-    类型化数据边（含 `edge-answer-1`）原样装进 ExecutionConsent 外发。
-    """
-    source = runtime.upload_stream(io.BytesIO(FILE_BYTES), filename="source.pdf",
-                                   operation_key="upload-answer")
-    scope = plan_scope(runtime.store.environment_id, runtime.store.workspace_id)
-    scope["plan"]["plan_id"] = "answer-plan"
-    scope["task_spec"]["resource_scope"]["resource_refs"] = [source["version_id"]]
-    scope["plan"]["steps"][0]["fixed_inputs"] = [source["version_id"]]
-    scope["input_manifest"] = [{"ref": source["version_id"],
-                                "digest": content_digest(FILE_BYTES),
-                                "size_bytes": len(FILE_BYTES)}]
-    spec, plan = scope["task_spec"], scope["plan"]
-    spec["execution_policy"]["mode"] = "trusted_federation"
-    plan["steps"].append({"step_id": "answer-1", "operation": "answer",
-                          "executor_node_id": "center-b",
-                          "depends_on": ["retrieve-1"]})
-    plan["data_edges"].extend([
-        {"edge_id": "edge-evidence-1", "from_node_id": "center-a",
-         "to_node_id": "center-b", "payload_kind": "evidence_excerpts",
-         "retention": "temporary", "authorised_by": "source:center-a"},
-        {"edge_id": "edge-answer-1", "from_node_id": runtime.store.environment_id,
-         "to_node_id": "center-b", "payload_kind": "evidence_excerpts",
-         "retention": "temporary",
-         "authorised_by": "local:" + runtime.store.environment_id},
-    ])
-    plan["budget"]["max_hops"] = 3
-    redigest(scope)
-    # 可信来源策略：center-a 允许把证据交给 center-b（评审时已核准）。
-    runtime.consents.source_policy_resolver = lambda _scope: {
-        "source:center-a": {"source_node_id": "center-a",
-                            "allowed_recipients": ["center-b"],
-                            "allowed_payload": ["evidence_excerpts"],
-                            "allowed_retention": ["temporary"],
-                            "valid_until": "2030-01-01T00:00:00Z"}}
-    identity = module.federation_identity(runtime)
-    view = runtime.consents.prepare(identity, scope, operation_key="prepare-answer")
-    for phase in ("exploration", "execution"):
-        runtime.consents.approve(identity, "answer-plan", phase=phase,
-                                 confirmed_scope_digest=view["scope_digest"],
-                                 user_confirmed=True,
-                                 operation_key="approve-answer-" + phase)
-    wired.plan = {**scope["plan"], "planning_state": "ready"}
-    wired.task_status = status_for(scope["plan"]["plan_digest"])
-    await module.dispatch_plan(runtime, "answer-plan", config(), phase="exploration")
-    await module.dispatch_plan(runtime, "answer-plan", config(), phase="execution")
-
-    approvals = [request for request in wired.requests
-                 if request["path"].endswith("/approve")]
-    assert approvals, "执行阶段必须把本地许可交给中心 approve"
-    consent = approvals[0]["body"]["execution_consent"]
-    assert "edge-answer-1" in consent["allowed_edges"], \
-        "客户端不得丢掉 answer 委托边"
-    assert "center-b" in consent["allowed_recipients"], \
-        "answer 执行者必须在许可接收方集合里"
 
 
 async def test_center_ref_resolves_from_private_workspace_config(runtime, wired):

@@ -18,29 +18,44 @@ import (
 // 谁来保证这个对象的大小、类型、摘要与它声称的一致？答案是 finalize 时
 // 由服务端核对 —— 而核对的依据就是创建会话时记下的这行。
 type UploadSession struct {
-	CreateIdempotencyKey *string         `json:"-"`
-	RequestDigest        *string         `json:"request_digest,omitempty"`
-	AllocationState      string          `json:"allocation_state"`
-	PartSize             *int64          `json:"part_size,omitempty"`
-	FinalizeDigest       *string         `json:"-"`
-	ID                   string          `json:"id"`
-	OrganizationID       string          `json:"-"`
-	ActorID              string          `json:"-"`
-	ActorKind            string          `json:"-"`
-	Status               string          `json:"status"`
-	ObjectKey            string          `json:"object_key"`
-	MultipartID          string          `json:"-"`
-	Filename             string          `json:"filename"`
-	MIME                 string          `json:"mime"`
-	DeclaredSize         int64           `json:"declared_size"`
-	ActualSize           *int64          `json:"actual_size,omitempty"`
-	DeclaredSHA256       *string         `json:"declared_sha256,omitempty"`
-	VerifiedSHA256       *string         `json:"verified_sha256,omitempty"`
-	Engine               *string         `json:"engine,omitempty"`
-	Options              json.RawMessage `json:"options,omitempty"`
-	Error                *string         `json:"error,omitempty"`
-	CreatedAt            time.Time       `json:"-"`
-	ExpiresAt            time.Time       `json:"expires_at"`
+	ID                   string  `json:"id"`
+	CreateIdempotencyKey *string `json:"-"`
+	RequestDigest        *string `json:"request_digest,omitempty"`
+	AllocationState      string  `json:"allocation_state"`
+	PartSize             *int64  `json:"part_size,omitempty"`
+	FinalizeDigest       *string `json:"-"`
+	Purpose              string  `json:"purpose"`
+	RemoteComputeID      *string `json:"remote_compute_id,omitempty"`
+	// TargetResourceID 是追加式版本上传的目标资源。创建时冻结：只有 permanent
+	// 上传能带它（upload_target_permanent_ck），取值进入创建摘要，重试改值是
+	// 幂等冲突。omitempty：没带就是独立建资源的老行为。
+	TargetResourceID *string `json:"target_resource_id,omitempty"`
+	// IngestStatus 是派生状态，不是列：permanent 上传字节就绪（ready）之前恒
+	// 为 null；就绪后从同组织 DocumentSubmitted 事件的投递位推导
+	// （pending | retrying | ready | rejected）。ready 只表示事件被 ACK
+	// （2xx 或 409 duplicate_event），不是解析/索引完成。
+	// 始终序列化：null 与各状态都是有意义的读取结果。
+	IngestStatus *string `json:"ingest_status"`
+	// IngestError 只在 rejected 时非空，取值只可能是契约枚举 ingest_rejection
+	// 的码；绝不透出上游原始错误/密钥（重试原因只留在 outbox.last_error）。
+	IngestError    *string         `json:"ingest_error"`
+	OrganizationID string          `json:"-"`
+	ActorID        string          `json:"-"`
+	ActorKind      string          `json:"-"`
+	Status         string          `json:"status"`
+	ObjectKey      string          `json:"object_key"`
+	MultipartID    string          `json:"-"`
+	Filename       string          `json:"filename"`
+	MIME           string          `json:"mime"`
+	DeclaredSize   int64           `json:"declared_size"`
+	ActualSize     *int64          `json:"actual_size,omitempty"`
+	DeclaredSHA256 *string         `json:"declared_sha256,omitempty"`
+	VerifiedSHA256 *string         `json:"verified_sha256,omitempty"`
+	Engine         *string         `json:"engine,omitempty"`
+	Options        json.RawMessage `json:"options,omitempty"`
+	Error          *string         `json:"error,omitempty"`
+	CreatedAt      time.Time       `json:"-"`
+	ExpiresAt      time.Time       `json:"expires_at"`
 }
 
 func (s *Store) CreateUploadSession(ctx context.Context, u *UploadSession) error {
@@ -49,14 +64,16 @@ func (s *Store) CreateUploadSession(ctx context.Context, u *UploadSession) error
 	if u.DeclaredSHA256 != nil {
 		sha = *u.DeclaredSHA256
 	}
+	// target_resource_id 与会话同一行冻结：NULL 即独立建资源的老行为；
+	// temporary_compute 带 target 由 upload_target_permanent_ck 拒掉。
 	return s.pool.QueryRow(ctx, `
 		INSERT INTO control.upload_sessions
 		    (id, organization_id, actor_id, actor_kind, status, object_key, upload_id,
-		     filename, mime, declared_size, declared_sha256, expires_at)
-		VALUES ($1,$2,$3,$4,'created',$5,$6,$7,$8,$9,$10,$11)
+		     filename, mime, declared_size, declared_sha256, expires_at, target_resource_id)
+		VALUES ($1,$2,$3,$4,'created',$5,$6,$7,$8,$9,$10,$11,$12)
 		RETURNING created_at`,
 		u.ID, u.OrganizationID, u.ActorID, u.ActorKind, u.ObjectKey, u.MultipartID,
-		u.Filename, u.MIME, u.DeclaredSize, sha, u.ExpiresAt).Scan(&u.CreatedAt)
+		u.Filename, u.MIME, u.DeclaredSize, sha, u.ExpiresAt, nullableTarget(u.TargetResourceID)).Scan(&u.CreatedAt)
 }
 
 func (s *Store) UploadSession(ctx context.Context, orgID, id string) (*UploadSession, error) {
@@ -64,14 +81,20 @@ func (s *Store) UploadSession(ctx context.Context, orgID, id string) (*UploadSes
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, actor_id, actor_kind, status, object_key, coalesce(upload_id, ''),
 		       filename, mime, declared_size, actual_size, declared_sha256, verified_sha256,
-		       engine, options, error, created_at, expires_at, create_idempotency_key, request_digest, allocation_state, part_size, finalize_digest
+		       engine, options, error, created_at, expires_at, create_idempotency_key, request_digest, allocation_state, part_size, finalize_digest,
+		       purpose, remote_compute_id, target_resource_id
 		FROM control.upload_sessions
 		WHERE id = $1 AND organization_id = $2`, id, orgID).
 		Scan(&u.ID, &u.ActorID, &u.ActorKind, &u.Status, &u.ObjectKey, &u.MultipartID,
 			&u.Filename, &u.MIME, &u.DeclaredSize, &u.ActualSize, &u.DeclaredSHA256,
-			&u.VerifiedSHA256, &u.Engine, &u.Options, &u.Error, &u.CreatedAt, &u.ExpiresAt, &u.CreateIdempotencyKey, &u.RequestDigest, &u.AllocationState, &u.PartSize, &u.FinalizeDigest)
+			&u.VerifiedSHA256, &u.Engine, &u.Options, &u.Error, &u.CreatedAt, &u.ExpiresAt, &u.CreateIdempotencyKey, &u.RequestDigest, &u.AllocationState, &u.PartSize, &u.FinalizeDigest, &u.Purpose, &u.RemoteComputeID, &u.TargetResourceID)
 	if err != nil {
 		return nil, norows(err)
+	}
+	// ingest_status 永远从 durable outbox 推导：字节没 ready 之前恒 null，
+	// ready 之后缺事件是 pending 而不是 ready。
+	if err := s.attachIngestStatus(ctx, orgID, u); err != nil {
+		return nil, err
 	}
 	return u, nil
 }
@@ -134,31 +157,32 @@ func (s *Store) MarkUploadVerified(ctx context.Context, orgID, id, sha256 string
 			uploadID, objectKey, filename, mime string
 			actorID, actorKind, engine          string
 			size                                int64
+			purpose, remoteComputeID            string
+			target                              *string
 			options                             json.RawMessage
 		)
+		// target 只读存储行的冻结值：finalize 输入里没有它，也绝不能从参数传进来。
 		if err := tx.QueryRow(ctx, `
 			UPDATE control.upload_sessions
 			SET status = 'ready', verified_sha256 = $3, updated_at = now()
 			WHERE id = $1 AND organization_id = $2 AND status = 'verifying'
 			RETURNING id, object_key, filename, mime, coalesce(actual_size, 0),
-			          coalesce(engine, ''), options, actor_id, actor_kind`,
+			          coalesce(engine, ''), options, actor_id, actor_kind,
+			          coalesce(purpose, 'permanent'), coalesce(remote_compute_id, ''),
+			          target_resource_id`,
 			id, orgID, sha256).
 			Scan(&uploadID, &objectKey, &filename, &mime, &size,
-				&engine, &options, &actorID, &actorKind); err != nil {
+				&engine, &options, &actorID, &actorKind, &purpose, &remoteComputeID, &target); err != nil {
 			return norows(err)
 		}
-		payload, err := json.Marshal(map[string]any{
-			"upload_id":  uploadID,
-			"object_key": objectKey,
-			"filename":   filename,
-			"mime":       mime,
-			"size":       size,
-			"sha256":     sha256,
-			"engine":     engine,
-			"options":    options,
-			"actor_id":   actorID,
-			"actor_kind": actorKind,
-		})
+		event := DocumentSubmittedPayload{
+			UploadID: uploadID, ObjectKey: objectKey, Filename: filename,
+			MIME: mime, Size: size, SHA256: sha256, Engine: engine,
+			Options: options, ActorID: actorID, ActorKind: actorKind,
+			Purpose: purpose, RemoteComputeID: remoteComputeID,
+			TargetResourceID: target,
+		}
+		payload, err := json.Marshal(event.marshalMap())
 		if err != nil {
 			return err
 		}
@@ -219,6 +243,131 @@ func nullable(s string) any {
 
 var ErrUploadIdempotencyConflict = errors.New("upload idempotency conflict")
 
+func purposeOrDefault(purpose string) string {
+	if purpose == "" {
+		return "permanent"
+	}
+	return purpose
+}
+
+func nullableRemoteCompute(id *string) any {
+	if id == nil || *id == "" {
+		return nil
+	}
+	return *id
+}
+
+// nullableTarget 把空目标压成 SQL NULL：空串不是"指向一个叫空串的资源"，
+// 它是没有目标的老行为；存空串会让事件里多一个无意义的 target 键。
+func nullableTarget(id *string) any {
+	if id == nil || *id == "" {
+		return nil
+	}
+	return *id
+}
+
+// ClassifyIngestRejection 判断 corpus 的错误码是不是对 DocumentSubmitted 的
+// **确定性**拒绝（契约枚举 ingest_rejection）。只有这组码是终态；其余一律按
+// 暂时故障重试 —— 把可恢复的失败判成终态，已校验的上传就永远进不了语料库。
+func ClassifyIngestRejection(code string) (contracts.IngestRejection, bool) {
+	r := contracts.IngestRejection(code)
+	return r, r.Valid()
+}
+
+// DocumentSubmittedPayload 是 DocumentSubmitted 事件的命名载荷。
+// TargetResourceID 只从存储行取：finalize 输入里没有它，方法签名里也不收它。
+type DocumentSubmittedPayload struct {
+	UploadID         string
+	ObjectKey        string
+	Filename         string
+	MIME             string
+	Size             int64
+	SHA256           string
+	Engine           string
+	Options          json.RawMessage
+	ActorID          string
+	ActorKind        string
+	Purpose          string
+	RemoteComputeID  string
+	TargetResourceID *string
+}
+
+// marshalMap 把载荷压成事件 JSON。target 为空时不写键：corpus 侧
+// p.get("target_resource_id") 缺键即独立建资源，与老事件字节一致。
+func (p DocumentSubmittedPayload) marshalMap() map[string]any {
+	m := map[string]any{
+		"upload_id":         p.UploadID,
+		"object_key":        p.ObjectKey,
+		"filename":          p.Filename,
+		"mime":              p.MIME,
+		"size":              p.Size,
+		"sha256":            p.SHA256,
+		"engine":            p.Engine,
+		"options":           p.Options,
+		"actor_id":          p.ActorID,
+		"actor_kind":        p.ActorKind,
+		"purpose":           p.Purpose,
+		"remote_compute_id": p.RemoteComputeID,
+	}
+	if p.TargetResourceID != nil && *p.TargetResourceID != "" {
+		m["target_resource_id"] = *p.TargetResourceID
+	}
+	return m
+}
+
+// attachIngestStatus 从 durable outbox 推导派生 ingest 状态。
+// 规则：字节没 ready（或非 permanent）恒 null；ready 后缺事件是 pending；
+// delivered_at 有值是 ready；rejected_at 有值是 rejected（ingest_error 为
+// 落库的拒绝码，只可能是 ingest_rejection 枚举里的值）；
+// 否则 last_error 有值是 retrying，无值是 pending。
+// temporary_compute 没有 ingest 语义：即使 ready 也不推导，保持 null。
+func (s *Store) attachIngestStatus(ctx context.Context, orgID string, u *UploadSession) error {
+	u.IngestStatus = nil
+	u.IngestError = nil
+	if u.Status != string(contracts.UploadStatusReady) || purposeOrDefault(u.Purpose) != "permanent" {
+		return nil
+	}
+	var deliveredAt, rejectedAt *time.Time
+	var lastErr *string
+	var attempts int
+	err := s.pool.QueryRow(ctx, `
+		SELECT delivered_at, rejected_at, last_error, attempts
+		FROM control.control_outbox
+		WHERE organization_id = $1 AND type = 'DocumentSubmitted'
+		  AND payload->>'upload_id' = $2
+		ORDER BY created_at DESC
+		LIMIT 1`, orgID, u.ID).Scan(&deliveredAt, &rejectedAt, &lastErr, &attempts)
+	if err != nil {
+		if norows(err) == ErrNotFound {
+			u.IngestStatus = new(string(contracts.IngestStatusPending))
+			return nil
+		}
+		return err
+	}
+	switch {
+	case deliveredAt != nil:
+		u.IngestStatus = new(string(contracts.IngestStatusReady))
+	case rejectedAt != nil:
+		u.IngestStatus = new(string(contracts.IngestStatusRejected))
+		// 拒绝行的 last_error 只由 MarkOutboxRejected 写入，且只写枚举码；
+		// 读出时再过一遍白名单，历史脏值落回最保守的 invalid_upload_target。
+		code := contracts.IngestRejectionInvalidUploadTarget
+		if lastErr != nil {
+			if known, ok := ClassifyIngestRejection(*lastErr); ok {
+				code = known
+			}
+		}
+		u.IngestError = new(string(code))
+	case attempts > 0 && lastErr != nil && *lastErr != "":
+		// 重试中的原因（HTTP 码、上游原文）只留在 last_error 给运维：上游载荷
+		// 可能带密钥或内部地址。对上传者 retrying 本身就是全部信息。
+		u.IngestStatus = new(string(contracts.IngestStatusRetrying))
+	default:
+		u.IngestStatus = new(string(contracts.IngestStatusPending))
+	}
+	return nil
+}
+
 // ClaimUpload atomically binds the actor's business key, quota reservation and
 // random object key. No S3 operation may run before this transaction commits.
 func (s *Store) ClaimUpload(ctx context.Context, u *UploadSession, pages int) (*UploadSession, bool, error) {
@@ -262,9 +411,9 @@ func (s *Store) ClaimUpload(ctx context.Context, u *UploadSession, pages int) (*
 		}
 		id = auth.NewID()
 		_, err := tx.Exec(ctx, `INSERT INTO control.upload_sessions
-   (id,organization_id,actor_id,actor_kind,status,object_key,filename,mime,declared_size,declared_sha256,expires_at,create_idempotency_key,request_digest,allocation_state,part_size,reserved_pages)
-   VALUES($1,$2,$3,$4,'created',$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13,$14)`,
-			id, u.OrganizationID, u.ActorID, u.ActorKind, u.ObjectKey, u.Filename, u.MIME, u.DeclaredSize, u.DeclaredSHA256, u.ExpiresAt, u.CreateIdempotencyKey, u.RequestDigest, u.PartSize, pages)
+   (id,organization_id,actor_id,actor_kind,status,object_key,filename,mime,declared_size,declared_sha256,expires_at,create_idempotency_key,request_digest,allocation_state,part_size,reserved_pages,purpose,remote_compute_id,target_resource_id)
+   VALUES($1,$2,$3,$4,'created',$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13,$14,$15,$16,$17)`,
+			id, u.OrganizationID, u.ActorID, u.ActorKind, u.ObjectKey, u.Filename, u.MIME, u.DeclaredSize, u.DeclaredSHA256, u.ExpiresAt, u.CreateIdempotencyKey, u.RequestDigest, u.PartSize, pages, purposeOrDefault(u.Purpose), nullableRemoteCompute(u.RemoteComputeID), nullableTarget(u.TargetResourceID))
 		created = err == nil
 		return err
 	})

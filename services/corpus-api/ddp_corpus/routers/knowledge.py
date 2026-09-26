@@ -16,6 +16,7 @@ from ddp_corpus.policy import document_resource_id, require_document, visible_do
 from ddp_corpus.knowledge import generate as generate_knowledge
 from ddp_corpus.usage import record_usage
 from ddp_corpus.routers.wikis import router as versioned_wiki_router
+from ddp_corpus.wiki import claim_backlinks
 from ddp_corpus.models import (
     Assertion, Citation, Document, Evidence, ExtractionItem, ExtractionRun, GraphEdge, KnowledgeEntity,
     KnowledgeReview, ResourceVersion, WikiEntry, WikiSection, WikiSentence,
@@ -279,6 +280,7 @@ async def backlinks(evidence_id: str, actor: Actor = Depends(current_actor),
             label = field_name if target else row.source_id
         result.append({"source_kind": row.source_kind, "source_id": row.source_id,
                        "role": row.role, "label": label})
+    result.extend(await claim_backlinks(session, actor, evidence_id))
     return {"evidence_id": evidence_id, "backlinks": result}
 
 

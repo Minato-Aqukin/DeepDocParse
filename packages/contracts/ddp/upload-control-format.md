@@ -14,6 +14,56 @@ returns the original upload; changed fields return `409 idempotency_conflict`.
 Older callers may omit the key (and digest), retaining independent-create behavior.
 They cannot recover a lost initial response by key.
 
+## Uploading a new resource version
+
+Permanent uploads may specify `target_resource_id`. It is part of the immutable
+upload identity and canonical creation digest; changing the target on retry is
+an idempotency conflict. Omitting it retains independent-resource creation.
+Temporary-compute uploads cannot specify a resource target.
+
+Before allocating storage, control asks corpus
+`GET /internal/upload-target/{resource_id}[?sha256=<declared>]` as the uploading
+actor. The single corpus predicate (`require_upload_target`) requires the target to
+be live, in the same organization, owned by the upload's `actor_id`, not withdrawn,
+and — when a digest is declared — not already holding a version with that source
+digest. Denials are `404 resource_not_found` / `409 resource_version_exists`; an
+unreachable or malformed answer is `502 upload_target_unavailable` and allocates
+nothing. A replay of an existing creation key skips admission and returns the
+original session (the first upload may already have landed in the target).
+Finalize does not accept a target: the `DocumentSubmitted` payload takes it only
+from the stored session row.
+
+Corpus repeats the same predicate when consuming the verified `DocumentSubmitted`
+event. A successful target upload appends one fixed ResourceVersion to that
+resource and binds its own parse attempt, without rewriting prior versions,
+citations, or the resource's `copied_from` ancestry. Raw uploaded bytes are not a
+metadata-only copy of another logical resource.
+
+## Registration (ingest) state
+
+After bytes are verified (`status=ready`), a permanent upload exposes
+`ingest_status` (enum `ingest_status`), derived from its durable outbox event:
+
+| ingest_status | Meaning |
+| --- | --- |
+| null | Bytes not yet verified, or a temporary-compute upload |
+| pending | Event not yet acknowledged (including a missing event) |
+| retrying | A delivery attempt failed transiently; the same event is retried with backoff |
+| ready | Corpus acknowledged registration; **not** parse/index completion |
+| rejected | Corpus deterministically refused the event; terminal, never re-delivered |
+
+Delivery outcomes: 2xx, or `409` with code `duplicate_event`, is acknowledgement.
+For `DocumentSubmitted`, a 4xx (other than 401/403/408/429) whose error code is in
+enum `ingest_rejection` (`resource_not_found`, `resource_version_exists`,
+`invalid_upload_target`, `idempotency_conflict`, `source_missing`) is a terminal
+rejection; `ingest_error` then carries exactly that code. Everything else —
+5xx, auth/config errors, other conflicts such as `document_state_changed`,
+responses without an error code — is transient: `ingest_error` stays null and the
+diagnostic cause stays on the server-side event row only.
+
+Clients waiting for registration poll the same upload ID; a client timeout means
+"not yet confirmed", never a reason to re-send bytes or create a new session.
+
 ## State and recovery
 
 `allocation_state` is separate from content status:

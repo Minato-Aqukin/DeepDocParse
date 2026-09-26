@@ -55,10 +55,13 @@ class LocalWikiStore:
     def __init__(self, store):
         self.store = store
 
-    def freeze(self, sources, limits):
+    def freeze(self, sources, limits, *, query=""):
+        """Select bounded original evidence, without losing a requested source."""
         if not isinstance(sources, list) or not 1 <= len(sources) <= 50:
             raise ApplicationError("wiki_source_invalid", "select 1..50 fixed local source versions")
-        frozen, seen = [], set()
+        if len(sources) > limits["max_evidence"]:
+            raise ApplicationError("wiki_budget_exceeded", "the evidence budget cannot represent every selected source")
+        frozen, seen, candidates = [], set(), []
         with self.store.lock:
             for source in sources:
                 version_id = source["source_version_id"]
@@ -67,13 +70,39 @@ class LocalWikiStore:
                 if version["resource_id"] != source["resource_id"] or version_id in seen:
                     raise ApplicationError("wiki_source_invalid", "source ownership or unique version binding is invalid")
                 seen.add(version_id)
+                # Rank within each selected version using the existing local index.
+                # A late matching page must not disappear behind a first-N slice.
+                ranked = self.store.keyword_search(query, [version_id], limits["max_evidence"])
                 rows = self.store.db.execute("SELECT id FROM evidence WHERE version_id=? ORDER BY seq,id LIMIT ?",
-                                             (version_id, limits["max_evidence"] + 1)).fetchall()
-                if not rows:
+                                             (version_id, limits["max_evidence"])).fetchall()
+                identifiers = dict.fromkeys([hit["evidence_id"] for hit in ranked] + [row["id"] for row in rows])
+                if not identifiers:
                     raise ApplicationError("wiki_source_unavailable", "source version has no original evidence")
-                frozen.extend({**self.store.evidence(row["id"]), "local_binding": {
-                    key: version[key] for key in ("id", "resource_id", "source_digest", "parse_revision")}}
-                    for row in rows)
+                candidates.append((version, iter(identifiers)))
+            used_chars = 2  # Canonical JSON array brackets; evidence is never truncated.
+            first_round = True
+            while candidates and len(frozen) < limits["max_evidence"]:
+                remaining = []
+                for version, identifiers in candidates:
+                    selected = None
+                    for evidence_id in identifiers:
+                        item = {**self.store.evidence(evidence_id), "local_binding": {
+                            key: version[key] for key in ("id", "resource_id", "source_digest", "parse_revision")}}
+                        size = len(json_bytes(item).decode()) + bool(frozen)
+                        if used_chars + size <= limits["max_input_chars"]:
+                            selected = item
+                            used_chars += size
+                            break
+                    if selected is None:
+                        if first_round:
+                            raise ApplicationError("wiki_budget_exceeded", "a selected source cannot fit the original evidence budget")
+                        continue
+                    frozen.append(selected)
+                    remaining.append((version, identifiers))
+                    if len(frozen) == limits["max_evidence"]:
+                        break
+                candidates = remaining
+                first_round = False
         validate_original_evidence(frozen, limits)
         return frozen
 
@@ -101,24 +130,42 @@ class LocalWikiStore:
             if len(revision["body"].encode()) > 2 * 1024 * 1024:
                 raise ApplicationError("wiki_response_too_large", "Wiki revision exceeds the 2 MiB read budget")
             body = json.loads(revision["body"])
-            stale = {}
+            # Reasons are the wiki_stale_reason contract values (the shared Wiki view labels
+            # them). A page goes stale for a new version only when none of its dependencies
+            # on that resource sits on the resource's latest ready version (wiki-format).
+            stale, on_latest, latest = {}, {}, {}
             for dep in body["dependency_manifest"]:
+                if dep.get("local_version_id") is None:
+                    # Foreign references kept from an imported bundle: no local source can
+                    # change under them; their review state travels with the dependency.
+                    continue
                 reason = None
                 try:
                     current = self.store.evidence(dep["evidence_id"])
                     version = self.store.version(dep["local_version_id"])
-                    if version["state"] != "ready":
+                    if version["state"] == "withdrawn":
+                        reason = "source_withdrawn"
+                    elif version["state"] != "ready":
                         reason = "source_unavailable"
-                    elif json_bytes(current["evidence"]) != json_bytes(dep["original"]):
-                        reason = "source_binding_changed"
-                    elif hashlib.sha256(current["excerpt"].encode()).hexdigest() != dep["local_excerpt_sha256"]:
-                        reason = "source_content_changed"
                     elif version["parse_revision"] != dep["local_parse_revision"]:
                         reason = "parse_revision_changed"
+                    elif (json_bytes(current["evidence"]) != json_bytes(dep["original"])
+                          or hashlib.sha256(current["excerpt"].encode()).hexdigest() != dep["local_excerpt_sha256"]):
+                        reason = "source_digest_changed"
                 except ApplicationError:
                     reason = "source_unavailable"
                 if reason:
                     stale.setdefault(dep["page_key"], []).append(reason)
+                    continue
+                resource_id = version["resource_id"]
+                if resource_id not in latest:
+                    ready = [v for v in self.store.resource_versions(resource_id) if v["state"] == "ready"]
+                    latest[resource_id] = ready[0]["id"] if ready else None
+                key = (dep["page_key"], resource_id)
+                on_latest[key] = on_latest.get(key, False) or version["id"] == latest[resource_id]
+            for (page_key, _resource), current_version in on_latest.items():
+                if not current_version:
+                    stale.setdefault(page_key, []).append("source_version_changed")
             body.update(stale=bool(stale), stale_reasons={k: sorted(set(v)) for k, v in stale.items()})
             for page in body["pages"]:
                 page["stale"] = page["page_key"] in stale
@@ -229,9 +276,23 @@ class LocalWikiStore:
                              "local_parse_revision": version["parse_revision"],
                              "local_excerpt_sha256": hashlib.sha256(item["excerpt"].encode()).hexdigest(),
                              "original": item["evidence"]})
+        deps.extend(copy.deepcopy(dep) for dep in result.get("dependency_manifest", [])
+                    if dep.get("local_version_id") is None)
         if prior:
-            retained = {p["page_key"] for p in pages if p.get("human_paragraphs")}
-            deps.extend(copy.deepcopy(d) for d in prior["dependency_manifest"] if d["page_key"] in retained)
+            retained = {p["page_key"] for p in pages if kind == "human_edit" or p.get("human_paragraphs")}
+            existing = {e["evidence_id"] for e in self.store.db.execute(
+                "SELECT id AS evidence_id FROM evidence").fetchall()}
+            live = {v["id"] for v in self.store.versions()}
+            for old in prior["dependency_manifest"]:
+                if old["page_key"] in retained and old.get("local_version_id") is None:
+                    deps.append(copy.deepcopy(old))
+                    continue
+                if (old["page_key"] in retained and old["evidence_id"] in existing
+                        and old["local_version_id"] in live):
+                    # A withdrawn source stays visible through the old revision's
+                    # rows; the new draft cannot re-insert a version row that no
+                    # longer exists, and foreign keys forbid dangling bindings.
+                    deps.append(copy.deepcopy(old))
         unique = {(d["page_key"], d["evidence_id"]): d for d in deps}
         deps = list(unique.values())
         body = {"id": revision_id, "wiki_id": wiki_id, "base_revision_id": base_revision_id,
@@ -241,6 +302,8 @@ class LocalWikiStore:
                 "merge_conflicts": conflicts, "semantic_review": "needs_review", "source_type": "generated",
                 "protocol": result.get("protocol", "legacy-cited-wiki/1"),
                 "decoder_revision": result.get("decoder_revision", "legacy-citations/1")}
+        if result.get("imported_version_id"):
+            body["imported_version_id"] = result["imported_version_id"]
         if len(json_bytes(body)) > 2 * 1024 * 1024:
             raise ApplicationError("wiki_budget_exceeded", "Wiki revision exceeds its 2 MiB storage/read budget")
         self.store.db.execute("INSERT INTO wiki_revisions VALUES(?,?,?,?,?,?)",
@@ -250,6 +313,8 @@ class LocalWikiStore:
         if count != 1:
             raise ApplicationError("revision_conflict", "Wiki changed before this revision could commit")
         for dep in deps:
+            if dep.get("local_version_id") is None:
+                continue
             self.store.db.execute("INSERT INTO wiki_dependencies VALUES(?,?,?,?,?)",
                 (revision_id, dep["page_key"], dep["evidence_id"], dep["local_version_id"], json.dumps(dep)))
         if edit:

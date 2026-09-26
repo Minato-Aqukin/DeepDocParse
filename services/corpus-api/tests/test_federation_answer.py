@@ -18,7 +18,7 @@ import respx
 from conftest import SERVICE
 from ddp_corpus import federation, federation_tasks, upstream
 from ddp_corpus.config import settings
-from federation_two_node import TwoNodeFixture
+from federation_two_node import A_KEY, NODE_A, NODE_B, TwoNodeFixture
 from test_federation_probes import NODE, configure_federation, indexed_source, publish_collection
 from test_federation_tasks import (
     PEER_NODE,
@@ -35,7 +35,6 @@ from test_federation_tasks import (
     task_spec,
 )
 from test_federation_two_node import (
-    NODE_B,
     approve_task as two_node_approve,
     create_intent as two_node_create,
     exploration as two_node_exploration,
@@ -536,11 +535,9 @@ async def test_insufficient_evidence_never_generates_and_keeps_bindings_empty(
 
 @pytest.fixture
 async def two_node(tmp_path, monkeypatch):
-    # B 是固定身份 node-b、没有控制面的真子进程：绑不上持久身份、验不了
-    # Ed25519 信任链，只能走开发档位 shared_token_insecure（B 读进程环境变量）。
-    # 节点凭证形态由进程内 PeerCaller 用例与 test_federation_peer_client.py 覆盖。
-    monkeypatch.setenv("FEDERATION_PEER_AUTH", "shared_token_insecure")
-    monkeypatch.setenv("ALLOW_INSECURE_DEFAULTS", "true")
+    # 与 test_federation_two_node.py 同一形态：B 用批准 A 的信任文件启动，
+    # A 用 A_KEY 现签每一张单次凭证。节点凭证的密码学由进程内用例另行覆盖，
+    # 这里量的是真实回环 HTTP 上的正文跨节点进入 prompt。
     fixture = await TwoNodeFixture.create(
         tmp_path, b_texts=("beta federation keyword fact",))
     try:
@@ -558,16 +555,28 @@ async def test_two_node_remote_excerpt_reaches_real_prompt(
     A 通过生产的 `PeerClient` 走真实回环 HTTP 取回。旧行为下 A 拿到的信封
     没有正文，prompt 里只有 `(excerpt unavailable)`。
     """
-    monkeypatch.setattr(settings, "bundle_node_id", "node-a")
-    # 与 two_node 夹具同档位：真子进程 B 没有控制面，A 侧也必须用共享口令。
-    monkeypatch.setattr(settings, "federation_peer_auth", "shared_token_insecure")
-    monkeypatch.setattr(settings, "federation_peer_token", "peer-a")
+    from ddp_corpus import node_identity
+
+    from node_credentials_fixture import LocalControlSigner
+
+    monkeypatch.setattr(settings, "bundle_node_id", NODE_A)
+    node_identity.reset()
+    node_identity.bind_static_for_tests(NODE_A)
+    from ddp_corpus import federation_tasks as _tasks
+    from ddp_corpus.federation_peers import PeerDirectory, parse_peers
+
+    _signer = LocalControlSigner(issuer_node_id=NODE_A, key=A_KEY)
+
+    def _factory(actor, delegation=None):
+        _peers = parse_peers(settings.federation_peers,
+                             allow_loopback=settings.federation_allow_loopback)
+        return PeerDirectory(_peers, actor=actor, transport=None,
+                             signer=_signer, delegation=delegation)
+
+    monkeypatch.setattr(_tasks, "peer_directory", _factory)
     monkeypatch.setattr(settings, "federation_admissions_enabled", True)
     monkeypatch.setattr(settings, "federation_peers", two_node.peers_json())
     monkeypatch.setattr(settings, "federation_allow_loopback", True)
-    monkeypatch.setattr(settings, "chat_url", "")
-    monkeypatch.setattr(settings, "chat_model", "")
-
     async def _embed(_http, _text):
         return [0.1, 0.2, 0.3, 0.4]
 

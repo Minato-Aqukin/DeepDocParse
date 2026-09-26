@@ -1,0 +1,4619 @@
+{
+ "id": "core-f-gpu-retest-20260925",
+ "scope": "SINGLE-CENTER-WEB-PLAN §4F「最后统一用高性能服务复测的项目」第 1–3 项；第 4 项（人工语义评审）仍待人做",
+ "date": "2026-09-25",
+ "code": "本机工作树（A–E 全部未提交改动 + 本轮 Wiki 修复）。服务器 /root/src/DeepDocParse 是 09-03 的旧拷贝、不是 git 仓库，没用它跑任何东西",
+ "hardware": {
+  "instance": "AutoDL ddp-deploy（pro-788473b34c9c）",
+  "gpu": "RTX 4090 D 24GB，驱动 580.105.08",
+  "runtime": "vLLM 0.27.1（/root/serve.sh）",
+  "billing": "¥1.88/h；约 00:11 开机、00:43 关机，约 32 分钟；账户余额 ¥686.04 → ¥685.08（-¥0.96）"
+ },
+ "topology": "本机单中心栈（B 栈的 control/web/PG/redis/MinIO 与 bge-m3 CPU 不变）只把对话与视觉模型换成远端：SSH 本地转发 127.0.0.1:48280→18002（qwen3-4b-instruct）、48281→18001（deepseek-ocr-2）。Cloudflare 穿透不可用：cloudflared 的 ingress 主机名是 ddp.cauc.moe（不是 www），且服务器上 cloudflared 与服务栈都没在跑（www→TLS alert 40，ddp→530）",
+ "models": {
+  "chat": "Qwen3-4B-Instruct-2507（vLLM，max_model_len 16384，temperature 0）",
+  "vision": "DeepSeek-OCR-2（vLLM，prompt 'Free OCR.'）",
+  "embedding": "bge-m3 Q8_0（本机 llama.cpp CPU，与 C/D 相同）",
+  "registry": {
+   "parse_engines": {
+    "borndigital": {
+     "endpoint": "inproc://borndigital",
+     "runtime": "borndigital",
+     "default": true,
+     "capabilities": [
+      "parse"
+     ]
+    }
+   },
+   "embedding_models": {
+    "bge-m3": {
+     "endpoint": "http://127.0.0.1:48181",
+     "runtime": "llama.cpp",
+     "default": true,
+     "capabilities": [
+      "dense"
+     ]
+    }
+   },
+   "vqa_models": {
+    "deepseek-ocr-2": {
+     "endpoint": "http://127.0.0.1:48281",
+     "default": true,
+     "capabilities": [
+      "vision",
+      "no_instruct"
+     ],
+     "options": {
+      "transcribe_prompt": "Free OCR."
+     }
+    },
+    "qwen3-4b-instruct": {
+     "endpoint": "http://127.0.0.1:48280",
+     "capabilities": [
+      "instruct"
+     ]
+    }
+   }
+  }
+ },
+ "qa": {
+  "command": ".dev-logs/f-20260925/c_qa.py 3（与 C 相同的冻结题：5 个单篇正向 + 2 个负样本，各 3 次）",
+  "summary": {
+   "pico-core-frequency": "3/3 正确：Dual-core Cortex-M0+、133 MHz，均引 p3 headline features",
+   "esp32-cpu": "3/3 正确：one or two Xtensa LX6、240 MHz，引 p25。CPU 1.7B 上这题 3/3 误拒",
+   "esp32-radio": "Wi-Fi 3/3 正确（802.11b/g/n、150 Mbps）。蓝牙一句写成 'supports Bluetooth version Bluetooth® (including Bluetooth LE)'：1.7B 的 '4.0' 虚构没了，但仍没答出 v4.2 —— 'Compliant with Bluetooth v4.2' 那句三路检索都没召回（与 C 相同），模型拿到的两块证据里都没有 'v4.2'。属检索缺口，模型没有编",
+   "attention-en-de-bleu": "3/3 正确：28.4 BLEU、领先 2.0 BLEU 以上。1.7B 上的 EN-FR 错配没再出现",
+   "attention-multi-head": "3/3 正确：8 头、d_k=d_v=64",
+   "pico-private-board-serial": "3/3 拒答（检索到了段落，回答模型判断不足以回答）",
+   "pico-off-topic": "3/3 在门控处拒答（no_evidence_in_turn）"
+  },
+  "structure": "21/21 次结构有效；44 条引用全部：在模型上下文内、固定版本、固定解析、页码/bbox 相符、摘录在原文内、块为当前；他人访问 404",
+  "latency_seconds": "正向 5.5–14.5，门控拒答 0.8–1.0",
+  "vision_verification": "21/21 verified=false、degraded=vision_unavailable。corpus 层问答核对把图发给对话模型（纯文本），不会按能力选 OCR-2，也没有 transcribe_prompt（corpus config.py 的注释写明未移植）。这是设计缺口，不是模型问题",
+  "runs": [
+   {
+    "case": "pico-core-frequency",
+    "kind": "positive",
+    "run": 1,
+    "conversation_id": "bd0566c956d6410291aae043d331ded3",
+    "seconds": 14.5,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题要求根据Pico数据表的headline features获取具体处理器核心和最大频率信息，属于需要新事实的查询，且无已有证",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.7628
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.7021
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.7113
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.6843
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.7021,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The RP2040 on the Raspberry Pi Pico has dual-core Cortex-M0+ processors.",
+      "unsupported": false,
+      "evidence_ids": [
+       "40924dbd45c44975a798e20dedbdc224"
+      ],
+      "citations": [
+       {
+        "evidence_id": "40924dbd45c44975a798e20dedbdc224",
+        "page_idx": 3,
+        "bbox": [
+         71.5,
+         474.6,
+         524.1,
+         763.6
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "Dual-core cortex M0+ at up to 133 MHz"
+        ],
+        "content_head": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequ"
+       }
+      ]
+     },
+     {
+      "text": "The maximum core frequency of the RP2040 processor cores is 133 MHz.",
+      "unsupported": false,
+      "evidence_ids": [
+       "40924dbd45c44975a798e20dedbdc224"
+      ],
+      "citations": [
+       {
+        "evidence_id": "40924dbd45c44975a798e20dedbdc224",
+        "page_idx": 3,
+        "bbox": [
+         71.5,
+         474.6,
+         524.1,
+         763.6
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "Dual-core cortex M0+ at up to 133 MHz"
+        ],
+        "content_head": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequ"
+       }
+      ]
+     }
+    ],
+    "answer": "The RP2040 on the Raspberry Pi Pico has dual-core Cortex-M0+ processors. The maximum core frequency of the RP2040 processor cores is 133 MHz.",
+    "facts_present": [
+     true,
+     true,
+     true
+    ],
+    "refused": false
+   },
+   {
+    "case": "pico-core-frequency",
+    "kind": "positive",
+    "run": 2,
+    "conversation_id": "f5d2b0f39c1a441ab99306f2f27d525d",
+    "seconds": 8.0,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题要求根据Pico datasheet的headline features获取具体处理器核心和最大频率信息，当前无已有证据支持",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.7628
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.7021
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.7113
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.6843
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.7021,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The RP2040 on the Raspberry Pi Pico has dual-core Cortex-M0+ processors.",
+      "unsupported": false,
+      "evidence_ids": [
+       "40924dbd45c44975a798e20dedbdc224"
+      ],
+      "citations": [
+       {
+        "evidence_id": "40924dbd45c44975a798e20dedbdc224",
+        "page_idx": 3,
+        "bbox": [
+         71.5,
+         474.6,
+         524.1,
+         763.6
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "Dual-core cortex M0+ at up to 133 MHz"
+        ],
+        "content_head": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequ"
+       }
+      ]
+     },
+     {
+      "text": "The maximum core frequency of the RP2040 processor cores is 133 MHz.",
+      "unsupported": false,
+      "evidence_ids": [
+       "40924dbd45c44975a798e20dedbdc224"
+      ],
+      "citations": [
+       {
+        "evidence_id": "40924dbd45c44975a798e20dedbdc224",
+        "page_idx": 3,
+        "bbox": [
+         71.5,
+         474.6,
+         524.1,
+         763.6
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "Dual-core cortex M0+ at up to 133 MHz"
+        ],
+        "content_head": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequ"
+       }
+      ]
+     }
+    ],
+    "answer": "The RP2040 on the Raspberry Pi Pico has dual-core Cortex-M0+ processors. The maximum core frequency of the RP2040 processor cores is 133 MHz.",
+    "facts_present": [
+     true,
+     true,
+     true
+    ],
+    "refused": false
+   },
+   {
+    "case": "pico-core-frequency",
+    "kind": "positive",
+    "run": 3,
+    "conversation_id": "60b5c5637f8b459da41dba2011febe77",
+    "seconds": 9.1,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题要求根据Pico数据表的headline features获取具体处理器核心和最大频率信息，属于需要新事实验证的内容，且无已",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.7628
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.7021
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.7113
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.6843
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.7021,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The RP2040 on the Raspberry Pi Pico has dual-core Cortex-M0+ processors.",
+      "unsupported": false,
+      "evidence_ids": [
+       "40924dbd45c44975a798e20dedbdc224"
+      ],
+      "citations": [
+       {
+        "evidence_id": "40924dbd45c44975a798e20dedbdc224",
+        "page_idx": 3,
+        "bbox": [
+         71.5,
+         474.6,
+         524.1,
+         763.6
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "Dual-core cortex M0+ at up to 133 MHz"
+        ],
+        "content_head": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequ"
+       }
+      ]
+     },
+     {
+      "text": "The maximum core frequency of the RP2040 processor cores is 133 MHz.",
+      "unsupported": false,
+      "evidence_ids": [
+       "40924dbd45c44975a798e20dedbdc224"
+      ],
+      "citations": [
+       {
+        "evidence_id": "40924dbd45c44975a798e20dedbdc224",
+        "page_idx": 3,
+        "bbox": [
+         71.5,
+         474.6,
+         524.1,
+         763.6
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "Dual-core cortex M0+ at up to 133 MHz"
+        ],
+        "content_head": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequ"
+       }
+      ]
+     }
+    ],
+    "answer": "The RP2040 on the Raspberry Pi Pico has dual-core Cortex-M0+ processors. The maximum core frequency of the RP2040 processor cores is 133 MHz.",
+    "facts_present": [
+     true,
+     true,
+     true
+    ],
+    "refused": false
+   },
+   {
+    "case": "esp32-radio",
+    "kind": "positive",
+    "run": 1,
+    "conversation_id": "cc86a912ebdb4532b4d21f2de5172a47",
+    "seconds": 6.4,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题要求具体的技术规格（Wi-Fi协议、最大802.11n速率、蓝牙版本），这些信息未在已有证据中出现，需从官方datashee",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.7314
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.7135
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.7544
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.6431
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.7544,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The ESP32 supports Wi-Fi protocols 802.11b/g/n with a maximum 802.11n rate of 150 Mbps.",
+      "unsupported": false,
+      "evidence_ids": [
+       "588258c29ebd439d9d06391bb78b72ea",
+       "f4fe2bb8bea84e56bea3b3696318a33e"
+      ],
+      "citations": [
+       {
+        "evidence_id": "588258c29ebd439d9d06391bb78b72ea",
+        "page_idx": 2,
+        "bbox": [
+         56.9,
+         62.8,
+         510.1,
+         362.7
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "802.11b/g/n",
+         "802.11n (2.4 GHz), up to 150 Mbps"
+        ],
+        "content_head": "Features Wi-Fi • 802.11b/g/n • 802.11n (2.4 GHz), up to 150 Mbps • WMM • TX/RX A-MPDU, RX A-MSDU • Immediate Block ACK • Defragmentation • Automatic Beacon moni"
+       },
+       {
+        "evidence_id": "f4fe2bb8bea84e56bea3b3696318a33e",
+        "page_idx": 32,
+        "bbox": [
+         56.8,
+         459.2,
+         533.6,
+         769.8
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "802.11b/g/n"
+        ],
+        "content_head": "4.6.4 Wi-Fi Radio and Baseband ESP32 implements a TCP/IP and full 802.11 b/g/n Wi-Fi MAC protocol. It supports the Basic Service Set (BSS) STA and SoftAP operat"
+       }
+      ]
+     },
+     {
+      "text": "The ESP32 supports Bluetooth version Bluetooth® (including Bluetooth LE).",
+      "unsupported": false,
+      "evidence_ids": [
+       "b0136c969e1e4a5fb9a29abd600e6b5c",
+       "ca5bff496de446148fadaedc683653ca"
+      ],
+      "citations": [
+       {
+        "evidence_id": "b0136c969e1e4a5fb9a29abd600e6b5c",
+        "page_idx": 0,
+        "bbox": [
+         43.3,
+         110.3,
+         315.9,
+         253.8
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [],
+        "content_head": "ESP32 Series Datasheet Version 5.3 2.4 GHz Wi-Fi + Bluetooth® + Bluetooth LE SoC"
+       },
+       {
+        "evidence_id": "ca5bff496de446148fadaedc683653ca",
+        "page_idx": 33,
+        "bbox": [
+         56.8,
+         60.6,
+         529.3,
+         367.8
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [],
+        "content_head": "4.6.5 Wi-Fi MAC The ESP32 Wi-Fi MAC applies low-level protocol functions automatically. They are as follows: • Four virtual Wi-Fi interfaces • Simultaneous Infr"
+       }
+      ]
+     }
+    ],
+    "answer": "The ESP32 supports Wi-Fi protocols 802.11b/g/n with a maximum 802.11n rate of 150 Mbps. The ESP32 supports Bluetooth version Bluetooth® (including Bluetooth LE).",
+    "facts_present": [
+     true,
+     true,
+     false
+    ],
+    "refused": false
+   },
+   {
+    "case": "esp32-radio",
+    "kind": "positive",
+    "run": 2,
+    "conversation_id": "6a60d480f50e4ff39d1c46c3316f3e3a",
+    "seconds": 6.5,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题要求具体的技术规格（Wi-Fi协议、最大802.11n速率、蓝牙版本），这些信息未在已有证据中提及，需要从ESP32的数据表",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.7314
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.7135
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.7544
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.6431
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.7544,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The ESP32 supports Wi-Fi protocols 802.11b/g/n with a maximum 802.11n rate of 150 Mbps.",
+      "unsupported": false,
+      "evidence_ids": [
+       "588258c29ebd439d9d06391bb78b72ea",
+       "f4fe2bb8bea84e56bea3b3696318a33e"
+      ],
+      "citations": [
+       {
+        "evidence_id": "588258c29ebd439d9d06391bb78b72ea",
+        "page_idx": 2,
+        "bbox": [
+         56.9,
+         62.8,
+         510.1,
+         362.7
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "802.11b/g/n",
+         "802.11n (2.4 GHz), up to 150 Mbps"
+        ],
+        "content_head": "Features Wi-Fi • 802.11b/g/n • 802.11n (2.4 GHz), up to 150 Mbps • WMM • TX/RX A-MPDU, RX A-MSDU • Immediate Block ACK • Defragmentation • Automatic Beacon moni"
+       },
+       {
+        "evidence_id": "f4fe2bb8bea84e56bea3b3696318a33e",
+        "page_idx": 32,
+        "bbox": [
+         56.8,
+         459.2,
+         533.6,
+         769.8
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "802.11b/g/n"
+        ],
+        "content_head": "4.6.4 Wi-Fi Radio and Baseband ESP32 implements a TCP/IP and full 802.11 b/g/n Wi-Fi MAC protocol. It supports the Basic Service Set (BSS) STA and SoftAP operat"
+       }
+      ]
+     },
+     {
+      "text": "The ESP32 supports Bluetooth version Bluetooth® (including Bluetooth LE).",
+      "unsupported": false,
+      "evidence_ids": [
+       "b0136c969e1e4a5fb9a29abd600e6b5c",
+       "ca5bff496de446148fadaedc683653ca"
+      ],
+      "citations": [
+       {
+        "evidence_id": "b0136c969e1e4a5fb9a29abd600e6b5c",
+        "page_idx": 0,
+        "bbox": [
+         43.3,
+         110.3,
+         315.9,
+         253.8
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [],
+        "content_head": "ESP32 Series Datasheet Version 5.3 2.4 GHz Wi-Fi + Bluetooth® + Bluetooth LE SoC"
+       },
+       {
+        "evidence_id": "ca5bff496de446148fadaedc683653ca",
+        "page_idx": 33,
+        "bbox": [
+         56.8,
+         60.6,
+         529.3,
+         367.8
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [],
+        "content_head": "4.6.5 Wi-Fi MAC The ESP32 Wi-Fi MAC applies low-level protocol functions automatically. They are as follows: • Four virtual Wi-Fi interfaces • Simultaneous Infr"
+       }
+      ]
+     }
+    ],
+    "answer": "The ESP32 supports Wi-Fi protocols 802.11b/g/n with a maximum 802.11n rate of 150 Mbps. The ESP32 supports Bluetooth version Bluetooth® (including Bluetooth LE).",
+    "facts_present": [
+     true,
+     true,
+     false
+    ],
+    "refused": false
+   },
+   {
+    "case": "esp32-radio",
+    "kind": "positive",
+    "run": 3,
+    "conversation_id": "2856b8e1f254461e9c46d72a3e5d7faf",
+    "seconds": 9.1,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题要求根据ESP32数据表的Features部分获取具体Wi-Fi和Bluetooth支持信息，当前无已有证据，需检索最新资料",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.7314
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.7135
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.7544
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.6431
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.7544,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The ESP32 supports Wi-Fi protocols 802.11b/g/n with a maximum 802.11n rate of 150 Mbps.",
+      "unsupported": false,
+      "evidence_ids": [
+       "588258c29ebd439d9d06391bb78b72ea",
+       "f4fe2bb8bea84e56bea3b3696318a33e"
+      ],
+      "citations": [
+       {
+        "evidence_id": "588258c29ebd439d9d06391bb78b72ea",
+        "page_idx": 2,
+        "bbox": [
+         56.9,
+         62.8,
+         510.1,
+         362.7
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "802.11b/g/n",
+         "802.11n (2.4 GHz), up to 150 Mbps"
+        ],
+        "content_head": "Features Wi-Fi • 802.11b/g/n • 802.11n (2.4 GHz), up to 150 Mbps • WMM • TX/RX A-MPDU, RX A-MSDU • Immediate Block ACK • Defragmentation • Automatic Beacon moni"
+       },
+       {
+        "evidence_id": "f4fe2bb8bea84e56bea3b3696318a33e",
+        "page_idx": 32,
+        "bbox": [
+         56.8,
+         459.2,
+         533.6,
+         769.8
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "802.11b/g/n"
+        ],
+        "content_head": "4.6.4 Wi-Fi Radio and Baseband ESP32 implements a TCP/IP and full 802.11 b/g/n Wi-Fi MAC protocol. It supports the Basic Service Set (BSS) STA and SoftAP operat"
+       }
+      ]
+     },
+     {
+      "text": "The ESP32 supports Bluetooth version Bluetooth® (including Bluetooth LE).",
+      "unsupported": false,
+      "evidence_ids": [
+       "b0136c969e1e4a5fb9a29abd600e6b5c",
+       "ca5bff496de446148fadaedc683653ca"
+      ],
+      "citations": [
+       {
+        "evidence_id": "b0136c969e1e4a5fb9a29abd600e6b5c",
+        "page_idx": 0,
+        "bbox": [
+         43.3,
+         110.3,
+         315.9,
+         253.8
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [],
+        "content_head": "ESP32 Series Datasheet Version 5.3 2.4 GHz Wi-Fi + Bluetooth® + Bluetooth LE SoC"
+       },
+       {
+        "evidence_id": "ca5bff496de446148fadaedc683653ca",
+        "page_idx": 33,
+        "bbox": [
+         56.8,
+         60.6,
+         529.3,
+         367.8
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [],
+        "content_head": "4.6.5 Wi-Fi MAC The ESP32 Wi-Fi MAC applies low-level protocol functions automatically. They are as follows: • Four virtual Wi-Fi interfaces • Simultaneous Infr"
+       }
+      ]
+     }
+    ],
+    "answer": "The ESP32 supports Wi-Fi protocols 802.11b/g/n with a maximum 802.11n rate of 150 Mbps. The ESP32 supports Bluetooth version Bluetooth® (including Bluetooth LE).",
+    "facts_present": [
+     true,
+     true,
+     false
+    ],
+    "refused": false
+   },
+   {
+    "case": "esp32-cpu",
+    "kind": "positive",
+    "run": 1,
+    "conversation_id": "25e772e41a0d4826a9c0ab5182b56955",
+    "seconds": 6.7,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题要求根据ESP32的数据手册中的功能描述获取具体的技术参数，当前没有已有证据支持，需要新事实检索。",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.744
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.3349
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.7299
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.4916
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.7299,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The ESP32 has one or two Xtensa® 32-bit LX6 microprocessor cores.",
+      "unsupported": false,
+      "evidence_ids": [
+       "834034a85de64587bbd1c2fe8f771754"
+      ],
+      "citations": [
+       {
+        "evidence_id": "834034a85de64587bbd1c2fe8f771754",
+        "page_idx": 25,
+        "bbox": [
+         56.3,
+         101.7,
+         528.4,
+         431.5
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "ESP32 contains one or two low-power Xtensa",
+         "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))"
+        ],
+        "content_head": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microprocessor(s) with the following features: • 7-stage pipeline to support"
+       }
+      ]
+     },
+     {
+      "text": "The maximum clock frequency of the ESP32 CPU cores is 240 MHz.",
+      "unsupported": false,
+      "evidence_ids": [
+       "834034a85de64587bbd1c2fe8f771754"
+      ],
+      "citations": [
+       {
+        "evidence_id": "834034a85de64587bbd1c2fe8f771754",
+        "page_idx": 25,
+        "bbox": [
+         56.3,
+         101.7,
+         528.4,
+         431.5
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "ESP32 contains one or two low-power Xtensa",
+         "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))"
+        ],
+        "content_head": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microprocessor(s) with the following features: • 7-stage pipeline to support"
+       }
+      ]
+     }
+    ],
+    "answer": "The ESP32 has one or two Xtensa® 32-bit LX6 microprocessor cores. The maximum clock frequency of the ESP32 CPU cores is 240 MHz.",
+    "facts_present": [
+     true,
+     true
+    ],
+    "refused": false
+   },
+   {
+    "case": "esp32-cpu",
+    "kind": "positive",
+    "run": 2,
+    "conversation_id": "11489bf4451d4f53870844273e046190",
+    "seconds": 7.0,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题要求根据ESP32数据手册中的功能描述获取具体CPU核心和最大时钟频率，属于需要新事实证据的内容，且无已有证据支持。",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.744
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.3349
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.7299
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.4916
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.7299,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The ESP32 has one or two Xtensa® 32-bit LX6 microprocessor cores.",
+      "unsupported": false,
+      "evidence_ids": [
+       "834034a85de64587bbd1c2fe8f771754"
+      ],
+      "citations": [
+       {
+        "evidence_id": "834034a85de64587bbd1c2fe8f771754",
+        "page_idx": 25,
+        "bbox": [
+         56.3,
+         101.7,
+         528.4,
+         431.5
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "ESP32 contains one or two low-power Xtensa",
+         "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))"
+        ],
+        "content_head": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microprocessor(s) with the following features: • 7-stage pipeline to support"
+       }
+      ]
+     },
+     {
+      "text": "The maximum clock frequency of the ESP32 CPU cores is 240 MHz.",
+      "unsupported": false,
+      "evidence_ids": [
+       "834034a85de64587bbd1c2fe8f771754"
+      ],
+      "citations": [
+       {
+        "evidence_id": "834034a85de64587bbd1c2fe8f771754",
+        "page_idx": 25,
+        "bbox": [
+         56.3,
+         101.7,
+         528.4,
+         431.5
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "ESP32 contains one or two low-power Xtensa",
+         "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))"
+        ],
+        "content_head": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microprocessor(s) with the following features: • 7-stage pipeline to support"
+       }
+      ]
+     },
+     {
+      "text": "The ESP32-S0WD (NRND) variant has a maximum clock frequency of 160 MHz for its CPU cores.",
+      "unsupported": false,
+      "evidence_ids": [
+       "834034a85de64587bbd1c2fe8f771754"
+      ],
+      "citations": [
+       {
+        "evidence_id": "834034a85de64587bbd1c2fe8f771754",
+        "page_idx": 25,
+        "bbox": [
+         56.3,
+         101.7,
+         528.4,
+         431.5
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "ESP32 contains one or two low-power Xtensa",
+         "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))"
+        ],
+        "content_head": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microprocessor(s) with the following features: • 7-stage pipeline to support"
+       }
+      ]
+     }
+    ],
+    "answer": "The ESP32 has one or two Xtensa® 32-bit LX6 microprocessor cores. The maximum clock frequency of the ESP32 CPU cores is 240 MHz. The ESP32-S0WD (NRND) variant has a maximum clock frequency of 160 MHz for its CPU cores.",
+    "facts_present": [
+     true,
+     true
+    ],
+    "refused": false
+   },
+   {
+    "case": "esp32-cpu",
+    "kind": "positive",
+    "run": 3,
+    "conversation_id": "abee1145d63244518bb684f275967520",
+    "seconds": 7.2,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题要求根据ESP32数据手册中的功能描述获取具体CPU核心和最大时钟频率，属于需要新事实的查询，且无已有证据支持。",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.744
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.3349
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.7299
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.4916
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.7299,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The ESP32 has one or two Xtensa® 32-bit LX6 microprocessor cores.",
+      "unsupported": false,
+      "evidence_ids": [
+       "834034a85de64587bbd1c2fe8f771754"
+      ],
+      "citations": [
+       {
+        "evidence_id": "834034a85de64587bbd1c2fe8f771754",
+        "page_idx": 25,
+        "bbox": [
+         56.3,
+         101.7,
+         528.4,
+         431.5
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "ESP32 contains one or two low-power Xtensa",
+         "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))"
+        ],
+        "content_head": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microprocessor(s) with the following features: • 7-stage pipeline to support"
+       }
+      ]
+     },
+     {
+      "text": "The maximum clock frequency of the ESP32 CPU cores is 240 MHz.",
+      "unsupported": false,
+      "evidence_ids": [
+       "834034a85de64587bbd1c2fe8f771754"
+      ],
+      "citations": [
+       {
+        "evidence_id": "834034a85de64587bbd1c2fe8f771754",
+        "page_idx": 25,
+        "bbox": [
+         56.3,
+         101.7,
+         528.4,
+         431.5
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "ESP32 contains one or two low-power Xtensa",
+         "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))"
+        ],
+        "content_head": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microprocessor(s) with the following features: • 7-stage pipeline to support"
+       }
+      ]
+     },
+     {
+      "text": "The ESP32-S0WD (NRND) variant has a maximum clock frequency of 160 MHz for its CPU cores.",
+      "unsupported": false,
+      "evidence_ids": [
+       "834034a85de64587bbd1c2fe8f771754"
+      ],
+      "citations": [
+       {
+        "evidence_id": "834034a85de64587bbd1c2fe8f771754",
+        "page_idx": 25,
+        "bbox": [
+         56.3,
+         101.7,
+         528.4,
+         431.5
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "ESP32 contains one or two low-power Xtensa",
+         "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))"
+        ],
+        "content_head": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microprocessor(s) with the following features: • 7-stage pipeline to support"
+       }
+      ]
+     }
+    ],
+    "answer": "The ESP32 has one or two Xtensa® 32-bit LX6 microprocessor cores. The maximum clock frequency of the ESP32 CPU cores is 240 MHz. The ESP32-S0WD (NRND) variant has a maximum clock frequency of 160 MHz for its CPU cores.",
+    "facts_present": [
+     true,
+     true
+    ],
+    "refused": false
+   },
+   {
+    "case": "attention-en-de-bleu",
+    "kind": "positive",
+    "run": 1,
+    "conversation_id": "5e4d66e0ea6142c7a87648b0c1b1c007",
+    "seconds": 10.7,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题涉及具体的历史技术指标（BLEU分数及改进幅度），需要最新或权威来源的事实支持，当前无相关证据。",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.7591
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.6631
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.619
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.6456
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.7591,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The Transformer achieved a BLEU score of 28.4 on the WMT 2014 English-to-German translation task.",
+      "unsupported": false,
+      "evidence_ids": [
+       "a3fa6901edb6488f92d7cf20edd49f88",
+       "1165d4378fe04aab882d5c2a01733710"
+      ],
+      "citations": [
+       {
+        "evidence_id": "a3fa6901edb6488f92d7cf20edd49f88",
+        "page_idx": 7,
+        "bbox": [
+         107.8,
+         398.0,
+         504.7,
+         640.7
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [],
+        "content_head": "6.1 Machine Translation On the WMT 2014 English-to-German translation task, the big transformer model (Transformer (big) in Table 2) outperforms the best previo"
+       },
+       {
+        "evidence_id": "1165d4378fe04aab882d5c2a01733710",
+        "page_idx": 0,
+        "bbox": [
+         143.7,
+         414.2,
+         469.3,
+         575.9
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "Our model achieves 28.4 BLEU on the WMT 2014 English",
+         "ensembles, by over 2 BLEU"
+        ],
+        "content_head": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks that include an encoder and a decoder. The best perfor"
+       }
+      ]
+     },
+     {
+      "text": "This BLEU score improved over the existing best results by more than 2.0 BLEU points.",
+      "unsupported": false,
+      "evidence_ids": [
+       "a3fa6901edb6488f92d7cf20edd49f88",
+       "1165d4378fe04aab882d5c2a01733710"
+      ],
+      "citations": [
+       {
+        "evidence_id": "a3fa6901edb6488f92d7cf20edd49f88",
+        "page_idx": 7,
+        "bbox": [
+         107.8,
+         398.0,
+         504.7,
+         640.7
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [],
+        "content_head": "6.1 Machine Translation On the WMT 2014 English-to-German translation task, the big transformer model (Transformer (big) in Table 2) outperforms the best previo"
+       },
+       {
+        "evidence_id": "1165d4378fe04aab882d5c2a01733710",
+        "page_idx": 0,
+        "bbox": [
+         143.7,
+         414.2,
+         469.3,
+         575.9
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "Our model achieves 28.4 BLEU on the WMT 2014 English",
+         "ensembles, by over 2 BLEU"
+        ],
+        "content_head": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks that include an encoder and a decoder. The best perfor"
+       }
+      ]
+     }
+    ],
+    "answer": "The Transformer achieved a BLEU score of 28.4 on the WMT 2014 English-to-German translation task. This BLEU score improved over the existing best results by more than 2.0 BLEU points.",
+    "facts_present": [
+     true,
+     true
+    ],
+    "refused": false
+   },
+   {
+    "case": "attention-en-de-bleu",
+    "kind": "positive",
+    "run": 2,
+    "conversation_id": "e50a668e5eda4140a70a2b6179ee1fd7",
+    "seconds": 10.4,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题涉及具体的历史技术指标（BLEU分数及改进幅度），属于需要新事实验证的内容，且无现有证据支持。",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.7591
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.6631
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.619
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.6456
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.7591,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The Transformer achieved a BLEU score of 28.4 on the WMT 2014 English-to-German translation task.",
+      "unsupported": false,
+      "evidence_ids": [
+       "a3fa6901edb6488f92d7cf20edd49f88",
+       "1165d4378fe04aab882d5c2a01733710"
+      ],
+      "citations": [
+       {
+        "evidence_id": "a3fa6901edb6488f92d7cf20edd49f88",
+        "page_idx": 7,
+        "bbox": [
+         107.8,
+         398.0,
+         504.7,
+         640.7
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [],
+        "content_head": "6.1 Machine Translation On the WMT 2014 English-to-German translation task, the big transformer model (Transformer (big) in Table 2) outperforms the best previo"
+       },
+       {
+        "evidence_id": "1165d4378fe04aab882d5c2a01733710",
+        "page_idx": 0,
+        "bbox": [
+         143.7,
+         414.2,
+         469.3,
+         575.9
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "Our model achieves 28.4 BLEU on the WMT 2014 English",
+         "ensembles, by over 2 BLEU"
+        ],
+        "content_head": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks that include an encoder and a decoder. The best perfor"
+       }
+      ]
+     },
+     {
+      "text": "This BLEU score improved over the existing best results by more than 2.0 BLEU points.",
+      "unsupported": false,
+      "evidence_ids": [
+       "a3fa6901edb6488f92d7cf20edd49f88",
+       "1165d4378fe04aab882d5c2a01733710"
+      ],
+      "citations": [
+       {
+        "evidence_id": "a3fa6901edb6488f92d7cf20edd49f88",
+        "page_idx": 7,
+        "bbox": [
+         107.8,
+         398.0,
+         504.7,
+         640.7
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [],
+        "content_head": "6.1 Machine Translation On the WMT 2014 English-to-German translation task, the big transformer model (Transformer (big) in Table 2) outperforms the best previo"
+       },
+       {
+        "evidence_id": "1165d4378fe04aab882d5c2a01733710",
+        "page_idx": 0,
+        "bbox": [
+         143.7,
+         414.2,
+         469.3,
+         575.9
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "Our model achieves 28.4 BLEU on the WMT 2014 English",
+         "ensembles, by over 2 BLEU"
+        ],
+        "content_head": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks that include an encoder and a decoder. The best perfor"
+       }
+      ]
+     }
+    ],
+    "answer": "The Transformer achieved a BLEU score of 28.4 on the WMT 2014 English-to-German translation task. This BLEU score improved over the existing best results by more than 2.0 BLEU points.",
+    "facts_present": [
+     true,
+     true
+    ],
+    "refused": false
+   },
+   {
+    "case": "attention-en-de-bleu",
+    "kind": "positive",
+    "run": 3,
+    "conversation_id": "6c0ee908c941442b9b976602c23a8b47",
+    "seconds": 10.5,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题涉及具体的历史技术指标（BLEU分数及改进幅度），属于需要新事实验证的内容，且无已有证据支持。",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.7591
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.6631
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.619
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.6456
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.7591,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The Transformer achieved a BLEU score of 28.4 on the WMT 2014 English-to-German translation task.",
+      "unsupported": false,
+      "evidence_ids": [
+       "a3fa6901edb6488f92d7cf20edd49f88",
+       "1165d4378fe04aab882d5c2a01733710"
+      ],
+      "citations": [
+       {
+        "evidence_id": "a3fa6901edb6488f92d7cf20edd49f88",
+        "page_idx": 7,
+        "bbox": [
+         107.8,
+         398.0,
+         504.7,
+         640.7
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [],
+        "content_head": "6.1 Machine Translation On the WMT 2014 English-to-German translation task, the big transformer model (Transformer (big) in Table 2) outperforms the best previo"
+       },
+       {
+        "evidence_id": "1165d4378fe04aab882d5c2a01733710",
+        "page_idx": 0,
+        "bbox": [
+         143.7,
+         414.2,
+         469.3,
+         575.9
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "Our model achieves 28.4 BLEU on the WMT 2014 English",
+         "ensembles, by over 2 BLEU"
+        ],
+        "content_head": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks that include an encoder and a decoder. The best perfor"
+       }
+      ]
+     },
+     {
+      "text": "This BLEU score improved over the existing best results by more than 2.0 BLEU points.",
+      "unsupported": false,
+      "evidence_ids": [
+       "a3fa6901edb6488f92d7cf20edd49f88",
+       "1165d4378fe04aab882d5c2a01733710"
+      ],
+      "citations": [
+       {
+        "evidence_id": "a3fa6901edb6488f92d7cf20edd49f88",
+        "page_idx": 7,
+        "bbox": [
+         107.8,
+         398.0,
+         504.7,
+         640.7
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [],
+        "content_head": "6.1 Machine Translation On the WMT 2014 English-to-German translation task, the big transformer model (Transformer (big) in Table 2) outperforms the best previo"
+       },
+       {
+        "evidence_id": "1165d4378fe04aab882d5c2a01733710",
+        "page_idx": 0,
+        "bbox": [
+         143.7,
+         414.2,
+         469.3,
+         575.9
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "Our model achieves 28.4 BLEU on the WMT 2014 English",
+         "ensembles, by over 2 BLEU"
+        ],
+        "content_head": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks that include an encoder and a decoder. The best perfor"
+       }
+      ]
+     }
+    ],
+    "answer": "The Transformer achieved a BLEU score of 28.4 on the WMT 2014 English-to-German translation task. This BLEU score improved over the existing best results by more than 2.0 BLEU points.",
+    "facts_present": [
+     true,
+     true
+    ],
+    "refused": false
+   },
+   {
+    "case": "attention-multi-head",
+    "kind": "positive",
+    "run": 1,
+    "conversation_id": "04286e820d1149529f5dacb04d0cc1aa",
+    "seconds": 5.8,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题涉及具体论文中的技术细节（Transformer的并行注意力头数及每头键值维度），需要查阅原始论文以获取准确信息。",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.6229
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.5973
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.5276
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.681
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.6229,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The Transformer uses 8 parallel attention heads.",
+      "unsupported": false,
+      "evidence_ids": [
+       "04bc1d4aeae24e6fbb37058eccab70d5"
+      ],
+      "citations": [
+       {
+        "evidence_id": "04bc1d4aeae24e6fbb37058eccab70d5",
+        "page_idx": 4,
+        "bbox": [
+         107.6,
+         206.5,
+         504.0,
+         265.9
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "In this work we employ h = 8 parallel attention layers, or heads.",
+         "dk = dv = dmodel/h = 64"
+        ],
+        "content_head": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ h = 8 parallel attention layers, or heads. For each of these we use d"
+       }
+      ]
+     },
+     {
+      "text": "Each attention head has a key/value dimension of 64.",
+      "unsupported": false,
+      "evidence_ids": [
+       "04bc1d4aeae24e6fbb37058eccab70d5"
+      ],
+      "citations": [
+       {
+        "evidence_id": "04bc1d4aeae24e6fbb37058eccab70d5",
+        "page_idx": 4,
+        "bbox": [
+         107.6,
+         206.5,
+         504.0,
+         265.9
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "In this work we employ h = 8 parallel attention layers, or heads.",
+         "dk = dv = dmodel/h = 64"
+        ],
+        "content_head": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ h = 8 parallel attention layers, or heads. For each of these we use d"
+       }
+      ]
+     }
+    ],
+    "answer": "The Transformer uses 8 parallel attention heads. Each attention head has a key/value dimension of 64.",
+    "facts_present": [
+     true,
+     true
+    ],
+    "refused": false
+   },
+   {
+    "case": "attention-multi-head",
+    "kind": "positive",
+    "run": 2,
+    "conversation_id": "f74c808723f3472caa13f7a0026ef5a0",
+    "seconds": 5.5,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题涉及具体论文中的技术细节（Transformer的并行注意力头数及每头键值维度），需要查阅原始论文获取准确信息。",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.6229
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.5973
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.5276
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.681
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.6229,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The Transformer uses 8 parallel attention heads.",
+      "unsupported": false,
+      "evidence_ids": [
+       "04bc1d4aeae24e6fbb37058eccab70d5"
+      ],
+      "citations": [
+       {
+        "evidence_id": "04bc1d4aeae24e6fbb37058eccab70d5",
+        "page_idx": 4,
+        "bbox": [
+         107.6,
+         206.5,
+         504.0,
+         265.9
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "In this work we employ h = 8 parallel attention layers, or heads.",
+         "dk = dv = dmodel/h = 64"
+        ],
+        "content_head": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ h = 8 parallel attention layers, or heads. For each of these we use d"
+       }
+      ]
+     },
+     {
+      "text": "Each attention head has a key/value dimension of 64.",
+      "unsupported": false,
+      "evidence_ids": [
+       "04bc1d4aeae24e6fbb37058eccab70d5"
+      ],
+      "citations": [
+       {
+        "evidence_id": "04bc1d4aeae24e6fbb37058eccab70d5",
+        "page_idx": 4,
+        "bbox": [
+         107.6,
+         206.5,
+         504.0,
+         265.9
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "In this work we employ h = 8 parallel attention layers, or heads.",
+         "dk = dv = dmodel/h = 64"
+        ],
+        "content_head": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ h = 8 parallel attention layers, or heads. For each of these we use d"
+       }
+      ]
+     }
+    ],
+    "answer": "The Transformer uses 8 parallel attention heads. Each attention head has a key/value dimension of 64.",
+    "facts_present": [
+     true,
+     true
+    ],
+    "refused": false
+   },
+   {
+    "case": "attention-multi-head",
+    "kind": "positive",
+    "run": 3,
+    "conversation_id": "48e2e190324841589c5b60eb73dd4261",
+    "seconds": 5.7,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题涉及具体论文中的技术细节（Transformer中的并行注意力头数及每头键/值维度），需要查阅原始论文获取准确信息。",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.6229
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.5973
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.5276
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.681
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "high",
+      "top_similarity": 0.6229,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "The Transformer uses 8 parallel attention heads.",
+      "unsupported": false,
+      "evidence_ids": [
+       "04bc1d4aeae24e6fbb37058eccab70d5"
+      ],
+      "citations": [
+       {
+        "evidence_id": "04bc1d4aeae24e6fbb37058eccab70d5",
+        "page_idx": 4,
+        "bbox": [
+         107.6,
+         206.5,
+         504.0,
+         265.9
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "In this work we employ h = 8 parallel attention layers, or heads.",
+         "dk = dv = dmodel/h = 64"
+        ],
+        "content_head": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ h = 8 parallel attention layers, or heads. For each of these we use d"
+       }
+      ]
+     },
+     {
+      "text": "Each attention head has a key/value dimension of 64.",
+      "unsupported": false,
+      "evidence_ids": [
+       "04bc1d4aeae24e6fbb37058eccab70d5"
+      ],
+      "citations": [
+       {
+        "evidence_id": "04bc1d4aeae24e6fbb37058eccab70d5",
+        "page_idx": 4,
+        "bbox": [
+         107.6,
+         206.5,
+         504.0,
+         265.9
+        ],
+        "in_model_context": true,
+        "pinned_version": true,
+        "pinned_parse_revision": true,
+        "page_matches": true,
+        "bbox_matches": true,
+        "snippet_in_content": true,
+        "chunk_current": true,
+        "other_user_status": 404,
+        "contains_reference_excerpt": [
+         "In this work we employ h = 8 parallel attention layers, or heads.",
+         "dk = dv = dmodel/h = 64"
+        ],
+        "content_head": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ h = 8 parallel attention layers, or heads. For each of these we use d"
+       }
+      ]
+     }
+    ],
+    "answer": "The Transformer uses 8 parallel attention heads. Each attention head has a key/value dimension of 64.",
+    "facts_present": [
+     true,
+     true
+    ],
+    "refused": false
+   },
+   {
+    "case": "pico-private-board-serial",
+    "kind": "negative",
+    "run": 1,
+    "conversation_id": "de401917e4e041f1ae121a38f40fbb0b",
+    "seconds": 6.5,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题要求根据上传的Pico数据表获取具体唯一的板子序列号，但无上传文件或相关证据支持，无法确认信息来源。",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.5704
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.5614
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.5449
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.6085
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "unknown",
+      "top_similarity": null,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "已检索到相关段落，但回答模型判断它们不足以回答该问题；可展开候选自行核对。",
+      "unsupported": true,
+      "evidence_ids": [],
+      "citations": []
+     }
+    ],
+    "answer": "已检索到相关段落，但回答模型判断它们不足以回答该问题；可展开候选自行核对。",
+    "facts_present": [],
+    "refused": true,
+    "invented_serial": false
+   },
+   {
+    "case": "pico-private-board-serial",
+    "kind": "negative",
+    "run": 2,
+    "conversation_id": "1f08c807bbf24427ab9e8abadffebaaf",
+    "seconds": 6.3,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题要求根据上传的Pico数据表获取具体唯一的板子序列号，但无上传文件或相关证据支持，无法确认信息来源。",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.5704
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.5614
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.5449
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.6085
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "unknown",
+      "top_similarity": null,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "已检索到相关段落，但回答模型判断它们不足以回答该问题；可展开候选自行核对。",
+      "unsupported": true,
+      "evidence_ids": [],
+      "citations": []
+     }
+    ],
+    "answer": "已检索到相关段落，但回答模型判断它们不足以回答该问题；可展开候选自行核对。",
+    "facts_present": [],
+    "refused": true,
+    "invented_serial": false
+   },
+   {
+    "case": "pico-private-board-serial",
+    "kind": "negative",
+    "run": 3,
+    "conversation_id": "7617cd416a5046349bb014370a2258ed",
+    "seconds": 6.5,
+    "decision": {
+     "need_retrieval": true,
+     "reason": "问题要求根据上传的Pico数据表获取具体唯一的板子序列号，但无上传文件或相关证据支持，无法确认信息存在。",
+     "inherited_evidence_ids": [],
+     "degraded": null
+    },
+    "context_chunks": 4,
+    "candidates": [
+     [
+      0,
+      true,
+      "document_gate_passed",
+      0.5704
+     ],
+     [
+      1,
+      true,
+      "document_gate_passed",
+      0.5614
+     ],
+     [
+      2,
+      true,
+      "document_gate_passed",
+      0.5449
+     ],
+     [
+      3,
+      true,
+      "document_gate_passed",
+      0.6085
+     ]
+    ],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "vision_unavailable",
+     "confidence": {
+      "level": "unknown",
+      "top_similarity": null,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "已检索到相关段落，但回答模型判断它们不足以回答该问题；可展开候选自行核对。",
+      "unsupported": true,
+      "evidence_ids": [],
+      "citations": []
+     }
+    ],
+    "answer": "已检索到相关段落，但回答模型判断它们不足以回答该问题；可展开候选自行核对。",
+    "facts_present": [],
+    "refused": true,
+    "invented_serial": false
+   },
+   {
+    "case": "pico-off-topic",
+    "kind": "negative",
+    "run": 1,
+    "conversation_id": "0f7b2e5ac0a644c0862b9a5a1f63f328",
+    "seconds": 0.9,
+    "decision": {
+     "need_retrieval": false,
+     "reason": "该问题属于常识性问题，无需检索新证据。",
+     "inherited_evidence_ids": [],
+     "degraded": "no_evidence_in_turn"
+    },
+    "context_chunks": 0,
+    "candidates": [],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "no_evidence_in_turn",
+     "confidence": {
+      "level": "unknown",
+      "top_similarity": null,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "本轮没有可继承的文档证据，无法在不检索的情况下回答。",
+      "unsupported": true,
+      "evidence_ids": [],
+      "citations": []
+     }
+    ],
+    "answer": "本轮没有可继承的文档证据，无法在不检索的情况下回答。",
+    "facts_present": [],
+    "refused": true,
+    "invented_serial": false
+   },
+   {
+    "case": "pico-off-topic",
+    "kind": "negative",
+    "run": 2,
+    "conversation_id": "cbb959acb92f422e8c8e5bae6467f447",
+    "seconds": 0.8,
+    "decision": {
+     "need_retrieval": false,
+     "reason": "该问题属于常识性知识，无需检索。",
+     "inherited_evidence_ids": [],
+     "degraded": "no_evidence_in_turn"
+    },
+    "context_chunks": 0,
+    "candidates": [],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "no_evidence_in_turn",
+     "confidence": {
+      "level": "unknown",
+      "top_similarity": null,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "本轮没有可继承的文档证据，无法在不检索的情况下回答。",
+      "unsupported": true,
+      "evidence_ids": [],
+      "citations": []
+     }
+    ],
+    "answer": "本轮没有可继承的文档证据，无法在不检索的情况下回答。",
+    "facts_present": [],
+    "refused": true,
+    "invented_serial": false
+   },
+   {
+    "case": "pico-off-topic",
+    "kind": "negative",
+    "run": 3,
+    "conversation_id": "8e601a615977477db6ac06d2ba01f7cc",
+    "seconds": 1.0,
+    "decision": {
+     "need_retrieval": false,
+     "reason": "该问题属于常识性知识，无需检索。",
+     "inherited_evidence_ids": [],
+     "degraded": "no_evidence_in_turn"
+    },
+    "context_chunks": 0,
+    "candidates": [],
+    "error": null,
+    "done": {
+     "verified": false,
+     "degraded": "no_evidence_in_turn",
+     "confidence": {
+      "level": "unknown",
+      "top_similarity": null,
+      "warn_below": 0.6
+     }
+    },
+    "assertions": [
+     {
+      "text": "本轮没有可继承的文档证据，无法在不检索的情况下回答。",
+      "unsupported": true,
+      "evidence_ids": [],
+      "citations": []
+     }
+    ],
+    "answer": "本轮没有可继承的文档证据，无法在不检索的情况下回答。",
+    "facts_present": [],
+    "refused": true,
+    "invented_serial": false
+   }
+  ]
+ },
+ "retrieval": {
+  "command": ".dev-logs/f-20260925/c_retrieval.py",
+  "result": "问答范围、检索页单篇、检索页全库都是 12/13，与 C/D 完全相同（检索不经过对话模型）；漏的仍是 ESP32 'Compliant with Bluetooth v4.2'",
+  "data": {
+   "scope": {
+    "documents": 13,
+    "parse_jobs": 16
+   },
+   "params": {
+    "qa": {
+     "limit": 4,
+     "candidates": 8,
+     "min_similarity": -1.01
+    },
+    "search": {
+     "limit": 20,
+     "candidates": 20,
+     "min_similarity": 0.45
+    }
+   },
+   "cases": [
+    {
+     "id": "pico-core-frequency",
+     "kind": "positive",
+     "question": "What processor cores does the RP2040 on the Raspberry Pi Pico have, and what is their maximum core frequency, according to the Pico datasheet headline features?",
+     "runs": [
+      {
+       "mode": "qa",
+       "source": "pico",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "pico",
+         "page_index": 3,
+         "excerpt": "Dual-core cortex M0+ at up to 133 MHz",
+         "vector_rank": 4,
+         "keyword_rank": 1,
+         "fused_rank": 2,
+         "fused_similarity": 0.7021,
+         "keyword_only_rank": 1
+        }
+       ],
+       "top_similarity": 0.7628,
+       "fused_top": [
+        {
+         "chunk_id": "2d9e0f5a023b45848314eeefbf8423ec",
+         "similarity": 0.7628,
+         "snippet": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for"
+        },
+        {
+         "chunk_id": "f1a23cd731f449bfb8197d4c1c7a7502",
+         "similarity": 0.7021,
+         "snippet": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-c"
+        },
+        {
+         "chunk_id": "d63604eab9b145b2979b8c8d558fa786",
+         "similarity": 0.7113,
+         "snippet": "Raspberry Pi Pico Datasheet An RP2040-based microcontroller board"
+        },
+        {
+         "chunk_id": "cf9861bb9af544b88d802610b839e6b4",
+         "similarity": 0.6843,
+         "snippet": "Update to VGA board hardware description for launch of Raspberry Pi Pico W. D.9. 17 June 2"
+        }
+       ],
+       "route_sizes": {
+        "vector": 8,
+        "keyword": 8
+       }
+      },
+      {
+       "mode": "search_doc",
+       "source": "pico",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "pico",
+         "page_index": 3,
+         "excerpt": "Dual-core cortex M0+ at up to 133 MHz",
+         "vector_rank": 4,
+         "keyword_rank": 1,
+         "fused_rank": 2,
+         "fused_similarity": 0.7021,
+         "keyword_only_rank": 1
+        }
+       ],
+       "top_similarity": 0.7628,
+       "fused_top": [
+        {
+         "chunk_id": "2d9e0f5a023b45848314eeefbf8423ec",
+         "similarity": 0.7628,
+         "snippet": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for"
+        },
+        {
+         "chunk_id": "f1a23cd731f449bfb8197d4c1c7a7502",
+         "similarity": 0.7021,
+         "snippet": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-c"
+        },
+        {
+         "chunk_id": "d63604eab9b145b2979b8c8d558fa786",
+         "similarity": 0.7113,
+         "snippet": "Raspberry Pi Pico Datasheet An RP2040-based microcontroller board"
+        },
+        {
+         "chunk_id": "cf9861bb9af544b88d802610b839e6b4",
+         "similarity": 0.6843,
+         "snippet": "Update to VGA board hardware description for launch of Raspberry Pi Pico W. D.9. 17 June 2"
+        },
+        {
+         "chunk_id": "737e5ce915d14909b1ce27f7c4d9fa4b",
+         "similarity": 0.6472,
+         "snippet": "Corrected minor typos and formatting issues. Corrected SMT footprint of Raspberry Pi Pico."
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "pico-datasheet.pdf",
+          20
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      },
+      {
+       "mode": "search_all",
+       "source": null,
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "pico",
+         "page_index": 3,
+         "excerpt": "Dual-core cortex M0+ at up to 133 MHz",
+         "vector_rank": 4,
+         "keyword_rank": 2,
+         "fused_rank": 1,
+         "fused_similarity": 0.7021,
+         "keyword_only_rank": 2
+        }
+       ],
+       "top_similarity": 0.7628,
+       "fused_top": [
+        {
+         "chunk_id": "f1a23cd731f449bfb8197d4c1c7a7502",
+         "similarity": 0.7021,
+         "snippet": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-c"
+        },
+        {
+         "chunk_id": "2d9e0f5a023b45848314eeefbf8423ec",
+         "similarity": 0.7628,
+         "snippet": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for"
+        },
+        {
+         "chunk_id": "d63604eab9b145b2979b8c8d558fa786",
+         "similarity": 0.7113,
+         "snippet": "Raspberry Pi Pico Datasheet An RP2040-based microcontroller board"
+        },
+        {
+         "chunk_id": "cf9861bb9af544b88d802610b839e6b4",
+         "similarity": 0.6843,
+         "snippet": "Update to VGA board hardware description for launch of Raspberry Pi Pico W. D.9. 17 June 2"
+        },
+        {
+         "chunk_id": "3dcf773e721e41128c49d8c2fc9134e0",
+         "similarity": 0.603,
+         "snippet": "2 cores at 240 MHz: 1079.96 CoreMark; 4.50 CoreMark/MHz • 448 KB ROM • 520 KB SRAM • 16 KB"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "pico-datasheet.pdf",
+          15
+         ],
+         [
+          "esp32-datasheet.pdf",
+          5
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "pico-esp32-sram-compare",
+     "kind": "positive",
+     "question": "How much SRAM does the Raspberry Pi Pico (RP2040) provide compared with the ESP32's on-chip SRAM, according to the two vendor datasheets?",
+     "runs": [
+      {
+       "mode": "qa",
+       "source": "esp32",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "esp32",
+         "page_index": 3,
+         "excerpt": "520 KB SRAM",
+         "vector_rank": 5,
+         "keyword_rank": 4,
+         "fused_rank": 2,
+         "fused_similarity": 0.628,
+         "keyword_only_rank": 4
+        },
+        {
+         "source": "esp32",
+         "page_index": 25,
+         "excerpt": "520 KB of on-chip SRAM for data and instructions",
+         "vector_rank": 1,
+         "keyword_rank": 6,
+         "fused_rank": 1,
+         "fused_similarity": 0.6637,
+         "keyword_only_rank": null
+        }
+       ],
+       "top_similarity": 0.6637,
+       "fused_top": [
+        {
+         "chunk_id": "14978b8d896c47948be0ff7b30d196b6",
+         "similarity": 0.6637,
+         "snippet": "4.1.2 Internal Memory ESP32’s internal memory includes: • 448 KB of ROM for booting and co"
+        },
+        {
+         "chunk_id": "3dcf773e721e41128c49d8c2fc9134e0",
+         "similarity": 0.628,
+         "snippet": "2 cores at 240 MHz: 1079.96 CoreMark; 4.50 CoreMark/MHz • 448 KB ROM • 520 KB SRAM • 16 KB"
+        },
+        {
+         "chunk_id": "68b54687516d49adb2710742b153b832",
+         "similarity": 0.6543,
+         "snippet": "4.1.3 External Flash and RAM ESP32 supports multiple external QSPI flash and external RAM "
+        },
+        {
+         "chunk_id": "f7c563c15e7e4140ae808cfa688494d1",
+         "similarity": 0.4673,
+         "snippet": "high-impedance, according to the function signal. If a function is not selected, the input"
+        }
+       ],
+       "route_sizes": {
+        "vector": 8,
+        "keyword": 8
+       }
+      },
+      {
+       "mode": "qa",
+       "source": "pico",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "pico",
+         "page_index": 3,
+         "excerpt": "264 kB multi-bank high performance SRAM",
+         "vector_rank": null,
+         "keyword_rank": 1,
+         "fused_rank": 4,
+         "fused_similarity": 0.6046,
+         "keyword_only_rank": 1
+        }
+       ],
+       "top_similarity": 0.6612,
+       "fused_top": [
+        {
+         "chunk_id": "892668e11c8542939b077d2e2e461bbb",
+         "similarity": 0.6145,
+         "snippet": "2.1. Raspberry Pi Pico pinout The Pico pinout has been designed to directly bring out as m"
+        },
+        {
+         "chunk_id": "99b0f53102804a4abb743b7f8a7df856",
+         "similarity": 0.6059,
+         "snippet": "4.7. USB RP2040 has an integrated USB1.1 PHY and controller which can be used in both Devi"
+        },
+        {
+         "chunk_id": "2d9e0f5a023b45848314eeefbf8423ec",
+         "similarity": 0.6612,
+         "snippet": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for"
+        },
+        {
+         "chunk_id": "f1a23cd731f449bfb8197d4c1c7a7502",
+         "similarity": 0.6046,
+         "snippet": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-c"
+        }
+       ],
+       "route_sizes": {
+        "vector": 8,
+        "keyword": 8
+       }
+      },
+      {
+       "mode": "search_doc",
+       "source": "esp32",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "esp32",
+         "page_index": 3,
+         "excerpt": "520 KB SRAM",
+         "vector_rank": 5,
+         "keyword_rank": 2,
+         "fused_rank": 2,
+         "fused_similarity": 0.628,
+         "keyword_only_rank": 4
+        },
+        {
+         "source": "esp32",
+         "page_index": 25,
+         "excerpt": "520 KB of on-chip SRAM for data and instructions",
+         "vector_rank": 1,
+         "keyword_rank": 4,
+         "fused_rank": 1,
+         "fused_similarity": 0.6637,
+         "keyword_only_rank": 6
+        }
+       ],
+       "top_similarity": 0.6637,
+       "fused_top": [
+        {
+         "chunk_id": "14978b8d896c47948be0ff7b30d196b6",
+         "similarity": 0.6637,
+         "snippet": "4.1.2 Internal Memory ESP32’s internal memory includes: • 448 KB of ROM for booting and co"
+        },
+        {
+         "chunk_id": "3dcf773e721e41128c49d8c2fc9134e0",
+         "similarity": 0.628,
+         "snippet": "2 cores at 240 MHz: 1079.96 CoreMark; 4.50 CoreMark/MHz • 448 KB ROM • 520 KB SRAM • 16 KB"
+        },
+        {
+         "chunk_id": "68b54687516d49adb2710742b153b832",
+         "similarity": 0.6543,
+         "snippet": "4.1.3 External Flash and RAM ESP32 supports multiple external QSPI flash and external RAM "
+        },
+        {
+         "chunk_id": "c0fb1f03951b4ae0b97c3091ceb0e7c8",
+         "similarity": 0.5982,
+         "snippet": "space, up to 4 MB can be mapped at a time. 8-bit, 16-bit and 32-bit reads are supported. •"
+        },
+        {
+         "chunk_id": "686bb2e1e69449eb9b4584641680063d",
+         "similarity": 0.5947,
+         "snippet": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microp"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "esp32-datasheet.pdf",
+          20
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      },
+      {
+       "mode": "search_doc",
+       "source": "pico",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "pico",
+         "page_index": 3,
+         "excerpt": "264 kB multi-bank high performance SRAM",
+         "vector_rank": 9,
+         "keyword_rank": 1,
+         "fused_rank": 1,
+         "fused_similarity": 0.6046,
+         "keyword_only_rank": 1
+        }
+       ],
+       "top_similarity": 0.6612,
+       "fused_top": [
+        {
+         "chunk_id": "f1a23cd731f449bfb8197d4c1c7a7502",
+         "similarity": 0.6046,
+         "snippet": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-c"
+        },
+        {
+         "chunk_id": "99b0f53102804a4abb743b7f8a7df856",
+         "similarity": 0.6059,
+         "snippet": "4.7. USB RP2040 has an integrated USB1.1 PHY and controller which can be used in both Devi"
+        },
+        {
+         "chunk_id": "892668e11c8542939b077d2e2e461bbb",
+         "similarity": 0.6145,
+         "snippet": "2.1. Raspberry Pi Pico pinout The Pico pinout has been designed to directly bring out as m"
+        },
+        {
+         "chunk_id": "0f4248d8944d4df18935458a6ad4546e",
+         "similarity": 0.6105,
+         "snippet": "The Raspberry Pi Pico’s GPIO is powered from the on-board 3.3 V rail and is therefore fixe"
+        },
+        {
+         "chunk_id": "cca50a5a428a4a04a3382b19f0317b69",
+         "similarity": 0.591,
+         "snippet": "2. Mechanical specification The Raspberry Pi Pico is a single sided 51×21 mm 1 mm thick PC"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "pico-datasheet.pdf",
+          20
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      },
+      {
+       "mode": "search_all",
+       "source": null,
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "pico",
+         "page_index": 3,
+         "excerpt": "264 kB multi-bank high performance SRAM",
+         "vector_rank": 18,
+         "keyword_rank": 7,
+         "fused_rank": 6,
+         "fused_similarity": 0.6046,
+         "keyword_only_rank": 14
+        },
+        {
+         "source": "esp32",
+         "page_index": 3,
+         "excerpt": "520 KB SRAM",
+         "vector_rank": 6,
+         "keyword_rank": 9,
+         "fused_rank": 3,
+         "fused_similarity": 0.628,
+         "keyword_only_rank": 16
+        },
+        {
+         "source": "esp32",
+         "page_index": 25,
+         "excerpt": "520 KB of on-chip SRAM for data and instructions",
+         "vector_rank": 1,
+         "keyword_rank": 11,
+         "fused_rank": 1,
+         "fused_similarity": 0.6637,
+         "keyword_only_rank": 18
+        }
+       ],
+       "top_similarity": 0.6637,
+       "fused_top": [
+        {
+         "chunk_id": "14978b8d896c47948be0ff7b30d196b6",
+         "similarity": 0.6637,
+         "snippet": "4.1.2 Internal Memory ESP32’s internal memory includes: • 448 KB of ROM for booting and co"
+        },
+        {
+         "chunk_id": "892668e11c8542939b077d2e2e461bbb",
+         "similarity": 0.6145,
+         "snippet": "2.1. Raspberry Pi Pico pinout The Pico pinout has been designed to directly bring out as m"
+        },
+        {
+         "chunk_id": "3dcf773e721e41128c49d8c2fc9134e0",
+         "similarity": 0.628,
+         "snippet": "2 cores at 240 MHz: 1079.96 CoreMark; 4.50 CoreMark/MHz • 448 KB ROM • 520 KB SRAM • 16 KB"
+        },
+        {
+         "chunk_id": "68b54687516d49adb2710742b153b832",
+         "similarity": 0.6543,
+         "snippet": "4.1.3 External Flash and RAM ESP32 supports multiple external QSPI flash and external RAM "
+        },
+        {
+         "chunk_id": "99b0f53102804a4abb743b7f8a7df856",
+         "similarity": 0.6059,
+         "snippet": "4.7. USB RP2040 has an integrated USB1.1 PHY and controller which can be used in both Devi"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "esp32-datasheet.pdf",
+          9
+         ],
+         [
+          "pico-datasheet.pdf",
+          11
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "esp32-radio",
+     "kind": "positive",
+     "question": "Which Wi-Fi protocols (and at what maximum 802.11n rate) and which Bluetooth version does the ESP32 support, according to the Features section of its datasheet?",
+     "runs": [
+      {
+       "mode": "qa",
+       "source": "esp32",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "esp32",
+         "page_index": 2,
+         "excerpt": "802.11b/g/n",
+         "vector_rank": 2,
+         "keyword_rank": 1,
+         "fused_rank": 1,
+         "fused_similarity": 0.7314,
+         "keyword_only_rank": 1
+        },
+        {
+         "source": "esp32",
+         "page_index": 2,
+         "excerpt": "802.11n (2.4 GHz), up to 150 Mbps",
+         "vector_rank": 2,
+         "keyword_rank": 2,
+         "fused_rank": 1,
+         "fused_similarity": 0.7314,
+         "keyword_only_rank": 2
+        },
+        {
+         "source": "esp32",
+         "page_index": 2,
+         "excerpt": "Compliant with Bluetooth v4.2 BR/EDR and Bluetooth LE specifications",
+         "vector_rank": null,
+         "keyword_rank": null,
+         "fused_rank": null,
+         "fused_similarity": null,
+         "keyword_only_rank": null
+        }
+       ],
+       "top_similarity": 0.7544,
+       "fused_top": [
+        {
+         "chunk_id": "75886a87b4ad470da1bb7bce0c126257",
+         "similarity": 0.7314,
+         "snippet": "Features Wi-Fi • 802.11b/g/n • 802.11n (2.4 GHz), up to 150 Mbps • WMM • TX/RX A-MPDU, RX "
+        },
+        {
+         "chunk_id": "fb9e6d70ce0549468e8715a520fc45ca",
+         "similarity": 0.7135,
+         "snippet": "4.6.4 Wi-Fi Radio and Baseband ESP32 implements a TCP/IP and full 802.11 b/g/n Wi-Fi MAC p"
+        },
+        {
+         "chunk_id": "3fcb006d4b6849ab8caa992b6d19988d",
+         "similarity": 0.7544,
+         "snippet": "ESP32 Series Datasheet Version 5.3 2.4 GHz Wi-Fi + Bluetooth® + Bluetooth LE SoC"
+        },
+        {
+         "chunk_id": "34406ba079574fa181b92b6ad1d1e793",
+         "similarity": 0.6431,
+         "snippet": "4.6.5 Wi-Fi MAC The ESP32 Wi-Fi MAC applies low-level protocol functions automatically. Th"
+        }
+       ],
+       "route_sizes": {
+        "vector": 8,
+        "keyword": 8
+       }
+      },
+      {
+       "mode": "search_doc",
+       "source": "esp32",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "esp32",
+         "page_index": 2,
+         "excerpt": "802.11b/g/n",
+         "vector_rank": 2,
+         "keyword_rank": 1,
+         "fused_rank": 1,
+         "fused_similarity": 0.7314,
+         "keyword_only_rank": 1
+        },
+        {
+         "source": "esp32",
+         "page_index": 2,
+         "excerpt": "802.11n (2.4 GHz), up to 150 Mbps",
+         "vector_rank": 2,
+         "keyword_rank": 2,
+         "fused_rank": 1,
+         "fused_similarity": 0.7314,
+         "keyword_only_rank": 2
+        },
+        {
+         "source": "esp32",
+         "page_index": 2,
+         "excerpt": "Compliant with Bluetooth v4.2 BR/EDR and Bluetooth LE specifications",
+         "vector_rank": null,
+         "keyword_rank": null,
+         "fused_rank": null,
+         "fused_similarity": null,
+         "keyword_only_rank": null
+        }
+       ],
+       "top_similarity": 0.7544,
+       "fused_top": [
+        {
+         "chunk_id": "75886a87b4ad470da1bb7bce0c126257",
+         "similarity": 0.7314,
+         "snippet": "Features Wi-Fi • 802.11b/g/n • 802.11n (2.4 GHz), up to 150 Mbps • WMM • TX/RX A-MPDU, RX "
+        },
+        {
+         "chunk_id": "fb9e6d70ce0549468e8715a520fc45ca",
+         "similarity": 0.7135,
+         "snippet": "4.6.4 Wi-Fi Radio and Baseband ESP32 implements a TCP/IP and full 802.11 b/g/n Wi-Fi MAC p"
+        },
+        {
+         "chunk_id": "3fcb006d4b6849ab8caa992b6d19988d",
+         "similarity": 0.7544,
+         "snippet": "ESP32 Series Datasheet Version 5.3 2.4 GHz Wi-Fi + Bluetooth® + Bluetooth LE SoC"
+        },
+        {
+         "chunk_id": "34406ba079574fa181b92b6ad1d1e793",
+         "similarity": 0.6431,
+         "snippet": "4.6.5 Wi-Fi MAC The ESP32 Wi-Fi MAC applies low-level protocol functions automatically. Th"
+        },
+        {
+         "chunk_id": "ccacc12269ca49bf87e5785a2faa1829",
+         "similarity": 0.6963,
+         "snippet": "VDD _ Voltage ESP32-D0WD-V3 Dual core v3.0/v3.14 — QFN 5*5 1.8 V/3.3 V ESP32-D0WDR2-V3 (EO"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "esp32-datasheet.pdf",
+          20
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      },
+      {
+       "mode": "search_all",
+       "source": null,
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "esp32",
+         "page_index": 2,
+         "excerpt": "802.11b/g/n",
+         "vector_rank": 2,
+         "keyword_rank": 1,
+         "fused_rank": 1,
+         "fused_similarity": 0.7135,
+         "keyword_only_rank": 1
+        },
+        {
+         "source": "esp32",
+         "page_index": 2,
+         "excerpt": "802.11n (2.4 GHz), up to 150 Mbps",
+         "vector_rank": 2,
+         "keyword_rank": 3,
+         "fused_rank": 2,
+         "fused_similarity": 0.7314,
+         "keyword_only_rank": 3
+        },
+        {
+         "source": "esp32",
+         "page_index": 2,
+         "excerpt": "Compliant with Bluetooth v4.2 BR/EDR and Bluetooth LE specifications",
+         "vector_rank": null,
+         "keyword_rank": null,
+         "fused_rank": null,
+         "fused_similarity": null,
+         "keyword_only_rank": null
+        }
+       ],
+       "top_similarity": 0.7544,
+       "fused_top": [
+        {
+         "chunk_id": "fb9e6d70ce0549468e8715a520fc45ca",
+         "similarity": 0.7135,
+         "snippet": "4.6.4 Wi-Fi Radio and Baseband ESP32 implements a TCP/IP and full 802.11 b/g/n Wi-Fi MAC p"
+        },
+        {
+         "chunk_id": "75886a87b4ad470da1bb7bce0c126257",
+         "similarity": 0.7314,
+         "snippet": "Features Wi-Fi • 802.11b/g/n • 802.11n (2.4 GHz), up to 150 Mbps • WMM • TX/RX A-MPDU, RX "
+        },
+        {
+         "chunk_id": "3fcb006d4b6849ab8caa992b6d19988d",
+         "similarity": 0.7544,
+         "snippet": "ESP32 Series Datasheet Version 5.3 2.4 GHz Wi-Fi + Bluetooth® + Bluetooth LE SoC"
+        },
+        {
+         "chunk_id": "34406ba079574fa181b92b6ad1d1e793",
+         "similarity": 0.6431,
+         "snippet": "4.6.5 Wi-Fi MAC The ESP32 Wi-Fi MAC applies low-level protocol functions automatically. Th"
+        },
+        {
+         "chunk_id": "ccacc12269ca49bf87e5785a2faa1829",
+         "similarity": 0.6963,
+         "snippet": "VDD _ Voltage ESP32-D0WD-V3 Dual core v3.0/v3.14 — QFN 5*5 1.8 V/3.3 V ESP32-D0WDR2-V3 (EO"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "esp32-datasheet.pdf",
+          20
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "esp32-cpu",
+     "kind": "positive",
+     "question": "What CPU cores and maximum clock frequency does the ESP32 have, according to the functional description in its datasheet?",
+     "runs": [
+      {
+       "mode": "qa",
+       "source": "esp32",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "esp32",
+         "page_index": 25,
+         "excerpt": "ESP32 contains one or two low-power Xtensa",
+         "vector_rank": 2,
+         "keyword_rank": null,
+         "fused_rank": 3,
+         "fused_similarity": 0.7299,
+         "keyword_only_rank": null
+        },
+        {
+         "source": "esp32",
+         "page_index": 25,
+         "excerpt": "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))",
+         "vector_rank": 2,
+         "keyword_rank": null,
+         "fused_rank": 3,
+         "fused_similarity": 0.7299,
+         "keyword_only_rank": null
+        }
+       ],
+       "top_similarity": 0.744,
+       "fused_top": [
+        {
+         "chunk_id": "9d365b4cb75f4b8f92e5811bf76d9fec",
+         "similarity": 0.744,
+         "snippet": "ESP32 is a single 2.4 GHz Wi-Fi-and-Bluetooth combo chip designed with the TSMC low-power "
+        },
+        {
+         "chunk_id": "c98c54e1d36245dcba2b5c62e0af8b0a",
+         "similarity": 0.3349,
+         "snippet": "No. Description Each column about digital “Function” is accompanied by a column about “Typ"
+        },
+        {
+         "chunk_id": "686bb2e1e69449eb9b4584641680063d",
+         "similarity": 0.7299,
+         "snippet": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microp"
+        },
+        {
+         "chunk_id": "7586b23b74ab4d7582379745f87aabd6",
+         "similarity": 0.4916,
+         "snippet": "MUX, the boxes highlighted in yellow indicate the GPIO pins that are input-only. Please se"
+        }
+       ],
+       "route_sizes": {
+        "vector": 8,
+        "keyword": 8
+       }
+      },
+      {
+       "mode": "search_doc",
+       "source": "esp32",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "esp32",
+         "page_index": 25,
+         "excerpt": "ESP32 contains one or two low-power Xtensa",
+         "vector_rank": 2,
+         "keyword_rank": 13,
+         "fused_rank": 2,
+         "fused_similarity": 0.7299,
+         "keyword_only_rank": 17
+        },
+        {
+         "source": "esp32",
+         "page_index": 25,
+         "excerpt": "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))",
+         "vector_rank": 2,
+         "keyword_rank": 13,
+         "fused_rank": 2,
+         "fused_similarity": 0.7299,
+         "keyword_only_rank": 17
+        }
+       ],
+       "top_similarity": 0.744,
+       "fused_top": [
+        {
+         "chunk_id": "6f30f1cd9b8d4e6e85195cc4a87d7067",
+         "similarity": 0.7063,
+         "snippet": "Power off CHIP • * Among the ESP32 series of SoCs, ESP32-D0WD-V3, ESP32-D0WDRH2-V3, ESP32-"
+        },
+        {
+         "chunk_id": "686bb2e1e69449eb9b4584641680063d",
+         "similarity": 0.7299,
+         "snippet": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microp"
+        },
+        {
+         "chunk_id": "1093b476c1124d808680b3a3dcc3565d",
+         "similarity": 0.6928,
+         "snippet": "4.1.5 Cache ESP32 uses a two-way set-associative cache. Each of the two CPUs has 32 KB of "
+        },
+        {
+         "chunk_id": "448dc017181748ceb1993337abcc01bf",
+         "similarity": 0.6795,
+         "snippet": "ESP32 Series Datasheet v5.3"
+        },
+        {
+         "chunk_id": "85cb2f16b18a4ae4b7af3ecd0423918e",
+         "similarity": 0.6795,
+         "snippet": "ESP32 Series Datasheet v5.3"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "esp32-datasheet.pdf",
+          20
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      },
+      {
+       "mode": "search_all",
+       "source": null,
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "esp32",
+         "page_index": 25,
+         "excerpt": "ESP32 contains one or two low-power Xtensa",
+         "vector_rank": 2,
+         "keyword_rank": 16,
+         "fused_rank": 3,
+         "fused_similarity": 0.7299,
+         "keyword_only_rank": null
+        },
+        {
+         "source": "esp32",
+         "page_index": 25,
+         "excerpt": "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))",
+         "vector_rank": 2,
+         "keyword_rank": 16,
+         "fused_rank": 3,
+         "fused_similarity": 0.7299,
+         "keyword_only_rank": null
+        }
+       ],
+       "top_similarity": 0.744,
+       "fused_top": [
+        {
+         "chunk_id": "9d365b4cb75f4b8f92e5811bf76d9fec",
+         "similarity": 0.744,
+         "snippet": "ESP32 is a single 2.4 GHz Wi-Fi-and-Bluetooth combo chip designed with the TSMC low-power "
+        },
+        {
+         "chunk_id": "6f30f1cd9b8d4e6e85195cc4a87d7067",
+         "similarity": 0.7063,
+         "snippet": "Power off CHIP • * Among the ESP32 series of SoCs, ESP32-D0WD-V3, ESP32-D0WDRH2-V3, ESP32-"
+        },
+        {
+         "chunk_id": "686bb2e1e69449eb9b4584641680063d",
+         "similarity": 0.7299,
+         "snippet": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microp"
+        },
+        {
+         "chunk_id": "1093b476c1124d808680b3a3dcc3565d",
+         "similarity": 0.6928,
+         "snippet": "4.1.5 Cache ESP32 uses a two-way set-associative cache. Each of the two CPUs has 32 KB of "
+        },
+        {
+         "chunk_id": "afaaff7ec77d42c9b2dc24c94a1f4658",
+         "similarity": 0.6737,
+         "snippet": "ESP32 Functional Block Diagram"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "esp32-datasheet.pdf",
+          20
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "attention-en-de-bleu",
+     "kind": "positive",
+     "question": "What BLEU score did the Transformer achieve on the WMT 2014 English-to-German translation task, and how much did that improve over the existing best results?",
+     "runs": [
+      {
+       "mode": "qa",
+       "source": "attention",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "attention",
+         "page_index": 0,
+         "excerpt": "Our model achieves 28.4 BLEU on the WMT 2014 English",
+         "vector_rank": 3,
+         "keyword_rank": 1,
+         "fused_rank": 2,
+         "fused_similarity": 0.6631,
+         "keyword_only_rank": 1
+        },
+        {
+         "source": "attention",
+         "page_index": 0,
+         "excerpt": "ensembles, by over 2 BLEU",
+         "vector_rank": 3,
+         "keyword_rank": 1,
+         "fused_rank": 2,
+         "fused_similarity": 0.6631,
+         "keyword_only_rank": 1
+        }
+       ],
+       "top_similarity": 0.7591,
+       "fused_top": [
+        {
+         "chunk_id": "a99ca3878efc430fa4122b2aa8a3c900",
+         "similarity": 0.7591,
+         "snippet": "6.1 Machine Translation On the WMT 2014 English-to-German translation task, the big transf"
+        },
+        {
+         "chunk_id": "f8428521699b48139cf6fa1f9deef1d5",
+         "similarity": 0.6631,
+         "snippet": "The dominant sequence transduction models are based on complex recurrent or convolutional "
+        },
+        {
+         "chunk_id": "6785131c6c514354852e1837d4abec69",
+         "similarity": 0.619,
+         "snippet": "In this work, we presented the Transformer, the first sequence transduction model based en"
+        },
+        {
+         "chunk_id": "9dc84a46de3d4e168054eec6b0417055",
+         "similarity": 0.6456,
+         "snippet": "a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eigh"
+        }
+       ],
+       "route_sizes": {
+        "vector": 8,
+        "keyword": 8
+       }
+      },
+      {
+       "mode": "search_doc",
+       "source": "attention",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "attention",
+         "page_index": 0,
+         "excerpt": "Our model achieves 28.4 BLEU on the WMT 2014 English",
+         "vector_rank": 3,
+         "keyword_rank": 1,
+         "fused_rank": 2,
+         "fused_similarity": 0.6631,
+         "keyword_only_rank": 1
+        },
+        {
+         "source": "attention",
+         "page_index": 0,
+         "excerpt": "ensembles, by over 2 BLEU",
+         "vector_rank": 3,
+         "keyword_rank": 1,
+         "fused_rank": 2,
+         "fused_similarity": 0.6631,
+         "keyword_only_rank": 1
+        }
+       ],
+       "top_similarity": 0.7591,
+       "fused_top": [
+        {
+         "chunk_id": "a99ca3878efc430fa4122b2aa8a3c900",
+         "similarity": 0.7591,
+         "snippet": "6.1 Machine Translation On the WMT 2014 English-to-German translation task, the big transf"
+        },
+        {
+         "chunk_id": "f8428521699b48139cf6fa1f9deef1d5",
+         "similarity": 0.6631,
+         "snippet": "The dominant sequence transduction models are based on complex recurrent or convolutional "
+        },
+        {
+         "chunk_id": "6785131c6c514354852e1837d4abec69",
+         "similarity": 0.619,
+         "snippet": "In this work, we presented the Transformer, the first sequence transduction model based en"
+        },
+        {
+         "chunk_id": "9dc84a46de3d4e168054eec6b0417055",
+         "similarity": 0.6456,
+         "snippet": "a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eigh"
+        },
+        {
+         "chunk_id": "896ecd715da04efd9d66b68f40f5334e",
+         "similarity": 0.747,
+         "snippet": "Table 2: The Transformer achieves better BLEU scores than previous state-of-the-art models"
+        }
+       ],
+       "route_sizes": {
+        "vector": 19,
+        "keyword": 19
+       },
+       "api": {
+        "degraded": null,
+        "hits": 19,
+        "groups": [
+         [
+          "attention-is-all-you-need.pdf",
+          19
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      },
+      {
+       "mode": "search_all",
+       "source": null,
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "attention",
+         "page_index": 0,
+         "excerpt": "Our model achieves 28.4 BLEU on the WMT 2014 English",
+         "vector_rank": 3,
+         "keyword_rank": 1,
+         "fused_rank": 2,
+         "fused_similarity": 0.6631,
+         "keyword_only_rank": 1
+        },
+        {
+         "source": "attention",
+         "page_index": 0,
+         "excerpt": "ensembles, by over 2 BLEU",
+         "vector_rank": 3,
+         "keyword_rank": 1,
+         "fused_rank": 2,
+         "fused_similarity": 0.6631,
+         "keyword_only_rank": 1
+        }
+       ],
+       "top_similarity": 0.7591,
+       "fused_top": [
+        {
+         "chunk_id": "a99ca3878efc430fa4122b2aa8a3c900",
+         "similarity": 0.7591,
+         "snippet": "6.1 Machine Translation On the WMT 2014 English-to-German translation task, the big transf"
+        },
+        {
+         "chunk_id": "f8428521699b48139cf6fa1f9deef1d5",
+         "similarity": 0.6631,
+         "snippet": "The dominant sequence transduction models are based on complex recurrent or convolutional "
+        },
+        {
+         "chunk_id": "6785131c6c514354852e1837d4abec69",
+         "similarity": 0.619,
+         "snippet": "In this work, we presented the Transformer, the first sequence transduction model based en"
+        },
+        {
+         "chunk_id": "896ecd715da04efd9d66b68f40f5334e",
+         "similarity": 0.747,
+         "snippet": "Table 2: The Transformer achieves better BLEU scores than previous state-of-the-art models"
+        },
+        {
+         "chunk_id": "9dc84a46de3d4e168054eec6b0417055",
+         "similarity": 0.6456,
+         "snippet": "a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eigh"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "attention-is-all-you-need.pdf",
+          19
+         ],
+         [
+          "esp32-datasheet.pdf",
+          1
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "attention-multi-head",
+     "kind": "positive",
+     "question": "How many parallel attention heads does the Transformer use in the paper, and what per-head key/value dimension does that imply?",
+     "runs": [
+      {
+       "mode": "qa",
+       "source": "attention",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "attention",
+         "page_index": 4,
+         "excerpt": "In this work we employ h = 8 parallel attention layers, or heads.",
+         "vector_rank": 4,
+         "keyword_rank": 3,
+         "fused_rank": 1,
+         "fused_similarity": 0.6229,
+         "keyword_only_rank": 3
+        },
+        {
+         "source": "attention",
+         "page_index": 4,
+         "excerpt": "dk = dv = dmodel/h = 64",
+         "vector_rank": 4,
+         "keyword_rank": 3,
+         "fused_rank": 1,
+         "fused_similarity": 0.6229,
+         "keyword_only_rank": 3
+        }
+       ],
+       "top_similarity": 0.681,
+       "fused_top": [
+        {
+         "chunk_id": "39ed1faa93d342168a3f1e658811bc22",
+         "similarity": 0.6229,
+         "snippet": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ"
+        },
+        {
+         "chunk_id": "f3dc27bb369f423b9cf883523ff8b156",
+         "similarity": 0.5973,
+         "snippet": "The goal of reducing sequential computation also forms the foundation of the Extended Neur"
+        },
+        {
+         "chunk_id": "2c000783c841420e8e2dfb9b2231b3de",
+         "similarity": 0.5276,
+         "snippet": "development set, newstest2013. We used beam search as described in the previous section, b"
+        },
+        {
+         "chunk_id": "35726bcfdcb84e53960ac69396605283",
+         "similarity": 0.681,
+         "snippet": "3.2.3 Applications of Attention in our Model The Transformer uses multi-head attention in "
+        }
+       ],
+       "route_sizes": {
+        "vector": 8,
+        "keyword": 8
+       }
+      },
+      {
+       "mode": "search_doc",
+       "source": "attention",
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "attention",
+         "page_index": 4,
+         "excerpt": "In this work we employ h = 8 parallel attention layers, or heads.",
+         "vector_rank": 4,
+         "keyword_rank": 3,
+         "fused_rank": 1,
+         "fused_similarity": 0.6229,
+         "keyword_only_rank": 3
+        },
+        {
+         "source": "attention",
+         "page_index": 4,
+         "excerpt": "dk = dv = dmodel/h = 64",
+         "vector_rank": 4,
+         "keyword_rank": 3,
+         "fused_rank": 1,
+         "fused_similarity": 0.6229,
+         "keyword_only_rank": 3
+        }
+       ],
+       "top_similarity": 0.681,
+       "fused_top": [
+        {
+         "chunk_id": "39ed1faa93d342168a3f1e658811bc22",
+         "similarity": 0.6229,
+         "snippet": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ"
+        },
+        {
+         "chunk_id": "f3dc27bb369f423b9cf883523ff8b156",
+         "similarity": 0.5973,
+         "snippet": "The goal of reducing sequential computation also forms the foundation of the Extended Neur"
+        },
+        {
+         "chunk_id": "35726bcfdcb84e53960ac69396605283",
+         "similarity": 0.681,
+         "snippet": "3.2.3 Applications of Attention in our Model The Transformer uses multi-head attention in "
+        },
+        {
+         "chunk_id": "137417d19ef644839c5f8536995e8e30",
+         "similarity": 0.53,
+         "snippet": "4 Why Self-Attention In this section we compare various aspects of self-attention layers t"
+        },
+        {
+         "chunk_id": "1e9cb4f9f0c9484a896ec63c9e2a1d35",
+         "similarity": 0.5532,
+         "snippet": "Table 3: Variations on the Transformer architecture. Unlisted values are identical to thos"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "attention-is-all-you-need.pdf",
+          20
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      },
+      {
+       "mode": "search_all",
+       "source": null,
+       "embedding": "ok",
+       "references": [
+        {
+         "source": "attention",
+         "page_index": 4,
+         "excerpt": "In this work we employ h = 8 parallel attention layers, or heads.",
+         "vector_rank": 4,
+         "keyword_rank": 2,
+         "fused_rank": 1,
+         "fused_similarity": 0.6229,
+         "keyword_only_rank": 2
+        },
+        {
+         "source": "attention",
+         "page_index": 4,
+         "excerpt": "dk = dv = dmodel/h = 64",
+         "vector_rank": 4,
+         "keyword_rank": 2,
+         "fused_rank": 1,
+         "fused_similarity": 0.6229,
+         "keyword_only_rank": 2
+        }
+       ],
+       "top_similarity": 0.681,
+       "fused_top": [
+        {
+         "chunk_id": "39ed1faa93d342168a3f1e658811bc22",
+         "similarity": 0.6229,
+         "snippet": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ"
+        },
+        {
+         "chunk_id": "f3dc27bb369f423b9cf883523ff8b156",
+         "similarity": 0.5973,
+         "snippet": "The goal of reducing sequential computation also forms the foundation of the Extended Neur"
+        },
+        {
+         "chunk_id": "35726bcfdcb84e53960ac69396605283",
+         "similarity": 0.681,
+         "snippet": "3.2.3 Applications of Attention in our Model The Transformer uses multi-head attention in "
+        },
+        {
+         "chunk_id": "137417d19ef644839c5f8536995e8e30",
+         "similarity": 0.53,
+         "snippet": "4 Why Self-Attention In this section we compare various aspects of self-attention layers t"
+        },
+        {
+         "chunk_id": "0b756f7489c644ccb79b107437972504",
+         "similarity": 0.5553,
+         "snippet": "in the case of dilated convolutions [18], increasing the length of the longest paths betwe"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "attention-is-all-you-need.pdf",
+          20
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "pico-private-board-serial",
+     "kind": "negative",
+     "question": "According only to the uploaded Pico datasheet, what is the exact unique serial number of the individual board I purchased yesterday?",
+     "runs": [
+      {
+       "mode": "qa",
+       "source": "pico",
+       "embedding": "ok",
+       "references": [],
+       "top_similarity": 0.6085,
+       "fused_top": [
+        {
+         "chunk_id": "c338e06e31cb4c0ea82b54875b891d8c",
+         "similarity": 0.5704,
+         "snippet": "Appendix A. Availability Raspberry Pi guarantee availability of the Raspberry Pi Pico prod"
+        },
+        {
+         "chunk_id": "01340eb79a564cc4b6fd095ef50ac2ab",
+         "similarity": 0.5614,
+         "snippet": "Pico uses an on-board buck-boost SMPS which is able to generate the required 3.3 V (to pow"
+        },
+        {
+         "chunk_id": "2d9e0f5a023b45848314eeefbf8423ec",
+         "similarity": 0.5449,
+         "snippet": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for"
+        },
+        {
+         "chunk_id": "cca50a5a428a4a04a3382b19f0317b69",
+         "similarity": 0.6085,
+         "snippet": "2. Mechanical specification The Raspberry Pi Pico is a single sided 51×21 mm 1 mm thick PC"
+        }
+       ],
+       "route_sizes": {
+        "vector": 8,
+        "keyword": 8
+       }
+      },
+      {
+       "mode": "search_doc",
+       "source": "pico",
+       "embedding": "ok",
+       "references": [],
+       "top_similarity": 0.6085,
+       "fused_top": [
+        {
+         "chunk_id": "c338e06e31cb4c0ea82b54875b891d8c",
+         "similarity": 0.5704,
+         "snippet": "Appendix A. Availability Raspberry Pi guarantee availability of the Raspberry Pi Pico prod"
+        },
+        {
+         "chunk_id": "01340eb79a564cc4b6fd095ef50ac2ab",
+         "similarity": 0.5614,
+         "snippet": "Pico uses an on-board buck-boost SMPS which is able to generate the required 3.3 V (to pow"
+        },
+        {
+         "chunk_id": "d63604eab9b145b2979b8c8d558fa786",
+         "similarity": 0.5924,
+         "snippet": "Raspberry Pi Pico Datasheet An RP2040-based microcontroller board"
+        },
+        {
+         "chunk_id": "2d9e0f5a023b45848314eeefbf8423ec",
+         "similarity": 0.5449,
+         "snippet": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for"
+        },
+        {
+         "chunk_id": "cf9861bb9af544b88d802610b839e6b4",
+         "similarity": 0.5611,
+         "snippet": "Update to VGA board hardware description for launch of Raspberry Pi Pico W. D.9. 17 June 2"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "pico-datasheet.pdf",
+          20
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      },
+      {
+       "mode": "search_all",
+       "source": null,
+       "embedding": "ok",
+       "references": [],
+       "top_similarity": 0.6085,
+       "fused_top": [
+        {
+         "chunk_id": "01340eb79a564cc4b6fd095ef50ac2ab",
+         "similarity": 0.5614,
+         "snippet": "Pico uses an on-board buck-boost SMPS which is able to generate the required 3.3 V (to pow"
+        },
+        {
+         "chunk_id": "d63604eab9b145b2979b8c8d558fa786",
+         "similarity": 0.5924,
+         "snippet": "Raspberry Pi Pico Datasheet An RP2040-based microcontroller board"
+        },
+        {
+         "chunk_id": "2d9e0f5a023b45848314eeefbf8423ec",
+         "similarity": 0.5449,
+         "snippet": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for"
+        },
+        {
+         "chunk_id": "cf9861bb9af544b88d802610b839e6b4",
+         "similarity": 0.5611,
+         "snippet": "Update to VGA board hardware description for launch of Raspberry Pi Pico W. D.9. 17 June 2"
+        },
+        {
+         "chunk_id": "801d4416dfb64e0bbe9eaeff9cb20012",
+         "similarity": 0.5844,
+         "snippet": "Raspberry Pi | Raspberry Pi Pico Datasheet Datasheet"
+        }
+       ],
+       "route_sizes": {
+        "vector": 20,
+        "keyword": 20
+       },
+       "api": {
+        "degraded": null,
+        "hits": 20,
+        "groups": [
+         [
+          "pico-datasheet.pdf",
+          18
+         ],
+         [
+          "esp32-datasheet.pdf",
+          2
+         ]
+        ],
+        "same_set_as_in_process": true
+       }
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "wiki_cross_sram": {
+  "command": ".dev-logs/f-20260925/c_wiki_cross.py（Pico + ESP32 固定版本，题目 'Raspberry Pi Pico RP2040 SRAM compared with ESP32 on-chip SRAM'）",
+  "before_fix": {
+   "summary": "201，6.2 秒。两条断言都写出 264 kB，却都是 unsupported：页面阶段模型按提示里的 reference 编号引了 \"4\"（Pico headline features，含 264 kB），服务端只认 evidence_id，把它静默丢了",
+   "data": {
+    "request": {
+     "title": "Raspberry Pi Pico RP2040 SRAM compared with ESP32 on-chip SRAM",
+     "sources": [
+      {
+       "resource_id": "0341f9d5fc404cf8bb8b04d391a3c9de",
+       "source_version_id": "77c1392bb1ad42c5aff771ee836b92b3"
+      },
+      {
+       "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+       "source_version_id": "a823c98f0ae048a0afec21a751d06da8"
+      }
+     ],
+     "max_pages": 1,
+     "max_evidence": 24,
+     "max_output_tokens": 2048,
+     "max_input_chars": 20000
+    },
+    "status": 201,
+    "seconds": 6.2,
+    "wiki_id": "821dc4d790c6426586321edd0b607b87",
+    "revision_id": "b609f5c27ffd4fca9850c35f1363bf27",
+    "provider": {
+     "model": "qwen3-4b-instruct",
+     "kind": "wiki_generation",
+     "semantic_verification": "not_performed"
+    },
+    "selection": {
+     "max_pages": 1,
+     "max_evidence": 24,
+     "max_output_tokens": 2048,
+     "max_input_chars": 20000,
+     "evidence_selection": {
+      "total_original_evidence": 2243,
+      "selected_evidence": 16,
+      "omitted_evidence": 2227,
+      "complete": false,
+      "ranking_degraded": null,
+      "sources": [
+       {
+        "resource_id": "0341f9d5fc404cf8bb8b04d391a3c9de",
+        "source_version_id": "77c1392bb1ad42c5aff771ee836b92b3",
+        "total_original_evidence": 123,
+        "selected_evidence": 8
+       },
+       {
+        "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+        "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+        "total_original_evidence": 2120,
+        "selected_evidence": 8
+       }
+      ]
+     }
+    },
+    "claims": [
+     {
+      "text": "The Raspberry Pi Pico is based on the RP2040 microcontroller chip, which features 264 kB of multi-bank high-performance SRAM that is on-chip and part of the RP2040's internal memory architecture, providing fast access for data and instructions.",
+      "unsupported": true,
+      "evidence": []
+     },
+     {
+      "text": "The RP2040 microcontroller includes 264 kB of multi-bank high-performance SRAM as a headline feature, which supports fast data and instruction access.",
+      "unsupported": true,
+      "evidence": []
+     }
+    ],
+    "mentions_264": true,
+    "mentions_520": false,
+    "sources_bound": []
+   }
+  },
+  "after_fix": {
+   "summary": "201，7.5 秒。同样两条 264 kB 断言，都绑定到 Pico p3 headline features（40924dbd…）。520 KB 仍没写：规划阶段只规划了一页、references [4, 8]，含 520 KB 的 ESP32 证据（reference 11、13）在上下文里但没进规划 —— 模型行为",
+   "data": {
+    "request": {
+     "title": "Raspberry Pi Pico RP2040 SRAM compared with ESP32 on-chip SRAM",
+     "sources": [
+      {
+       "resource_id": "0341f9d5fc404cf8bb8b04d391a3c9de",
+       "source_version_id": "77c1392bb1ad42c5aff771ee836b92b3"
+      },
+      {
+       "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+       "source_version_id": "a823c98f0ae048a0afec21a751d06da8"
+      }
+     ],
+     "max_pages": 1,
+     "max_evidence": 24,
+     "max_output_tokens": 2048,
+     "max_input_chars": 20000
+    },
+    "status": 201,
+    "seconds": 7.5,
+    "wiki_id": "943fad9dfa154246b775c6a3d4c1efbf",
+    "revision_id": "11234cd1b43840738a506262220ab4fa",
+    "provider": {
+     "model": "qwen3-4b-instruct",
+     "kind": "wiki_generation",
+     "semantic_verification": "not_performed"
+    },
+    "selection": {
+     "max_pages": 1,
+     "max_evidence": 24,
+     "max_output_tokens": 2048,
+     "max_input_chars": 20000,
+     "evidence_selection": {
+      "total_original_evidence": 2243,
+      "selected_evidence": 16,
+      "omitted_evidence": 2227,
+      "complete": false,
+      "ranking_degraded": null,
+      "sources": [
+       {
+        "resource_id": "0341f9d5fc404cf8bb8b04d391a3c9de",
+        "source_version_id": "77c1392bb1ad42c5aff771ee836b92b3",
+        "total_original_evidence": 123,
+        "selected_evidence": 8
+       },
+       {
+        "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+        "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+        "total_original_evidence": 2120,
+        "selected_evidence": 8
+       }
+      ]
+     }
+    },
+    "claims": [
+     {
+      "text": "The Raspberry Pi Pico is based on the RP2040 microcontroller chip, which features 264 kB of multi-bank high-performance SRAM that is on-chip and part of the RP2040's internal memory architecture, providing fast access for data and instructions.",
+      "unsupported": false,
+      "evidence": [
+       {
+        "evidence_id": "40924dbd45c44975a798e20dedbdc224",
+        "source": "pico",
+        "page_idx": 3,
+        "content": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequency 264 kB multi-bank high performance SRAM External Quad-SPI Flash with eXecut"
+       }
+      ]
+     },
+     {
+      "text": "The RP2040 microcontroller includes 264 kB of multi-bank high-performance SRAM as a headline feature, which supports fast data and instruction access.",
+      "unsupported": false,
+      "evidence": [
+       {
+        "evidence_id": "40924dbd45c44975a798e20dedbdc224",
+        "source": "pico",
+        "page_idx": 3,
+        "content": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequency 264 kB multi-bank high performance SRAM External Quad-SPI Flash with eXecut"
+       }
+      ]
+     }
+    ],
+    "mentions_264": true,
+    "mentions_520": false,
+    "sources_bound": [
+     "pico"
+    ]
+   }
+  },
+  "cpu_1_7b_after_fix": {
+   "summary": "对照：修复后在 CPU 1.7B 上同题 16.6 秒，仍只有一条复述标题的「结论」，现在绑定到 Pico headline 块（修复前是 unsupported）。绑定不等于语义正确（契约原文如此），空洞结论系统挡不住",
+   "data": {
+    "request": {
+     "title": "Raspberry Pi Pico RP2040 SRAM compared with ESP32 on-chip SRAM",
+     "sources": [
+      {
+       "resource_id": "0341f9d5fc404cf8bb8b04d391a3c9de",
+       "source_version_id": "77c1392bb1ad42c5aff771ee836b92b3"
+      },
+      {
+       "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+       "source_version_id": "a823c98f0ae048a0afec21a751d06da8"
+      }
+     ],
+     "max_pages": 1,
+     "max_evidence": 24,
+     "max_output_tokens": 2048,
+     "max_input_chars": 20000
+    },
+    "status": 201,
+    "seconds": 16.6,
+    "wiki_id": "c0a2ec1ed100483386125916f825151d",
+    "revision_id": "98388ef672014258914ba08cedde6654",
+    "provider": {
+     "model": "qwen3-1.7b",
+     "kind": "wiki_generation",
+     "semantic_verification": "not_performed"
+    },
+    "selection": {
+     "max_pages": 1,
+     "max_evidence": 24,
+     "max_output_tokens": 2048,
+     "max_input_chars": 20000,
+     "evidence_selection": {
+      "total_original_evidence": 2243,
+      "selected_evidence": 16,
+      "omitted_evidence": 2227,
+      "complete": false,
+      "ranking_degraded": null,
+      "sources": [
+       {
+        "resource_id": "0341f9d5fc404cf8bb8b04d391a3c9de",
+        "source_version_id": "77c1392bb1ad42c5aff771ee836b92b3",
+        "total_original_evidence": 123,
+        "selected_evidence": 8
+       },
+       {
+        "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+        "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+        "total_original_evidence": 2120,
+        "selected_evidence": 8
+       }
+      ]
+     }
+    },
+    "claims": [
+     {
+      "text": "The Raspberry Pi Pico RP2040 SRAM compared with ESP32 on-chip SRAM",
+      "unsupported": false,
+      "evidence": [
+       {
+        "evidence_id": "40924dbd45c44975a798e20dedbdc224",
+        "source": "pico",
+        "page_idx": 3,
+        "content": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequency 264 kB multi-bank high performance SRAM External Quad-SPI Flash with eXecut"
+       }
+      ]
+     }
+    ],
+    "mentions_264": false,
+    "mentions_520": false,
+    "sources_bound": [
+     "pico"
+    ]
+   }
+  },
+  "planner_references_in_page_request": "页面请求里 reference 4 = 40924dbd45c44975a798e20dedbdc224（含 264 kB），11 = 2b1e8fac…、13 = 590e0e2e…（含 520 KB）"
+ },
+ "wiki_versions": {
+  "command": ".dev-logs/f-20260925/f_wiki_versions.py（b-alice 的控制器资源 69de63cf…，v1 17 ms → v2 23 ms → v3 31 ms 依次重建）",
+  "result": {
+   "v1": "201，4.3 秒：17 毫秒与看门狗 7 秒两条都引到 v1 原文；unsupported 0；没有其他版本的延时",
+   "v2": "201，3.8 秒：23 毫秒与 7 秒都引到 v2；unsupported 0；没有 17/31 泄漏",
+   "v3_default": "502 wiki_generation_failed，2.2 秒。规划器给出两页同名页面；修复后报错原文是 'Wiki planner output rejected: planner repeated a page'（修复前是误导性的 'invalid source bindings'）。两次运行都复现，是模型行为",
+   "v3_max_pages_1": "201：31 毫秒与 7 秒都引到 v3、not stale、没有 17/23 泄漏"
+  },
+  "script_fix": "f_wiki_versions.py 原来用 \\b17\\s*毫秒 判断，中文里数字前是汉字、\\b 不成立，结果误报 states_delay=false；已改成 (?<!\\d) 并对已存数据重算",
+  "before_fix": {
+   "resource": "69de63cfb2b5433798f6db19b87073bb",
+   "title": "控制器复位延时与看门狗设置",
+   "revisions": [
+    {
+     "version_no": 1,
+     "status": 201,
+     "seconds": 4.9,
+     "revision_id": "a5b4c849452340639494f7b8916b0ced",
+     "stale": true,
+     "claims": [
+      {
+       "text": "看门狗超时设置为7秒，复位延时与看门狗超时是独立的设置项。",
+       "unsupported": false,
+       "evidence": [
+        {
+         "evidence_id": "4cd0aae19893473590657c074993c7b8",
+         "version": "f0bfbef8a26e4675822d254cec8bc5fb",
+         "page_idx": 1,
+         "content": "Watchdog settings The watchdog timeout is 7 seconds. Reset timing and watchdog timeout are separate settings."
+        }
+       ]
+      },
+      {
+       "text": "控制器复位延时为17毫秒，在发送命令前需等待该延时。",
+       "unsupported": false,
+       "evidence": [
+        {
+         "evidence_id": "6a05d4e9ddb9493e9f506478056aa6bd",
+         "version": "f0bfbef8a26e4675822d254cec8bc5fb",
+         "page_idx": 0,
+         "content": "Controller setup manual The reset delay is 17 milliseconds. Wait for the reset delay before sending a command."
+        }
+       ]
+      }
+     ],
+     "states_delay": true,
+     "delay_cited_to_this_version": true,
+     "states_watchdog_7s": true,
+     "unsupported": 0,
+     "restates_title": 0,
+     "old_delays_leaked": []
+    },
+    {
+     "version_no": 2,
+     "status": 201,
+     "seconds": 4.3,
+     "revision_id": "5fdcaf72c8dd41c790c9225b377dc505",
+     "stale": true,
+     "claims": [
+      {
+       "text": "控制器复位延时为23毫秒，发送命令前需等待该延时。",
+       "unsupported": false,
+       "evidence": [
+        {
+         "evidence_id": "c8b7c057b251463e9d4e27ca45d10e8e",
+         "version": "8284dbebe53f4186af6eec285ef4f785",
+         "page_idx": 0,
+         "content": "Controller setup manual The reset delay is 23 milliseconds. Wait for the reset delay before sending a command."
+        }
+       ]
+      },
+      {
+       "text": "看门狗超时设置为7秒，复位延时与看门狗超时是独立的设置。",
+       "unsupported": false,
+       "evidence": [
+        {
+         "evidence_id": "de50437abadf42d2afc206d64d43f50b",
+         "version": "8284dbebe53f4186af6eec285ef4f785",
+         "page_idx": 1,
+         "content": "Watchdog settings The watchdog timeout is 7 seconds. Reset timing and watchdog timeout are separate settings."
+        }
+       ]
+      }
+     ],
+     "states_delay": true,
+     "delay_cited_to_this_version": true,
+     "states_watchdog_7s": true,
+     "unsupported": 0,
+     "restates_title": 0,
+     "old_delays_leaked": []
+    },
+    {
+     "version_no": 3,
+     "status": 502,
+     "seconds": 2.0,
+     "error": "{\"error\":{\"message\":\"Wiki planner returned invalid source bindings\",\"type\":\"invalid_request_error\",\"code\":\"wiki_generation_failed\"}}"
+    }
+   ],
+   "wiki_id": "27e7a5c0aecb479585a93b0515ae5b0d",
+   "v3_one_page_retry": {
+    "version_no": 3,
+    "max_pages": 1,
+    "status": 201,
+    "revision_id": "fbdf8915343342b6b5f5601b53096c8c",
+    "stale": false,
+    "claims": [
+     {
+      "text": "看门狗超时设置为7秒，复位延时与看门狗超时是独立的设置项。",
+      "unsupported": false,
+      "evidence": [
+       "Watchdog settings\nThe watchdog timeout is 7 seconds. Reset timing and watchdog t"
+      ]
+     },
+     {
+      "text": "控制器复位延时为31毫秒，在发送命令前需等待复位延时。",
+      "unsupported": false,
+      "evidence": [
+       "Controller setup manual\nThe reset delay is 31 milliseconds. Wait for the reset d"
+      ]
+     }
+    ],
+    "states_delay": true,
+    "delay_cited": true,
+    "old_delays_leaked": []
+   },
+   "v3_default_failure_cause": "planner returned two pages with the same title (normalize_plan: 'planner repeated a page'); corpus reported it as 'Wiki planner returned invalid source bindings'"
+  },
+  "after_fix": {
+   "resource": "69de63cfb2b5433798f6db19b87073bb",
+   "title": "控制器复位延时与看门狗设置",
+   "revisions": [
+    {
+     "version_no": 1,
+     "status": 201,
+     "seconds": 4.3,
+     "revision_id": "ed08502043ac410fbfd7962ba24e2afd",
+     "stale": true,
+     "claims": [
+      {
+       "text": "看门狗超时设置为7秒，复位延时与看门狗超时是独立的配置项。",
+       "unsupported": false,
+       "evidence": [
+        {
+         "evidence_id": "4cd0aae19893473590657c074993c7b8",
+         "version": "f0bfbef8a26e4675822d254cec8bc5fb",
+         "page_idx": 1,
+         "content": "Watchdog settings The watchdog timeout is 7 seconds. Reset timing and watchdog timeout are separate settings."
+        }
+       ]
+      },
+      {
+       "text": "控制器复位延时为17毫秒，在发送命令前需等待该延时。",
+       "unsupported": false,
+       "evidence": [
+        {
+         "evidence_id": "6a05d4e9ddb9493e9f506478056aa6bd",
+         "version": "f0bfbef8a26e4675822d254cec8bc5fb",
+         "page_idx": 0,
+         "content": "Controller setup manual The reset delay is 17 milliseconds. Wait for the reset delay before sending a command."
+        }
+       ]
+      }
+     ],
+     "states_delay": true,
+     "delay_cited_to_this_version": true,
+     "states_watchdog_7s": true,
+     "unsupported": 0,
+     "restates_title": 0,
+     "old_delays_leaked": []
+    },
+    {
+     "version_no": 2,
+     "status": 201,
+     "seconds": 3.8,
+     "revision_id": "c063a1df74a64e238f3ee247fd24719f",
+     "stale": true,
+     "claims": [
+      {
+       "text": "控制器复位延时为23毫秒，发送命令前需等待该延时。",
+       "unsupported": false,
+       "evidence": [
+        {
+         "evidence_id": "c8b7c057b251463e9d4e27ca45d10e8e",
+         "version": "8284dbebe53f4186af6eec285ef4f785",
+         "page_idx": 0,
+         "content": "Controller setup manual The reset delay is 23 milliseconds. Wait for the reset delay before sending a command."
+        }
+       ]
+      },
+      {
+       "text": "看门狗超时设置为7秒，复位延时与看门狗超时是独立的设置。",
+       "unsupported": false,
+       "evidence": [
+        {
+         "evidence_id": "de50437abadf42d2afc206d64d43f50b",
+         "version": "8284dbebe53f4186af6eec285ef4f785",
+         "page_idx": 1,
+         "content": "Watchdog settings The watchdog timeout is 7 seconds. Reset timing and watchdog timeout are separate settings."
+        }
+       ]
+      }
+     ],
+     "states_delay": true,
+     "delay_cited_to_this_version": true,
+     "states_watchdog_7s": true,
+     "unsupported": 0,
+     "restates_title": 0,
+     "old_delays_leaked": []
+    },
+    {
+     "version_no": 3,
+     "status": 502,
+     "seconds": 2.2,
+     "error": "{\"error\":{\"message\":\"Wiki planner output rejected: planner repeated a page\",\"type\":\"invalid_request_error\",\"code\":\"wiki_generation_failed\"}}"
+    }
+   ],
+   "wiki_id": "ee29dd16bee143968969a9cb44ec132b",
+   "v3_one_page_retry": {
+    "version_no": 3,
+    "max_pages": 1,
+    "status": 201,
+    "revision_id": "c072fa8f741d40c78ca3c0eac07f69c3",
+    "stale": false,
+    "claims": [
+     {
+      "text": "看门狗超时设置为7秒，复位延时与看门狗超时是独立的设置项。",
+      "unsupported": false,
+      "evidence": [
+       "Watchdog settings\nThe watchdog timeout is 7 seconds. Reset timing and watchdog t"
+      ]
+     },
+     {
+      "text": "控制器复位延时为31毫秒，在发送命令前需等待复位延时。",
+      "unsupported": false,
+      "evidence": [
+       "Controller setup manual\nThe reset delay is 31 milliseconds. Wait for the reset d"
+      ]
+     }
+    ],
+    "states_delay": true,
+    "delay_cited": true,
+    "states_watchdog_7s": true,
+    "old_delays_leaked": []
+   }
+  }
+ },
+ "vision_threshold": {
+  "command": ".dev-logs/f-20260925/calibrate_all.sh（scripts/calibrate_verify_threshold.py，OCR-2 + 'Free OCR.'，每份 40 块；一致组=块图对自己的文本，不一致组=块图对其他 39 块的文本）",
+  "script_fix": "脚本还从 ddp_gateway.services 导入 crops，而 crops 已搬进 ddp_core，一运行就 ImportError（08-25 标定之后的代码搬迁造成）；改为从 ddp_core 导入",
+  "current_threshold": 0.55,
+  "per_pdf": {
+   "attention-is-all-you-need": {
+    "blocks": 40,
+    "matching": {
+     "n": 40,
+     "min": 0.182,
+     "p5": 0.6,
+     "p50": 1.0,
+     "p95": 1.0,
+     "max": 1.0
+    },
+    "mismatched": {
+     "n": 1560,
+     "min": 0.004,
+     "p5": 0.024,
+     "p50": 0.131,
+     "p95": 0.293,
+     "max": 0.667
+    },
+    "suggested": 0.45,
+    "at_0.55": {
+     "missed_mismatch": "16/1560",
+     "false_alarm": "1/40"
+    },
+    "at_suggested": {
+     "missed_mismatch": "34/1560",
+     "false_alarm": "1/40"
+    },
+    "note": "唯一的误报是块 [2]：arXiv 侧边竖排文字，文字层是反序的 '3 2 0 2 g u A 2 ] L C . s c'，OCR-2 读成 'arXiV:1706.037627 [cs.CL] 2 Aug 2023'。这是文字层真的抽错（D 已记的「旋转文字反序」引擎限制），核对报 parse_mismatch 是对的。公式块（LaTeX 与文字层记法不同）的比值偏低，拉低了 p5。"
+   },
+   "pico-datasheet": {
+    "blocks": 40,
+    "matching": {
+     "n": 40,
+     "min": 0.855,
+     "p5": 0.979,
+     "p50": 1.0,
+     "p95": 1.0,
+     "max": 1.0
+    },
+    "mismatched": {
+     "n": 1560,
+     "min": 0.006,
+     "p5": 0.028,
+     "p50": 0.197,
+     "p95": 0.706,
+     "max": 1.0
+    },
+    "suggested": 0.84,
+    "at_0.55": {
+     "missed_mismatch": "258/1560",
+     "false_alarm": "0/40"
+    },
+    "at_suggested": {
+     "missed_mismatch": "66/1560",
+     "false_alarm": "0/40"
+    },
+    "note": "40 块里有 7 块是每页重复的页眉 'Raspberry Pi Pico Datasheet'，还有 'About Raspberry Pi Pico N' 这类页脚。脚本把「别的块的文本」一律当作不一致，于是同文页眉两两配对也算进不一致组（比值≈1.0）。不一致组的 p95/max 被这类配对抬高，258/1560 不全是真正会放过的错误。标定脚本应当排除同文或近同文配对后再算；本轮没改脚本，只报告。"
+   },
+   "esp32-datasheet": {
+    "blocks": 40,
+    "matching": {
+     "n": 40,
+     "min": 0.7,
+     "p5": 0.975,
+     "p50": 1.0,
+     "p95": 1.0,
+     "max": 1.0
+    },
+    "mismatched": {
+     "n": 1560,
+     "min": 0.0,
+     "p5": 0.038,
+     "p50": 0.15,
+     "p95": 0.338,
+     "max": 1.0
+    },
+    "suggested": 0.66,
+    "at_0.55": {
+     "missed_mismatch": "12/1560",
+     "false_alarm": "0/40"
+    },
+    "at_suggested": {
+     "missed_mismatch": "10/1560",
+     "false_alarm": "0/40"
+    },
+    "note": "同样有重复页脚 'ESP32 Series Datasheet v5.3'（块 21、27）造成的 max=1.0。"
+   }
+  },
+  "decision": "没改阈值（需要用户签字）。三份文档的建议值是 0.45 / 0.84 / 0.66，差得很远；pico 的数字被重复页眉污染。建议先让标定脚本排除同文配对再重标，而不是现在换阈值。另外即使定了阈值，corpus 层问答目前也用不上它（见 qa.vision_verification）"
+ },
+ "fix_delta": {
+  "files": [
+   "packages/contracts/ddp/wiki-format.md",
+   "services/corpus-api/ddp_corpus/wiki.py",
+   "services/corpus-api/tests/test_wiki_revisions.py",
+   "scripts/calibrate_verify_threshold.py"
+  ],
+  "behavior": [
+   "断言引用可以是 evidence_id 或提示里的 reference 编号；编号解析成该证据的 ID，其他一律丢弃（仍然不修补、不猜）",
+   "规划输出超过 max_pages 仍是 409 wiki_budget_exceeded；其余被计划校验拒绝的输出 502 wiki_generation_failed，message 写明具体原因"
+  ],
+  "tests": "test_wiki_revisions.py 23 passed（新增 2 条）；变异：去掉编号解析 → 引用编号那条红；改回旧报错文案 → 规划错误那条红。corpus-api 全量 880 passed / 19 failed / 13 errors，失败集与 E 完全相同（均为暂停范围：联邦/桌面）；门禁 ruff(F,B) 对改动文件通过；守卫 12/13（红的是桌面测试，与 E 相同）",
+  "acceptance": "独立验收子代理 FAcceptance：8 项中 7 项 PASS（含自行复做两次变异）；契约措辞 1 项 FAIL（超过 max_pages 是 409 wiki_budget_exceeded），改正后二次验收 PASS；无阻塞项。未提交"
+ },
+ "not_done": [
+  "人工语义评审（§4F 第 4 项）",
+  "跨篇 Wiki 仍没写 ESP32 520 KB",
+  "v3 默认重建因规划器重复页而失败",
+  "corpus 层问答的视觉核对路由",
+  "扫描件/中文/表格/公式的 OCR 分域验证、受控部署（§4F 其余要求）"
+ ]
+}

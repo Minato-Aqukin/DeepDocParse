@@ -86,7 +86,8 @@ type CredentialClaims struct {
 func credentialGetOperation(op contracts.NodeCredentialOperation) bool {
 	switch op {
 	case contracts.NodeCredentialOperationProbeRead, contracts.NodeCredentialOperationExecutionRead,
-		contracts.NodeCredentialOperationEvidenceSetRead, contracts.NodeCredentialOperationCatalogRead:
+		contracts.NodeCredentialOperationEvidenceSetRead, contracts.NodeCredentialOperationCatalogRead,
+		contracts.NodeCredentialOperationDirectoryMembersRead, contracts.NodeCredentialOperationDirectoryCollectionsRead:
 		return true
 	}
 	return false
@@ -132,6 +133,9 @@ func (c CredentialClaims) Validate() error {
 		return ErrCredentialInvalid
 	}
 	if (op == contracts.NodeCredentialOperationProbeCreate || op == contracts.NodeCredentialOperationProbeRead) && k.TaskSpecDigest == "" {
+		return ErrCredentialInvalid
+	}
+	if (op == contracts.NodeCredentialOperationDirectoryMembersRead || op == contracts.NodeCredentialOperationDirectoryCollectionsRead) && !credentialDigest.MatchString(k.ScopeRef) {
 		return ErrCredentialInvalid
 	}
 	if c.IssuedAt < 1 || c.ExpiresAt > credentialEpochMax || c.ExpiresAt-c.IssuedAt < 1 || c.ExpiresAt-c.IssuedAt > MaxCredentialLifetimeSeconds {
@@ -226,11 +230,30 @@ func strictRawURL(text string) ([]byte, bool) {
 	return raw, true
 }
 
+// CredentialIssuer reads only a lookup hint. It never authorizes a request:
+// callers must validate the complete credential against the trusted public key.
+func CredentialIssuer(token string) (string, error) {
+	if len(token) > maxCredentialChars {
+		return "", ErrCredentialInvalid
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return "", ErrCredentialInvalid
+	}
+	payload, ok := strictRawURL(parts[0])
+	if !ok {
+		return "", ErrCredentialInvalid
+	}
+	var claims CredentialClaims
+	if json.Unmarshal(payload, &claims) != nil || !credentialNode.MatchString(claims.IssuerNodeID) {
+		return "", ErrCredentialInvalid
+	}
+	return claims.IssuerNodeID, nil
+}
+
 // VerifyCredential decodes a credential strictly and checks its signature
-// against a standard-base64 Ed25519 public key. Control never receives
-// credentials in production (corpus verifies); this exists so Go tests can
-// refuse the same frozen invalid vectors the Python verifier refuses, and so a
-// future Go receiver has one implementation to call rather than a second copy.
+// against a standard-base64 Ed25519 public key. The control directory receiver
+// also checks live membership, expiry, request binding and its durable nonce.
 func VerifyCredential(token, publicKey string) (CredentialClaims, error) {
 	var none CredentialClaims
 	if token == "" || len(token) > maxCredentialChars {

@@ -84,9 +84,11 @@ DEGRADED_META: Final[dict[str, EnumMeta]] = {
     "citation_persist_failed": {"value": "citation_persist_failed", "label": "出处保存失败，相关结论已标为无证据支持", "severity": "error"},
     # 原文自动核对没得出结论
     "verification_unavailable": {"value": "verification_unavailable", "label": "原文自动核对未得出结论，请人工复核", "severity": "warn"},
-    # 模型输出反复不合 schema（已按 EXTRACT_MAX_RETRIES 重试仍失败）。
-    # **绝不能被静默当成 not_found** —— 那会把系统故障伪装成"文档里没有"。
-    "schema_violation": {"value": "schema_violation", "label": "模型输出不符合 schema（已重试仍失败）", "severity": "error"},
+    # 模型输出不符合约定结构。抽取平面：按 EXTRACT_MAX_RETRIES 重试仍失败；
+    # 问答平面：回答未满足逐条证据绑定协议（非法 JSON、缺失/越界 evidence_id、
+    # 截断），不重试，已校验的完整断言作为显式失败的部分回答保留。
+    # **绝不能被静默当成 not_found / 文档中没有** —— 那会把系统故障伪装成"文档里没有"。
+    "schema_violation": {"value": "schema_violation", "label": "模型输出不符合约定格式", "severity": "error"},
     # 配了精排但上游没注册 rerank 模型，本轮没重排
     "rerank_unavailable": {"value": "rerank_unavailable", "label": "未做精排（重排序服务不可用）", "severity": "neutral"},
     # 注册表里只有 OCR 专用模型（`capabilities` 含 `no_instruct`），
@@ -111,7 +113,7 @@ def degraded_label(value: str | None) -> str | None:
 # 版面编译（DDP-Compile v1）的降级。与 `degraded` 分开是因为它是
 # **列表**：一次编译可以同时有好几种降级，而且它落在
 # `documents.compile_degraded`（JSON 数组）上。
-CompileDegraded = Literal["code_detection_unavailable", "crop_unsupported", "crop_failed", "vision_unavailable", "vision_invalid_output", "provider_unresolved", "reindex_validation_required", "compile_failed"]
+CompileDegraded = Literal["code_detection_unavailable", "crop_unsupported", "crop_failed", "vision_unavailable", "vision_invalid_output", "provider_unresolved", "reindex_validation_required", "compile_failed", "layout_unavailable"]
 
 COMPILE_DEGRADED_VALUES: Final[tuple[str, ...]] = (
     "code_detection_unavailable",
@@ -122,6 +124,7 @@ COMPILE_DEGRADED_VALUES: Final[tuple[str, ...]] = (
     "provider_unresolved",
     "reindex_validation_required",
     "compile_failed",
+    "layout_unavailable",
 )
 
 COMPILE_DEGRADED_META: Final[dict[str, EnumMeta]] = {
@@ -141,6 +144,8 @@ COMPILE_DEGRADED_META: Final[dict[str, EnumMeta]] = {
     "reindex_validation_required": {"value": "reindex_validation_required", "label": "存在历史出处，需先校验并确认后重建", "severity": "warn"},
     # 版面编译整体失败
     "compile_failed": {"value": "compile_failed", "label": "版面编译失败", "severity": "error"},
+    # 导入的来源没有可用版面（layout.json 缺失或无效），未编译、未建索引
+    "layout_unavailable": {"value": "layout_unavailable", "label": "来源版面不可用，未编译", "severity": "error"},
 }
 
 
@@ -667,6 +672,115 @@ def upload_status_label(value: str | None) -> str | None:
     return meta["label"] if meta else f"未知取值（{value}）"
 
 
+# 永久上传字节就绪（`upload_status=ready`）之后的**语料登记确认**：control 把
+# `DocumentSubmitted` 投递给语料域，只有 2xx 或 `409 duplicate_event` 算确认。
+# 与 `upload_status` 是两段：`ready` 只表示已登记，**不是解析/索引完成**。
+# 字节未就绪、或临时计算上传时，该字段为 null。
+IngestStatus = Literal["pending", "retrying", "ready", "rejected"]
+
+INGEST_STATUS_VALUES: Final[tuple[str, ...]] = (
+    "pending",
+    "retrying",
+    "ready",
+    "rejected",
+)
+
+INGEST_STATUS_META: Final[dict[str, EnumMeta]] = {
+    # 登记事件尚未得到确认（含事件尚未落库）
+    "pending": {"value": "pending", "label": "登记中", "severity": "progress", "active": True},
+    # 投递遇到暂时故障，按退避重试同一事件
+    "retrying": {"value": "retrying", "label": "登记重试中", "severity": "warn", "active": True},
+    # 语料域已确认登记；解析/索引另行展示
+    "ready": {"value": "ready", "label": "已登记", "severity": "ok"},
+    # 语料域确定性拒绝，终态，不再重投
+    "rejected": {"value": "rejected", "label": "登记被拒绝", "severity": "error"},
+}
+
+
+def ingest_status_label(value: str | None) -> str | None:
+    """ingest_status 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = INGEST_STATUS_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# `ingest_status=rejected` 时 `ingest_error` 的取值：语料域对 `DocumentSubmitted`
+# 的**确定性**拒绝码。投递器只把这一组当终态；其余非 2xx（含 5xx、
+# `document_state_changed`、校验错误）一律按暂时故障重试 —— 把可恢复的失败
+# 判成终态会让一份已校验的上传永远进不了语料库。
+IngestRejection = Literal["resource_not_found", "resource_version_exists", "invalid_upload_target", "idempotency_conflict", "source_missing"]
+
+INGEST_REJECTION_VALUES: Final[tuple[str, ...]] = (
+    "resource_not_found",
+    "resource_version_exists",
+    "invalid_upload_target",
+    "idempotency_conflict",
+    "source_missing",
+)
+
+INGEST_REJECTION_META: Final[dict[str, EnumMeta]] = {
+    # 目标资源已删除、已撤回或不属于上传者
+    "resource_not_found": {"value": "resource_not_found", "label": "目标资源不存在、已撤回或无权追加", "severity": "error"},
+    # 相同字节已是目标资源的一个固定版本
+    "resource_version_exists": {"value": "resource_version_exists", "label": "该内容已是目标资源的一个版本", "severity": "error"},
+    # 目标字段非法，或临时计算上传带了目标
+    "invalid_upload_target": {"value": "invalid_upload_target", "label": "目标资源无效", "severity": "error"},
+    # 同一登记键绑定了不同的输入
+    "idempotency_conflict": {"value": "idempotency_conflict", "label": "登记幂等键冲突", "severity": "error"},
+    # 内容对应的原件已不可用
+    "source_missing": {"value": "source_missing", "label": "原件已不可用", "severity": "error"},
+}
+
+
+def ingest_rejection_label(value: str | None) -> str | None:
+    """ingest_rejection 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = INGEST_REJECTION_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 版本化 Wiki 修订 `stale_reasons` 里按页给出的原因（读时依据来源的当前状态现算）。
+# 页面只在它对某资源的依赖**没有一条**落在最新版本时才因新版本而过期（wiki-format）。
+WikiStaleReason = Literal["source_version_changed", "parse_revision_changed", "source_digest_changed", "permission_unresolved", "source_withdrawn", "source_unavailable"]
+
+WIKI_STALE_REASON_VALUES: Final[tuple[str, ...]] = (
+    "source_version_changed",
+    "parse_revision_changed",
+    "source_digest_changed",
+    "permission_unresolved",
+    "source_withdrawn",
+    "source_unavailable",
+)
+
+WIKI_STALE_REASON_META: Final[dict[str, EnumMeta]] = {
+    # 该页依赖的资源有了更新的固定版本
+    "source_version_changed": {"value": "source_version_changed", "label": "来源有了新版本", "severity": "warn"},
+    # 固定版本绑定的解析修订与依赖记录不一致
+    "parse_revision_changed": {"value": "parse_revision_changed", "label": "来源的解析修订已变化", "severity": "warn"},
+    # 版本或原始证据的摘要与依赖记录不一致
+    "source_digest_changed": {"value": "source_digest_changed", "label": "来源原文摘要已变化", "severity": "warn"},
+    # 跨节点来源的授权无法确认
+    "permission_unresolved": {"value": "permission_unresolved", "label": "来源授权无法确认", "severity": "warn"},
+    # 依赖的固定版本已被撤回（本机工作区可撤回单个版本）
+    "source_withdrawn": {"value": "source_withdrawn", "label": "来源版本已撤回", "severity": "warn"},
+    # 依赖的固定版本或其原始证据已读不到（删除、未就绪）
+    "source_unavailable": {"value": "source_unavailable", "label": "来源版本不可用", "severity": "warn"},
+}
+
+
+def wiki_stale_reason_label(value: str | None) -> str | None:
+    """wiki_stale_reason 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = WIKI_STALE_REASON_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
 # `ScopeManifest` 的成员枚举状态（计划 §5.4）。**这是「查了哪里」这句话
 # 的分母**：分母没封上就没有百分比可言。
 #
@@ -964,15 +1078,16 @@ def federated_answer_reason_label(value: str | None) -> str | None:
 #
 # 为什么必须闭集：规划只按 operation 决定要不要加生成步骤。以前不看 operation，
 # 本地模型就绪时**任何** operation 都会被追加一个 `answer` 步 —— 提交
-# `corpus.retrieve`（只取证据）会白跑一次生成，提交一个没实现的 operation
-# （例如 `wiki.pages`）会拿回一个 RAG 答案。那是静默错义，不是报错。
+# `corpus.retrieve`（只取证据）会白跑一次生成；未登记的操作必须明确拒绝，
+# 不得用 RAG 答案冒充其他业务产物。
 #
 # 本地运行时的 TaskSpec 还有别的 operation（本机自己的计划许可），不受这里约束。
-FederationTaskOperation = Literal["corpus.retrieve", "rag.answer.cited"]
+FederationTaskOperation = Literal["corpus.retrieve", "rag.answer.cited", "wiki.pages"]
 
 FEDERATION_TASK_OPERATION_VALUES: Final[tuple[str, ...]] = (
     "corpus.retrieve",
     "rag.answer.cited",
+    "wiki.pages",
 )
 
 FEDERATION_TASK_OPERATION_META: Final[dict[str, EnumMeta]] = {
@@ -980,6 +1095,8 @@ FEDERATION_TASK_OPERATION_META: Final[dict[str, EnumMeta]] = {
     "corpus.retrieve": {"value": "corpus.retrieve", "label": "只取证据", "severity": "neutral"},
     # 取证据并生成带出处的回答
     "rag.answer.cited": {"value": "rag.answer.cited", "label": "带出处的回答", "severity": "neutral"},
+    # 按固定原始证据生成并验证版本化 Wiki 草稿
+    "wiki.pages": {"value": "wiki.pages", "label": "构建 Wiki 草稿", "severity": "neutral"},
 }
 
 
@@ -1580,7 +1697,7 @@ def federation_error_label(value: str | None) -> str | None:
 # 一张节点凭证授权的**唯一**操作（DDP-NODE-CREDENTIAL）。每个节点对节点
 # 端点恰好对应一个值；凭证只签一个操作，拿读执行状态的凭证去受理任务是
 # `credential_operation_denied`。
-NodeCredentialOperation = Literal["probe_create", "probe_read", "admission_create", "admission_lookup", "execution_read", "execution_cancel", "evidence_set_read", "resource_locate", "result_resolve", "catalog_read"]
+NodeCredentialOperation = Literal["probe_create", "probe_read", "admission_create", "admission_lookup", "execution_read", "execution_cancel", "evidence_set_read", "resource_locate", "result_resolve", "catalog_read", "directory_members_read", "directory_collections_read"]
 
 NODE_CREDENTIAL_OPERATION_VALUES: Final[tuple[str, ...]] = (
     "probe_create",
@@ -1593,6 +1710,8 @@ NODE_CREDENTIAL_OPERATION_VALUES: Final[tuple[str, ...]] = (
     "resource_locate",
     "result_resolve",
     "catalog_read",
+    "directory_members_read",
+    "directory_collections_read",
 )
 
 NODE_CREDENTIAL_OPERATION_META: Final[dict[str, EnumMeta]] = {
@@ -1616,6 +1735,10 @@ NODE_CREDENTIAL_OPERATION_META: Final[dict[str, EnumMeta]] = {
     "result_resolve": {"value": "result_resolve", "label": "解析证据引用", "severity": "neutral"},
     # GET /api/v1/federation/published-collections
     "catalog_read": {"value": "catalog_read", "label": "读取发布目录", "severity": "neutral"},
+    # GET /api/v1/federation/members
+    "directory_members_read": {"value": "directory_members_read", "label": "读取目录成员", "severity": "neutral"},
+    # GET /api/v1/federation/collections
+    "directory_collections_read": {"value": "directory_collections_read", "label": "读取目录集合", "severity": "neutral"},
 }
 
 
@@ -1628,22 +1751,18 @@ def node_credential_operation_label(value: str | None) -> str | None:
     return meta["label"] if meta else f"未知取值（{value}）"
 
 
-# 语料服务节点对节点端点的认证方式。`node_credential` 是唯一的生产形态；
-# `shared_token_insecure` 只给没有控制面的开发夹具，**必须显式配置且同时
-# 打开 ALLOW_INSECURE_DEFAULTS**，并在 /readyz 与能力声明里如实报成降级。
-PeerAuthMode = Literal["node_credential", "shared_token_insecure"]
+# 语料服务节点对节点端点的认证方式。唯一取值 `node_credential`：控制面持有
+# 节点私钥，按请求签发限定 audience/actor/操作/范围/有效期的单次凭证。
+# 旧的共享口令形态已删除，不再有兼容取值。
+PeerAuthMode = Literal["node_credential"]
 
 PEER_AUTH_MODE_VALUES: Final[tuple[str, ...]] = (
     "node_credential",
-    "shared_token_insecure",
 )
 
 PEER_AUTH_MODE_META: Final[dict[str, EnumMeta]] = {
     # 控制面持有节点私钥，按请求签发限定 audience/actor/操作/范围/有效期的单次凭证
     "node_credential": {"value": "node_credential", "label": "节点签名凭证", "severity": "ok"},
-    # 旧的共享 peer token + 服务凭据 + actor 头。所有登记同伴共用一个秘密、
-    # 调用方身份未签名、同名用户会被直接合并 —— 只许开发用
-    "shared_token_insecure": {"value": "shared_token_insecure", "label": "共享口令（不安全，仅开发）", "severity": "warn"},
 }
 
 
@@ -1709,4 +1828,442 @@ def member_expansion_state_label(value: str | None) -> str | None:
     if not value:
         return None
     meta = MEMBER_EXPANSION_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 桌面端数据源的状态（DESKTOP-APPSHELL-PLAN §1.6）。
+# 与 `transport_state` 分开：那条是 client-runtime 的连接状态，
+# 这里是"当前数据源能不能按其能力读写" —— 本机工作区与已连接中心各自一态。
+SourceState = Literal["ready", "connecting", "signed_out", "unavailable"]
+
+SOURCE_STATE_VALUES: Final[tuple[str, ...]] = (
+    "ready",
+    "connecting",
+    "signed_out",
+    "unavailable",
+)
+
+SOURCE_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 数据源可用，可按其能力读写
+    "ready": {"value": "ready", "label": "可用", "severity": "ok"},
+    # 正在连接（本机运行时启动中或中心登录握手中）
+    "connecting": {"value": "connecting", "label": "连接中", "severity": "progress", "active": True},
+    # 中心登录已过期，需重新连接该中心
+    "signed_out": {"value": "signed_out", "label": "需要重新登录", "severity": "warn"},
+    # 数据源不可用（本机运行时起不来或中心不可达）
+    "unavailable": {"value": "unavailable", "label": "不可用", "severity": "error"},
+}
+
+
+def source_state_label(value: str | None) -> str | None:
+    """source_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = SOURCE_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 桌面端数据源错误的机器可读码（宿主 `/api` 代理与数据源具名方法返回）。
+# 命名对齐项目既有约定（snake_case）。`approved_plan_required` 是中心只读的
+# 写拒绝：不是权限不足，而是写必须走联邦任务、经原生对话框批准后派发。
+SourceError = Literal["no_active_source", "approved_plan_required", "source_signed_out", "source_changed", "not_supported_locally"]
+
+SOURCE_ERROR_VALUES: Final[tuple[str, ...]] = (
+    "no_active_source",
+    "approved_plan_required",
+    "source_signed_out",
+    "source_changed",
+    "not_supported_locally",
+)
+
+SOURCE_ERROR_META: Final[dict[str, EnumMeta]] = {
+    # 还没有任何当前数据源（首运或全部移除后），/api 直接 503
+    "no_active_source": {"value": "no_active_source", "label": "还没有选择数据源", "severity": "error"},
+    # 中心源只放行 GET/HEAD；写操作须作为联邦任务发起并经批准派发
+    "approved_plan_required": {"value": "approved_plan_required", "label": "中心在桌面里只读；写操作请作为联邦任务发起并批准", "severity": "error"},
+    # 中心 JWT 过期（上游 401），该源变为"需要重新登录"
+    "source_signed_out": {"value": "source_signed_out", "label": "登录已过期，请重新连接该中心", "severity": "error"},
+    # 在途请求返回时当前源已切换，页面丢弃该响应
+    "source_changed": {"value": "source_changed", "label": "数据源已切换，此结果已丢弃", "severity": "error"},
+    # 本机工作区没实现这项中心接口（发布、重解析等）
+    "not_supported_locally": {"value": "not_supported_locally", "label": "本机工作区不支持这项功能", "severity": "error"},
+}
+
+
+def source_error_label(value: str | None) -> str | None:
+    """source_error 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = SOURCE_ERROR_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 桌面端渲染进程的本机错误码（旧工作台 `platform/desktop.ts` 的 `reasons` 表搬入）。
+# 命名对齐项目既有约定（snake_case）。这些码来自宿主具名方法与本地账本，
+# 不是中心契约：含义只在"本机工作区 + 已配对中心"这套桌面链路下成立。
+DesktopError = Literal["connection_failed", "authentication_required", "identity_mismatch", "profile_mismatch", "protocol_incompatible", "cache_failure", "model_unavailable", "unsupported_operation", "approved_plan_required", "outcome_unknown", "receipt_required", "disposed", "draft_conflict", "revision_conflict", "input_too_large", "not_found", "source_unavailable", "source_digest_mismatch", "wiki_response_too_large", "wiki_source_unavailable", "wiki_generation_invalid", "unsupported_generation", "wiki_relation_unsupported", "out_of_memory", "cursor_expired", "approval_cancelled", "plan_changed", "approval_unavailable", "consent_required", "consent_revoked", "consent_expired", "budget_exceeded", "policy_denied", "input_changed", "local_only", "center_not_paired", "center_not_current", "center_identity_changed", "center_binding_required", "center_unavailable", "delivery_unverified", "dispatch_already_reserved", "connection_not_current", "unreachable", "delivery_expired", "delivery_not_found", "delivery_id_missing", "result_manifest_mismatch", "result_unavailable", "ack_not_confirmed", "transfer_unknown", "resume_unknown", "transfer_in_progress", "upload_expired", "upload_failed", "upload_incomplete", "storage_origin_not_approved", "delivery_too_large", "gpu_device_unsupported", "gpu_offload_unverified", "model_backend_incompatible", "model_process_busy", "egress_denied", "invalid_response", "invalid_arguments", "host_operation_failed"]
+
+DESKTOP_ERROR_VALUES: Final[tuple[str, ...]] = (
+    "connection_failed",
+    "authentication_required",
+    "identity_mismatch",
+    "profile_mismatch",
+    "protocol_incompatible",
+    "cache_failure",
+    "model_unavailable",
+    "unsupported_operation",
+    "approved_plan_required",
+    "outcome_unknown",
+    "receipt_required",
+    "disposed",
+    "draft_conflict",
+    "revision_conflict",
+    "input_too_large",
+    "not_found",
+    "source_unavailable",
+    "source_digest_mismatch",
+    "wiki_response_too_large",
+    "wiki_source_unavailable",
+    "wiki_generation_invalid",
+    "unsupported_generation",
+    "wiki_relation_unsupported",
+    "out_of_memory",
+    "cursor_expired",
+    "approval_cancelled",
+    "plan_changed",
+    "approval_unavailable",
+    "consent_required",
+    "consent_revoked",
+    "consent_expired",
+    "budget_exceeded",
+    "policy_denied",
+    "input_changed",
+    "local_only",
+    "center_not_paired",
+    "center_not_current",
+    "center_identity_changed",
+    "center_binding_required",
+    "center_unavailable",
+    "delivery_unverified",
+    "dispatch_already_reserved",
+    "connection_not_current",
+    "unreachable",
+    "delivery_expired",
+    "delivery_not_found",
+    "delivery_id_missing",
+    "result_manifest_mismatch",
+    "result_unavailable",
+    "ack_not_confirmed",
+    "transfer_unknown",
+    "resume_unknown",
+    "transfer_in_progress",
+    "upload_expired",
+    "upload_failed",
+    "upload_incomplete",
+    "storage_origin_not_approved",
+    "delivery_too_large",
+    "gpu_device_unsupported",
+    "gpu_offload_unverified",
+    "model_backend_incompatible",
+    "model_process_busy",
+    "egress_denied",
+    "invalid_response",
+    "invalid_arguments",
+    "host_operation_failed",
+)
+
+DESKTOP_ERROR_META: Final[dict[str, EnumMeta]] = {
+    # 本机连接暂不可用，写操作未发出，草稿已保留
+    "connection_failed": {"value": "connection_failed", "label": "连接暂不可用，已保留草稿。", "severity": "error"},
+    # 当前身份需要重新认证后才能操作
+    "authentication_required": {"value": "authentication_required", "label": "此身份需要重新认证。", "severity": "error"},
+    # 环境身份与已配对记录不一致，拒绝操作
+    "identity_mismatch": {"value": "identity_mismatch", "label": "环境身份与已配对记录不一致。", "severity": "error"},
+    # 登录身份与已配对记录不一致，拒绝操作
+    "profile_mismatch": {"value": "profile_mismatch", "label": "登录身份与已配对记录不一致。", "severity": "error"},
+    # 当前环境没有提供所需的工作台协议
+    "protocol_incompatible": {"value": "protocol_incompatible", "label": "此环境未提供所需的工作台协议。", "severity": "error"},
+    # 本地缓存/草稿写不进去（先持久再出网不断言失败）
+    "cache_failure": {"value": "cache_failure", "label": "本地缓存无法写入，请检查可用空间。", "severity": "error"},
+    # 生成模型尚不可用，检索与原文不受影响
+    "model_unavailable": {"value": "model_unavailable", "label": "生成模型尚不可用，可以继续检索和查看原文。", "severity": "warn"},
+    # 当前环境不支持这项操作，未发出请求
+    "unsupported_operation": {"value": "unsupported_operation", "label": "此环境暂不支持这项操作。", "severity": "error"},
+    # 中心源只读，写操作须作为联邦任务发起并经批准派发
+    "approved_plan_required": {"value": "approved_plan_required", "label": "此操作需要先确认远端执行与外发许可。", "severity": "error"},
+    # 请求发出但回执丢失，须按幂等键查询回执后再处理
+    "outcome_unknown": {"value": "outcome_unknown", "label": "提交结果未确认，请查询回执后再处理。", "severity": "warn"},
+    # 有未对账的操作键，先查回执再做新的写操作
+    "receipt_required": {"value": "receipt_required", "label": "请查询已保存操作的回执。", "severity": "warn"},
+    # 连接已切换或释放，旧连接上的操作不再受理
+    "disposed": {"value": "disposed", "label": "连接已切换，请在当前工作区重新操作。", "severity": "error"},
+    # 草稿被另一窗口先写，CAS 修订对不上
+    "draft_conflict": {"value": "draft_conflict", "label": "草稿已被另一窗口更新，请重新打开后合并。", "severity": "warn"},
+    # 草稿被另一窗口先写，CAS 修订对不上
+    "revision_conflict": {"value": "revision_conflict", "label": "草稿已被另一窗口更新，请重新打开后合并。", "severity": "warn"},
+    # 文件超过当前操作的大小限制，未发送
+    "input_too_large": {"value": "input_too_large", "label": "文件超过当前操作的大小限制。", "severity": "error"},
+    # 资料不存在或当前身份无权访问
+    "not_found": {"value": "not_found", "label": "该资料不存在或当前身份无权访问。", "severity": "error"},
+    # 来源的访问许可已撤销或过期，不能继续读取快照
+    "source_unavailable": {"value": "source_unavailable", "label": "此来源的访问许可已撤销或过期，不能继续读取快照。", "severity": "error"},
+    # 收到的原文与固定版本摘要不一致，已阻止显示
+    "source_digest_mismatch": {"value": "source_digest_mismatch", "label": "收到的原文与固定版本摘要不一致，已阻止显示。", "severity": "error"},
+    # Wiki 修订超过当前读取大小限制
+    "wiki_response_too_large": {"value": "wiki_response_too_large", "label": "Wiki 修订超过当前读取大小限制。", "severity": "error"},
+    # Wiki 的固定来源已不可用，需重新选择来源
+    "wiki_source_unavailable": {"value": "wiki_source_unavailable", "label": "Wiki 的固定来源已经不可用，请重新选择来源。", "severity": "error"},
+    # 模型输出未通过 Wiki 格式或引用检查，本次没有发布修订
+    "wiki_generation_invalid": {"value": "wiki_generation_invalid", "label": "模型输出未通过 Wiki 格式或引用检查，此次没有发布修订。", "severity": "error"},
+    # 生成内容缺少有效的原始出处，本次没有发布
+    "unsupported_generation": {"value": "unsupported_generation", "label": "生成内容缺少有效的原始出处，此次没有发布。", "severity": "error"},
+    # 模型选择了不存在或缺少原文支撑的关系，本次没有发布修订
+    "wiki_relation_unsupported": {"value": "wiki_relation_unsupported", "label": "模型选择了不存在或缺少原文支撑的关系，此次没有发布 Wiki 修订。请缩小主题或调整模型后重试。", "severity": "error"},
+    # 本机内存不足，模型已停止，可查看任务后重启
+    "out_of_memory": {"value": "out_of_memory", "label": "本机内存不足，模型已经停止；可以查看任务后重新启动。", "severity": "error"},
+    # 目录已更新或快照已失效，需重新读取首页
+    "cursor_expired": {"value": "cursor_expired", "label": "目录已更新或快照已失效，请重新读取首页。", "severity": "warn"},
+    # 用户在系统确认框里取消了批准，没有授予任何外发许可
+    "approval_cancelled": {"value": "approval_cancelled", "label": "已取消批准，没有授予任何外发许可。", "severity": "neutral"},
+    # 计划修订变了，原批准不再适用
+    "plan_changed": {"value": "plan_changed", "label": "执行计划已变更，需重新批准。", "severity": "warn"},
+    # 当前宿主无法显示系统确认框，不能批准外发
+    "approval_unavailable": {"value": "approval_unavailable", "label": "当前宿主无法显示系统确认框，不能批准外发。", "severity": "error"},
+    # 该阶段尚未批准，未发送任何内容
+    "consent_required": {"value": "consent_required", "label": "该阶段尚未批准，未发送任何内容。", "severity": "warn"},
+    # 批准已撤销，需准备并批准新计划
+    "consent_revoked": {"value": "consent_revoked", "label": "批准已撤销；需要准备并批准新计划。", "severity": "warn"},
+    # 计划或批准已过期，需准备新计划
+    "consent_expired": {"value": "consent_expired", "label": "计划或批准已过期；需要准备新计划。", "severity": "warn"},
+    # 超出已批准的请求或外发字节预算，未发送
+    "budget_exceeded": {"value": "budget_exceeded", "label": "超出已批准的请求或外发字节预算，未发送。", "severity": "warn"},
+    # 接收方、地址或数据边超出已批准范围，未发送
+    "policy_denied": {"value": "policy_denied", "label": "接收方、地址或数据边超出已批准范围，未发送。", "severity": "error"},
+    # 本地输入与锁定摘要不一致，未发送
+    "input_changed": {"value": "input_changed", "label": "本地输入与锁定摘要不一致，未发送。", "severity": "error"},
+    # 工作区处于仅本地模式，禁止外发
+    "local_only": {"value": "local_only", "label": "工作区处于仅本地模式，禁止外发。", "severity": "error"},
+    # 计划中的中心尚未配对
+    "center_not_paired": {"value": "center_not_paired", "label": "尚未配对计划中的中心。", "severity": "error"},
+    # 中心连接未就绪，需重连并核对节点身份
+    "center_not_current": {"value": "center_not_current", "label": "中心连接未就绪；重新连接并核对节点身份后再操作。", "severity": "error"},
+    # 中心地址或身份与已审阅计划不一致，已拒绝发送
+    "center_identity_changed": {"value": "center_identity_changed", "label": "中心地址或身份与已审阅计划不一致，已拒绝发送。", "severity": "error"},
+    # 计划没有唯一的已审阅接收方，不能派发
+    "center_binding_required": {"value": "center_binding_required", "label": "计划没有唯一的已审阅接收方，不能派发。", "severity": "error"},
+    # 当前连接无法取得中心凭证
+    "center_unavailable": {"value": "center_unavailable", "label": "当前连接无法取得中心凭证。", "severity": "error"},
+    # 交付结果没有通过本地摘要重算，不能确认
+    "delivery_unverified": {"value": "delivery_unverified", "label": "交付结果没有通过本地摘要重算，不能确认。", "severity": "error"},
+    # 这次发送已占用预算，先对账再重试
+    "dispatch_already_reserved": {"value": "dispatch_already_reserved", "label": "这次发送已经占用预算，请先对账再重试。", "severity": "warn"},
+    # 本机工作区连接未就绪，草稿已保留
+    "connection_not_current": {"value": "connection_not_current", "label": "本机工作区连接未就绪，已保留草稿。", "severity": "warn"},
+    # 中心暂时无法连接，未确认任何结果
+    "unreachable": {"value": "unreachable", "label": "中心暂时无法连接，未确认任何结果。", "severity": "error"},
+    # 交付已过期，结果没有保存到本机
+    "delivery_expired": {"value": "delivery_expired", "label": "交付已过期，结果没有保存到本机。", "severity": "error"},
+    # 中心暂时没有这份交付，可稍后再取
+    "delivery_not_found": {"value": "delivery_not_found", "label": "中心暂时没有这份交付，可以稍后再取。", "severity": "warn"},
+    # 中心尚未给出交付编号
+    "delivery_id_missing": {"value": "delivery_id_missing", "label": "中心尚未给出交付编号。", "severity": "warn"},
+    # 取回的结果与中心声明的摘要不一致，没有保存
+    "result_manifest_mismatch": {"value": "result_manifest_mismatch", "label": "取回的结果与中心声明的摘要不一致，没有保存。", "severity": "error"},
+    # 中心没有返回可校验的结果
+    "result_unavailable": {"value": "result_unavailable", "label": "中心没有返回可校验的结果。", "severity": "error"},
+    # 中心没有确认这次交付，可以再次确认
+    "ack_not_confirmed": {"value": "ack_not_confirmed", "label": "中心没有确认这次交付，可以再次确认。", "severity": "warn"},
+    # 传输结果未确认，保留原创建编号，先查回执再对账，不自动重传
+    "transfer_unknown": {"value": "transfer_unknown", "label": "传输结果未确认。保留原创建编号，先查询回执，再显式对账或继续缺片；不会自动重传。", "severity": "warn"},
+    # 继续请求的结果未确认，查回执后再处理，不自动批准或派发
+    "resume_unknown": {"value": "resume_unknown", "label": "继续请求的结果未确认，请查询回执后再处理；不会自动批准或派发。", "severity": "warn"},
+    # 此计划已有主机传输在执行，可查看进度或停止传输
+    "transfer_in_progress": {"value": "transfer_in_progress", "label": "此计划已有主机传输在执行，可查看进度或停止传输。", "severity": "neutral"},
+    # 临时上传已过期，需重新准备并批准计划
+    "upload_expired": {"value": "upload_expired", "label": "临时上传已过期，需要重新准备并批准计划。", "severity": "warn"},
+    # 服务端拒绝了这份输入，未提交解析任务
+    "upload_failed": {"value": "upload_failed", "label": "服务端拒绝了这份输入，未提交解析任务。", "severity": "error"},
+    # 中心返回的分片清单不完整，没有继续发送
+    "upload_incomplete": {"value": "upload_incomplete", "label": "中心返回的分片清单不完整，没有继续发送。", "severity": "error"},
+    # 对象存储地址不在已审阅的传输范围内，原件未发送
+    "storage_origin_not_approved": {"value": "storage_origin_not_approved", "label": "对象存储地址不在已审阅的传输范围内，原件未发送。", "severity": "error"},
+    # 交付超过本机 64 MiB 校验上限，尚未确认或清理
+    "delivery_too_large": {"value": "delivery_too_large", "label": "交付超过本机 64 MiB 校验上限，尚未确认或清理。", "severity": "error"},
+    # 所选 Vulkan 设备是软件渲染器，未启动，也未自动退回 CPU
+    "gpu_device_unsupported": {"value": "gpu_device_unsupported", "label": "所选 Vulkan 设备是软件渲染器，未启动，也未自动退回 CPU。", "severity": "error"},
+    # 没有观测到物理 GPU 上的模型层卸载，已停止该进程
+    "gpu_offload_unverified": {"value": "gpu_offload_unverified", "label": "没有观测到物理 GPU 上的模型层卸载，已停止该进程。需要 CPU 时请明确选择 CPU 运行包。", "severity": "error"},
+    # 所选模型与运行包不兼容
+    "model_backend_incompatible": {"value": "model_backend_incompatible", "label": "所选模型与运行包不兼容。", "severity": "error"},
+    # 受管模型正在运行，先停止再切换模型或后端
+    "model_process_busy": {"value": "model_process_busy", "label": "请先停止当前受管模型，再切换模型或后端。", "severity": "warn"},
+    # 中心拒绝了这次外发许可
+    "egress_denied": {"value": "egress_denied", "label": "中心拒绝了这次外发许可。", "severity": "error"},
+    # 中心返回的内容无法识别
+    "invalid_response": {"value": "invalid_response", "label": "中心返回的内容无法识别。", "severity": "error"},
+    # 请求参数不合法，宿主拒绝执行
+    "invalid_arguments": {"value": "invalid_arguments", "label": "请求参数不正确，宿主拒绝执行。", "severity": "error"},
+    # 宿主操作失败且结果未知，须按幂等键对账
+    "host_operation_failed": {"value": "host_operation_failed", "label": "宿主操作结果未知，请查询回执后再处理。", "severity": "warn"},
+}
+
+
+def desktop_error_label(value: str | None) -> str | None:
+    """desktop_error 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = DESKTOP_ERROR_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 本机运行时联邦派发状态机（`ddp_local/federation_dispatch.py` 的 `state`）。
+# 与契约轴分开：它是"本机镜像看到的进展"，中心的权威状态以对账结果为准。
+# 展示时按契约轴摆（规划/受理/交付），明细收进详情 —— 不许压成一个绿色完成。
+LocalDispatchState = Literal["prepared", "exploring", "planned", "explore_unknown", "submitted", "submit_unknown", "approved", "succeeded", "failed", "cancelled", "delivered", "waiting_input", "uploading", "content_verifying", "content_verified", "running", "expired", "acked", "cancel_unknown", "resume_unknown"]
+
+LOCAL_DISPATCH_STATE_VALUES: Final[tuple[str, ...]] = (
+    "prepared",
+    "exploring",
+    "planned",
+    "explore_unknown",
+    "submitted",
+    "submit_unknown",
+    "approved",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "delivered",
+    "waiting_input",
+    "uploading",
+    "content_verifying",
+    "content_verified",
+    "running",
+    "expired",
+    "acked",
+    "cancel_unknown",
+    "resume_unknown",
+)
+
+LOCAL_DISPATCH_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 计划已建，还没派发
+    "prepared": {"value": "prepared", "label": "尚未派发", "severity": "neutral"},
+    # 已派发探索，中心规划中
+    "exploring": {"value": "exploring", "label": "中心规划中", "severity": "progress", "active": True},
+    # 中心计划已就绪，待审阅批准
+    "planned": {"value": "planned", "label": "中心计划已就绪", "severity": "progress", "active": True},
+    # 探索发出但回执丢失，需对账
+    "explore_unknown": {"value": "explore_unknown", "label": "探索结果未知 · 需对账", "severity": "warn", "active": True},
+    # 已提交中心执行
+    "submitted": {"value": "submitted", "label": "中心执行中", "severity": "progress", "active": True},
+    # 提交发出但回执丢失，需对账
+    "submit_unknown": {"value": "submit_unknown", "label": "提交结果未知 · 需对账", "severity": "warn", "active": True},
+    # 中心已批准（中心侧状态）
+    "approved": {"value": "approved", "label": "中心已批准", "severity": "progress", "active": True},
+    # 中心已完成
+    "succeeded": {"value": "succeeded", "label": "中心已完成", "severity": "ok"},
+    # 失败，失败原因持久化在镜像里
+    "failed": {"value": "failed", "label": "失败", "severity": "error"},
+    # 已取消（显式终态）
+    "cancelled": {"value": "cancelled", "label": "已取消", "severity": "neutral"},
+    # 已交付并经本地确认
+    "delivered": {"value": "delivered", "label": "已交付", "severity": "ok"},
+    # 文件计划：等原始输入上传完，不占算力
+    "waiting_input": {"value": "waiting_input", "label": "等待原始输入", "severity": "progress", "active": True},
+    # 文件计划：原始输入上传中
+    "uploading": {"value": "uploading", "label": "上传中", "severity": "progress", "active": True},
+    # 文件计划：服务端全量校验中
+    "content_verifying": {"value": "content_verifying", "label": "完整摘要校验中", "severity": "progress", "active": True},
+    # 文件计划：输入已校验，待执行
+    "content_verified": {"value": "content_verified", "label": "输入已校验 · 等待执行", "severity": "progress", "active": True},
+    # 中心计算执行中
+    "running": {"value": "running", "label": "中心计算中", "severity": "progress", "active": True},
+    # 临时产物已过期
+    "expired": {"value": "expired", "label": "临时产物已过期", "severity": "warn"},
+    # 本机已确认交付
+    "acked": {"value": "acked", "label": "本机已确认交付", "severity": "ok"},
+    # 取消发出但回执丢失，需对账
+    "cancel_unknown": {"value": "cancel_unknown", "label": "取消结果未知 · 需对账", "severity": "warn"},
+    # 继续请求发出但回执丢失，需对账
+    "resume_unknown": {"value": "resume_unknown", "label": "继续请求结果未知 · 需对账", "severity": "warn", "active": True},
+}
+
+
+def local_dispatch_state_label(value: str | None) -> str | None:
+    """local_dispatch_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = LOCAL_DISPATCH_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 宿主对取回的交付字节重算摘要的结果（`bridge.d.ts` 的 `PlanDetail.verification`）。
+# 与契约 `validation_state` 分开：那条是中心对输出引用的结构校验，
+# 这里是本机对交付字节的摘要重算 —— 只有 `passed` 才允许确认交付。
+LocalVerifyState = Literal["passed", "failed", "unavailable"]
+
+LOCAL_VERIFY_STATE_VALUES: Final[tuple[str, ...]] = (
+    "passed",
+    "failed",
+    "unavailable",
+)
+
+LOCAL_VERIFY_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 本地重算摘要与中心声明一致，可以确认
+    "passed": {"value": "passed", "label": "本地重算摘要一致", "severity": "ok"},
+    # 本地重算摘要与中心声明不一致，禁止确认
+    "failed": {"value": "failed", "label": "本地重算摘要不一致", "severity": "error"},
+    # 尚无取回的交付可校验
+    "unavailable": {"value": "unavailable", "label": "尚无可校验的本地结果", "severity": "neutral"},
+}
+
+
+def local_verify_state_label(value: str | None) -> str | None:
+    """local_verify_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = LOCAL_VERIFY_STATE_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 文件计划的对象存储传输相位（`bridge.d.ts` 的 `PlanDetail.transfer`）。
+# 上传走的是宿主独占的传输循环，账本只记录相位与字节 ——
+# 上传完成不等于解析完成，界面不许把两者混成一个"成功"。
+LocalTransferState = Literal["prepared", "creating", "uploading", "verifying", "verified", "unknown"]
+
+LOCAL_TRANSFER_STATE_VALUES: Final[tuple[str, ...]] = (
+    "prepared",
+    "creating",
+    "uploading",
+    "verifying",
+    "verified",
+    "unknown",
+)
+
+LOCAL_TRANSFER_STATE_META: Final[dict[str, EnumMeta]] = {
+    # 传输尚未开始
+    "prepared": {"value": "prepared", "label": "待发送", "severity": "neutral"},
+    # 正在准备临时上传
+    "creating": {"value": "creating", "label": "准备临时上传", "severity": "progress", "active": True},
+    # 正在上传缺片
+    "uploading": {"value": "uploading", "label": "正在上传缺片", "severity": "progress", "active": True},
+    # 已上传，服务端全量校验中
+    "verifying": {"value": "verifying", "label": "已上传，服务端全量校验中", "severity": "progress", "active": True},
+    # 输入已通过服务端校验
+    "verified": {"value": "verified", "label": "输入已通过服务端校验", "severity": "ok"},
+    # 上次传输中断，需先对账再继续
+    "unknown": {"value": "unknown", "label": "上次传输中断，需对账", "severity": "warn"},
+}
+
+
+def local_transfer_state_label(value: str | None) -> str | None:
+    """local_transfer_state 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = LOCAL_TRANSFER_STATE_META.get(value)
     return meta["label"] if meta else f"未知取值（{value}）"

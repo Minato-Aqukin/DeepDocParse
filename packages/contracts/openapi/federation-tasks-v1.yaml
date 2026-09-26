@@ -23,8 +23,7 @@ info:
       credential_audience_mismatch / node_unknown / node_revoked），越权 403
       （credential_operation_denied / credential_scope_denied），本节点身份未绑定或
       不一致 503（node_identity_unavailable / node_identity_mismatch）。
-      旧的共享 `X-DDP-Peer-Token` 只在显式的 `FEDERATION_PEER_AUTH=shared_token_insecure`
-      开发档位下存在，并在 /readyz 报成降级。
+      不存在任何共享口令兼容路径。
 
     所有写操作必须带 `Idempotency-Key`。
 
@@ -210,6 +209,9 @@ paths:
         探索许可门先于任何远端 Probe。同键同请求体返回已持久化的同一 TaskIntent
         （本实现固定 201），同键不同请求体 409 idempotency_conflict —— HTTP 重试
         不得造出第二个 root task。
+        可选 budget 是调用方从自己的总预算预留的、不重叠的中心份额。中心与服务器
+        上限取交集后冻结；规划修订、恢复、重试与重启不得重置。省略则沿用服务器预算；
+        提供 budget 但省略 max_generation_tokens 等同于 0，不授权生成。
 
         只受理 `federation_task_operation` 这个**闭集**里的 operation
         （`corpus.retrieve` 只取证据，`rag.answer.cited` 取证据并生成带出处的回答）；
@@ -245,6 +247,15 @@ paths:
         '404': {description: 未知 root_task_id}
         '409': {description: 'plan_changed：提交的修订与持久状态不一致'}
         '410': {description: 'scope_expired：ScopeManifest 已过期，重新枚举生成新 scope'}
+  /api/v1/task-plans/{root_task_id}:
+    parameters: [{$ref: '#/components/parameters/RootTaskId'}]
+    get:
+      operationId: readTaskPlan
+      description: 只读当前持久计划修订；不触发探测、规划或执行，适用于重连和重新审批。
+      responses:
+        '200': {description: 当前持久计划, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/TaskPlan'}}}}
+        '404': {description: 任务不存在或对调用者不可见}
+        '409': {description: 'plan_changed：尚无已生成的计划'}
   /api/v1/task-plans/{root_task_id}/approve:
     parameters: [{$ref: '#/components/parameters/RootTaskId'}]
     post:
@@ -326,14 +337,15 @@ paths:
       operationId: resumeTask
       description: |
         重新判权后补做未完成目标，不隐式扩权（旧授权不得无期限复用）。
-        **202 表示已受理并排入持久队列**（与 `POST /tasks` 同一套）：本调用
-        立即返回当前状态，由 corpus-worker 只补做可重做的目标。对已经
-        `lease_expired` 的本地执行，这一步会重新排队执行（同一条受理，
-        不产生第二条执行记录）。
+        已批准子图内的恢复会立即排入持久队列，由 corpus-worker 补做可重做目标。
+        fast 结果不足或存在冲突且仍有未批准候选时，只准备下一批计划修订：
+        返回 planning_state=ready、status=queued，清除旧执行许可，不执行新增边。
+        调用方必须 GET 新计划、重新 approve，再调用本 resume 端点继续；
+        根预算和已完成覆盖不重置。对 lease_expired 的执行，同一受理重新排队。
         对**已经取消**的任务返回 409 `task_cancelled` 且不做任何改写：
         取消是显式终态，重跑必须另起一条新任务。
       responses:
-        '202': {description: '已受理恢复，未完成目标继续执行；可用 GET /api/v1/tasks/{root_task_id} 对账', content: {application/json: {schema: {$ref: '#/components/schemas/TaskStatus'}}}}
+        '202': {description: '恢复已受理；planning_state=ready 时须先批准新修订再 resume，否则未完成目标已入队', content: {application/json: {schema: {$ref: '#/components/schemas/TaskStatus'}}}}
         '403': {description: 'egress_denied：重新判权未通过或超出原外发边界', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '404': {description: 未知 root_task_id 或对调用者不可见}
         '409': {description: 'task_cancelled：任务已被显式取消，终态不得被 resume 复活；任务状态原样不动', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -463,11 +475,14 @@ components:
               size_bytes: {type: integer, minimum: 0}
         evidence:
           description: |
-            类型化 `evidence_excerpts` 数据边携带的证据（answer 步骤必须提供）。
+            类型化 `evidence_excerpts` 数据边携带的证据（answer / wiki_pages 步骤必须提供）。
             有界：每条 excerpt 最多 2000 字符（或等价 UTF-8 字符数），最多 50 条；
             digest 必须是 `sha256(excerpt)`，执行者重算后才受理。空 excerpt、重复
             evidence_id、摘要对不上、越界一律显式拒绝（input_not_verified），
             **不静默截断**。excerpt 是不可信文档数据，绝不进控制流。
+            wiki_pages 还必须携带真实 source_envelope，不能把生成节点冒充为来源。
+            其 evidence_id 是生成上下文内的稳定来源引用；source_envelope.evidence_id
+            保留原始节点的证据 ID。不同节点的同名证据不能混绑。
           type: array
           maxItems: 50
           items: {$ref: '#/components/schemas/AdmissionEvidence'}
@@ -522,6 +537,18 @@ components:
         digest:
           description: 必须等于 `sha256(excerpt)`；执行者逐条重算，对不上拒绝受理。
           $ref: '#/components/schemas/Digest'
+        source_envelope:
+          description: |
+            wiki_pages 必填的原始证据信封；其身份、页码、定位与权限修订必须来自实际来源，
+            excerpt_digest 必须等于本条 digest。原文只放在外层 excerpt，不能在信封内重复携带。
+          allOf:
+            - $ref: '../schemas/ddp-evidence/v1.json#/$defs/FederatedEvidence'
+            - not: {required: [excerpt]}
+        derivative_grant:
+          description: 私有来源确有的派生使用授权引用；没有授权不能自行填造。
+          type: string
+          minLength: 1
+          maxLength: 128
     LocateRequest:
       type: object
       additionalProperties: false
@@ -556,6 +583,18 @@ components:
         task_spec: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/TaskSpec'}
         exploration_consent: {description: 用户已批准的探索许可；协调者只校验与持久化，不代签, $ref: '../schemas/ddp-task-probe/v1.json#/$defs/ExplorationConsent'}
         scope_manifest: {description: 'federation_public 必填（缺了 409 discovery_incomplete）；site_public 可选，缺省由本节点枚举；fixed_resources 不需要', $ref: '../schemas/ddp-scope-coverage/v1.json#/$defs/ScopeManifest'}
+        budget: {$ref: '#/components/schemas/TaskIntentBudget'}
+    TaskIntentBudget:
+      description: 调用方预留给中心的独立根预算份额，不含设备自己消费的控制请求。
+      type: object
+      additionalProperties: false
+      required: [max_requests, max_bytes, max_hops, deadline]
+      properties:
+        max_requests: {type: integer, minimum: 1}
+        max_bytes: {type: integer, minimum: 4096}
+        max_hops: {type: integer, minimum: 1}
+        deadline: {type: string, format: date-time}
+        max_generation_tokens: {type: integer, minimum: 0, default: 0}
     TaskIntent:
       type: object
       additionalProperties: false
@@ -672,6 +711,19 @@ components:
         coverage_ref: {type: [string, 'null'], description: 指向 CoverageLedger；没有它就无法判断"未找到"是什么意思}
         delivery_id: {type: [string, 'null']}
         delivery_state: {type: string, x-ddp-enum: delivery_state}
+        used_budget:
+          description: 独立根账本的已提交预扣量；跨计划修订、重试、回滚与重启单调累计，不是模型账单。
+          type: object
+          additionalProperties: false
+          required: [requests, bytes, generation_tokens, hops, discovery, probes, egress_bytes]
+          properties:
+            requests: {type: integer, minimum: 0}
+            bytes: {type: integer, minimum: 0}
+            generation_tokens: {type: integer, minimum: 0}
+            hops: {type: integer, minimum: 0}
+            discovery: {type: integer, minimum: 0}
+            probes: {type: integer, minimum: 0}
+            egress_bytes: {type: integer, minimum: 0}
         result: {type: [object, 'null'], description: '结果摘要；完整结果与证据经 results/resolve 与交付流程取回。没有答案时分两种：**没请求生成**（operation 是 `corpus.retrieve`）`answer` 与 `answer_reason` 都为 null；**请求了但没生成出来**则 `answer_reason` 说明原因，取值见 enums.yaml 的 `federated_answer_reason`：代码封闭，其中五个可带 `:细节` 后缀（对端状态/错误码只进细节、经过清洗）；查文案前先去掉后缀'}
         error: {type: [string, 'null']}
         scope_ref: {type: [string, 'null']}

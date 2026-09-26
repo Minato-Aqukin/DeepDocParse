@@ -1,0 +1,1606 @@
+{
+ "recorded_at": "2026-09-24",
+ "phase": "B 上传、版本与精确原文定位",
+ "code_scope": "工作树 e1902a5 + 未提交改动（本轮 B 的改动见 SINGLE-CENTER-WEB-PLAN.md §3）；未 commit",
+ "stack": {
+  "note": "本工作树起的一次性单中心栈：docker PG(pgvector pg16)/redis-stack/MinIO，control-api(go build) + corpus-api/worker + model-gateway/worker + Vite；全新库",
+  "parse_engine": "borndigital（CPU，文字层 PDF）",
+  "chat_model": "qwen3-1.7b（llama.cpp，纯文本，视觉核对显式 vision_unavailable）",
+  "embedding_model": "bge-m3（llama.cpp）",
+  "chunker": "ddp-chunk/3",
+  "expected_compile_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+ },
+ "ui_observations": [
+  "浏览器上传 17 ms → 追加版本 23 ms → 31 ms，同一资源 v1..v3；对话框阶段：计算摘要 → 已上传，校验中 → 字节已就绪，登记中 → 关闭",
+  "停掉 corpus-api 后上传：对话框显示「登记重试中…」，恢复后变「1 个文件已登记」，未新建重复资源",
+  "上传途中删除目标资源：对话框显示契约文案「目标资源不存在、已撤回或无权追加」，只有「移除」按钮，无重试",
+  "资源库每个版本显示「解析 X · 索引 Y」，活动中轮询",
+  "重建前校验显示 stale（chunker_changed, historical_citations_will_invalidate）；未确认重建 409 index_version_unsafe；确认框写明接回 0 条、1 条会明确标为失效",
+  "重建后旧 v1/v3 引用显示「出处已失效」，证据预览保留原文与旧 bbox，并提示「这条证据不在当前索引里」",
+  "新引用高亮只框被引段落：控制器 [55.2,48.6,329.4,126.5]；ESP32 第 26 页只框 4.1.2 Internal Memory 节（0.248 页高）"
+ ],
+ "upload_scenarios": {
+  "checks": [
+   {
+    "name": "browser-built chain is one resource with v1..v3",
+    "ok": true,
+    "detail": [
+     [
+      1,
+      "e767746230fd",
+      "succeeded",
+      "ready"
+     ],
+     [
+      2,
+      "3d9ccbffb6ea",
+      "succeeded",
+      "ready"
+     ],
+     [
+      3,
+      "ae1ef3f70fd7",
+      "succeeded",
+      "ready"
+     ]
+    ]
+   },
+   {
+    "name": "same name different bytes -> separate resource",
+    "ok": true,
+    "detail": [
+     "e8c2967792684d9e96453d6987109e3a"
+    ]
+   },
+   {
+    "name": "existing version chain unchanged by same-name upload",
+    "ok": true,
+    "detail": null
+   },
+   {
+    "name": "same bytes by another user -> bob's own resource",
+    "ok": true,
+    "detail": {
+     "bob_resource": "98e1b9e72ca24c2d8369bb3973ffaac9",
+     "versions": 1
+    }
+   },
+   {
+    "name": "bob cannot read alice's private resource",
+    "ok": true,
+    "detail": 404
+   },
+   {
+    "name": "alice's chain unchanged by bob's identical upload",
+    "ok": true,
+    "detail": null
+   },
+   {
+    "name": "create replay before bytes returns same session",
+    "ok": true,
+    "detail": 200
+   },
+   {
+    "name": "finalize replay is idempotent",
+    "ok": true,
+    "detail": [
+     202,
+     202
+    ]
+   },
+   {
+    "name": "create replay after landing returns same session",
+    "ok": true,
+    "detail": 200
+   },
+   {
+    "name": "retries produced exactly one asset version",
+    "ok": true,
+    "detail": 1
+   },
+   {
+    "name": "same key with a different target -> idempotency_conflict",
+    "ok": true,
+    "detail": {
+     "message": "该幂等键已绑定另一上传请求",
+     "type": "invalid_request_error",
+     "code": "idempotency_conflict"
+    }
+   },
+   {
+    "name": "unrelated resource deleted meanwhile",
+    "ok": true,
+    "detail": 204
+   },
+   {
+    "name": "target frozen at create: v4 lands in the chain as version 4",
+    "ok": true,
+    "detail": {
+     "t": 60.14,
+     "state": [
+      "ready",
+      "ready",
+      "succeeded",
+      "ready"
+     ]
+    }
+   },
+   {
+    "name": "target deleted after admission -> rejected/resource_not_found",
+    "ok": true,
+    "detail": [
+     {
+      "t": 0.02,
+      "state": [
+       "verifying",
+       null,
+       null,
+       null
+      ]
+     },
+     {
+      "t": 0.9,
+      "state": [
+       "ready",
+       "pending",
+       null,
+       null
+      ]
+     },
+     {
+      "t": 1.79,
+      "state": [
+       "ready",
+       "rejected",
+       null,
+       null
+      ]
+     }
+    ]
+   },
+   {
+    "name": "rejected upload created no resource or version",
+    "ok": true,
+    "detail": null
+   }
+  ],
+  "timelines": {
+   "same-name-different-content": [
+    {
+     "t": 0.02,
+     "state": [
+      "verifying",
+      null,
+      null,
+      null
+     ]
+    },
+    {
+     "t": 0.68,
+     "state": [
+      "ready",
+      "pending",
+      null,
+      null
+     ]
+    },
+    {
+     "t": 1.8,
+     "state": [
+      "ready",
+      "ready",
+      "pending",
+      "none"
+     ]
+    },
+    {
+     "t": 20.44,
+     "state": [
+      "ready",
+      "ready",
+      "succeeded",
+      "pending"
+     ]
+    },
+    {
+     "t": 20.67,
+     "state": [
+      "ready",
+      "ready",
+      "succeeded",
+      "ready"
+     ]
+    }
+   ],
+   "same-content-other-user": [
+    {
+     "t": 0.01,
+     "state": [
+      "verifying",
+      null,
+      null,
+      null
+     ]
+    },
+    {
+     "t": 0.9,
+     "state": [
+      "ready",
+      "pending",
+      null,
+      null
+     ]
+    },
+    {
+     "t": 2.88,
+     "state": [
+      "ready",
+      "ready",
+      "pending",
+      "none"
+     ]
+    },
+    {
+     "t": 59.92,
+     "state": [
+      "ready",
+      "ready",
+      "succeeded",
+      "indexing"
+     ]
+    },
+    {
+     "t": 60.14,
+     "state": [
+      "ready",
+      "ready",
+      "succeeded",
+      "ready"
+     ]
+    }
+   ],
+   "append-v4-unaffected-by-other-delete": [
+    {
+     "t": 0.02,
+     "state": [
+      "verifying",
+      null,
+      null,
+      null
+     ]
+    },
+    {
+     "t": 0.45,
+     "state": [
+      "ready",
+      "pending",
+      null,
+      null
+     ]
+    },
+    {
+     "t": 2.68,
+     "state": [
+      "ready",
+      "ready",
+      "pending",
+      "none"
+     ]
+    },
+    {
+     "t": 59.92,
+     "state": [
+      "ready",
+      "ready",
+      "succeeded",
+      "indexing"
+     ]
+    },
+    {
+     "t": 60.14,
+     "state": [
+      "ready",
+      "ready",
+      "succeeded",
+      "ready"
+     ]
+    }
+   ],
+   "target-deleted-after-admission": [
+    {
+     "t": 0.02,
+     "state": [
+      "verifying",
+      null,
+      null,
+      null
+     ]
+    },
+    {
+     "t": 0.9,
+     "state": [
+      "ready",
+      "pending",
+      null,
+      null
+     ]
+    },
+    {
+     "t": 1.79,
+     "state": [
+      "ready",
+      "rejected",
+      null,
+      null
+     ]
+    }
+   ]
+  }
+ },
+ "historical_citations": {
+  "recorded_at": "2026-09-24T12:30+08:00",
+  "chunker": "ddp-chunk/2 (pre-fix)",
+  "resource_id": "761b72a6b55c4c619777ea5b29a2ecb5",
+  "version": {
+   "no": 1,
+   "id": "06a03a6597e44da294b4d3d4b0225f74",
+   "parse_job_id": "6e1360e851ff451bb4c1b2c5132563e0",
+   "document_id": "956d1e03cb9b452683d00da85a028281"
+  },
+  "conversation_id": "e038b27e5b5a4925b6b25ae86e2a6852",
+  "assistant_message_id": "b5b91a28aea14adb8b6c77f48446248d",
+  "answer": "The reset delay is 17 milliseconds.",
+  "cited_evidence_id": "188ce926b4c640719e69245cbc042a6c",
+  "cited_seq": 0,
+  "cited_bbox": [
+   55.167999267578125,
+   48.623779296875,
+   329.41595458984375,
+   791.8897705078125
+  ],
+  "cited_text": "Controller setup manual\nThe reset delay is 17 milliseconds. Wait for the reset delay before sending a command.\ni",
+  "screenshot": "shots/b-locate-before-v1.webp",
+  "v3": {
+   "version_id": "9e1f4acac1754290abeab0f5daf36775",
+   "parse_job_id": "bd4ab3e5a4b9471490c533c3ccb62e10",
+   "document_id": "ce29f90fbb2e436ead66903c3a8831af",
+   "conversation_id": "2e88d38d2ab2434a8e03e4ce3213df5b",
+   "answer": "The reset delay is 31 milliseconds.",
+   "cited_evidence_id": "da2cc88da53f4a8b8abb68a5423e5de5",
+   "cited_bbox": [
+    55.167999267578125,
+    48.623779296875,
+    329.41595458984375,
+    791.8897705078125
+   ],
+   "note": "first attempt with 'What is the reset delay?' returned insufficient_evidence although retrieval accepted the right chunk (sim 0.72) -- small-model variance, C-phase item"
+  }
+ },
+ "reindex_ddp_chunk_2_to_3": {
+  "checks": [
+   {
+    "name": "before rebuild: v3 historical citation still resolves to 31 ms text",
+    "ok": true,
+    "detail": "Controller setup manual The reset delay is 31 milliseconds. Wait for the reset delay before sending a command. i"
+   },
+   {
+    "name": "v2 validation reports stale chunker",
+    "ok": true,
+    "detail": [
+     "chunker_changed"
+    ]
+   },
+   {
+    "name": "v2 rebuild with nothing to invalidate proceeds without acknowledgement",
+    "ok": true,
+    "detail": 202
+   },
+   {
+    "name": "v3 validation reports stale chunker",
+    "ok": true,
+    "detail": [
+     "chunker_changed",
+     "historical_citations_will_invalidate"
+    ]
+   },
+   {
+    "name": "v3 unacknowledged rebuild refused",
+    "ok": true,
+    "detail": 409
+   },
+   {
+    "name": "v3 acknowledged rebuild accepted",
+    "ok": true,
+    "detail": 202
+   },
+   {
+    "name": "v4 validation reports stale chunker",
+    "ok": true,
+    "detail": [
+     "chunker_changed"
+    ]
+   },
+   {
+    "name": "v4 rebuild with nothing to invalidate proceeds without acknowledgement",
+    "ok": true,
+    "detail": 202
+   },
+   {
+    "name": "all four versions ready after rebuild",
+    "ok": true,
+    "detail": {
+     "1": "ready",
+     "2": "ready",
+     "3": "ready",
+     "4": "ready"
+    }
+   },
+   {
+    "name": "v1 validation current after rebuild",
+    "ok": true,
+    "detail": "current"
+   },
+   {
+    "name": "v2 validation current after rebuild",
+    "ok": true,
+    "detail": "current"
+   },
+   {
+    "name": "v3 validation current after rebuild",
+    "ok": true,
+    "detail": "current"
+   },
+   {
+    "name": "v4 validation current after rebuild",
+    "ok": true,
+    "detail": "current"
+   },
+   {
+    "name": "after rebuild: v3 historical citation explicit invalid, text still 31 ms, not reattached",
+    "ok": true,
+    "detail": {
+     "resolved": false,
+     "snippet": "Controller setup manual The reset delay is 31 milliseconds. Wait for the reset delay before sending a command. i"
+    }
+   },
+   {
+    "name": "historical v3 evidence row unchanged (content + old bbox)",
+    "ok": true,
+    "detail": {
+     "bbox": [
+      55.167999267578125,
+      48.623779296875,
+      329.41595458984375,
+      791.8897705078125
+     ],
+     "chunk_id": null
+    }
+   },
+   {
+    "name": "v1 historical citation stays 17 ms and invalid (no cross-version reattach)",
+    "ok": true,
+    "detail": "Controller setup manual The reset delay is 17 milliseconds. Wait for the reset delay before sending a command. i"
+   },
+   {
+    "name": "v1 new citation: own parse job, 17 ms text, tight bbox (bottom < 200pt)",
+    "ok": true,
+    "detail": {
+     "bbox": [
+      55.2,
+      48.6,
+      329.4,
+      126.5
+     ],
+     "answer": "The reset delay is 17 milliseconds."
+    }
+   },
+   {
+    "name": "v2 new citation: own parse job, 23 ms text, tight bbox (bottom < 200pt)",
+    "ok": true,
+    "detail": {
+     "bbox": [
+      55.2,
+      48.6,
+      329.4,
+      126.5
+     ],
+     "answer": "The reset delay is 23 milliseconds."
+    }
+   },
+   {
+    "name": "v3 new citation: own parse job, 31 ms text, tight bbox (bottom < 200pt)",
+    "ok": true,
+    "detail": {
+     "bbox": [
+      55.2,
+      48.6,
+      329.4,
+      126.5
+     ],
+     "answer": "The reset delay is 31 milliseconds."
+    }
+   }
+  ],
+  "versions": {
+   "2": {
+    "validation": {
+     "status": "stale",
+     "observed_fingerprints": [
+      "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b"
+     ],
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+     "reasons": [
+      "chunker_changed"
+     ],
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "safe_to_reindex": true
+    },
+    "after": {
+     "status": "current",
+     "observed_fingerprints": [
+      "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+     ],
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+     "reasons": [],
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "safe_to_reindex": true
+    },
+    "new_answer": {
+     "content": "The reset delay is 23 milliseconds.",
+     "degraded": "vision_unavailable",
+     "citation": {
+      "evidence_id": "a89da43691e8470bbc16eb4762b27f0e",
+      "seq": 0,
+      "bbox": [
+       55.167999267578125,
+       48.623779296875,
+       329.41595458984375,
+       126.51776123046875
+      ],
+      "snippet": "Controller setup manual The reset delay is 23 milliseconds. Wait for the reset delay before sending a command.",
+      "resolved": true
+     }
+    }
+   },
+   "3": {
+    "validation": {
+     "status": "stale",
+     "observed_fingerprints": [
+      "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b"
+     ],
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+     "reasons": [
+      "chunker_changed",
+      "historical_citations_will_invalidate"
+     ],
+     "citation_reconnectable": 0,
+     "citation_invalidations": 1,
+     "safe_to_reindex": false
+    },
+    "after": {
+     "status": "current",
+     "observed_fingerprints": [
+      "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+     ],
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+     "reasons": [
+      "historical_citations_will_invalidate"
+     ],
+     "citation_reconnectable": 0,
+     "citation_invalidations": 1,
+     "safe_to_reindex": false
+    },
+    "new_answer": {
+     "content": "The reset delay is 31 milliseconds.",
+     "degraded": "vision_unavailable",
+     "citation": {
+      "evidence_id": "673ce6d649e748f4b5d294ec204b3b22",
+      "seq": 0,
+      "bbox": [
+       55.167999267578125,
+       48.623779296875,
+       329.41595458984375,
+       126.51776123046875
+      ],
+      "snippet": "Controller setup manual The reset delay is 31 milliseconds. Wait for the reset delay before sending a command.",
+      "resolved": true
+     }
+    }
+   },
+   "4": {
+    "validation": {
+     "status": "stale",
+     "observed_fingerprints": [
+      "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b"
+     ],
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+     "reasons": [
+      "chunker_changed"
+     ],
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "safe_to_reindex": true
+    },
+    "after": {
+     "status": "current",
+     "observed_fingerprints": [
+      "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+     ],
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+     "reasons": [],
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "safe_to_reindex": true
+    }
+   },
+   "1": {
+    "after": {
+     "status": "current",
+     "observed_fingerprints": [
+      "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+     ],
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+     "reasons": [
+      "historical_citations_will_invalidate"
+     ],
+     "citation_reconnectable": 1,
+     "citation_invalidations": 1,
+     "safe_to_reindex": false
+    },
+    "new_answer": {
+     "content": "The reset delay is 17 milliseconds.",
+     "degraded": "vision_unavailable",
+     "citation": {
+      "evidence_id": "1a20fe482abc47938bcfca26a2bec620",
+      "seq": 0,
+      "bbox": [
+       55.167999267578125,
+       48.623779296875,
+       329.41595458984375,
+       126.51776123046875
+      ],
+      "snippet": "Controller setup manual The reset delay is 17 milliseconds. Wait for the reset delay before sending a command.",
+      "resolved": true
+     }
+    }
+   }
+  }
+ },
+ "rechunk_after_rule_amendment": {
+  "note": "ddp-chunk/3 未发布前又补了两条规则（跳过纯符号块；切开的超长块不再往后并），版本号不变，本栈全部索引按正常 validate→(ack)→reindex 路径重建；内容不变的引用按内容接回，变了的显式失效",
+  "rows": [
+   {
+    "user": "b-alice",
+    "resource": "69de63cfb2b5433798f6db19b87073bb",
+    "title": null,
+    "version_no": 1,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "69de63cfb2b5433798f6db19b87073bb",
+    "title": null,
+    "version_no": 2,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "69de63cfb2b5433798f6db19b87073bb",
+    "title": null,
+    "version_no": 3,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "0341f9d5fc404cf8bb8b04d391a3c9de",
+    "title": null,
+    "version_no": 1,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "98ebcc11f63e4e95981e56d87ad89a57",
+    "title": null,
+    "version_no": 1,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "b7a444b0eb324fc59fea207015c61d98",
+    "title": null,
+    "version_no": 1,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 1
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 1,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "c7c3b89e566d4c1bb7015f5b27c54201",
+    "title": null,
+    "version_no": 1,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 2,
+     "citation_invalidations": 0
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 2,
+     "citation_invalidations": 0,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "c7c3b89e566d4c1bb7015f5b27c54201",
+    "title": null,
+    "version_no": 2,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "0aefd2dffc664842b2afd5745f90904d",
+    "title": null,
+    "version_no": 1,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "702d64308b4842f5a9d284e81fd0e923",
+    "title": null,
+    "version_no": 1,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "761b72a6b55c4c619777ea5b29a2ecb5",
+    "title": null,
+    "version_no": 1,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 2,
+     "citation_invalidations": 1
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 2,
+     "citation_invalidations": 1,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "761b72a6b55c4c619777ea5b29a2ecb5",
+    "title": null,
+    "version_no": 2,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 1,
+     "citation_invalidations": 0
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 1,
+     "citation_invalidations": 0,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "761b72a6b55c4c619777ea5b29a2ecb5",
+    "title": null,
+    "version_no": 3,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 1,
+     "citation_invalidations": 1
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 1,
+     "citation_invalidations": 1,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-alice",
+    "resource": "761b72a6b55c4c619777ea5b29a2ecb5",
+    "title": null,
+    "version_no": 4,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   },
+   {
+    "user": "b-bob",
+    "resource": "98e1b9e72ca24c2d8369bb3973ffaac9",
+    "title": null,
+    "version_no": 1,
+    "before": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0
+    },
+    "reindex": 202,
+    "index_status": "ready",
+    "after": {
+     "status": "current",
+     "citation_reconnectable": 0,
+     "citation_invalidations": 0,
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   }
+  ]
+ },
+ "layout_probe": {
+  "file": "files/layout-probe.pdf (4 pages, PageLabels i,1,2,3; page 3 /Rotate 90; page 4 CropBox [50 50 545 792])",
+  "footer": {
+   "result": "pass",
+   "detail": "page-number footers (i/1/2/3) become their own chunks; body chunk bbox stops at the body (page 1: [56,39,324,108])"
+  },
+  "columns": {
+   "result": "pass with known limit",
+   "detail": "left/right column paragraphs never share a chunk or bbox; borndigital reading order across columns is row-interleaved (left1,right1,left2,right2) - documented engine limit (no layout analysis)"
+  },
+  "rotation": {
+   "result": "fixed",
+   "before": "2 lines on /Rotate 90 page merged into one line in reverse order without a separator ('...stops the motor.Rotated page: ...')",
+   "after": "'Rotated page: the torque limit is 45 Nm.' / 'Exceeding the torque limit stops the motor.' in order; bbox unchanged in display space [774,57,798,264]; crop render correct (shots/crop-rotated.png)"
+  },
+  "cropbox": {
+   "result": "pass",
+   "detail": "page_size [495,742] = CropBox; text bbox relative to CropBox origin [30,84,239,108]; crop render correct (shots/crop-cropbox.png)"
+  },
+  "page_labels": {
+   "result": "explicit gap",
+   "detail": "printed labels (i,1,2,3) are not extracted into DDP-Layout; UI shows 'PDF 第 N 页' with tooltip 'PDF 物理页序，从 1 开始；不是印刷页码'"
+  },
+  "no_bbox": {
+   "result": "explicit notice added",
+   "detail": "borndigital always emits bbox, so no live sample; EvidencePreview now says '没有区域坐标，只能定位到 PDF 第 N 页' instead of '左栏仍保留整页 bbox'; CitationChip shows '无区域定位'; unit tests cover both"
+  },
+  "invalid_locator": {
+   "result": "pass",
+   "detail": "historical citations after rebuild show '出处已失效'; evidence preview shows '不在当前索引里' note and keeps original content + bbox"
+  }
+ },
+ "pinned_sources": {
+  "sources": {
+   "pico": {
+    "resource_id": "0341f9d5fc404cf8bb8b04d391a3c9de",
+    "version_id": "77c1392bb1ad42c5aff771ee836b92b3",
+    "version_no": 1,
+    "document_id": "4ec760d4a5384f9fb021beabad8dc458",
+    "parse_job_id": "66e776e7d4e54d9c8cfd3822e6ef21af",
+    "source_digest": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+    "filename": "pico-datasheet.pdf",
+    "page_count": 31,
+    "parse_status": "succeeded",
+    "index_status": "ready",
+    "compile_status": "partial",
+    "compile_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+    "validation": "current",
+    "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+   },
+   "esp32": {
+    "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+    "version_id": "a823c98f0ae048a0afec21a751d06da8",
+    "version_no": 1,
+    "document_id": "121c42f16ca84325a00d298c7cedbfcf",
+    "parse_job_id": "4585afdaa46c49bca67375b860c074f8",
+    "source_digest": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+    "filename": "esp32-datasheet.pdf",
+    "page_count": 78,
+    "parse_status": "succeeded",
+    "index_status": "ready",
+    "compile_status": "partial",
+    "compile_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+    "validation": "current",
+    "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+   },
+   "attention": {
+    "resource_id": "98ebcc11f63e4e95981e56d87ad89a57",
+    "version_id": "d8750769f3fb4722b8ef3482ea8a3826",
+    "version_no": 1,
+    "document_id": "d2fb6877db694b14bfb0e30182518432",
+    "parse_job_id": "aa2b0fa0dfd64bba817cbb7141616240",
+    "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+    "filename": "attention-is-all-you-need.pdf",
+    "page_count": 15,
+    "parse_status": "succeeded",
+    "index_status": "ready",
+    "compile_status": "ready",
+    "compile_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+    "validation": "current",
+    "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+   },
+   "controller_chain": {
+    "revision-1": {
+     "resource_id": "69de63cfb2b5433798f6db19b87073bb",
+     "version_id": "f0bfbef8a26e4675822d254cec8bc5fb",
+     "version_no": 1,
+     "document_id": "956d1e03cb9b452683d00da85a028281",
+     "parse_job_id": "7bef4b9b572a40aaa22876927d4c4bf3",
+     "source_digest": "e767746230fdaf6921446e4ee31abcea6bc8acd1126cd3ee85c3a6a44eab6833",
+     "filename": "controller-manual.pdf",
+     "page_count": 2,
+     "parse_status": "succeeded",
+     "index_status": "ready",
+     "compile_status": "ready",
+     "compile_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+     "validation": "current",
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    },
+    "revision-2": {
+     "resource_id": "69de63cfb2b5433798f6db19b87073bb",
+     "version_id": "8284dbebe53f4186af6eec285ef4f785",
+     "version_no": 2,
+     "document_id": "1a957d4789194539a31e9028714c3b66",
+     "parse_job_id": "cc803e8d70544200ae9dfe9c2265e943",
+     "source_digest": "3d9ccbffb6eaecfa562c35351827d90286926600480a44607fc1a69c0bb491a3",
+     "filename": "controller-manual.pdf",
+     "page_count": 2,
+     "parse_status": "succeeded",
+     "index_status": "ready",
+     "compile_status": "ready",
+     "compile_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+     "validation": "current",
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    },
+    "revision-3": {
+     "resource_id": "69de63cfb2b5433798f6db19b87073bb",
+     "version_id": "b56b081b63e9479f841bb7c4fbbf9c44",
+     "version_no": 3,
+     "document_id": "ce29f90fbb2e436ead66903c3a8831af",
+     "parse_job_id": "7a24e905a5a04c40b8dfcc4f1e5af743",
+     "source_digest": "ae1ef3f70fd7b306306f0563ef026868af11c7888a7a395a93d1a6406ccf0d3d",
+     "filename": "controller-manual.pdf",
+     "page_count": 2,
+     "parse_status": "succeeded",
+     "index_status": "ready",
+     "compile_status": "ready",
+     "compile_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa",
+     "validation": "current",
+     "expected_fingerprint": "d46cd7120ddeac7df66b8278e535aca797cc6ff02157a93a3be912dbd0f9a3fa"
+    }
+   }
+  },
+  "excerpts": [
+   {
+    "case": "pico-core-frequency",
+    "source": "pico",
+    "excerpt": "Dual-core cortex M0+ at up to 133 MHz",
+    "expected_page_index": 3,
+    "layout_pages": [
+     3
+    ],
+    "chunk_v3": {
+     "seq": 27,
+     "page_idx": 3,
+     "bbox": [
+      71.5,
+      474.6,
+      524.1,
+      763.6
+     ],
+     "height_ratio": 0.343
+    },
+    "chunk_v2": {
+     "seq": 23,
+     "page_idx": 3,
+     "bbox": [
+      71.0,
+      474.6,
+      524.1,
+      810.1
+     ],
+     "height_ratio": 0.398
+    }
+   },
+   {
+    "case": "pico-esp32-sram-compare",
+    "source": "pico",
+    "excerpt": "264 kB multi-bank high performance SRAM",
+    "expected_page_index": 3,
+    "layout_pages": [
+     3
+    ],
+    "chunk_v3": {
+     "seq": 27,
+     "page_idx": 3,
+     "bbox": [
+      71.5,
+      474.6,
+      524.1,
+      763.6
+     ],
+     "height_ratio": 0.343
+    },
+    "chunk_v2": {
+     "seq": 23,
+     "page_idx": 3,
+     "bbox": [
+      71.0,
+      474.6,
+      524.1,
+      810.1
+     ],
+     "height_ratio": 0.398
+    }
+   },
+   {
+    "case": "pico-esp32-sram-compare",
+    "source": "esp32",
+    "excerpt": "520 KB SRAM",
+    "expected_page_index": 3,
+    "layout_pages": [
+     3
+    ],
+    "chunk_v3": {
+     "seq": 40,
+     "page_idx": 3,
+     "bbox": [
+      56.7,
+      59.2,
+      471.0,
+      558.2
+     ],
+     "height_ratio": 0.593
+    },
+    "chunk_v2": {
+     "seq": 6,
+     "page_idx": 3,
+     "bbox": [
+      56.7,
+      59.2,
+      471.0,
+      558.2
+     ],
+     "height_ratio": 0.593
+    }
+   },
+   {
+    "case": "pico-esp32-sram-compare",
+    "source": "esp32",
+    "excerpt": "520 KB of on-chip SRAM for data and instructions",
+    "expected_page_index": 25,
+    "layout_pages": [
+     25
+    ],
+    "chunk_v3": {
+     "seq": 857,
+     "page_idx": 25,
+     "bbox": [
+      56.8,
+      452.5,
+      537.9,
+      661.5
+     ],
+     "height_ratio": 0.248
+    },
+    "chunk_v2": {
+     "seq": 60,
+     "page_idx": 25,
+     "bbox": [
+      56.3,
+      101.7,
+      537.9,
+      661.5
+     ],
+     "height_ratio": 0.665
+    }
+   },
+   {
+    "case": "esp32-radio",
+    "source": "esp32",
+    "excerpt": "802.11b/g/n",
+    "expected_page_index": 2,
+    "layout_pages": [
+     2,
+     32,
+     51
+    ],
+    "chunk_v3": {
+     "seq": 36,
+     "page_idx": 2,
+     "bbox": [
+      56.9,
+      62.8,
+      510.1,
+      362.7
+     ],
+     "height_ratio": 0.356
+    },
+    "chunk_v2": {
+     "seq": 3,
+     "page_idx": 2,
+     "bbox": [
+      56.9,
+      62.8,
+      510.1,
+      362.7
+     ],
+     "height_ratio": 0.356
+    }
+   },
+   {
+    "case": "esp32-radio",
+    "source": "esp32",
+    "excerpt": "802.11n (2.4 GHz), up to 150 Mbps",
+    "expected_page_index": 2,
+    "layout_pages": [
+     2
+    ],
+    "chunk_v3": {
+     "seq": 36,
+     "page_idx": 2,
+     "bbox": [
+      56.9,
+      62.8,
+      510.1,
+      362.7
+     ],
+     "height_ratio": 0.356
+    },
+    "chunk_v2": {
+     "seq": 3,
+     "page_idx": 2,
+     "bbox": [
+      56.9,
+      62.8,
+      510.1,
+      362.7
+     ],
+     "height_ratio": 0.356
+    }
+   },
+   {
+    "case": "esp32-radio",
+    "source": "esp32",
+    "excerpt": "Compliant with Bluetooth v4.2 BR/EDR and Bluetooth LE specifications",
+    "expected_page_index": 2,
+    "layout_pages": [
+     2
+    ],
+    "chunk_v3": {
+     "seq": 37,
+     "page_idx": 2,
+     "bbox": [
+      57.1,
+      380.6,
+      392.9,
+      766.7
+     ],
+     "height_ratio": 0.459
+    },
+    "chunk_v2": {
+     "seq": 4,
+     "page_idx": 2,
+     "bbox": [
+      57.1,
+      380.6,
+      392.9,
+      766.7
+     ],
+     "height_ratio": 0.459
+    }
+   },
+   {
+    "case": "esp32-cpu",
+    "source": "esp32",
+    "excerpt": "ESP32 contains one or two low-power Xtensa",
+    "expected_page_index": 25,
+    "layout_pages": [
+     25
+    ],
+    "chunk_v3": {
+     "seq": 855,
+     "page_idx": 25,
+     "bbox": [
+      56.3,
+      101.7,
+      528.4,
+      431.5
+     ],
+     "height_ratio": 0.392
+    },
+    "chunk_v2": {
+     "seq": 59,
+     "page_idx": 25,
+     "bbox": [
+      56.3,
+      101.7,
+      528.4,
+      431.5
+     ],
+     "height_ratio": 0.392
+    }
+   },
+   {
+    "case": "esp32-cpu",
+    "source": "esp32",
+    "excerpt": "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))",
+    "expected_page_index": 25,
+    "layout_pages": [
+     25
+    ],
+    "chunk_v3": {
+     "seq": 855,
+     "page_idx": 25,
+     "bbox": [
+      56.3,
+      101.7,
+      528.4,
+      431.5
+     ],
+     "height_ratio": 0.392
+    },
+    "chunk_v2": {
+     "seq": 59,
+     "page_idx": 25,
+     "bbox": [
+      56.3,
+      101.7,
+      528.4,
+      431.5
+     ],
+     "height_ratio": 0.392
+    }
+   },
+   {
+    "case": "attention-en-de-bleu",
+    "source": "attention",
+    "excerpt": "Our model achieves 28.4 BLEU on the WMT 2014 English",
+    "expected_page_index": 0,
+    "layout_pages": [
+     0
+    ],
+    "chunk_v3": {
+     "seq": 11,
+     "page_idx": 0,
+     "bbox": [
+      143.7,
+      414.2,
+      469.3,
+      575.9
+     ],
+     "height_ratio": 0.204
+    },
+    "chunk_v2": {
+     "seq": 1,
+     "page_idx": 0,
+     "bbox": [
+      143.7,
+      414.2,
+      469.3,
+      575.9
+     ],
+     "height_ratio": 0.204
+    }
+   },
+   {
+    "case": "attention-en-de-bleu",
+    "source": "attention",
+    "excerpt": "ensembles, by over 2 BLEU",
+    "expected_page_index": 0,
+    "layout_pages": [
+     0
+    ],
+    "chunk_v3": {
+     "seq": 11,
+     "page_idx": 0,
+     "bbox": [
+      143.7,
+      414.2,
+      469.3,
+      575.9
+     ],
+     "height_ratio": 0.204
+    },
+    "chunk_v2": {
+     "seq": 1,
+     "page_idx": 0,
+     "bbox": [
+      143.7,
+      414.2,
+      469.3,
+      575.9
+     ],
+     "height_ratio": 0.204
+    }
+   },
+   {
+    "case": "attention-multi-head",
+    "source": "attention",
+    "excerpt": "In this work we employ h = 8 parallel attention layers, or heads.",
+    "expected_page_index": 4,
+    "layout_pages": [
+     4
+    ],
+    "chunk_v3": {
+     "seq": 45,
+     "page_idx": 4,
+     "bbox": [
+      107.6,
+      206.5,
+      504.0,
+      265.9
+     ],
+     "height_ratio": 0.075
+    },
+    "chunk_v2": {
+     "seq": 20,
+     "page_idx": 4,
+     "bbox": [
+      107.6,
+      75.2,
+      504.0,
+      265.9
+     ],
+     "height_ratio": 0.241
+    }
+   },
+   {
+    "case": "attention-multi-head",
+    "source": "attention",
+    "excerpt": "dk = dv = dmodel/h = 64",
+    "expected_page_index": 4,
+    "layout_pages": [
+     4
+    ],
+    "chunk_v3": {
+     "seq": 45,
+     "page_idx": 4,
+     "bbox": [
+      107.6,
+      206.5,
+      504.0,
+      265.9
+     ],
+     "height_ratio": 0.075
+    },
+    "chunk_v2": {
+     "seq": 20,
+     "page_idx": 4,
+     "bbox": [
+      107.6,
+      75.2,
+      504.0,
+      265.9
+     ],
+     "height_ratio": 0.241
+    }
+   }
+  ],
+  "chunk_stats": {
+   "pico": {
+    "chunks_v3": 162,
+    "chunks_v2": 93,
+    "median_height_ratio_v3": 0.041,
+    "median_height_ratio_v2": 0.364,
+    "over_half_page_v3": 15,
+    "over_half_page_v2": 34
+   },
+   "esp32": {
+    "chunks_v3": 2295,
+    "chunks_v2": 232,
+    "median_height_ratio_v3": 0.011,
+    "median_height_ratio_v2": 0.367,
+    "over_half_page_v3": 20,
+    "over_half_page_v2": 61
+   },
+   "attention": {
+    "chunks_v3": 354,
+    "chunks_v2": 67,
+    "median_height_ratio_v3": 0.025,
+    "median_height_ratio_v2": 0.231,
+    "over_half_page_v3": 5,
+    "over_half_page_v2": 9
+   },
+   "controller-revision-1": {
+    "chunks_v3": 4,
+    "chunks_v2": 2,
+    "median_height_ratio_v3": 0.092,
+    "median_height_ratio_v2": 0.883,
+    "over_half_page_v3": 0,
+    "over_half_page_v2": 2
+   },
+   "controller-revision-2": {
+    "chunks_v3": 4,
+    "chunks_v2": 2,
+    "median_height_ratio_v3": 0.092,
+    "median_height_ratio_v2": 0.883,
+    "over_half_page_v3": 0,
+    "over_half_page_v2": 2
+   },
+   "controller-revision-3": {
+    "chunks_v3": 4,
+    "chunks_v2": 2,
+    "median_height_ratio_v3": 0.092,
+    "median_height_ratio_v2": 0.883,
+    "over_half_page_v3": 0,
+    "over_half_page_v2": 2
+   }
+  }
+ },
+ "qa_after_rebuild": {
+  "pico": {
+   "question": "How much SRAM does the RP2040 on Raspberry Pi Pico have?",
+   "conversation_id": "ade25505bfb14647ab55c1caf43fb421",
+   "attempts": 2,
+   "answer": "The RP2040 on Raspberry Pi Pico has 264 kB of high-performance SRAM.",
+   "degraded": "vision_unavailable",
+   "citations": [
+    {
+     "evidence_id": "40924dbd45c44975a798e20dedbdc224",
+     "page_idx": 3,
+     "bbox": [
+      71.53014373779297,
+      474.5745849609375,
+      524.1144409179688,
+      763.6390609741211
+     ],
+     "snippet": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequ…",
+     "resolved": true,
+     "parse_job_id": "66e776e7d4e54d9c8cfd3822e6ef21af"
+    }
+   ]
+  },
+  "esp32": {
+   "question": "How much on-chip SRAM does ESP32 have?",
+   "conversation_id": "77d94dfe818e4cef8ddb4fb517ff1c44",
+   "attempts": 1,
+   "answer": "ESP32 has 520 KB of on-chip SRAM.",
+   "degraded": "vision_unavailable",
+   "citations": [
+    {
+     "evidence_id": "c8d67c392d6a4f70a34319c1e09db67f",
+     "page_idx": 25,
+     "bbox": [
+      56.80059814453125,
+      452.5072021484375,
+      537.8870849609375,
+      661.4710845947266
+     ],
+     "snippet": "4.1.2 Internal Memory ESP32’s internal memory includes: • 448 KB of ROM for booting and core functions • 520 KB of on-chip SRAM for data and instructions • 8 KB…",
+     "resolved": true,
+     "parse_job_id": "4585afdaa46c49bca67375b860c074f8"
+    }
+   ]
+  }
+ },
+ "screenshots": [
+  "core-b-validate-stale-20260924.webp",
+  "core-b-reindex-confirm-20260924.webp",
+  "core-b-old-citation-invalid-20260924.webp",
+  "core-b-new-citation-tight-bbox-20260924.webp",
+  "core-b-esp32-p26-citation-20260924.png",
+  "core-b-crop-rotated-20260924.png"
+ ]
+}

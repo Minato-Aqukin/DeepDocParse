@@ -18,25 +18,43 @@ def public_viewer(organization_id: str) -> Actor:
     return Actor(id="", kind="service", organization_id=organization_id, role="viewer")
 
 
+PUBLICATIONS = ("private", "draft", "published", "withdrawn")
+
+
 def resource_condition(actor: Actor, *, write: bool = False):
-    owner = and_(Resource.organization_id == actor.organization_id,
-                 Resource.owner_id == actor.principal_id, actor.principal_id is not None)
-    # Reachable publication roots exclude withdrawn ancestry, missing origins and cycles.
-    # A copied resource cannot reopen publication after an ancestor revokes it.
-    public = select(Resource.id.label("id")).where(
-        Resource.publication == "published", Resource.deleted_at.is_(None),
-        Resource.copied_from.is_(None)).correlate(None).cte(recursive=True)
+    def owned(table):
+        return and_(table.owner_id == actor.principal_id, actor.principal_id is not None)
+
+    live = and_(Resource.deleted_at.is_(None), Resource.publication.in_(PUBLICATIONS),
+                Resource.organization_id == actor.organization_id)
+    if write:
+        # Writes stay with the owner even after a source ancestor is revoked: the owner must
+        # still be able to rename, withdraw or delete what they hold. Reads below do not.
+        return and_(live, owned(Resource))
+    # Readable set, built top-down from lineage roots: live, in the caller's organization,
+    # owned by the caller or published, and the `copied_from` parent readable too. The
+    # published-only path is the public closure (withdrawn ancestry, missing origins and cycles
+    # never grant access). The owner path stops at a revoked or deleted foreign ancestor as
+    # well: a metadata copy made while the source was public kept the withdrawn source's
+    # evidence, crops and original readable to the copier (2026-09-24, phase E). Local parents
+    # are tombstoned, never removed, so a parent with no local row at all is a placeholder
+    # (a bundle's `remote:` origin): it keeps publication closed but is the owner's own root;
+    # its revocation belongs to the replica ledger, not to this predicate.
+    # Publication and lineage are organization-scoped (enterprise boundary 8): a single-
+    # organization deployment sees no difference; without it a multi-organization deployment
+    # would serve one tenant's published chunks, evidence and bundles to every other tenant.
+    root, parent = aliased(Resource), aliased(Resource)
+    placeholder_parent = and_(root.copied_from.is_not(None),
+                              ~exists(select(parent.id).where(parent.id == root.copied_from)))
+    readable = select(root.id.label("id")).where(
+        root.deleted_at.is_(None), root.organization_id == actor.organization_id,
+        or_(and_(root.copied_from.is_(None), or_(root.publication == "published", owned(root))),
+            and_(placeholder_parent, owned(root)))).correlate(None).cte(recursive=True)
     child = aliased(Resource)
-    public = public.union_all(select(child.id).join(public, child.copied_from == public.c.id)
-        .where(child.publication == "published", child.deleted_at.is_(None)))
-    # Publication is organization-scoped (enterprise boundary 8). A single-organization
-    # deployment sees no difference; without it a multi-organization deployment would serve
-    # one tenant's published chunks, evidence and bundles to every other tenant.
-    published = and_(Resource.organization_id == actor.organization_id,
-                     Resource.id.in_(select(public.c.id)))
-    permitted = owner if write else or_(owner, published)
-    return and_(Resource.deleted_at.is_(None),
-                Resource.publication.in_(("private", "draft", "published", "withdrawn")), permitted)
+    readable = readable.union_all(select(child.id).join(readable, child.copied_from == readable.c.id).where(
+        child.deleted_at.is_(None), child.organization_id == actor.organization_id,
+        or_(child.publication == "published", owned(child))))
+    return and_(live, Resource.id.in_(select(readable.c.id)))
 
 
 def visible_document_condition(actor: Actor):

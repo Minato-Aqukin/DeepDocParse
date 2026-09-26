@@ -43,13 +43,17 @@ const tooltip = computed(() =>
     <img v-if="cropUrl" :src="cropUrl" alt="出处截图" />
     <div class="cite-text">
       <div class="line">
-        <b class="ddp-cite-page">[{{ index }}] 第 {{ citation.page_idx + 1 }} 页</b>
+        <b class="ddp-cite-page" title="PDF 物理页序，从 1 开始；不是印刷页码">[{{ index }}] PDF 第 {{ citation.page_idx + 1 }} 页</b>
         <el-tooltip :content="tooltip">
           <StatusTag :label="`相关度 ${percent ?? '—'}`" :type="tagType" />
         </el-tooltip>
         <el-tooltip v-if="citation.resolved === false"
                     content="这条出处指向的分块已随重建索引失效，无法再定位到原文">
           <StatusTag label="出处已失效" type="danger" />
+        </el-tooltip>
+        <el-tooltip v-if="!citation.bbox"
+                    content="这条出处没有区域坐标，只能定位到页，不能当作区域精确的出处">
+          <StatusTag label="无区域定位" type="warning" />
         </el-tooltip>
         <el-tooltip v-if="citation.bbox && !citation.page_size"
                     content="历史出处缺少页面坐标基准，为避免画错位置，本次不显示 bbox 红框">

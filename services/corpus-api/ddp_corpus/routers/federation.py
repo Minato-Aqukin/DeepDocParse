@@ -5,17 +5,15 @@ These routes are **not** proxied by control-api (`corpusPrefixes` does not list
 single-use node credential (`ddp-node-credential/1`, see
 `packages/contracts/ddp/node-credential-format.md` and `ddp_corpus/node_auth.py`):
 
-- **no** `SERVICE_TOKEN`, **no** caller-asserted actor headers: the remote caller is
-  derived from the verified credential as a read-only `peer-*` principal inside the
-  local organization that approved the issuing node;
+- **no** `SERVICE_TOKEN`, **no** caller-asserted actor headers, **no** shared peer
+  token: the remote caller is derived from the verified credential as a read-only
+  `peer-*` principal inside the local organization that approved the issuing node
+  (claims carry the issuer-side actor only for audit/binding, never as local rights);
 - every route pins its credential operation (`ROUTE_OPERATIONS`, the same table the
   contract declares as `x-ddp-node-credential-operation`);
 - the credential's scope constraints are compared with the request body and with the
   row the route reads (`PeerContext.require` / `PeerContext.within`) — authentication
   is not authorization, and the local resource ACL still decides after all that.
-
-`FEDERATION_PEER_AUTH=shared_token_insecure` keeps the old shared-token + actor-header
-path for development fixtures only (startup refuses it without ALLOW_INSECURE_DEFAULTS).
 
 `X-DDP-Target-Node`, when present, must name this node (`wrong_target`). Bodies
 carry the same identity for probes/admissions, checked there as well.
@@ -103,13 +101,16 @@ class EvidenceItem(BaseModel):
     Pydantic 这里只做防滥用的粗界（4096 字符/64 条），**契约的 2000/50 由
     执行者 `_verify_evidence` 把关并给 `input_not_verified` 机器码** —— 契约
     约束与业务拒绝必须是同一条可测路径，不能因为 Pydantic 先生效而变成另一
-    种 422 形状。
+    种 422 形状。`source_envelope`（完整原始信封，不含 excerpt）与
+    `derivative_grant`（真实已有引用）仅 wiki_pages 携带；answer 旧载荷不受影响。
     """
 
     model_config = ConfigDict(extra="forbid")
     evidence_id: str = Field(min_length=1, max_length=128)
     excerpt: str = Field(min_length=1, max_length=4096)
     digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    source_envelope: dict | None = None
+    derivative_grant: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class AdmissionRequest(BaseModel):
@@ -185,7 +186,7 @@ async def create_admission(body: AdmissionRequest, request: Request,
         raise APIError(400, "Idempotency-Key header must match the request body",
                        "invalid_request_error", "idempotency_key_mismatch")
     peer.require(root_task_id=body.root_task_id, step_id=body.step_id)
-    if peer.claims is not None and body.plan.get("root_coordinator_node_id") != peer.issuer_node_id:
+    if body.plan.get("root_coordinator_node_id") != peer.issuer_node_id:
         # 越权委托：一个节点不能以另一个协调者的名义提交计划。计划里写着谁在协调，
         # 签名证明的是谁在发 —— 两者必须是同一个节点。
         raise APIError(403, "only the plan's root coordinator may submit its admissions",
@@ -255,17 +256,16 @@ async def read_evidence_set(set_ref: str,
                                                       "/api/v1/federation/evidence-sets/{set_ref}"),
                             _target: None = Depends(require_target),
                             session: AsyncSession = Depends(get_session)):
-    if peer.claims is not None:
-        if set_ref.startswith("federation-execution:"):
-            row = await federation.require_execution(session, peer.actor,
-                                                     set_ref.split(":", 1)[1])
-            peer.within(root_task_id=row.root_task_id, step_id=row.step_id)
-        elif set_ref.startswith("federation-probe:"):
-            probe = await session.get(FederationProbe, set_ref.split(":", 1)[1])
-            if probe is not None and probe.organization_id == peer.actor.organization_id \
-                    and probe.actor_id == federation.acting_actor(peer.actor):
-                # 探测证据集没有根任务，钉的是需求修订：凭证必须带着它并且相等。
-                peer.require(task_spec_digest=probe.task_spec_digest)
+    if set_ref.startswith("federation-execution:"):
+        row = await federation.require_execution(session, peer.actor,
+                                                 set_ref.split(":", 1)[1])
+        peer.within(root_task_id=row.root_task_id, step_id=row.step_id)
+    elif set_ref.startswith("federation-probe:"):
+        probe = await session.get(FederationProbe, set_ref.split(":", 1)[1])
+        if probe is not None and probe.organization_id == peer.actor.organization_id \
+                and probe.actor_id == federation.acting_actor(peer.actor):
+            # 探测证据集没有根任务，钉的是需求修订：凭证必须带着它并且相等。
+            peer.require(task_spec_digest=probe.task_spec_digest)
     return await federation.read_evidence_set(session, peer.actor, set_ref, now=utcnow())
 
 

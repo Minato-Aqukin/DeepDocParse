@@ -411,8 +411,7 @@ def install_peer(monkeypatch, peer: StubPeer) -> None:
 
     def factory(actor: Actor, delegation=None) -> PeerDirectory:
         return PeerDirectory(peers, actor=actor, transport=peer.transport(),
-                             signer=signer, delegation=delegation,
-                             shared_token=False)
+                             signer=signer, delegation=delegation)
 
     monkeypatch.setattr(federation_tasks, "peer_directory", factory)
 
@@ -1311,6 +1310,55 @@ async def test_fusion_dedupes_identical_evidence_but_keeps_distinct_resources(
                for item in status["result"]["evidence"])
 
 
+async def test_foreign_envelope_cannot_replace_attributed_evidence(
+        actor_client, session, monkeypatch):
+    """A peer cannot replace a source-owned envelope, including after recovery."""
+    _, version, _, _, evidence_rows = await indexed_source(session)
+    collection = await publish_collection(actor_client, version)
+    peer = StubPeer()
+    install_peer(monkeypatch, peer)
+    manifest = scope_manifest([
+        member(collection["collection_id"]),
+        member("peer-collection-1", PEER_NODE),
+    ])
+    intent = await create_intent(
+        actor_client,
+        spec=task_spec(scope="federation_public", mode="exhaustive_scope",
+                       scope_ref="scope-1", operation="corpus.retrieve"),
+        consent=exploration(), manifest=manifest)
+    root = intent["root_task_id"]
+    plan_body = await plan_task(actor_client, root)
+    peer.fail_admit_step = next(step["step_id"] for step in plan_body["steps"]
+                               if step["operation"] == "retrieve"
+                               and step["executor_node_id"] == PEER_NODE)
+    local_probes = await session.scalars(select(FederationProbe).where(
+        FederationProbe.target_node_id == NODE))
+    original = next(
+        item for probe in local_probes for item in probe.result_json.get("evidence", [])
+        if item["evidence_id"] == evidence_rows[0].id)
+    forged = {key: value for key, value in original.items()
+              if not key.startswith("_")}
+    forged.update(source_digest="sha256:" + "0" * 64, policy_revision="forged",
+                  locator={**original["locator"], "physical_page_index": 99})
+    peer.items = [forged]
+    await approve_task(actor_client, root, plan_body, recipients=(NODE, PEER_NODE))
+    status = (await submit_task(
+        actor_client, root, plan_body["plan_digest"], "protected-envelope")).json()
+    assert status["retrieval_completeness"] == "partial"
+    peer.fail_admit_step = None
+    resumed = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert resumed.status_code == 202, resumed.text
+    await drain_tasks(corpus_app.state)
+    status = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    delivered = await actor_client.get(f"/api/v1/deliveries/{status['delivery_id']}")
+    assert delivered.status_code == 200, delivered.text
+    preserved = next(item for item in delivered.json()["result"]["evidence"]
+                     if item["evidence_id"] == evidence_rows[0].id)
+    assert preserved["source_digest"] == original["source_digest"]
+    assert preserved["policy_revision"] == original["policy_revision"]
+    assert preserved["locator"] == original["locator"]
+
+
 async def test_remote_peer_unreachable_is_visible_and_never_retried(
         actor_client, session, monkeypatch):
     peer = StubPeer(fail="all")
@@ -1839,12 +1887,113 @@ async def test_resume_after_crash_before_ledger_fills_fast_denominator(
     assert states == [("not_attempted", "search_mode_fast"), ("succeeded", None)]
 
 
+@pytest.mark.parametrize("initial_hit", [False, True])
+async def test_fast_requested_continuation_requires_new_approval_without_resetting_budget(
+        actor_client, monkeypatch, initial_hit):
+    monkeypatch.setattr(federation_tasks, "FAST_CANDIDATE_LIMIT", 1)
+    peer = StubPeer()
+    peer.items = [peer_evidence()] if initial_hit else []
+    install_peer(monkeypatch, peer)
+    manifest = scope_manifest([member("peer-collection-1", PEER_NODE),
+                               member("peer-collection-2", PEER_NODE)])
+    intent = await create_intent(
+        actor_client, spec=task_spec(scope="federation_public", mode="fast",
+                                     scope_ref="scope-1", operation="corpus.retrieve"),
+        consent=exploration(), manifest=manifest)
+    root = intent["root_task_id"]
+    first_plan = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, first_plan, recipients=(NODE, PEER_NODE))
+    first = (await submit_task(
+        actor_client, root, first_plan["plan_digest"], "fast-batches")).json()
+    assert bool(first["result"]["evidence"]) is initial_hit
+    assert first["evidence_sufficiency"] == ("sufficient_by_policy" if initial_hit else "insufficient")
+    previous_delivery = (await actor_client.get(
+        f"/api/v1/deliveries/{first['delivery_id']}")).json()
+    admissions = len(peer.accepted)
+    peer.items = [peer_evidence()]
+
+    staged = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert staged.status_code == 202, staged.text
+    assert staged.json()["planning_state"] == "ready"
+    assert staged.json()["plan_revision"] == 2
+    assert staged.json()["delivery_id"] is None
+    assert staged.json()["delivery_state"] == "not_requested"
+    await drain_tasks(corpus_app.state)
+    assert len(peer.accepted) == admissions
+    blocked = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert blocked.status_code == 403
+    sent = len(peer.calls)
+    read_plan = await actor_client.get(f"/api/v1/task-plans/{root}")
+    assert read_plan.status_code == 200, read_plan.text
+    second_plan = read_plan.json()
+    assert len(peer.calls) == sent, "reading a revision must not trigger planning or probing"
+    hidden = await actor_client.get(
+        f"/api/v1/task-plans/{root}", headers=actor_headers("another-actor"))
+    assert hidden.status_code == 404
+    assert second_plan["budget"] == first_plan["budget"]
+    assert second_plan["plan_digest"] != first_plan["plan_digest"]
+    await approve_task(actor_client, root, second_plan, recipients=(NODE, PEER_NODE))
+    resumed = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert resumed.status_code == 202, resumed.text
+    await drain_tasks(corpus_app.state)
+    final = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert final["status"] == "succeeded", final
+    assert final["retrieval_completeness"] == "partial"  # fast never claims exhaustive coverage
+    assert final["result"]["counts"]["succeeded"] == 2
+    assert final["result"]["counts"]["incomplete"] == 0
+    assert final["result"]["evidence"][0]["evidence_id"] == "peer-evidence-1"
+    assert final["used_budget"]["requests"] > first["used_budget"]["requests"] > 0
+    assert final["used_budget"]["bytes"] >= first["used_budget"]["bytes"]
+    assert len(peer.accepted) == admissions + 1
+    assert final["delivery_id"] != first["delivery_id"]
+    retained = (await actor_client.get(
+        f"/api/v1/deliveries/{first['delivery_id']}")).json()
+    assert retained["result_manifest_digest"] == previous_delivery["result_manifest_digest"]
+    assert retained["result"] == previous_delivery["result"]
+
+
+async def test_caller_request_slice_is_not_refilled_by_resume(actor_client, monkeypatch):
+    peer = StubPeer()
+    install_peer(monkeypatch, peer)
+    body = {
+        "task_spec": task_spec(scope="federation_public", scope_ref="scope-1",
+                               operation="corpus.retrieve"),
+        "exploration_consent": exploration(),
+        "scope_manifest": scope_manifest([member("peer-collection-1", PEER_NODE)]),
+        "budget": {"max_requests": 2, "max_bytes": 65536, "max_hops": 2,
+                   "max_generation_tokens": 0, "deadline": EXPIRY},
+    }
+    intent = await actor_client.post("/api/v1/task-intents", json=body,
+                                     headers={"Idempotency-Key": "bounded-root"})
+    assert intent.status_code == 201, intent.text
+    root = intent.json()["root_task_id"]
+    plan = await plan_task(actor_client, root)
+    assert plan["budget"]["max_requests"] == 2
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
+    first = (await submit_task(actor_client, root, plan["plan_digest"], "bounded-exec")).json()
+    assert first["used_budget"]["requests"] == 2
+    assert first["status"] == "failed" and first["error"] == "budget_exhausted"
+    sent = len(peer.calls)
+    resumed = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert resumed.status_code == 202, resumed.text
+    await drain_tasks(corpus_app.state)
+    final = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert final["used_budget"]["requests"] == 2
+    assert len(peer.calls) == sent and not peer.accepted
+    body["budget"]["max_requests"] = 3
+    changed = await actor_client.post("/api/v1/task-intents", json=body,
+                                      headers={"Idempotency-Key": "bounded-root"})
+    assert changed.status_code == 409
+    assert changed.json()["error"]["code"] == "idempotency_conflict"
+
+
 class SlowExecutorPeer(ReconcilingStubPeer):
     """执行者跑得比协调者的轮询耐心慢；`/cancel` 与真实执行者一样落终态。"""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.hold = True
+        self.lease_until = None
         self.cancelled: set[str] = set()
 
     def transport(self) -> httpx.MockTransport:
@@ -1862,21 +2011,17 @@ class SlowExecutorPeer(ReconcilingStubPeer):
                      else "running" if self.hold else "succeeded")
             return httpx.Response(200, json={
                 **peer_status(), "executor_task_id": executor, "state": state,
+                "lease_until": self.lease_until,
                 "evidence_set_ref": (f"federation-execution:{executor}"
                                      if state == "succeeded" else None)})
 
         return httpx.MockTransport(handler)
 
 
-async def test_remote_poll_timeout_stays_retryable_on_resume(actor_client, monkeypatch):
-    """远端执行超过轮询耐心：记 unreachable，resume 对账到同一条执行接着等。
-
-    旧行为：超时先 `cancel` 对端执行。resume 的对账拿回同一张回执，轮询到
-    cancelled -> `not_attempted`；换代次重新受理又是同键异体 409 —— 这个
-    标着"可重做"的目标永远重做不了。
-    """
-    monkeypatch.setattr(federation_tasks, "PEER_POLL_DEADLINE_SECONDS", 0.0)
+async def test_remote_expired_lease_stays_retryable_on_resume(actor_client, monkeypatch):
+    """An expired executor lease is a gap, not permission to cancel its admission."""
     peer = SlowExecutorPeer()
+    peer.lease_until = (utcnow() - timedelta(seconds=1)).isoformat()
     install_peer(monkeypatch, peer)
     manifest = scope_manifest([member("peer-collection-1", PEER_NODE)])
     intent = await create_intent(
@@ -1891,8 +2036,8 @@ async def test_remote_poll_timeout_stays_retryable_on_resume(actor_client, monke
     assert first["status"] == "failed"
     coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
     assert [(entry["state"], entry["last_error"]) for entry in coverage["entries"]] \
-        == [("unreachable", "peer_execution_timeout")]
-    assert not peer.cancelled, "轮询超时不得取消对端执行"
+        == [("unreachable", "lease_expired")]
+    assert not peer.cancelled, "租约到期不得取消对端执行"
 
     peer.hold = False
     resumed = await actor_client.post(f"/api/v1/tasks/{root}/resume")
@@ -2348,7 +2493,7 @@ async def test_undeclared_event_type_is_refused_before_it_is_stored(session):
 
 # ------------------------------------------------ 协调者 operation 是闭集（改进项 ② 的 G1）
 
-@pytest.mark.parametrize("operation", ["wiki.pages", "rag.answer", "corpus.Retrieve", "", "回答"])
+@pytest.mark.parametrize("operation", ["rag.answer", "corpus.Retrieve", "", "回答"])
 async def test_unknown_coordinator_operation_is_refused_before_anything_is_stored(
         actor_client, session, operation):
     """认不出来的 operation 当场拒绝：放进去不会报错，只会被顺手配一个 answer 步。"""
@@ -2395,3 +2540,61 @@ async def test_retrieve_only_task_never_gets_an_answer_step_or_a_generation_budg
     assert status["evidence_sufficiency"] in ("sufficient_by_policy", "insufficient"), status
     assert result["counts"]["total_targets"] >= 1, "目标照常进覆盖账本"
 
+
+
+async def test_wiki_intent_requires_typed_requirements_before_persistence(actor_client, session):
+    body = {"task_spec": task_spec(operation="wiki.pages"),
+            "exploration_consent": exploration(**LOCAL_EXPLORATION)}
+    rejected = await actor_client.post("/api/v1/task-intents", json=body,
+                                       headers={"Idempotency-Key": "wiki-requirements"})
+    assert rejected.status_code == 409, rejected.text
+    assert await session.scalar(select(func.count()).select_from(FederationRequest)) == 0
+    body["task_spec"]["requirements"] = {"wiki": {"title": "Fixed source notes", "max_pages": 2}}
+    accepted = await actor_client.post("/api/v1/task-intents", json=body,
+                                       headers={"Idempotency-Key": "wiki-requirements"})
+    assert accepted.status_code == 201, accepted.text
+    assert accepted.json()["task_spec"]["requirements"]["wiki"]["title"] == "Fixed source notes"
+
+
+async def test_compute_only_wiki_plan_requires_both_directed_data_edges(
+        actor_client, session, monkeypatch):
+    class WikiPeer(StubPeer):
+        def transport(self):
+            inner = super().transport()
+
+            def handler(request):
+                if request.url.path.endswith("/probes"):
+                    body = json.loads(request.content)
+                    if body.get("operation") == "wiki.pages":
+                        return httpx.Response(201, json=peer_capability_probe(
+                            operation="wiki.pages", readiness="ready", can_generate=False))
+                return inner.handle_request(request)
+
+            return httpx.MockTransport(handler)
+
+    peer = WikiPeer()
+    install_peer(monkeypatch, peer)
+    _, version, _, _, _ = await indexed_source(session)
+    collection = await publish_collection(actor_client, version)
+    manifest = scope_manifest([member(collection["collection_id"])],
+                              revisions=[(NODE, 1), (PEER_NODE, 1)])
+    spec = task_spec(scope="federation_public", scope_ref="scope-1", operation="wiki.pages")
+    spec["requirements"] = {"wiki": {"title": "Verified source notes", "max_pages": 2}}
+    intent = await create_intent(actor_client, spec=spec, consent=exploration(), manifest=manifest)
+    root = intent["root_task_id"]
+    plan = await plan_task(actor_client, root)
+    assert next(step for step in plan["steps"] if step["operation"] == "wiki_pages")[
+        "executor_node_id"] == PEER_NODE
+    assert {(edge["from_node_id"], edge["to_node_id"], edge["payload_kind"])
+            for edge in plan["data_edges"]} >= {
+                (NODE, PEER_NODE, "evidence_excerpts"), (PEER_NODE, NODE, "wiki_draft")}
+    for omitted in ("evidence_excerpts", "wiki_draft"):
+        consent = execution_consent(
+            plan["plan_digest"], recipients=(NODE, PEER_NODE),
+            edges=[edge["edge_id"] for edge in plan["data_edges"]
+                   if edge["payload_kind"] != omitted])
+        denied = await actor_client.post(f"/api/v1/task-plans/{root}/approve", json={
+            "plan_digest": plan["plan_digest"], "execution_consent": consent})
+        assert denied.status_code == 403, denied.text
+        assert not peer.accepted
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))

@@ -9,8 +9,8 @@
   127.0.0.1/[::1] 时放行（`localhost` 不给过 —— 那是 DNS）。
 - **每个请求一张节点凭证**（`ddp-node-credential/1`）：出站前把
   (audience, 原始调用者, 操作, 范围约束, 方法/路径/正文摘要) 交给**本节点**控制面
-  签发，放进 `X-DDP-Node-Credential`。本服务不持有任何对端的口令，也不再把对端的
-  `SERVICE_TOKEN` 与自报 actor 头发出去；用户的 API key（连 id 都）不转发（§8.4）。
+  签发，放进 `X-DDP-Node-Credential`。本服务不持有任何对端的口令，不发对端的
+  `SERVICE_TOKEN`，不发自报 actor 头；用户的 API key（连 id 都）不转发（§8.4）。
   签不出凭证是**本节点**的问题：`PeerUnavailable(status=None, code=…)`，协调者记
   unreachable 并保留可重试，绝不说成对端没有资料。
 - 出站 HTTP 与仓库铁律 8 一致：`trust_env=False`、`follow_redirects=False`，
@@ -19,7 +19,8 @@
 - 传输层与签发方可注入（`transport=` / `signer=`），测试用 `MockTransport` 与本地
   测试签发方就能覆盖全部出站行为，不需要真网络。
 
-`FEDERATION_PEER_AUTH=shared_token_insecure` 保留旧的共享口令形态，仅供开发夹具。
+没有共享口令形态：`FEDERATION_PEERS` 只登记 `endpoint`，带 service_token /
+peer_token 等口令字段即配置错误（`parse_peers` 直接拒绝）。
 """
 from __future__ import annotations
 
@@ -67,9 +68,6 @@ class PeerUnavailable(RuntimeError):
 class PeerConfig:
     node_id: str
     endpoint: str
-    #: 仅 shared_token_insecure 档位使用；node_credential 档位必须为空。
-    service_token: str = ""
-    peer_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -102,44 +100,32 @@ def validate_endpoint(node_id: str, endpoint, *, allow_loopback: bool) -> str:
     return endpoint.rstrip("/")
 
 
-def parse_peers(raw: str, *, allow_loopback: bool = False,
-                shared_token: bool | None = None) -> dict[str, PeerConfig]:
+def parse_peers(raw: str, *, allow_loopback: bool = False) -> dict[str, PeerConfig]:
     """把 JSON 配置校验成目录；任何一条坏配置都是启动/调用即失败，不是静默跳过。
 
-    node_credential 档位（默认）只许登记 `endpoint`：带着口令字段是配置错误 ——
-    不用的秘密留在配置里，迟早被复制到别处。
+    只许登记 `endpoint`：带着 service_token / peer_token 等口令字段是配置错误 ——
+    不用的秘密留在配置里，迟早被复制到别处。旧共享配置不会静默降级，只会大声失败。
     """
-    if shared_token is None:
-        shared_token = settings.federation_peer_auth == "shared_token_insecure"
     try:
         value = json.loads(raw) if raw else {}
     except (TypeError, ValueError):
         raise PeerUnavailable("-", "FEDERATION_PEERS is not valid JSON") from None
     if not isinstance(value, dict):
         raise PeerUnavailable("-", "FEDERATION_PEERS must be a JSON object")
-    allowed = {"endpoint", "service_token", "peer_token"} if shared_token else {"endpoint"}
     peers: dict[str, PeerConfig] = {}
     for node_id, item in value.items():
         if not isinstance(node_id, str) or not NODE_PATTERN.fullmatch(node_id):
             raise PeerUnavailable(str(node_id)[:64], "invalid node id in FEDERATION_PEERS")
         if not isinstance(item, dict):
             raise PeerUnavailable(node_id, "peer entry must be an object")
-        unknown = set(item) - allowed
+        unknown = set(item) - {"endpoint"}
         if unknown:
-            hint = "" if shared_token else (
-                " (shared peer tokens are not used with FEDERATION_PEER_AUTH=node_credential)")
-            raise PeerUnavailable(node_id, f"unknown peer fields: {sorted(unknown)}{hint}")
+            raise PeerUnavailable(
+                node_id, f"unknown peer fields: {sorted(unknown)} "
+                         "(peer entries carry only endpoint; cross-node auth is a "
+                         "single-use node credential issued by this node's control-api)")
         endpoint = validate_endpoint(node_id, item.get("endpoint"), allow_loopback=allow_loopback)
-        if shared_token:
-            for key in ("service_token", "peer_token"):
-                token = item.get(key)
-                if not isinstance(token, str) or not token:
-                    raise PeerUnavailable(node_id, f"missing {key}")
-            peers[node_id] = PeerConfig(node_id=node_id, endpoint=endpoint,
-                                        service_token=item["service_token"],
-                                        peer_token=item["peer_token"])
-        else:
-            peers[node_id] = PeerConfig(node_id=node_id, endpoint=endpoint)
+        peers[node_id] = PeerConfig(node_id=node_id, endpoint=endpoint)
     return peers
 
 
@@ -157,34 +143,15 @@ class PeerClient:
     def __init__(self, config: PeerConfig, *, actor: Actor, transport=None,
                  timeout: httpx.Timeout = DEFAULT_TIMEOUT,
                  max_response_bytes: int = MAX_RESPONSE_BYTES,
-                 signer=None, delegation: Delegation | None = None,
-                 shared_token: bool | None = None):
+                 signer=None, delegation: Delegation | None = None):
         self.config = config
         self.actor = actor
         self.max_response_bytes = max_response_bytes
         self.signer = signer
         self.delegation = delegation
-        self.shared_token = (settings.federation_peer_auth == "shared_token_insecure"
-                             if shared_token is None else shared_token)
         self._client = httpx.AsyncClient(
             transport=transport, timeout=timeout, trust_env=False, follow_redirects=False)
 
-    def _shared_headers(self) -> dict[str, str]:
-        """shared_token_insecure 档位的旧头：对端服务凭据 + 共享口令 + 自报 actor。"""
-        actor = self.actor
-        headers = {
-            "Authorization": f"Bearer {self.config.service_token}",
-            "X-DDP-Peer-Token": self.config.peer_token,
-            "X-DDP-Organization": actor.organization_id,
-            "X-DDP-Actor": actor.id,
-            "X-DDP-Actor-Kind": actor.kind,
-            "X-DDP-Role": actor.role,
-        }
-        if actor.principal_id:
-            headers["X-DDP-User"] = actor.principal_id
-        if actor.api_key_id:
-            headers["X-DDP-Api-Key"] = actor.api_key_id
-        return headers
 
     async def _credential(self, *, operation: str, constraints: dict, method: str,
                           path: str, body: bytes) -> str:
@@ -236,12 +203,9 @@ class PeerClient:
             headers["X-Request-Id"] = self.actor.request_id
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
-        if self.shared_token:
-            headers.update(self._shared_headers())
-        else:
-            headers[nc.HEADER] = await self._credential(
-                operation=operation, constraints=constraints or self._constraints(),
-                method=method, path=path, body=body)
+        headers[nc.HEADER] = await self._credential(
+            operation=operation, constraints=constraints or self._constraints(),
+            method=method, path=path, body=body)
         try:
             async with self._client.stream(
                     method, self.config.endpoint + path, content=body or None, params=params,
@@ -331,17 +295,16 @@ class PeerClient:
 
         分页协议与 `catalog.snapshot_page` 相同：首请求不带 `snapshot_id` 建快照，
         之后带快照与游标跟随，终止页 `complete=true`。`limit` 上限 100 由对端
-        校验，这里不放大。node_credential 档位走节点对节点端点；共享口令档位沿用
-        旧的 `/internal/...`（持对端 SERVICE_TOKEN，所以只许开发用）。
+        校验，这里不放大。只走节点对节点端点（带单次节点凭证）；`/internal/…`
+        是同一节点控制面代收目录的生产者路径，不跨节点直调。
         """
         params: dict = {"limit": min(max(1, limit), 100)}
         if snapshot_id:
             params["snapshot_id"] = snapshot_id
         if cursor:
             params["cursor"] = cursor
-        path = ("/internal/federation/published-collections" if self.shared_token
-                else "/api/v1/federation/published-collections")
-        return await self._request("GET", path, operation="catalog_read", params=params)
+        return await self._request("GET", "/api/v1/federation/published-collections",
+                                   operation="catalog_read", params=params)
 
     async def locate(self, resource_id: str, version_id: str | None = None) -> dict:
         return await self._request("POST", "/api/v1/federation/resources/locate",
@@ -363,8 +326,7 @@ class PeerDirectory:
     def __init__(self, peers: dict[str, PeerConfig], *, actor: Actor, transport=None,
                  timeout: httpx.Timeout = DEFAULT_TIMEOUT,
                  max_response_bytes: int = MAX_RESPONSE_BYTES,
-                 signer=None, delegation: Delegation | None = None,
-                 shared_token: bool | None = None):
+                 signer=None, delegation: Delegation | None = None):
         self._peers = dict(peers)
         self._actor = actor
         self._transport = transport
@@ -372,7 +334,6 @@ class PeerDirectory:
         self._max_response_bytes = max_response_bytes
         self._signer = signer
         self._delegation = delegation
-        self._shared_token = shared_token
         self._clients: dict[str, PeerClient] = {}
 
     @classmethod
@@ -380,16 +341,14 @@ class PeerDirectory:
                       transport=None, signer=None,
                       settings_: Settings | None = None) -> "PeerDirectory":
         config = settings_ or settings
-        shared = config.federation_peer_auth == "shared_token_insecure"
         peers = parse_peers(config.federation_peers,
-                            allow_loopback=config.federation_allow_loopback,
-                            shared_token=shared)
-        if signer is None and not shared:
+                            allow_loopback=config.federation_allow_loopback)
+        if signer is None:
             from ddp_corpus.node_auth import ControlCredentialSigner
 
             signer = ControlCredentialSigner()
         return cls(peers, actor=actor, transport=transport, signer=signer,
-                   delegation=delegation, shared_token=shared)
+                   delegation=delegation)
 
     def known(self, node_id: str) -> bool:
         return node_id in self._peers
@@ -402,8 +361,7 @@ class PeerDirectory:
             self._clients[node_id] = PeerClient(
                 self._peers[node_id], actor=self._actor, transport=self._transport,
                 timeout=self._timeout, max_response_bytes=self._max_response_bytes,
-                signer=self._signer, delegation=self._delegation,
-                shared_token=self._shared_token)
+                signer=self._signer, delegation=self._delegation)
         return self._clients[node_id]
 
     async def collections(self, node_id: str, *, reserve=None,
@@ -419,7 +377,7 @@ class PeerDirectory:
         collected: list[dict] = []
         snapshot_id = cursor = ""
         for _ in range(max(1, max_pages)):
-            if reserve is not None and not reserve():
+            if reserve is not None and not await reserve():
                 break
             page = await client.published_collections(
                 snapshot_id=snapshot_id, cursor=cursor, limit=DIRECTORY_PAGE_LIMIT)

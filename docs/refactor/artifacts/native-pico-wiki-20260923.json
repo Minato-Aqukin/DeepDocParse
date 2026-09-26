@@ -1,0 +1,3051 @@
+{
+  "schema": "ddp-v3-real-native-wiki-proof/1",
+  "date": "2026-09-23",
+  "platform": {
+    "system": "Linux",
+    "kernel": "7.2.6-1-cachyos",
+    "machine": "x86_64",
+    "session": "Wayland",
+    "electron": "44.3.0"
+  },
+  "input": {
+    "publisher_url": "https://datasheets.raspberrypi.com/pico/pico-datasheet.pdf",
+    "sha256": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+    "topic": "RP2040 processor cores and maximum clock frequency",
+    "max_pages": 4,
+    "max_output_tokens": 4096
+  },
+  "regression_before": {
+    "task_id": "16fdfd3d52ae439792314774b3595a82",
+    "status": "failed",
+    "error": "wiki_relation_unsupported",
+    "relation_candidates": 0,
+    "model_relation_output": "```json\n[\n  {\n    \"selected_relations\": [\n      1\n    ]\n  }\n]\n```"
+  },
+  "observed_after": {
+    "task_id": "7674994a795c40e99703751587961aea",
+    "status": "succeeded",
+    "stages": [
+      {
+        "stage": "plan",
+        "allowance": 1024,
+        "error": null,
+        "created_at": 1790145348.0922604,
+        "finished_at": 1790145369.3168542
+      },
+      {
+        "stage": "write",
+        "allowance": 3072,
+        "error": null,
+        "created_at": 1790145369.3208559,
+        "finished_at": 1790145405.897539
+      }
+    ],
+    "model_wall_seconds": 57.805,
+    "pages": 4,
+    "relations": 0,
+    "original_pdf_rendered_page": 4,
+    "original_physical_page_index": 3,
+    "original_bbox_highlight_visible": true,
+    "old_revision_editor_note_absent": true,
+    "new_revision_editor_note_present": true,
+    "editor_note_survives_ui_reload": true,
+    "invalid_page_budget_blocks_submission": true,
+    "budget_3072_restored_after_host_restart": true
+  },
+  "revisions": [
+    {
+      "id": "b294d768b53d4db1b1b1c7e215a08059",
+      "base_revision_id": null,
+      "task_id": "7674994a795c40e99703751587961aea",
+      "body": {
+        "base_revision_id": null,
+        "created_at": 1790145405.9042392,
+        "created_by": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be",
+        "decoder_revision": "wiki-json/2-relations-array-envelope",
+        "dependency_manifest": [
+          {
+            "evidence_id": "e2d6432e2027529289d1b76787108aec",
+            "local_excerpt_sha256": "61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "e5f9bf1d6a99b1ae782abd893b82c190",
+              "excerpt_digest": "sha256:61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  474.5745849609375,
+                  524.1144409179688,
+                  810.0669708251953
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 3,
+                "seq": 16
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "b5bf11bb9e18757b04c054e095f7f03c",
+            "local_excerpt_sha256": "bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "4d19386dd3429747a8e71ce368474a51",
+              "excerpt_digest": "sha256:bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  524.0652465820312,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 17,
+                "seq": 44
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "86f9be648222d617ba70ff8ef079965a",
+            "local_excerpt_sha256": "c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "7845e87f5ce70044ea61b722af5c7932",
+              "excerpt_digest": "sha256:c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  523.8892211914062,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 13,
+                "seq": 40
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "e78a020da6cab6f85acc40814b370606",
+            "local_excerpt_sha256": "cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "69f82b7b69542fa030447249514f0e21",
+              "excerpt_digest": "sha256:cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+              "locator": {
+                "bbox": [
+                  71.05814361572266,
+                  33.1182861328125,
+                  524.080810546875,
+                  234.2347412109375
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 37
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "cf83f1176d37c301ab8d55eb3b3e802d",
+            "local_excerpt_sha256": "0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "fb2bf16d21724d18eeeefc2687e8a008",
+              "excerpt_digest": "sha256:0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+              "locator": {
+                "bbox": [
+                  70.89813995361328,
+                  336.163330078125,
+                  525.0933227539062,
+                  545.2597961425781
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 20,
+                "seq": 56
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "3a2b4f473490bcb41485e9f7cf216d3f",
+            "local_excerpt_sha256": "8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "12d1ec093ff5d854d323d3eb12fbf715",
+              "excerpt_digest": "sha256:8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+              "locator": {
+                "bbox": [
+                  70.89014434814453,
+                  33.1182861328125,
+                  522.76123046875,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 11,
+                "seq": 36
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "b4a783e7a08ce009770c4266171fb8e0",
+            "local_excerpt_sha256": "b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "1807129e2aa9ad983ca13409478da036",
+              "excerpt_digest": "sha256:b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  247.72625732421875,
+                  524.2567749023438,
+                  432.8162536621094
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 38
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "afbf47ea7c042e40d60628948396aeed",
+            "local_excerpt_sha256": "e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "3e43bd9037e9bfd833747e326d1430d1",
+              "excerpt_digest": "sha256:e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  70.6976318359375,
+                  525.057373046875,
+                  342.2161560058594
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 8,
+                "seq": 29
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "e2d6432e2027529289d1b76787108aec",
+            "local_excerpt_sha256": "61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "e5f9bf1d6a99b1ae782abd893b82c190",
+              "excerpt_digest": "sha256:61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  474.5745849609375,
+                  524.1144409179688,
+                  810.0669708251953
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 3,
+                "seq": 16
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "b5bf11bb9e18757b04c054e095f7f03c",
+            "local_excerpt_sha256": "bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "4d19386dd3429747a8e71ce368474a51",
+              "excerpt_digest": "sha256:bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  524.0652465820312,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 17,
+                "seq": 44
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "86f9be648222d617ba70ff8ef079965a",
+            "local_excerpt_sha256": "c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "7845e87f5ce70044ea61b722af5c7932",
+              "excerpt_digest": "sha256:c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  523.8892211914062,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 13,
+                "seq": 40
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "e78a020da6cab6f85acc40814b370606",
+            "local_excerpt_sha256": "cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "69f82b7b69542fa030447249514f0e21",
+              "excerpt_digest": "sha256:cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+              "locator": {
+                "bbox": [
+                  71.05814361572266,
+                  33.1182861328125,
+                  524.080810546875,
+                  234.2347412109375
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 37
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "cf83f1176d37c301ab8d55eb3b3e802d",
+            "local_excerpt_sha256": "0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "fb2bf16d21724d18eeeefc2687e8a008",
+              "excerpt_digest": "sha256:0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+              "locator": {
+                "bbox": [
+                  70.89813995361328,
+                  336.163330078125,
+                  525.0933227539062,
+                  545.2597961425781
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 20,
+                "seq": 56
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "3a2b4f473490bcb41485e9f7cf216d3f",
+            "local_excerpt_sha256": "8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "12d1ec093ff5d854d323d3eb12fbf715",
+              "excerpt_digest": "sha256:8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+              "locator": {
+                "bbox": [
+                  70.89014434814453,
+                  33.1182861328125,
+                  522.76123046875,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 11,
+                "seq": 36
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "b4a783e7a08ce009770c4266171fb8e0",
+            "local_excerpt_sha256": "b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "1807129e2aa9ad983ca13409478da036",
+              "excerpt_digest": "sha256:b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  247.72625732421875,
+                  524.2567749023438,
+                  432.8162536621094
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 38
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "afbf47ea7c042e40d60628948396aeed",
+            "local_excerpt_sha256": "e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "3e43bd9037e9bfd833747e326d1430d1",
+              "excerpt_digest": "sha256:e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  70.6976318359375,
+                  525.057373046875,
+                  342.2161560058594
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 8,
+                "seq": 29
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "e2d6432e2027529289d1b76787108aec",
+            "local_excerpt_sha256": "61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "e5f9bf1d6a99b1ae782abd893b82c190",
+              "excerpt_digest": "sha256:61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  474.5745849609375,
+                  524.1144409179688,
+                  810.0669708251953
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 3,
+                "seq": 16
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "b5bf11bb9e18757b04c054e095f7f03c",
+            "local_excerpt_sha256": "bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "4d19386dd3429747a8e71ce368474a51",
+              "excerpt_digest": "sha256:bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  524.0652465820312,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 17,
+                "seq": 44
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "86f9be648222d617ba70ff8ef079965a",
+            "local_excerpt_sha256": "c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "7845e87f5ce70044ea61b722af5c7932",
+              "excerpt_digest": "sha256:c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  523.8892211914062,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 13,
+                "seq": 40
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "e78a020da6cab6f85acc40814b370606",
+            "local_excerpt_sha256": "cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "69f82b7b69542fa030447249514f0e21",
+              "excerpt_digest": "sha256:cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+              "locator": {
+                "bbox": [
+                  71.05814361572266,
+                  33.1182861328125,
+                  524.080810546875,
+                  234.2347412109375
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 37
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "cf83f1176d37c301ab8d55eb3b3e802d",
+            "local_excerpt_sha256": "0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "fb2bf16d21724d18eeeefc2687e8a008",
+              "excerpt_digest": "sha256:0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+              "locator": {
+                "bbox": [
+                  70.89813995361328,
+                  336.163330078125,
+                  525.0933227539062,
+                  545.2597961425781
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 20,
+                "seq": 56
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "3a2b4f473490bcb41485e9f7cf216d3f",
+            "local_excerpt_sha256": "8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "12d1ec093ff5d854d323d3eb12fbf715",
+              "excerpt_digest": "sha256:8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+              "locator": {
+                "bbox": [
+                  70.89014434814453,
+                  33.1182861328125,
+                  522.76123046875,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 11,
+                "seq": 36
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "b4a783e7a08ce009770c4266171fb8e0",
+            "local_excerpt_sha256": "b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "1807129e2aa9ad983ca13409478da036",
+              "excerpt_digest": "sha256:b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  247.72625732421875,
+                  524.2567749023438,
+                  432.8162536621094
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 38
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "afbf47ea7c042e40d60628948396aeed",
+            "local_excerpt_sha256": "e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "3e43bd9037e9bfd833747e326d1430d1",
+              "excerpt_digest": "sha256:e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  70.6976318359375,
+                  525.057373046875,
+                  342.2161560058594
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 8,
+                "seq": 29
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "e2d6432e2027529289d1b76787108aec",
+            "local_excerpt_sha256": "61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "e5f9bf1d6a99b1ae782abd893b82c190",
+              "excerpt_digest": "sha256:61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  474.5745849609375,
+                  524.1144409179688,
+                  810.0669708251953
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 3,
+                "seq": 16
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "b5bf11bb9e18757b04c054e095f7f03c",
+            "local_excerpt_sha256": "bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "4d19386dd3429747a8e71ce368474a51",
+              "excerpt_digest": "sha256:bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  524.0652465820312,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 17,
+                "seq": 44
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "86f9be648222d617ba70ff8ef079965a",
+            "local_excerpt_sha256": "c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "7845e87f5ce70044ea61b722af5c7932",
+              "excerpt_digest": "sha256:c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  523.8892211914062,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 13,
+                "seq": 40
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "e78a020da6cab6f85acc40814b370606",
+            "local_excerpt_sha256": "cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "69f82b7b69542fa030447249514f0e21",
+              "excerpt_digest": "sha256:cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+              "locator": {
+                "bbox": [
+                  71.05814361572266,
+                  33.1182861328125,
+                  524.080810546875,
+                  234.2347412109375
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 37
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "cf83f1176d37c301ab8d55eb3b3e802d",
+            "local_excerpt_sha256": "0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "fb2bf16d21724d18eeeefc2687e8a008",
+              "excerpt_digest": "sha256:0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+              "locator": {
+                "bbox": [
+                  70.89813995361328,
+                  336.163330078125,
+                  525.0933227539062,
+                  545.2597961425781
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 20,
+                "seq": 56
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "3a2b4f473490bcb41485e9f7cf216d3f",
+            "local_excerpt_sha256": "8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "12d1ec093ff5d854d323d3eb12fbf715",
+              "excerpt_digest": "sha256:8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+              "locator": {
+                "bbox": [
+                  70.89014434814453,
+                  33.1182861328125,
+                  522.76123046875,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 11,
+                "seq": 36
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "b4a783e7a08ce009770c4266171fb8e0",
+            "local_excerpt_sha256": "b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "1807129e2aa9ad983ca13409478da036",
+              "excerpt_digest": "sha256:b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  247.72625732421875,
+                  524.2567749023438,
+                  432.8162536621094
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 38
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "afbf47ea7c042e40d60628948396aeed",
+            "local_excerpt_sha256": "e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "3e43bd9037e9bfd833747e326d1430d1",
+              "excerpt_digest": "sha256:e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  70.6976318359375,
+                  525.057373046875,
+                  342.2161560058594
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 8,
+                "seq": 29
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          }
+        ],
+        "id": "b294d768b53d4db1b1b1c7e215a08059",
+        "kind": "generated",
+        "limits": {
+          "max_evidence": 40,
+          "max_input_chars": 16000,
+          "max_output_tokens": 4096,
+          "max_pages": 4
+        },
+        "merge_conflicts": [],
+        "pages": [
+          {
+            "generated_sections": [
+              {
+                "heading": "RP2040 Datasheet",
+                "sentences": [
+                  {
+                    "conflict_group": null,
+                    "evidence_ids": [
+                      "e2d6432e2027529289d1b76787108aec"
+                    ],
+                    "id": "6a466324ed462912d28c480c3d28842a",
+                    "provider": {
+                      "context_tokens": 8192,
+                      "device": "cpu",
+                      "endpoint": "http://127.0.0.1:37935/v1",
+                      "engine": "openai-compatible",
+                      "gpu_devices": [],
+                      "location": "local",
+                      "model_id": "qwen3-1.7b-q8_0",
+                      "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+                      "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+                      "name": "ddp-eb01d48c3c67a87dca2fdb952c5fd574",
+                      "offloaded_layers": 0,
+                      "provider_resolved": true,
+                      "runtime_id": "llama-cpp-cpu-linux-x64",
+                      "runtime_revision": "b10809",
+                      "runtime_sha256": "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941"
+                    },
+                    "review_state": "unreviewed",
+                    "source_type": "generated",
+                    "text": "The RP2040 Datasheet provides detailed information about the Raspberry Pi Pico microcontroller.",
+                    "unsupported": false
+                  }
+                ]
+              }
+            ],
+            "human_paragraphs": [],
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023",
+            "title": "RP2040 Datasheet"
+          },
+          {
+            "generated_sections": [
+              {
+                "heading": "RP2040 Processor Cores and Maximum Clock Frequency",
+                "sentences": [
+                  {
+                    "conflict_group": null,
+                    "evidence_ids": [
+                      "e2d6432e2027529289d1b76787108aec"
+                    ],
+                    "id": "368c45a74d292fa8eb9e0bc4b0fd28c1",
+                    "provider": {
+                      "context_tokens": 8192,
+                      "device": "cpu",
+                      "endpoint": "http://127.0.0.1:37935/v1",
+                      "engine": "openai-compatible",
+                      "gpu_devices": [],
+                      "location": "local",
+                      "model_id": "qwen3-1.7b-q8_0",
+                      "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+                      "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+                      "name": "ddp-eb01d48c3c67a87dca2fdb952c5fd574",
+                      "offloaded_layers": 0,
+                      "provider_resolved": true,
+                      "runtime_id": "llama-cpp-cpu-linux-x64",
+                      "runtime_revision": "b10809",
+                      "runtime_sha256": "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941"
+                    },
+                    "review_state": "unreviewed",
+                    "source_type": "generated",
+                    "text": "The RP2040 features a Dual-core cortex M0+ processor with a maximum clock frequency of up to 133 MHz.",
+                    "unsupported": false
+                  }
+                ]
+              }
+            ],
+            "human_paragraphs": [],
+            "page_key": "0cd87e050d253f8105e119211674a9c7",
+            "title": "RP2040 Processor Cores and Maximum Clock Frequency"
+          },
+          {
+            "generated_sections": [
+              {
+                "heading": "Power Consumption of Raspberry Pi Pico",
+                "sentences": [
+                  {
+                    "conflict_group": null,
+                    "evidence_ids": [
+                      "e2d6432e2027529289d1b76787108aec"
+                    ],
+                    "id": "6f71748c916fddcd9f2421a030cd9350",
+                    "provider": {
+                      "context_tokens": 8192,
+                      "device": "cpu",
+                      "endpoint": "http://127.0.0.1:37935/v1",
+                      "engine": "openai-compatible",
+                      "gpu_devices": [],
+                      "location": "local",
+                      "model_id": "qwen3-1.7b-q8_0",
+                      "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+                      "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+                      "name": "ddp-eb01d48c3c67a87dca2fdb952c5fd574",
+                      "offloaded_layers": 0,
+                      "provider_resolved": true,
+                      "runtime_id": "llama-cpp-cpu-linux-x64",
+                      "runtime_revision": "b10809",
+                      "runtime_sha256": "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941"
+                    },
+                    "review_state": "unreviewed",
+                    "source_type": "generated",
+                    "text": "The Raspberry Pi Pico consumes a typical current of 1.4 mA in the DORMANT mode, with a maximum of 1.81 mA in the SLEEP mode.",
+                    "unsupported": false
+                  }
+                ]
+              }
+            ],
+            "human_paragraphs": [],
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0",
+            "title": "Power Consumption of Raspberry Pi Pico"
+          },
+          {
+            "generated_sections": [
+              {
+                "heading": "Electrical Specifications of Raspberry Pi Pico",
+                "sentences": [
+                  {
+                    "conflict_group": null,
+                    "evidence_ids": [
+                      "e2d6432e2027529289d1b76787108aec"
+                    ],
+                    "id": "7616c7fc33d1f5c796cb6c20f987d817",
+                    "provider": {
+                      "context_tokens": 8192,
+                      "device": "cpu",
+                      "endpoint": "http://127.0.0.1:37935/v1",
+                      "engine": "openai-compatible",
+                      "gpu_devices": [],
+                      "location": "local",
+                      "model_id": "qwen3-1.7b-q8_0",
+                      "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+                      "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+                      "name": "ddp-eb01d48c3c67a87dca2fdb952c5fd574",
+                      "offloaded_layers": 0,
+                      "provider_resolved": true,
+                      "runtime_id": "llama-cpp-cpu-linux-x64",
+                      "runtime_revision": "b10809",
+                      "runtime_sha256": "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941"
+                    },
+                    "review_state": "unreviewed",
+                    "source_type": "generated",
+                    "text": "The Raspberry Pi Pico operates with a voltage range of 1.8 V to 5.5 V, with VBUS and VSYS currents depending on the use case.",
+                    "unsupported": false
+                  }
+                ]
+              }
+            ],
+            "human_paragraphs": [],
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54",
+            "title": "Electrical Specifications of Raspberry Pi Pico"
+          }
+        ],
+        "protocol": "ddp-wiki-generation/5",
+        "provider": {
+          "context_tokens": 8192,
+          "device": "cpu",
+          "endpoint": "http://127.0.0.1:37935/v1",
+          "engine": "openai-compatible",
+          "gpu_devices": [],
+          "location": "local",
+          "model_id": "qwen3-1.7b-q8_0",
+          "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+          "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+          "name": "ddp-eb01d48c3c67a87dca2fdb952c5fd574",
+          "offloaded_layers": 0,
+          "provider_resolved": true,
+          "runtime_id": "llama-cpp-cpu-linux-x64",
+          "runtime_revision": "b10809",
+          "runtime_sha256": "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941"
+        },
+        "relations": [],
+        "semantic_review": "needs_review",
+        "source_type": "generated",
+        "title": "RP2040 processor cores and maximum clock frequency",
+        "wiki_id": "9a105856547349fcb3bef79050f15e9d"
+      }
+    },
+    {
+      "id": "1ea5c84a29544fa6b0c777110a9acc44",
+      "base_revision_id": "b294d768b53d4db1b1b1c7e215a08059",
+      "task_id": "34156f2d8b1548368ae9ff31dd1fa7d6",
+      "body": {
+        "base_revision_id": "b294d768b53d4db1b1b1c7e215a08059",
+        "created_at": 1790145737.9719746,
+        "created_by": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be",
+        "decoder_revision": "wiki-json/2-relations-array-envelope",
+        "dependency_manifest": [
+          {
+            "evidence_id": "3a2b4f473490bcb41485e9f7cf216d3f",
+            "local_excerpt_sha256": "8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "12d1ec093ff5d854d323d3eb12fbf715",
+              "excerpt_digest": "sha256:8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+              "locator": {
+                "bbox": [
+                  70.89014434814453,
+                  33.1182861328125,
+                  522.76123046875,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 11,
+                "seq": 36
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "86f9be648222d617ba70ff8ef079965a",
+            "local_excerpt_sha256": "c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "7845e87f5ce70044ea61b722af5c7932",
+              "excerpt_digest": "sha256:c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  523.8892211914062,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 13,
+                "seq": 40
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "afbf47ea7c042e40d60628948396aeed",
+            "local_excerpt_sha256": "e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "3e43bd9037e9bfd833747e326d1430d1",
+              "excerpt_digest": "sha256:e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  70.6976318359375,
+                  525.057373046875,
+                  342.2161560058594
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 8,
+                "seq": 29
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "b4a783e7a08ce009770c4266171fb8e0",
+            "local_excerpt_sha256": "b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "1807129e2aa9ad983ca13409478da036",
+              "excerpt_digest": "sha256:b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  247.72625732421875,
+                  524.2567749023438,
+                  432.8162536621094
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 38
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "b5bf11bb9e18757b04c054e095f7f03c",
+            "local_excerpt_sha256": "bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "4d19386dd3429747a8e71ce368474a51",
+              "excerpt_digest": "sha256:bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  524.0652465820312,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 17,
+                "seq": 44
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "cf83f1176d37c301ab8d55eb3b3e802d",
+            "local_excerpt_sha256": "0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "fb2bf16d21724d18eeeefc2687e8a008",
+              "excerpt_digest": "sha256:0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+              "locator": {
+                "bbox": [
+                  70.89813995361328,
+                  336.163330078125,
+                  525.0933227539062,
+                  545.2597961425781
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 20,
+                "seq": 56
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "e2d6432e2027529289d1b76787108aec",
+            "local_excerpt_sha256": "61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "e5f9bf1d6a99b1ae782abd893b82c190",
+              "excerpt_digest": "sha256:61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  474.5745849609375,
+                  524.1144409179688,
+                  810.0669708251953
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 3,
+                "seq": 16
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "e78a020da6cab6f85acc40814b370606",
+            "local_excerpt_sha256": "cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "69f82b7b69542fa030447249514f0e21",
+              "excerpt_digest": "sha256:cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+              "locator": {
+                "bbox": [
+                  71.05814361572266,
+                  33.1182861328125,
+                  524.080810546875,
+                  234.2347412109375
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 37
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023"
+          },
+          {
+            "evidence_id": "3a2b4f473490bcb41485e9f7cf216d3f",
+            "local_excerpt_sha256": "8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "12d1ec093ff5d854d323d3eb12fbf715",
+              "excerpt_digest": "sha256:8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+              "locator": {
+                "bbox": [
+                  70.89014434814453,
+                  33.1182861328125,
+                  522.76123046875,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 11,
+                "seq": 36
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "86f9be648222d617ba70ff8ef079965a",
+            "local_excerpt_sha256": "c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "7845e87f5ce70044ea61b722af5c7932",
+              "excerpt_digest": "sha256:c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  523.8892211914062,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 13,
+                "seq": 40
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "afbf47ea7c042e40d60628948396aeed",
+            "local_excerpt_sha256": "e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "3e43bd9037e9bfd833747e326d1430d1",
+              "excerpt_digest": "sha256:e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  70.6976318359375,
+                  525.057373046875,
+                  342.2161560058594
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 8,
+                "seq": 29
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "b4a783e7a08ce009770c4266171fb8e0",
+            "local_excerpt_sha256": "b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "1807129e2aa9ad983ca13409478da036",
+              "excerpt_digest": "sha256:b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  247.72625732421875,
+                  524.2567749023438,
+                  432.8162536621094
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 38
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "b5bf11bb9e18757b04c054e095f7f03c",
+            "local_excerpt_sha256": "bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "4d19386dd3429747a8e71ce368474a51",
+              "excerpt_digest": "sha256:bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  524.0652465820312,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 17,
+                "seq": 44
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "cf83f1176d37c301ab8d55eb3b3e802d",
+            "local_excerpt_sha256": "0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "fb2bf16d21724d18eeeefc2687e8a008",
+              "excerpt_digest": "sha256:0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+              "locator": {
+                "bbox": [
+                  70.89813995361328,
+                  336.163330078125,
+                  525.0933227539062,
+                  545.2597961425781
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 20,
+                "seq": 56
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "e2d6432e2027529289d1b76787108aec",
+            "local_excerpt_sha256": "61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "e5f9bf1d6a99b1ae782abd893b82c190",
+              "excerpt_digest": "sha256:61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  474.5745849609375,
+                  524.1144409179688,
+                  810.0669708251953
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 3,
+                "seq": 16
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "e78a020da6cab6f85acc40814b370606",
+            "local_excerpt_sha256": "cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "69f82b7b69542fa030447249514f0e21",
+              "excerpt_digest": "sha256:cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+              "locator": {
+                "bbox": [
+                  71.05814361572266,
+                  33.1182861328125,
+                  524.080810546875,
+                  234.2347412109375
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 37
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "0cd87e050d253f8105e119211674a9c7"
+          },
+          {
+            "evidence_id": "3a2b4f473490bcb41485e9f7cf216d3f",
+            "local_excerpt_sha256": "8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "12d1ec093ff5d854d323d3eb12fbf715",
+              "excerpt_digest": "sha256:8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+              "locator": {
+                "bbox": [
+                  70.89014434814453,
+                  33.1182861328125,
+                  522.76123046875,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 11,
+                "seq": 36
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "86f9be648222d617ba70ff8ef079965a",
+            "local_excerpt_sha256": "c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "7845e87f5ce70044ea61b722af5c7932",
+              "excerpt_digest": "sha256:c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  523.8892211914062,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 13,
+                "seq": 40
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "afbf47ea7c042e40d60628948396aeed",
+            "local_excerpt_sha256": "e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "3e43bd9037e9bfd833747e326d1430d1",
+              "excerpt_digest": "sha256:e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  70.6976318359375,
+                  525.057373046875,
+                  342.2161560058594
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 8,
+                "seq": 29
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "b4a783e7a08ce009770c4266171fb8e0",
+            "local_excerpt_sha256": "b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "1807129e2aa9ad983ca13409478da036",
+              "excerpt_digest": "sha256:b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  247.72625732421875,
+                  524.2567749023438,
+                  432.8162536621094
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 38
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "b5bf11bb9e18757b04c054e095f7f03c",
+            "local_excerpt_sha256": "bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "4d19386dd3429747a8e71ce368474a51",
+              "excerpt_digest": "sha256:bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  524.0652465820312,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 17,
+                "seq": 44
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "cf83f1176d37c301ab8d55eb3b3e802d",
+            "local_excerpt_sha256": "0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "fb2bf16d21724d18eeeefc2687e8a008",
+              "excerpt_digest": "sha256:0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+              "locator": {
+                "bbox": [
+                  70.89813995361328,
+                  336.163330078125,
+                  525.0933227539062,
+                  545.2597961425781
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 20,
+                "seq": 56
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "e2d6432e2027529289d1b76787108aec",
+            "local_excerpt_sha256": "61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "e5f9bf1d6a99b1ae782abd893b82c190",
+              "excerpt_digest": "sha256:61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  474.5745849609375,
+                  524.1144409179688,
+                  810.0669708251953
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 3,
+                "seq": 16
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "e78a020da6cab6f85acc40814b370606",
+            "local_excerpt_sha256": "cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "69f82b7b69542fa030447249514f0e21",
+              "excerpt_digest": "sha256:cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+              "locator": {
+                "bbox": [
+                  71.05814361572266,
+                  33.1182861328125,
+                  524.080810546875,
+                  234.2347412109375
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 37
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0"
+          },
+          {
+            "evidence_id": "3a2b4f473490bcb41485e9f7cf216d3f",
+            "local_excerpt_sha256": "8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "12d1ec093ff5d854d323d3eb12fbf715",
+              "excerpt_digest": "sha256:8fcf870f94b46045d46e1057e660556496e405bc36fd0a625d67c185eda0d932",
+              "locator": {
+                "bbox": [
+                  70.89014434814453,
+                  33.1182861328125,
+                  522.76123046875,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 11,
+                "seq": 36
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "86f9be648222d617ba70ff8ef079965a",
+            "local_excerpt_sha256": "c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "7845e87f5ce70044ea61b722af5c7932",
+              "excerpt_digest": "sha256:c236b1d5379020bd3507928795613d14aff292133542da58e83ae0076a5ae708",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  523.8892211914062,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 13,
+                "seq": 40
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "afbf47ea7c042e40d60628948396aeed",
+            "local_excerpt_sha256": "e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "3e43bd9037e9bfd833747e326d1430d1",
+              "excerpt_digest": "sha256:e2662b973f831aee8ece5346c35dd03ae074a1b9e29d0cbba174fbfb291e2254",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  70.6976318359375,
+                  525.057373046875,
+                  342.2161560058594
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 8,
+                "seq": 29
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "b4a783e7a08ce009770c4266171fb8e0",
+            "local_excerpt_sha256": "b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "1807129e2aa9ad983ca13409478da036",
+              "excerpt_digest": "sha256:b2b5bf2d1b84f026f933e6c21b15687525a67ca226ff536be81c1f6a94e30135",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  247.72625732421875,
+                  524.2567749023438,
+                  432.8162536621094
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 38
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "b5bf11bb9e18757b04c054e095f7f03c",
+            "local_excerpt_sha256": "bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "4d19386dd3429747a8e71ce368474a51",
+              "excerpt_digest": "sha256:bec6008ff0041381782259740e65f554e900e1a8b6f3061da02ac3e3f6f093aa",
+              "locator": {
+                "bbox": [
+                  71.0261459350586,
+                  33.1182861328125,
+                  524.0652465820312,
+                  809.9869709014893
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 17,
+                "seq": 44
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "cf83f1176d37c301ab8d55eb3b3e802d",
+            "local_excerpt_sha256": "0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "fb2bf16d21724d18eeeefc2687e8a008",
+              "excerpt_digest": "sha256:0268c1c7a91cd8801cee5d56e04d75b5fc573d853f369bdb070611803c2e0588",
+              "locator": {
+                "bbox": [
+                  70.89813995361328,
+                  336.163330078125,
+                  525.0933227539062,
+                  545.2597961425781
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 20,
+                "seq": 56
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "e2d6432e2027529289d1b76787108aec",
+            "local_excerpt_sha256": "61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "e5f9bf1d6a99b1ae782abd893b82c190",
+              "excerpt_digest": "sha256:61bed150af3d4fe633e04f1b199af32fe3bf3125b44054b2f294fde1cc9b030f",
+              "locator": {
+                "bbox": [
+                  70.97814178466797,
+                  474.5745849609375,
+                  524.1144409179688,
+                  810.0669708251953
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 3,
+                "seq": 16
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          },
+          {
+            "evidence_id": "e78a020da6cab6f85acc40814b370606",
+            "local_excerpt_sha256": "cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+            "local_parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+            "local_resource_id": "3b06fecc46034768bc21676abfa1ee05",
+            "local_version_id": "ba1396f27a014e18a73737588213c18b",
+            "original": {
+              "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "block_type": "text",
+              "derived_from": null,
+              "evidence_id": "69f82b7b69542fa030447249514f0e21",
+              "excerpt_digest": "sha256:cb7f654b774dc0cbf6f9856b697706c51793a9a3ee928f9aca0af37e6f4fc6e1",
+              "locator": {
+                "bbox": [
+                  71.05814361572266,
+                  33.1182861328125,
+                  524.080810546875,
+                  234.2347412109375
+                ],
+                "kind": "page_block",
+                "page_size": {
+                  "height": 841.8897705078125,
+                  "width": 595.2755737304688
+                },
+                "physical_page_index": 12,
+                "seq": 37
+              },
+              "origin_node_id": "local-143f21ad923b47bea43e1beccb485ef3",
+              "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+              "policy_revision": "local-private/1",
+              "resource_id": "3b06fecc46034768bc21676abfa1ee05",
+              "retrieval_receipt_ref": null,
+              "schema": "ddp-evidence/1#FederatedEvidence",
+              "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_type": "source",
+              "source_version_id": "ba1396f27a014e18a73737588213c18b",
+              "uploader_ref": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be"
+            },
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54"
+          }
+        ],
+        "id": "1ea5c84a29544fa6b0c777110a9acc44",
+        "kind": "human_edit",
+        "limits": {
+          "max_evidence": 40,
+          "max_input_chars": 16000,
+          "max_output_tokens": 4096,
+          "max_pages": 4
+        },
+        "merge_conflicts": [],
+        "pages": [
+          {
+            "generated_sections": [
+              {
+                "heading": "RP2040 Datasheet",
+                "sentences": [
+                  {
+                    "conflict_group": null,
+                    "evidence_ids": [
+                      "e2d6432e2027529289d1b76787108aec"
+                    ],
+                    "id": "6a466324ed462912d28c480c3d28842a",
+                    "provider": {
+                      "context_tokens": 8192,
+                      "device": "cpu",
+                      "endpoint": "http://127.0.0.1:37935/v1",
+                      "engine": "openai-compatible",
+                      "gpu_devices": [],
+                      "location": "local",
+                      "model_id": "qwen3-1.7b-q8_0",
+                      "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+                      "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+                      "name": "ddp-eb01d48c3c67a87dca2fdb952c5fd574",
+                      "offloaded_layers": 0,
+                      "provider_resolved": true,
+                      "runtime_id": "llama-cpp-cpu-linux-x64",
+                      "runtime_revision": "b10809",
+                      "runtime_sha256": "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941"
+                    },
+                    "review_state": "unreviewed",
+                    "source_type": "generated",
+                    "text": "The RP2040 Datasheet provides detailed information about the Raspberry Pi Pico microcontroller.",
+                    "unsupported": false
+                  }
+                ]
+              }
+            ],
+            "human_paragraphs": [],
+            "page_key": "fe4aebbd889ecdf2c1de213641b9e023",
+            "stale": false,
+            "title": "RP2040 Datasheet"
+          },
+          {
+            "generated_sections": [
+              {
+                "heading": "RP2040 Processor Cores and Maximum Clock Frequency",
+                "sentences": [
+                  {
+                    "conflict_group": null,
+                    "evidence_ids": [
+                      "e2d6432e2027529289d1b76787108aec"
+                    ],
+                    "id": "368c45a74d292fa8eb9e0bc4b0fd28c1",
+                    "provider": {
+                      "context_tokens": 8192,
+                      "device": "cpu",
+                      "endpoint": "http://127.0.0.1:37935/v1",
+                      "engine": "openai-compatible",
+                      "gpu_devices": [],
+                      "location": "local",
+                      "model_id": "qwen3-1.7b-q8_0",
+                      "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+                      "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+                      "name": "ddp-eb01d48c3c67a87dca2fdb952c5fd574",
+                      "offloaded_layers": 0,
+                      "provider_resolved": true,
+                      "runtime_id": "llama-cpp-cpu-linux-x64",
+                      "runtime_revision": "b10809",
+                      "runtime_sha256": "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941"
+                    },
+                    "review_state": "unreviewed",
+                    "source_type": "generated",
+                    "text": "The RP2040 features a Dual-core cortex M0+ processor with a maximum clock frequency of up to 133 MHz.",
+                    "unsupported": false
+                  }
+                ]
+              }
+            ],
+            "human_paragraphs": [
+              {
+                "created_by": "workspace:c9968ba6f6cd4abd8f1ca88c52d3e5be",
+                "evidence_ids": [],
+                "id": "97c8ed11-330a-4041-8507-9213628bd7f6",
+                "kind": "human",
+                "review_state": "unreviewed",
+                "source_type": "generated",
+                "text": "验收备注：此段由自动化操作写入，用于验证独立编辑修订；不表示人工事实核验。",
+                "unsupported": true
+              }
+            ],
+            "page_key": "0cd87e050d253f8105e119211674a9c7",
+            "stale": false,
+            "title": "RP2040 Processor Cores and Maximum Clock Frequency"
+          },
+          {
+            "generated_sections": [
+              {
+                "heading": "Power Consumption of Raspberry Pi Pico",
+                "sentences": [
+                  {
+                    "conflict_group": null,
+                    "evidence_ids": [
+                      "e2d6432e2027529289d1b76787108aec"
+                    ],
+                    "id": "6f71748c916fddcd9f2421a030cd9350",
+                    "provider": {
+                      "context_tokens": 8192,
+                      "device": "cpu",
+                      "endpoint": "http://127.0.0.1:37935/v1",
+                      "engine": "openai-compatible",
+                      "gpu_devices": [],
+                      "location": "local",
+                      "model_id": "qwen3-1.7b-q8_0",
+                      "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+                      "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+                      "name": "ddp-eb01d48c3c67a87dca2fdb952c5fd574",
+                      "offloaded_layers": 0,
+                      "provider_resolved": true,
+                      "runtime_id": "llama-cpp-cpu-linux-x64",
+                      "runtime_revision": "b10809",
+                      "runtime_sha256": "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941"
+                    },
+                    "review_state": "unreviewed",
+                    "source_type": "generated",
+                    "text": "The Raspberry Pi Pico consumes a typical current of 1.4 mA in the DORMANT mode, with a maximum of 1.81 mA in the SLEEP mode.",
+                    "unsupported": false
+                  }
+                ]
+              }
+            ],
+            "human_paragraphs": [],
+            "page_key": "ad7ca4e1b2a66111ab99f8eb0634a7a0",
+            "stale": false,
+            "title": "Power Consumption of Raspberry Pi Pico"
+          },
+          {
+            "generated_sections": [
+              {
+                "heading": "Electrical Specifications of Raspberry Pi Pico",
+                "sentences": [
+                  {
+                    "conflict_group": null,
+                    "evidence_ids": [
+                      "e2d6432e2027529289d1b76787108aec"
+                    ],
+                    "id": "7616c7fc33d1f5c796cb6c20f987d817",
+                    "provider": {
+                      "context_tokens": 8192,
+                      "device": "cpu",
+                      "endpoint": "http://127.0.0.1:37935/v1",
+                      "engine": "openai-compatible",
+                      "gpu_devices": [],
+                      "location": "local",
+                      "model_id": "qwen3-1.7b-q8_0",
+                      "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+                      "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+                      "name": "ddp-eb01d48c3c67a87dca2fdb952c5fd574",
+                      "offloaded_layers": 0,
+                      "provider_resolved": true,
+                      "runtime_id": "llama-cpp-cpu-linux-x64",
+                      "runtime_revision": "b10809",
+                      "runtime_sha256": "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941"
+                    },
+                    "review_state": "unreviewed",
+                    "source_type": "generated",
+                    "text": "The Raspberry Pi Pico operates with a voltage range of 1.8 V to 5.5 V, with VBUS and VSYS currents depending on the use case.",
+                    "unsupported": false
+                  }
+                ]
+              }
+            ],
+            "human_paragraphs": [],
+            "page_key": "d5c6ecaabb5ff02dc2975a34582fab54",
+            "stale": false,
+            "title": "Electrical Specifications of Raspberry Pi Pico"
+          }
+        ],
+        "protocol": "ddp-wiki-generation/5",
+        "provider": {
+          "context_tokens": 8192,
+          "device": "cpu",
+          "endpoint": "http://127.0.0.1:37935/v1",
+          "engine": "openai-compatible",
+          "gpu_devices": [],
+          "location": "local",
+          "model_id": "qwen3-1.7b-q8_0",
+          "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+          "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+          "name": "ddp-eb01d48c3c67a87dca2fdb952c5fd574",
+          "offloaded_layers": 0,
+          "provider_resolved": true,
+          "runtime_id": "llama-cpp-cpu-linux-x64",
+          "runtime_revision": "b10809",
+          "runtime_sha256": "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941"
+        },
+        "relations": [],
+        "semantic_review": "needs_review",
+        "source_type": "generated",
+        "title": "RP2040 processor cores and maximum clock frequency",
+        "wiki_id": "9a105856547349fcb3bef79050f15e9d"
+      }
+    }
+  ],
+  "editor_annotation_origin": "agent_ui_action_not_human_fact_review",
+  "human_review_status": "pending",
+  "quality_limit": "Successful publication proves the structured, source-bound workflow, not correctness of every generated claim. The earlier unsupported answer and relation failure were retained.",
+  "screenshot": "native-pico-wiki-20260923.png"
+}

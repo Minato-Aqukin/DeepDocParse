@@ -125,15 +125,15 @@ def test_expiry_and_root_probe_budget_are_atomic(ledger):
     scope = plan_scope()
     scope["plan"]["valid_until"] = utc_instant(NOW + 30)
     prepared = approve(ledger, "exploration", scope)
-    args = dispatch_args(prepared, "exploration")
-    ledger.authorize_dispatch(IDENTITY, "plan-1", **args)
-    args["operation_key"] = "second-probe"
+    args = {"kind": "intent", "confirmed_scope_digest": prepared["scope_digest"],
+            "size_bytes": len(scope["task_spec"]["query"].encode("utf-8"))}
+    ledger.authorize_control(IDENTITY, "plan-1", ticket="first-probe", **args)
     with pytest.raises(ApplicationError) as exc:
-        ledger.authorize_dispatch(IDENTITY, "plan-1", **args)
+        ledger.authorize_control(IDENTITY, "plan-1", ticket="second-probe", **args)
     assert exc.value.code == "budget_exceeded"
     ledger.clock = lambda: NOW + 31
     with pytest.raises(ApplicationError) as exc:
-        ledger.authorize_dispatch(IDENTITY, "plan-1", **args)
+        ledger.authorize_control(IDENTITY, "plan-1", ticket="expired-probe", **args)
     assert exc.value.code == "consent_expired"
     assert ledger.get(IDENTITY, "plan-1")["planning_state"] == "invalidated"
 
@@ -229,8 +229,72 @@ def test_generation_reservation_is_derived_from_approved_binding(ledger):
         ledger.authorize_dispatch(IDENTITY, "plan-1", **args, generation_tokens=0)
     assert exc.value.code == "budget_exceeded"
     ledger.authorize_dispatch(IDENTITY, "plan-1", **args)
-    assert ledger.db.execute("SELECT generation_tokens FROM dispatches").fetchone()[0] == 100
-    args["operation_key"] = "another-generation"
+    send = {"kind": "submit", "confirmed_scope_digest": prepared["scope_digest"]}
+    ledger.authorize_control(IDENTITY, "plan-1", ticket="first-generation", **send)
+    # Permission revalidation is free; the second physical generation is not.
+    args["operation_key"] = "another-permission-check"
+    ledger.authorize_dispatch(IDENTITY, "plan-1", **args)
     with pytest.raises(ApplicationError) as exc:
-        ledger.authorize_dispatch(IDENTITY, "plan-1", **args)
+        ledger.authorize_control(IDENTITY, "plan-1", ticket="another-generation", **send)
     assert exc.value.code == "budget_exceeded"
+
+
+@pytest.mark.parametrize("previous_version", [1, 2])
+def test_ledger_upgrade_preserves_spent_allowance_across_reopen(tmp_path, previous_version):
+    def open_store():
+        return ConsentStore(tmp_path, local_node_id="local-env", clock=lambda: NOW,
+                            input_resolver=lambda ref: b"approved file")
+
+    store = open_store()
+    prepared = approve(store, "exploration")
+    if previous_version == 1:
+        store.authorize_dispatch(IDENTITY, "plan-1", **dispatch_args(prepared, "exploration"))
+        store.db.execute("DROP TABLE cost_ledger")
+        store.db.execute("PRAGMA user_version=1")
+    else:
+        store.authorize_control(IDENTITY, "plan-1", ticket="spent-before-upgrade",
+                                kind="intent", confirmed_scope_digest=prepared["scope_digest"])
+        store.db.execute("ALTER TABLE cost_ledger DROP COLUMN phase")
+        store.db.execute("PRAGMA user_version=2")
+    store.close()
+
+    for _ in range(2):
+        store = open_store()
+        try:
+            assert store.cost_usage(store._owner(IDENTITY), "plan-1")["requests"] == 1
+            with pytest.raises(ApplicationError) as exc:
+                store.authorize_control(IDENTITY, "plan-1", ticket="after-upgrade",
+                                        kind="intent", confirmed_scope_digest=prepared["scope_digest"])
+            assert exc.value.code == "budget_exceeded"
+        finally:
+            store.close()
+
+
+def test_center_allocation_survives_reopen_and_cannot_be_spent_by_control(tmp_path):
+    scope = plan_scope()
+    scope["plan"]["budget"].update(max_requests=40, max_bytes=131072)
+    scope["exploration"]["budget"].update(max_probe_requests=100, max_egress_bytes=65536)
+    store = ConsentStore(tmp_path, local_node_id="local-env", clock=lambda: NOW,
+                         input_resolver=lambda ref: b"approved file")
+    prepared = approve(store, "exploration", scope)
+    allocation_args = {"recipient_node_id": "center-a",
+                       "confirmed_scope_digest": prepared["scope_digest"]}
+    first = store.reserve_center_budget(IDENTITY, "plan-1", **allocation_args)
+    store.close()
+    store = ConsentStore(tmp_path, local_node_id="local-env", clock=lambda: NOW,
+                         input_resolver=lambda ref: b"approved file")
+    try:
+        assert store.reserve_center_budget(IDENTITY, "plan-1", **allocation_args) == first
+        for index in range(32):
+            store.authorize_control(
+                IDENTITY, "plan-1", ticket=f"physical-send-{index}", kind="intent",
+                confirmed_scope_digest=prepared["scope_digest"])
+        with pytest.raises(ApplicationError) as exc:
+            store.authorize_control(
+                IDENTITY, "plan-1", ticket="cannot-spend-center-share", kind="intent",
+                confirmed_scope_digest=prepared["scope_digest"])
+        assert exc.value.code == "budget_exceeded"
+        assert store.reserve_center_budget(IDENTITY, "plan-1", **allocation_args) == first
+        assert store.cost_usage(store._owner(IDENTITY), "plan-1")["requests"] == 40
+    finally:
+        store.close()

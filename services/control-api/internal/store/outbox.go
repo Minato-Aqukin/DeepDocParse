@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/auth"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/contracts"
 )
 
 // Outbox：**跨服务边界的唯一正确姿势。**
@@ -39,10 +40,12 @@ func EnqueueOutbox(ctx context.Context, tx pgx.Tx, orgID, typ string, payload js
 // `FOR UPDATE SKIP LOCKED` 让多个副本可以并行投递而不互相阻塞，
 // 也不会把同一条投两次 —— 这是 PG 做队列的标准姿势，比自己写 lease 简单得多。
 func (s *Store) ClaimOutbox(ctx context.Context, limit int) ([]OutboxEvent, error) {
+	// rejected_at 有值的行是终端态：投递器不再领取，状态机也不再轮询它。
+	// 它仍留在表里 —— rejected ingest 的可见性就靠这一行。
 	rows, err := s.pool.Query(ctx, `
 		WITH claimed AS (
 		  SELECT id FROM control.control_outbox
-		  WHERE delivered_at IS NULL AND next_attempt_at <= now()
+		  WHERE delivered_at IS NULL AND rejected_at IS NULL AND next_attempt_at <= now()
 		  ORDER BY created_at
 		  LIMIT $1
 		  FOR UPDATE SKIP LOCKED
@@ -69,8 +72,27 @@ func (s *Store) ClaimOutbox(ctx context.Context, limit int) ([]OutboxEvent, erro
 }
 
 func (s *Store) MarkOutboxDelivered(ctx context.Context, id string) error {
+	// 真实 ACK 是权威的：清掉此前的一切失败与拒绝痕迹。迟到的拒绝不得覆盖它
+	// （MarkOutboxRejected 只碰未投递的行，见下）。
 	_, err := s.pool.Exec(ctx,
-		`UPDATE control.control_outbox SET delivered_at = now(), last_error = NULL WHERE id = $1`, id)
+		`UPDATE control.control_outbox SET delivered_at = now(), rejected_at = NULL, last_error = NULL WHERE id = $1`, id)
+	return err
+}
+
+// MarkOutboxRejected 把一条未投递事件标成终端拒绝：确定性冲突
+// （目标非法、同内容版本已存在）不是"稍后重试能好的事"。
+//
+// 只标未投递的行：已经 delivered 的事件上再盖拒绝等于篡改历史 ——
+// 那条事件 corpus 已经认领，再标拒绝只会让 ingest 读出撒谎的状态。
+// code 只进 last_error，而且类型上就只能是契约枚举 ingest_rejection 的值
+// （它会原样透给上传者）；终端位是 rejected_at 本身，不靠错误文本或一个
+// 遥远的 next_attempt_at 来编码"结束了"。
+func (s *Store) MarkOutboxRejected(ctx context.Context, id string, code contracts.IngestRejection) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE control.control_outbox
+		SET rejected_at = now(), last_error = $2
+		WHERE id = $1 AND delivered_at IS NULL AND rejected_at IS NULL`,
+		id, string(code))
 	return err
 }
 
@@ -87,7 +109,7 @@ func (s *Store) MarkOutboxFailed(ctx context.Context, id string, attempts int, r
 	_, err := s.pool.Exec(ctx, `
 		UPDATE control.control_outbox
 		SET last_error = $2, next_attempt_at = now() + $3::interval
-		WHERE id = $1`, id, truncate(reason, 500), backoff.String())
+		WHERE id = $1 AND delivered_at IS NULL AND rejected_at IS NULL`, id, truncate(reason, 500), backoff.String())
 	return err
 }
 
@@ -96,9 +118,10 @@ func (s *Store) MarkOutboxFailed(ctx context.Context, id string, attempts int, r
 // 最老一条 20 分钟没投出去才是故障。
 func (s *Store) OutboxBacklog(ctx context.Context) (count int, oldest time.Duration, err error) {
 	var oldestAt *time.Time
+	// 终端拒绝的行不是积压：它永远不会再被领，再数进去只会让 /readyz 撒谎。
 	err = s.pool.QueryRow(ctx, `
 		SELECT count(*), min(created_at) FROM control.control_outbox
-		WHERE delivered_at IS NULL`).Scan(&count, &oldestAt)
+		WHERE delivered_at IS NULL AND rejected_at IS NULL`).Scan(&count, &oldestAt)
 	if err == nil && oldestAt != nil {
 		oldest = time.Since(*oldestAt)
 	}

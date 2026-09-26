@@ -55,11 +55,23 @@ DDP-Agent 是语料问答六段链路的内部契约。它把“是否检索、�
 }
 ```
 
-回答的规范形态是 `Assertion[]`，不再以整段字符串作为语义真相。模型仍可流式输出
-文本，但持久化前必须按句切成断言，并解析 `[1]` 形式的证据编号：
+回答的规范形态是 `Assertion[]`，不再以整段字符串作为语义真相。Web 问答模型使用
+受约束的 JSON 输出，二选一：
 
-- `evidence_ids=[]` 时 `unsupported` **必须**为 `true`；调用方传 `false` 也要强制纠正。
-- 超界引用（例如只有两条证据却输出 `[9]`）不产生 evidence id，并使该断言 unsupported。
+```json
+{"status":"answered","claims":[{"text":"设备的额定电压是 220 V。","evidence_ids":["evidence-id"]}]}
+{"status":"insufficient_evidence"}
+```
+
+- `answered` 必须有非空 claims；每条 claim 必须显式给出非空、属于本次可见上下文的
+  `evidence_ids`。正文里的 `[1]` 等文本不产生引用，也不能把整组候选自动挂到回答上。
+- 每条完整 claim 校验后才输出文本增量；引用绑定直接持久化，不再按标点重新分句或
+  从自由文本猜来源。原始 JSON 不暴露给前端。
+- `insufficient_evidence` 是正常拒答；没有可用证据时不调用回答模型。拒答不附引用、
+  不继承视觉核对结果，其展示断言必须 `unsupported=true`。
+- 非法 JSON、缺失或越界 ID、空引用、截断输出是 `schema_violation`，不能冒充
+  “文档中没有”。已输出的完整断言可作为显式标记失败的部分回答保留。
+- 历史自由文本断言与其引用保持不变；新生成不再兼容自由文本模型输出。
 - 展示用 `Message.content` 是 Assertion.text 的有序投影，只为兼容旧客户端。
 - Citation 的 `source_kind` 为 `assertion`，`source_id` 指向断言主键。
 
@@ -114,6 +126,7 @@ DDP-Agent 是语料问答六段链路的内部契约。它把“是否检索、�
 | `inherited_evidence_incomplete` | 上一轮只有部分证据仍有效，已拒答并要求重新检索 |
 | `gate_rejected_all` | 检索有候选但逐篇门控全部拒绝 |
 | `citation_persist_failed` | 断言引用未能完整持久化，断言已强制标 unsupported |
+| `schema_violation` | 回答模型未满足逐条证据绑定协议；仅保留此前已校验的完整断言 |
 
 既有检索、视觉、解析与索引降级码继续有效。多个降级同时发生时，对外 `degraded`
 保留对结论风险更高的一项，完整链路原因同时保存在 QueryDecision/CandidateDecision 中。

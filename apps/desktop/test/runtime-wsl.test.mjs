@@ -322,8 +322,12 @@ test('the real W3 tarball provisions, launches, handshakes and stops by inner pi
   const installed = JSON.parse(await readFile(path.join(root, 'INSTALLED.json'), 'utf8'))
   assert.equal(installed.version, real.manifest.version)
   assert.equal(installed.sha256, real.manifest.sha256)
-  await cp(path.join(repository, 'python/ddp_local/ddp_local'),
-    path.join(root, 'runtime/site-packages/ddp_local'), { recursive: true, force: true })
+  // Run the current first-party code inside the real runtime. Overlaying ddp_local alone
+  // pairs it with the tarball's older ddp_core/ddp_contracts, and the runtime exits on import.
+  for (const name of ['ddp_local', 'ddp_core', 'ddp_contracts']) {
+    await cp(path.join(repository, 'python', name, name),
+      path.join(root, 'runtime/site-packages', name), { recursive: true, force: true })
+  }
   const canary = path.join(root, 'keep-me')
   await writeFile(canary, 'canary')
   assert.equal((await backend.prepare()).installed, false)

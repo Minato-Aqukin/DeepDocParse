@@ -2,7 +2,8 @@ package api
 
 import (
 	"context"
-	"crypto/subtle"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,14 +14,14 @@ import (
 	"time"
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/apierr"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/contracts"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/discovery"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/httpx"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/store"
 )
 
-// Peer-facing reads are authenticated by one node-level credential. An
-// unconfigured token fails closed (401) and comparison is constant time; the
-// corpus peer endpoints use the same rule.
+// Each directory request is signed for this receiver and consumed once.
+// SERVICE_TOKEN remains local to the control-to-corpus hop below.
 func (s *Server) mountPeer(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/federation/members", s.requirePeerCredentials(httpx.Wrap(s.handlePeerMembers)))
 	mux.Handle("GET /api/v1/federation/collections", s.requirePeerCredentials(httpx.Wrap(s.handlePeerCollections)))
@@ -32,18 +33,118 @@ func (s *Server) requirePeerCredentials(next http.Handler) http.Handler {
 			apierr.Write(w, r, err)
 			return
 		}
-		configured := s.cfg.FederationPeerToken
-		presented := r.Header.Get(discovery.HeaderPeerToken)
-		if configured == "" || presented == "" || subtle.ConstantTimeCompare([]byte(configured), []byte(presented)) != 1 {
-			apierr.Write(w, r, apierr.Unauthorized("peer_unauthenticated", "缺少或无效的同伴凭据"))
-			return
-		}
-		if target := r.Header.Get(discovery.HeaderPeerTarget); target != "" && target != s.nodeIdentity.NodeID() {
-			apierr.Write(w, r, apierr.Conflict("wrong_target", "请求指向另一个节点"))
+		if err := s.authenticatePeerRead(r); err != nil {
+			apierr.Write(w, r, err)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func peerReadOperation(path string) (string, error) {
+	switch path {
+	case "/api/v1/federation/members":
+		return string(contracts.NodeCredentialOperationDirectoryMembersRead), nil
+	case "/api/v1/federation/collections":
+		return string(contracts.NodeCredentialOperationDirectoryCollectionsRead), nil
+	default:
+		return "", discovery.ErrCredentialInvalid
+	}
+}
+
+func peerReadDigest(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func (s *Server) signPeerRead(ctx context.Context, cfg discovery.PeerConfig, request *http.Request) error {
+	record, err := s.peerTrust().PeerTrust(ctx, s.defaultOrg, cfg.NodeID)
+	if refusal := trustRefusal(record, err, http.StatusForbidden); refusal != nil {
+		return refusal
+	}
+	endpoint, err := url.Parse(cfg.Endpoint)
+	if err != nil {
+		return err
+	}
+	route := strings.TrimPrefix(request.URL.Path, endpoint.Path)
+	operation, err := peerReadOperation(route)
+	if err != nil {
+		return err
+	}
+	jti, err := discovery.NewCredentialJTI()
+	if err != nil {
+		return err
+	}
+	now := s.clock().UTC().Unix()
+	claims := discovery.CredentialClaims{
+		Schema: discovery.CredentialSchema, Alg: discovery.CredentialAlg,
+		IssuerNodeID: s.nodeIdentity.NodeID(), AudienceNodeID: cfg.NodeID,
+		Actor:     discovery.CredentialActor{OrganizationID: s.defaultOrg, Subject: "control-api", Kind: "service"},
+		Operation: operation, IssuedAt: now, ExpiresAt: now + 60, JTI: jti,
+		Constraints: discovery.CredentialConstraints{RootTaskID: "directory:" + jti, ScopeRef: peerReadDigest(request.URL.Query().Encode())},
+		Request:     discovery.CredentialRequest{Method: request.Method, Path: route, BodyDigest: peerReadDigest("")},
+	}
+	token, err := s.nodeIdentity.SignCredential(claims)
+	if err != nil {
+		return err
+	}
+	request.Header.Set(discovery.HeaderNodeCredential, token)
+	return nil
+}
+
+func (s *Server) authenticatePeerRead(r *http.Request) error {
+	token := r.Header.Get(discovery.HeaderNodeCredential)
+	issuer, err := discovery.CredentialIssuer(token)
+	if err != nil {
+		return apierr.Unauthorized("credential_invalid", "缺少或无效的节点凭据")
+	}
+	record, err := s.peerTrust().PeerTrust(r.Context(), s.defaultOrg, issuer)
+	if refusal := trustRefusal(record, err, http.StatusForbidden); refusal != nil {
+		return refusal
+	}
+	derived, err := discovery.NodeIDForPublicKey(record.PublicKey)
+	if err != nil || derived != issuer {
+		return apierr.Unauthorized("credential_invalid", "签发者身份与公钥不符")
+	}
+	claims, err := discovery.VerifyCredential(token, record.PublicKey)
+	if err != nil {
+		return apierr.Unauthorized("credential_invalid", "节点签名无效")
+	}
+	if claims.AudienceNodeID != s.nodeIdentity.NodeID() {
+		return apierr.Forbidden("credential_audience_mismatch", "凭据不是签给本节点")
+	}
+	now := s.clock().UTC().Unix()
+	if claims.ExpiresAt <= now || claims.IssuedAt > now+30 {
+		return apierr.Unauthorized("credential_expired", "节点凭据不在有效期内")
+	}
+	operation, err := peerReadOperation(r.URL.Path)
+	if err != nil || claims.Operation != operation {
+		return apierr.Forbidden("credential_operation_denied", "凭据未授权此目录操作")
+	}
+	if claims.Request.Method != r.Method || claims.Request.Path != r.URL.Path ||
+		claims.Request.BodyDigest != peerReadDigest("") || r.ContentLength != 0 ||
+		claims.Constraints.ScopeRef != peerReadDigest(r.URL.Query().Encode()) ||
+		claims.Actor.Kind != "service" || claims.Actor.Subject != "control-api" {
+		return apierr.Forbidden("credential_scope_denied", "凭据与请求或查询范围不符")
+	}
+	if target := r.Header.Get(discovery.HeaderPeerTarget); target != "" && target != s.nodeIdentity.NodeID() {
+		return apierr.Conflict("wrong_target", "请求指向另一个节点")
+	}
+	if s.store == nil {
+		return apierr.New(503, apierr.TypeUpstream, "credential_store_unavailable", "重放保护存储不可用")
+	}
+	consumed, err := s.store.ConsumePeerCredential(r.Context(), s.defaultOrg, claims, record.PublicKey)
+	if err != nil {
+		return err
+	}
+	if !consumed {
+		latest, lookupErr := s.peerTrust().PeerTrust(r.Context(), s.defaultOrg, issuer)
+		if refusal := trustRefusal(latest, lookupErr, http.StatusForbidden); refusal != nil {
+			return refusal
+		}
+		return apierr.Unauthorized("credential_replayed", "节点凭据已使用")
+	}
+	return nil
 }
 
 func peerPageError(err error) error {
@@ -59,7 +160,7 @@ func (s *Server) handlePeerMembers(w http.ResponseWriter, r *http.Request) error
 	}
 	snapshotID := r.URL.Query().Get("snapshot_id")
 	cursor := r.URL.Query().Get("cursor")
-	limit := 50
+	limit := 0
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 || n > 100 {
@@ -71,7 +172,11 @@ func (s *Server) handlePeerMembers(w http.ResponseWriter, r *http.Request) error
 		if cursor != "" {
 			return apierr.BadRequest("invalid_peer_page", "cursor 必须与 snapshot_id 一起提供")
 		}
-		snap, err := s.store.CreatePeerMemberSnapshot(r.Context(), s.defaultOrg, s.nodeIdentity.NodeID(), limit, 5*time.Minute)
+		pageSize := limit
+		if pageSize == 0 {
+			pageSize = 50
+		}
+		snap, err := s.store.CreatePeerMemberSnapshot(r.Context(), s.defaultOrg, s.nodeIdentity.NodeID(), pageSize, 5*time.Minute)
 		if err != nil {
 			return peerPageError(err)
 		}

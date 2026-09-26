@@ -1,4 +1,11 @@
 # Local recipe for the reviewed directory artifact; no AUR publication or updater claim.
+# Lifecycle note: a pacman-installed tree is managed by pacman (-U/-R); the
+# update_check.py apply/rollback/uninstall channel only manages directory
+# roots (e.g. /opt/deepdocparse copied from the tarball or a scratch drill
+# root). Never run `update_check.py apply` against a pacman-owned
+# /opt/deepdocparse: reinstall via `makepkg` + `pacman -U` instead, and keep
+# workspaces (~/.deepdocparse or explicit --workspace dirs) and the model
+# cache outside the package tree so upgrades never delete user data.
 pkgname=deepdocparse-desktop-spike
 pkgver=0.1.0
 pkgrel=1

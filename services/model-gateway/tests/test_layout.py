@@ -272,18 +272,40 @@ async def test_borndigital_fails_loudly_on_a_scanned_pdf(client, worker_ctx, app
     assert "文字层" in status["error"], status["error"]
 
 
-def _one_line_pdf(rotate: int) -> bytes:
+@respx.mock
+async def test_failed_source_download_does_not_put_the_file_url_into_the_task_error(
+        client, worker_ctx, app_state, monkeypatch):
+    """The source URL of an in-process engine is control's stable file URL; its path token is the
+    credential for the original. A failed download used to store `str(HTTPStatusError)` — the
+    full URL — as the parse error that users see (2026-09-24, phase E)."""
+    from ddp_gateway.config import settings as cfg
+    from ddp_gateway.worker.tasks import poll_and_archive
+
+    monkeypatch.setattr(cfg, "poll_initial_delay", 0.01)
+    file_url = "https://control.example/files/secret-grant-token-0123456789"
+    respx.get(file_url).mock(return_value=Response(502))
+    task_id = (await client.post("/v1/parse", json={
+        "file_url": file_url, "engine": "borndigital"})).json()["task_id"]
+    await poll_and_archive(worker_ctx, task_id)
+
+    status = (await client.get(f"/v1/parse/{task_id}")).json()
+    assert status["status"] == "failed"
+    assert "502" in status["error"] and "secret-grant-token" not in status["error"], status["error"]
+
+
+def _one_line_pdf(rotate: int, *, inherited_media: bool = False,
+                  lines: tuple[tuple[str, int, int], ...] = (("TOPLEFT MARKER", 60, 730),)) -> bytes:
     """一页 PDF，在未旋转坐标系的左上角放一行字，页面带 /Rotate。
 
     手写而不是用库：要精确控制 /Rotate 与文字位置，才谈得上验坐标变换。
     """
-    text = "TOPLEFT MARKER"
-    stream = f"BT /F1 12 Tf 60 730 Td ({text}) Tj ET".encode()
+    stream = "".join(f"BT /F1 12 Tf {x} {y} Td ({text}) Tj ET\n" for text, x, y in lines).encode()
+    media_box = b"/MediaBox[0 0 100 842]" if inherited_media else b"/MediaBox[0 0 612 792]"
     objs = {
         1: b"<</Type/Catalog/Pages 2 0 R>>",
-        2: b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
-        3: (f"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Rotate {rotate}"
-            f"/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>").encode(),
+        2: b"<</Type/Pages/Kids[3 0 R]/Count 1" + (media_box if inherited_media else b"") + b">>",
+        3: (b"<</Type/Page/Parent 2 0 R" + (b"" if inherited_media else media_box)
+            + f"/Rotate {rotate}/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>".encode()),
         4: b"<</Length " + str(len(stream)).encode() + b">>stream\n" + stream + b"\nendstream",
         5: b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
     }
@@ -330,6 +352,138 @@ def test_borndigital_handles_page_rotation(rotate, corner):
         "左上": (True, True), "右上": (False, True),
         "右下": (False, False), "左下": (True, False),
     }[corner], f"rotate={rotate} 时那行字应在{corner}，实际 bbox={[x0, y0, x1, y1]}"
+
+
+@pytest.mark.parametrize("rotate", [0, 90])
+def test_borndigital_inherited_media_box_clips_invisible_text(rotate):
+    page = borndigital.extract_pages(_one_line_pdf(rotate, inherited_media=True))[0]
+    text = "\n".join(block["text"] for block in page["blocks"])
+    assert "TOP" in text
+    assert "MARKER" not in text
+    width, height = page["page_size"]
+    for block in page["blocks"]:
+        x0, y0, x1, y1 = block["bbox"]
+        assert 0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height
+
+
+@pytest.mark.parametrize("rotate", [0, 90, 180, 270])
+def test_borndigital_keeps_line_order_and_breaks_on_rotated_pages(rotate):
+    """旋转页上相邻两行不能被当成同一行的左右碎片拼起来。
+
+    显示空间里旋转页的每一行都是竖条，两行并排。旧实现在显示空间缝合：
+    /Rotate 90 页上两行被倒序拼成一行、中间连空格都没有（2026-09-24 版面探针）。
+    """
+    pdf = _one_line_pdf(rotate, lines=(("FIRST LINE", 60, 730), ("SECOND LINE", 60, 714)))
+    blocks = borndigital.extract_pages(pdf)[0]["blocks"]
+    assert [block["text"] for block in blocks] == ["FIRST LINE\nSECOND LINE"], (rotate, blocks)
+
+
+def _text_lines_pdf(pages: list[list[tuple[str, int, int]]], *,
+                    x0: int = 60, size: int = 12, font: str = "Helvetica") -> bytes:
+    """多行文本 PDF：每页是 [(文本, 基线 y, 是否混排小字)] 列表。
+
+    手写而不引入依赖：精确控制原生换行位置与混排片段，
+    才谈得上验"字符序 -> 行 -> 段"的保序。不 checked-in 大 PDF。
+    混排小字用独立的 BT 块写（与 publisher PDF 的上下标结构同形），
+    字号小 3pt、基线抬高 4pt。
+    """
+    objects: dict[int, bytes] = {1: b"<</Type/Catalog/Pages 2 0 R>>"}
+    kids = " ".join(f"{3 + 2 * i} 0 R" for i in range(len(pages)))
+    objects[2] = f"<</Type/Pages/Kids[{kids}]/Count {len(pages)}>>".encode()
+    for i, lines in enumerate(pages):
+        parts = []
+        for text, y, small_mixed in lines:
+            safe = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            parts.append(f"BT /F1 {size} Tf {x0} {y} Td ({safe}) Tj ET")
+            if small_mixed:
+                # 同一视觉行的异体字小片段：基线略抬、字号略小，
+                # 与"另起一行"拉开差距（原生换行仍在行尾，由下一个 BT 块带出）。
+                parts.append(
+                    f"BT /F1 {size - 3} Tf {x0 + 300} {y + 4} Td (X8) Tj ET")
+        stream = "\n".join(parts).encode()
+        objects[3 + 2 * i] = (
+            f"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]"
+            f"/Contents {4 + 2 * i} 0 R"
+            f"/Resources<</Font<</F1 {3 + 2 * len(pages)} 0 R>>>>>>"
+        ).encode()
+        objects[4 + 2 * i] = (b"<</Length " + str(len(stream)).encode()
+                              + b">>stream\n" + stream + b"\nendstream")
+    objects[3 + 2 * len(pages)] = f"<</Type/Font/Subtype/Type1/BaseFont/{font}>>".encode()
+    out = bytearray(b"%PDF-1.4\n")
+    offsets: dict[int, int] = {}
+    for num in sorted(objects):
+        offsets[num] = len(out)
+        out += f"{num} 0 obj\n".encode() + objects[num] + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {max(objects) + 1}\n0000000000 65535 f \n".encode()
+    for num in range(1, max(objects) + 1):
+        out += f"{offsets[num]:010d} 00000 n \n".encode()
+    out += (f"trailer\n<</Size {max(objects) + 1}/Root 1 0 R>>\n"
+            f"startxref\n{xref}\n%%EOF").encode()
+    return bytes(out)
+
+
+def test_borndigital_retains_indentation_as_a_code_signal():
+    pdf = _text_lines_pdf([[("    payload value", 700, False)]], font="Courier")
+    blocks = borndigital.extract_pages(pdf)[0]["blocks"]
+    assert [(block["text"], block["type"]) for block in blocks] == [("payload value", "code")]
+
+
+def test_borndigital_preserves_mixed_font_line_in_reading_order():
+    """回归（2026-09-23 真实上传）：混排小字行不断裂、不丢句。
+
+    ESP32 index25（物理页 26）的 CPU 主频句与 Attention index4（物理页 5）
+    的 h=8 / dk=dv=dmodel/h=64 在旧实现里被字体矩形拆散：
+    count_rects()/get_rect() 的矩形横跨多行、叠住混排片段，
+    以它为"行"再做 bounded 重提，整句丢序、bbox 退化成版心。
+    小夹具复现同形结构：主行 + 同行小字混排，整句必须保序、
+    bbox 只盖住本行（不出现页高量级的整版矩形）。
+    """
+    pdf = _text_lines_pdf([[
+        ("The clock frequency is up to 240 MHz (160 MHz for S0WD (NRND))", 700, True),
+        ("In this work we employ h = 8 parallel layers, or heads.", 660, False),
+        ("dk = dv = dmodel/h = 64 charges apply.", 620, True),
+    ]])
+    page = borndigital.extract_pages(pdf)[0]
+    text = "\n".join(block["text"] for block in page["blocks"])
+    flat = " ".join(text.split())
+    assert "240 MHz (160 MHz for S0WD (NRND))" in flat, text
+    assert "h = 8 parallel layers" in flat, text
+    assert "dk = dv = dmodel/h = 64" in flat, text
+    height = page["page_size"][1]
+    for block in page["blocks"]:
+        x0, y0, x1, y1 = block["bbox"]
+        assert 0 <= x0 < x1 <= page["page_size"][0]
+        assert 0 <= y0 < y1 <= height
+        assert y1 - y0 < height / 2, f"行盒退化成版心：{block['bbox']}"
+
+
+def test_borndigital_keeps_distant_footer_in_its_own_block():
+    """回归（2026-09-23 真实上传）：远端页脚不与正文粘成一块。
+
+    两页 controller 手册的旧实现把 header/body/footer 并成一个
+    y48..792 的巨块。小夹具复现同形：正文两行在页顶、页码在页底，
+    两者必须分属不同块，且页脚块的顶边在页底区域。
+    """
+    pdf = _text_lines_pdf([
+        [("Controller setup manual", 740, False),
+         ("The reset delay is 17 milliseconds.", 700, False),
+         ("1", 60, False)],
+        [("Watchdog settings", 740, False),
+         ("The watchdog timeout is 7 seconds.", 700, False),
+         ("2", 60, False)],
+    ])
+    pages = borndigital.extract_pages(pdf)
+    assert len(pages) == 2, f"两页手册要出两页版面：{len(pages)}"
+    for index, page in enumerate(pages):
+        width, height = page["page_size"]
+        assert len(page["blocks"]) >= 2, f"页脚被并进正文：{[b['text'] for b in page['blocks']]}"
+        footers = [b for b in page["blocks"] if b["text"].strip() == str(index + 1)]
+        assert footers, f"页码 {index + 1} 丢了：{[b['text'] for b in page['blocks']]}"
+        assert footers[0]["bbox"][1] > height / 2, footers[0]["bbox"]
+        for block in page["blocks"]:
+            x0, y0, x1, y1 = block["bbox"]
+            assert 0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height
 
 
 @respx.mock

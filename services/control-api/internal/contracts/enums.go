@@ -67,8 +67,10 @@ const (
 	DegradedCitationPersistFailed Degraded = "citation_persist_failed"
 	// 原文自动核对没得出结论
 	DegradedVerificationUnavailable Degraded = "verification_unavailable"
-	// 模型输出反复不合 schema（已按 EXTRACT_MAX_RETRIES 重试仍失败）。
-	// **绝不能被静默当成 not_found** —— 那会把系统故障伪装成"文档里没有"。
+	// 模型输出不符合约定结构。抽取平面：按 EXTRACT_MAX_RETRIES 重试仍失败；
+	// 问答平面：回答未满足逐条证据绑定协议（非法 JSON、缺失/越界 evidence_id、
+	// 截断），不重试，已校验的完整断言作为显式失败的部分回答保留。
+	// **绝不能被静默当成 not_found / 文档中没有** —— 那会把系统故障伪装成"文档里没有"。
 	DegradedSchemaViolation Degraded = "schema_violation"
 	// 配了精排但上游没注册 rerank 模型，本轮没重排
 	DegradedRerankUnavailable Degraded = "rerank_unavailable"
@@ -125,7 +127,7 @@ var DegradedMeta = map[Degraded]EnumMeta{
 	DegradedGateRejectedAll:             {Value: "gate_rejected_all", Label: "检索候选均未通过逐篇质量门控", Severity: SeverityWarn},
 	DegradedCitationPersistFailed:       {Value: "citation_persist_failed", Label: "出处保存失败，相关结论已标为无证据支持", Severity: SeverityError},
 	DegradedVerificationUnavailable:     {Value: "verification_unavailable", Label: "原文自动核对未得出结论，请人工复核", Severity: SeverityWarn},
-	DegradedSchemaViolation:             {Value: "schema_violation", Label: "模型输出不符合 schema（已重试仍失败）", Severity: SeverityError},
+	DegradedSchemaViolation:             {Value: "schema_violation", Label: "模型输出不符合约定格式", Severity: SeverityError},
 	DegradedRerankUnavailable:           {Value: "rerank_unavailable", Label: "未做精排（重排序服务不可用）", Severity: SeverityNeutral},
 	DegradedNoInstructModel:             {Value: "no_instruct_model", Label: "未抽取（后端没有可用的指令模型）", Severity: SeverityError},
 	DegradedEmptyQuery:                  {Value: "empty_query", Label: "查询词为空", Severity: SeverityNeutral},
@@ -160,6 +162,8 @@ const (
 	CompileDegradedReindexValidationRequired CompileDegraded = "reindex_validation_required"
 	// 版面编译整体失败
 	CompileDegradedCompileFailed CompileDegraded = "compile_failed"
+	// 导入的来源没有可用版面（layout.json 缺失或无效），未编译、未建索引
+	CompileDegradedLayoutUnavailable CompileDegraded = "layout_unavailable"
 )
 
 // CompileDegradedValues 保持 enums.yaml 里的声明顺序。
@@ -172,6 +176,7 @@ var CompileDegradedValues = []CompileDegraded{
 	CompileDegradedProviderUnresolved,
 	CompileDegradedReindexValidationRequired,
 	CompileDegradedCompileFailed,
+	CompileDegradedLayoutUnavailable,
 }
 
 var CompileDegradedMeta = map[CompileDegraded]EnumMeta{
@@ -183,6 +188,7 @@ var CompileDegradedMeta = map[CompileDegraded]EnumMeta{
 	CompileDegradedProviderUnresolved:        {Value: "provider_unresolved", Label: "上游实际模型未解析，当前编译版本不可比较", Severity: SeverityWarn},
 	CompileDegradedReindexValidationRequired: {Value: "reindex_validation_required", Label: "存在历史出处，需先校验并确认后重建", Severity: SeverityWarn},
 	CompileDegradedCompileFailed:             {Value: "compile_failed", Label: "版面编译失败", Severity: SeverityError},
+	CompileDegradedLayoutUnavailable:         {Value: "layout_unavailable", Label: "来源版面不可用，未编译", Severity: SeverityError},
 }
 
 // Valid 报告 s 是不是一个已知的 compile_degraded 取值。
@@ -775,6 +781,130 @@ func (s UploadStatus) Valid() bool {
 	return ok
 }
 
+// 永久上传字节就绪（`upload_status=ready`）之后的**语料登记确认**：control 把
+// `DocumentSubmitted` 投递给语料域，只有 2xx 或 `409 duplicate_event` 算确认。
+// 与 `upload_status` 是两段：`ready` 只表示已登记，**不是解析/索引完成**。
+// 字节未就绪、或临时计算上传时，该字段为 null。
+type IngestStatus string
+
+const (
+	// 登记事件尚未得到确认（含事件尚未落库）
+	IngestStatusPending IngestStatus = "pending"
+	// 投递遇到暂时故障，按退避重试同一事件
+	IngestStatusRetrying IngestStatus = "retrying"
+	// 语料域已确认登记；解析/索引另行展示
+	IngestStatusReady IngestStatus = "ready"
+	// 语料域确定性拒绝，终态，不再重投
+	IngestStatusRejected IngestStatus = "rejected"
+)
+
+// IngestStatusValues 保持 enums.yaml 里的声明顺序。
+var IngestStatusValues = []IngestStatus{
+	IngestStatusPending,
+	IngestStatusRetrying,
+	IngestStatusReady,
+	IngestStatusRejected,
+}
+
+var IngestStatusMeta = map[IngestStatus]EnumMeta{
+	IngestStatusPending:  {Value: "pending", Label: "登记中", Severity: SeverityProgress, Active: true},
+	IngestStatusRetrying: {Value: "retrying", Label: "登记重试中", Severity: SeverityWarn, Active: true},
+	IngestStatusReady:    {Value: "ready", Label: "已登记", Severity: SeverityOk},
+	IngestStatusRejected: {Value: "rejected", Label: "登记被拒绝", Severity: SeverityError},
+}
+
+// Valid 报告 s 是不是一个已知的 ingest_status 取值。
+func (s IngestStatus) Valid() bool {
+	_, ok := IngestStatusMeta[s]
+	return ok
+}
+
+// `ingest_status=rejected` 时 `ingest_error` 的取值：语料域对 `DocumentSubmitted`
+// 的**确定性**拒绝码。投递器只把这一组当终态；其余非 2xx（含 5xx、
+// `document_state_changed`、校验错误）一律按暂时故障重试 —— 把可恢复的失败
+// 判成终态会让一份已校验的上传永远进不了语料库。
+type IngestRejection string
+
+const (
+	// 目标资源已删除、已撤回或不属于上传者
+	IngestRejectionResourceNotFound IngestRejection = "resource_not_found"
+	// 相同字节已是目标资源的一个固定版本
+	IngestRejectionResourceVersionExists IngestRejection = "resource_version_exists"
+	// 目标字段非法，或临时计算上传带了目标
+	IngestRejectionInvalidUploadTarget IngestRejection = "invalid_upload_target"
+	// 同一登记键绑定了不同的输入
+	IngestRejectionIdempotencyConflict IngestRejection = "idempotency_conflict"
+	// 内容对应的原件已不可用
+	IngestRejectionSourceMissing IngestRejection = "source_missing"
+)
+
+// IngestRejectionValues 保持 enums.yaml 里的声明顺序。
+var IngestRejectionValues = []IngestRejection{
+	IngestRejectionResourceNotFound,
+	IngestRejectionResourceVersionExists,
+	IngestRejectionInvalidUploadTarget,
+	IngestRejectionIdempotencyConflict,
+	IngestRejectionSourceMissing,
+}
+
+var IngestRejectionMeta = map[IngestRejection]EnumMeta{
+	IngestRejectionResourceNotFound:      {Value: "resource_not_found", Label: "目标资源不存在、已撤回或无权追加", Severity: SeverityError},
+	IngestRejectionResourceVersionExists: {Value: "resource_version_exists", Label: "该内容已是目标资源的一个版本", Severity: SeverityError},
+	IngestRejectionInvalidUploadTarget:   {Value: "invalid_upload_target", Label: "目标资源无效", Severity: SeverityError},
+	IngestRejectionIdempotencyConflict:   {Value: "idempotency_conflict", Label: "登记幂等键冲突", Severity: SeverityError},
+	IngestRejectionSourceMissing:         {Value: "source_missing", Label: "原件已不可用", Severity: SeverityError},
+}
+
+// Valid 报告 s 是不是一个已知的 ingest_rejection 取值。
+func (s IngestRejection) Valid() bool {
+	_, ok := IngestRejectionMeta[s]
+	return ok
+}
+
+// 版本化 Wiki 修订 `stale_reasons` 里按页给出的原因（读时依据来源的当前状态现算）。
+// 页面只在它对某资源的依赖**没有一条**落在最新版本时才因新版本而过期（wiki-format）。
+type WikiStaleReason string
+
+const (
+	// 该页依赖的资源有了更新的固定版本
+	WikiStaleReasonSourceVersionChanged WikiStaleReason = "source_version_changed"
+	// 固定版本绑定的解析修订与依赖记录不一致
+	WikiStaleReasonParseRevisionChanged WikiStaleReason = "parse_revision_changed"
+	// 版本或原始证据的摘要与依赖记录不一致
+	WikiStaleReasonSourceDigestChanged WikiStaleReason = "source_digest_changed"
+	// 跨节点来源的授权无法确认
+	WikiStaleReasonPermissionUnresolved WikiStaleReason = "permission_unresolved"
+	// 依赖的固定版本已被撤回（本机工作区可撤回单个版本）
+	WikiStaleReasonSourceWithdrawn WikiStaleReason = "source_withdrawn"
+	// 依赖的固定版本或其原始证据已读不到（删除、未就绪）
+	WikiStaleReasonSourceUnavailable WikiStaleReason = "source_unavailable"
+)
+
+// WikiStaleReasonValues 保持 enums.yaml 里的声明顺序。
+var WikiStaleReasonValues = []WikiStaleReason{
+	WikiStaleReasonSourceVersionChanged,
+	WikiStaleReasonParseRevisionChanged,
+	WikiStaleReasonSourceDigestChanged,
+	WikiStaleReasonPermissionUnresolved,
+	WikiStaleReasonSourceWithdrawn,
+	WikiStaleReasonSourceUnavailable,
+}
+
+var WikiStaleReasonMeta = map[WikiStaleReason]EnumMeta{
+	WikiStaleReasonSourceVersionChanged: {Value: "source_version_changed", Label: "来源有了新版本", Severity: SeverityWarn},
+	WikiStaleReasonParseRevisionChanged: {Value: "parse_revision_changed", Label: "来源的解析修订已变化", Severity: SeverityWarn},
+	WikiStaleReasonSourceDigestChanged:  {Value: "source_digest_changed", Label: "来源原文摘要已变化", Severity: SeverityWarn},
+	WikiStaleReasonPermissionUnresolved: {Value: "permission_unresolved", Label: "来源授权无法确认", Severity: SeverityWarn},
+	WikiStaleReasonSourceWithdrawn:      {Value: "source_withdrawn", Label: "来源版本已撤回", Severity: SeverityWarn},
+	WikiStaleReasonSourceUnavailable:    {Value: "source_unavailable", Label: "来源版本不可用", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 wiki_stale_reason 取值。
+func (s WikiStaleReason) Valid() bool {
+	_, ok := WikiStaleReasonMeta[s]
+	return ok
+}
+
 // `ScopeManifest` 的成员枚举状态（计划 §5.4）。**这是「查了哪里」这句话
 // 的分母**：分母没封上就没有百分比可言。
 //
@@ -1115,8 +1245,8 @@ func (s FederatedAnswerReason) Valid() bool {
 //
 // 为什么必须闭集：规划只按 operation 决定要不要加生成步骤。以前不看 operation，
 // 本地模型就绪时**任何** operation 都会被追加一个 `answer` 步 —— 提交
-// `corpus.retrieve`（只取证据）会白跑一次生成，提交一个没实现的 operation
-// （例如 `wiki.pages`）会拿回一个 RAG 答案。那是静默错义，不是报错。
+// `corpus.retrieve`（只取证据）会白跑一次生成；未登记的操作必须明确拒绝，
+// 不得用 RAG 答案冒充其他业务产物。
 //
 // 本地运行时的 TaskSpec 还有别的 operation（本机自己的计划许可），不受这里约束。
 type FederationTaskOperation string
@@ -1126,17 +1256,21 @@ const (
 	FederationTaskOperationCorpusRetrieve FederationTaskOperation = "corpus.retrieve"
 	// 取证据并生成带出处的回答
 	FederationTaskOperationRagAnswerCited FederationTaskOperation = "rag.answer.cited"
+	// 按固定原始证据生成并验证版本化 Wiki 草稿
+	FederationTaskOperationWikiPages FederationTaskOperation = "wiki.pages"
 )
 
 // FederationTaskOperationValues 保持 enums.yaml 里的声明顺序。
 var FederationTaskOperationValues = []FederationTaskOperation{
 	FederationTaskOperationCorpusRetrieve,
 	FederationTaskOperationRagAnswerCited,
+	FederationTaskOperationWikiPages,
 }
 
 var FederationTaskOperationMeta = map[FederationTaskOperation]EnumMeta{
 	FederationTaskOperationCorpusRetrieve: {Value: "corpus.retrieve", Label: "只取证据", Severity: SeverityNeutral},
 	FederationTaskOperationRagAnswerCited: {Value: "rag.answer.cited", Label: "带出处的回答", Severity: SeverityNeutral},
+	FederationTaskOperationWikiPages:      {Value: "wiki.pages", Label: "构建 Wiki 草稿", Severity: SeverityNeutral},
 }
 
 // Valid 报告 s 是不是一个已知的 federation_task_operation 取值。
@@ -1846,6 +1980,10 @@ const (
 	NodeCredentialOperationResultResolve NodeCredentialOperation = "result_resolve"
 	// GET /api/v1/federation/published-collections
 	NodeCredentialOperationCatalogRead NodeCredentialOperation = "catalog_read"
+	// GET /api/v1/federation/members
+	NodeCredentialOperationDirectoryMembersRead NodeCredentialOperation = "directory_members_read"
+	// GET /api/v1/federation/collections
+	NodeCredentialOperationDirectoryCollectionsRead NodeCredentialOperation = "directory_collections_read"
 )
 
 // NodeCredentialOperationValues 保持 enums.yaml 里的声明顺序。
@@ -1860,19 +1998,23 @@ var NodeCredentialOperationValues = []NodeCredentialOperation{
 	NodeCredentialOperationResourceLocate,
 	NodeCredentialOperationResultResolve,
 	NodeCredentialOperationCatalogRead,
+	NodeCredentialOperationDirectoryMembersRead,
+	NodeCredentialOperationDirectoryCollectionsRead,
 }
 
 var NodeCredentialOperationMeta = map[NodeCredentialOperation]EnumMeta{
-	NodeCredentialOperationProbeCreate:     {Value: "probe_create", Label: "发起探测", Severity: SeverityNeutral},
-	NodeCredentialOperationProbeRead:       {Value: "probe_read", Label: "读取探测回执", Severity: SeverityNeutral},
-	NodeCredentialOperationAdmissionCreate: {Value: "admission_create", Label: "提交接单", Severity: SeverityNeutral},
-	NodeCredentialOperationAdmissionLookup: {Value: "admission_lookup", Label: "对账接单", Severity: SeverityNeutral},
-	NodeCredentialOperationExecutionRead:   {Value: "execution_read", Label: "读取执行状态", Severity: SeverityNeutral},
-	NodeCredentialOperationExecutionCancel: {Value: "execution_cancel", Label: "取消执行", Severity: SeverityNeutral},
-	NodeCredentialOperationEvidenceSetRead: {Value: "evidence_set_read", Label: "读取证据集", Severity: SeverityNeutral},
-	NodeCredentialOperationResourceLocate:  {Value: "resource_locate", Label: "定位资源版本", Severity: SeverityNeutral},
-	NodeCredentialOperationResultResolve:   {Value: "result_resolve", Label: "解析证据引用", Severity: SeverityNeutral},
-	NodeCredentialOperationCatalogRead:     {Value: "catalog_read", Label: "读取发布目录", Severity: SeverityNeutral},
+	NodeCredentialOperationProbeCreate:              {Value: "probe_create", Label: "发起探测", Severity: SeverityNeutral},
+	NodeCredentialOperationProbeRead:                {Value: "probe_read", Label: "读取探测回执", Severity: SeverityNeutral},
+	NodeCredentialOperationAdmissionCreate:          {Value: "admission_create", Label: "提交接单", Severity: SeverityNeutral},
+	NodeCredentialOperationAdmissionLookup:          {Value: "admission_lookup", Label: "对账接单", Severity: SeverityNeutral},
+	NodeCredentialOperationExecutionRead:            {Value: "execution_read", Label: "读取执行状态", Severity: SeverityNeutral},
+	NodeCredentialOperationExecutionCancel:          {Value: "execution_cancel", Label: "取消执行", Severity: SeverityNeutral},
+	NodeCredentialOperationEvidenceSetRead:          {Value: "evidence_set_read", Label: "读取证据集", Severity: SeverityNeutral},
+	NodeCredentialOperationResourceLocate:           {Value: "resource_locate", Label: "定位资源版本", Severity: SeverityNeutral},
+	NodeCredentialOperationResultResolve:            {Value: "result_resolve", Label: "解析证据引用", Severity: SeverityNeutral},
+	NodeCredentialOperationCatalogRead:              {Value: "catalog_read", Label: "读取发布目录", Severity: SeverityNeutral},
+	NodeCredentialOperationDirectoryMembersRead:     {Value: "directory_members_read", Label: "读取目录成员", Severity: SeverityNeutral},
+	NodeCredentialOperationDirectoryCollectionsRead: {Value: "directory_collections_read", Label: "读取目录集合", Severity: SeverityNeutral},
 }
 
 // Valid 报告 s 是不是一个已知的 node_credential_operation 取值。
@@ -1881,28 +2023,23 @@ func (s NodeCredentialOperation) Valid() bool {
 	return ok
 }
 
-// 语料服务节点对节点端点的认证方式。`node_credential` 是唯一的生产形态；
-// `shared_token_insecure` 只给没有控制面的开发夹具，**必须显式配置且同时
-// 打开 ALLOW_INSECURE_DEFAULTS**，并在 /readyz 与能力声明里如实报成降级。
+// 语料服务节点对节点端点的认证方式。唯一取值 `node_credential`：控制面持有
+// 节点私钥，按请求签发限定 audience/actor/操作/范围/有效期的单次凭证。
+// 旧的共享口令形态已删除，不再有兼容取值。
 type PeerAuthMode string
 
 const (
 	// 控制面持有节点私钥，按请求签发限定 audience/actor/操作/范围/有效期的单次凭证
 	PeerAuthModeNodeCredential PeerAuthMode = "node_credential"
-	// 旧的共享 peer token + 服务凭据 + actor 头。所有登记同伴共用一个秘密、
-	// 调用方身份未签名、同名用户会被直接合并 —— 只许开发用
-	PeerAuthModeSharedTokenInsecure PeerAuthMode = "shared_token_insecure"
 )
 
 // PeerAuthModeValues 保持 enums.yaml 里的声明顺序。
 var PeerAuthModeValues = []PeerAuthMode{
 	PeerAuthModeNodeCredential,
-	PeerAuthModeSharedTokenInsecure,
 }
 
 var PeerAuthModeMeta = map[PeerAuthMode]EnumMeta{
-	PeerAuthModeNodeCredential:      {Value: "node_credential", Label: "节点签名凭证", Severity: SeverityOk},
-	PeerAuthModeSharedTokenInsecure: {Value: "shared_token_insecure", Label: "共享口令（不安全，仅开发）", Severity: SeverityWarn},
+	PeerAuthModeNodeCredential: {Value: "node_credential", Label: "节点签名凭证", Severity: SeverityOk},
 }
 
 // Valid 报告 s 是不是一个已知的 peer_auth_mode 取值。
@@ -1970,5 +2107,547 @@ var MemberExpansionStateMeta = map[MemberExpansionState]EnumMeta{
 // Valid 报告 s 是不是一个已知的 member_expansion_state 取值。
 func (s MemberExpansionState) Valid() bool {
 	_, ok := MemberExpansionStateMeta[s]
+	return ok
+}
+
+// 桌面端数据源的状态（DESKTOP-APPSHELL-PLAN §1.6）。
+// 与 `transport_state` 分开：那条是 client-runtime 的连接状态，
+// 这里是"当前数据源能不能按其能力读写" —— 本机工作区与已连接中心各自一态。
+type SourceState string
+
+const (
+	// 数据源可用，可按其能力读写
+	SourceStateReady SourceState = "ready"
+	// 正在连接（本机运行时启动中或中心登录握手中）
+	SourceStateConnecting SourceState = "connecting"
+	// 中心登录已过期，需重新连接该中心
+	SourceStateSignedOut SourceState = "signed_out"
+	// 数据源不可用（本机运行时起不来或中心不可达）
+	SourceStateUnavailable SourceState = "unavailable"
+)
+
+// SourceStateValues 保持 enums.yaml 里的声明顺序。
+var SourceStateValues = []SourceState{
+	SourceStateReady,
+	SourceStateConnecting,
+	SourceStateSignedOut,
+	SourceStateUnavailable,
+}
+
+var SourceStateMeta = map[SourceState]EnumMeta{
+	SourceStateReady:       {Value: "ready", Label: "可用", Severity: SeverityOk},
+	SourceStateConnecting:  {Value: "connecting", Label: "连接中", Severity: SeverityProgress, Active: true},
+	SourceStateSignedOut:   {Value: "signed_out", Label: "需要重新登录", Severity: SeverityWarn},
+	SourceStateUnavailable: {Value: "unavailable", Label: "不可用", Severity: SeverityError},
+}
+
+// Valid 报告 s 是不是一个已知的 source_state 取值。
+func (s SourceState) Valid() bool {
+	_, ok := SourceStateMeta[s]
+	return ok
+}
+
+// 桌面端数据源错误的机器可读码（宿主 `/api` 代理与数据源具名方法返回）。
+// 命名对齐项目既有约定（snake_case）。`approved_plan_required` 是中心只读的
+// 写拒绝：不是权限不足，而是写必须走联邦任务、经原生对话框批准后派发。
+type SourceError string
+
+const (
+	// 还没有任何当前数据源（首运或全部移除后），/api 直接 503
+	SourceErrorNoActiveSource SourceError = "no_active_source"
+	// 中心源只放行 GET/HEAD；写操作须作为联邦任务发起并经批准派发
+	SourceErrorApprovedPlanRequired SourceError = "approved_plan_required"
+	// 中心 JWT 过期（上游 401），该源变为"需要重新登录"
+	SourceErrorSourceSignedOut SourceError = "source_signed_out"
+	// 在途请求返回时当前源已切换，页面丢弃该响应
+	SourceErrorSourceChanged SourceError = "source_changed"
+	// 本机工作区没实现这项中心接口（发布、重解析等）
+	SourceErrorNotSupportedLocally SourceError = "not_supported_locally"
+)
+
+// SourceErrorValues 保持 enums.yaml 里的声明顺序。
+var SourceErrorValues = []SourceError{
+	SourceErrorNoActiveSource,
+	SourceErrorApprovedPlanRequired,
+	SourceErrorSourceSignedOut,
+	SourceErrorSourceChanged,
+	SourceErrorNotSupportedLocally,
+}
+
+var SourceErrorMeta = map[SourceError]EnumMeta{
+	SourceErrorNoActiveSource:       {Value: "no_active_source", Label: "还没有选择数据源", Severity: SeverityError},
+	SourceErrorApprovedPlanRequired: {Value: "approved_plan_required", Label: "中心在桌面里只读；写操作请作为联邦任务发起并批准", Severity: SeverityError},
+	SourceErrorSourceSignedOut:      {Value: "source_signed_out", Label: "登录已过期，请重新连接该中心", Severity: SeverityError},
+	SourceErrorSourceChanged:        {Value: "source_changed", Label: "数据源已切换，此结果已丢弃", Severity: SeverityError},
+	SourceErrorNotSupportedLocally:  {Value: "not_supported_locally", Label: "本机工作区不支持这项功能", Severity: SeverityError},
+}
+
+// Valid 报告 s 是不是一个已知的 source_error 取值。
+func (s SourceError) Valid() bool {
+	_, ok := SourceErrorMeta[s]
+	return ok
+}
+
+// 桌面端渲染进程的本机错误码（旧工作台 `platform/desktop.ts` 的 `reasons` 表搬入）。
+// 命名对齐项目既有约定（snake_case）。这些码来自宿主具名方法与本地账本，
+// 不是中心契约：含义只在"本机工作区 + 已配对中心"这套桌面链路下成立。
+type DesktopError string
+
+const (
+	// 本机连接暂不可用，写操作未发出，草稿已保留
+	DesktopErrorConnectionFailed DesktopError = "connection_failed"
+	// 当前身份需要重新认证后才能操作
+	DesktopErrorAuthenticationRequired DesktopError = "authentication_required"
+	// 环境身份与已配对记录不一致，拒绝操作
+	DesktopErrorIdentityMismatch DesktopError = "identity_mismatch"
+	// 登录身份与已配对记录不一致，拒绝操作
+	DesktopErrorProfileMismatch DesktopError = "profile_mismatch"
+	// 当前环境没有提供所需的工作台协议
+	DesktopErrorProtocolIncompatible DesktopError = "protocol_incompatible"
+	// 本地缓存/草稿写不进去（先持久再出网不断言失败）
+	DesktopErrorCacheFailure DesktopError = "cache_failure"
+	// 生成模型尚不可用，检索与原文不受影响
+	DesktopErrorModelUnavailable DesktopError = "model_unavailable"
+	// 当前环境不支持这项操作，未发出请求
+	DesktopErrorUnsupportedOperation DesktopError = "unsupported_operation"
+	// 中心源只读，写操作须作为联邦任务发起并经批准派发
+	DesktopErrorApprovedPlanRequired DesktopError = "approved_plan_required"
+	// 请求发出但回执丢失，须按幂等键查询回执后再处理
+	DesktopErrorOutcomeUnknown DesktopError = "outcome_unknown"
+	// 有未对账的操作键，先查回执再做新的写操作
+	DesktopErrorReceiptRequired DesktopError = "receipt_required"
+	// 连接已切换或释放，旧连接上的操作不再受理
+	DesktopErrorDisposed DesktopError = "disposed"
+	// 草稿被另一窗口先写，CAS 修订对不上
+	DesktopErrorDraftConflict DesktopError = "draft_conflict"
+	// 草稿被另一窗口先写，CAS 修订对不上
+	DesktopErrorRevisionConflict DesktopError = "revision_conflict"
+	// 文件超过当前操作的大小限制，未发送
+	DesktopErrorInputTooLarge DesktopError = "input_too_large"
+	// 资料不存在或当前身份无权访问
+	DesktopErrorNotFound DesktopError = "not_found"
+	// 来源的访问许可已撤销或过期，不能继续读取快照
+	DesktopErrorSourceUnavailable DesktopError = "source_unavailable"
+	// 收到的原文与固定版本摘要不一致，已阻止显示
+	DesktopErrorSourceDigestMismatch DesktopError = "source_digest_mismatch"
+	// Wiki 修订超过当前读取大小限制
+	DesktopErrorWikiResponseTooLarge DesktopError = "wiki_response_too_large"
+	// Wiki 的固定来源已不可用，需重新选择来源
+	DesktopErrorWikiSourceUnavailable DesktopError = "wiki_source_unavailable"
+	// 模型输出未通过 Wiki 格式或引用检查，本次没有发布修订
+	DesktopErrorWikiGenerationInvalid DesktopError = "wiki_generation_invalid"
+	// 生成内容缺少有效的原始出处，本次没有发布
+	DesktopErrorUnsupportedGeneration DesktopError = "unsupported_generation"
+	// 模型选择了不存在或缺少原文支撑的关系，本次没有发布修订
+	DesktopErrorWikiRelationUnsupported DesktopError = "wiki_relation_unsupported"
+	// 本机内存不足，模型已停止，可查看任务后重启
+	DesktopErrorOutOfMemory DesktopError = "out_of_memory"
+	// 目录已更新或快照已失效，需重新读取首页
+	DesktopErrorCursorExpired DesktopError = "cursor_expired"
+	// 用户在系统确认框里取消了批准，没有授予任何外发许可
+	DesktopErrorApprovalCancelled DesktopError = "approval_cancelled"
+	// 计划修订变了，原批准不再适用
+	DesktopErrorPlanChanged DesktopError = "plan_changed"
+	// 当前宿主无法显示系统确认框，不能批准外发
+	DesktopErrorApprovalUnavailable DesktopError = "approval_unavailable"
+	// 该阶段尚未批准，未发送任何内容
+	DesktopErrorConsentRequired DesktopError = "consent_required"
+	// 批准已撤销，需准备并批准新计划
+	DesktopErrorConsentRevoked DesktopError = "consent_revoked"
+	// 计划或批准已过期，需准备新计划
+	DesktopErrorConsentExpired DesktopError = "consent_expired"
+	// 超出已批准的请求或外发字节预算，未发送
+	DesktopErrorBudgetExceeded DesktopError = "budget_exceeded"
+	// 接收方、地址或数据边超出已批准范围，未发送
+	DesktopErrorPolicyDenied DesktopError = "policy_denied"
+	// 本地输入与锁定摘要不一致，未发送
+	DesktopErrorInputChanged DesktopError = "input_changed"
+	// 工作区处于仅本地模式，禁止外发
+	DesktopErrorLocalOnly DesktopError = "local_only"
+	// 计划中的中心尚未配对
+	DesktopErrorCenterNotPaired DesktopError = "center_not_paired"
+	// 中心连接未就绪，需重连并核对节点身份
+	DesktopErrorCenterNotCurrent DesktopError = "center_not_current"
+	// 中心地址或身份与已审阅计划不一致，已拒绝发送
+	DesktopErrorCenterIdentityChanged DesktopError = "center_identity_changed"
+	// 计划没有唯一的已审阅接收方，不能派发
+	DesktopErrorCenterBindingRequired DesktopError = "center_binding_required"
+	// 当前连接无法取得中心凭证
+	DesktopErrorCenterUnavailable DesktopError = "center_unavailable"
+	// 交付结果没有通过本地摘要重算，不能确认
+	DesktopErrorDeliveryUnverified DesktopError = "delivery_unverified"
+	// 这次发送已占用预算，先对账再重试
+	DesktopErrorDispatchAlreadyReserved DesktopError = "dispatch_already_reserved"
+	// 本机工作区连接未就绪，草稿已保留
+	DesktopErrorConnectionNotCurrent DesktopError = "connection_not_current"
+	// 中心暂时无法连接，未确认任何结果
+	DesktopErrorUnreachable DesktopError = "unreachable"
+	// 交付已过期，结果没有保存到本机
+	DesktopErrorDeliveryExpired DesktopError = "delivery_expired"
+	// 中心暂时没有这份交付，可稍后再取
+	DesktopErrorDeliveryNotFound DesktopError = "delivery_not_found"
+	// 中心尚未给出交付编号
+	DesktopErrorDeliveryIdMissing DesktopError = "delivery_id_missing"
+	// 取回的结果与中心声明的摘要不一致，没有保存
+	DesktopErrorResultManifestMismatch DesktopError = "result_manifest_mismatch"
+	// 中心没有返回可校验的结果
+	DesktopErrorResultUnavailable DesktopError = "result_unavailable"
+	// 中心没有确认这次交付，可以再次确认
+	DesktopErrorAckNotConfirmed DesktopError = "ack_not_confirmed"
+	// 传输结果未确认，保留原创建编号，先查回执再对账，不自动重传
+	DesktopErrorTransferUnknown DesktopError = "transfer_unknown"
+	// 继续请求的结果未确认，查回执后再处理，不自动批准或派发
+	DesktopErrorResumeUnknown DesktopError = "resume_unknown"
+	// 此计划已有主机传输在执行，可查看进度或停止传输
+	DesktopErrorTransferInProgress DesktopError = "transfer_in_progress"
+	// 临时上传已过期，需重新准备并批准计划
+	DesktopErrorUploadExpired DesktopError = "upload_expired"
+	// 服务端拒绝了这份输入，未提交解析任务
+	DesktopErrorUploadFailed DesktopError = "upload_failed"
+	// 中心返回的分片清单不完整，没有继续发送
+	DesktopErrorUploadIncomplete DesktopError = "upload_incomplete"
+	// 对象存储地址不在已审阅的传输范围内，原件未发送
+	DesktopErrorStorageOriginNotApproved DesktopError = "storage_origin_not_approved"
+	// 交付超过本机 64 MiB 校验上限，尚未确认或清理
+	DesktopErrorDeliveryTooLarge DesktopError = "delivery_too_large"
+	// 所选 Vulkan 设备是软件渲染器，未启动，也未自动退回 CPU
+	DesktopErrorGpuDeviceUnsupported DesktopError = "gpu_device_unsupported"
+	// 没有观测到物理 GPU 上的模型层卸载，已停止该进程
+	DesktopErrorGpuOffloadUnverified DesktopError = "gpu_offload_unverified"
+	// 所选模型与运行包不兼容
+	DesktopErrorModelBackendIncompatible DesktopError = "model_backend_incompatible"
+	// 受管模型正在运行，先停止再切换模型或后端
+	DesktopErrorModelProcessBusy DesktopError = "model_process_busy"
+	// 中心拒绝了这次外发许可
+	DesktopErrorEgressDenied DesktopError = "egress_denied"
+	// 中心返回的内容无法识别
+	DesktopErrorInvalidResponse DesktopError = "invalid_response"
+	// 请求参数不合法，宿主拒绝执行
+	DesktopErrorInvalidArguments DesktopError = "invalid_arguments"
+	// 宿主操作失败且结果未知，须按幂等键对账
+	DesktopErrorHostOperationFailed DesktopError = "host_operation_failed"
+)
+
+// DesktopErrorValues 保持 enums.yaml 里的声明顺序。
+var DesktopErrorValues = []DesktopError{
+	DesktopErrorConnectionFailed,
+	DesktopErrorAuthenticationRequired,
+	DesktopErrorIdentityMismatch,
+	DesktopErrorProfileMismatch,
+	DesktopErrorProtocolIncompatible,
+	DesktopErrorCacheFailure,
+	DesktopErrorModelUnavailable,
+	DesktopErrorUnsupportedOperation,
+	DesktopErrorApprovedPlanRequired,
+	DesktopErrorOutcomeUnknown,
+	DesktopErrorReceiptRequired,
+	DesktopErrorDisposed,
+	DesktopErrorDraftConflict,
+	DesktopErrorRevisionConflict,
+	DesktopErrorInputTooLarge,
+	DesktopErrorNotFound,
+	DesktopErrorSourceUnavailable,
+	DesktopErrorSourceDigestMismatch,
+	DesktopErrorWikiResponseTooLarge,
+	DesktopErrorWikiSourceUnavailable,
+	DesktopErrorWikiGenerationInvalid,
+	DesktopErrorUnsupportedGeneration,
+	DesktopErrorWikiRelationUnsupported,
+	DesktopErrorOutOfMemory,
+	DesktopErrorCursorExpired,
+	DesktopErrorApprovalCancelled,
+	DesktopErrorPlanChanged,
+	DesktopErrorApprovalUnavailable,
+	DesktopErrorConsentRequired,
+	DesktopErrorConsentRevoked,
+	DesktopErrorConsentExpired,
+	DesktopErrorBudgetExceeded,
+	DesktopErrorPolicyDenied,
+	DesktopErrorInputChanged,
+	DesktopErrorLocalOnly,
+	DesktopErrorCenterNotPaired,
+	DesktopErrorCenterNotCurrent,
+	DesktopErrorCenterIdentityChanged,
+	DesktopErrorCenterBindingRequired,
+	DesktopErrorCenterUnavailable,
+	DesktopErrorDeliveryUnverified,
+	DesktopErrorDispatchAlreadyReserved,
+	DesktopErrorConnectionNotCurrent,
+	DesktopErrorUnreachable,
+	DesktopErrorDeliveryExpired,
+	DesktopErrorDeliveryNotFound,
+	DesktopErrorDeliveryIdMissing,
+	DesktopErrorResultManifestMismatch,
+	DesktopErrorResultUnavailable,
+	DesktopErrorAckNotConfirmed,
+	DesktopErrorTransferUnknown,
+	DesktopErrorResumeUnknown,
+	DesktopErrorTransferInProgress,
+	DesktopErrorUploadExpired,
+	DesktopErrorUploadFailed,
+	DesktopErrorUploadIncomplete,
+	DesktopErrorStorageOriginNotApproved,
+	DesktopErrorDeliveryTooLarge,
+	DesktopErrorGpuDeviceUnsupported,
+	DesktopErrorGpuOffloadUnverified,
+	DesktopErrorModelBackendIncompatible,
+	DesktopErrorModelProcessBusy,
+	DesktopErrorEgressDenied,
+	DesktopErrorInvalidResponse,
+	DesktopErrorInvalidArguments,
+	DesktopErrorHostOperationFailed,
+}
+
+var DesktopErrorMeta = map[DesktopError]EnumMeta{
+	DesktopErrorConnectionFailed:         {Value: "connection_failed", Label: "连接暂不可用，已保留草稿。", Severity: SeverityError},
+	DesktopErrorAuthenticationRequired:   {Value: "authentication_required", Label: "此身份需要重新认证。", Severity: SeverityError},
+	DesktopErrorIdentityMismatch:         {Value: "identity_mismatch", Label: "环境身份与已配对记录不一致。", Severity: SeverityError},
+	DesktopErrorProfileMismatch:          {Value: "profile_mismatch", Label: "登录身份与已配对记录不一致。", Severity: SeverityError},
+	DesktopErrorProtocolIncompatible:     {Value: "protocol_incompatible", Label: "此环境未提供所需的工作台协议。", Severity: SeverityError},
+	DesktopErrorCacheFailure:             {Value: "cache_failure", Label: "本地缓存无法写入，请检查可用空间。", Severity: SeverityError},
+	DesktopErrorModelUnavailable:         {Value: "model_unavailable", Label: "生成模型尚不可用，可以继续检索和查看原文。", Severity: SeverityWarn},
+	DesktopErrorUnsupportedOperation:     {Value: "unsupported_operation", Label: "此环境暂不支持这项操作。", Severity: SeverityError},
+	DesktopErrorApprovedPlanRequired:     {Value: "approved_plan_required", Label: "此操作需要先确认远端执行与外发许可。", Severity: SeverityError},
+	DesktopErrorOutcomeUnknown:           {Value: "outcome_unknown", Label: "提交结果未确认，请查询回执后再处理。", Severity: SeverityWarn},
+	DesktopErrorReceiptRequired:          {Value: "receipt_required", Label: "请查询已保存操作的回执。", Severity: SeverityWarn},
+	DesktopErrorDisposed:                 {Value: "disposed", Label: "连接已切换，请在当前工作区重新操作。", Severity: SeverityError},
+	DesktopErrorDraftConflict:            {Value: "draft_conflict", Label: "草稿已被另一窗口更新，请重新打开后合并。", Severity: SeverityWarn},
+	DesktopErrorRevisionConflict:         {Value: "revision_conflict", Label: "草稿已被另一窗口更新，请重新打开后合并。", Severity: SeverityWarn},
+	DesktopErrorInputTooLarge:            {Value: "input_too_large", Label: "文件超过当前操作的大小限制。", Severity: SeverityError},
+	DesktopErrorNotFound:                 {Value: "not_found", Label: "该资料不存在或当前身份无权访问。", Severity: SeverityError},
+	DesktopErrorSourceUnavailable:        {Value: "source_unavailable", Label: "此来源的访问许可已撤销或过期，不能继续读取快照。", Severity: SeverityError},
+	DesktopErrorSourceDigestMismatch:     {Value: "source_digest_mismatch", Label: "收到的原文与固定版本摘要不一致，已阻止显示。", Severity: SeverityError},
+	DesktopErrorWikiResponseTooLarge:     {Value: "wiki_response_too_large", Label: "Wiki 修订超过当前读取大小限制。", Severity: SeverityError},
+	DesktopErrorWikiSourceUnavailable:    {Value: "wiki_source_unavailable", Label: "Wiki 的固定来源已经不可用，请重新选择来源。", Severity: SeverityError},
+	DesktopErrorWikiGenerationInvalid:    {Value: "wiki_generation_invalid", Label: "模型输出未通过 Wiki 格式或引用检查，此次没有发布修订。", Severity: SeverityError},
+	DesktopErrorUnsupportedGeneration:    {Value: "unsupported_generation", Label: "生成内容缺少有效的原始出处，此次没有发布。", Severity: SeverityError},
+	DesktopErrorWikiRelationUnsupported:  {Value: "wiki_relation_unsupported", Label: "模型选择了不存在或缺少原文支撑的关系，此次没有发布 Wiki 修订。请缩小主题或调整模型后重试。", Severity: SeverityError},
+	DesktopErrorOutOfMemory:              {Value: "out_of_memory", Label: "本机内存不足，模型已经停止；可以查看任务后重新启动。", Severity: SeverityError},
+	DesktopErrorCursorExpired:            {Value: "cursor_expired", Label: "目录已更新或快照已失效，请重新读取首页。", Severity: SeverityWarn},
+	DesktopErrorApprovalCancelled:        {Value: "approval_cancelled", Label: "已取消批准，没有授予任何外发许可。", Severity: SeverityNeutral},
+	DesktopErrorPlanChanged:              {Value: "plan_changed", Label: "执行计划已变更，需重新批准。", Severity: SeverityWarn},
+	DesktopErrorApprovalUnavailable:      {Value: "approval_unavailable", Label: "当前宿主无法显示系统确认框，不能批准外发。", Severity: SeverityError},
+	DesktopErrorConsentRequired:          {Value: "consent_required", Label: "该阶段尚未批准，未发送任何内容。", Severity: SeverityWarn},
+	DesktopErrorConsentRevoked:           {Value: "consent_revoked", Label: "批准已撤销；需要准备并批准新计划。", Severity: SeverityWarn},
+	DesktopErrorConsentExpired:           {Value: "consent_expired", Label: "计划或批准已过期；需要准备新计划。", Severity: SeverityWarn},
+	DesktopErrorBudgetExceeded:           {Value: "budget_exceeded", Label: "超出已批准的请求或外发字节预算，未发送。", Severity: SeverityWarn},
+	DesktopErrorPolicyDenied:             {Value: "policy_denied", Label: "接收方、地址或数据边超出已批准范围，未发送。", Severity: SeverityError},
+	DesktopErrorInputChanged:             {Value: "input_changed", Label: "本地输入与锁定摘要不一致，未发送。", Severity: SeverityError},
+	DesktopErrorLocalOnly:                {Value: "local_only", Label: "工作区处于仅本地模式，禁止外发。", Severity: SeverityError},
+	DesktopErrorCenterNotPaired:          {Value: "center_not_paired", Label: "尚未配对计划中的中心。", Severity: SeverityError},
+	DesktopErrorCenterNotCurrent:         {Value: "center_not_current", Label: "中心连接未就绪；重新连接并核对节点身份后再操作。", Severity: SeverityError},
+	DesktopErrorCenterIdentityChanged:    {Value: "center_identity_changed", Label: "中心地址或身份与已审阅计划不一致，已拒绝发送。", Severity: SeverityError},
+	DesktopErrorCenterBindingRequired:    {Value: "center_binding_required", Label: "计划没有唯一的已审阅接收方，不能派发。", Severity: SeverityError},
+	DesktopErrorCenterUnavailable:        {Value: "center_unavailable", Label: "当前连接无法取得中心凭证。", Severity: SeverityError},
+	DesktopErrorDeliveryUnverified:       {Value: "delivery_unverified", Label: "交付结果没有通过本地摘要重算，不能确认。", Severity: SeverityError},
+	DesktopErrorDispatchAlreadyReserved:  {Value: "dispatch_already_reserved", Label: "这次发送已经占用预算，请先对账再重试。", Severity: SeverityWarn},
+	DesktopErrorConnectionNotCurrent:     {Value: "connection_not_current", Label: "本机工作区连接未就绪，已保留草稿。", Severity: SeverityWarn},
+	DesktopErrorUnreachable:              {Value: "unreachable", Label: "中心暂时无法连接，未确认任何结果。", Severity: SeverityError},
+	DesktopErrorDeliveryExpired:          {Value: "delivery_expired", Label: "交付已过期，结果没有保存到本机。", Severity: SeverityError},
+	DesktopErrorDeliveryNotFound:         {Value: "delivery_not_found", Label: "中心暂时没有这份交付，可以稍后再取。", Severity: SeverityWarn},
+	DesktopErrorDeliveryIdMissing:        {Value: "delivery_id_missing", Label: "中心尚未给出交付编号。", Severity: SeverityWarn},
+	DesktopErrorResultManifestMismatch:   {Value: "result_manifest_mismatch", Label: "取回的结果与中心声明的摘要不一致，没有保存。", Severity: SeverityError},
+	DesktopErrorResultUnavailable:        {Value: "result_unavailable", Label: "中心没有返回可校验的结果。", Severity: SeverityError},
+	DesktopErrorAckNotConfirmed:          {Value: "ack_not_confirmed", Label: "中心没有确认这次交付，可以再次确认。", Severity: SeverityWarn},
+	DesktopErrorTransferUnknown:          {Value: "transfer_unknown", Label: "传输结果未确认。保留原创建编号，先查询回执，再显式对账或继续缺片；不会自动重传。", Severity: SeverityWarn},
+	DesktopErrorResumeUnknown:            {Value: "resume_unknown", Label: "继续请求的结果未确认，请查询回执后再处理；不会自动批准或派发。", Severity: SeverityWarn},
+	DesktopErrorTransferInProgress:       {Value: "transfer_in_progress", Label: "此计划已有主机传输在执行，可查看进度或停止传输。", Severity: SeverityNeutral},
+	DesktopErrorUploadExpired:            {Value: "upload_expired", Label: "临时上传已过期，需要重新准备并批准计划。", Severity: SeverityWarn},
+	DesktopErrorUploadFailed:             {Value: "upload_failed", Label: "服务端拒绝了这份输入，未提交解析任务。", Severity: SeverityError},
+	DesktopErrorUploadIncomplete:         {Value: "upload_incomplete", Label: "中心返回的分片清单不完整，没有继续发送。", Severity: SeverityError},
+	DesktopErrorStorageOriginNotApproved: {Value: "storage_origin_not_approved", Label: "对象存储地址不在已审阅的传输范围内，原件未发送。", Severity: SeverityError},
+	DesktopErrorDeliveryTooLarge:         {Value: "delivery_too_large", Label: "交付超过本机 64 MiB 校验上限，尚未确认或清理。", Severity: SeverityError},
+	DesktopErrorGpuDeviceUnsupported:     {Value: "gpu_device_unsupported", Label: "所选 Vulkan 设备是软件渲染器，未启动，也未自动退回 CPU。", Severity: SeverityError},
+	DesktopErrorGpuOffloadUnverified:     {Value: "gpu_offload_unverified", Label: "没有观测到物理 GPU 上的模型层卸载，已停止该进程。需要 CPU 时请明确选择 CPU 运行包。", Severity: SeverityError},
+	DesktopErrorModelBackendIncompatible: {Value: "model_backend_incompatible", Label: "所选模型与运行包不兼容。", Severity: SeverityError},
+	DesktopErrorModelProcessBusy:         {Value: "model_process_busy", Label: "请先停止当前受管模型，再切换模型或后端。", Severity: SeverityWarn},
+	DesktopErrorEgressDenied:             {Value: "egress_denied", Label: "中心拒绝了这次外发许可。", Severity: SeverityError},
+	DesktopErrorInvalidResponse:          {Value: "invalid_response", Label: "中心返回的内容无法识别。", Severity: SeverityError},
+	DesktopErrorInvalidArguments:         {Value: "invalid_arguments", Label: "请求参数不正确，宿主拒绝执行。", Severity: SeverityError},
+	DesktopErrorHostOperationFailed:      {Value: "host_operation_failed", Label: "宿主操作结果未知，请查询回执后再处理。", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 desktop_error 取值。
+func (s DesktopError) Valid() bool {
+	_, ok := DesktopErrorMeta[s]
+	return ok
+}
+
+// 本机运行时联邦派发状态机（`ddp_local/federation_dispatch.py` 的 `state`）。
+// 与契约轴分开：它是"本机镜像看到的进展"，中心的权威状态以对账结果为准。
+// 展示时按契约轴摆（规划/受理/交付），明细收进详情 —— 不许压成一个绿色完成。
+type LocalDispatchState string
+
+const (
+	// 计划已建，还没派发
+	LocalDispatchStatePrepared LocalDispatchState = "prepared"
+	// 已派发探索，中心规划中
+	LocalDispatchStateExploring LocalDispatchState = "exploring"
+	// 中心计划已就绪，待审阅批准
+	LocalDispatchStatePlanned LocalDispatchState = "planned"
+	// 探索发出但回执丢失，需对账
+	LocalDispatchStateExploreUnknown LocalDispatchState = "explore_unknown"
+	// 已提交中心执行
+	LocalDispatchStateSubmitted LocalDispatchState = "submitted"
+	// 提交发出但回执丢失，需对账
+	LocalDispatchStateSubmitUnknown LocalDispatchState = "submit_unknown"
+	// 中心已批准（中心侧状态）
+	LocalDispatchStateApproved LocalDispatchState = "approved"
+	// 中心已完成
+	LocalDispatchStateSucceeded LocalDispatchState = "succeeded"
+	// 失败，失败原因持久化在镜像里
+	LocalDispatchStateFailed LocalDispatchState = "failed"
+	// 已取消（显式终态）
+	LocalDispatchStateCancelled LocalDispatchState = "cancelled"
+	// 已交付并经本地确认
+	LocalDispatchStateDelivered LocalDispatchState = "delivered"
+	// 文件计划：等原始输入上传完，不占算力
+	LocalDispatchStateWaitingInput LocalDispatchState = "waiting_input"
+	// 文件计划：原始输入上传中
+	LocalDispatchStateUploading LocalDispatchState = "uploading"
+	// 文件计划：服务端全量校验中
+	LocalDispatchStateContentVerifying LocalDispatchState = "content_verifying"
+	// 文件计划：输入已校验，待执行
+	LocalDispatchStateContentVerified LocalDispatchState = "content_verified"
+	// 中心计算执行中
+	LocalDispatchStateRunning LocalDispatchState = "running"
+	// 临时产物已过期
+	LocalDispatchStateExpired LocalDispatchState = "expired"
+	// 本机已确认交付
+	LocalDispatchStateAcked LocalDispatchState = "acked"
+	// 取消发出但回执丢失，需对账
+	LocalDispatchStateCancelUnknown LocalDispatchState = "cancel_unknown"
+	// 继续请求发出但回执丢失，需对账
+	LocalDispatchStateResumeUnknown LocalDispatchState = "resume_unknown"
+)
+
+// LocalDispatchStateValues 保持 enums.yaml 里的声明顺序。
+var LocalDispatchStateValues = []LocalDispatchState{
+	LocalDispatchStatePrepared,
+	LocalDispatchStateExploring,
+	LocalDispatchStatePlanned,
+	LocalDispatchStateExploreUnknown,
+	LocalDispatchStateSubmitted,
+	LocalDispatchStateSubmitUnknown,
+	LocalDispatchStateApproved,
+	LocalDispatchStateSucceeded,
+	LocalDispatchStateFailed,
+	LocalDispatchStateCancelled,
+	LocalDispatchStateDelivered,
+	LocalDispatchStateWaitingInput,
+	LocalDispatchStateUploading,
+	LocalDispatchStateContentVerifying,
+	LocalDispatchStateContentVerified,
+	LocalDispatchStateRunning,
+	LocalDispatchStateExpired,
+	LocalDispatchStateAcked,
+	LocalDispatchStateCancelUnknown,
+	LocalDispatchStateResumeUnknown,
+}
+
+var LocalDispatchStateMeta = map[LocalDispatchState]EnumMeta{
+	LocalDispatchStatePrepared:         {Value: "prepared", Label: "尚未派发", Severity: SeverityNeutral},
+	LocalDispatchStateExploring:        {Value: "exploring", Label: "中心规划中", Severity: SeverityProgress, Active: true},
+	LocalDispatchStatePlanned:          {Value: "planned", Label: "中心计划已就绪", Severity: SeverityProgress, Active: true},
+	LocalDispatchStateExploreUnknown:   {Value: "explore_unknown", Label: "探索结果未知 · 需对账", Severity: SeverityWarn, Active: true},
+	LocalDispatchStateSubmitted:        {Value: "submitted", Label: "中心执行中", Severity: SeverityProgress, Active: true},
+	LocalDispatchStateSubmitUnknown:    {Value: "submit_unknown", Label: "提交结果未知 · 需对账", Severity: SeverityWarn, Active: true},
+	LocalDispatchStateApproved:         {Value: "approved", Label: "中心已批准", Severity: SeverityProgress, Active: true},
+	LocalDispatchStateSucceeded:        {Value: "succeeded", Label: "中心已完成", Severity: SeverityOk},
+	LocalDispatchStateFailed:           {Value: "failed", Label: "失败", Severity: SeverityError},
+	LocalDispatchStateCancelled:        {Value: "cancelled", Label: "已取消", Severity: SeverityNeutral},
+	LocalDispatchStateDelivered:        {Value: "delivered", Label: "已交付", Severity: SeverityOk},
+	LocalDispatchStateWaitingInput:     {Value: "waiting_input", Label: "等待原始输入", Severity: SeverityProgress, Active: true},
+	LocalDispatchStateUploading:        {Value: "uploading", Label: "上传中", Severity: SeverityProgress, Active: true},
+	LocalDispatchStateContentVerifying: {Value: "content_verifying", Label: "完整摘要校验中", Severity: SeverityProgress, Active: true},
+	LocalDispatchStateContentVerified:  {Value: "content_verified", Label: "输入已校验 · 等待执行", Severity: SeverityProgress, Active: true},
+	LocalDispatchStateRunning:          {Value: "running", Label: "中心计算中", Severity: SeverityProgress, Active: true},
+	LocalDispatchStateExpired:          {Value: "expired", Label: "临时产物已过期", Severity: SeverityWarn},
+	LocalDispatchStateAcked:            {Value: "acked", Label: "本机已确认交付", Severity: SeverityOk},
+	LocalDispatchStateCancelUnknown:    {Value: "cancel_unknown", Label: "取消结果未知 · 需对账", Severity: SeverityWarn},
+	LocalDispatchStateResumeUnknown:    {Value: "resume_unknown", Label: "继续请求结果未知 · 需对账", Severity: SeverityWarn, Active: true},
+}
+
+// Valid 报告 s 是不是一个已知的 local_dispatch_state 取值。
+func (s LocalDispatchState) Valid() bool {
+	_, ok := LocalDispatchStateMeta[s]
+	return ok
+}
+
+// 宿主对取回的交付字节重算摘要的结果（`bridge.d.ts` 的 `PlanDetail.verification`）。
+// 与契约 `validation_state` 分开：那条是中心对输出引用的结构校验，
+// 这里是本机对交付字节的摘要重算 —— 只有 `passed` 才允许确认交付。
+type LocalVerifyState string
+
+const (
+	// 本地重算摘要与中心声明一致，可以确认
+	LocalVerifyStatePassed LocalVerifyState = "passed"
+	// 本地重算摘要与中心声明不一致，禁止确认
+	LocalVerifyStateFailed LocalVerifyState = "failed"
+	// 尚无取回的交付可校验
+	LocalVerifyStateUnavailable LocalVerifyState = "unavailable"
+)
+
+// LocalVerifyStateValues 保持 enums.yaml 里的声明顺序。
+var LocalVerifyStateValues = []LocalVerifyState{
+	LocalVerifyStatePassed,
+	LocalVerifyStateFailed,
+	LocalVerifyStateUnavailable,
+}
+
+var LocalVerifyStateMeta = map[LocalVerifyState]EnumMeta{
+	LocalVerifyStatePassed:      {Value: "passed", Label: "本地重算摘要一致", Severity: SeverityOk},
+	LocalVerifyStateFailed:      {Value: "failed", Label: "本地重算摘要不一致", Severity: SeverityError},
+	LocalVerifyStateUnavailable: {Value: "unavailable", Label: "尚无可校验的本地结果", Severity: SeverityNeutral},
+}
+
+// Valid 报告 s 是不是一个已知的 local_verify_state 取值。
+func (s LocalVerifyState) Valid() bool {
+	_, ok := LocalVerifyStateMeta[s]
+	return ok
+}
+
+// 文件计划的对象存储传输相位（`bridge.d.ts` 的 `PlanDetail.transfer`）。
+// 上传走的是宿主独占的传输循环，账本只记录相位与字节 ——
+// 上传完成不等于解析完成，界面不许把两者混成一个"成功"。
+type LocalTransferState string
+
+const (
+	// 传输尚未开始
+	LocalTransferStatePrepared LocalTransferState = "prepared"
+	// 正在准备临时上传
+	LocalTransferStateCreating LocalTransferState = "creating"
+	// 正在上传缺片
+	LocalTransferStateUploading LocalTransferState = "uploading"
+	// 已上传，服务端全量校验中
+	LocalTransferStateVerifying LocalTransferState = "verifying"
+	// 输入已通过服务端校验
+	LocalTransferStateVerified LocalTransferState = "verified"
+	// 上次传输中断，需先对账再继续
+	LocalTransferStateUnknown LocalTransferState = "unknown"
+)
+
+// LocalTransferStateValues 保持 enums.yaml 里的声明顺序。
+var LocalTransferStateValues = []LocalTransferState{
+	LocalTransferStatePrepared,
+	LocalTransferStateCreating,
+	LocalTransferStateUploading,
+	LocalTransferStateVerifying,
+	LocalTransferStateVerified,
+	LocalTransferStateUnknown,
+}
+
+var LocalTransferStateMeta = map[LocalTransferState]EnumMeta{
+	LocalTransferStatePrepared:  {Value: "prepared", Label: "待发送", Severity: SeverityNeutral},
+	LocalTransferStateCreating:  {Value: "creating", Label: "准备临时上传", Severity: SeverityProgress, Active: true},
+	LocalTransferStateUploading: {Value: "uploading", Label: "正在上传缺片", Severity: SeverityProgress, Active: true},
+	LocalTransferStateVerifying: {Value: "verifying", Label: "已上传，服务端全量校验中", Severity: SeverityProgress, Active: true},
+	LocalTransferStateVerified:  {Value: "verified", Label: "输入已通过服务端校验", Severity: SeverityOk},
+	LocalTransferStateUnknown:   {Value: "unknown", Label: "上次传输中断，需对账", Severity: SeverityWarn},
+}
+
+// Valid 报告 s 是不是一个已知的 local_transfer_state 取值。
+func (s LocalTransferState) Valid() bool {
+	_, ok := LocalTransferStateMeta[s]
 	return ok
 }

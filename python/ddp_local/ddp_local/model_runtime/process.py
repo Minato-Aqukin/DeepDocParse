@@ -3,6 +3,7 @@
 import asyncio
 import os
 import platform
+import re
 import secrets
 import shutil
 import signal
@@ -88,6 +89,26 @@ def extract_runtime(archive, destination, artifact):
     return executable
 
 
+def backend_evidence(log, backend):
+    """Inspect startup, before any prompt can place generated text in the log."""
+    if backend["device"] == "cpu":
+        return {"device": "cpu", "offloaded_layers": 0, "gpu_devices": []}
+    with log.open("rb") as stream:
+        text = stream.read(2 * 1024 * 1024).decode("utf-8", errors="replace")
+    devices = dict(re.findall(r"using device (Vulkan\d+) \((.+)\) \([^)]+\) - [^\n]+", text))
+    buffers = {name: float(size) for name, size in
+               re.findall(r"(Vulkan\d+) model buffer size\s*=\s*([0-9.]+) MiB", text)}
+    offloads = re.findall(r"offloaded (\d+)/(\d+) layers to GPU", text)
+    if any(re.search(r"\b(llvmpipe|lavapipe|swiftshader|software|cpu)\b", name, re.I) for name in devices.values()):
+        raise ApplicationError("gpu_device_unsupported", "selected Vulkan device is a software renderer; no CPU fallback was used")
+    count, total = tuple(map(int, offloads[-1])) if offloads else (0, 0)
+    if not devices or not 0 < count <= total or not any(buffers.get(name, 0) > 0 for name in devices):
+        raise ApplicationError("gpu_offload_unverified", "physical GPU offload was not observed; select CPU explicitly to use it")
+    return {"device": "gpu", "gpu_api": "vulkan", "gpu_devices": list(devices.values()),
+            "offloaded_layers": count, "total_layers": total,
+            "gpu_model_buffer_mib": sum(buffers.get(name, 0) for name in devices)}
+
+
 class ModelProcess:
     def __init__(self, installer, *, event=None):
         self.installer = installer
@@ -98,6 +119,7 @@ class ModelProcess:
         self.workdir = None
         self.selection = None
         self.model_id = None
+        self.runtime_id = None
         self.last_error = None
         self.started_at = None
         self._lock = asyncio.Lock()
@@ -108,26 +130,30 @@ class ModelProcess:
             self.last_error = "model_process_exited"
             self._emit()
         return {"status": "ready" if alive and self.selection else "starting" if alive else
-                "failed" if self.last_error else "stopped", "model_id": self.model_id,
+                "failed" if self.last_error else "stopped", "model_id": self.model_id, "runtime_id": self.runtime_id,
                 "pid": self.process.pid if alive else None,
                 "endpoint": self.selection.endpoint if alive and self.selection else None,
+                "backend": self.selection.provenance if alive and self.selection else None,
                 "error": self.last_error, "started_at": self.started_at}
 
     def _emit(self):
         if self.event:
             self.event(self.status())
 
-    async def start(self, identifier, *, threads=None, timeout=120):
+    async def start(self, identifier, *, runtime_id=None, threads=None, timeout=120):
         async with self._lock:
+            model = self.installer.artifact(identifier)
+            runtime_id = runtime_id or model.get("runtime_id")
+            if runtime_id not in model.get("runtime_ids", [model.get("runtime_id")]):
+                raise ApplicationError("model_backend_incompatible", "this runtime is not a reviewed choice for the model")
             if self.process is not None and self.process.poll() is None:
-                if self.model_id == identifier and self.selection:
+                if self.model_id == identifier and self.runtime_id == runtime_id and self.selection:
                     return self.selection
                 raise ApplicationError("model_process_busy", "stop the owned model before changing it")
-            model = self.installer.artifact(identifier)
             try:
-                backend = self.installer.artifact(model.get("runtime_id"))
+                backend = self.installer.artifact(runtime_id)
             except ApplicationError as exc:
-                raise ApplicationError("runtime_unavailable", "the reviewed CPU runtime is not installed") from exc
+                raise ApplicationError("runtime_unavailable", "the selected reviewed runtime is not installed") from exc
             if (model.get("kind") != "model" or backend.get("kind") != "runtime" or
                     backend.get("backend") != model.get("backend") or
                     model.get("architecture") not in backend.get("architectures", []) or
@@ -136,7 +162,7 @@ class ModelProcess:
             await settled_io(self.installer.verify, identifier)
             await settled_io(self.installer.verify, backend["id"])
             self.stop_sync()
-            self.model_id, self.last_error = identifier, None
+            self.model_id, self.runtime_id, self.last_error = identifier, runtime_id, None
             self.workdir = Path(f"/proc/self/fd/{self.installer.fd}") / (".runtime-" + uuid.uuid4().hex)
             self.workdir.mkdir(mode=0o700)
             try:
@@ -167,8 +193,10 @@ class ModelProcess:
                     "--host", "127.0.0.1", "--port", str(port), "--alias", alias,
                     "--ctx-size", str(model.get("context_tokens", 8192)),
                     "--threads", str(max(1, min(threads or max(1, (os.cpu_count() or 2) // 2), 32))),
-                    "--n-gpu-layers", "0", "--parallel", "1", "--api-key-file", str(key_file),
-                    "--offline", "--no-webui",
+                    "--n-gpu-layers", str(backend.get("default_gpu_layers", 0)) if backend["device"] == "gpu" else "0",
+                    "--parallel", "1", "--api-key-file", str(key_file),
+                    "--offline", "--no-webui", "--fit", "off",
+                    "--verbosity", str(backend.get("default_log_verbosity", 3)),
                     "--chat-template-kwargs", '{"enable_thinking":false}', "--reasoning-budget", "0",
                 ]
                 environment = {
@@ -176,6 +204,8 @@ class ModelProcess:
                     "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
                     "LD_LIBRARY_PATH": os.pathsep.join(str(self.workdir / safe_member(d)) for d in backend.get("library_dirs", [])),
                 }
+                if backend["device"] == "gpu":
+                    environment["DISABLE_LSFGVK"] = "1"
                 log = self.workdir / "model.log"
                 with open(log, "wb") as output:
                     self.process = subprocess.Popen(
@@ -206,11 +236,12 @@ class ModelProcess:
                                 names = {entry.get("id") for entry in response.json().get("data", [])}
                                 health = await client.get(f"http://127.0.0.1:{port}/health", headers={"Authorization": "Bearer " + api_key})
                                 if alias in names and health.status_code == 200:
+                                    observed = backend_evidence(log, backend)
                                     self.selection = ModelSelection(endpoint, alias, "local", api_key, {
                                         "model_id": model["id"], "model_revision": model["version"],
                                         "model_sha256": model["sha256"], "runtime_id": backend["id"],
                                         "runtime_revision": backend["version"], "runtime_sha256": backend["sha256"],
-                                        "device": "cpu", "context_tokens": model.get("context_tokens", 8192),
+                                        **observed, "context_tokens": model.get("context_tokens", 8192),
                                     })
                                     self._emit()
                                     return self.selection

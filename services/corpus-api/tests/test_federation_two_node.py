@@ -4,8 +4,9 @@ Node A (coordinator) is the repo's standard in-process pytest app; node B
 (executor) is a **real uvicorn subprocess with its own SQLite file database**
 (see `federation_two_node.py`). Every A -> B call in every scenario below goes
 through the production `PeerClient`/`PeerDirectory` code path over real
-loopback TCP, with the real service bearer, peer token, actor headers and
-target-node header. The peer protocol is never skipped: B's request log is the
+loopback TCP, with a real single-use `X-DDP-Node-Credential` and the
+target-node header. No shared secrets cross the wire: A signs with its own
+key, B verifies against its approved-member record. B's request log is the
 ground truth for "what did the peer actually receive".
 
 Scenario map (task brief -> test):
@@ -17,7 +18,7 @@ Scenario map (task brief -> test):
 5. Idempotency replay / conflict            test_submit_replay_is_one_logical_task,
                                             test_idempotency_key_reuse_across_tasks_conflicts,
                                             test_same_task_tampered_plan_digest_is_rejected
-6. Peer auth failure                        test_wrong_peer_token_fails_closed_without_fabrication
+6. Peer auth failure                        test_unapproved_peer_fails_closed_without_fabrication
 7. Fast vs exhaustive completeness          test_fast_mode_never_claims_complete,
                                             test_exhaustive_complete_requires_sealed_enumeration
 8. Cancel / resume                          test_cancel_after_success_and_resume_after_peer_failure
@@ -33,10 +34,10 @@ from ddp_corpus.config import settings
 from ddp_corpus.federation_models import FederationAdmission, FederationProbe
 from ddp_corpus.main import app as corpus_app
 from federation_two_node import (
+    A_KEY,
     NODE_A,
     NODE_B,
     NODE_C,
-    PEER_TOKEN_A,
     TwoNodeFixture,
 )
 from sqlalchemy import func, select
@@ -50,16 +51,12 @@ B_TEXT = "beta federation keyword fact"
 
 @pytest.fixture
 async def two_node(tmp_path, request, monkeypatch):
-    # B 是固定身份 node-a/node-b、没有控制面的真子进程：绑不上持久身份、
-    # 验不了 Ed25519 信任链，只能走开发档位 shared_token_insecure（B 读进程
-    # 环境变量，A 侧见下面的 autouse 夹具）。节点凭证形态由进程内 PeerCaller
-    # 用例与 test_federation_peer_client.py 覆盖；这里量的是真实回环 HTTP 上的
-    # 拓扑/幂等/取消/续跑行为， credential 密码学本身不在这里重复验证。
+    # A、B 都是真实 Ed25519 身份（见 federation_two_node.py 的派生规则）：
+    # B 子进程用批准 A 的信任文件启动，A 用 A_KEY 现签每一张单次凭证。
+    # 这里量的是真实回环 HTTP 上的拓扑/幂等/取消/续跑行为，凭证密码学本身
+    # 由进程内 PeerCaller 用例与 test_federation_peer_client.py 另行钉死。
     # 默认 B 没有模型运行时（诚实的不就绪形态）。`parametrize(..., indirect=True)`
     # 传入一个字符串时，B 会挂上真实的 loopback 模型桩（能力探测与生成都走 HTTP）。
-    monkeypatch.setenv("FEDERATION_PEER_AUTH", "shared_token_insecure")
-    monkeypatch.setenv("ALLOW_INSECURE_DEFAULTS", "true")
-    answer = getattr(request, "param", None)
     answer = getattr(request, "param", None)
     fixture = await TwoNodeFixture.create(tmp_path, b_texts=(B_TEXT,),
                                           b_generate_answer=answer)
@@ -72,13 +69,15 @@ async def two_node(tmp_path, request, monkeypatch):
 @pytest.fixture(autouse=True)
 def _node_a_federation_config(two_node, monkeypatch):
     """Point node A at the real node B endpoint; A is the only in-process node."""
+    from ddp_corpus import node_identity
+
     monkeypatch.setattr(settings, "bundle_node_id", NODE_A)
-    # 与 two_node 夹具同档位：真子进程 B 没有控制面，A 侧也必须用共享口令。
-    monkeypatch.setattr(settings, "federation_peer_auth", "shared_token_insecure")
-    monkeypatch.setattr(settings, "federation_peer_token", PEER_TOKEN_A)
+    node_identity.reset()
+    node_identity.bind_static_for_tests(NODE_A)
     monkeypatch.setattr(settings, "federation_admissions_enabled", True)
     monkeypatch.setattr(settings, "federation_peers", two_node.peers_json())
     monkeypatch.setattr(settings, "federation_allow_loopback", True)
+    two_node.install_counting_transport(monkeypatch)
 
     async def _embed(_http, _text):
         return [0.1, 0.2, 0.3, 0.4]
@@ -512,36 +511,46 @@ async def test_same_task_tampered_plan_digest_is_rejected(actor_client, two_node
 # ================================================================ 6. peer auth failure
 
 
-async def test_wrong_peer_token_fails_closed_without_fabrication(
-        actor_client, session, two_node, monkeypatch):
-    monkeypatch.setattr(settings, "federation_peers",
-                        two_node.peers_json(peer_token_b="definitely-not-the-token"))
-    root, plan = await start_b_only(actor_client, two_node)
-    # Planning crossed the network and got a real 401 from B (evidence probe
-    # and generation-readiness probe both rejected).
-    assert [call["status"] for call in two_node.calls_to("/api/v1/federation/probes")] \
-        == [401, 401]
-    assert count_probe_kinds(two_node) == (1, 1)
+async def test_unapproved_peer_fails_closed_without_fabrication(
+        actor_client, session, two_node, monkeypatch, tmp_path):
+    """B 撤销 A 的批准后：探测与受理一律 401，中途换信任不伪造证据。
 
-    await approve_task(actor_client, root, plan)
-    status = (await submit_task(actor_client, root, plan["plan_digest"], "bad-token")).json()
-    assert status["status"] == "failed"
-    assert status["result"]["evidence"] == [], "an auth failure must never fabricate evidence"
-    assert status["error"] == "peer_unauthenticated"
-    coverage = await coverage_of(actor_client, root)
-    entry = entry_for(coverage, NODE_B)
-    assert entry["state"] == "failed"
-    assert entry["last_error"] == "peer_unauthenticated"
+    这是旧 `test_wrong_peer_token_*` 的干净切换版：以前靠配错共享口令触发
+    401，现在靠 B 的成员目录里没有 A（node_unknown）触发 —— 同一个 Fail Closed
+    形状，同一组"不伪造、不重试风暴"断言，只是信任根从共享秘密换成了成员批准。
+    """
+    revoked_dir = tmp_path / "revoked"
+    revoked_dir.mkdir(exist_ok=True)
+    revoked = await TwoNodeFixture.create(revoked_dir, b_texts=(B_TEXT,), b_trust={})
+    try:
+        monkeypatch.setattr(settings, "federation_peers",
+                            revoked.peers_json(endpoint_b=revoked.b_endpoint))
+        root, plan = await start_b_only(actor_client, revoked)
+        # Planning crossed the network and got a real 401 from B (evidence probe
+        # and generation-readiness probe both rejected: A is not approved there).
+        assert [call["status"] for call in revoked.calls_to("/api/v1/federation/probes")] \
+            == [401, 401]
+        assert count_probe_kinds(revoked) == (1, 1)
 
-    # Exactly two rejected probes and one admission attempt: no retry loop.
-    assert [call["status"] for call in two_node.calls_to("/api/v1/federation/admissions")] \
-        == [401]
-    assert len(two_node.calls_to("/api/v1/federation/probes")) == 2
-    assert two_node.calls_containing("/evidence-sets/") == []
-    count = await session.scalar(select(func.count()).select_from(FederationProbe))
-    assert count == 0
+        await approve_task(actor_client, root, plan)
+        status = (await submit_task(actor_client, root, plan["plan_digest"], "bad-trust")).json()
+        assert status["status"] == "failed"
+        assert status["result"]["evidence"] == [], "an auth failure must never fabricate evidence"
+        assert status["error"] == "node_unknown"
+        coverage = await coverage_of(actor_client, root)
+        entry = entry_for(coverage, NODE_B)
+        assert entry["state"] == "failed"
+        assert entry["last_error"] == "node_unknown"
 
-
+        # Exactly two rejected probes and one admission attempt: no retry loop.
+        assert [call["status"] for call in revoked.calls_to("/api/v1/federation/admissions")] \
+            == [401]
+        assert len(revoked.calls_to("/api/v1/federation/probes")) == 2
+        assert revoked.calls_containing("/evidence-sets/") == []
+        count = await session.scalar(select(func.count()).select_from(FederationProbe))
+        assert count == 0
+    finally:
+        await revoked.stop()
 # ========================================================== 7. fast vs exhaustive
 
 

@@ -17,7 +17,7 @@ import (
 )
 
 func (s *Server) mountClient(mux *http.ServeMux) {
-	for _, path := range []string{"GET /api/v1/client/snapshot", "GET /api/v1/client/events", "GET /api/v1/client/receipts/{operation_key}", "POST /api/v1/client/query"} {
+	for _, path := range []string{"GET /api/v1/client/snapshot", "GET /api/v1/client/events", "GET /api/v1/client/receipts/{operation_key}", "POST /api/v1/client/query", "GET /api/v1/client/versions/{version_id}/source", "GET /api/v1/client/versions/{version_id}/bundle"} {
 		mux.Handle(path, s.discoveryAuth(s.domainThrottle(httpx.Wrap(s.handleClientRead))))
 	}
 	mux.Handle("POST /api/v1/client/commands", s.discoveryAuth(httpx.Wrap(func(w http.ResponseWriter, r *http.Request) error {
@@ -92,7 +92,7 @@ func (s *Server) clientCapabilities(ctx context.Context) []string {
 	if json.Unmarshal(body, &value) != nil || value.Protocol != "ddp-client/1" {
 		return empty
 	}
-	allowed := map[string]bool{"client.snapshot": true, "client.events": true, "client.receipt": true, "client.query": true, "client.windows": true}
+	allowed := map[string]bool{"client.snapshot": true, "client.events": true, "client.receipt": true, "client.query": true, "client.windows": true, "client.assets": true}
 	out := []string{}
 	for _, capability := range value.Capabilities {
 		if allowed[capability] {

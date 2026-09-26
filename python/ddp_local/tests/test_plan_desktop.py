@@ -82,8 +82,9 @@ def center(monkeypatch):
     stub = Center()
     real = module.CenterFederationClient
 
-    def factory(config, *, transport=None, actor_headers=None):
-        return real(config, transport=httpx.MockTransport(stub.handler), actor_headers=actor_headers)
+    def factory(config, *, transport=None, actor_headers=None, before_send=None):
+        return real(config, transport=httpx.MockTransport(stub.handler),
+                    actor_headers=actor_headers, before_send=before_send)
 
     monkeypatch.setattr(module, "CenterFederationClient", factory)
     return stub

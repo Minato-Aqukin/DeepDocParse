@@ -3,6 +3,7 @@
 分三组：本层自有资源（PG/MinIO/JWT）、对 service 的调用参数、额度默认值。
 service 相关的一切只对应 ../DeepDocParse/openapi.yaml 的契约，不感知其内部实现。
 """
+import os
 from typing import TYPE_CHECKING
 
 from pydantic import model_validator
@@ -267,27 +268,21 @@ class Settings(BaseSettings):
     # 本节点是否接受 peer 的 admission。关掉时能力清单里的 accepting_admissions
     # 如实报 false，admission 端点也会拒绝（不排队、不占算力）。
     federation_admissions_enabled: bool = True
-    # 节点对节点端点的认证方式（契约 enums.yaml 的 peer_auth_mode）。
-    # **node_credential（默认，唯一的生产形态）**：出站每个请求向本节点控制面申请
-    # 一张单次、≤120s、限定 audience/actor/操作/范围的 Ed25519 凭证；入站按控制面
-    # 成员目录里已批准节点的公钥验签、记 jti 防重放，远端调用者映射成本地只读的
-    # peer-* 主体再按本地 ACL 判权（packages/contracts/ddp/node-credential-format.md）。
-    # shared_token_insecure：旧的共享 FEDERATION_PEER_TOKEN + 对端 SERVICE_TOKEN +
-    # 自报 actor 头。所有同伴共用一个秘密、同名用户被直接合并 —— **只给没有控制面的
-    # 开发夹具**：必须同时 ALLOW_INSECURE_DEFAULTS=true 才能启动，/readyz 如实报降级。
-    federation_peer_auth: str = "node_credential"
-    # **仅 shared_token_insecure 档位使用**：本节点接受 peer 调用时校验的共享凭据。
-    # 留空 = 一律 401 peer_unauthenticated（Fail Closed）。
-    # **绝不回显、绝不入日志、绝不进错误消息**；比较用 hmac.compare_digest。
-    federation_peer_token: str = ""
-
+    # 节点对节点端点只认一种认证（契约 enums.yaml 的 peer_auth_mode，唯一取值
+    # node_credential）：出站每个请求向本节点控制面申请一张单次、≤120s、限定
+    # audience/actor/操作/范围的 Ed25519 凭证；入站按控制面成员目录里已批准节点的
+    # 公钥验签、记 jti 防重放，远端调用者映射成本地只读的 peer-* 主体再按本地 ACL
+    # 判权（packages/contracts/ddp/node-credential-format.md）。
+    # 这里没有档位开关：旧的 FEDERATION_PEER_AUTH / FEDERATION_PEER_TOKEN 与登记里
+    # 的 service_token/peer_token 一律视为配置错误（启动或调用即失败），绝不静默
+    # 沿用共享凭据。
     # 协调者出站时登记的远端节点目录（P5-INTERFACES-v3 §5）。JSON 对象：
-    # node_credential 档位：{"<node_id>": {"endpoint": "https://…"}} —— **不许带任何口令**，
-    # 带了就是配置错误（留着不用的秘密迟早被复制到别处）；
-    # shared_token_insecure 档位：{"<node_id>": {"endpoint": "…", "service_token": "…", "peer_token": "…"}}。
+    # {"<node_id>": {"endpoint": "https://…"}} —— 只登记地址，不登记任何口令；
+    # 带着 service_token/peer_token 等口令字段是配置错误（留着不用的秘密迟早被
+    # 复制到别处，parse_peers 直接拒绝）。
     # **Fail Closed**：没登记的节点一个请求也不发（连 DNS 都不解析）；endpoint
-    # 必须是 HTTPS 且无 userinfo/query/fragment。凭据字段绝不回显、不入日志、
-    # 不进错误消息。登记在这里只决定"往哪发"；能不能签出凭证还要控制面批准该节点。
+    # 必须是 HTTPS 且无 userinfo/query/fragment。登记在这里只决定"往哪发"；
+    # 能不能签出凭证还要控制面批准该节点。
     federation_peers: str = ""
     # 入站验签时对**已批准**节点信任记录的缓存秒数，也就是控制面撤销一个节点后
     # 本节点最迟多久拒绝它的新请求。0 = 每个请求都查控制面；上限 60。
@@ -412,16 +407,21 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _check_federation_peer_auth(self):
-        """认证档位只能取契约里的值；缓存与有效期有硬上界。
+    def _check_federation_credentials(self):
+        """联邦凭证边界：只认节点签名；旧共享配置必须大声失败。
 
-        一个拼错的档位（`node-credential`）若被当成"不是共享口令"就放行，等于
-        没人知道自己跑在哪种认证下；缓存上限决定撤销多久生效，不能无界。
+        FEDERATION_PEER_AUTH / FEDERATION_PEER_TOKEN 在本层已不存在（extra="ignore"
+        会静默丢掉未知环境变量，所以这里显式读环境，绝不让旧共享配置悄悄变成
+        "没有认证档位但照常启动"）。FEDERATION_PEERS 里带 service_token/peer_token
+        同样是配置错误，parse_peers 在使用时拒绝；这里只守住缓存与有效期硬上界
+        （撤销生效延迟不能无界，凭证有效期只覆盖一次往返）。
         """
-        from ddp_contracts import PEER_AUTH_MODE_VALUES
-
-        if self.federation_peer_auth not in PEER_AUTH_MODE_VALUES:
-            raise ValueError(f"FEDERATION_PEER_AUTH 必须是 {PEER_AUTH_MODE_VALUES} 之一")
+        for legacy in ("FEDERATION_PEER_AUTH", "FEDERATION_PEER_TOKEN"):
+            if os.environ.get(legacy):
+                raise ValueError(
+                    f"{legacy} 已删除：跨节点只认本节点控制面签发的单次节点凭证，"
+                    "不再接受共享口令档位或对端服务口令。请删掉该环境变量；"
+                    "peer 目录只登记 endpoint（见 FEDERATION_PEERS 注释）。")
         if not 0 <= self.federation_peer_key_cache_seconds <= 60:
             raise ValueError("FEDERATION_PEER_KEY_CACHE_SECONDS 必须在 0..60（它就是撤销生效的最长延迟）")
         if not 1 <= self.federation_credential_ttl_seconds <= 120:
@@ -491,20 +491,12 @@ def assert_secrets_configured() -> None:
 
     这不会在运行时报任何错，只会安静地把整套鉴权变成摆设 —— 正是
     必须在启动时拦下来的那类问题。
+
+    注意：联邦跨节点认证与 SERVICE_TOKEN 无关 —— SERVICE_TOKEN 只用于同一节点
+    control↔corpus 内部请求（签发凭证、查信任记录、绑定身份）。旧共享配置
+    （FEDERATION_PEER_AUTH / FEDERATION_PEER_TOKEN）由上面的 validator 拒绝，
+    这里不再为它们开任何例外分支。
     """
-    if settings.federation_peer_auth == "shared_token_insecure":
-        # 共享口令档位与占位密钥是同一类东西：能跑，但鉴权是摆设。它只许在
-        # 显式声明"我知道这不安全"的部署里启动，而且每次启动都说出来。
-        if not settings.allow_insecure_defaults:
-            raise RuntimeError(
-                "拒绝启动：FEDERATION_PEER_AUTH=shared_token_insecure 只给没有控制面的开发夹具，"
-                "必须同时设置 ALLOW_INSECURE_DEFAULTS=true。生产请用 node_credential。")
-        # 措辞刻意不带下划线形式的档位名：日志脱敏守卫按 `_` 切段后逐段精确匹配，
-        # 写成 `shared_token_insecure` 会被当成打印了一个凭据名。这里说的是档位，
-        # 不是秘密 —— 与其配一条按行号锁定的豁免，不如把话说清楚。
-        print("[config] WARNING: FEDERATION_PEER_AUTH 处于共享口令档位（shared "
-              "token insecure，仅开发）—— 所有登记同伴共用一个秘密，"
-              "远端 actor 头未签名且同名用户会被合并")
     if settings.allow_insecure_defaults:
         print("[config] WARNING: ALLOW_INSECURE_DEFAULTS 已开启，占位密钥检查被跳过")
         return

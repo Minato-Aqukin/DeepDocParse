@@ -1,0 +1,1232 @@
+openapi: 3.1.0
+info:
+  title: DeepDocParse Content API
+  version: 1.0.0
+  description: |
+    Web 前端实际调用的中心内容接口（`services/corpus-api` 的语料面 + control-api
+    拥有的三个端点），此前未进任何 OpenAPI 契约。**以 corpus-api 现行实现为准**，
+    不改变中心行为。
+
+    ## 入口
+
+    浏览器只跟 control-api 说话（见 control-v1.yaml）：会话鉴权、actor 头下发后，
+    `/api/*` 整段转发给 corpus-api。只有三处例外由 control-api 自己实现：
+
+    - `GET /api/auth/me` —— 当前用户（control-api `handleMe`）。
+    - `POST /api/uploads`、`GET /api/uploads/{id}`、`POST /api/uploads/{id}/finalize`
+      —— 直传上传会话（control-v1.yaml 的 UploadSession，见其 `parts` 预签名）。
+    - `GET /api/documents/{id}/download-url` —— 浏览器用的短期下载地址
+      （control-api `handleDownloadURL`）。
+
+    其余端点由 corpus-api 实现（`services/corpus-api/ddp_corpus/routers/*.py`），
+    经 control-api 的 `corpusPrefixes` 转发。
+
+    ## 错误体
+
+    corpus-api：`{"error": {"message": "...", "type": "...", "code": "..."}}`
+    （`ddp_corpus/errors.py` 的 APIError；`code` 是机器可读码如 `document_not_found`）。
+    control-api：OpenAI 风格（control-v1.yaml `Error`）。
+
+tags:
+  - name: resources
+  - name: uploads
+  - name: documents
+  - name: search
+  - name: qa
+  - name: evidence
+  - name: wiki
+
+components:
+  securitySchemes:
+    session:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 浏览器会话。`/api/*` 用它。
+
+  parameters:
+    ResourceContext:
+      name: resource_id
+      in: query
+      required: false
+      schema: { type: string }
+      description: |
+        同一份字节被多人先后上传时，按选中的资源看它的元数据
+        （前端 `ResourceContext`，见 `apps/web/src/api/resource-context.ts`）。
+    VersionContext:
+      name: version_id
+      in: query
+      required: false
+      schema: { type: string }
+      description: 同上，固定版本的身份。
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type]
+          properties:
+            message: { type: string }
+            type: { type: string }
+            code: { type: string, nullable: true }
+
+    ResourceVersion:
+      type: object
+      required: [id, resource_id, version_no, document_id, source_digest, filename]
+      properties:
+        id: { type: string }
+        resource_id: { type: string }
+        version_no: { type: integer }
+        document_id: { type: string }
+        source_digest: { type: string }
+        source_digest_verified: { type: boolean }
+        filename: { type: string }
+        size_bytes: { type: integer }
+        parse_job_id: { type: string, nullable: true }
+        parse_status:
+          type: string
+          description: 取值与文案的唯一来源是 enums.yaml 的 `parse_status`。
+        index_status:
+          type: string
+          description: 取值与文案的唯一来源是 enums.yaml 的 `index_status`。
+
+    Resource:
+      type: object
+      required: [id, versions]
+      properties:
+        id: { type: string }
+        organization_id: { type: string }
+        owner_id: { type: string }
+        uploader_ref: { type: object }
+        display_name: { type: string }
+        publication:
+          type: string
+          description: 取值见 enums.yaml 的 `publishing_state`。
+        versions:
+          type: array
+          items: { $ref: '#/components/schemas/ResourceVersion' }
+
+    ResourceList:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Resource' }
+        offset: { type: integer }
+        limit: { type: integer }
+        has_more: { type: boolean }
+        coverage: { type: object }
+
+    DocumentInfo:
+      type: object
+      required: [id, resource_id, filename, status, compile_fingerprint]
+      properties:
+        id: { type: string }
+        resource_id: { type: string, nullable: true }
+        source_version_id: { type: string, nullable: true }
+        source_version_no: { type: integer, nullable: true }
+        filename: { type: string }
+        doc_id: { type: string }
+        origin: { type: string }
+        mime: { type: string }
+        size_bytes: { type: integer }
+        page_count: { type: integer }
+        status:
+          type: string
+          description: 取值与文案的唯一来源是 enums.yaml 的 `parse_status`。
+        error: { type: string, nullable: true }
+        index_status:
+          type: string
+          description: 取值与文案的唯一来源是 enums.yaml 的 `index_status`。
+        index_error: { type: string, nullable: true }
+        compile_status:
+          type: string
+          description: 取值与文案的唯一来源是 enums.yaml 的 `compile_status`。
+        compile_degraded:
+          type: array
+          items: { type: string }
+          description: 取值见 enums.yaml 的 `compile_degraded`。
+        compile_fingerprint: { type: string }
+        layout_version: { type: string }
+        code_detection:
+          type: string
+          description: 取值见 enums.yaml 的 `code_detection`。
+        current_job_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        uploaders:
+          type: array
+          items: { type: string }
+        can_delete: { type: boolean }
+
+    JobInfo:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: string }
+        engine: { type: string }
+        options: { type: object }
+        status:
+          type: string
+          description: 取值与文案的唯一来源是 enums.yaml 的 `parse_status`。
+        error: { type: string, nullable: true }
+        page_count: { type: integer }
+        is_current: { type: boolean }
+        created_at: { type: string, format: date-time }
+        archived_at: { type: string, format: date-time, nullable: true }
+        document_version: { type: integer }
+
+    DocumentStats:
+      type: object
+      required: [documents, pages, askable]
+      properties:
+        documents: { type: integer }
+        pages: { type: integer }
+        askable: { type: integer }
+
+    DocumentResult:
+      type: object
+      required: [document_id, job_id, filename, page_count, markdown, images]
+      properties:
+        document_id: { type: string }
+        job_id: { type: string }
+        filename: { type: string }
+        page_count: { type: integer }
+        markdown: { type: string }
+        images:
+          type: array
+          items: { type: string }
+
+    Block:
+      type: object
+      required: [seq, page_idx, text]
+      properties:
+        chunk_id: { type: string, nullable: true }
+        seq: { type: integer }
+        page_idx: { type: integer }
+        bbox:
+          type: array
+          items: { type: number }
+          minItems: 4
+          maxItems: 4
+          nullable: true
+        page_size:
+          type: array
+          items: { type: number }
+          minItems: 2
+          maxItems: 2
+          nullable: true
+        text: { type: string }
+
+    DocumentPages:
+      type: object
+      required: [document_id, job_id, page_count, pages]
+      properties:
+        document_id: { type: string }
+        job_id: { type: string }
+        page_count: { type: integer }
+        pages:
+          type: array
+          items:
+            type: object
+            required: [page_idx, blocks]
+            properties:
+              page_idx: { type: integer }
+              page_size:
+                type: array
+                items: { type: number }
+                nullable: true
+              blocks:
+                type: array
+                items: { $ref: '#/components/schemas/Block' }
+
+    DownloadUrl:
+      type: object
+      required: [url, expires_at, supports_range]
+      description: |
+        control-api 给浏览器的**短期**下载/预览地址（control-api `handleDownloadURL`）。
+        与 corpus-api `/api/documents/{id}/source-url` 的**稳定** URL 刻意分开：
+        那条的路径永远不变（模型网关的 doc_hash 幂等靠它，ADR #11/#12），这条每次都换。
+      properties:
+        url: { type: string }
+        expires_at: { type: string, format: date-time }
+        supports_range:
+          type: boolean
+          description: 对象存储原生支持 Range —— PDF.js 因此可以只取要看的那一页。
+
+    SourceUrl:
+      type: object
+      required: [url, path, mime]
+      description: |
+        corpus-api 的原件**稳定** URL（`routers/documents.py::source_url`）。
+        凭证住在 control schema（`file_grants`），这里问 control-api 要。
+      properties:
+        url: { type: string }
+        path: { type: string }
+        mime: { type: string }
+
+    Citation:
+      type: object
+      required: [page_idx, snippet, resolved]
+      description: |
+        出处的对外形状只许有一处实现（`ddp_corpus/citation_out.py`）；前端类型见
+        `apps/web/src/types/api.ts#Citation`。
+      properties:
+        evidence_id: { type: string, nullable: true }
+        source_type:
+          type: string
+          description: 取值见 enums.yaml 的 `source_type`。
+        derived_from: { type: string, nullable: true }
+        chunk_id:
+          type: string
+          nullable: true
+          description: 接不回来时是 null —— 后端宁可不给，也不会回放失效的旧值。
+        parse_job_id: { type: string, nullable: true }
+        seq: { type: integer, nullable: true }
+        page_idx: { type: integer }
+        bbox:
+          type: array
+          items: { type: number }
+          minItems: 4
+          maxItems: 4
+          nullable: true
+        page_size:
+          type: array
+          items: { type: number }
+          minItems: 2
+          maxItems: 2
+          nullable: true
+        crop_url: { type: string, nullable: true }
+        snippet: { type: string }
+        score: { type: number }
+        similarity: { type: number, nullable: true }
+        resolved: { type: boolean }
+
+    QueryDecision:
+      type: object
+      properties:
+        need_retrieval: { type: boolean }
+        reason: { type: string }
+        inherited_evidence_ids:
+          type: array
+          items: { type: string }
+        degraded:
+          type: string
+          nullable: true
+          description: 取值见 enums.yaml 的 `degraded`。
+
+    CandidateDecision:
+      type: object
+      properties:
+        evidence_id: { type: string, nullable: true }
+        document_id: { type: string }
+        chunk_id: { type: string, nullable: true }
+        rank: { type: integer }
+        score: { type: number, nullable: true }
+        similarity: { type: number, nullable: true }
+        accepted: { type: boolean }
+        reason: { type: string }
+
+    AssertionVerification:
+      type: object
+      properties:
+        state: { type: string, enum: [passed, rejected, questioned, unverified] }
+        mode: { type: string, enum: [auto, human], nullable: true }
+
+    AnswerAssertion:
+      type: object
+      description: 回答的语义真相；无 evidence_ids 时 unsupported 必须为 true。
+      properties:
+        id: { type: string, nullable: true }
+        position: { type: integer }
+        text: { type: string }
+        evidence_ids:
+          type: array
+          items: { type: string }
+        verification: { $ref: '#/components/schemas/AssertionVerification' }
+        unsupported: { type: boolean }
+        citations:
+          type: array
+          items: { $ref: '#/components/schemas/Citation' }
+
+    RetrievalConfidence:
+      type: object
+      properties:
+        level: { type: string, enum: [high, low, unknown] }
+        top_similarity: { type: number, nullable: true }
+        warn_below: { type: number }
+
+    ChatMessage:
+      type: object
+      required: [id, role, content, verified, created_at]
+      properties:
+        id: { type: string }
+        role: { type: string, enum: [user, assistant] }
+        content: { type: string }
+        citations:
+          type: array
+          items: { $ref: '#/components/schemas/Citation' }
+        assertions:
+          type: array
+          items: { $ref: '#/components/schemas/AnswerAssertion' }
+        query_decision: { $ref: '#/components/schemas/QueryDecision' }
+        retrieval: { type: object }
+        verified: { type: boolean }
+        degraded:
+          type: string
+          nullable: true
+          description: 取值见 enums.yaml 的 `degraded`。
+        model_meta: { type: object }
+        confidence: { $ref: '#/components/schemas/RetrievalConfidence' }
+        created_at: { type: string, format: date-time }
+
+    ConversationInfo:
+      type: object
+      required: [id, document_id]
+      properties:
+        id: { type: string }
+        document_id: { type: string }
+        title: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    SearchHit:
+      type: object
+      required: [chunk_id, page_idx, score, snippet]
+      properties:
+        chunk_id: { type: string }
+        page_idx: { type: integer }
+        bbox:
+          type: array
+          items: { type: number }
+          minItems: 4
+          maxItems: 4
+          nullable: true
+        score: { type: number, description: RRF 融合分，只用来排序，不是相关度。 }
+        similarity: { type: number, nullable: true, description: 余弦相似度，这才是"有多相关"。 }
+        snippet: { type: string }
+
+    SearchResult:
+      type: object
+      required: [query, groups]
+      properties:
+        query: { type: string }
+        degraded:
+          type: string
+          nullable: true
+          description: 非 null 表示这次检索降级了（如 embedding_unavailable），UI 必须显示出来。
+        groups:
+          type: array
+          items:
+            type: object
+            required: [document_id, filename, hits]
+            properties:
+              document_id: { type: string }
+              resource_id: { type: string, nullable: true }
+              source_version_id: { type: string, nullable: true }
+              source_version_no: { type: integer, nullable: true }
+              parse_revision: { type: string }
+              filename: { type: string }
+              hits:
+                type: array
+                items: { $ref: '#/components/schemas/SearchHit' }
+
+    EvidenceVerification:
+      type: object
+      required: [id, mode, verdict]
+      properties:
+        id: { type: string }
+        mode: { type: string, enum: [auto, human] }
+        verdict: { type: string, enum: [pass, reject, question] }
+        reason_code: { type: string, nullable: true }
+        reason_text: { type: string, nullable: true }
+        reviewer_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    EvidenceDetail:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        resource_id: { type: string, nullable: true }
+        source_version_id: { type: string, nullable: true }
+        source_digest: { type: string }
+        parse_revision: { type: string }
+        document:
+          type: object
+          required: [id, filename]
+          properties:
+            id: { type: string }
+            filename: { type: string }
+        page_idx: { type: integer }
+        seq: { type: integer }
+        parse_job_id: { type: string }
+        doc_version: { type: integer }
+        bbox:
+          type: array
+          items: { type: number }
+          minItems: 4
+          maxItems: 4
+          nullable: true
+        page_size:
+          type: array
+          items: { type: number }
+          minItems: 2
+          maxItems: 2
+          nullable: true
+        kind: { type: string }
+        content: { type: string }
+        source_type:
+          type: string
+          description: 取值见 enums.yaml 的 `source_type`。
+        derived_from: { type: string, nullable: true }
+        crop_url: { type: string, nullable: true }
+        review_state: { type: string }
+        chunk_id: { type: string, nullable: true }
+        verifications:
+          type: array
+          items: { $ref: '#/components/schemas/EvidenceVerification' }
+
+    EvidenceBacklink:
+      type: object
+      required: [source_kind, source_id, role, label]
+      properties:
+        source_kind: { type: string, enum: [assertion, extract_field, graph_edge, wiki_sentence, wiki_claim] }
+        source_id: { type: string }
+        role: { type: string }
+        label: { type: string }
+        wiki_id: { type: string }
+        wiki_title: { type: string }
+        revision_id: { type: string }
+
+    BacklinkList:
+      type: object
+      required: [evidence_id, backlinks]
+      properties:
+        evidence_id: { type: string }
+        backlinks:
+          type: array
+          items: { $ref: '#/components/schemas/EvidenceBacklink' }
+
+    WikiRevisionDocument:
+      type: object
+      required: [wiki, revision]
+      description: |
+        版本化 Wiki 修订文档。完整形状见 `openapi/wiki-v1.yaml` 与 `ddp/wiki-format.md`；
+        前端类型见 `apps/web/src/api/wiki.ts#WikiRevisionDocument`。
+      properties:
+        wiki:
+          type: object
+          required: [id, title, current_revision_id]
+          properties:
+            id: { type: string }
+            title: { type: string }
+            current_revision_id: { type: string }
+            published_revision_id: { type: string, nullable: true }
+        revision:
+          type: object
+          required: [id, wiki_id]
+          properties:
+            id: { type: string }
+            wiki_id: { type: string }
+            base_revision_id: { type: string, nullable: true }
+            kind: { type: string }
+            title: { type: string }
+            created_by: { type: string }
+            created_at: { type: string, format: date-time }
+            provider: { type: object }
+            limits: { type: object }
+            merge_conflicts: { type: array, items: { type: object } }
+            stale: { type: boolean }
+            stale_reasons:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  type: string
+                  description: 取值见 enums.yaml 的 `wiki_stale_reason`。
+            pages: { type: array, items: { type: object } }
+            dependency_manifest: { type: array, items: { type: object } }
+
+    SSEMeta:
+      type: object
+      description: ask 流的首帧。`query_decision` 形状见 QueryDecision。
+      required: [query_decision, retrieval]
+      properties:
+        query_decision: { $ref: '#/components/schemas/QueryDecision' }
+        retrieval:
+          type: object
+          required: [chunk_ids, candidates]
+          properties:
+            chunk_ids:
+              type: array
+              items: { type: string }
+            candidates:
+              type: array
+              items: { $ref: '#/components/schemas/CandidateDecision' }
+
+    SSEDelta:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string }
+
+    SSECitations:
+      type: object
+      required: [citations]
+      properties:
+        citations:
+          type: array
+          items: { $ref: '#/components/schemas/Citation' }
+
+    SSEAssertions:
+      type: object
+      required: [assertions]
+      properties:
+        assertions:
+          type: array
+          items: { $ref: '#/components/schemas/AnswerAssertion' }
+
+    SSEDone:
+      type: object
+      description: 终帧。生成路径上每一轮都以 done 收尾（出错也先发 error、落库、再发 done）。
+      required: [message_id, verified, confidence]
+      properties:
+        message_id: { type: string }
+        verified: { type: boolean }
+        degraded:
+          type: string
+          nullable: true
+          description: 取值见 enums.yaml 的 `degraded`。
+        confidence: { $ref: '#/components/schemas/RetrievalConfidence' }
+
+    SSEError:
+      type: object
+      required: [message, code]
+      properties:
+        message: { type: string }
+        code: { type: string }
+
+paths:
+  /api/auth/me:
+    get:
+      tags: [documents]
+      operationId: getAuthMe
+      summary: 当前用户与其在本组织内的角色
+      security: [{ session: [] }]
+      description: 由 control-api 自己实现（`handleMe`）。本地运行时返回单一属主。
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, username, role]
+                properties:
+                  id: { type: string }
+                  username: { type: string }
+                  email: { type: string, nullable: true }
+                  role:
+                    type: string
+                    description: 取值与文案的唯一来源是 enums.yaml 的 `role`。
+                  organization_id: { type: string }
+                  created_at: { type: string, format: date-time }
+
+  /api/resources:
+    get:
+      tags: [resources]
+      operationId: listResources
+      summary: 资源列表
+      security: [{ session: [] }]
+      parameters:
+        - name: scope
+          in: query
+          schema: { type: string, enum: [mine, site_public], default: mine }
+          description: site_public 是本组织的公开目录，不是跨租户目录。
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResourceList' }
+
+  /api/resources/{resource_id}:
+    parameters:
+      - { name: resource_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [resources]
+      operationId: getResource
+      summary: 资源详情
+      security: [{ session: [] }]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Resource' }
+    delete:
+      tags: [resources]
+      operationId: deleteResource
+      summary: 删除资源（软删除，对象由 GC 回收）
+      security: [{ session: [] }]
+      responses:
+        '204': { description: 已删除 }
+
+  /api/uploads:
+    post:
+      tags: [uploads]
+      operationId: createUpload
+      summary: 创建直传上传会话
+      security: [{ session: [] }]
+      description: |
+        由 control-api 实现（control-v1.yaml UploadSession）。字节流不经过任何应用进程：
+        客户端拿预签名分片 PUT 到对象存储，再 finalize。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename, size, mime]
+              properties:
+                filename: { type: string }
+                size: { type: integer }
+                mime: { type: string }
+                sha256: { type: string, nullable: true }
+                target_resource_id: { type: string, description: 追加版本的目标资源，创建时冻结。 }
+      responses:
+        '201':
+          description: 会话已创建，预签名已下发
+          content:
+            application/json:
+              schema: { type: object }
+
+  /api/uploads/{upload_id}:
+    parameters:
+      - { name: upload_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [uploads]
+      operationId: getUpload
+      summary: 查询上传会话（含 ingest_status）
+      security: [{ session: [] }]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { type: object }
+
+  /api/uploads/{upload_id}/finalize:
+    post:
+      tags: [uploads]
+      operationId: finalizeUpload
+      summary: 完成上传，触发校验与语料登记
+      security: [{ session: [] }]
+      parameters:
+        - { name: upload_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                parts:
+                  type: array
+                  items:
+                    type: object
+                    required: [part_number, etag]
+                    properties:
+                      part_number: { type: integer }
+                      etag: { type: string }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { type: object }
+
+  /api/documents:
+    get:
+      tags: [documents]
+      operationId: listDocuments
+      summary: 文档列表
+      security: [{ session: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string, default: '' }, description: 按文件名过滤。 }
+        - { name: status, in: query, schema: { type: string, default: '' }, description: 按当前解析任务状态过滤（pending 含 null）。 }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DocumentInfo' }
+
+  /api/documents/stats/summary:
+    get:
+      tags: [documents]
+      operationId: getDocumentStats
+      summary: 文档统计
+      security: [{ session: [] }]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocumentStats' }
+
+  /api/documents/{document_id}:
+    parameters:
+      - { name: document_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [documents]
+      operationId: getDocument
+      summary: 文档详情
+      security: [{ session: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ResourceContext' }
+        - { $ref: '#/components/parameters/VersionContext' }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocumentInfo' }
+    delete:
+      tags: [documents]
+      operationId: deleteDocument
+      summary: 删除文档（全站唯一还判权限的动作）
+      security: [{ session: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ResourceContext' }
+        - { $ref: '#/components/parameters/VersionContext' }
+      responses:
+        '204': { description: 已删除 }
+
+  /api/documents/{document_id}/jobs:
+    get:
+      tags: [documents]
+      operationId: listDocumentJobs
+      summary: 文档的解析任务
+      security: [{ session: [] }]
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/ResourceContext' }
+        - { $ref: '#/components/parameters/VersionContext' }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/JobInfo' }
+
+  /api/documents/{document_id}/result:
+    get:
+      tags: [documents]
+      operationId: getDocumentResult
+      summary: 解析产物（markdown + 图片名）
+      security: [{ session: [] }]
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string } }
+        - { name: job, in: query, schema: { type: string, default: '' } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocumentResult' }
+
+  /api/documents/{document_id}/pages:
+    get:
+      tags: [documents]
+      operationId: getDocumentPages
+      summary: 按页分组的块（左右栏对齐与 bbox 高亮的数据源）
+      security: [{ session: [] }]
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string } }
+        - { name: job, in: query, schema: { type: string, default: '' } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocumentPages' }
+
+  /api/documents/{document_id}/layout:
+    get:
+      tags: [documents]
+      operationId: getDocumentLayout
+      summary: 版面 layout.json 原样返回
+      security: [{ session: [] }]
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string } }
+        - { name: job, in: query, schema: { type: string, default: '' } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { type: object }
+
+  /api/documents/{document_id}/download-url:
+    get:
+      tags: [documents]
+      operationId: getDocumentDownloadUrl
+      summary: 浏览器用的短期下载/预览地址
+      security: [{ session: [] }]
+      description: 由 control-api 实现（`handleDownloadURL`，跨源对象存储直读，支持 Range）。
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string } }
+        - { name: disposition, in: query, schema: { type: string, enum: [inline, attachment], default: inline } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DownloadUrl' }
+
+  /api/documents/{document_id}/source:
+    get:
+      tags: [documents]
+      operationId: getDocumentSource
+      summary: 原件 PDF 字节（本机工作区的同源直传形态）
+      security: [{ session: [] }]
+      description: |
+        中心实现是两条分开的路（corpus `/api/documents/{id}/source-url` 的稳定 URL +
+        control `/api/documents/{id}/download-url` 的短期 URL）；本机工作区用这条
+        同源路径直接返回原件字节。中心不实现这条。
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 原件字节（Content-Type 为原件 MIME） }
+
+  /api/documents/{document_id}/crops/{job_id}/{name}:
+    get:
+      tags: [documents]
+      operationId: getCrop
+      summary: 出处区域截图（PNG，本进程直出以保缓存命中）
+      security: [{ session: [] }]
+      description: |
+        键里带 bbox 摘要 ⇒ 内容不可变 ⇒ `Cache-Control: private, max-age=31536000, immutable`；
+        `ETag` + `If-None-Match` 复访 304。裁图是几十 KB 的 PNG，直出的内存代价与缓存收益不成比例。
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string } }
+        - { name: job_id, in: path, required: true, schema: { type: string } }
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: PNG 字节 }
+        '304': { description: 未修改 }
+        '404': { description: 裁图不存在 }
+
+  /api/search:
+    get:
+      tags: [search]
+      operationId: search
+      summary: 跨文档检索
+      security: [{ session: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string, default: '' } }
+        - { name: doc, in: query, schema: { type: string, default: '' }, description: 限定单个文档。 }
+        - { name: limit, in: query, schema: { type: integer, default: 20 } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchResult' }
+
+  /api/documents/{document_id}/conversations:
+    post:
+      tags: [qa]
+      operationId: createConversation
+      summary: 为文档新建会话
+      security: [{ session: [] }]
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationInfo' }
+
+  /api/conversations:
+    get:
+      tags: [qa]
+      operationId: listConversations
+      summary: 会话列表
+      security: [{ session: [] }]
+      parameters:
+        - { name: document, in: query, schema: { type: string, default: '' } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ConversationInfo' }
+
+  /api/conversations/{conversation_id}/messages:
+    get:
+      tags: [qa]
+      operationId: listMessages
+      summary: 会话消息（含断言、出处、核对状态）
+      security: [{ session: [] }]
+      parameters:
+        - { name: conversation_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ChatMessage' }
+
+  /api/conversations/{conversation_id}:
+    delete:
+      tags: [qa]
+      operationId: deleteConversation
+      summary: 删除会话（EvidenceVerification 审计记录保留）
+      security: [{ session: [] }]
+      parameters:
+        - { name: conversation_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: 已删除 }
+
+  /api/conversations/{conversation_id}/ask:
+    post:
+      tags: [qa]
+      operationId: ask
+      summary: 问答（SSE 流）
+      security: [{ session: [] }]
+      description: |
+        SSE 事件（`routers/conversations.py::_stream_answer` + 前端 `askStream`/`dispatch`）：
+
+        - `meta` → SSEMeta：本轮是否检索、检索到的 chunk 与候选门控。
+        - `delta` → SSEDelta：回答文本片段（可多帧拼接）。
+        - `citations` → SSECitations：本轮引用的出处（落库形状经 `citation_out`）。
+        - `assertions` → SSEAssertions：回答的语义真相（逐条证据绑定；拒绝作答时
+          unsupported 为 true，文本为固定 REFUSAL_* 之一）。
+        - `done` → SSEDone：终帧。**每一轮都以 done 收尾**（出错也先发 error、落库、再发 done）；
+          什么都没说明就结束的流 = 生成中途断了，客户端按 `stream_incomplete` 报。
+        - `error` → SSEError：错误（code 如 `schema_violation`、`upstream_unavailable`、
+          `upstream_interrupted`、`resource_access_revoked`）。
+
+        结构化答案规则：claims 只绑定本轮供给的 evidence；证据不足时拒绝脱离文档作答，
+        不凭常识补答（REFUSAL_NO_EVIDENCE / REFUSAL_INCOMPLETE_EVIDENCE /
+        REFUSAL_INSUFFICIENT_EVIDENCE）。
+      parameters:
+        - { name: conversation_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question: { type: string, minLength: 1, maxLength: 2000 }
+      responses:
+        '200': { description: text/event-stream 事件流 }
+
+  /api/evidence/{evidence_id}:
+    get:
+      tags: [evidence]
+      operationId: getEvidence
+      summary: 证据详情
+      security: [{ session: [] }]
+      parameters:
+        - { name: evidence_id, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/ResourceContext' }
+        - { $ref: '#/components/parameters/VersionContext' }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvidenceDetail' }
+        '404': { description: 证据不存在或无权访问 }
+
+  /api/evidence/{evidence_id}/backlinks:
+    get:
+      tags: [evidence]
+      operationId: getEvidenceBacklinks
+      summary: 引用该证据的断言/字段/边/句子/Wiki claim
+      description: citations 表的行加 wiki_claim_bindings 的版本化 Wiki claim（wiki_claim 来源带 wiki_id、wiki_title、revision_id）。
+      parameters:
+        - { name: evidence_id, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/ResourceContext' }
+        - { $ref: '#/components/parameters/VersionContext' }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BacklinkList' }
+        '404': { description: 证据不存在或无权访问 }
+
+  /api/wikis:
+    get:
+      tags: [wiki]
+      operationId: listWikis
+      summary: 版本化 Wiki 列表
+      security: [{ session: [] }]
+      description: 完整写入形状见 `openapi/wiki-v1.yaml`；读回形状见 WikiRevisionDocument。
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/WikiRevisionDocument' }
+    post:
+      tags: [wiki]
+      operationId: createWiki
+      summary: 新建版本化 Wiki（写操作，本机源可用，中心源经宿主拒绝）
+      security: [{ session: [] }]
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, sources]
+              properties:
+                title: { type: string, minLength: 1, maxLength: 255 }
+                sources:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  items:
+                    type: object
+                    required: [resource_id, source_version_id]
+                    properties:
+                      resource_id: { type: string }
+                      source_version_id: { type: string }
+      responses:
+        '201':
+          description: 固定草稿修订
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WikiRevisionDocument' }
+
+  /api/wikis/{wiki_id}:
+    parameters:
+      - { name: wiki_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [wiki]
+      operationId: readWiki
+      summary: 读 Wiki 当前（或已发布）修订
+      security: [{ session: [] }]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WikiRevisionDocument' }
+        '404': { description: 不存在或无权访问 }
+
+  /api/wikis/{wiki_id}/revisions:
+    post:
+      tags: [wiki]
+      operationId: rebuildWiki
+      summary: 用当前资源生成新修订（写操作）
+      security: [{ session: [] }]
+      parameters:
+        - { name: wiki_id, in: path, required: true, schema: { type: string } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, sources, base_revision_id]
+              properties:
+                title: { type: string, minLength: 1, maxLength: 255 }
+                sources:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  items:
+                    type: object
+                    required: [resource_id, source_version_id]
+                    properties:
+                      resource_id: { type: string }
+                      source_version_id: { type: string }
+                base_revision_id: { type: string }
+      responses:
+        '201':
+          description: 新的不可变草稿修订
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WikiRevisionDocument' }
+
+  /api/wikis/{wiki_id}/revisions/{revision_id}:
+    get:
+      tags: [wiki]
+      operationId: readWikiRevision
+      summary: 读固定修订（含动态计算的过期原因）
+      security: [{ session: [] }]
+      parameters:
+        - { name: wiki_id, in: path, required: true, schema: { type: string } }
+        - { name: revision_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WikiRevisionDocument' }
+        '404': { description: 不存在或无权访问 }
+
+  /api/wikis/{wiki_id}/pages/{page_key}:
+    patch:
+      tags: [wiki]
+      operationId: editWikiPage
+      summary: 人工编辑页（写操作；只收 {id, text}）
+      security: [{ session: [] }]
+      parameters:
+        - { name: wiki_id, in: path, required: true, schema: { type: string } }
+        - { name: page_key, in: path, required: true, schema: { type: string } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [base_revision_id, paragraphs]
+              properties:
+                base_revision_id: { type: string }
+                paragraphs:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [id, text]
+                    properties:
+                      id: { type: string, minLength: 1, maxLength: 64 }
+                      text: { type: string, minLength: 1, maxLength: 10000 }
+      responses:
+        '201':
+          description: 人工编辑修订
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WikiRevisionDocument' }

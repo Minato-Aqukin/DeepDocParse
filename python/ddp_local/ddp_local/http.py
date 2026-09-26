@@ -23,7 +23,9 @@ class RequestBodyBudget:
             return await self.app(scope, receive, send)
         maximum = (
             65536
-            if scope.get("path") in {"/api/v1/search", "/api/v1/answer", "/api/v1/wiki"} or scope.get("path", "").startswith(("/api/v1/wikis", "/api/v1/plans"))
+            if scope.get("path") in {"/api/v1/search", "/api/v1/answer"} or scope.get("path", "").startswith(("/api/v1/wikis", "/api/v1/plans"))
+            else 8 * 1024 * 1024
+            if scope.get("path", "").startswith("/api/uploads/") and scope.get("path", "").endswith("/finalize") is False and scope.get("method") == "PUT"
             else MAX_ARCHIVE
         )
         total = 0
@@ -143,6 +145,38 @@ def create_app(
         )
         return JSONResponse({"error": {"code": exc.code, "message": str(exc)}}, status)
 
+    @app.exception_handler(404)
+    async def content_not_found(request: Request, exc):
+        # Center-shape fallback for /api paths the local subset does not
+        # implement. The message comes from the generated source_error
+        # labels, never a hand-written copy.
+        if isinstance(request.url.path, str) and request.url.path.startswith("/api/"):
+            from ddp_contracts.enums import source_error_label
+
+            return JSONResponse(
+                {"error": {"code": "not_supported_locally",
+                           "message": source_error_label("not_supported_locally")}}, 404,
+            )
+        from fastapi.responses import JSONResponse as _JSONResponse
+
+        return _JSONResponse({"detail": "Not Found"}, 404)
+
+    @app.exception_handler(405)
+    async def content_wrong_method(request: Request, exc):
+        # A known path with the wrong method keeps its 405 status (existing
+        # private-route tests pin this); only the body becomes the contract
+        # shape so Web error parsing sees one error format.
+        if isinstance(request.url.path, str) and request.url.path.startswith("/api/"):
+            from ddp_contracts.enums import source_error_label
+
+            return JSONResponse(
+                {"error": {"code": "not_supported_locally",
+                           "message": source_error_label("not_supported_locally")}}, 405,
+            )
+        from fastapi.responses import JSONResponse as _JSONResponse
+
+        return _JSONResponse({"detail": "Method Not Allowed"}, 405)
+
     class SearchInput(BaseModel):
         model_config = ConfigDict(extra="forbid")
         query: str = Field(min_length=1, max_length=4096)
@@ -241,9 +275,14 @@ def create_app(
     async def model_verify(identifier: str):
         return await settled_io(runtime.model_installer.verify, identifier)
 
+    class ModelStart(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        runtime_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_.-]{0,95}$")
+
     @app.post("/api/v1/models/{identifier}/start")
-    async def model_start(identifier: str, request: Request):
-        return await runtime.model_operation("start", identifier, operation_key=operation_key(request))
+    async def model_start(identifier: str, request: Request, body: ModelStart | None = None):
+        return await runtime.model_operation("start", identifier, operation_key=operation_key(request),
+                                             runtime_id=body.runtime_id if body else None)
 
     @app.post("/api/v1/models/stop")
     async def model_stop(request: Request):
@@ -269,11 +308,29 @@ def create_app(
     async def resources():
         return {"items": runtime.store.versions()}
 
+    @app.get("/api/v1/resources/{resource_id}/versions")
+    async def resource_versions(resource_id: str):
+        return {"items": runtime.store.resource_versions(resource_id)}
+
     @app.post("/api/v1/resources/upload", status_code=202)
     async def upload(request: Request):
         key, filename = operation_key(request), upload_filename(request)
         with await body_file(request, MAX_INPUT) as stream:
             return runtime.upload_stream(stream, filename=filename, operation_key=key)
+
+    @app.post("/api/v1/resources/{resource_id}/versions", status_code=202)
+    async def append_version(resource_id: str, request: Request):
+        # A new immutable version under the same logical resource. Earlier
+        # versions are never rewritten; the new version parses independently
+        # and keeps its own task, digest, size and identity.
+        key, filename = operation_key(request), upload_filename(request)
+        with await body_file(request, MAX_INPUT) as stream:
+            return runtime.append_version_stream(
+                resource_id, stream, filename=filename, operation_key=key)
+
+    @app.delete("/api/v1/resources/{resource_id}", status_code=200)
+    async def delete_resource(resource_id: str, request: Request):
+        return runtime.store.resource_command("resource.delete", resource_id, operation_key=operation_key(request))
 
     @app.get("/api/v1/tasks")
     async def tasks():
@@ -299,6 +356,13 @@ def create_app(
     async def evidence(evidence_id: str):
         return runtime.store.evidence(evidence_id)
 
+    @app.get("/api/v1/versions/{version_id}")
+    async def version_detail(version_id: str):
+        # Immutable projection: original bytes, digest, size and version
+        # identity stay readable even when CPU parsing failed or a source
+        # was withdrawn; only ready versions keep authorizing new queries.
+        return runtime.store.version(version_id)
+
     @app.get("/api/v1/versions/{version_id}/bundle")
     async def export(version_id: str):
         return Response(
@@ -315,6 +379,14 @@ def create_app(
             headers={"Content-Disposition": 'inline; filename="document.pdf"'},
         )
 
+    @app.post("/api/v1/versions/{version_id}/withdraw", status_code=200)
+    async def withdraw_version(version_id: str, request: Request):
+        return runtime.store.resource_command("version.withdraw", version_id, operation_key=operation_key(request))
+
+    @app.delete("/api/v1/versions/{version_id}", status_code=200)
+    async def delete_version(version_id: str, request: Request):
+        return runtime.store.resource_command("version.delete", version_id, operation_key=operation_key(request))
+
     @app.post("/api/v1/bundles/import", status_code=201)
     async def import_bundle(request: Request):
         key = operation_key(request)
@@ -325,12 +397,6 @@ def create_app(
     async def answer(body: GenerationInput, request: Request):
         return await runtime.answer(
             **body.model_dump(), operation_key=request.headers.get("idempotency-key")
-        )
-
-    @app.post("/api/v1/wiki")
-    async def wiki(body: GenerationInput, request: Request):
-        return await runtime.answer(
-            **body.model_dump(), wiki=True, operation_key=request.headers.get("idempotency-key")
         )
 
     @app.get("/api/v1/wikis")
@@ -361,11 +427,10 @@ def create_app(
     async def wiki_edit(wiki_id: str, page_key: str, body: WikiEdit, request: Request):
         return await runtime.edit_wiki(wiki_id, page_key, body.model_dump(), operation_key=operation_key(request))
 
-    @app.get("/api/v1/tasks/{task_id}/wiki-attempts")
-    async def wiki_attempts(task_id: str):
-        return {"items": runtime.wikis.attempts(task_id)}
-
     from ddp_local.plan_http import plan_router
     app.include_router(plan_router(runtime))
+    from ddp_local.content_http import bundle_export_router, content_router
+    app.include_router(content_router(runtime))
+    app.include_router(bundle_export_router(runtime))
     app.add_middleware(RequestBodyBudget)
     return app

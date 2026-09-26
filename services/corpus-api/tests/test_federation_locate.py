@@ -185,10 +185,10 @@ async def test_resource_locate_probe_reports_the_locate_capability(client, _peer
 
 async def test_locate_and_resolve_require_peer_credentials(actor_client, session):
     resource, version, _, _, evidence = await private_source(session)
-    locate = await actor_client.post(f"{BASE}/resources/locate", headers=headers(peer=False),
+    locate = await actor_client.post(f"{BASE}/resources/locate", headers=headers(target=False),
         json={"resource_id": resource.id, "version_id": version.id})
     assert locate.status_code == 401
     assert locate.json()["error"]["code"] == "peer_unauthenticated"
-    resolve = await actor_client.post(f"{BASE}/results/resolve", headers=headers(peer=False),
+    resolve = await actor_client.post(f"{BASE}/results/resolve", headers=headers(target=False),
         json={"evidence_ref": evidence.id})
     assert resolve.status_code == 401

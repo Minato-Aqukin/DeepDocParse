@@ -70,8 +70,8 @@ async def search(request: Request, q: str = "", doc: str = "", limit: int = 20,
             key = context.version_id or document.id
             group = groups.setdefault(key, {
                 "document_id": document.id, "resource_id": context.resource_id,
-                "source_version_id": context.version_id, "parse_revision": hit["parse_job_id"],
-                "filename": context.filename, "hits": [],
+                "source_version_id": context.version_id, "source_version_no": context.version_no,
+                "parse_revision": hit["parse_job_id"], "filename": context.filename, "hits": [],
             })
             group["hits"].append({
                 "chunk_id": hit["chunk_id"], "page_idx": hit["page_idx"], "bbox": hit.get("bbox"),

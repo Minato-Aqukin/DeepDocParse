@@ -39,6 +39,10 @@ export type DownloadFormat = 'md' | 'json' | 'zip' | 'source'
 
 export interface DocumentInfo {
   id: string
+  resource_id: string | null
+  source_version_id: string | null
+  /** 固定版本在资源内的序号；老的非资源文档为 null */
+  source_version_no?: number | null
   filename: string
   doc_id: string
   origin: string
@@ -236,6 +240,8 @@ export interface EvidenceVerification {
 
 export interface EvidenceDetail {
   id: string
+  resource_id: string | null
+  source_version_id: string | null
   document: { id: string; filename: string }
   page_idx: number
   seq: number
@@ -313,10 +319,14 @@ export interface WikiDetail {
 }
 
 export interface EvidenceBacklink {
-  source_kind: 'assertion' | 'extract_field' | 'graph_edge' | 'wiki_sentence'
+  source_kind: 'assertion' | 'extract_field' | 'graph_edge' | 'wiki_sentence' | 'wiki_claim'
   source_id: string
   role: string
   label: string
+  /** 仅 wiki_claim：引用它的版本化 Wiki 及其固定修订 */
+  wiki_id?: string
+  wiki_title?: string
+  revision_id?: string
 }
 
 export interface KnowledgeReviewItem {
@@ -350,7 +360,7 @@ export interface SearchResult {
   /** 非 null 表示这次检索降级了（如 embedding_unavailable），UI 必须显示出来 */
   degraded: string | null
   groups: { document_id: string; resource_id?: string | null; source_version_id?: string | null;
-    parse_revision?: string; filename: string; hits: SearchHit[] }[]
+    source_version_no?: number | null; parse_revision?: string; filename: string; hits: SearchHit[] }[]
 }
 
 export interface KeyInfo {

@@ -102,3 +102,8 @@ class FileBlobStore:
         import io
 
         return self.put_stream(io.BytesIO(content), maximum=128 * 1024 * 1024)[0]
+
+    def put_bytes(self, content: bytes, *, maximum=MAX_INPUT) -> tuple[str, int]:
+        import io
+
+        return self.put_stream(io.BytesIO(content), maximum=maximum)

@@ -8,6 +8,17 @@ resources are readable and writable only by the matching local organization and 
 API keys use the verified `X-DDP-User` subject supplied by control-api; a key id is not a user id. Missing key subject context fails closed. Service/node credentials confer no private resource permission. Published resources are
 readable by authenticated actors **of the resource's organization** while their complete `copied_from` ancestry remains published; missing origins and cycles do not grant public access. Only the owner can change or delete them. Denied
 reads return 404 with no resource metadata. Unknown publication states fail closed.
+A resource with a `copied_from` parent (a metadata-only copy, or a root that borrowed a
+version) is readable by its own owner only while that parent is still readable to the owner:
+owned by the same principal, or published through its complete ancestry. Withdrawing,
+unpublishing or deleting a foreign ancestor therefore closes the copy's content — resource,
+versions, search, evidence, crops, originals, conversations and Wikis — to the copier as
+well; the owner can still list, rename, withdraw and delete the copy (writes do not depend
+on lineage), and republishing the ancestor reopens it. Without this a copy made while the
+source was public kept revoked content readable to the copier. Local resources are
+tombstoned, never removed, so a `copied_from` with no local row at all is a placeholder (a
+bundle import's `remote:` origin): it keeps publication closed but does not close the owner's
+own copy — that revocation is carried by the replica ledger.
 The organization predicate applies to every published read (resource and version reads, search,
 evidence, crops, bundles, `site_public` listing). The first deployment form is single-organization,
 where this is the whole site; enterprise boundary 8 keeps the predicate anyway so a multi-organization
@@ -29,6 +40,16 @@ requires Idempotency-Key. Never accepts a bare hash as authorization. Optional c
 must identify an authorized resource. Same key and payload returns the same asset; same
 key and different payload returns 409 idempotency_conflict. A new key creates a new asset.
 GET /api/v1/resources/{resource_id}/versions and GET /api/v1/resources/{resource_id}/versions/{version_id}: authorized fixed version metadata.
+Version read responses include `parse_status` and `index_status`, the current parse and
+index states (enums `parse_status` / `index_status`) of that version's fixed
+`parse_job_id` (both null when no parse exists). They are readiness projections, not a
+mutation of the version binding. A non-null job ID alone does not establish successful
+parsing; source choosers require `parse_status == "succeeded"`, and retrieval over a
+version needs `index_status == "ready"`.
+Every fixed version of a resource stays searchable, and versions usually share a filename.
+`GET /api/search` groups and `GET /api/documents/{id}` (opened with a `version_id`) therefore
+carry `source_version_no` next to `source_version_id` (null for legacy non-resource documents),
+so a reader can tell which fixed version a hit or a conversation belongs to.
 POST /api/v1/resources/{resource_id}/versions: bind an authorized document as a new fixed
 version, with Idempotency-Key. Ownership is checked before resolving any content.
 PATCH /api/v1/resources/{resource_id}: owner may update display_name or publication;
@@ -40,6 +61,12 @@ content reclamation belongs to reference-aware GC, never to the resource endpoin
 Search authorization is applied before vector and keyword candidate limits, rerank or
 model calls. Original files, crops, evidence, historical conversations and extraction
 exports recheck current source permission; cache validators never precede authorization.
+A conversation is bound to the resource it was opened in and answers from and cites that
+resource's fixed parse. `GET /api/conversations?document=` with a resource context
+(`resource_id`) therefore lists only conversations bound to that resource; without a context
+it keeps listing every readable conversation on the document. Two resources holding the same
+bytes share one Document, and listing the other resource's conversation made its citations
+unreadable (404) in the resource being viewed.
 
 ## Resource-scoped mutation (P1)
 

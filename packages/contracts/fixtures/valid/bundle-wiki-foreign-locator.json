@@ -1,0 +1,54 @@
+{
+  "schema": "ddp-bundle-wiki/1",
+  "state": "draft",
+  "title": "Private imported notes",
+  "pages": [
+    {
+      "page_key": "notes",
+      "title": "Notes",
+      "generated_sections": [],
+      "human_paragraphs": [
+        {
+          "id": "human-1",
+          "text": "Keep this human paragraph verbatim.\n保留人工修订。"
+        }
+      ]
+    }
+  ],
+  "reason": null,
+  "relations": [],
+  "dependency_manifest": [
+    {
+      "page_key": "notes",
+      "evidence_id": "source:+frozen-other-origin",
+      "excerpt_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "source": {
+        "origin_node_id": "node-other",
+        "authority_node_id": "node-other",
+        "resource_id": "remote-resource",
+        "source_version_id": "remote-version",
+        "source_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "parse_revision": "parse-3"
+      },
+      "review": "needs_review",
+      "source_evidence_id": "raw-evidence-7",
+      "policy_revision": "policy-8",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 2,
+        "seq": 7,
+        "bbox": [
+          1,
+          2,
+          10,
+          20
+        ],
+        "page_size": {
+          "width": 100,
+          "height": 200,
+          "rotation": 0
+        }
+      }
+    }
+  ]
+}

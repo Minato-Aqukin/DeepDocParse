@@ -330,9 +330,9 @@ docker exec -i ddp-postgres-1 sh -c \
    也是 POSIX-only。
 2. `package-windows`（`windows-latest`，`needs` 上者）：按 pin 校验 Electron zip、
    `build_desktop.py --platform win32-x64` 组装目录包、electron-builder 出
-   NSIS + 便携 exe、`verify_windows_package.py` 校验、记录 SHA256，最后跑
-   Windows 版 smoke（首轮 `continue-on-error`，仅诊断）与 WSL spike（诊断，
-   决策 5：不装发行版、不碰 reboot/admin）。
+   NSIS + 便携 exe、`verify_windows_package.py` 校验、记录 SHA256、阻塞门
+   GUI smoke 通过后生成来源清单（`source-receipt.json`），最后上传构件。
+   WSL spike 仍是诊断（决策 5：不装发行版、不碰 reboot/admin）。
 
 **这条 workflow 已经在 windows-latest 上真跑并连续绿色**（2026-09-14，最近一次
 run 34847164881；首跑连修五个跨平台缺陷，见 `WINDOWS-AC-VALIDATION-v1.md` §9）。
@@ -356,6 +356,13 @@ npx --yes electron-builder@26.15.3 \
 - 发布校验：`win-unpacked` 里捆绑的 WSL 运行时必须与 `dist/wsl/wsl-runtime.json`
   逐字节一致；两个 exe 必须带真负载（安装器 < 100 MiB 视为卸载器 stub，拒绝）。
 - CI 附带 `SHA256SUMS` 与每个 exe 的 `.sha256` sidecar。
+- GUI smoke 是阻塞门（T-007 起）：失败则 job 变红，来源清单与安装包构件
+  不会上传，失败包到不了 release。smoke 证据（报告/日志/失败原因）仍
+  `always()` 上传留档。
+- 来源清单 `source-receipt.json`（repo/workflow/run_id/run_attempt/head_sha/
+  版本/双 exe 文件名与流式 sha256）随 `windows-installers` 构件一起上传；
+  release 侧凭它 + GitHub API 元数据逐字段对照。旧构件没有它会被明确拒绝，
+  必须重建，无绕过。
 
 ### 9.5 Windows 版 smoke
 
@@ -374,8 +381,9 @@ ready→suspend→resume→stop 与共享客户端的 PDF 渲染/导出结果。
 > (!app.isPackaged || process.argv.includes('--smoke'))`，本轮已同步
 > `smoke-windows.mjs` 的头部/失败文案与 workflow 注释。
 
-**首轮 CI 里它仍然是诊断**：runner 会话未必能开 Electron 窗口；产物与失败原因
-照常上传，从第二轮起按阻塞项处理。
+**CI 里它现在是阻塞门**（T-007 起去掉了 `continue-on-error`）：runner
+无 WSL 发行版时报 `wsl_unavailable` 仍是合法 Tier A 通过（脚本内断言区分），
+真正的失败会把 job 变红并阻止后续上传。
 
 ### 9.6 更新与回滚（Windows 分支）
 
@@ -407,7 +415,7 @@ ready→suspend→resume→stop 与共享客户端的 PDF 渲染/导出结果。
 - **WSL2 内部**：运行时在 `~/.deepdocparse/runtime`，默认工作区在
   `~/.deepdocparse/workspaces/default`；不上 `/mnt/c`（避开 WAL 与权限问题）。
 - 导入/导出走字节流 HTTP，WSL 运行时**不读 Windows 路径**；token 不落到
-  Windows 盘上（`serve --token-file -`，见 `python/ddp_local/docs/local-api.md`）。
+   Windows 盘上（`serve --token-file -`，见 `python/ddp_local/docs/local-api.md`）。
 
 ### 9.8 WSL 设置/修复流程（detect → provision → start）
 
@@ -425,3 +433,31 @@ ready→suspend→resume→stop 与共享客户端的 PDF 渲染/导出结果。
    `wsl.exe -d <distro> -- kill -TERM <pid>`（超时再 KILL）。
    **绝不 `wsl --terminate` 整个发行版**。启动前会做孤儿清理：只杀 session
    记录过、且 argv 带我们 launcher 路径的 pid。
+
+### 9.9 发布门（release.yml，T-007 当前操作）
+
+```bash
+# Actions 页选 release → Run workflow（分支必须选 main）→ 填运行 ID 与 tag。
+# 以下全由 scripts/release_publication.py 执行，任一步红即停：
+#  1. assert-ref：自身非 refs/heads/main 直接红。
+#  2. verify-run：核验 run（同仓/非 fork/固定 workflow 路径/main/push 或
+#     dispatch/completed+success/无 PR 关联），读来源 commit 的 package.json
+#     版本为外部锚点，要求 tag == v<锚点版本>。
+#  3. fetch-artifact：完整分页后唯一未过期 windows-installers，按校验过的
+#     artifact ID 构造同仓固定路径下载 zip 到临时文件再逐项流式解包；
+#     artifact 的 run id/仓库 ID/分支/SHA 与运行 API 逐项对照。
+#     解包锚定 windows/ 子目录（根的 release.json 等归档保留但不参与校验）。
+#  4. verify-package：唯一性、清单精确覆盖、三处哈希与字节流、来源清单对照；
+#     文件名版本/platform 必须等于来源版本（electron-builder artifactName 锚点）。
+#  5. create-release：--package-dir 必填且先跑同一完整校验；已有 tag 剥离核对
+#     来源 SHA（精确 ref 查询明确 404 才新建）；新 tag --target 来源 SHA；
+#     最终 gh release create 显式 --repo 同一已校验仓库；发布 setup/portable/
+#     双 sidecar/完整 SHA256SUMS/来源清单。
+```
+
+- dispatch 输入只走 `env:`，不拼进 shell；`GH_TOKEN` 由 job 级
+  `env: GH_TOKEN: ${{ github.token }}` 提供（gh 不读 checkout 凭据）。
+- checksum 是完整性校验，不声称签名，不防同信任域作恶。
+- 行为测试 `tests/test_release_publication.py`（fake gh + 临时小构件，
+  不碰网络与真实 gh）；workflow 形状（无插值、smoke 阻塞、路径覆盖、
+  GH_TOKEN 接线）有断言钉住。

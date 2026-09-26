@@ -144,7 +144,26 @@
           "type": "object",
           "properties": {
             "citations": { "type": "string", "enum": ["required", "preferred", "not_required"] },
-            "output_schema": { "type": "string" }
+            "output_schema": { "type": "string" },
+            "wiki": {
+              "description": "wiki.pages 的 Wiki 需求（与 ddp_core.application.plans.requirements_wiki 同形）。",
+              "type": "object",
+              "properties": {
+                "wiki_id": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "base_revision_id": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "title": { "type": "string", "minLength": 1, "maxLength": 255 },
+                "max_pages": { "type": "integer", "minimum": 1, "maximum": 12 }
+              },
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "$comment": "wiki.pages 更新（有 wiki_id）必须带 base_revision_id 做 CAS；新建（无 wiki_id）必须给 title。",
+                  "if": { "properties": { "wiki_id": { "type": "string" } }, "required": ["wiki_id"] },
+                  "then": { "required": ["base_revision_id"] },
+                  "else": { "required": ["title"] }
+                }
+              ]
+            }
           },
           "additionalProperties": false
         },
@@ -189,6 +208,25 @@
             "properties": {
               "resource_scope": {
                 "properties": { "kind": { "not": { "const": "federation_public" } } }
+              }
+            }
+          }
+        },
+        {
+          "$comment": "requirements.wiki 只属于 wiki.pages；别的 operation 带 wiki 一律拒绝，wiki.pages 则必须带 requirements.wiki（与 plans.requirements_wiki 一致，防止静默错义）。",
+          "if": {
+            "properties": { "operation": { "const": "wiki.pages" } },
+            "required": ["operation"]
+          },
+          "then": {
+            "properties": { "requirements": { "required": ["wiki"] } },
+            "required": ["requirements"]
+          },
+          "else": {
+            "properties": {
+              "requirements": {
+                "properties": { "wiki": false },
+                "required": []
               }
             }
           }

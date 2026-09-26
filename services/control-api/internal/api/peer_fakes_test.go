@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -200,10 +202,43 @@ func enumerablePeerMember(nodeID string) discovery.PeerMember {
 
 // peerDirectoryFor wires a PeerDirectory directly (no FEDERATION_PEERS JSON) to
 // the given fake servers.
-func peerDirectoryFor(servers map[string]*httptest.Server) *discovery.PeerDirectory {
+func peerDirectoryFor(t *testing.T, servers map[string]*httptest.Server) *discovery.PeerDirectory {
+	t.Helper()
+	signer := peerCollectorSigner(t)
 	configs := map[string]discovery.PeerConfig{}
 	for nodeID, server := range servers {
-		configs[nodeID] = discovery.PeerConfig{NodeID: nodeID, Endpoint: server.URL, ServiceToken: "service-" + nodeID, PeerToken: "peer-" + nodeID}
+		configs[nodeID] = discovery.PeerConfig{NodeID: nodeID, Endpoint: server.URL}
 	}
-	return discovery.NewPeerDirectory(configs, nil, 2*time.Second)
+	return discovery.NewPeerDirectory(configs, nil, 2*time.Second, signer)
+}
+
+func peerCollectorSigner(t *testing.T) discovery.PeerSigner {
+	t.Helper()
+	node, err := discovery.LoadIdentity(filepath.Join(t.TempDir(), "identity"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func(_ context.Context, cfg discovery.PeerConfig, r *http.Request) error {
+		operation, err := peerReadOperation(r.URL.Path)
+		if err != nil {
+			return err
+		}
+		jti, err := discovery.NewCredentialJTI()
+		if err != nil {
+			return err
+		}
+		now := time.Now().Unix()
+		token, err := node.SignCredential(discovery.CredentialClaims{
+			Schema: discovery.CredentialSchema, Alg: discovery.CredentialAlg,
+			IssuerNodeID: node.NodeID(), AudienceNodeID: cfg.NodeID,
+			Actor:     discovery.CredentialActor{OrganizationID: "test-org", Subject: "control-api", Kind: "service"},
+			Operation: operation, IssuedAt: now, ExpiresAt: now + 60, JTI: jti,
+			Constraints: discovery.CredentialConstraints{RootTaskID: "directory:" + jti, ScopeRef: peerReadDigest(r.URL.Query().Encode())},
+			Request:     discovery.CredentialRequest{Method: r.Method, Path: r.URL.Path, BodyDigest: peerReadDigest("")},
+		})
+		if err == nil {
+			r.Header.Set(discovery.HeaderNodeCredential, token)
+		}
+		return err
+	}
 }

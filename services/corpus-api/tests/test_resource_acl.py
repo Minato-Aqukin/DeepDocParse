@@ -7,7 +7,7 @@ from ddp_corpus.models import (
     Chunk, Conversation, Document, Evidence, Message, ParseJob, Resource, ResourceVersion,
     UploadEvent, new_id,
 )
-from tests.conftest import ACTOR, ORG, EMBEDDINGS, SERVICE, actor_headers, submit_document
+from tests.conftest import ACTOR, CONTROL, ORG, EMBEDDINGS, SERVICE, actor_headers, submit_document
 from tests.test_documents import _mock_service
 
 
@@ -37,6 +37,34 @@ async def seed(session, *, owner=ACTOR, org=ORG, publication="private", text="se
                       text=text, text_tokenized=text, evidence_id=evidence.id))
     await session.commit()
     return document, resource, version, job, evidence
+
+
+async def test_version_readiness_uses_its_fixed_parse_not_the_document_mirror(actor_client, session):
+    document, resource, original, _, _ = await seed(session)
+    failed = ParseJob(id=new_id(), document_id=document.id, resource_id=resource.id,
+        initiated_by=ACTOR, engine="borndigital", options_hash=new_id()*2,
+        document_version=2, status="failed", index_status="none")
+    session.add(failed)
+    await session.flush()
+    later = ResourceVersion(id=new_id(), resource_id=resource.id, document_id=document.id,
+        version_no=2, source_digest=document.doc_id, filename=document.filename,
+        parse_job_id=failed.id)
+    session.add(later)
+    document.status = "succeeded"
+    await session.commit()
+
+    listed = await actor_client.get(f"/api/resources/{resource.id}/versions")
+    assert listed.status_code == 200
+    assert [(v["id"], v["parse_status"]) for v in listed.json()] == [
+        (original.id, "succeeded"), (later.id, "failed"),
+    ]
+    fixed = await actor_client.get(f"/api/resources/{resource.id}/versions/{later.id}")
+    assert fixed.status_code == 200
+    assert fixed.json()["parse_status"] == "failed"
+    mine = await actor_client.get("/api/resources")
+    assert mine.status_code == 200
+    row = next(r for r in mine.json()["items"] if r["id"] == resource.id)
+    assert [v["parse_status"] for v in row["versions"]] == ["succeeded", "failed"]
 
 
 @respx.mock
@@ -97,6 +125,39 @@ async def test_t06_search_scope_applies_before_candidate_limit(actor_client, ses
     assert response.status_code == 200
     assert [g["document_id"] for g in response.json()["groups"]] == [doc.id]
     assert "secret secret" not in response.text
+
+
+@respx.mock
+async def test_search_groups_and_document_info_name_the_fixed_version(actor_client, session):
+    """同一资源两个固定版本文件名相同、都可检索。不带版本号，检索结果是两条一模一样的
+    "confidential.pdf"，工作台标题也一样 —— 用户分不清读到、问到的是哪一版。"""
+    document, resource, first, _, _ = await seed(session, text="reset delay 17 ms")
+    job = ParseJob(id=new_id(), document_id=document.id, resource_id=resource.id,
+        initiated_by=ACTOR, engine="borndigital", options_hash=new_id()*2, document_version=2,
+        status="succeeded", index_status="ready", result_prefix="results/v2/",
+        service_task_id=new_id())
+    session.add(job)
+    await session.flush()
+    second = ResourceVersion(id=new_id(), resource_id=resource.id, document_id=document.id,
+        version_no=2, source_digest=document.doc_id, filename=document.filename,
+        parse_job_id=job.id)
+    evidence = Evidence(id=new_id(), document_id=document.id, parse_job_id=job.id,
+                        atom_key="source", content="reset delay 23 ms")
+    session.add_all([second, evidence])
+    await session.flush()
+    session.add(Chunk(id=new_id(), document_id=document.id, parse_job_id=job.id,
+                      text=evidence.content, text_tokenized=evidence.content,
+                      evidence_id=evidence.id))
+    await session.commit()
+    _mock_service()     # 文档详情要向 control 查上传者显示名
+    respx.post(EMBEDDINGS).mock(return_value=httpx.Response(503))
+
+    groups = (await actor_client.get("/api/search?q=reset delay")).json()["groups"]
+    assert sorted((g["source_version_id"], g["source_version_no"]) for g in groups) == sorted(
+        [(first.id, 1), (second.id, 2)])
+    info = await actor_client.get(f"/api/documents/{document.id}",
+                                  params={"resource_id": resource.id, "version_id": second.id})
+    assert info.json()["source_version_no"] == 2
 
 
 async def test_t32_same_subject_other_issuer_and_node_creds_not_owner(actor_client, session):
@@ -414,6 +475,70 @@ async def test_omitted_copy_source_cannot_launder_publication_or_revocation(acto
     source.publication = "withdrawn"
     await session.commit()
     assert (await actor_client.get(f"/api/resources/{copy['id']}", headers=actor_headers("charlie"))).status_code == 404
+
+
+async def test_conversation_list_follows_the_resource_context(actor_client, session):
+    """Two resources with the same bytes share a Document. The workbench of one listed the
+    other's conversations, and their citations 404ed there (2026-09-24, phase E browser run)."""
+    doc, first, _, _, _ = await seed(session)
+    made = await actor_client.post("/api/resources", json={"document_id": doc.id, "copied_from": first.id},
+                                   headers={"Idempotency-Key": "same-bytes-second-resource"})
+    assert made.status_code == 201, made.text
+    second = made.json()["id"]
+    opened = await actor_client.post(f"/api/documents/{doc.id}/conversations?resource_id={first.id}")
+    assert opened.status_code == 201, opened.text
+
+    async def listed(context=""):
+        response = await actor_client.get(f"/api/conversations?document={doc.id}{context}")
+        assert response.status_code == 200, response.text
+        return [row["id"] for row in response.json()]
+
+    assert await listed(f"&resource_id={first.id}") == [opened.json()["id"]]
+    assert await listed(f"&resource_id={second}") == []
+    assert await listed() == [opened.json()["id"]]
+
+
+
+@respx.mock
+async def test_copier_loses_withdrawn_source_content_but_keeps_managing_the_copy(actor_client, session):
+    """A copy made while the source was public must not keep the withdrawn source readable to the
+    copier: every read of the borrowed content closes, the copy itself stays deletable, and
+    republishing the source reopens it (2026-09-24, phase E: the copy served the original,
+    evidence and a new conversation after the owner withdrew)."""
+    doc, source, version, _, evidence = await seed(session, owner="bob", publication="published",
+                                                    text="withdrawn plutonium fact")
+    made = await actor_client.post("/api/resources", json={"document_id": doc.id, "copied_from": source.id},
+                                   headers={"Idempotency-Key": "copy-then-withdraw"})
+    assert made.status_code == 201, made.text
+    copy = made.json()
+    context = f"resource_id={copy['id']}&version_id={copy['versions'][0]['id']}"
+    respx.post(EMBEDDINGS).mock(return_value=httpx.Response(503))
+    respx.get(f"{CONTROL}/internal/actors").mock(return_value=httpx.Response(200, json={}))
+
+    async def reads():
+        return {
+            "resource": (await actor_client.get(f"/api/resources/{copy['id']}")).status_code,
+            "document": (await actor_client.get(f"/api/documents/{doc.id}?{context}")).status_code,
+            "evidence": (await actor_client.get(f"/api/evidence/{evidence.id}?{context}")).status_code,
+            "search": sorted(g["resource_id"] for g in
+                             (await actor_client.get("/api/search?q=plutonium")).json()["groups"]),
+            "conversation": (await actor_client.post(f"/api/documents/{doc.id}/conversations?{context}")).status_code,
+        }
+
+    assert await reads() == {"resource": 200, "document": 200, "evidence": 200,
+                             "search": sorted([source.id, copy["id"]]), "conversation": 201}
+    source.publication = "withdrawn"
+    await session.commit()
+    assert await reads() == {"resource": 404, "document": 404, "evidence": 404, "search": [], "conversation": 404}
+    mine = (await actor_client.get("/api/resources?scope=mine")).json()["items"]
+    assert copy["id"] in [row["id"] for row in mine]
+    source.publication = "published"
+    await session.commit()
+    assert (await reads())["evidence"] == 200
+    source.publication = "withdrawn"
+    await session.commit()
+    assert (await actor_client.delete(f"/api/resources/{copy['id']}")).status_code == 204
+
 
 
 async def test_added_borrowed_version_preserves_source_dependency(actor_client, session):

@@ -137,11 +137,69 @@ def delivery_result_bytes(runtime, plan_id):
     return canonical_bytes(delivery["result"])
 
 
+def file_delivery_manifest(runtime, plan_id):
+    """Host-only: fixed manifest + verified flag + import result for a file delivery."""
+    state = load_federation_state(runtime, plan_id)
+    delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
+    if not isinstance(delivery.get("manifest"), dict):
+        reject("not_found", "plan has no file delivery manifest")
+    return {"manifest": delivery["manifest"],
+            "result_manifest_digest": delivery.get("result_manifest_digest"),
+            "verified": delivery.get("verified") is True,
+            "bytes_verified": delivery.get("bytes_verified") is True,
+            "import_result": delivery.get("import_result")}
+
+
 def _require_reviewed_endpoint(runtime, identity, plan_id, config):
     """A plan with a reviewed transport may only reach that exact center endpoint."""
     transports = runtime.consents.get(identity, plan_id)["scope"].get("transport_bindings") or []
     if transports and config.endpoint not in {item["endpoint"] for item in transports}:
         reject("policy_denied", "center endpoint differs from the reviewed transport binding")
+
+
+def _center_client(runtime, identity, plan_id, config, actor_headers):
+    """Authorize and commit one fresh reservation at each physical HTTP send."""
+    _require_reviewed_endpoint(runtime, identity, plan_id, config)
+    scope_digest = runtime.consents.get(identity, plan_id)["scope_digest"]
+
+    async def before_send(request):
+        path = request.url.path
+        discovery_requests = 0
+        if request.method == "POST" and path.endswith("/api/v1/federation/scopes"):
+            kind = "scope-create"
+            discovery_requests = json.loads(request.content).get("max_discovery_requests")
+            if type(discovery_requests) is not int or discovery_requests < 0:
+                reject("budget_exceeded", "scope creation must declare its discovery bound")
+        elif request.method == "GET":
+            if "/api/v1/federation/scopes/" in path:
+                kind = "scope-targets"
+            elif "/api/v1/deliveries/" in path or path.endswith("/bundle"):
+                kind = "fetch"
+            else:
+                kind = "reconcile"
+        elif path.endswith(("/api/v1/task-intents", "/api/v1/remote-compute")):
+            kind = "intent"
+        elif path.endswith("/api/v1/task-plans"):
+            kind = "plan"
+        elif path.endswith("/approve"):
+            kind = "approve"
+        elif path.endswith("/ack"):
+            kind = "ack"
+        elif path.endswith("/cancel"):
+            kind = "cancel"
+        elif path.endswith("/resume"):
+            kind = "resume"
+        else:
+            kind = "submit"
+        # The transport has serialized the entire body, including consent and
+        # scope metadata. Business idempotency keys are deliberately not tickets.
+        runtime.consents.authorize_control(
+            identity, plan_id, ticket="control-" + uuid.uuid4().hex, kind=kind,
+            size_bytes=len(request.content), discovery_requests=discovery_requests,
+            confirmed_scope_digest=scope_digest)
+
+    return CenterFederationClient(
+        config, actor_headers=actor_headers, before_send=before_send)
 
 
 def load_federation_state(runtime, plan_id):
@@ -174,11 +232,154 @@ def _new_state(plan_id, view):
         "last_error": None,
     }
 
+def _frozen_scope_id(scope):
+    ref = ((scope.get("task_spec") or {}).get("resource_scope") or {}).get("scope_ref")
+    return ref if isinstance(ref, str) and ref else None
 
-def _record(state, action, outcome, code=None, status=None):
+
+def _allowed_node_ids(scope, center_node):
+    recipients = scope.get("exploration", {}).get("allowed_recipients") or []
+    ordered = [center_node] + [node for node in recipients if node != center_node]
+    if len(ordered) > 100:
+        reject("policy_denied", "frozen recipient set exceeds the scope budget")
+    return ordered
+
+
+async def _ensure_frozen_scope(runtime, client, plan_id, view, identity, state, scope, center_node, seed):
+    """Create the frozen federation scope inside the approved exploration budget.
+
+    Runs only after exploration approval and before create_intent, reserving
+    each HTTP call against the consent cost ledger (pre-reserved N=1+pages for
+    directory expansion + reads, conservative and non-refunding). With an
+    existing sealed scope_ref, reuses it after verifying its targets are a
+    subset of the frozen recipients. Never accepts a renderer-supplied
+    manifest as authority: the persisted center mirror is canonical.
+    """
+    if scope.get("task_spec", {}).get("execution_policy", {}).get("mode") != "trusted_federation":
+        return None
+    existing = _frozen_scope_id(scope)
+    allowed = _allowed_node_ids(scope, center_node)
+    base = _submit_key(plan_id, view["scope_digest"], "frozen-scope")
+    if existing is not None:
+        # Reuse path still costs reads: reserve each target page pre-send.
+        cursor, pages, manifest_digest = None, 0, None
+        while True:
+            
+            page = await client.scope_targets(existing, cursor=cursor)
+            if not isinstance(page, dict) or page.get("scope_id") != existing:
+                raise CenterFault("invalid_response", 0, False)
+            for entry in page.get("targets") or []:
+                key = (entry or {}).get("target_key") or {}
+                if key.get("origin_node_id") not in allowed:
+                    reject("policy_denied", "sealed scope reaches nodes outside the frozen recipient set")
+            manifest_digest = page.get("manifest_digest") or manifest_digest
+            cursor = page.get("next_cursor")
+            pages += 1
+            if not cursor:
+                break
+            if pages >= 64:
+                raise CenterFault("scope_incomplete", 0, False)
+        state["frozen_scope"] = {"scope_id": existing, "manifest_digest": manifest_digest}
+        return state["frozen_scope"]
+    body = {"operation": "corpus.retrieve", "allowed_node_ids": allowed,
+            "page_size": 50, "max_members": 1000,
+            "max_discovery_requests": 8, "max_remote_members": len(allowed), "ttl_seconds": 900}
+    # The physical request hook atomically reserves create + the bounded
+    # internal discovery calls before this request leaves the process.
+    envelope = await client.create_scope(body, idempotency_key=base)
+    manifest = (envelope or {}).get("manifest") if isinstance(envelope, dict) else None
+    if not isinstance(manifest, dict) or manifest.get("scope_id") != (envelope or {}).get("manifest", {}).get("scope_id"):
+        raise CenterFault("invalid_response", 0, False)
+    for member in manifest.get("expanded_members") or []:
+        if (member or {}).get("origin_node_id") not in allowed:
+            reject("policy_denied", "frozen scope reaches nodes outside the frozen recipient set")
+    state["frozen_scope"] = {"scope_id": manifest["scope_id"], "manifest_digest": manifest.get("manifest_digest"),
+                             "manifest": manifest}
+    return state["frozen_scope"]
+
+
+
+def review_center_plan(runtime, plan_id, *, operation_key):
+    """Mint a reviewed child scope bound to center C's persisted plan mirror.
+
+    Body is only the operation key (Idempotency-Key header): reads the
+    locally authenticated center mirror (root_task_id/plan/probes persisted
+    by exploration dispatch), validates root/writer/spec/digest/ready/allowed
+    nodes/expiry against the parent scope, and persists a new prepared child
+    plan view with scope.center_execution (no inherited execution consent).
+    Same-key replay with the same parent+center digest returns the child;
+    a different mirror under the same key conflicts.
+    """
+    from ddp_core.application.plans import canonical_bytes as _bytes, digest as _digest, instant as _instant, task_plan_digest as _plan_digest, task_spec_digest as _spec_digest, validate_plan as _validate_plan
+    import uuid as _uuid
+    identity = federation_identity(runtime)
+    store = runtime.consents
+    owner = store._owner(identity)
+    store._key(operation_key)
+    with store.tx():
+        parent_row = store._row(owner, plan_id)
+        parent_view = store._view(parent_row)
+        parent_scope = parent_view["scope"]
+        if parent_view["revoked"] or parent_view["planning_state"] == "invalidated":
+            reject("consent_revoked", "parent scope was revoked or expired; the child is invalid")
+        if store._local_only() and parent_scope["task_spec"]["execution_policy"]["mode"] != "local_only":
+            reject("local_only", "current workspace policy forbids remote plans")
+        store._active(parent_row, parent_view["scope_digest"])
+        state = _load(runtime, identity, plan_id)
+        if state is None or not isinstance(state.get("root_task_id"), str) or not isinstance(state.get("center_plan"), dict):
+            reject("consent_required", "review needs an exploration result; run dispatch exploration first")
+        if state.get("center_plan_digest") != state["center_plan"].get("plan_digest"):
+            reject("plan_changed", "persisted center mirror digest differs from its content")
+        center_plan = state["center_plan"]
+        if center_plan.get("plan_digest") != _plan_digest(center_plan):
+            reject("plan_changed", "center plan digest differs from its content")
+        if center_plan.get("planning_state") not in {"ready", "awaiting_approval", "approved"}:
+            reject("plan_changed", "center plan is not in a reviewable revision")
+        if center_plan.get("task_spec_digest") != _spec_digest(parent_scope["task_spec"]):
+            reject("plan_changed", "center plan was not planned for the approved task")
+        now = store.clock()
+        if min(_instant(center_plan["valid_until"]), _instant(center_plan["budget"]["deadline"])) <= now:
+            reject("consent_expired", "center plan revision has expired")
+        transports = {item["transport_ref"]: item for item in parent_scope.get("transport_bindings", [])}
+        if "center" not in transports:
+            reject("policy_denied", "parent scope has no reviewed center transport")
+        center = transports["center"]["recipient_node_id"]
+        nodes = _validate_plan(center_plan, parent_scope["task_spec"], local_node_id=store.local_node_id, now=now)
+        allowed = set(parent_scope["exploration"]["allowed_recipients"]) | {store.local_node_id, center}
+        if nodes - allowed:
+            reject("policy_denied", "center plan reaches nodes outside the frozen recipient set")
+        if center_plan["root_coordinator_node_id"] != center or center_plan["final_result_writer"] != center:
+            reject("policy_denied", "center execution must be rooted at the paired center")
+        request = {"action": "review-center", "parent_plan_id": plan_id,
+                   "scope_digest": parent_view["scope_digest"],
+                   "center_digest": center_plan["plan_digest"], "root_task_id": state["root_task_id"]}
+        previous = store._existing_command(owner, operation_key, request)
+        if previous:
+            return store._view(store._row(owner, previous["plan_id"]))
+        child_id = "plan-" + _uuid.uuid4().hex
+        child_scope = json.loads(_bytes(parent_scope))
+        child_scope["plan"] = json.loads(_bytes(parent_scope["plan"]))
+        child_scope["plan"]["plan_id"] = child_id
+        child_scope["plan"]["planning_state"] = "ready"
+        child_scope["plan"]["revision"] = 1
+        child_scope["payload_bindings"] = []
+        child_scope["parent_plan_id"] = plan_id
+        child_scope["parent_scope"] = parent_scope
+        child_scope["center_execution"] = {"root_task_id": state["root_task_id"], "parent_plan_id": plan_id,
+                                           "transport_ref": "center", "plan_digest": center_plan["plan_digest"],
+                                           "plan": center_plan, "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))}
+        child_scope["plan"]["task_spec_digest"] = _spec_digest(child_scope["task_spec"])
+        child_scope["plan"]["plan_digest"] = _plan_digest(child_scope["plan"])
+        store._scope_shape(child_scope)
+        result = store._admit(owner, identity, child_scope)
+        store._command(owner, operation_key, request, {"plan_id": child_scope["plan"]["plan_id"]})
+        return result
+
+
+def _record(state, action, outcome, code=None, status=None, extra=None):
     attempts = state.setdefault("attempts", [])
     attempts.append({"at": time.time(), "action": action, "outcome": outcome,
-                     "code": code, "status": status})
+                     "code": code, "status": status, "extra": extra})
     del attempts[:-MAX_ATTEMPTS]
 
 
@@ -232,6 +433,17 @@ def _current_transport(scope, binding, config):
     )
     if reviewed is None:
         return None
+    # Control bytes go to the reviewed center endpoint. Storage bytes go to
+    # the reviewed `center-storage` upload origin; the storage endpoint never
+    # goes through the credential broker (presigned PUT carries its own
+    # query-string credential, `redirect:error`, no Authorization header).
+    if binding.get("transport_ref") == "center-storage":
+        upload_origin = getattr(config, "upload_origin", None) or getattr(config, "upload_endpoint", None)
+        if not isinstance(upload_origin, str) or not upload_origin:
+            return dict(reviewed)
+        if upload_origin != reviewed["endpoint"]:
+            return None
+        return dict(reviewed)
     # The endpoint that actually receives the bytes comes from the caller's center
     # configuration. Handing the ledger the reviewed value itself made its
     # "current transport equals approval" comparison true by construction.
@@ -276,24 +488,24 @@ def _state_from_status(status):
     if not isinstance(status, dict):
         return None
     planning, execution = status.get("planning_state"), status.get("status")
+    if execution == "cancelled":
+        # 中心 task_status 的显式终态。不映射就会保留旧投影（submitted），
+        # 界面永远显示一个再也不会结束的"执行中"。
+        return "cancelled"
+    if planning in {"ready", "awaiting_approval"}:
+        return "planned"
+    if planning == "exploring":
+        return "exploring"
     if status.get("delivery_state") == "confirmed":
         return "delivered"
     if execution == "succeeded":
         return "succeeded"
     if execution == "failed":
         return "failed"
-    if execution == "cancelled":
-        # 中心 task_status 的显式终态。不映射就会保留旧投影（submitted），
-        # 界面永远显示一个再也不会结束的"执行中"。
-        return "cancelled"
     if execution in {"queued", "claimed", "running"}:
         return "submitted"
     if planning == "approved":
         return "approved"
-    if planning in {"ready", "awaiting_approval"}:
-        return "planned"
-    if planning == "exploring":
-        return "exploring"
     return None
 
 
@@ -309,11 +521,65 @@ def _merge_delivery(state, status):
     state["delivery"] = delivery
 
 
+def _is_file_plan(scope):
+    return isinstance(scope, dict) and isinstance(scope.get("task_spec"), dict) and scope["task_spec"].get("operation") == "corpus.parse"
+
+
+async def _explore_file(runtime, client, plan_id, view, identity, state, seed, operation_key=None):
+    """File-compute exploration: persist a waiting-input center record, never queue work.
+
+    The exploration payload is only the bounded descriptor (filename + digest
+    + size); the original bytes stay local until the execution phase. The
+    center record fixes input digest/size, plan digest and source/target
+    identity for the same actor/org. Unknown write outcomes persist as
+    `explore_unknown` and reconcile with a read; explicit retries reuse the
+    caller's stable idempotency key, never minting a second record.
+    """
+    scope = view["scope"]
+    verified = _authorize_bindings(runtime, identity, plan_id, view, scope, "exploration", seed,
+                                   client.config)
+    pinned = scope["input_manifest"][0] if len(scope["input_manifest"]) == 1 else None
+    if pinned is None:
+        reject("input_changed", "file compute binds exactly one pinned input")
+    descriptor_binding = next((item for item in scope["payload_bindings"]
+                               if item["phase"] == "exploration"
+                               and item["payload_kind"] == "query_text"), None)
+    if descriptor_binding is not None:
+        verified[descriptor_binding["payload_id"]].decode("utf-8")
+    identity_block = {"actor": identity["subject"], "workspace": identity["workspace_id"],
+                      "environment": identity["environment_id"]}
+    body = {"input_sha256": pinned["digest"].removeprefix("sha256:"),
+            "input_size": pinned["size_bytes"],
+            "plan_digest": scope["plan"]["plan_digest"],
+            "source_identity": identity_block,
+            "target_identity": {"recipient": descriptor_binding["recipient_node_id"]
+                                if descriptor_binding else scope["plan"]["steps"][0]["executor_node_id"]},
+            "retention": scope["retention"]}
+    
+    record = await client.create_remote_compute(
+        body, idempotency_key=operation_key or _submit_key(plan_id, scope["plan"]["plan_digest"], "file-waiting"))
+    compute_id = _required_id(record, "id")
+    if record.get("input_sha256") != body["input_sha256"] or record.get("input_size") != body["input_size"]:
+        reject("plan_changed", "center waiting record does not match the approved input")
+    state["remote_compute_id"] = compute_id
+    state["remote_compute"] = record
+    state["root_task_id"] = record.get("upload_id") or state.get("root_task_id")
+    state["state"] = "waiting_input"
+    _record(state, "create_remote_compute", "ok")
+    return _save(runtime, identity, plan_id, state)
+
+
 async def _explore(runtime, client, plan_id, view, identity, state, seed, scope_manifest):
+    if _is_file_plan(view["scope"]):
+        return await _explore_file(runtime, client, plan_id, view, identity, state, seed)
     scope = view["scope"]
     verified = _authorize_bindings(runtime, identity, plan_id, view, scope, "exploration", seed,
                                    client.config)
     spec = dict(scope["task_spec"])
+    center_node = spec["execution_policy"].get("coordinator_ref")
+    center_budget = runtime.consents.reserve_center_budget(
+        identity, plan_id, recipient_node_id=center_node,
+        confirmed_scope_digest=view["scope_digest"])
     # 中心 `validate_exploration_consent` 要求 TaskSpec 引用**这一份**探索许可。
     # 本地 prepare 只收未授权的 spec（consent_refs 全空），approve 发出许可却不
     # 回写 spec；这里在发出前把引用绑上。consent_refs 不进 task_spec_digest，
@@ -327,11 +593,24 @@ async def _explore(runtime, client, plan_id, view, identity, state, seed, scope_
                           and item["payload_kind"] == "query_text"), None)
     if query_binding is not None:
         spec["query"] = verified[query_binding["payload_id"]].decode("utf-8")
-    intent = await client.create_intent(spec, exploration, scope_manifest)
+    frozen = None
+    if scope_manifest is not None:
+        reject("policy_denied", "dispatch never accepts a renderer-supplied scope manifest")
+    if scope["task_spec"].get("execution_policy", {}).get("mode") == "trusted_federation":
+        transports = {item["transport_ref"]: item for item in scope.get("transport_bindings", [])}
+        center_node = transports["center"]["recipient_node_id"] if "center" in transports else None
+        if center_node is None:
+            reject("policy_denied", "trusted scope needs its reviewed center transport")
+        frozen = await _ensure_frozen_scope(runtime, client, plan_id, view, identity, state, scope, center_node, seed)
+        state = _load(runtime, identity, plan_id) or state
+    manifest_arg = (frozen or {}).get("manifest") if frozen else None
+    
+    intent = await client.create_intent(spec, exploration, manifest_arg, budget=center_budget)
     root = _required_id(intent, "root_task_id")
     state["root_task_id"] = root
     state["task_spec_digest"] = intent.get("task_spec_digest")
     _record(state, "create_intent", "ok")
+    
     plan = await client.create_plan(root)
     if not isinstance(plan, dict):
         raise CenterFault("invalid_response", 0, False)
@@ -344,9 +623,166 @@ async def _explore(runtime, client, plan_id, view, identity, state, seed, scope_
     _record(state, "create_plan", "ok")
     return _save(runtime, identity, plan_id, state)
 
+async def _execute_file(runtime, client, plan_id, view, identity, state, seed):
+    """File-compute execution reservation: idempotent per plan, never double-charged.
+
+    `_authorize_bindings` rehashes the local snapshot against the approved
+    manifest; any mutation fails closed as `input_changed` before a byte moves.
+    The actual multipart upload travels the control `/api/uploads` channel with
+    purpose=`temporary_compute` (owned by the desktop host upload path), so
+    this ledger step only records the binding contract: the same center record,
+    the same actor, the same input digest/size.
+
+    Execution only validates the grant. Every multipart attempt reserves its
+    actual bytes immediately before sending; re-dispatching this local command
+    cannot consume or refund transfer costs. The first execution fixes the
+    host-kept key, and subsequent executions must retain that identity.
+    Host journal persists the create key/uploadId; recovery only GETs
+    reconcile/missing parts, never mints a second task. An old SDK receipt is
+    never privilege: every external action re-queries transfer/authorize first.
+    """
+    scope = view["scope"]
+    compute_id = state.get("remote_compute_id")
+    if not isinstance(compute_id, str) or not compute_id:
+        reject("consent_required", "file execution needs a waiting remote compute; run dispatch exploration first")
+    if state.get("execution_authorized"):
+        # Explicit re-dispatch: re-validate everything, charge nothing new.
+        _authorize_bindings(runtime, identity, plan_id, view, scope, "execution", seed, client.config)
+        state["phase"] = "execution"
+        if state.get("state") not in ("uploading", "submitted", "content_verified",
+                                      "content_verifying", "waiting_input"):
+            state["state"] = "uploading"
+        _record(state, "authorize_file_execution_revalidated", "ok")
+        return _save(runtime, identity, plan_id, state)
+    _authorize_bindings(runtime, identity, plan_id, view, scope, "execution", seed, client.config)
+    key = state.get("idempotency_key") or _submit_key(plan_id, scope["plan"]["plan_digest"], "file-execution")
+    state["idempotency_key"] = key
+    state["execution_authorized"] = True
+    state["phase"] = "execution"
+    state["state"] = "uploading"
+    _record(state, "authorize_file_execution", "ok")
+    return _save(runtime, identity, plan_id, state)
+TRANSFER_ACTIONS = ("create", "resume", "part", "finalize")
+
+
+def authorize_file_transfer(runtime, plan_id, config, *, action, operation_key,
+                            upload_id=None, offset=None, length=None):
+    """Fixed restricted transfer authorization for the host upload loop.
+
+    The host owns the real transfer loop (file pick/snapshot/credential broker/
+    connection, same multipart protocol as `apps/web/src/api/uploads.ts`: POST
+    `/api/uploads` -> PUT presigned part URLs serially -> POST finalize). It
+    MUST call this before every upload/resume action. Each call revalidates:
+    execution approval still present, plan not revoked/invalidated/expired,
+    pinned bytes unchanged (rehash), endpoint equals the reviewed transport,
+    and the center record is not terminal. Every call is audited in `attempts`
+    with its byte length. Each real action charges one request + its bytes on
+    the root-shared cost_ledger; a retransmit with a fresh ticket is charged
+    again, while the identical ticket replays free without re-sending.
+    Every actual send uses a fresh operation_key; resume only re-authorizes
+    missing ranges. Returns a fixed host-only ticket
+    with no credential, path or URL (the renderer never sees it). The ledger
+    never PUTs bytes itself: there is exactly one uploader (the host).
+    """
+    if action not in TRANSFER_ACTIONS:
+        reject("invalid_plan", "unknown file transfer action")
+    if not isinstance(operation_key, str) or not 1 <= len(operation_key) <= 128:
+        reject("invalid_key", "an idempotency key of 1-128 characters is required")
+    identity = federation_identity(runtime)
+    view = runtime.consents.get(identity, plan_id)
+    if view["revoked"] or view["planning_state"] == "invalidated":
+        reject("consent_revoked", "approval was revoked; prepare and approve a new plan")
+    if "execution" not in view["consents"]:
+        reject("consent_required", "file transfer needs execution approval")
+    scope = view["scope"]
+    if not _is_file_plan(scope):
+        reject("invalid_plan", "transfer authorization is only for file plans")
+    _require_reviewed_endpoint(runtime, identity, plan_id, config)
+    state = _load(runtime, identity, plan_id)
+    if state is None:
+        reject("not_found", "plan has no local federation state")
+    compute_id = state.get("remote_compute_id")
+    if not isinstance(compute_id, str) or not compute_id:
+        reject("consent_required", "file transfer needs a waiting remote compute")
+    if state.get("state") in ("delivered", "cancelled", "expired", "failed"):
+        reject("plan_changed", "transfer record is terminal")
+    pinned = scope["input_manifest"][0] if len(scope["input_manifest"]) == 1 else None
+    if pinned is None:
+        reject("input_changed", "file compute binds exactly one pinned input")
+    inputs = _input_bytes(runtime, scope)
+    content = inputs.get(pinned["ref"])
+    if content is None or content_digest(content) != pinned["digest"] or len(content) != pinned["size_bytes"]:
+        reject("input_changed", "current input bytes differ from approved snapshot")
+    if action == "part":
+        if type(offset) is not int or type(length) is not int or offset < 0 or length <= 0:
+            reject("invalid_plan", "part range must be a non-negative offset and positive length")
+        if offset + length > pinned["size_bytes"]:
+            reject("input_changed", "part range exceeds the pinned input size")
+    elif offset is not None or length is not None:
+        reject("invalid_plan", "offset/length are only for part transfers")
+    if upload_id is not None and (not isinstance(upload_id, str) or not upload_id or len(upload_id) > 128):
+        reject("invalid_plan", "upload_id must be a bounded string")
+    if upload_id is not None and upload_id != state.get("upload_id") and state.get("upload_id") is not None:
+        reject("idempotency_conflict", "upload binding differs from the recorded upload")
+    # Sole cost basis is the root-shared cost_ledger (charged below via
+    # authorize_transfer): every real action with a fresh ticket charges one
+    # request + its bytes. attempts/file_covered stay as idempotency/audit
+    # state only, never a second budget deduction.
+    request = {"action": "file-transfer", "transfer": action, "plan_id": plan_id,
+               "scope_digest": view["scope_digest"], "endpoint": config.endpoint,
+               "upload_id": upload_id, "offset": offset, "length": length}
+    stored = runtime.store.version(pinned["ref"])
+    storage_binding = next((item for item in scope.get("transport_bindings", [])
+                            if item.get("transport_ref") == "center-storage"), None)
+    storage_endpoint = storage_binding["endpoint"] if isinstance(storage_binding, dict) else None
+    configured = getattr(config, "upload_origin", None)
+    upload_origin = configured or storage_endpoint
+    if upload_origin != storage_endpoint:
+        reject("policy_denied", "upload origin differs from the reviewed storage binding")
+    ticket = {"plan_id": plan_id, "remote_compute_id": compute_id,
+              "input_ref": pinned["ref"], "filename": stored["filename"],
+              "input_sha256": pinned["digest"].removeprefix("sha256:"),
+              "input_size": pinned["size_bytes"],
+              "recipient_node_id": scope["plan"]["steps"][0]["executor_node_id"],
+              "retention": scope["retention"], "action": action,
+              "upload_id": upload_id if upload_id is not None else state.get("upload_id"),
+              "upload_origin": upload_origin}
+    # Match the host's fixed upload protocol, including serialized metadata.
+    # Order does not affect UTF-8 length; both encoders use compact JSON and
+    # unescaped Unicode. The original bytes are charged only by actual parts.
+    if action == "create":
+        body = {"filename": stored["filename"], "size": pinned["size_bytes"],
+                "mime": "application/pdf", "sha256": ticket["input_sha256"],
+                "purpose": "temporary_compute", "remote_compute_id": compute_id}
+        action_bytes = len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    elif action == "finalize":
+        action_bytes = 2
+    else:
+        action_bytes = length if action == "part" else 0
+    if _command_matches(state, operation_key, request):
+        return ticket
+    # Pre-send atomic reserve on the root-shared ledger happens BEFORE any
+    # byte moves: a fresh ticket charges, the identical ticket replays free,
+    # a different body under the same ticket conflicts. Limit/expiry/consent
+    # refusals therefore happen before the network, never after.
+    runtime.consents.authorize_transfer(
+        identity, plan_id, ticket="transfer:" + action + ":" + operation_key,
+        action=action, size_bytes=action_bytes, confirmed_scope_digest=view["scope_digest"])
+    _remember_command(state, operation_key, request)
+    if upload_id is not None and state.get("upload_id") is None:
+        state["upload_id"] = upload_id
+    _record(state, "authorize_file_transfer:" + action, "ok",
+            extra={"length": length or 0})
+    state = _save(runtime, identity, plan_id, state, command_key=operation_key)
+    return {**ticket, "upload_id": state.get("upload_id")}
+
 
 async def _execute(runtime, client, plan_id, view, identity, state, seed):
+    if _is_file_plan(view["scope"]):
+        return await _execute_file(runtime, client, plan_id, view, identity, state, seed)
     scope = view["scope"]
+    if "center_execution" in scope:
+        return await _execute_child(runtime, client, plan_id, view, identity, state, seed)
     root = state.get("root_task_id")
     if not isinstance(root, str) or not root:
         reject("consent_required", "submit needs an exploration result; run dispatch exploration first")
@@ -360,6 +796,7 @@ async def _execute(runtime, client, plan_id, view, identity, state, seed):
     center_plan = state.get("center_plan") if isinstance(state.get("center_plan"), dict) else {}
     plan_digest = state.get("center_plan_digest") or scope["plan"]["plan_digest"]
     if center_plan.get("planning_state") != "approved":
+        
         approved = await client.approve(root, plan_digest, view["consents"]["execution"])
         if not isinstance(approved, dict):
             raise CenterFault("invalid_response", 0, False)
@@ -370,7 +807,54 @@ async def _execute(runtime, client, plan_id, view, identity, state, seed):
         _record(state, "approve", "ok")
     key = state.get("idempotency_key") or _submit_key(plan_id, plan_digest, "execution")
     state["idempotency_key"] = key
+    
     status = await client.submit_task(root, plan_digest, key)
+    if not isinstance(status, dict):
+        raise CenterFault("invalid_response", 0, False)
+    state["task"] = status
+    state["state"] = _state_from_status(status) or "submitted"
+    _record(state, "submit_task", "ok")
+    return _save(runtime, identity, plan_id, state)
+
+
+async def _execute_child(runtime, client, plan_id, view, identity, state, seed):
+    """Approve/submit the exact reviewed C revision; never the local transport plan.
+
+    The child scope carries no payloads (the query already left during parent
+    exploration). Only the approve/submit control requests are authorized, and
+    only against the bound C digest. Local source-policy/transport guards stay:
+    dispatch_plan already enforced the reviewed endpoint and cost ledger.
+    """
+    scope = view["scope"]
+    center = scope["center_execution"]
+    consent = view["consents"].get("execution") or {}
+    bound = (consent.get("center_execution") or {}).get("plan_digest") or center.get("plan_digest")
+    if center.get("plan", {}).get("plan_digest") != bound or center.get("plan_digest") != bound:
+        reject("plan_changed", "execution approval must name the exact reviewed center revision")
+    if state.get("center_plan_digest") not in (None, bound):
+        reject("plan_changed", "center has a new revision that requires fresh review")
+    _require_reviewed_endpoint(runtime, identity, scope.get("parent_plan_id") or plan_id, client.config)
+    parent = runtime.consents.get(identity, scope["parent_plan_id"])
+    if parent["revoked"] or parent["planning_state"] == "invalidated":
+        reject("consent_revoked", "parent scope was revoked or expired; the child is invalid")
+    approved = center["plan"] if center["plan"].get("planning_state") == "approved" else None
+    if approved is None:
+        
+        approved = await client.approve(center["root_task_id"], bound, view["consents"]["execution"])
+        if not isinstance(approved, dict):
+            raise CenterFault("invalid_response", 0, False)
+        if approved.get("plan_digest") != bound:
+            reject("plan_changed", "center approved a different revision than the one reviewed")
+        state["center_plan"] = approved
+        state["center_plan_digest"] = bound
+        _record(state, "approve", "ok")
+    key = state.get("idempotency_key") or _submit_key(plan_id, bound, "execution")
+    state["idempotency_key"] = key
+    state["root_task_id"] = center["root_task_id"]
+    
+    status = (await client.resume(center["root_task_id"])
+              if center["plan"]["revision"] > 1 else
+              await client.submit_task(center["root_task_id"], bound, key))
     if not isinstance(status, dict):
         raise CenterFault("invalid_response", 0, False)
     state["task"] = status
@@ -392,11 +876,14 @@ async def dispatch_plan(runtime, plan_id, config, *, phase, operation_key=None,
         reject("invalid_plan", "dispatch phase must be exploration or execution")
     identity = federation_identity(runtime)
     view = runtime.consents.get(identity, plan_id)
+    if "center_execution" in view["scope"] and phase == "exploration":
+        reject("policy_denied", "a reviewed child never re-explores; approve execution only")
     if view["revoked"]:
         reject("consent_revoked", "approval was revoked; prepare and approve a new plan")
     if phase not in view["consents"]:
         reject("consent_required", "this dispatch phase has no explicit user approval")
-    _require_reviewed_endpoint(runtime, identity, plan_id, config)
+    if "center_execution" not in view["scope"]:
+        _require_reviewed_endpoint(runtime, identity, plan_id, config)
     state = _load(runtime, identity, plan_id) or _new_state(plan_id, view)
     state["phase"] = phase
     state["center_ref"] = center_ref
@@ -409,7 +896,7 @@ async def dispatch_plan(runtime, plan_id, config, *, phase, operation_key=None,
         # 先落命令再出网：崩溃后同键重放只返回状态，不产生无记录的第二次发送。
         _save(runtime, identity, plan_id, state, command_key=operation_key)
     seed = operation_key or uuid.uuid4().hex
-    client = CenterFederationClient(config, actor_headers=actor_headers)
+    client = _center_client(runtime, identity, plan_id, config, actor_headers)
     try:
         if phase == "exploration":
             state = await _explore(runtime, client, plan_id, view, identity, state, seed, scope_manifest)
@@ -434,6 +921,106 @@ async def dispatch_plan(runtime, plan_id, config, *, phase, operation_key=None,
     return _save(runtime, identity, plan_id, state)
 
 
+async def _reconcile_file(runtime, plan_id, config, identity, state, *, actor_headers=None):
+    """只读远端计算权威状态；绝不重放创建/上传/取消/确认写请求。"""
+    compute_id = state.get("remote_compute_id")
+    if not isinstance(compute_id, str) or not compute_id:
+        state["reconcile"] = {"at": time.time(), "result": "no_remote_compute"}
+        return _save(runtime, identity, plan_id, state)
+    client = _center_client(runtime, identity, plan_id, config, actor_headers)
+    try:
+        
+        record = await client.remote_compute(compute_id)
+        if not isinstance(record, dict):
+            raise CenterFault("invalid_response", 0, False)
+        if record.get("id") != compute_id:
+            raise CenterFault("invalid_response", 0, False)
+        state["remote_compute"] = record
+        status = record.get("status")
+        mapped = {"waiting_input": "waiting_input", "content_verifying": "content_verifying",
+                  "content_verified": "content_verified", "running": "submitted",
+                  "succeeded": "succeeded", "failed": "failed", "expired": "expired",
+                  "cancelled": "cancelled", "acked": "delivered"}.get(status)
+        if mapped:
+            state["state"] = mapped
+        manifest = record.get("manifest")
+        if isinstance(manifest, dict):
+            delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
+            delivery["manifest"] = manifest
+            state["delivery"] = delivery
+        state["reconcile"] = {"at": time.time(), "result": "ok"}
+        _record(state, "reconcile", "ok")
+        return _save(runtime, identity, plan_id, state)
+    except CenterFault as exc:
+        _record(state, "reconcile", "unknown" if isinstance(exc, CenterOutcomeUnknown) else "rejected",
+                exc.code, exc.status)
+        _save(runtime, identity, plan_id, state)
+        raise
+    finally:
+        await client.aclose()
+
+
+async def _merge_task_status(state, status, client, root):
+    if not isinstance(status, dict) or status.get("root_task_id") != root:
+        raise CenterFault("invalid_response", 0, False)
+    state["task"] = status
+    derived = _state_from_status(status)
+    if derived:
+        state["state"] = derived
+    if isinstance(status.get("plan_digest"), str):
+        state["center_plan_digest"] = status["plan_digest"]
+    if type(status.get("plan_revision")) is int:
+        state["plan_revision"] = status["plan_revision"]
+    if (status.get("planning_state") == "ready"
+            and state.get("center_plan", {}).get("plan_digest") != status.get("plan_digest")):
+        state["center_plan"] = await client.read_plan(root)
+    _merge_delivery(state, status)
+
+
+async def resume_plan(runtime, plan_id, config, *, operation_key, actor_headers=None):
+    """Explicitly resume a known root; a changed graph remains unapproved."""
+    identity = federation_identity(runtime)
+    view = runtime.consents.get(identity, plan_id)
+    runtime.consents._key(operation_key)
+    if _is_file_plan(view["scope"]):
+        reject("policy_denied", "file transfers use their recorded upload recovery")
+    if view["revoked"]:
+        reject("consent_revoked", "approval was revoked")
+    if "execution" not in view["consents"]:
+        reject("consent_required", "resume needs the previous execution approval")
+    state = _load(runtime, identity, plan_id)
+    if state is None or not isinstance(state.get("root_task_id"), str):
+        reject("not_found", "plan has no submitted center task")
+    _require_reviewed_endpoint(runtime, identity, plan_id, config)
+    root = state["root_task_id"]
+    request = {"action": "resume", "root_task_id": root,
+               "scope_digest": view["scope_digest"], "endpoint": config.endpoint}
+    if _command_matches(state, operation_key, request):
+        return state
+    _remember_command(state, operation_key, request)
+    state["state"] = "resume_unknown"
+    _save(runtime, identity, plan_id, state, command_key=operation_key)
+    client = _center_client(runtime, identity, plan_id, config, actor_headers)
+    try:
+        await _merge_task_status(state, await client.resume(root), client, root)
+        state["last_error"] = None
+        _record(state, "resume", "ok")
+    except CenterFault as exc:
+        state["last_error"] = {"code": exc.code, "status": exc.status,
+                               "retryable": exc.retryable}
+        _record(state, "resume", "unknown" if isinstance(exc, CenterOutcomeUnknown)
+                else "rejected", exc.code, exc.status)
+        _save(runtime, identity, plan_id, state)
+        raise
+    except ApplicationError as exc:
+        _record(state, "authorize:resume", "rejected", exc.code)
+        _save(runtime, identity, plan_id, state)
+        raise
+    finally:
+        await client.aclose()
+    return _save(runtime, identity, plan_id, state)
+
+
 async def reconcile(runtime, plan_id, config, *, actor_headers=None):
     """只读中心权威状态/覆盖账本并更新本地投影；绝不重放任何写请求。"""
     identity = federation_identity(runtime)
@@ -441,25 +1028,21 @@ async def reconcile(runtime, plan_id, config, *, actor_headers=None):
     if state is None:
         reject("not_found", "plan has no local federation state")
     _require_reviewed_endpoint(runtime, identity, plan_id, config)
+    view = runtime.consents.get(identity, plan_id)
+    if _is_file_plan(view["scope"]):
+        return await _reconcile_file(runtime, plan_id, config, identity, state,
+                                     actor_headers=actor_headers)
     root = state.get("root_task_id")
     if not isinstance(root, str) or not root:
         state["reconcile"] = {"at": time.time(), "result": "no_root_task"}
         return _save(runtime, identity, plan_id, state)
-    client = CenterFederationClient(config, actor_headers=actor_headers)
+    client = _center_client(runtime, identity, plan_id, config, actor_headers)
     try:
+        
         status = await client.task(root)
-        if not isinstance(status, dict):
-            raise CenterFault("invalid_response", 0, False)
-        state["task"] = status
-        derived = _state_from_status(status)
-        if derived:
-            state["state"] = derived
-        if isinstance(status.get("plan_digest"), str):
-            state["center_plan_digest"] = status["plan_digest"]
-        if type(status.get("plan_revision")) is int:
-            state["plan_revision"] = status["plan_revision"]
-        _merge_delivery(state, status)
+        await _merge_task_status(state, status, client, root)
         try:
+            
             coverage = await client.coverage(root)
             if isinstance(coverage, dict):
                 state["coverage"] = coverage
@@ -477,6 +1060,125 @@ async def reconcile(runtime, plan_id, config, *, actor_headers=None):
         await client.aclose()
 
 
+async def _fetch_file_delivery(runtime, plan_id, config, identity, state, *, actor_headers=None):
+    """File-compute delivery: fixed manifest contract only; bytes verify in host.
+
+    The center manifest fixes source/version/output hash where
+    `delivery.result_manifest_digest` is `sha256:` of the actual ZIP bytes
+    (never a JSON receipt hashed as ZIP). The host streams the ZIP with resume,
+    hashes the complete bytes, and only after full-hash match plus atomic local
+    import sets `bytes_verified` via `note_file_bytes_verified`. Until then
+    `verified` stays false and `confirm` refuses. Expired TTL never displays
+    as saved locally.
+    """
+    compute_id = state.get("remote_compute_id")
+    if not isinstance(compute_id, str) or not compute_id:
+        reject("not_found", "plan has no remote compute to fetch")
+    
+    client = _center_client(runtime, identity, plan_id, config, actor_headers)
+    try:
+        
+        record = await client.remote_compute(compute_id)
+        if not isinstance(record, dict) or record.get("id") != compute_id:
+            raise CenterFault("invalid_response", 0, False)
+        state["remote_compute"] = record
+        manifest = record.get("manifest")
+        delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
+        digest = record.get("result_manifest_digest")
+        if isinstance(manifest, dict) and isinstance(manifest.get("output_sha256"), str):
+            digest = "sha256:" + manifest["output_sha256"]
+        if not isinstance(manifest, dict) or not isinstance(digest, str):
+            delivery["verified"] = False
+            delivery["reason"] = "result_unavailable"
+            state["delivery"] = delivery
+        else:
+            delivery["manifest"] = manifest
+            delivery["result_manifest_digest"] = digest
+            state["delivery"] = delivery
+            state = _save(runtime, identity, plan_id, state)
+            # Real ZIP path: bounded stream, full sha256, atomic import, and
+            # only then verified. Corrupt bytes stay a visible failure, never
+            # an ack. import_result carries the local version/resource id.
+            try:
+                
+                raw, header = await client.download_bundle(compute_id)
+            except CenterFault as exc:
+                if exc.code in ("result_unavailable", "delivery_expired", "not_found"):
+                    delivery["verified"] = False
+                    delivery["reason"] = exc.code
+                    state["delivery"] = delivery
+                    _record(state, "fetch_delivery", "pending", exc.code, exc.status)
+                    return _save(runtime, identity, plan_id, state)
+                raise
+            from ddp_local.remote_compute import import_verified_bundle, verify_output_bytes
+            try:
+                checked = verify_output_bytes(raw, digest)
+                stored = import_verified_bundle(
+                    runtime, checked,
+                    operation_key="import:" + plan_id + ":" + digest.removeprefix("sha256:")[:32])
+            except Exception as exc:
+                code = getattr(exc, "code", None) or "result_manifest_mismatch"
+                delivery["verified"] = False
+                delivery["bytes_verified"] = False
+                delivery["reason"] = code if isinstance(code, str) else "result_manifest_mismatch"
+                delivery["received_bytes"] = len(raw) if isinstance(raw, (bytes, bytearray)) else None
+                state["delivery"] = delivery
+                _record(state, "fetch_delivery", "rejected", delivery["reason"])
+                return _save(runtime, identity, plan_id, state)
+            if isinstance(header, str) and header and header != digest.removeprefix("sha256:"):
+                delivery["verified"] = False
+                delivery["bytes_verified"] = False
+                delivery["reason"] = "result_manifest_mismatch"
+                state["delivery"] = delivery
+                _record(state, "fetch_delivery", "rejected", delivery["reason"])
+                return _save(runtime, identity, plan_id, state)
+            delivery["bytes_verified"] = True
+            delivery["verified"] = True
+            delivery.pop("reason", None)
+            if isinstance(stored, dict):
+                delivery["import_result"] = {
+                    key: stored[key] for key in ("version_id", "resource_id", "id") if key in stored}
+            state["delivery"] = delivery
+        _record(state, "fetch_delivery",
+                "ok" if delivery.get("verified") else "pending", delivery.get("reason"))
+        return _save(runtime, identity, plan_id, state)
+    except CenterFault as exc:
+        _record(state, "fetch_delivery",
+                "unknown" if isinstance(exc, CenterOutcomeUnknown) else "rejected",
+                exc.code, exc.status)
+        _save(runtime, identity, plan_id, state)
+        raise
+    finally:
+        await client.aclose()
+
+
+def note_file_bytes_verified(runtime, plan_id, result_manifest_digest, *, import_result=None):
+    """Host-only: mark complete ZIP bytes hashed and atomically imported.
+
+    Called by the session-authenticated host after it streamed the delivery
+    ZIP, matched `sha256:` of the complete bytes against
+    `delivery.result_manifest_digest`, atomically imported the Bundle, and
+    persisted the local version. Only then may `confirm` ack. `import_result`
+    (local version/resource identity) is retained for the UI; it never leaves
+    the local ledger as a credential.
+    """
+    identity = federation_identity(runtime)
+    state = _load(runtime, identity, plan_id)
+    if state is None:
+        reject("not_found", "plan has no local federation state")
+    delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
+    if delivery.get("result_manifest_digest") != result_manifest_digest:
+        reject("plan_changed", "verified digest differs from the fixed manifest")
+    delivery["bytes_verified"] = True
+    delivery["verified"] = True
+    delivery.pop("reason", None)
+    if import_result is not None:
+        delivery["import_result"] = import_result
+    state["delivery"] = delivery
+    _record(state, "fetch_delivery", "ok")
+    return _save(runtime, identity, plan_id, state)
+
+
 async def fetch_delivery(runtime, plan_id, config, *, actor_headers=None):
     """下载交付字节、本地校验摘要、持久投影；**校验通过前绝不 ack**。
 
@@ -491,19 +1193,28 @@ async def fetch_delivery(runtime, plan_id, config, *, actor_headers=None):
        "已保存本地"；
     5. 校验通过才把结果文档持久到本地投影并置 `verified=true`，后续
        `confirm_delivery` 才可能向中心 ack。
+
+    File-compute plans (`corpus.parse`) branch to `_fetch_file_delivery`:
+    fixed manifest bytes are verified before any ack, hash mismatch never
+    imports, expired TTL never displays as saved locally.
     """
     identity = federation_identity(runtime)
     state = _load(runtime, identity, plan_id)
     if state is None:
         reject("not_found", "plan has no local federation state")
     _require_reviewed_endpoint(runtime, identity, plan_id, config)
+    view = runtime.consents.get(identity, plan_id)
+    if _is_file_plan(view["scope"]):
+        return await _fetch_file_delivery(runtime, plan_id, config, identity, state,
+                                          actor_headers=actor_headers)
     root = state.get("root_task_id")
     if not isinstance(root, str) or not root:
         reject("not_found", "plan has no center task to fetch")
     delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
-    client = CenterFederationClient(config, actor_headers=actor_headers)
+    client = _center_client(runtime, identity, plan_id, config, actor_headers)
     try:
         if not isinstance(delivery.get("id"), str) or not delivery["id"]:
+            
             status = await client.task(root)
             if not isinstance(status, dict):
                 raise CenterFault("invalid_response", 0, False)
@@ -518,6 +1229,7 @@ async def fetch_delivery(runtime, plan_id, config, *, actor_headers=None):
             _record(state, "fetch_delivery", "pending", "delivery_id_missing")
             return _save(runtime, identity, plan_id, state)
         try:
+            
             body = await client.delivery(delivery_id)
         except CenterFault as exc:
             if exc.code == "delivery_expired":
@@ -576,6 +1288,120 @@ async def fetch_delivery(runtime, plan_id, config, *, actor_headers=None):
         await client.aclose()
 
 
+async def _confirm_file_delivery(runtime, plan_id, delivery_id, result_manifest_digest, config,
+                                 identity, state, *, actor_headers=None, operation_key=None):
+    """File-compute ack: only a locally verified fixed manifest digest is confirmed.
+
+    `delivery_id` is the remote compute id; the digest must equal the verified
+    manifest output hash recorded by the host import path. Same-key replays
+    return stored state; a new key may re-send the center idempotent ack after
+    a lost reply. Expired TTL never becomes confirmed.
+    """
+    if state.get("remote_compute_id") != delivery_id:
+        reject("not_found", "delivery does not belong to this plan")
+    delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
+    if delivery.get("state") == "confirmed":
+        return state
+    if not delivery.get("bytes_verified") or not delivery.get("verified") or delivery.get("result_manifest_digest") != result_manifest_digest:
+        reject("plan_changed", "refusing to confirm a delivery whose bytes were not verified locally")
+    _require_reviewed_endpoint(runtime, identity, plan_id, config)
+    
+    
+    request = {"action": "ack-file", "delivery_id": delivery_id, "digest": result_manifest_digest}
+    if operation_key is not None and _command_matches(state, operation_key, request):
+        return state
+    if operation_key is not None:
+        _remember_command(state, operation_key, request)
+        state = _save(runtime, identity, plan_id, state, command_key=operation_key)
+    client = _center_client(runtime, identity, plan_id, config, actor_headers)
+    try:
+        receipt = await client.ack_remote_compute(delivery_id, result_manifest_digest)
+    except CenterFault as exc:
+        _record(state, "ack_delivery",
+                "unknown" if isinstance(exc, CenterOutcomeUnknown) else "rejected", exc.code, exc.status)
+        _save(runtime, identity, plan_id, state)
+        raise
+    finally:
+        await client.aclose()
+    ack_state = receipt.get("status") if isinstance(receipt, dict) else None
+    if ack_state != "acked":
+        ack_state = receipt.get("state") if isinstance(receipt, dict) else None
+    if ack_state == "acked" or ack_state == "confirmed":
+        state["delivery"] = {**delivery, "state": "confirmed", "confirmed_at": time.time()}
+        state["state"] = "delivered"
+        _record(state, "ack_delivery", "ok")
+    else:
+        mapped = ack_state if ack_state in ("pending", "expired", "cancelled", "failed") else "pending"
+        updated = {**delivery, "state": mapped}
+        if mapped == "expired":
+            updated["verified"] = False
+            updated["reason"] = "delivery_expired"
+        else:
+            updated["reason"] = "ack_not_confirmed"
+        state["delivery"] = updated
+        _record(state, "ack_delivery",
+                "expired" if mapped == "expired" else "rejected", "ack_not_confirmed")
+    return _save(runtime, identity, plan_id, state)
+
+
+async def cancel_remote_compute(runtime, plan_id, config, *,
+                                  actor_headers=None, operation_key=None):
+    """Operable file-compute cancel: calls the center cancel, saves the truth.
+
+    Allowed even after local revoke (reconcile stays available), but never
+    sends original bytes again: revoke blocks every future transfer/authorize
+    while this path only issues the center cancel for the persisted
+    remote_compute_id. Same-key replays return stored state; a new key may
+    re-send after a lost reply. Transport failures stay `unknown` (raised),
+    never mapped to `cancelled`: only the center's authoritative receipt (or a
+    later reconcile read) moves the mirror to cancelled.
+    """
+    identity = federation_identity(runtime)
+    state = _load(runtime, identity, plan_id)
+    if state is None:
+        reject("not_found", "plan has no local federation state")
+    view = runtime.consents.get(identity, plan_id)
+    if not _is_file_plan(view["scope"]):
+        reject("invalid_plan", "cancel_remote_compute is only for file plans")
+    compute_id = state.get("remote_compute_id")
+    if not isinstance(compute_id, str) or not compute_id:
+        reject("not_found", "plan has no remote compute to cancel")
+    _require_reviewed_endpoint(runtime, identity, plan_id, config)
+    if state.get("state") == "cancelled":
+        return state
+    request = {"action": "cancel-file", "plan_id": plan_id,
+               "scope_digest": view["scope_digest"], "endpoint": config.endpoint,
+               "remote_compute_id": compute_id}
+    if operation_key is not None and _command_matches(state, operation_key, request):
+        return state
+    if operation_key is not None:
+        _remember_command(state, operation_key, request)
+        state = _save(runtime, identity, plan_id, state, command_key=operation_key)
+    client = _center_client(runtime, identity, plan_id, config, actor_headers)
+    try:
+        record = await client.cancel_remote_compute(compute_id)
+    except CenterFault as exc:
+        _record(state, "cancel_remote_compute",
+                "unknown" if isinstance(exc, CenterOutcomeUnknown) else "rejected",
+                exc.code, exc.status)
+        _save(runtime, identity, plan_id, state)
+        raise
+    finally:
+        await client.aclose()
+    if not isinstance(record, dict) or record.get("id") != compute_id:
+        _record(state, "cancel_remote_compute", "rejected", "invalid_response")
+        _save(runtime, identity, plan_id, state)
+        raise CenterFault("invalid_response", 0, False)
+    state["remote_compute"] = record
+    if record.get("status") == "cancelled":
+        state["state"] = "cancelled"
+        _record(state, "cancel_remote_compute", "ok")
+    else:
+        _record(state, "cancel_remote_compute", "rejected",
+                record.get("status") or "ack_not_confirmed")
+    return _save(runtime, identity, plan_id, state)
+
+
 async def confirm_delivery(runtime, plan_id, delivery_id, result_manifest_digest, config, *,
                            actor_headers=None, operation_key=None):
     """本地校验通过后才向中心 ack；digest 不符或不曾校验就拒绝，交付保持 pending。
@@ -583,11 +1409,19 @@ async def confirm_delivery(runtime, plan_id, delivery_id, result_manifest_digest
     ack 的回执状态才是确认的判据：只有 `state=confirmed` 才落本地 confirmed，
     `state=expired` 落本地 expired，其它/缺失状态保持 pending 并记原因 ——
     HTTP 200 本身不构成确认（中心对过期件也回 200）。
+
+    File-compute plans (`corpus.parse`) branch to `_confirm_file_delivery`:
+    only the locally verified fixed manifest digest is confirmed, lost and
+    duplicate acks replay safely, expired TTL never becomes confirmed.
     """
     identity = federation_identity(runtime)
     state = _load(runtime, identity, plan_id)
     if state is None:
         reject("not_found", "plan has no local federation state")
+    if _is_file_plan(runtime.consents.get(identity, plan_id)["scope"]):
+        return await _confirm_file_delivery(runtime, plan_id, delivery_id, result_manifest_digest,
+                                            config, identity, state, actor_headers=actor_headers,
+                                            operation_key=operation_key)
     delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
     request = {"action": "ack", "delivery_id": delivery_id, "digest": result_manifest_digest}
     if operation_key is not None and _command_matches(state, operation_key, request):
@@ -603,10 +1437,12 @@ async def confirm_delivery(runtime, plan_id, delivery_id, result_manifest_digest
     if not delivery.get("verified") or delivery.get("result_manifest_digest") != result_manifest_digest:
         reject("plan_changed", "refusing to confirm a delivery whose bytes were not verified locally")
     _require_reviewed_endpoint(runtime, identity, plan_id, config)
+    
+    
     if operation_key is not None:
         _remember_command(state, operation_key, request)
         state = _save(runtime, identity, plan_id, state, command_key=operation_key)
-    client = CenterFederationClient(config, actor_headers=actor_headers)
+    client = _center_client(runtime, identity, plan_id, config, actor_headers)
     try:
         receipt = await client.ack_delivery(delivery_id, result_manifest_digest)
     except CenterFault as exc:
@@ -691,27 +1527,35 @@ def resolve_center_ref(runtime, center_ref):
     endpoint, credential = entry.get("endpoint"), entry.get("credential")
     if not isinstance(endpoint, str) or not isinstance(credential, str):
         reject("invalid_plan", "center_ref entry requires endpoint and credential strings")
+    upload_origin = entry.get("upload_origin", entry.get("upload_endpoint"))
+    if upload_origin is not None and not isinstance(upload_origin, str):
+        reject("invalid_plan", "center_ref upload origin must be a string")
     return CenterConfig(
         endpoint=endpoint,
         credential=credential,
         timeout_seconds=entry.get("timeout_seconds", DEFAULT_TIMEOUT),
         allow_loopback=entry.get("allow_loopback", False),
+        upload_origin=upload_origin,
     )
 
 
-def resolve_center(runtime, *, center_ref=None, endpoint=None, credential=None, timeout_seconds=None):
+def resolve_center(runtime, *, center_ref=None, endpoint=None, credential=None, timeout_seconds=None,
+                   upload_origin=None, upload_endpoint=None):
     """请求体可以内联 endpoint/credential，也可以给 center_ref 让本地配置解析。
 
     只要给了 center_ref 就以本地登记为准（内联值被忽略），避免请求体用同名
-    引用顶替管理员登记的端点。
+    引用顶替管理员登记的端点。storage origin 同理：host 配对元数据固定，
+    renderer 永不提供 URL；内联 upload origin 仅供 host 内部调用。
     """
     if center_ref is not None:
         return resolve_center_ref(runtime, center_ref)
     if endpoint is None or credential is None:
         reject("invalid_plan", "center requires endpoint and credential, or a configured center_ref")
+    origin = upload_origin if upload_origin is not None else upload_endpoint
     return CenterConfig(
         endpoint=endpoint,
         credential=credential,
         timeout_seconds=timeout_seconds if timeout_seconds is not None else DEFAULT_TIMEOUT,
         allow_loopback=False,
+        upload_origin=origin,
     )

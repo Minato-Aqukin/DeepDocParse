@@ -18,6 +18,8 @@ class DocumentContext:
     filename: str
     created_at: datetime
     parse_job_id: str | None
+    # 同一资源的各个固定版本文件名通常相同；界面要靠它说清"这是第几版"
+    version_no: int | None = None
 
 
 def presentation(document: Document, version: ResourceVersion | None) -> DocumentContext:
@@ -25,7 +27,7 @@ def presentation(document: Document, version: ResourceVersion | None) -> Documen
         return DocumentContext(None, None, document.filename, document.created_at,
                                document.current_job_id)
     return DocumentContext(version.resource_id, version.id, version.filename,
-                           version.created_at, version.parse_job_id)
+                           version.created_at, version.parse_job_id, version.version_no)
 
 
 async def document_context(session: AsyncSession, actor: Actor,

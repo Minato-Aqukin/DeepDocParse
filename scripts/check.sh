@@ -1,19 +1,75 @@
 #!/usr/bin/env bash
-# 本地全量门禁 —— 与 CI 同一套判据，跑一条命令看全。
+# 本地默认门禁；浏览器、真实服务与发行检查的边界见 docs/DEVELOPMENT.md。
 #
-#   scripts/check.sh            # 全跑
+#   scripts/check.sh            # 默认四组
 #   scripts/check.sh guards     # 只跑守卫
 #   scripts/check.sh python go web
+#   scripts/check.sh web-e2e    # 可选：需要 Playwright Chromium
 #
 # **不 set -e**：一处红就停会让人只看到第一个问题，然后修一个跑一遍。
 # 这里全部跑完再汇总 —— 一次看到全部问题比早停有用得多。
 set -uo pipefail
 
+CALLER_DIR="$PWD"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
 
-PY="${PY:-$ROOT/.venv/bin/python}"
-[ -x "$PY" ] || PY=python3
+usage() {
+  cat <<'USAGE'
+用法：scripts/check.sh [guards|python|go|web|web-e2e ...]
+      scripts/check.sh --help
+
+默认：guards python go web（依次运行，失败后继续汇总）。
+  guards   契约、配置、架构等守卫；dev PostgreSQL 可用时追加数据库边界检查
+  python   Ruff 与各 Python 包的单测
+  go       vet、单测、gofmt、go mod tidy；真库用例需要 CONTROL_TEST_DATABASE_URL
+  web      类型检查与生产构建、组件单测、共享连接层与桌面主机测试
+  web-e2e  前端浏览器测试（含构建；需提前安装 Playwright Chromium）
+
+PY 可指定解释器命令名或路径；相对路径基于调用目录。未设置时优先 .venv/bin/python。
+完整验证范围与依赖见 docs/DEVELOPMENT.md。
+USAGE
+}
+
+WANTED=("$@")
+if [ ${#WANTED[@]} -eq 1 ] && [ "${WANTED[0]}" = --help ]; then
+  usage
+  exit 0
+fi
+for arg in "${WANTED[@]}"; do
+  case "$arg" in
+    guards|python|go|web|web-e2e) ;;
+    *) printf '未知检查目标：%s\n' "$arg" >&2; usage >&2; exit 2 ;;
+  esac
+done
+[ ${#WANTED[@]} -eq 0 ] && WANTED=(guards python go web)
+
+# 固定绝对路径后再切换包目录。显式 PY 错误必须报错，不能换成另一个解释器。
+resolve_python() {
+  local candidate="$1"
+  [ -n "$candidate" ] || return 1
+  if [[ "$candidate" != */* ]]; then
+    candidate="$(command -v -- "$candidate")" || return 1
+  fi
+  [[ "$candidate" = /* ]] || candidate="$CALLER_DIR/$candidate"
+  [ -f "$candidate" ] && [ -x "$candidate" ] || return 1
+  printf '%s/%s\n' "$(cd "$(dirname "$candidate")" && pwd)" "$(basename "$candidate")"
+}
+
+if [ "${PY+x}" = x ]; then
+  PY="$(resolve_python "$PY")" || {
+    printf 'PY 必须是可执行的 Python 命令名或文件路径。\n' >&2
+    exit 2
+  }
+elif [ -x "$ROOT/.venv/bin/python" ]; then
+  PY="$ROOT/.venv/bin/python"
+else
+  PY="$(resolve_python python3)" || {
+    printf '找不到 Python：请创建 .venv 或设置 PY。\n' >&2
+    exit 2
+  }
+fi
+
+cd "$ROOT" || exit 2
 export PATH="$HOME/.local/opt/go/bin:$PATH"
 
 FAILED=()
@@ -35,16 +91,12 @@ in_dir() {
 }
 
 want() {
-  [ $# -eq 0 ] && return 0
-  local target="$1"; shift
+  local target="$1"
   for arg in "${WANTED[@]}"; do
     [ "$arg" = "$target" ] && return 0
   done
   return 1
 }
-
-WANTED=("$@")
-[ ${#WANTED[@]} -eq 0 ] && WANTED=(guards python go web)
 
 if want guards; then
   run "契约生成物"        "$PY" packages/contracts/scripts/generate.py --check
@@ -56,6 +108,7 @@ if want guards; then
   run "日志脱敏"          "$PY" scripts/check_log_redaction.py --with-self-test
   run "联邦契约"          "$PY" scripts/check_federation_contracts.py
   run "联邦任务路由"      "$PY" scripts/check_federation_routes.py
+  run "内容契约路由"      "$PY" scripts/check_content_contract.py
   run "验收台账"          "$PY" scripts/check_acceptance_matrix.py
   run "control 迁移同步"  "$PY" scripts/check_control_migrations.py
   run "配置参考文档"      "$PY" scripts/gen_config_docs.py --check
@@ -108,10 +161,10 @@ if want go; then
     # 没有可替代的假实现）。dev 库起着就连上去跑，没起就**说出来**——
     # 那几条会 t.Skip，而 skip 与 pass 在 `go test` 的总结里长得一模一样
     if [ -n "${CONTROL_TEST_DATABASE_URL:-}" ]; then
-      printf '\033[2m    （计量用例连着 %s）\033[0m\n' "${CONTROL_TEST_DATABASE_URL%%\?*}"
+      printf '\033[2m    已配置 CONTROL_TEST_DATABASE_URL，计量用例使用 PostgreSQL 测试连接。\033[0m\n'
     else
       printf '\033[33m    注意：没有 CONTROL_TEST_DATABASE_URL，internal/store 的 4 条计量用例被跳过\033[0m\n'
-      printf '\033[2m    起 dev 库后：scripts/dev.sh up postgres 并导出该变量；CI 里是必跑的\033[0m\n'
+      printf '\033[2m    请准备独立 PostgreSQL 测试库并设置该变量；见 docs/DEVELOPMENT.md，CI 里是必跑的\033[0m\n'
     fi
   else
     # **显式报缺，不静默跳过**：静默跳过的绿与真的绿长得一模一样
@@ -122,7 +175,7 @@ fi
 
 if want web; then
   if [ -d apps/web/node_modules ]; then
-    run "前端类型检查"  in_dir apps/web npm run --silent type-check
+    run "前端类型检查与生产构建" in_dir apps/web npm run --silent build
     run "前端单测"      in_dir apps/web npx vitest run
     run "连接层类型检查" in_dir apps/web npx tsc -p ../../packages/client-runtime/tsconfig.json
     run "连接层持久化与协议" node --test packages/client-runtime/test/*.test.mjs
@@ -132,6 +185,15 @@ if want web; then
   else
     printf '\033[33m>>> 跳过前端：apps/web/node_modules 不存在（npm ci）\033[0m\n'
     FAILED+=("前端（依赖未安装）")
+  fi
+fi
+
+if want web-e2e; then
+  if [ -d apps/web/node_modules ]; then
+    run "前端浏览器测试" in_dir apps/web npm run --silent test:e2e
+  else
+    printf '\033[33m>>> 跳过浏览器测试：apps/web/node_modules 不存在（npm ci）\033[0m\n'
+    FAILED+=("浏览器测试（依赖未安装）")
   fi
 fi
 

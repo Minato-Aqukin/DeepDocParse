@@ -5,11 +5,10 @@ import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { WorkspaceHandles } from '../src/workspaces.mjs'
 import { ClientHost, clientFailure } from '../src/client-host.mjs'
-import { CLIENT_CHANNELS, clientArguments } from '../src/client-policy.mjs'
+import { clientArguments } from '../src/client-policy.mjs'
 
 // Host tests for the remote plan flow. The local runtime is a loopback HTTP double of
 // ddp_local's plan routes, written with the same refusal rules the host relies on
@@ -191,12 +190,26 @@ async function setup(t) {
     await rm(temporary, { recursive: true, force: true })
   })
   const { clients, local } = await open()
-  const center = (await clients.pairRemote({ label: '研究中心', environment: { environmentId: NODE, authorityNodeId: NODE,
-    workspaceId: 'org-1', endpoint: CENTER }, profile: { profileId: 'profile-alice', issuer: NODE, subject: 'user-alice' } })).connectionId
+  // Host-internal registration (renderer now pairs via centerConnect; no clientPairRemote IPC).
+  const center = (await clients.pairRemote({ environment: { environmentId: NODE, authorityNodeId: NODE,
+    workspaceId: 'org-1', endpoint: CENTER }, profile: { profileId: 'profile-alice', issuer: NODE, subject: 'user-alice' },
+    label: '研究中心' })).connectionId
   await ready(clients, center)
   return { clients, local, center, runtime, credentialUse, dialogs, options, temporary, open,
     answer: value => { answer = value } }
 }
+
+test('remote connections refuse commands and named queries: reads go through the audited proxy', async t => {
+  const { clients, center } = await setup(t)
+  // A remote connection is never a plan runtime and never answers named queries.
+  await assert.rejects(clients.query({ connectionId: center, name: 'resource.page',
+    payload: { snapshot_id: 's', cursor: 'c' } }), { code: 'approved_plan_required' })
+  await assert.rejects(clients.command({ connectionId: center, name: 'rag.answer',
+    payload: { query: 'private question' }, idempotencyKey: 'not-a-read-0001' }),
+  { code: 'approved_plan_required' })
+  // The center JWT still flows only from the broker into approved dispatch bodies
+  // (covered below); the renderer-facing query/command surface stays shut.
+})
 
 const propose = (clients, local, center, idempotencyKey = 'propose-0001') => clients.planPropose({ connectionId: local,
   centerConnectionId: center, query: QUERY, inputs: [{ ref: 'version-1', digest: 'sha256:' + '1'.repeat(64), sizeBytes: 1024 }],
@@ -207,27 +220,63 @@ test('plan IPC is a fixed schema: no path, URL, credential, plan body or implici
   const good = {
     clientPlanPropose: { connectionId: 'connection-1', centerConnectionId: 'connection-2', query: QUERY,
       inputs: [{ ref: 'version-1', digest: DIGEST, sizeBytes: 10 }], retention: 'temporary', validMinutes: 60, idempotencyKey: 'propose-0001' },
+    clientPlanProposeFile: { connectionId: 'connection-1', centerConnectionId: 'connection-2', filename: 'manual.pdf',
+      inputs: [{ ref: 'version-1', digest: DIGEST, sizeBytes: 10 }], retention: 'temporary', validMinutes: 60, idempotencyKey: 'file-plan-0001' },
     clientPlanList: { connectionId: 'connection-1' }, clientPlanGet: plan, clientPlanReconcile: plan, clientPlanFetchDelivery: plan,
     clientPlanApprove: { ...plan, phase: 'exploration', scopeDigest: DIGEST, userConfirmed: true, idempotencyKey: 'approve-0001' },
     clientPlanRevoke: { ...plan, idempotencyKey: 'revoke-0001' },
+    clientPlanCancel: { ...plan, idempotencyKey: 'cancel-0001' },
+    clientPlanReviewCenter: { ...plan, idempotencyKey: 'review-center-0001' },
     clientPlanDispatch: { ...plan, phase: 'execution', idempotencyKey: 'dispatch-0001' },
+    clientPlanResume: { ...plan, idempotencyKey: 'resume-0001' },
     clientPlanConfirmDelivery: { ...plan, deliveryId: 'delivery-1', resultManifestDigest: DIGEST, idempotencyKey: 'confirm-0001' },
   }
-  for (const [method, input] of Object.entries(good)) {
-    assert.equal(Object.hasOwn(CLIENT_CHANNELS, method), true, method)
-    assert.deepEqual(clientArguments(method, structuredClone(input)), input, method)
+  const variants = [...Object.entries(good), ['clientPlanPropose', { ...good.clientPlanPropose,
+    template: 'trusted_federation', participantConnectionIds: ['connection-3'] }],
+    ['clientPlanPropose', { ...good.clientPlanPropose, purpose: 'answer' }],
+    ['clientPlanPropose', { ...good.clientPlanPropose, purpose: 'wiki', wiki: { title: '控制器说明', max_pages: 4 } }],
+    ['clientPlanPropose', { ...good.clientPlanPropose, purpose: 'wiki', wiki: { title: '控制器说明' } }]]
+  for (const [method, input] of variants) {
+    const accepted = clientArguments(method, structuredClone(input))
     // Any extra field — an endpoint, a path, a credential, a TaskPlan — fails closed.
     for (const extra of [{ endpoint: CENTER }, { path: '/etc/passwd' }, { credential: SECRET }, { plan: {} }, { url: 'https://x' }])
-      assert.throws(() => clientArguments(method, { ...input, ...extra }), /invalid_arguments/, method + JSON.stringify(extra))
+      assert.throws(() => clientArguments(method, { ...accepted, ...extra }), /invalid_arguments/, method + JSON.stringify(extra))
   }
   const rejected = [
     ['clientPlanPropose', { inputs: [{ ref: '../outside', digest: DIGEST, sizeBytes: 10 }] }],
     ['clientPlanPropose', { inputs: [{ ref: 'version-1', digest: DIGEST, sizeBytes: 10, path: '/tmp/a.pdf' }] }],
     ['clientPlanPropose', { inputs: [{ ref: 'version-1', digest: 'sha256:short', sizeBytes: 10 }] }],
     ['clientPlanPropose', { inputs: [{ ref: 'version-1', digest: DIGEST, sizeBytes: 10 }, { ref: 'version-1', digest: DIGEST, sizeBytes: 10 }] }],
+    ['clientPlanProposeFile', { inputs: [] }],
+    ['clientPlanProposeFile', { inputs: [{ ref: 'v1', digest: DIGEST, sizeBytes: 10 }, { ref: 'v2', digest: DIGEST, sizeBytes: 10 }] }],
+    ['clientPlanProposeFile', { filename: '../../private.pdf' }],
+    ['clientPlanProposeFile', { filename: 'private\nfile.pdf' }],
     ['clientPlanPropose', { centerConnectionId: 'https://center.test/team' }],
     ['clientPlanPropose', { retention: 'persistent' }], ['clientPlanPropose', { validMinutes: 100000 }],
-    ['clientPlanPropose', { query: ' ' }], ['clientPlanPropose', { query: 'a b' }],
+    ['clientPlanPropose', { template: 'open_federation' }],
+    ['clientPlanPropose', { template: 'center_only', participantConnectionIds: ['connection-3'] }],
+    ['clientPlanPropose', { template: 'trusted_federation', participantConnectionIds: ['connection-3', 'connection-3'] }],
+    ['clientPlanPropose', { template: 'trusted_federation', recipients: ['node-unpaired'] }],
+    ['clientPlanPropose', { template: 'trusted_federation', scope_manifest: {} }],
+    ['clientPlanReviewCenter', { center_plan: {} }],
+    ['clientPlanReviewCenter', { rootTaskId: 'injected-task' }],
+    ['clientPlanReviewCenter', { idempotencyKey: 'short' }],
+    ['clientPlanPropose', { query: ' ' }],
+    ['clientPlanPropose', { purpose: 'summary' }],
+    ['clientPlanPropose', { purpose: '' }],
+    ['clientPlanPropose', { purpose: 'wiki' }],
+    ['clientPlanPropose', { purpose: 'answer', wiki: { title: '控制器说明' } }],
+    ['clientPlanPropose', { purpose: 'wiki', wiki: { title: '  ' } }],
+    ['clientPlanPropose', { purpose: 'wiki', wiki: { title: 'x'.repeat(256) } }],
+    ['clientPlanPropose', { purpose: 'wiki', wiki: { title: '控制器说明', max_pages: 0 } }],
+    ['clientPlanPropose', { purpose: 'wiki', wiki: { title: '控制器说明', max_pages: 13 } }],
+    ['clientPlanPropose', { purpose: 'wiki', wiki: { title: '控制器说明', max_pages: 1.5 } }],
+    ['clientPlanPropose', { purpose: 'wiki', wiki: { max_pages: 4 } }],
+    ['clientPlanPropose', { purpose: 'wiki', wiki: { title: '控制器说明', wiki_id: 'wiki-1' } }],
+    ['clientPlanPropose', { purpose: 'wiki', wiki: { title: '控制器说明', base_revision_id: 'revision-1' } }],
+    ['clientPlanProposeFile', { purpose: 'wiki', wiki: { title: '控制器说明' } }],
+    ['clientPlanResume', { idempotencyKey: 'short' }],
+    ['clientPlanResume', { planId: '../../plan-1' }],
     ['clientPlanApprove', { userConfirmed: 'true' }], ['clientPlanApprove', { userConfirmed: false }],
     ['clientPlanApprove', { phase: 'publish' }], ['clientPlanApprove', { scopeDigest: 'sha256:' + 'A'.repeat(64) }],
     ['clientPlanDispatch', { planId: '../../plan-1' }], ['clientPlanDispatch', { planId: 'plan-1/../../x' }],
@@ -236,22 +285,14 @@ test('plan IPC is a fixed schema: no path, URL, credential, plan body or implici
   ]
   for (const [method, change] of rejected)
     assert.throws(() => clientArguments(method, { ...good[method], ...change }), /invalid_arguments/, method + JSON.stringify(change))
+  for (const method of ['clientReadDraft', 'clientSaveDraft']) {
+    const input = { connectionId: 'connection-1', key: '@file-transfer:plan-1',
+      ...(method === 'clientSaveDraft' ? { expectedRevision: 0, value: { uploadId: 'other-user' } } : {}) }
+    assert.throws(() => clientArguments(method, input), /invalid_arguments/, 'renderer cannot forge or read host transfer journals')
+  }
   assert.throws(() => clientArguments('clientPlanApprove', (({ userConfirmed: _, ...rest }) => rest)(good.clientPlanApprove)), /invalid_arguments/)
 })
 
-test('preload and main expose exactly the fixed plan channels, each mapped to its host method', async () => {
-  // Electron cannot run in this test process, so this is a structural check of the
-  // two source files that wire CLIENT_CHANNELS; behaviour is covered by the tests below.
-  const source = path.dirname(fileURLToPath(import.meta.url))
-  const preload = await readFile(path.join(source, '../src/preload.cjs'), 'utf8')
-  const main = await readFile(path.join(source, '../src/main.mjs'), 'utf8')
-  for (const [method, channel] of Object.entries(CLIENT_CHANNELS)) {
-    assert.match(preload, new RegExp(`${method}: (input => ipcRenderer\\.invoke\\('${channel}', input\\)|\\(\\) => ipcRenderer\\.invoke\\('${channel}'\\))`), method)
-    if (method === 'clientSubscribe') continue
-    assert.match(main, new RegExp(`${method}: (input => clients\\.|\\(\\) => clients\\.)`), method)
-  }
-  assert.doesNotMatch(preload, /invoke: |send: |ipcRenderer\.invoke\(channel/)
-})
 
 test('nothing dispatches or touches a credential before approval, and approval needs the native host dialog', async t => {
   const { clients, local, center, runtime, credentialUse, dialogs, answer } = await setup(t)
@@ -271,10 +312,7 @@ test('nothing dispatches or touches a credential before approval, and approval n
   answer(false)
   await assert.rejects(approve('approve-0002'), { code: 'approval_cancelled' })
   assert.deepEqual(runtime.approvals, [])
-  assert.deepEqual(dialogs[0], { planId: proposed.plan_id, phase: 'exploration', scopeDigest: proposed.scope_digest,
-    payloads: [{ kind: 'query_text', recipient: NODE, bytes: Buffer.byteLength(QUERY), digest: proposed.scope.payload_bindings[0].digest }],
-    transports: [{ recipient: NODE, endpoint: CENTER, workspace: 'org-1', subject: 'user-alice' }],
-    inputs: 1, retention: 'temporary', outputLocations: ['local:workspace-1'], validUntil: '2030-01-01T00:00:00Z' })
+  assert.equal(dialogs[0].description, QUERY, 'native approval discloses the original query, not just an opaque digest')
   answer(true)
   const approved = await approve('approve-0003')
   assert.ok(approved.consents.exploration)

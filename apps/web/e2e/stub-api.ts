@@ -113,6 +113,7 @@ export async function stubApi(page: Page): Promise<void> {
         return route.fulfill({
           json: {
             id: 'demo-id', filename: 'demo.pdf', doc_id: 'd'.repeat(64), origin: 'upload',
+            resource_id: null, source_version_id: null,
             mime: 'application/pdf', size_bytes: 1, page_count: 1, status: 'succeeded',
             error: null, index_status: 'ready', index_error: null,
             compile_status: 'ready', compile_degraded: [],

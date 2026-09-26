@@ -101,7 +101,7 @@ export const CONFIDENCE_META: Record<string, StatusMeta & { hint: string }> = {
   unknown: {
     label: '相关度未知',
     type: 'info',
-    hint: '本次只走了关键词检索（向量化服务不可用），无法判断语义相关度。',
+    hint: '没有可衡量语义相关度的已引用证据；可能没有有效引用，或向量化服务不可用。',
   },
 }
 

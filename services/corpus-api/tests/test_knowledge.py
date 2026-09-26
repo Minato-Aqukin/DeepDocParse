@@ -9,7 +9,7 @@ from ddp_corpus.models import (
     KnowledgeReview, WikiEntry, WikiSection, WikiSentence,
 )
 from tests.conftest import ACTOR, CHAT, ORG
-from tests.test_qa import _ask, _chat_sse, _conversation, _ready_document
+from tests.test_qa import _ask, _conversation, _grounded_doc, _grounded_side_effect, _ready_document
 
 
 async def _seed_knowledge(actor_client, session, monkeypatch):
@@ -18,7 +18,7 @@ async def _seed_knowledge(actor_client, session, monkeypatch):
     monkeypatch.setattr(settings, "qa_verify_parse", False)
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("系统使用模型。", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("系统使用模型。", [1]))))
     events = dict(await _ask(actor_client, cid))
     evidence_id = events["assertions"]["assertions"][0]["evidence_ids"][0]
 

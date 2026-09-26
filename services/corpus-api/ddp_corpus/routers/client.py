@@ -1,12 +1,16 @@
 """Fixed read/reconciliation routes for the authenticated center Provider."""
 from dataclasses import replace
+from datetime import datetime, timezone
+import base64
 import hashlib
+import json
+import math
 import re
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_corpus import client_projection as projection
@@ -14,13 +18,13 @@ from ddp_corpus.capabilities import collect_capability_profiles
 from ddp_corpus.config import settings
 from ddp_corpus.client_models import ClientPage, ClientReceipt, ClientSnapshot, ClientView
 from ddp_corpus.db import get_session
-from ddp_corpus.deps import Actor, current_actor, require_service_actor
-from ddp_corpus.models import Document, Resource, ResourceVersion, as_aware
+from ddp_corpus.deps import Actor, current_actor, get_storage, require_service_actor
+from ddp_corpus.models import Document, Resource, ResourceVersion, Wiki, WikiPage, WikiRevision, as_aware
 from ddp_corpus.policy import resource_condition
 from ddp_corpus.routers import mcp_tools
 
 router = APIRouter()
-CAPABILITIES = ["client.snapshot", "client.events", "client.receipt", "client.query", "client.windows"]
+CAPABILITIES = ["client.snapshot", "client.events", "client.receipt", "client.query", "client.windows", "client.assets"]
 
 
 async def client_scope(actor: Actor = Depends(current_actor),
@@ -76,6 +80,61 @@ async def receipt(operation_key: str, actor: Actor = Depends(current_actor),
     return response(await projection.receipt(session, actor, operation_key))
 
 
+async def _asset_version(session, actor, version_id):
+    version = await session.scalar(
+        select(ResourceVersion).join(Resource).join(
+            Document, Document.id == ResourceVersion.document_id
+        ).where(
+            ResourceVersion.id == version_id,
+            ResourceVersion.deleted_at.is_(None),
+            Document.deleted_at.is_(None),
+            resource_condition(actor),
+        )
+    )
+    if version is None:
+        raise projection.error("not_found", 404)
+    return version
+
+
+def _asset_identity(result, request, actor):
+    result.headers["Cache-Control"] = "private, no-store"
+    result.headers["X-DDP-Authority-Node"] = request.headers.get("X-DDP-Authority-Node", "")
+    result.headers["X-DDP-Actor-Subject"] = actor.principal_id
+    return result
+
+
+@router.get("/api/v1/client/versions/{version_id}/source")
+async def source_asset(
+    version_id: str, request: Request, actor: Actor = Depends(current_actor),
+    scope: str = Depends(client_scope), session: AsyncSession = Depends(get_session),
+    storage=Depends(get_storage),
+):
+    from ddp_corpus.bundle_source import source_response
+
+    version = await _asset_version(session, actor, version_id)
+    result = await source_response(
+        version.resource_id, version.id, actor=actor, session=session,
+        storage=storage, http=request.app.state.http,
+    )
+    return _asset_identity(result, request, actor)
+
+
+@router.get("/api/v1/client/versions/{version_id}/bundle")
+async def bundle_asset(
+    version_id: str, request: Request, actor: Actor = Depends(current_actor),
+    scope: str = Depends(client_scope), session: AsyncSession = Depends(get_session),
+    storage=Depends(get_storage),
+):
+    from ddp_corpus.routers.bundles import export_bundle
+
+    version = await _asset_version(session, actor, version_id)
+    result = await export_bundle(
+        version.resource_id, version.id, actor=actor, session=session, storage=storage,
+        include_wiki=False, include_vectors=False,
+    )
+    return _asset_identity(result, request, actor)
+
+
 class Query(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(max_length=64)
@@ -102,6 +161,108 @@ class EvidenceQuery(BaseModel):
     evidence_id: str = Field(min_length=1, max_length=512)
     resource_id: str | None = Field(default=None, max_length=128)
     version_id: str | None = Field(default=None, max_length=128)
+
+
+class WikiWindowQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    cursor: str | None = Field(default=None, min_length=1, max_length=1024)
+    limit: int = Field(default=50, ge=1, le=100, strict=True)
+
+
+class WikiRevisionsQuery(WikiWindowQuery):
+    wiki_id: str = Field(min_length=1, max_length=32)
+
+
+class WikiGetQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    wiki_id: str = Field(min_length=1, max_length=32)
+    revision_id: str | None = Field(default=None, min_length=1, max_length=32)
+
+
+async def client_wiki_window(session, actor, scope, args, *, wiki_id=None):
+    from ddp_corpus import wiki
+
+    model = WikiRevision if wiki_id else Wiki
+    list_scope = "revisions:" + wiki_id if wiki_id else "wikis"
+    if wiki_id:
+        selected_wiki = await wiki.get_wiki(session, actor, wiki_id)
+        predicates = [WikiRevision.wiki_id == wiki_id]
+        if not wiki.is_owner(selected_wiki, actor):
+            # A public revision's source revocation also revokes its history metadata.
+            await wiki.revision_out(session, actor, selected_wiki)
+            predicates.append(WikiRevision.id == selected_wiki.published_revision_id)
+    else:
+        predicates = [Wiki.organization_id == actor.organization_id,
+                      Wiki.owner_id == actor.principal_id,
+                      Wiki.current_revision_id.is_not(None)]
+
+    anchor = after = None
+    if args.cursor:
+        try:
+            decoded = json.loads(base64.urlsafe_b64decode(
+                args.cursor.encode() + b"=" * (-len(args.cursor) % 4)))
+            if decoded["workspace"] != scope or decoded["scope"] != list_scope:
+                raise ValueError()
+            anchor, after = decoded["anchor"], decoded["after"]
+            for pair in (anchor, after):
+                if (not isinstance(pair, list) or len(pair) != 2
+                        or type(pair[0]) not in (int, float) or not math.isfinite(pair[0])
+                        or not isinstance(pair[1], str) or not re.fullmatch(r"[a-f0-9]{32}", pair[1])):
+                    raise ValueError()
+                datetime.fromtimestamp(pair[0], timezone.utc)
+            if after > anchor:
+                raise ValueError()
+        except (ValueError, KeyError, TypeError, UnicodeError, OverflowError, OSError):
+            raise projection.error("cursor_expired", 409) from None
+    if anchor is None:
+        top = (await session.execute(select(model.created_at, model.id).where(*predicates)
+            .order_by(model.created_at.desc(), model.id.desc()).limit(1))).first()
+        if top is None:
+            return {"items": [], "visible_total": 0, "has_more": False, "next_cursor": None}
+        anchor = [as_aware(top.created_at).timestamp(), top.id]
+
+    def boundary(pair, *, inclusive):
+        timestamp = datetime.fromtimestamp(pair[0], timezone.utc)
+        return or_(model.created_at < timestamp, and_(model.created_at == timestamp,
+                   model.id <= pair[1] if inclusive else model.id < pair[1]))
+
+    predicates.append(boundary(anchor, inclusive=True))
+    total = await session.scalar(select(func.count()).select_from(model).where(*predicates))
+    if after is not None:
+        predicates.append(boundary(after, inclusive=False))
+    columns = [model.id, model.created_at]
+    if wiki_id:
+        columns += [WikiRevision.wiki_id, WikiRevision.base_revision_id, WikiRevision.kind]
+    else:
+        columns += [Wiki.title, Wiki.current_revision_id, Wiki.published_revision_id]
+    entries = (await session.execute(select(*columns).where(*predicates)
+        .order_by(model.created_at.desc(), model.id.desc()).limit(args.limit + 1))).all()
+    has_more, selected, items = len(entries) > args.limit, entries[:args.limit], []
+    for entry in selected:
+        if wiki_id:
+            items.append(dict(entry._mapping))
+            continue
+        metadata = (await session.execute(select(
+            WikiRevision.id, WikiRevision.wiki_id, WikiRevision.title,
+            WikiRevision.base_revision_id, WikiRevision.kind, WikiRevision.created_at,
+            func.coalesce(func.json_array_length(WikiRevision.relations), 0).label("relation_count"),
+            select(func.count(WikiPage.id)).where(WikiPage.revision_id == WikiRevision.id)
+                .correlate(WikiRevision).scalar_subquery().label("page_count"),
+        ).where(WikiRevision.id == entry.current_revision_id,
+                WikiRevision.wiki_id == entry.id))).one()
+        items.append({"wiki": {"id": entry.id, "title": metadata.title,
+                      "current_revision_id": entry.current_revision_id,
+                      "published_revision_id": entry.published_revision_id},
+                      "revision": {**dict(metadata._mapping), "semantic_review": "needs_review",
+                                   "source_type": "generated"}})
+    next_cursor = None
+    if has_more:
+        last = selected[-1]
+        next_cursor = base64.urlsafe_b64encode(projection.encoded({
+            "workspace": scope, "scope": list_scope, "anchor": anchor,
+            "after": [as_aware(last.created_at).timestamp(), last.id],
+        })).decode().rstrip("=")
+    return {"items": items, "visible_total": total, "has_more": has_more, "next_cursor": next_cursor}
 
 
 @router.post("/api/v1/client/query")
@@ -150,6 +311,17 @@ async def query(body: Query, request: Request, actor: Actor = Depends(current_ac
             result["hits"] = result.pop("results")
             result["scope"]["source_version_ids"] = sorted(current_ids)
             result["scope"]["snapshot_complete"] = True
+        elif body.name == "wiki.list":
+            args = WikiWindowQuery.model_validate(body.payload)
+            result = await client_wiki_window(session, actor, scope, args)
+        elif body.name == "wiki.revisions":
+            args = WikiRevisionsQuery.model_validate(body.payload)
+            result = await client_wiki_window(session, actor, scope, args, wiki_id=args.wiki_id)
+        elif body.name == "wiki.get":
+            from ddp_corpus import wiki
+            args = WikiGetQuery.model_validate(body.payload)
+            selected_wiki = await wiki.get_wiki(session, actor, args.wiki_id)
+            result = await wiki.revision_out(session, actor, selected_wiki, args.revision_id)
         elif body.name == "evidence.get":
             args = EvidenceQuery.model_validate(body.payload)
             actor = replace(actor, resource_id=args.resource_id, version_id=args.version_id)

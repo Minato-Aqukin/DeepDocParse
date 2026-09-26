@@ -97,6 +97,15 @@ async def reconcile_once(sessionmaker: async_sessionmaker, storage: Storage,
                 print(f"[reconcile] index failed for job {job_id}: {exc}")
 
     stats["gc"] = await collect_deleted_objects(sessionmaker, storage)
+    # File-compute TTL + terminal grace cleanup (own tmp prefix only, other
+    # references kept). Failures here must not break the main reconcile stats.
+    try:
+        from ddp_corpus.routers.remote_compute import sweep_remote_computes
+        async with sessionmaker() as sweep_session:
+            swept = await sweep_remote_computes(sweep_session, storage)
+            stats["remote_compute"] = swept
+    except Exception as exc:
+        print(f"[reconcile] remote-compute sweep failed: {type(exc).__name__}: {exc}")
     return stats
 
 

@@ -45,35 +45,94 @@ the normal error channel while remote connections keep working.
 
 ## Shared connection implementation (2026-09-13)
 
-`bridge.d.ts` is the renderer-facing contract. `ClientHost` now owns one
+`bridge.d.ts` is the renderer-facing contract. `ClientHost` owns one
 `ConnectionRegistry` reference per environment/profile, a private
 `SqliteProjectionStore`, and `HttpProvider` transports. `clientList` includes no
-endpoint or credential. Listener events carry subscriptionId, connectionId and a
-monotonic revision; the synchronous subscription response repairs subscribe races.
-Reload removes view listeners only. Explicit disconnect retains runtime assets,
-drafts and the reconciliation ledger. Restart restores cached projections as stale;
+endpoint or credential. The removed view-subscription and file-transfer IPC
+(`clientSubscribe`, `clientUnsubscribe`, `onClientView`, `clientImportFile`,
+`clientExportBundle`, `clientReadOriginal`, `clientConnectLocal`,
+`clientPairRemote`, `clientWake`, `clientDisconnect`) have no renderer callers
+left (verified by grep over `apps/web/src`); their host-internal counterparts
+(`connectLocal`, the private center registration, `wake`/`disconnect`,
+`importFile`/`exportBundle`/`readOriginal`) stay for the source registry, the
+plan ledger and suspend/resume. Restart restores cached projections as stale;
 only a freshly verified handshake and event acknowledgement make them current.
 
-The command allowlist is task.cancel/answer.generate/wiki.build plus
-models.install/models.start/models.stop, with local-only execution. Model install
-and start accept only a registry model_id, stop accepts an empty object; no
-endpoint, engine arguments or implicit download operation is exposed. Queries are corpus.search/evidence.get/models.list and the capability-gated
-resource.page/task.page windows. Window requests accept only a bounded
-snapshot_id/cursor pair within the selected connection. Native file import
-snapshots one bounded FD, verifies its before/after metadata, hashes those exact
-bytes and stores an intent before posting those same bytes to a fixed endpoint.
-A previous unknown intent cannot be replayed by selecting the file again. Receipts
-are explicit reconciliation. No renderer file path or endpoint is accepted.
-
-Source PDFs and bundles are read only from fixed local version endpoints after
-current-connection verification. Replies are bounded to 32 MiB and fenced against
-connection replacement. Export validates the complete archive through the shared
-DDP bundle verifier before writing an atomic file in the user-selected directory.
-Remote file/command dispatch awaits approved-plan support and returns an explicit
-failure instead of using an unchecked HTTP route.
+The renderer command allowlist is models.install/models.start/models.stop, with
+local-only execution. Model install and start accept only a registry model_id,
+stop accepts an empty object; no endpoint, engine arguments or implicit download
+operation is exposed. Every content write (uploads, Wiki create/rebuild/edit,
+answers, withdraw/delete, task cancel) goes through the same-origin `/api` proxy
+instead, so any other command name fails with `unsupported_operation`. The only
+named `clientQuery` read is `models.list` (LocalModelsView), LOCAL connections
+only; any other query name — and any query against a center connection — fails
+with `unsupported_operation` / `approved_plan_required`. Centers are read
+through the GET-only `/api` proxy (see below), never through the connection
+query path. Receipts are explicit reconciliation. No renderer file path or
+endpoint is accepted.
 
 Remote HTTP authentication uses the shared Ed25519 challenge inspector before
 accessing CredentialBroker. Pairing keeps authority/workspace/actor bindings;
 changing an existing endpoint currently requires a separate explicit relocation
 flow, which is not implemented by this bridge. Saved local directory reuse cannot
 silently substitute a different runtime identity for the cached connection.
+## Source registry and Host /api proxy (DESKTOP-APPSHELL-PLAN wave 1)
+
+The renderer calls same-origin `ddp://app/api/**` (GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS) and
+`ddp://app/_object/<opaque>` (GET). Web code builds URLs with `apiUrl(path)`;
+CSP `connect-src` allows `ddp://app` (packaged and dev). `bridge.d.ts`
+`DesktopSourceBridge` is the renderer-facing contract; `sourceId` IS the
+`ConnectionSummary.connectionId` verbatim.
+
+| Method | Input | Result |
+| --- | --- | --- |
+| `sourceList` | none | All registered sources (local + centers) with state/features/active |
+| `sourceActivate` | `{sourceId}` | Reconnects/wakes that source and stays `connecting` until its snapshot is current or the connection gives up (20 s cap), then records it active (persisted) |
+| `sourceRemove` | `{sourceId}` | Disconnects, deletes the registration, clears a stored center JWT; never deletes local workspace data (T65) |
+| `workspaceOpen` | none | Native directory dialog → start runtime → connect → activate; `null` = cancelled |
+| `centerConnect` | `{endpoint, username, password, persist, storageOrigin?}` | Node challenge proof → login → handshake → register → store JWT → activate |
+| `onSourceChange` | listener | Pushes the source list on activate/remove/`signed_out` transitions |
+
+After a successful `sourceActivate`/`workspaceOpen`/`centerConnect` the
+RENDERER calls `location.reload()`; the host only records the active source
+(persisted in userData as `active-source.json`, restored on restart).
+`hostStatus()` additionally returns `version: app.getVersion()`.
+
+Proxy rules: no active source → `503 no_active_source`. Local source: those
+methods, any path, query and body (streamed, 64 MiB cap, SSE flows incrementally)
+forwarded to the owned loopback runtime with its process Bearer token
+(renderer `Authorization`/`Cookie`/`Origin` stripped, Host set by the runtime).
+Center source: only GET/HEAD, else `403 approved_plan_required` with ZERO
+network I/O; `Authorization: Bearer <JWT from CredentialBroker>`,
+`redirect: 'error'`. Upstream 401 → marks the source `signed_out`, returns
+`401 source_signed_out`. Every proxied response carries
+`X-DDP-Source: <sourceId>`; `Set-Cookie` stripped; only safe headers forwarded
+(`content-type/-length/-disposition`, `cache-control`, `etag`,
+`last-modified`, `x-ddp-*`). Center JSON responses are parsed and every string
+value's absolute URL whose origin is the center endpoint origin or the
+registered storage origin (e.g. `GET /api/documents/{id}/download-url`) is
+rewritten to `ddp://app/_object/<opaque>`; the rewrite works on decoded strings,
+never raw text (Go writes `&` as `\u0026`, which would split a presigned URL),
+unparsable JSON fails closed, and the upstream `Content-Length` is dropped.
+`_object` streams the object from the allowed origin with no `Authorization`
+(presigned URLs are self-authenticating).
+Opaque ids are random, short-lived (10 min), per source, capped at 256.
+The renderer never receives any token (local process token, center JWT,
+presigned URLs).
+
+Center connect: endpoint must be `https:` (`http://127.0.0.1|[::1]` only
+when the build is unpackaged, for testing against the local stack; main passes
+`loopbackCenters: !app.isPackaged` so the shared provider accepts the same
+endpoint). The endpoint must equal the center's public base URL signed in its
+node proof →
+`GET /api/v1/federation/node?challenge=` Ed25519 proof check (same rules as
+the shared provider) → `POST /api/auth/login {username, password}` → JWT
+(the password is used once, never stored/logged/returned) →
+`GET /api/v1/client/handshake` (Bearer JWT) → identity
+`{environment_id, authority_node_id, workspace_id}` + profile
+`{issuer, subject}` → register via the existing pairRemote internals
+(`uploadOrigin` = storageOrigin ?? endpoint origin) → store JWT via
+CredentialBroker honoring `persist` and backend policy → activate. Center
+`SourceSummary.features` is fixed
+`['resources','documents','search','wiki','federation_tasks']` with
+`readOnly: true`; local features come from the runtime

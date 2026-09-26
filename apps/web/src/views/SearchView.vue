@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { searchApi } from '@/api'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { DEFAULT_WARN_BELOW, similarityText } from '@/constants/status'
-import type { SearchResult } from '@/types/api'
+import type { SearchHit, SearchResult } from '@/types/api'
 
 /** 跨文档检索：命中带页码，点击直达工作台对应页。 */
 const route = useRoute()
@@ -15,33 +15,54 @@ const keyword = ref(String(route.query.q || ''))
 const groups = ref<SearchResult['groups']>([])
 const degraded = ref<string | null>(null)
 const loading = ref(false)
+const failed = ref(false)
 
 let generation = 0
 onBeforeUnmount(() => { generation++ })
 
-function target(group: SearchResult['groups'][number]) {
+function target(group: SearchResult['groups'][number], hit?: SearchHit) {
   return { name: 'workbench', params: { id: group.document_id }, query: {
     resource_id: group.resource_id || undefined, version_id: group.source_version_id || undefined,
-    job: group.parse_revision,
+    job: group.parse_revision, chunk: hit?.chunk_id,
+    page: hit ? String(hit.page_idx + 1) : undefined,
   } }
 }
 
-async function run() {
-  if (!keyword.value.trim()) return
+async function loadResults(query: string) {
   const current = ++generation
+  groups.value = []
+  degraded.value = null
+  failed.value = false
+  if (!query.trim()) {
+    loading.value = false
+    return
+  }
   loading.value = true
   try {
-    const { data } = await searchApi.query(keyword.value)
+    const { data } = await searchApi.query(query)
     if (current !== generation) return
     groups.value = data.groups
     degraded.value = data.degraded ?? null
-    router.replace({ name: 'search', query: { q: keyword.value } })
+  } catch {
+    if (current === generation) failed.value = true
   } finally {
     if (current === generation) loading.value = false
   }
 }
 
-watch(() => route.query.q, run, { immediate: true })
+function run() {
+  const query = keyword.value.trim()
+  if (route.query.q !== (query || undefined)) {
+    void router.replace({ name: 'search', query: query ? { q: query } : {} })
+  } else {
+    void loadResults(query)
+  }
+}
+
+watch(() => route.query.q, query => {
+  keyword.value = typeof query === 'string' ? query : ''
+  void loadResults(keyword.value)
+}, { immediate: true })
 </script>
 
 <template>
@@ -63,19 +84,24 @@ watch(() => route.query.q, run, { immediate: true })
   <el-alert v-if="degraded === 'resource_index_unavailable'" type="warning" :closable="false"
     title="资源尚无可用的固定版本索引，请查看解析任务状态。" />
 
-  <el-empty v-if="!groups.length && !loading" description="没有命中" />
+  <el-alert v-if="failed" type="error" :closable="false" title="检索失败，请重试。" />
+  <el-empty v-if="!groups.length && !loading && !failed"
+            :description="route.query.q ? '没有命中' : '输入关键词开始检索'" />
 
   <el-card v-for="group in groups" :key="group.source_version_id || group.document_id" shadow="never" class="group">
     <template #header>
       <router-link :to="target(group)" class="filename">
         {{ group.filename }}
       </router-link>
-      <span class="count">{{ group.hits.length }} 处命中</span>
+      <!-- 同一资源的各版本都可检索且文件名相同，不写版本号就分不清哪条是旧版 -->
+      <span class="count">
+        <template v-if="group.source_version_no">第 {{ group.source_version_no }} 版 · </template>{{ group.hits.length }} 处命中
+      </span>
     </template>
-    <div v-for="(hit, i) in group.hits" :key="i" class="hit"
-         @click="router.push(target(group))">
+    <router-link v-for="hit in group.hits" :key="hit.chunk_id" class="hit"
+                 :to="target(group, hit)">
       <!-- 页码是元信息不是状态，按准则二排成普通文字，不做成标签 -->
-      <span class="page ddp-cite-page">第 {{ hit.page_idx + 1 }} 页</span>
+      <span class="page ddp-cite-page">PDF 第 {{ hit.page_idx + 1 }} 页</span>
       <!-- 相关度用 similarity（有校准量纲），不用 score（RRF 名次分，表达不了相关度）。
            阈值收在 constants/status.ts，不再在这里写第二个字面量 -->
       <StatusTag
@@ -84,7 +110,7 @@ watch(() => route.query.q, run, { immediate: true })
         :type="(hit.similarity ?? 0) >= DEFAULT_WARN_BELOW ? 'success' : 'warning'"
       />
       <span class="snippet">{{ hit.snippet }}</span>
-    </div>
+    </router-link>
   </el-card>
 </template>
 
@@ -124,6 +150,8 @@ watch(() => route.query.q, run, { immediate: true })
   gap: 10px;
   align-items: baseline;
   padding: 6px 0;
+  color: inherit;
+  text-decoration: none;
   cursor: pointer;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }

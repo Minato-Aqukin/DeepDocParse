@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import json
 
 import pytest
 
@@ -82,3 +83,30 @@ def test_bare_relation_id_array_is_only_an_equivalent_envelope():
         selected_relations(object_from_output('[99]', array_field='selected_relations'), candidates)
     with pytest.raises(ApplicationError):
         selected_relations(object_from_output('[{"made_up":1}]', array_field='selected_relations'), candidates)
+
+
+@pytest.mark.asyncio
+async def test_pages_without_relation_candidates_do_not_require_another_model_decision(evidence):
+    from ddp_core.application.wiki import generate_wiki
+
+    topics = ['Data collection overview', 'Validation workflow']
+
+    class Provider:
+        async def generate(self, messages, **kwargs):
+            stage = json.loads(messages[-1]['content'])['stage']
+            if stage == 'plan':
+                value = {'pages': [{'title': title, 'references': [1]} for title in topics]}
+            elif stage == 'write':
+                value = {'pages': [{'page': number, 'sections': [{'heading': 'Facts',
+                    'sentences': [{'text': evidence[0]['excerpt'], 'references': [1]}]}]}
+                    for number in (1, 2)]}
+            else:
+                # The real model invented this selection when given zero candidates.
+                value = {'selected_relations': [1]}
+            return json.dumps(value), {'name': 'fixture'}
+
+    result = await generate_wiki(Provider(), 'Collection and validation', evidence, limits_for({}),
+        execution_policy='local_only', allow_remote=False,
+        record_attempt=lambda *args: lambda **updates: None)
+    assert [page['title'] for page in result['pages']] == topics
+    assert result['relations'] == []

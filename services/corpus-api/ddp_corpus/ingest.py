@@ -48,15 +48,16 @@ def options_hash(engine: str, options: dict) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def parse_identity(source_digest: str, resource_id: str | None) -> str:
-    """Execution-cache scope is distinct from verified byte identity.
+def parse_identity(source_digest: str, resource_id: str | None, parse_job_id: str) -> str:
+    """Stable retries share a cache key; distinct parse revisions never do.
 
-    Pending work for asset B must not reuse asset A's revocable input grant.
-    The legacy fallback is reserved for already-existing jobs without a resource binding.
+    Resource identity isolates revocable input grants. The persisted job
+    identity also isolates engine/options changes from an older cached result.
+    Verified byte identity remains unchanged on the Document and version.
     """
-    if resource_id is None:
-        return source_digest
-    return hashlib.sha256(json.dumps(["resource-parse-v1", resource_id, source_digest]).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(
+        ["resource-parse-v2", resource_id, parse_job_id, source_digest]
+    ).encode()).hexdigest()
 
 
 async def ingest_document(
@@ -76,6 +77,7 @@ async def ingest_document(
     options: dict | None = None,
     upload_key: str | None = None,
     receipt_key: str | None = None,
+    target_resource_id: str | None = None,
 ) -> tuple[Document, ParseJob | None]:
     """建（或复用）Document 并排一次解析。返回 (document, job)。
 
@@ -85,6 +87,18 @@ async def ingest_document(
     """
     engine = engine or settings.default_parse_engine
     options = options or {}
+    target = None
+    if target_resource_id is not None:
+        from ddp_corpus.resources import require_upload_target
+        # Same predicate control-api used before allocating storage; re-checked here
+        # because the target may have been deleted or withdrawn since admission.
+        target = await require_upload_target(
+            session, organization_id=organization_id, owner_id=actor_id,
+            resource_id=target_resource_id)
+    request_payload = {"sha256": doc_id, "filename": filename, "mime": mime,
+                       "size": size_bytes, "engine": engine, "options": options}
+    if target_resource_id is not None:
+        request_payload["target_resource_id"] = target_resource_id
 
     document = (await session.execute(
         select(Document).where(Document.doc_id == doc_id, Document.origin == "web")
@@ -137,18 +151,16 @@ async def ingest_document(
         except IntegrityError:
             pass        # 并发下另一边先记上了，正是想要的结果
 
-    # Resource identity follows a verified upload operation, never the content hash.
+    # Explicit targets append; otherwise each verified upload owns an independent resource.
     from ddp_corpus.resources import create_asset
     resource, _version, _created = await create_asset(session, document=document, actor_id=actor_id,
         organization_id=organization_id, idempotency_key="upload:" + (upload_key or object_key),
-        filename=filename, request_payload={"sha256": doc_id, "filename": filename,
-            "mime": mime, "size": size_bytes, "engine": engine, "options": options})
+        filename=filename, resource=target, request_payload=request_payload)
     async def accept_receipt(job):
         if receipt_key:
             from ddp_corpus.client_projection import digest, record_upload_receipt
             await record_upload_receipt(session, organization_id=organization_id, principal_id=actor_id,
-                operation_key=receipt_key, request_digest=digest({"sha256": doc_id, "filename": filename,
-                    "mime": mime, "size": size_bytes, "engine": engine, "options": options}),
+                operation_key=receipt_key, request_digest=digest(request_payload),
                 resource_id=resource.id, version_id=_version.id, parse_job_id=job.id)
     digest = options_hash(engine, options)
     job = (await session.execute(
@@ -256,7 +268,7 @@ async def submit_parse(session: AsyncSession, control: ControlClient,
 
     try:
         task_id = await service.submit_parse(
-            file_url=file_url, doc_id=parse_identity(document.doc_id, resource_id),
+            file_url=file_url, doc_id=parse_identity(document.doc_id, resource_id, job.id),
             callback_url=f"{settings.public_base_url}/internal/parse-callback",
             engine=job.engine, options=job.options,
         )

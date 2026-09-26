@@ -219,7 +219,7 @@ async def test_qa_citations_come_back_from_the_new_tables(actor_client, session)
     """
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_sse_answer())
+    respx.post(CHAT).mock(side_effect=_sse_answer())
 
     await _ask(actor_client, cid)
 
@@ -297,8 +297,8 @@ async def test_extraction_citations_are_stored_per_field(actor_client, session, 
 
 
 def _sse_answer():
-    from tests.test_qa import _chat_sse
-    return _chat_sse("第二页", "讲的是表格数据。", cited=True)
+    from tests.test_qa import _grounded_doc, _grounded_side_effect
+    return _grounded_side_effect(_grounded_doc(("第二页讲的是表格数据。", [1])))
 
 
 async def test_two_citations_of_one_block_across_a_reindex_are_judged_separately(session):

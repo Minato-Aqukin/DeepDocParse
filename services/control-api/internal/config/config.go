@@ -72,16 +72,10 @@ type Config struct {
 	ServiceToken string
 
 	// ---- 联邦节点（P4/P6）----
-	// 本节点作为目录提供者接受对端调用时校验的同伴凭据（`X-DDP-Peer-Token`）。
-	// **留空 = 一律 401 `peer_unauthenticated`（Fail Closed）** ——
-	// 没有配置信任凭据的节点不该被任何对端读取目录、集合或成员。
-	// 比较用 constant time；**绝不回显、绝不入日志、绝不进错误消息**。
-	FederationPeerToken string
 	// 出站目录展开的已登记节点目录。JSON 对象：
-	// `{"<node_id>": {"endpoint": "https://…", "service_token": "…", "peer_token": "…"}}`。
-	// **Fail Closed**：没登记的 node_id 一个请求都不发（不解析 DNS、不试端口）。
-	// endpoint 必须 HTTPS 且无 userinfo/query/fragment；三个凭据字段
-	// **绝不回显、绝不入日志、绝不进错误消息**。
+	// `{"<node_id>": {"endpoint": "https://…"}}`。
+	// 未登记/未批准节点不会获得签名凭据。没有跨节点共享密钥。
+	// endpoint 必须 HTTPS 且无 userinfo/query/fragment。
 	FederationPeers string
 	// 只给本地回环集成测试用的逃生口：允许 `http://127.0.0.1` 或 `http://[::1]`
 	// 的 peer endpoint。**只认字面回环地址**（`localhost` 会走 DNS，不给过）。
@@ -191,7 +185,6 @@ func Load() (*Config, error) {
 		GatewayURL:              env("GATEWAY_URL", "http://127.0.0.1:9000"),
 		MCPURL:                  env("MCP_URL", "http://127.0.0.1:9100"),
 		ServiceToken:            env("SERVICE_TOKEN", placeholder),
-		FederationPeerToken:     env("FEDERATION_PEER_TOKEN", ""),
 		FederationPeers:         env("FEDERATION_PEERS", ""),
 		FederationAllowLoopback: envBool("FEDERATION_ALLOW_LOOPBACK", false),
 		ObjectEndpoint:          env("OBJECT_ENDPOINT", "127.0.0.1:19000"),

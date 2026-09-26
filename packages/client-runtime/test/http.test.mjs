@@ -206,18 +206,21 @@ test('a scoped batch advances all covered events without treating the skipped se
   assert.equal(c.state.transport,'ready');assert.equal(c.state.snapshot,'current')
 })
 
+const wikiRequest = { body: { title: 'q', sources: [{ resource_id: 'resource-1', source_version_id: 'version-1' }],
+  max_pages: 1, max_output_tokens: 1024, execution_policy: 'local_only', allow_remote: false } }
+
 test('a write with a lost response stays unknown until receipt reconciliation, across reconnect',async t=>{
   let writes=0
   const f=await server(t,(req,res)=>{
-    if(req.url==='/api/v1/wiki'){writes++;assert.equal(req.headers['idempotency-key'],'stable-key');req.socket.destroy();return true}
+    if(req.url==='/api/v1/wikis'){writes++;assert.equal(req.headers['idempotency-key'],'stable-key');req.socket.destroy();return true}
     if(req.url==='/api/v1/client/receipts/stable-key'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({task_id:'accepted-before-response-loss'}));return true}
   })
   const {c}=connection(t,f.environment,{localCommands:true});c.start();await until(()=>c.state.transport==='ready')
-  await assert.rejects(c.execute('wiki.build',{query:'q'},'stable-key'))
+  await assert.rejects(c.execute('wiki.create',wikiRequest,'stable-key'))
   await c.wake();await until(()=>c.state.transport==='ready')
-  await assert.rejects(c.execute('wiki.build',{query:'q'},'stable-key'));assert.equal(writes,1)
+  await assert.rejects(c.execute('wiki.create',wikiRequest,'stable-key'));assert.equal(writes,1)
   assert.deepEqual(await c.receipt('stable-key'),{task_id:'accepted-before-response-loss'})
-  assert.deepEqual(await c.execute('wiki.build',{query:'q'},'stable-key'),{task_id:'accepted-before-response-loss'})
+  assert.deepEqual(await c.execute('wiki.create',wikiRequest,'stable-key'),{task_id:'accepted-before-response-loss'})
   assert.equal(writes,1)
 })
 
@@ -271,10 +274,10 @@ test('remote command dispatch requires an approved plan and cannot use the local
   const runtime=planRuntime(),f=await server(t,runtime.handler),lookups=[]
   const {c}=connection(t,f.environment)
   c.start();await until(()=>c.state.transport==='ready')
-  await assert.rejects(c.execute('wiki.build',{query:'q'},'stable-key'),/approved_plan_required/)
+  await assert.rejects(c.execute('wiki.create',wikiRequest,'stable-key'),/approved_plan_required/)
   // A remote connection cannot be told to dispatch a plan either: plans live in the local ledger.
   await assert.rejects(c.execute('plan.dispatch',{plan_id:'plan-1',phase:'exploration'},'remote-plan-key'),/approved_plan_required/)
-  assert.equal(f.seen.some(item=>item.url==='/api/v1/wiki'||item.url.includes('/plans/')),false)
+  assert.equal(f.seen.some(item=>item.url==='/api/v1/wikis'||item.url.includes('/plans/')),false)
   // Through the local runtime: no approval for this phase -> no credential lookup, no dispatch request.
   const local=planConnection(t,f.environment,lookups);local.start();await until(()=>local.state.transport==='ready')
   await assert.rejects(local.execute('plan.dispatch',{plan_id:'plan-1',phase:'exploration'},'plan-dispatch-1'),{code:'approved_plan_required'})

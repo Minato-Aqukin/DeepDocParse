@@ -61,13 +61,12 @@ def install_peer(monkeypatch, peer: StubPeer) -> None:
     所以这里必须注入 LocalControlSigner 并透传 delegation，否则原来量的
     "请求发出去后如何"根本走不到 stub。
     """
-    peers = parse_peers(json.dumps({PEER_NODE: {"endpoint": "https://peer.example"}}),
-                        shared_token=False)
+    peers = parse_peers(json.dumps({PEER_NODE: {"endpoint": "https://peer.example"}}))
 
     def factory(actor, delegation=None):
         return PeerDirectory(peers, actor=actor, transport=peer.transport(),
                              signer=LocalControlSigner(issuer_node_id=NODE),
-                             delegation=delegation, shared_token=False)
+                             delegation=delegation)
 
     monkeypatch.setattr(federation_tasks, "peer_directory", factory)
 

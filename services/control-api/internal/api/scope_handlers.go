@@ -36,8 +36,8 @@ func (s *Server) handleScopeCreate(w http.ResponseWriter, r *http.Request) error
 	if err = httpx.DecodeJSON(r, &opts); err != nil {
 		return err
 	}
-	if opts.Validate() != nil {
-		return apierr.BadRequest("invalid_scope_options", "operation 与合法分页、范围预算及有效期必填")
+	if opts.Validate() != nil || !opts.AllowsNode(s.nodeIdentity.NodeID()) {
+		return apierr.BadRequest("invalid_scope_options", "operation、合法范围预算及有效期必填；批准节点边界必须包含本协调者")
 	}
 	callerScope := discovery.ScopeHash(a)
 	if opts.MemberSnapshotID == "" {
@@ -71,7 +71,8 @@ func (s *Server) handleScopeCreate(w http.ResponseWriter, r *http.Request) error
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 			remote = discovery.ExpandScope(ctx, s.peers, discovery.ExpansionInput{
 				Members: members, LocalNodeID: s.nodeIdentity.NodeID(), Operation: opts.Operation,
-				MaxTargets: budget, MaxRequests: opts.MaxDiscoveryRequests, MaxNodes: opts.MaxRemoteMembers,
+				AllowedNodeIDs: opts.AllowedNodeIDs,
+				MaxTargets:     budget, MaxRequests: opts.MaxDiscoveryRequests, MaxNodes: opts.MaxRemoteMembers,
 				Now: time.Now().UTC(),
 			})
 			cancel()

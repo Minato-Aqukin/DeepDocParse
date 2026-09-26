@@ -180,7 +180,8 @@ async def submit_document(client: httpx.AsyncClient, storage, content: bytes,
                           mime: str = "application/pdf",
                           actor_id: str = ACTOR, organization_id: str = ORG,
                           engine: str = "", options: dict | None = None,
-                          event_id: str | None = None) -> httpx.Response:
+                          event_id: str | None = None,
+                          target_resource_id: str | None = None) -> httpx.Response:
     """走**新的上传链路**：对象先在存储里，再投一个 DocumentSubmitted 事件。
 
     合仓前这里是 `POST /api/documents` 的 multipart —— 那条路已经删了，
@@ -207,6 +208,7 @@ async def submit_document(client: httpx.AsyncClient, storage, content: bytes,
                 "actor_id": actor_id, "object_key": object_key, "filename": filename,
                 "mime": mime, "size": len(content), "sha256": digest,
                 "engine": engine, "options": options or {},
+                **({"target_resource_id": target_resource_id} if target_resource_id is not None else {}),
             },
         },
         headers=actor_headers("control-api", role="admin", kind="service",

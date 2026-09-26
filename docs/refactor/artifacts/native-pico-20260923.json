@@ -1,0 +1,231 @@
+{
+  "schema": "ddp-v3-real-native-proof/1",
+  "date": "2026-09-23",
+  "input": {
+    "publisher_url": "https://datasheets.raspberrypi.com/pico/pico-datasheet.pdf",
+    "sha256": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+    "bytes": 18176869,
+    "pages": 31
+  },
+  "platform": {
+    "system": "Linux",
+    "kernel": "7.2.6-1-cachyos",
+    "machine": "x86_64",
+    "session": "Wayland",
+    "electron": "44.3.0"
+  },
+  "expected": {
+    "original_bytes_unchanged": true,
+    "pdf_rendered": true,
+    "immutable_append_withdraw_delete": true,
+    "suspend_resume_same_identity": true,
+    "close_stops_owned_runtime": true,
+    "renderer_sandboxed": true
+  },
+  "observed": {
+    "renderer": {
+      "nodeRequire": "undefined",
+      "nodeProcess": "undefined",
+      "methods": [
+        "clientList",
+        "clientConnectLocal",
+        "clientPairRemote",
+        "clientWake",
+        "clientDisconnect",
+        "clientSubscribe",
+        "clientUnsubscribe",
+        "clientCommand",
+        "clientQuery",
+        "clientReceipt",
+        "clientReadDraft",
+        "clientSaveDraft",
+        "clientImportFile",
+        "clientExportBundle",
+        "clientReadOriginal",
+        "clientPlanPropose",
+        "clientPlanProposeFile",
+        "clientPlanList",
+        "clientPlanGet",
+        "clientPlanReviewCenter",
+        "clientPlanApprove",
+        "clientPlanRevoke",
+        "clientPlanCancel",
+        "clientPlanDispatch",
+        "clientPlanResume",
+        "clientPlanReconcile",
+        "clientPlanFetchDelivery",
+        "clientPlanConfirmDelivery",
+        "onClientView",
+        "hostStatus",
+        "selectWorkspace",
+        "startLocal",
+        "stopLocal",
+        "runtimeStatus",
+        "setCredential",
+        "credentialStatus",
+        "clearCredential"
+      ],
+      "host": {
+        "ok": true,
+        "value": {
+          "platform": "linux",
+          "electron": "44.3.0",
+          "secrets": {
+            "backend": "basic_text",
+            "persistentAvailable": false,
+            "reason": "session_only_secret_service_required"
+          },
+          "credentialStorage": {
+            "backend": "basic_text",
+            "persistentAvailable": false,
+            "reason": "session_only_secret_service_required"
+          },
+          "runtimeBackend": "native",
+          "runtimeAvailable": true,
+          "runtimeReason": null,
+          "orphanCleanup": null,
+          "isolation": "posix_mode",
+          "lifecycle": "close_stops_owned_local_tasks",
+          "connectionIntegration": "shared_client_runtime"
+        }
+      },
+      "rejected": {
+        "ok": false,
+        "error": {
+          "code": "invalid_arguments"
+        }
+      },
+      "title": "环境工作台 · DeepDocParse",
+      "rendered": 1
+    },
+    "fonts": [
+      {
+        "font": "16px Inter",
+        "loaded": true
+      },
+      {
+        "font": "16px \"IBM Plex Mono\"",
+        "loaded": true
+      },
+      {
+        "font": "16px \"Noto Sans SC\"",
+        "loaded": true
+      }
+    ],
+    "localRuntime": {
+      "state": "ready",
+      "reason": null
+    },
+    "ready": {
+      "workspaceId": "6c3fe78d-2a0e-4e29-af31-d659d20837a0",
+      "state": "ready",
+      "generation": 1,
+      "reason": null,
+      "identity": {
+        "environment_id": "local-143f21ad923b47bea43e1beccb485ef3",
+        "workspace_id": "c9968ba6f6cd4abd8f1ca88c52d3e5be",
+        "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3"
+      }
+    },
+    "suspended": {
+      "workspaceId": "6c3fe78d-2a0e-4e29-af31-d659d20837a0",
+      "state": "stopped",
+      "generation": 1,
+      "reason": "system_suspended",
+      "identity": {
+        "environment_id": "local-143f21ad923b47bea43e1beccb485ef3",
+        "workspace_id": "c9968ba6f6cd4abd8f1ca88c52d3e5be",
+        "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3"
+      }
+    },
+    "resumed": {
+      "workspaceId": "6c3fe78d-2a0e-4e29-af31-d659d20837a0",
+      "state": "ready",
+      "generation": 2,
+      "reason": null,
+      "identity": {
+        "environment_id": "local-143f21ad923b47bea43e1beccb485ef3",
+        "workspace_id": "c9968ba6f6cd4abd8f1ca88c52d3e5be",
+        "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3"
+      }
+    },
+    "application": {
+      "version": "0.1.0",
+      "packaged": false
+    },
+    "sharedClient": {
+      "connectionId": "connection-1aaf9d12363b881e37110e4af421b6082c949b82",
+      "fileResults": {
+        "originalBytes": 18176869,
+        "exported": {
+          "ok": true,
+          "value": {
+            "saved": true
+          }
+        },
+        "lifecycle": {
+          "resourceId": "3b06fecc46034768bc21676abfa1ee05",
+          "originalVersion": "ba1396f27a014e18a73737588213c18b",
+          "appendedVersion": "4aa11f48f0ef48189f60b8bb24dd6999",
+          "withdrawn": "withdrawn",
+          "deleted": true,
+          "receiptTask": "5f3c02d4f09344638a431582948d83a6"
+        }
+      },
+      "pdfRendered": true,
+      "modelResults": null
+    },
+    "webPreferences": {
+      "sandbox": true,
+      "contextIsolation": true,
+      "nodeIntegration": false
+    },
+    "display": {
+      "wayland": "wayland-1",
+      "x11": ":1"
+    },
+    "stopped": {
+      "workspaceId": "6c3fe78d-2a0e-4e29-af31-d659d20837a0",
+      "state": "stopped",
+      "generation": 2,
+      "reason": "host_quit",
+      "identity": {
+        "environment_id": "local-143f21ad923b47bea43e1beccb485ef3",
+        "workspace_id": "c9968ba6f6cd4abd8f1ca88c52d3e5be",
+        "authority_node_id": "local-143f21ad923b47bea43e1beccb485ef3"
+      }
+    }
+  },
+  "parse_quality_record": {
+    "engine": "borndigital",
+    "pypdfium2_version": "5.13.0",
+    "compiler": "ddp-compile/1",
+    "chunker": "ddp-chunk/2",
+    "parse_options_hash": "1889c29ba638ae448d065b77a72cfd2277633f9825fee9054b5911c57992e358",
+    "parse_revision": "913ee2b2778147c0a236309b21dca2b4",
+    "layout_sha256": "95399b4b18246f3fd860127c93af321e4286cf1af00f8118900975bd34d90ad0",
+    "pages": 31,
+    "blocks": 5829,
+    "normalized_text_characters": 46258,
+    "empty_text_pages": [],
+    "out_of_bounds_or_invalid_boxes": [],
+    "dual_core_and_133_mhz_phrase_page_indices": [3],
+    "degraded": ["embedding_unavailable", "vision_unavailable"],
+    "metric_scope": "Structural diagnostics and a known publisher phrase, not OCR accuracy or human claim-support labels."
+  },
+  "known_truth_fixture_quality": {
+    "command": ".venv/bin/python eval/eval_ocr.py --engine borndigital",
+    "exit_code": 0,
+    "samples": ["code-corpus", "contract"],
+    "pages": 26,
+    "text_accuracy_reported_percent": 99.9,
+    "text_pages": 26,
+    "table_cell_f1_reported_percent": 0.0,
+    "table_pages": 1,
+    "formula_score": null,
+    "metric_scope": "Existing evaluator, local in-process born-digital fixtures, rounded report values; not the Pico PDF's OCR accuracy, not a deployment benchmark, and not TEDS/CDM. CPU table structure is not a demonstrated capability."
+  },
+  "verification_scope": "Actual Electron, shared Provider, CPU parser, SQLite, PDF.js and original/Bundle bytes; the existing smoke injects native picker paths only. This is not a model-quality score or a package-manager installation test.",
+  "human_review_status": "pending",
+  "screenshot": "native-pico-20260923.png"
+}

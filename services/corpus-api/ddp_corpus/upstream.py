@@ -45,7 +45,9 @@ async def embed_one(http: httpx.AsyncClient, text: str) -> list[float]:
     return (await embed_texts(http, [text]))[0]
 
 
-def chat_request(http: httpx.AsyncClient, messages: list[dict], *, stream: bool):
+def chat_request(http: httpx.AsyncClient, messages: list[dict], *, stream: bool,
+                 response_format: dict | None = None, temperature: float | None = None,
+                 max_tokens: int | None = None):
     """构造 chat 请求（不发送）——调用方决定流式消费还是一次读完。
 
     读超时单独配：CPU 上跑的视觉模型出第一个 token 可能要几分钟，
@@ -54,6 +56,12 @@ def chat_request(http: httpx.AsyncClient, messages: list[dict], *, stream: bool)
     payload: dict = {"messages": messages, "stream": stream}
     if settings.chat_model:
         payload["model"] = settings.chat_model
+    if response_format is not None:
+        payload["response_format"] = response_format
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
     return http.build_request("POST", settings.chat_endpoint, json=payload,
                               headers=_headers(settings.chat_token),
                               timeout=httpx.Timeout(30.0, read=settings.chat_read_timeout))

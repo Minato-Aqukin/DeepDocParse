@@ -88,9 +88,10 @@ PROBE_TTL_SECONDS = 300
 EXECUTION_BUDGET_SECONDS = 30.0
 #: 执行租约：到期后（本切片内不会有别的 worker 接管）用于区分"还在跑"。
 EXECUTION_LEASE_SECONDS = 300
-#: 本切片真正实现的 operation。`answer` 只在本节点生成就绪时受理，并复用
-#: 协调者同一份带引用生成实现；不生成就不接单，绝不接受后再静默失败。
-SUPPORTED_OPERATIONS = {"retrieve", "answer"}
+#: 本切片真正实现的 operation。`answer`/`wiki_pages` 只在本节点生成就绪时受理，
+#: 消费受理时已校验的有界证据快照（远端原始结果，回 A 提交）；不生成就不接单，
+#: 绝不接受后再静默失败。
+SUPPORTED_OPERATIONS = {"retrieve", "answer", "wiki_pages"}
 #: 从 TaskSpec 就能本地重算摘要的输入引用。其余引用（文件等）拿不到内容，
 #: 一律 waiting_input —— 只看客户端声明的哈希就受理正是 T78 要防的事。
 _LOCAL_INPUT_REFS = {"query", "query_text"}
@@ -587,9 +588,9 @@ async def _capability_probe(session: AsyncSession, actor: Actor, request: dict, 
     `operation` 缺省 `corpus.retrieve`（旧行为）。取值必须来自**本层组合出的
     能力清单**（`capabilities.collect_capability_profiles`）—— 网关不可达、
     清单里没有该 operation、或它不是本层真做的事时，一律 `unknown`，绝不拿
-    检索库的就绪度去冒充模型侧的就绪度。`can_generate` 只有
-    `rag.answer.cited` 且 readiness=ready 才为 true，这正是协调者规划
-    answer 委托的唯一依据（`can_generate` 不是 `can_solve`）。
+    检索库的就绪度去冒充模型侧的就绪度。`can_generate` 保持"只有
+    `rag.answer.cited` 且 readiness=ready 才为 true"（旧契约冻结，answer 委托
+    唯一依据）；wiki 探测看 `readiness` 本身，不看 `can_generate`。
     """
     node = local_node_id()
     operation = str(request.get("operation") or "corpus.retrieve")
@@ -921,19 +922,33 @@ def _verify_evidence(items) -> str | None:
             raise ApplicationError(
                 "input_not_verified",
                 f"evidence digest does not match the excerpt for {evidence_id!r}")
+        envelope = item.get("source_envelope")
+        if envelope is not None:
+            # 仅 wiki_pages 必须带：完整原始信封（不含 excerpt），且其
+            # excerpt_digest 必须等于本次 digest——绑定"这段摘录正是该原始
+            # 证据的固定正文"，不接受"摘录对得上、信封是另一条"的混搭。
+            # derivative_grant 只收真实已有字符串，不校验内容真值（A 提交时
+            # helper 按 publication/grant 做发表授权判定）；绝不在此编造。
+            if not isinstance(envelope, dict):
+                raise ApplicationError("input_not_verified",
+                                       "source_envelope must be an object")
+            if envelope.get("excerpt_digest") != actual:
+                raise ApplicationError(
+                    "input_not_verified",
+                    f"source_envelope excerpt_digest mismatch for {evidence_id!r}")
         seen.add(evidence_id)
         pairs.append([evidence_id, actual])
     return content_digest(canonical_bytes(sorted(pairs)))
 
 
 def _execution_spec(task_spec: dict, step: dict, *, evidence=(), plan: dict | None = None) -> dict:
-    """执行 retrieve / answer 所需的固定目标。
+    """执行 retrieve / answer / wiki_pages 所需的固定目标。
 
     约定：`fixed_inputs` 里的 `collection:<id>` 是集合目标；`probe_refs` 指向
     本节点已持久化的探测（取第一个能对上的，用它的集合与问题）。
     两者都没有时在调用者可见语料上检索 —— 与 `/api/search` 同一作用域。
-    `answer` 另带受理时已逐条校验过摘要的有界证据与生成 token 上限；执行只
-    消费这份快照，绝不重新外发或扩权。
+    `answer`/`wiki_pages` 另带受理时已逐条校验过摘要的有界证据与生成 token
+    上限；执行只消费这份快照，绝不重新外发或扩权。
     """
     collection_id = ""
     for ref in step.get("fixed_inputs", []):
@@ -942,12 +957,28 @@ def _execution_spec(task_spec: dict, step: dict, *, evidence=(), plan: dict | No
             break
     return {"query": task_spec.get("query") or "", "collection_id": collection_id,
             "candidate_limit": 8, "probe_refs": list(step.get("probe_refs", [])),
-            "evidence": [{"evidence_id": str(item.get("evidence_id") or ""),
-                          "excerpt": str(item.get("excerpt") or ""),
-                          "digest": str(item.get("digest") or "")}
-                         for item in evidence],
+            "evidence": [_snapshot_evidence_item(item) for item in evidence],
             "max_generation_tokens": int(((plan or {}).get("budget") or {})
-                                         .get("max_generation_tokens") or 0)}
+                                         .get("max_generation_tokens") or 0),
+            "wiki_title": str((task_spec.get("requirements") or {}).get("wiki", {}).get("title") or ""),
+            "wiki_max_pages": (task_spec.get("requirements") or {}).get("wiki", {}).get("max_pages", 4)}
+
+def _snapshot_evidence_item(item: dict) -> dict:
+    """受理快照：原样保留 `source_envelope` 与真实 `derivative_grant`。
+
+    快照只存受理时已校验的东西：envelope 必须是 dict（含 excerpt_digest 绑定），
+    grant 只有真实非空字符串才保留。执行只消费这份快照，不回读、不扩权。
+    """
+    snapshot = {"evidence_id": str(item.get("evidence_id") or ""),
+                "excerpt": str(item.get("excerpt") or ""),
+                "digest": str(item.get("digest") or "")}
+    envelope = item.get("source_envelope")
+    if isinstance(envelope, dict):
+        snapshot["source_envelope"] = dict(envelope)
+    grant = item.get("derivative_grant")
+    if isinstance(grant, str) and grant:
+        snapshot["derivative_grant"] = grant
+    return snapshot
 
 
 def _consent_binding(task_spec: dict, plan: dict, consent: dict, *, node: str,
@@ -1093,6 +1124,19 @@ async def _create_admission(session: AsyncSession, actor: Actor, request: dict,
             # 生成必须有固定 token 预留：没有额度就执行等于越权花算力。
             raise ApplicationError("budget_exceeded",
                                    "an answer step requires a positive generation token reservation")
+    if operation == "wiki_pages":
+        # Wiki 生成接单同一口径：`wiki.pages` profile 就绪 + 固定 token 预留，
+        # 否则当场拒收。远端只出原始页面草稿，版本化提交权永远在 A。
+        try:
+            ready = await capabilities.wiki_generation_ready(http, now=now)
+        except Exception:                  # noqa: BLE001 —— 可用性探测不许把接单打挂
+            ready = False
+        if not ready:
+            raise ApplicationError("capability_unsupported",
+                                   "wiki generation is not ready on this node")
+        if int((plan.get("budget") or {}).get("max_generation_tokens") or 0) <= 0:
+            raise ApplicationError("budget_exceeded",
+                                   "a wiki_pages step requires a positive generation token reservation")
 
     # 3. 输入校验。注意方向：校验不了是 waiting_input（不占算力），
     #    声明与本地内容对不上才是 input_changed / input_not_verified。
@@ -1106,6 +1150,19 @@ async def _create_admission(session: AsyncSession, actor: Actor, request: dict,
             state, input_validation, manifest = "waiting_input", "metadata_only", None
         elif evidence_manifest is None:
             # 缺证据不是伪造：不占算力，等协调者把有界摘录送来。
+            state, input_validation, manifest = "waiting_input", "metadata_only", None
+        else:
+            manifest = evidence_manifest
+    if operation == "wiki_pages":
+        # 与 answer 同一证据口径 + Main 定接口：wiki 必须逐条带 source_envelope
+        # （完整原始信封，不含 excerpt）且 excerpt_digest 已在 `_verify_evidence`
+        # 绑定；缺信封即 waiting_input（不占算力），不是伪造。answer 旧载荷不受影响。
+        if state != "accepted":
+            state, input_validation, manifest = "waiting_input", "metadata_only", None
+        elif evidence_manifest is None:
+            state, input_validation, manifest = "waiting_input", "metadata_only", None
+        elif any(not isinstance(item.get("source_envelope"), dict)
+                 for item in evidence_items):
             state, input_validation, manifest = "waiting_input", "metadata_only", None
         else:
             manifest = evidence_manifest
@@ -1195,13 +1252,9 @@ async def lookup_admission(session: AsyncSession, actor: Actor, idempotency_key:
     return row.receipt_json
 
 
-# ---------------------------------------------------------------------------
-# Execution
-# ---------------------------------------------------------------------------
-
 def execution_status(row: FederationExecution) -> dict:
     result_json = row.result_json or {}
-    return {
+    out = {
         "executor_task_id": row.executor_task_id,
         "admission_id": row.admission_id,
         "root_task_id": row.root_task_id,
@@ -1222,6 +1275,11 @@ def execution_status(row: FederationExecution) -> dict:
         "answer": result_json.get("answer") if row.operation == "answer" else None,
         "updated_at": _instant(row.updated_at),
     }
+    # `wiki_draft` 是加法字段：旧测试按冻结形状逐字段校验，只有 wiki_pages
+    # 执行才带它，其它 operation 不出现该键（缺省比 null 更兼容）。
+    if row.operation == "wiki_pages":
+        out["wiki_draft"] = result_json.get("wiki_draft")
+    return out
 
 
 async def require_execution(session: AsyncSession, actor: Actor,
@@ -1275,7 +1333,7 @@ async def _finish_execution(session: AsyncSession, executor_task_id: str, genera
 
 async def execute(session: AsyncSession, actor: Actor, execution: FederationExecution, *,
                   now: datetime, http=None, index=None, heartbeat: bool = False) -> dict:
-    """执行一个已受理的 step（当前切片只实现 `retrieve`）。
+    """执行一个已受理的 step（`retrieve` / `answer` / `wiki_pages`）。
 
     领取（queued -> running）与落终态都是条件 UPDATE，带 generation fence；
     被取消/被接管的旧执行写不进去。
@@ -1322,6 +1380,15 @@ async def execute(session: AsyncSession, actor: Actor, execution: FederationExec
             # 答案为空并带显式原因，证据与受理事实原样保留。
             document, degraded, limits = await _run_answer(spec, http=http)
             result_json = {"spec": spec, "result": None, "answer": document,
+                           "degraded": degraded, "internal_limits": limits}
+            await _finish_execution(
+                session, execution_id, generation, state="succeeded", now=now,
+                result_json=result_json, result_ref=f"result:{execution_id}")
+        elif execution.operation == "wiki_pages":
+            # 远端只出原始页面草稿：消费受理快照，不回读本地资源、不扩权；
+            # 版本化提交权永远在 A，C 的结果经协调器校验后由 A 落库。
+            document, degraded, limits = await _run_wiki_pages(spec, http=http)
+            result_json = {"spec": spec, "result": None, "wiki_draft": document,
                            "degraded": degraded, "internal_limits": limits}
             await _finish_execution(
                 session, execution_id, generation, state="succeeded", now=now,
@@ -1416,6 +1483,129 @@ async def _run_answer(spec: dict, *, http) -> tuple[dict, str | None, list[str]]
         provider_model=settings.chat_model or "unknown",
         provider_endpoint=settings.chat_endpoint, location="local")
     return document, None, []
+
+
+async def _run_wiki_pages(spec: dict, *, http) -> tuple[dict, str | None, list[str]]:
+    """执行一个已受理的 wiki_pages 步骤：只消费受理时校验过的快照行。"""
+    from ddp_core.application import wiki as wiki_kernel
+    evidence = list(spec.get("evidence") or [])
+    if not evidence:
+        raise ApplicationError("input_not_verified", "wiki_pages step has no verified evidence")
+    query = spec.get("query") or ""
+    title = str(spec.get("wiki_title") or query.strip()[:255] or "federated")
+    max_pages = spec.get("wiki_max_pages", 4)
+    if type(max_pages) is not int or not 1 <= max_pages <= 12:
+        raise ApplicationError("budget_exceeded", "wiki max_pages must be within 1..12")
+    rows = []
+    for item in evidence:
+        evidence_id = str(item.get("evidence_id") or "")
+        excerpt = str(item.get("excerpt") or "")
+        digest = str(item.get("digest") or "")
+        envelope = item.get("source_envelope")
+        if not evidence_id or not excerpt or not isinstance(envelope, dict):
+            raise ApplicationError("input_not_verified", "wiki_pages step has no verified evidence")
+        if envelope.get("excerpt_digest") != digest:
+            raise ApplicationError("input_not_verified", "wiki_pages snapshot envelope is stale")
+        rows.append({"id": evidence_id, "evidence": envelope, "excerpt": excerpt})
+    max_tokens = int(spec.get("max_generation_tokens") or 0)
+    if max_tokens <= 0:
+        raise ApplicationError("budget_exceeded",
+                               "a wiki_pages step requires a positive generation token reservation")
+    try:
+        limits = wiki_kernel.limits_for({"max_pages": max_pages, "max_evidence": len(rows),
+                                         "max_output_tokens": max_tokens,
+                                         "max_input_chars": 50000})
+    except ApplicationError:
+        raise
+    provider = _WikiExcerptProvider(http)
+    def _record(stage, messages, allowance):
+        def _finish(*, output=None, provider=None, error=None):
+            return None
+        return _finish
+    try:
+        result = await wiki_kernel.generate_wiki(
+            provider, title, rows, limits,
+            execution_policy="trusted_federation", allow_remote=False,
+            record_attempt=_record)
+    except (APIError, ApplicationError) as exc:
+        code = getattr(exc, "code", None) or "wiki_generation_failed"
+        return {"pages": [], "relations": [], "provider": None, "limits": {},
+                "error": str(code), "validation_state": "failed"}, None, []
+    return {"pages": list(result.get("pages") or []),
+            "relations": list(result.get("relations") or []),
+            "provider": result.get("provider"),
+            "limits": result.get("limits") or {},
+            "protocol": result.get("protocol"),
+            "decoder_revision": result.get("decoder_revision"),
+            "semantic_review": result.get("semantic_review"),
+            "source_type": result.get("source_type"),
+            "error": None, "validation_state": "passed"}, None, []
+
+
+class _WikiExcerptProvider:
+    """C 侧有界摘录生成通道：只打配置的 chat 端点，不回读来源、不扩样本。"""
+    def __init__(self, http):
+        self._http = http
+    def capabilities(self) -> dict:
+        return {"chat_endpoint": settings.chat_endpoint,
+                "model": settings.chat_model or "registry-default"}
+    async def generate(self, messages, *, execution_policy, allow_remote, max_tokens=1024):
+        if type(max_tokens) is not int or not 1 <= max_tokens <= 8192:
+            raise APIError(409, "completion token budget must be within 1..8192",
+                           "invalid_request_error", "wiki_budget_exceeded")
+        request = upstream.chat_request(self._http, messages, stream=False)
+        try:
+            payload = json.loads(request.content)
+        except ValueError:
+            raise APIError(502, "Wiki model request could not be built",
+                           "invalid_request_error", "wiki_generation_failed") from None
+        payload["max_tokens"] = max_tokens
+        built = self._http.build_request("POST", request.url, json=payload,
+                                         headers=request.headers,
+                                         extensions=request.extensions)
+        built.headers["Content-Length"] = str(len(built.content))
+        try:
+            async with self._http.stream(built.method, built.url, content=built.content,
+                                         headers=built.headers,
+                                         extensions=built.extensions) as response:
+                if response.status_code != 200:
+                    raise APIError(502, "Wiki model request failed",
+                                   "invalid_request_error", "wiki_generation_failed")
+                chunks, total = [], 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > 512_000:
+                        raise APIError(502, "model response exceeded byte limit",
+                                       "invalid_request_error", "wiki_budget_exceeded")
+                    chunks.append(chunk)
+        except APIError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- transport failure is a 502, never a draft.
+            raise APIError(502, f"Wiki model request failed: {type(exc).__name__}",
+                           "invalid_request_error", "wiki_generation_failed") from exc
+        try:
+            body = json.loads(b"".join(chunks))
+            choice = body["choices"][0]
+            if choice.get("finish_reason") == "length":
+                raise APIError(409, "model exhausted completion token budget",
+                               "invalid_request_error", "wiki_budget_exceeded")
+            if body.get("usage", {}).get("completion_tokens", 0) > max_tokens:
+                raise APIError(409, "model exceeded completion token budget",
+                               "invalid_request_error", "wiki_budget_exceeded")
+            output = choice["message"]["content"]
+            if not isinstance(output, str) or not output.strip():
+                raise ValueError("empty output")
+        except APIError:
+            raise
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise APIError(502, "Wiki model returned invalid output",
+                           "invalid_request_error", "wiki_generation_failed") from None
+        model = body.get("model") if isinstance(body, dict) else None
+        provenance = {"model": str(model or settings.chat_model or "registry-default"),
+                      "kind": "federated_wiki_generation",
+                      "endpoint": settings.chat_endpoint,
+                      "execution_policy": execution_policy, "allow_remote": allow_remote}
+        return output, provenance
 
 
 async def heartbeat_execution(session: AsyncSession, executor_task_id: str) -> bool:

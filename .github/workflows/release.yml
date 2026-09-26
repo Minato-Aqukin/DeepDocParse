@@ -1,12 +1,29 @@
-# 把一次 desktop-windows 构建的安装包转成 GitHub Release。
+# 把一次 desktop-windows 构建的安装包转成 GitHub Release（T-007 最小闭环版）。
 #
 # 为什么单独一个工作流：release 资产必须从持有文件的地方上传。
 # 安装包只存在于构建机（已销毁）和 artifact blob 里 —— 本地链路到 blob
 # 只有几十 KB/s，475MB 拉不下来。所以下载（artifact）和上传（release）
 # 都在 GitHub 机房内网完成，不经过本地。
 #
-# 用法：Actions 页选 release → Run workflow → 填已成功的 desktop-windows
-# 运行 ID 与 tag。只发 setup 安装版（NSIS）；便携版留在 artifact 里。
+# 用法：Actions 页选 release → Run workflow（必须选 main 分支）→ 填已成功的
+# desktop-windows 运行 ID 与 tag。发布 setup 安装版（NSIS）+ 便携版 + 双
+# sidecar + 完整 SHA256SUMS + 来源清单（发布集合与清单覆盖严格对应）。
+#
+# 闭环规则（release_publication.py + 同版 v3 验收门禁，任一步红即停）：
+# 1. 自身必须跑在 refs/heads/main，否则第一步就红。
+# 2. dispatch 输入只走 env: 进 helper，不拼进 shell；run_id 严格正整数，
+#    tag 只许 vX.Y.Z 且必须等于来源版本。
+# 3. 独立核验 run 元数据：同仓、非 fork、路径精确等于
+#    .github/workflows/desktop-windows.yml、main、push/workflow_dispatch、
+#    completed/success、无 PR 关联；缺字段/API 错误一律 fail。
+# 4. 只下载同 run 唯一未过期的 windows-installers（名字写死，用户挑不了）。
+# 5. 安装包三处哈希（清单/sidecar/来源清单）与字节流一致；来源清单与 API
+#    元数据逐字段对照；旧构件无来源清单明确拒绝重建，不设绕过。
+# 6. 已有 tag 剥离后必须等于来源 SHA；新 tag 显式 --target 来源 SHA。
+# 7. 来源必须就是这次可信 main checkout；v3 验收有部分/未验证/外部阻塞项不得发布。
+#    不允许拿新提交的验收结论替旧安装包背书；回退使用已发布的受信旧版本。
+#
+# checksum 是完整性校验，不声称签名，也不防同信任域作恶。
 name: release
 
 on:
@@ -16,7 +33,7 @@ on:
         description: '已成功的 desktop-windows 运行 ID（取其 windows-installers 构件）'
         required: true
       tag:
-        description: '发行版 tag（不存在则创建）'
+        description: '发行版 tag（vX.Y.Z，必须等于构建来源版本；不存在则创建并指向来源 commit）'
         required: true
         default: 'v0.1.0'
 
@@ -28,37 +45,62 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # gh 不读 checkout 的凭据：API 与下载/发布调用的认证只认 GH_TOKEN。
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
 
+      # 门 0：发布 workflow 自身必须从可信 main 执行，拒绝其他 ref。
+      - name: 拒绝非 main ref 上的执行
+        env:
+          REF: ${{ github.ref }}
+        run: python3 scripts/release_publication.py assert-ref --ref "$REF"
+
+      # 门 1：输入校验 + 来源核验 + 外部版本锚点 → source.json。
+      - name: 核验构建来源
+        env:
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+          TAG: ${{ inputs.tag }}
+          REF: ${{ github.ref }}
+          OUT: ${{ runner.temp }}/ddp-source.json
+        run: python3 scripts/release_publication.py verify-run --repo "$REPO" --run-id "$RUN_ID" --tag "$TAG" --ref "$REF" --out "$OUT"
+
+      - name: 拒绝未完成验收或不属于验收版本的构件
+        env:
+          SOURCE: ${{ runner.temp }}/ddp-source.json
+          ACCEPTED_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from scripts.release_publication import validate_sha
+          source = json.loads(Path(os.environ["SOURCE"]).read_text(encoding="utf-8"))
+          if validate_sha(source["head_sha"]) != validate_sha(os.environ["ACCEPTED_SHA"]):
+              raise SystemExit("发布阻断：构件来源不是当前验收版本，须从此 main 提交重新构建")
+          PY
+          python3 scripts/check_acceptance_matrix.py --require-complete
+
+      # 门 2：同 run 唯一未过期构件，多/少/过期/含混一律红。
       - name: 取回安装包构件
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh run download "${{ inputs.run_id }}" -n windows-installers -D dist/release
-          ls -la dist/release
+          REPO: ${{ github.repository }}
+          SOURCE: ${{ runner.temp }}/ddp-source.json
+        run: python3 scripts/release_publication.py fetch-artifact --repo "$REPO" --source "$SOURCE" --dest dist/release
 
-      # 防拿错包：SHA256SUMS 是打包机现场算的，对着它验不过就直接红。
-      # 构件里套了一层目录（upload-artifact 保留了 dist/desktop/windows 结构），
-      # 所以用 find 定位，不写死路径。
-      - name: 校验安装包哈希
-        run: |
-          SUMS=$(find dist/release -name SHA256SUMS | head -n 1)
-          if [ -z "$SUMS" ]; then echo "构件里没有 SHA256SUMS" >&2; exit 1; fi
-          echo "校验清单：$SUMS"
-          (cd "$(dirname "$SUMS")" && sha256sum -c "$(basename "$SUMS")")
-
-      - name: 发布 Release（仅 setup 安装版）
+      # 门 3：唯一性、清单精确覆盖、三处哈希与字节流、来源对照、版本三方一致。
+      - name: 校验安装包与来源清单
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          SETUP=$(find dist/release -name 'DeepDocParse-*-setup.exe' | head -n 1)
-          if [ -z "$SETUP" ] || [ "$(find dist/release -name 'DeepDocParse-*-setup.exe' | wc -l)" -ne 1 ]; then
-            echo "setup exe 数量不对" >&2; exit 1
-          fi
-          DIR="$(dirname "$SETUP")"
-          BASE="$(basename "$SETUP")"
-          gh release create "${{ inputs.tag }}" \
-            --title "DeepDocParse ${{ inputs.tag }}（Windows 桌面版）" \
-            --notes "Windows 安装版（NSIS）。SHA256 见同页 ${BASE}.sha256。构建来源：desktop-windows 运行 ${{ inputs.run_id }}。" \
-            "$DIR/$BASE" "$DIR/$BASE.sha256" "$DIR/SHA256SUMS"
+          TAG: ${{ inputs.tag }}
+          SOURCE: ${{ runner.temp }}/ddp-source.json
+        run: python3 scripts/release_publication.py verify-package --dir dist/release --source "$SOURCE" --tag "$TAG"
+
+      # 门 4：tag 解析（精确匹配，剥离核对）+ 发布（setup/portable/双 sidecar/完整清单/来源清单）。
+      - name: 发布 Release
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          SOURCE: ${{ runner.temp }}/ddp-source.json
+        run: python3 scripts/release_publication.py create-release --repo "$REPO" --source "$SOURCE" --tag "$TAG" --package-dir dist/release

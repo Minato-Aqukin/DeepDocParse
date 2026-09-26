@@ -37,6 +37,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import pathlib
 import sys
@@ -127,6 +128,55 @@ def walk(node, path: str, enums: dict[str, list[str]], *, inject: bool):
         walk(child, f"{path}/{key}", enums, inject=inject)
 
 
+def _visit_refs(node, owner: str, *, destination: str, schema: dict,
+                imported: dict[tuple[str, str], str], schemas: dict[str, dict]) -> None:
+    """Inline `$ref` imports so generated schemas stay self-contained (no HTTP fetch)."""
+    if isinstance(node, list):
+        for child in node:
+            _visit_refs(child, owner, destination=destination, schema=schema,
+                        imported=imported, schemas=schemas)
+        return
+    if not isinstance(node, dict):
+        return
+    ref = node.get("$ref")
+    if ref and (not ref.startswith("#") or owner != destination):
+        path, separator, fragment = ref.partition("#")
+        target = owner
+        if path:
+            absolute = (SCHEMA_DIR / owner).parent.joinpath(path).resolve()
+            target = absolute.relative_to(SCHEMA_DIR.resolve()).as_posix()
+        if not separator or not fragment.startswith("/$defs/") or target not in schemas:
+            raise ValueError(f"{owner}: unsupported schema reference {ref!r}")
+        name = fragment[len("/$defs/"):].replace("~1", "/").replace("~0", "~")
+        if name not in schemas[target]["$defs"]:
+            raise ValueError(f"{owner}: missing schema definition {ref!r}")
+        if target == destination:
+            alias = name
+        else:
+            key = target, name
+            alias = imported.get(key)
+            if alias is None:
+                alias = f"{target.replace('/', ':')}:{name}"
+                if alias in schema["$defs"]:
+                    raise ValueError(f"{destination}: colliding imported definition {alias!r}")
+                imported[key] = alias
+                definition = copy.deepcopy(schemas[target]["$defs"][name])
+                schema["$defs"][alias] = definition
+                _visit_refs(definition, target, destination=destination, schema=schema,
+                            imported=imported, schemas=schemas)
+        node["$ref"] = "#/$defs/" + alias.replace("~", "~0").replace("/", "~1")
+    for child in list(node.values()):
+        _visit_refs(child, owner, destination=destination, schema=schema,
+                    imported=imported, schemas=schemas)
+
+
+def resolve_schema_imports(schemas: dict[str, dict]) -> None:
+    """Keep generated schemas self-contained; never fetch a reference over HTTP."""
+    for destination, schema in schemas.items():
+        _visit_refs(schema, destination, destination=destination, schema=schema,
+                    imported={}, schemas=schemas)
+
+
 def load_schemas(enums: dict[str, list[str]], *, inject: bool) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for path in sorted(SCHEMA_DIR.rglob("v1.json")):
@@ -145,6 +195,7 @@ def load_schemas(enums: dict[str, list[str]], *, inject: bool) -> dict[str, dict
         out[rel] = schema
     if not out:
         fail(f"{SCHEMA_DIR} 下一份 schema 都没找到")
+    resolve_schema_imports(out)
     return out
 
 

@@ -39,7 +39,6 @@ from node_credentials_fixture import (
 from test_client_projection import asset
 
 NODE = "node-" + "f" * 48
-PEER = "peer-token-for-tests"
 BASE = "/api/v1/federation"
 SCHEMAS = json.loads((Path(__file__).resolve().parents[3]
                       / "packages/contracts/generated/schemas-resolved.json").read_text())
@@ -56,13 +55,14 @@ FEDERATION_TABLES = {
 
 
 def configure_federation(monkeypatch):
-    """配好节点身份、peer 凭据与进程内 embedding 替身。
+    """配好节点身份与进程内 embedding 替身。
 
     探测要真的走检索，但不该在单测里发 HTTP。三个 `test_federation_*` 文件
     各自的 autouse 夹具都调它 —— autouse 夹具不随 import 传播。
+    入站身份由 `node_credentials_fixture.install` 钉（真签发/真验签），
+    不再设任何共享 peer 凭据。
     """
     monkeypatch.setattr(settings, "bundle_node_id", NODE)
-    monkeypatch.setattr(settings, "federation_peer_token", PEER)
     monkeypatch.setattr(settings, "federation_admissions_enabled", True)
 
     async def _embed(_http, _text):
@@ -76,10 +76,8 @@ def _federation_config(monkeypatch):
     configure_federation(monkeypatch)
 
 
-def headers(who=ACTOR, *, org=ORG, role="contributor", peer=True, target=True):
+def headers(who=ACTOR, *, org=ORG, role="contributor", target=True):
     out = actor_headers(who, organization_id=org, role=role)
-    if peer:
-        out["X-DDP-Peer-Token"] = PEER
     if target:
         out["X-DDP-Target-Node"] = NODE
     return out

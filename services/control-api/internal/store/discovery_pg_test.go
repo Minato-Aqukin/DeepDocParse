@@ -24,6 +24,66 @@ func registerApproved(t *testing.T, s *Store, org string, r discovery.Registrati
 	}
 }
 
+func TestDescriptorLeaseRenewalPreservesApprovalAndFrozenAuthorization(t *testing.T) {
+	s := &Store{pool: testPool(t)}
+	ctx := context.Background()
+	org := seedOrg(t, s)
+	registration := testNode("node-renew", true)
+	registerApproved(t, s, org, registration)
+	before, err := s.PeerTrust(ctx, org, registration.Descriptor.NodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := s.CreateMemberSnapshot(ctx, org, "alice", "renew-reader", "local-node", false, 100, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renewed := registration
+	renewed.Descriptor.ValidUntil = registration.Descriptor.ValidUntil.Add(time.Hour)
+	if _, err := s.RegisterNode(ctx, org, renewed); err != nil {
+		t.Fatalf("unchanged lease cannot renew: %v", err)
+	}
+	after, err := s.PeerTrust(ctx, org, registration.Descriptor.NodeID)
+	if err != nil || *after != *before {
+		t.Fatalf("lease changed a permission epoch: %+v %+v %v", before, after, err)
+	}
+	oldPage, err := s.MemberSnapshotPage(ctx, org, "alice", "renew-reader", snapshot.ID, "", false)
+	if err != nil || len(oldPage.Members) != 1 || oldPage.Members[0].State != discovery.MemberApproved ||
+		oldPage.Members[0].Descriptor == nil || !oldPage.Members[0].Descriptor.ValidUntil.Equal(registration.Descriptor.ValidUntil) {
+		t.Fatalf("renewal rewrote or revoked the frozen snapshot: %+v %v", oldPage, err)
+	}
+	fresh, err := s.CreateMemberSnapshot(ctx, org, "alice", "renew-reader", "local-node", false, 100, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshPage, err := s.MemberSnapshotPage(ctx, org, "alice", "renew-reader", fresh.ID, "", false)
+	if err != nil || len(freshPage.Members) != 1 || freshPage.Members[0].Descriptor == nil ||
+		!freshPage.Members[0].Descriptor.ValidUntil.Equal(renewed.Descriptor.ValidUntil) {
+		t.Fatalf("new scope missed renewed lease: %+v %v", freshPage, err)
+	}
+	for _, mutation := range []func(*discovery.Registration){
+		func(r *discovery.Registration) { r.PublicKey = "another-key" },
+		func(r *discovery.Registration) { r.VisibleToOrg = false },
+		func(r *discovery.Registration) {
+			r.Descriptor.ControlledEndpoints = []discovery.Endpoint{{Purpose: "federation", URL: "https://changed.invalid"}}
+		},
+	} {
+		changed := renewed
+		changed.Descriptor.ValidUntil = renewed.Descriptor.ValidUntil.Add(time.Minute)
+		mutation(&changed)
+		if _, err := s.RegisterNode(ctx, org, changed); !errors.Is(err, ErrDiscoveryConflict) {
+			t.Fatalf("lease renewal smuggled changed trust/configuration: %v", err)
+		}
+	}
+	if _, err := s.SetNodeState(ctx, org, registration.Descriptor.NodeID, discovery.MemberRevoked); err != nil {
+		t.Fatal(err)
+	}
+	renewed.Descriptor.ValidUntil = renewed.Descriptor.ValidUntil.Add(time.Minute)
+	if _, err := s.RegisterNode(ctx, org, renewed); !errors.Is(err, ErrDiscoveryConflict) {
+		t.Fatalf("renewal resurrected revoked identity: %v", err)
+	}
+}
+
 func TestDiscoverySnapshotsFreezeVisibleMembershipAndRetainRevocations(t *testing.T) {
 	s := &Store{pool: testPool(t)}
 	ctx := context.Background()

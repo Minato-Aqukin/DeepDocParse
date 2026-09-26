@@ -53,7 +53,7 @@ from ddp_contracts.enums import (
     TASK_EVENT_TYPE_VALUES,
 )
 
-from ddp_corpus import cache, capabilities, catalog, federation, policy, queue, upstream
+from ddp_corpus import cache, capabilities, catalog, federation, federation_budget, policy, queue
 from ddp_corpus.collection_models import Collection
 from ddp_corpus.config import settings
 from ddp_corpus.deps import Actor
@@ -75,6 +75,7 @@ RETRIEVAL_OPERATION = "corpus.retrieve"
 LOCATE_OPERATION = "corpus.locate"
 #: fast 的有界候选数（§7.2）。exhaustive 不受它限制。
 FAST_CANDIDATE_LIMIT = 8
+MAX_ANSWER_CANDIDATES = 8
 #: 命中探测复用（P6 缓存回执）时覆盖账本 search_profile 上的可见标记。
 #: 它不声称"本次真的探测过" —— 回执本身的 observed_at 才是新鲜度事实。
 CACHED_PROBE_PROFILE = "cached_probe_receipt"
@@ -82,17 +83,20 @@ CACHED_PROBE_PROFILE = "cached_probe_receipt"
 SCOPE_TTL_SECONDS = 900
 #: 交付暂存期。TTL 到期未确认 -> expired，不得再显示"已保存本地"。
 DELIVERY_TTL_SECONDS = 86400
-#: 远端执行的轮询上限。超时记 `unreachable/peer_execution_timeout` 并**保留**
-#: 对端执行（与本地 `local_execution_timeout` 同一语义），本轮不再等；resume
-#: 按业务键对账到同一条执行接着等。超时就取消会让这个"可重做"的目标永远
-#: 重做不了：对账拿回的是已取消的执行，换代次重新受理又是同键异体 409。
-PEER_POLL_DEADLINE_SECONDS = 20.0
-PEER_POLL_INTERVAL_SECONDS = 0.05
+#: 远端执行的轮询间隔。轮询以已批准计划的 deadline 为上限；超时记
+#: `unreachable/peer_execution_timeout` 并**保留**对端执行（与本地
+#: `local_execution_timeout` 同一语义），本轮不再等；resume 按业务键对账到同一条
+#: 执行接着等。超时就取消会让这个"可重做"的目标永远重做不了：对账拿回的是已取消的
+#: 执行，换代次重新受理又是同键异体 409。
+#: 间隔 ≥1s：真实 CPU 生成一次常为数十秒，50ms 预扣会在结果返回前机械耗尽
+#: 正常请求预算；每次轮询仍是真实 HTTP，必须计 1 request（单调预扣，不免费）。
+PEER_POLL_INTERVAL_SECONDS = 1.0
 #: 本地执行的等待上限。本地目标现在也排在持久队列里（`federation_execute`），
 #: 协调者在拿到回执后等它落终态；超时记 `local_execution_timeout` 并保留
-#: 覆盖缺口，绝不无限挂住协调者任务。
+#: 覆盖缺口，绝不挂住协调者任务。本地轮询是本库读，不占根预算；间隔同样 ≥1s
+#: 给真实 CPU 任务让路，不空转。
 LOCAL_POLL_DEADLINE_SECONDS = 20.0
-LOCAL_POLL_INTERVAL_SECONDS = 0.05
+LOCAL_POLL_INTERVAL_SECONDS = 1.0
 #: 每个目标一份检索结果的字节预算（证据信封 + locator，够宽但有限）。
 EVIDENCE_BYTES_PER_TARGET = 64 * 1024
 #: 答案生成的 token 上限（`RootBudget.max_generation_tokens`）。本地生成或
@@ -100,14 +104,13 @@ EVIDENCE_BYTES_PER_TARGET = 64 * 1024
 #: 计数用本仓共享的 `ddp_core.tokenize.tokens`（确定性、可复核）；它是**上限
 #: 口径**，不是模型侧的真实 token 数。
 GENERATION_TOKEN_BUDGET = 1024
-#: 唯一会带生成步骤的协调者 operation（契约 `federation_task_operation`）。
+#: 会带生成步骤的协调者 operation（契约 `federation_task_operation` 的生成子集）。
 ANSWER_OPERATION = "rag.answer.cited"
-#: 生成提示词与结构验收的**唯一实现**在 `federation`（远端执行者与本地生成
-#: 共用同一份）。这里保留模块级别名，避免历史引用点漂移。
-ANSWER_SYSTEM_PROMPT = federation.ANSWER_SYSTEM_PROMPT
-#: 规划 answer 委托时最多探测几个候选执行节点。有界且确定：先按目标出现顺序，
-#: 再按稳定排序；预算（`max_probe_requests`）还会先一步封顶。
-MAX_ANSWER_CANDIDATES = 8
+#: 按固定原始证据生成版本化 Wiki 的协调者 operation（`requirements.wiki` 严格
+#: 校验已在 `plans.validate_spec` 落地；这里只复用它的形状，不另起契约）。
+WIKI_OPERATION = "wiki.pages"
+#: 任一需要生成 token 预算的 operation（answer 与 wiki_pages 都要调模型）。
+GENERATION_OPERATIONS = frozenset({ANSWER_OPERATION, WIKI_OPERATION})
 #: 交付结果文档的字节上限（规范 JSON）。结果本身不含正文摘录，正常远小于它；
 #: 超限**不持久化文档、也不截断**，读取端点如实返回 result=null，客户端据此
 #: 拒绝确认 —— 静默截断会让本地"校验通过"的哈希对不上真正交付的内容。
@@ -398,12 +401,17 @@ async def _local_manifest(session: AsyncSession, actor: Actor, *, consent: dict,
 # 意图
 # ---------------------------------------------------------------------------
 
-def _intent_request_digest(task_spec, exploration_consent, scope_manifest) -> str:
+def _intent_request_digest(task_spec, exploration_consent, scope_manifest,
+                           caller_budget=None) -> str:
     """入参实体摘要。**不能拿持久化后的 scope manifest 比** —— `site_public`
     的本地枚举每次都生成新的 scope_id/时间戳，同键重放会被误判成异实体。"""
-    return plans.digest({"task_spec": task_spec,
-                         "exploration_consent": exploration_consent,
-                         "scope_manifest": scope_manifest})
+    body: dict = {"task_spec": task_spec,
+                  "exploration_consent": exploration_consent,
+                  "scope_manifest": scope_manifest}
+    if caller_budget is not None:
+        # 同键不同 caller 切片必须 409；省略时沿用旧三键形状，老 intent 重放不炸。
+        body["caller_budget"] = caller_budget
+    return plans.digest(body)
 
 
 def _replay_intent(row: FederationRequest, request_digest: str) -> dict:
@@ -421,8 +429,8 @@ async def _find_intent_by_key(session: AsyncSession, organization_id: str,
 
 
 async def create_intent(session: AsyncSession, actor: Actor, *, task_spec,
-                        exploration_consent, scope_manifest=None, now: datetime,
-                        idempotency_key: str) -> dict:
+                        exploration_consent, scope_manifest=None, budget=None,
+                        now: datetime, idempotency_key: str) -> dict:
     """持久任务需求 + 已批准的探索许可。**协调者只校验，不代签。**
 
     `Idempotency-Key` 是必填的受理锚：同键同实体返回同一个 TaskIntent（固定
@@ -434,7 +442,9 @@ async def create_intent(session: AsyncSession, actor: Actor, *, task_spec,
     409 discovery_incomplete）；`site_public`/`local_only` 缺省由本节点枚举
     已发布集合；`fixed_resources` 的资源列表本身就是完整分母，不需要 manifest。
     """
-    request_digest = _intent_request_digest(task_spec, exploration_consent, scope_manifest)
+    caller = federation_budget.validate_caller_budget(budget)
+    request_digest = _intent_request_digest(task_spec, exploration_consent, scope_manifest,
+                                            caller_budget=caller)
     if not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 128:
         raise APIError(400, "an idempotency key of 1-128 characters is required",
                        "invalid_request_error", "idempotency_key_required")
@@ -486,11 +496,16 @@ async def create_intent(session: AsyncSession, actor: Actor, *, task_spec,
         intent_request_digest=request_digest, created_at=now, updated_at=now)
     session.add(row)
     try:
-        # 事件追加里的 `SELECT max(seq)` 会触发 autoflush，它必须和 commit 在
-        # 同一个 try 里：并发同键时唯一约束会在这里就炸，放在 try 外面则重放/
-        # 409 分支永远到不了，裸 IntegrityError 直接变 500（N4）。
+        # Ledger creation and event reads can both autoflush the intent's
+        # unique key. Keep every flush inside the same replay/conflict guard.
+        await federation_budget.ensure_ledger(
+            session, root_task_id=root_task_id, organization_id=actor.organization_id,
+            caller_budget=caller,
+            server_caps=_intent_budget(task_spec, manifest, consent, now=now),
+            legacy_result=None, now=now)
         await _append_event(session, root_task_id, _EVENT_INTENT,
-                            {"planning_state": "draft", "scope_ref": scope_id}, now=now)
+                            {"planning_state": "draft", "scope_ref": scope_id,
+                             "caller_budget": caller}, now=now)
         await session.commit()
     except IntegrityError:
         # 并发同键：唯一约束替我们仲裁；重放已有行，异实体如实报冲突。
@@ -644,7 +659,7 @@ async def list_tasks(session: AsyncSession, actor: Actor, *, limit: int,
             "next_cursor": _list_cursor(page[-1]) if len(rows) > limit else None}
 
 
-def _status_output(row: FederationRequest) -> dict:
+async def _status_output(session: AsyncSession, row: FederationRequest) -> dict:
     return {
         "root_task_id": row.root_task_id,
         "status": row.status,
@@ -659,6 +674,8 @@ def _status_output(row: FederationRequest) -> dict:
         "coverage_ref": row.coverage_ref,
         "delivery_id": row.delivery_id,
         "delivery_state": row.delivery_state,
+        "used_budget": await federation_budget.ledger_used(
+            session, root_task_id=row.root_task_id, organization_id=row.organization_id),
         "result": _public_result(row.result_json),
         "error": row.error,
         "scope_ref": row.scope_id or None,
@@ -693,8 +710,31 @@ def _ordered_targets(targets: list[dict]) -> list[dict]:
     return [keys[key] for key in sorted(keys)]
 
 
+def _fast_stop_reason(task_spec: dict, all_targets: list[dict], selected: list[dict],
+                      outcome: dict, generation_ready: bool,
+                      delegated: str | None) -> str:
+    """fast 首轮的可审查停止原因（写入 plan_ready 事件与结果内部字段）。"""
+    mode = task_spec["search_policy"]["mode"]
+    fixed = task_spec["resource_scope"]["kind"] == "fixed_resources"
+    if mode == "exhaustive_scope" or fixed or len(selected) >= len(all_targets):
+        return "complete_scope_covered"
+    if task_spec["operation"] in GENERATION_OPERATIONS and not generation_ready \
+            and delegated is None:
+        gate = any(isinstance(value, tuple) and str(value[1] or "").startswith(
+            ("budget_exhausted", "egress_mode:", "recipient_not_allowed",
+             "payload_not_allowed")) for value in outcome.values())
+        return "budget_or_consent_gate" if gate else "no_generation_capacity"
+    gate = any(isinstance(value, tuple) and str(value[1] or "").startswith(
+        ("budget_exhausted", "egress_mode:", "recipient_not_allowed",
+         "payload_not_allowed", "not_attempted")) for value in outcome.values())
+    if gate:
+        return "budget_or_consent_gate"
+    return "candidate_limit_reached"
+
+
 def _select_targets(targets: list[dict], task_spec: dict, node: str, *,
-                    descriptors: list[dict] | None = None) -> list[dict]:
+                    descriptors: list[dict] | None = None,
+                    rank_all: bool = False) -> list[dict]:
     """按集合目录摘要给候选定序并截到模式上限（排序实现只在路由内核里）。
 
     没有摘要（未取到/未授权/预算耗尽）时排序退化为确定性 local_first ——
@@ -705,7 +745,7 @@ def _select_targets(targets: list[dict], task_spec: dict, node: str, *,
                        "discovery_incomplete")
     mode = task_spec["search_policy"]["mode"]
     fixed = task_spec["resource_scope"]["kind"] == "fixed_resources"
-    limit = len(targets) if mode == "exhaustive_scope" or fixed \
+    limit = len(targets) if rank_all or mode == "exhaustive_scope" or fixed \
         else min(FAST_CANDIDATE_LIMIT, len(targets))
     try:
         ranked = routing.candidates(
@@ -715,6 +755,21 @@ def _select_targets(targets: list[dict], task_spec: dict, node: str, *,
     except ApplicationError as exc:
         raise federation.api_error(exc) from None
     return [item["target_key"] for item in ranked]
+
+
+def _fast_continuation_targets(ranked: list[dict], selected: list[dict]) -> list[dict]:
+    """An explicit continuation may expand even a nonempty previous result.
+
+    Having cited evidence is not proof that the user's question is fully answered.
+    The next candidate remains inside the frozen scope and needs a fresh approval.
+    """
+    selected_keys = {(item["origin_node_id"], item["collection_id"], item["operation"])
+                     for item in selected}
+    for target in ranked:
+        identity = (target["origin_node_id"], target["collection_id"], target["operation"])
+        if identity not in selected_keys:
+            return [target]
+    return []
 
 
 def _plan_selected_targets(plan: dict, all_targets: list[dict]) -> list[dict]:
@@ -849,7 +904,8 @@ async def _gather_descriptors(session: AsyncSession, actor: Actor, *, node: str,
                               all_targets: list[dict], manifest: dict | None,
                               consent: dict, budget: routing.RootBudget,
                               peers: PeerDirectory,
-                              valid_until: datetime) -> tuple[list[dict], dict]:
+                              valid_until: datetime,
+                              spend=None) -> tuple[list[dict], dict, list[str]]:
     """计划期集合摘要：本地已发布集合 + 许可允许的远端自发布目录。
 
     - 本地摘要是本库读，不出网，不受探索许可约束；
@@ -871,16 +927,23 @@ async def _gather_descriptors(session: AsyncSession, actor: Actor, *, node: str,
 
     exhausted = {"budget": False}
 
-    def _reserve() -> bool:
+    resource_nodes = {target["origin_node_id"] for target in all_targets}
+    remote_nodes = sorted((resource_nodes | set(_registry_revisions(manifest))) - {node})
+    # A frozen scope can include a compute-only node with no collection. It is
+    # merely a candidate until its separately authorized capability probe passes.
+    capability_only = [origin for origin in remote_nodes if origin not in resource_nodes
+                       and _peer_probe_denial(consent, origin) is None]
+
+    async def reserve_page():
         try:
-            budget.reserve("discovery")
+            if spend is not None:
+                await spend(kind="discovery", amount=1)
+            else:
+                budget.reserve("discovery")
         except ApplicationError:
             exhausted["budget"] = True
             return False
         return True
-
-    remote_nodes = sorted({target["origin_node_id"] for target in all_targets
-                           if target["origin_node_id"] != node})
     for origin in remote_nodes:
         denial = _directory_denial(consent, origin)
         if denial is not None:
@@ -888,7 +951,7 @@ async def _gather_descriptors(session: AsyncSession, actor: Actor, *, node: str,
             continue
         exhausted["budget"] = False
         try:
-            fetched = await peers.collections(origin, reserve=_reserve)
+            fetched = await peers.collections(origin, reserve=reserve_page)
         except PeerUnavailable as exc:
             notes["remote"][origin] = exc.code or "peer_unavailable"
             continue
@@ -900,17 +963,21 @@ async def _gather_descriptors(session: AsyncSession, actor: Actor, *, node: str,
             notes["remote"][origin] = "budget_exhausted"
         else:
             notes["remote"][origin] = len(usable)
-    return descriptors, notes
+        if not exhausted["budget"] and not usable and origin not in capability_only:
+            capability_only.append(origin)
+    return descriptors, notes, capability_only
 
 
 # ---------------------------------------------------------------------------
 # Probe
 # ---------------------------------------------------------------------------
 
-def _probe_key(root_task_id: str, target: dict) -> str:
-    return "plan:" + hashlib.sha256(plans.canonical_bytes(
-        [root_task_id, target["origin_node_id"], target["collection_id"],
-         target["operation"]])).hexdigest()
+def _probe_key(root_task_id: str, target: dict, revision: int = 1) -> str:
+    parts = [root_task_id, target["origin_node_id"], target["collection_id"],
+             target["operation"]]
+    if revision > 1:
+        parts.append(revision)
+    return "plan:" + hashlib.sha256(plans.canonical_bytes(parts)).hexdigest()
 
 
 def _negative_reason(exc: PeerUnavailable) -> str:
@@ -1037,7 +1104,8 @@ async def _probe_targets(session: AsyncSession, actor: Actor, row: FederationReq
                          targets: list[dict], now: datetime, http, index,
                          peers: PeerDirectory, budget: routing.RootBudget,
                          manifest: dict | None = None,
-                         descriptors: dict[tuple[str, str], dict] | None = None
+                         descriptors: dict[tuple[str, str], dict] | None = None,
+                         spend=None,
                          ) -> tuple[list[dict], dict, dict]:
     """执行探索许可允许的 Probe。返回 (probes, target_outcome, extra)。
 
@@ -1048,6 +1116,7 @@ async def _probe_targets(session: AsyncSession, actor: Actor, row: FederationReq
     task_spec = row.task_spec_json
     consent = row.exploration_consent_json
     scope_ref = row.scope_id
+    revision = int(row.plan_revision or 0) + 1
     node = federation.local_node_id()
     query = task_spec.get("query") or ""
     query_digest = plans.content_digest(query.encode("utf-8"))
@@ -1079,7 +1148,7 @@ async def _probe_targets(session: AsyncSession, actor: Actor, row: FederationReq
         request = _probe_request(task_spec=task_spec, consent_ref=consent["consent_id"],
                                  scope_ref=scope_ref, target=target, query=query)
         if origin == node:
-            probe_key = _probe_key(row.root_task_id, target)
+            probe_key = _probe_key(row.root_task_id, target, revision)
             try:
                 # commit=False：规划持有每 root 的事务级咨询锁，探测在规划
                 # 事务里落行、随计划一起提交；中途提交会把锁提前放掉。
@@ -1111,14 +1180,16 @@ async def _probe_targets(session: AsyncSession, actor: Actor, row: FederationReq
                 outcome[key] = (_negative_state(reason), reason)
                 continue
         try:
-            # 预占在真发请求之前；失败的预占不退款 —— 真实外发尝试的成本照记。
-            budget.reserve("probe")
+            # 单次预扣在 spend 内部（独立提交 + 内存 reserve 二合一）：
+            # 调用点不再另做 reserve，否则内存扣 2 次、持久只 1 次。
+            await spend(kind="probe", amount=1)
+            await spend(kind="egress_bytes", amount=len(plans.canonical_bytes(request)))
         except ApplicationError as exc:
             outcome[key] = ("not_attempted", exc.code)
             continue
         try:
             remote = await peers.client(origin).probe(
-                request, idempotency_key=_probe_key(row.root_task_id, target))
+                request, idempotency_key=_probe_key(row.root_task_id, target, revision))
         except PeerUnavailable as exc:
             if node_revision and (exc.status is None or exc.status == 403):
                 await cache.record_negative(session, scope_key=negative_scope,
@@ -1131,8 +1202,18 @@ async def _probe_targets(session: AsyncSession, actor: Actor, row: FederationReq
         set_ref = (remote.get("retrieval") or {}).get("evidence_set_ref")
         if set_ref:
             try:
-                items = list((await peers.client(origin)
-                              .evidence_set(str(set_ref))).get("items") or [])
+                # 证据集读取本身先预扣 1 request（独立提交），再读；字节按
+                # 实际信封规范 JSON 计，同样先预扣后用，不做内存 double-reserve。
+                if spend is not None:
+                    await spend(kind="request", amount=1)
+                fetched = await peers.client(origin).evidence_set(str(set_ref))
+                items = list(fetched.get("items") or [])
+                if spend is not None:
+                    await spend(kind="bytes",
+                                amount=len(plans.canonical_bytes({"items": items})))
+            except ApplicationError as exc:
+                outcome[key] = ("not_attempted", exc.code)
+                continue
             except PeerUnavailable as exc:
                 outcome[key] = ("unreachable" if exc.status is None else "failed",
                                 exc.code or "peer_unavailable")
@@ -1140,7 +1221,7 @@ async def _probe_targets(session: AsyncSession, actor: Actor, row: FederationReq
         probes.append(remote)
         probe_ids[key] = await _persist_remote_probe(
             session, actor, remote, items,
-            key=_probe_key(row.root_task_id, target),
+            key=_probe_key(row.root_task_id, target, revision),
             task_spec_digest=row.task_spec_digest, consent_ref=consent["consent_id"],
             query_digest=query_digest,
             request_digest=plans.content_digest(plans.canonical_bytes(request)), now=now)
@@ -1152,38 +1233,41 @@ async def _probe_targets(session: AsyncSession, actor: Actor, row: FederationReq
 # ---------------------------------------------------------------------------
 
 def _root_budget(consent: dict, *, target_count: int, remote_count: int,
-                 deadline: str, generation_ready: bool = False,
-                 discovery_count: int = 0) -> dict:
-    """从探索许可 + 目标数推导根预算（可复核、只增不减）。
+                 deadline: str, generation_ready: bool = False) -> dict:
+    """Freeze a bounded allowance before the first planning request.
 
-    - `max_requests` = 许可的 `max_probe_requests`（每个远端探测一次）
-      + 每个目标一次 retrieve 受理 + 已消耗的目录发现请求
-      （`discovery_count`，T87：发现与探测共用一份请求额度）。
-      本地探测不出网，不占探索额度。
-    - `max_bytes` = 许可的 `max_egress_bytes`（探测外发）
-      + 每个目标一份检索结果的字节上限（`EVIDENCE_BYTES_PER_TARGET`）。
-    - `max_hops` = 每个远端目标一来一回两条数据边；本地生成不产生跨节点边。
-      answer 委托的 `edge-answer-1` 在计划落定时给这份预算 +1（调用方补，
-      因为能不能委托要等能力探测结果）。
-    - `max_generation_tokens` = 本地生成或远端 answer 委托就绪时才给固定额度
-      （`GENERATION_TOKEN_BUDGET`），否则为 0（"本计划不生成"）。
-    - `deadline` = min(scope 有效期, 探索许可有效期, 计划有效期)；三者一致时
-      取同一个时刻。
+    Admission, lookup, evidence reads and up to 64 status polls per execution
+    all need request capacity. Capability readiness controls the eventual
+    graph, not whether its root can ever allocate generation tokens.
     """
-    probe_requests = int(consent["budget"]["max_probe_requests"])
+    probes = int(consent["budget"]["max_probe_requests"])
+    discovery = int(consent["budget"].get("max_discovery_requests", 0))
+    executions = max(1, target_count) + int(generation_ready)
     return {
-        "max_requests": max(1, probe_requests + target_count + max(0, discovery_count)),
-        "max_bytes": max(4096, int(consent["budget"]["max_egress_bytes"])
-                         + target_count * EVIDENCE_BYTES_PER_TARGET),
-        "max_hops": max(1, 2 * remote_count),
+        "max_requests": min(2**63 - 1, probes + discovery + 68 * executions),
+        "max_bytes": min(2**63 - 1, max(
+            4096, int(consent["budget"]["max_egress_bytes"])
+            + executions * EVIDENCE_BYTES_PER_TARGET)),
+        "max_hops": max(1, 2 * remote_count + 2 * int(generation_ready)),
         "deadline": deadline,
         "max_generation_tokens": GENERATION_TOKEN_BUDGET if generation_ready else 0,
-        # RootBudget 的子额度：探测次数与探测外发字节仍然受探索许可约束。
-        # 这几个键只在根预算账本里用，不会进 TaskPlan.budget（那里是白名单）。
-        "max_probe_requests": probe_requests,
+        "max_probe_requests": probes,
         "max_egress_bytes": int(consent["budget"]["max_egress_bytes"]),
-        "max_discovery_requests": int(consent["budget"].get("max_discovery_requests") or 0),
+        "max_discovery_requests": discovery,
     }
+
+
+def _intent_budget(task_spec, manifest, consent, *, now):
+    node = federation.local_node_id()
+    targets = _all_targets(task_spec, manifest, node)
+    deadline = min(plans.instant(consent["valid_until"]), _ts(now) + SCOPE_TTL_SECONDS)
+    if manifest is not None:
+        deadline = min(deadline, plans.instant(manifest["valid_until"]))
+    return _root_budget(
+        consent, target_count=len(targets),
+        remote_count=sum(target["origin_node_id"] != node for target in targets),
+        deadline=plans.utc_instant(deadline),
+        generation_ready=task_spec["operation"] in GENERATION_OPERATIONS)
 
 
 def _drop_answer_steps(steps: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -1203,9 +1287,12 @@ def _drop_answer_steps(steps: list[dict], edges: list[dict]) -> tuple[list[dict]
     return steps, edges
 
 
-def _answer_probe_key(root_task_id: str, node_id: str) -> str:
-    return "answer-probe:" + hashlib.sha256(plans.canonical_bytes(
-        [root_task_id, node_id, "rag.answer.cited"])).hexdigest()
+def _answer_probe_key(root_task_id: str, node_id: str, operation: str = "rag.answer.cited",
+                       revision: int = 1) -> str:
+    parts = [root_task_id, node_id, operation]
+    if revision > 1:
+        parts.append(revision)
+    return "answer-probe:" + hashlib.sha256(plans.canonical_bytes(parts)).hexdigest()
 
 
 def _append_delegated_answer_step(steps: list[dict], edges: list[dict], *,
@@ -1225,41 +1312,46 @@ def _append_delegated_answer_step(steps: list[dict], edges: list[dict], *,
     return steps, edges
 
 
-def _answer_candidates(targets: list[dict], *, node: str) -> list[str]:
-    """候选生成执行节点：本轮取数目标里的远端节点，按稳定顺序、有界。
-
+def _answer_candidates(targets: list[dict], *, node: str,
+                       extra_nodes: list[str] | None = None) -> list[str]:
+    """候选生成执行节点：取数目标里的远端节点 + 已许可的 capability-only 节点。
+    ...
     只在本切片已知的范围内找候选（不递归目录、不联系未进 scope 的节点）；
     顺序 = `_ordered_targets` 的顺序，保证同一计划每次得到同一个选择。
+    `extra_nodes` 是已获许可且认证的目录里有 `rag.answer.cited` profile、
+    但本轮没有取数目标的节点（无集合的 C）：真实 capability probe 就绪后
+    才进计划；B 只供证据，A 无模型可委托完整回答。
     """
     candidates: list[str] = []
     for target in _ordered_targets(targets):
         origin = target["origin_node_id"]
         if origin != node and origin not in candidates:
             candidates.append(origin)
+    for origin in sorted(set(extra_nodes or [])):
+        if origin != node and origin not in candidates:
+            candidates.append(origin)
     return candidates[:MAX_ANSWER_CANDIDATES]
-
 
 async def _probe_answer_candidates(*, root_task_id: str, task_spec_digest: str,
                                    consent: dict, scope_ref: str, targets: list[dict],
                                    peers: PeerDirectory,
-                                   budget: routing.RootBudget) -> tuple[str | None, dict]:
-    """探测候选节点的 `rag.answer.cited` 就绪度，返回 (选中节点, 逐节点结果)。
-
-    探索许可门先于任何字节：模式/接收方/载荷任一不覆盖就不发。每次外发先
-    `budget.reserve("probe")` —— 超预算的预占不退款，也绝不继续发。
-
-    输入全部是**已摊平的普通值**，不是 ORM 行：`_probe_targets` 可能在碰撞时
-    回滚过会话（N8 同款），这里再摸 `row.attr` 会触发异步懒加载。
-    """
+                                   budget: routing.RootBudget,
+                                   extra_nodes: list[str] | None = None,
+                                   operation: str = "rag.answer.cited",
+                                   revision: int = 1,
+                                   spend=None,
+                                   ) -> tuple[str | None, dict]:
     chosen: str | None = None
     outcomes: dict[str, str] = {}
-    for candidate in _answer_candidates(targets, node=federation.local_node_id()):
+    for candidate in _answer_candidates(targets, node=federation.local_node_id(),
+                                        extra_nodes=extra_nodes):
         denial = _peer_probe_denial(consent, candidate)
         if denial is not None:
             outcomes[candidate] = denial
             continue
         try:
-            budget.reserve("probe")
+            # 单预扣（spend 内独立提交 + 内存 reserve），调用点禁 double-reserve。
+            await spend(kind="probe", amount=1)
         except ApplicationError as exc:
             outcomes[candidate] = exc.code
             break
@@ -1268,17 +1360,27 @@ async def _probe_answer_candidates(*, root_task_id: str, task_spec_digest: str,
             "task_spec_digest": task_spec_digest,
             "consent_ref": consent["consent_id"], "probe_kind": "capability_input",
             "target_node_id": candidate, "scope_ref": scope_ref,
-            "operation": "rag.answer.cited",
+            "operation": operation,
         }
         try:
+            await spend(kind="egress_bytes", amount=len(plans.canonical_bytes(request)))
             probe = await peers.client(candidate).probe(
-                request, idempotency_key=_answer_probe_key(root_task_id, candidate))
+                request, idempotency_key=_answer_probe_key(root_task_id, candidate, operation, revision))
+        except ApplicationError as exc:
+            outcomes[candidate] = exc.code
+            break
         except PeerUnavailable as exc:
             outcomes[candidate] = exc.code or "peer_unavailable"
             continue
         check = probe.get("capability_check")
         readiness = check.get("readiness") if isinstance(check, dict) else None
-        if probe.get("can_generate") is True and readiness == "ready":
+        if operation == "wiki.pages":
+            # wiki 探测看 `readiness` 本身：执行器 `can_generate` 冻结为
+            # answer-only（旧契约），不能拿它卡 wiki。
+            ready = readiness == "ready"
+        else:
+            ready = probe.get("can_generate") is True and readiness == "ready"
+        if ready:
             chosen = candidate
             outcomes[candidate] = "ready"
             break
@@ -1312,6 +1414,42 @@ def _append_local_answer_step(steps: list[dict], *, coordinator: str) -> list[di
     return steps
 
 
+def _append_wiki_steps(steps: list[dict], edges: list[dict], *, coordinator: str,
+                       generator: str) -> tuple[list[dict], list[dict]]:
+    """补 `source_manifest(A) -> wiki_pages(G) -> validate(A)` 三步。
+
+    生成位置可远端（无模型 A 委托已就绪的 C 只做生成），提交权永远在 A：
+    `source_manifest` 与 `validate` 固定本地，`wiki_pages` 落在 `generator`
+   （本地就绪时就是协调者自己）。跨节点时 `wiki_draft` 回传边在审批前落图，
+    许可覆盖不到就 egress_denied，证据与草稿一个字节都不发。
+    """
+    retrieve_ids = [step["step_id"] for step in steps if step["operation"] == "retrieve"]
+    steps.append({"step_id": "source-manifest-1", "operation": "source_manifest",
+                  "executor_node_id": coordinator, "depends_on": retrieve_ids,
+                  "fixed_inputs": ["query"]})
+    steps.append({"step_id": "wiki-pages-1", "operation": "wiki_pages",
+                  "executor_node_id": generator, "depends_on": ["source-manifest-1"],
+                  "fixed_inputs": ["query"]})
+    steps.append({"step_id": "validate-1", "operation": "validate",
+                  "executor_node_id": coordinator, "depends_on": ["wiki-pages-1"],
+                  "fixed_inputs": ["query"]})
+    if generator != coordinator:
+        edges.append({"edge_id": "edge-wiki-evidence-1", "from_node_id": coordinator,
+                      "to_node_id": generator, "payload_kind": "evidence_excerpts",
+                      "retention": "temporary", "authorised_by": f"relay:{coordinator}"})
+        edges.append({"edge_id": "edge-wiki-draft-1", "from_node_id": generator,
+                      "to_node_id": coordinator, "payload_kind": "wiki_draft",
+                      "retention": "temporary", "authorised_by": f"source:{generator}"})
+    return steps, edges
+
+
+async def read_plan(session: AsyncSession, actor: Actor, root_task_id: str) -> dict:
+    row = await _load_request(session, actor, root_task_id)
+    if not row.plan_json:
+        raise APIError(409, "task has no generated plan", "invalid_request_error", "plan_changed")
+    return row.plan_json
+
+
 async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
                       now: datetime, http, index) -> dict:
     """按持久化的 scope 与探索许可做 Probe、生成并持久化 TaskPlan。"""
@@ -1338,20 +1476,26 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
                       else plans.instant(consent["valid_until"]),
                       plans.instant(consent["valid_until"]), _ts(now) + SCOPE_TTL_SECONDS)
     deadline = plans.utc_instant(valid_until)
-    # 本地生成就绪与否决定计划里有没有 answer 步与 token 额度。判据只来自
+    # 本地生成就绪与否决定计划里有没有生成步与 token 额度。判据只来自
     # 能力清单，不来自模型名（"注册即就绪"是这个项目反复吃亏的地方）。
     wants_answer = task_spec["operation"] == ANSWER_OPERATION
-    # 不要答案就别问本地生成能力：那一问会打一次能力探测，还会把生成预算算进根预算。
-    generation_ready = wants_answer and await _generation_available(http, now=now)
-    # 探索阶段的额度用**全量目标**做上界：目录摘要要先把远端目录读回来才拿得到，
-    # 而读目录本身要先占发现额度。摘要只改变 fast 选谁、不改变选多少，所以这个
-    # 上界一定覆盖最终选择；计划声明的预算是按最终选择 + 已消耗的发现请求重算的。
-    upper_remote = sum(1 for target in all_targets if target["origin_node_id"] != node)
-    planning_budget = _root_budget(consent, target_count=len(all_targets),
-                                   remote_count=upper_remote, deadline=deadline,
-                                   generation_ready=generation_ready)
+    wants_wiki = task_spec["operation"] == WIKI_OPERATION
+    wants_generation = task_spec["operation"] in GENERATION_OPERATIONS
+    generation_ready = False
+    # Pre-0037 intents acquire their ledger in a separate committed transaction.
+    # Never update/lock a live ledger in the coordinator's business transaction.
+    # 意图账本的生成额度恒为 0（意图落定时能力未知）：这里只借它的上限形状，
+    # 计划预算按真实就绪重算（本地就绪或远端委托就绪才给 1024）。
+    from ddp_corpus.db import get_sessionmaker
+    async with get_sessionmaker()() as ledger_session:
+        ledger = await federation_budget.ensure_ledger(
+            ledger_session, root_task_id=root_task_id, organization_id=actor.organization_id,
+            caller_budget=None, server_caps=_intent_budget(task_spec, manifest, consent, now=now),
+            legacy_result=row.result_json, now=now)
+        await ledger_session.commit()
     try:
-        root_budget = routing.RootBudget(planning_budget, now=_ts(now))
+        root_budget = federation_budget.rebuild_from_ledger(
+            ledger, None, now=_ts(now))
     except ApplicationError as exc:
         raise federation.api_error(exc) from None
     # 规划阶段的出站全部属于这一个根任务与这一份需求修订：凭证的范围约束从这里取，
@@ -1365,31 +1509,48 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
     # （root_task_id 是函数入参，本来就是普通值）。
     task_spec_digest = row.task_spec_digest
     scope_ref = row.scope_id
+
+    async def _plan_spend(kind: str, amount: int = 1) -> None:
+        # 独立原子预扣：先提交后发送；单次内存 reserve（spend 内部做），
+        # 调用点不再另做 reserve。父业务回滚/崩溃不退款。
+        await federation_budget.spend(
+            root_task_id=root_task_id, organization_id=actor.organization_id,
+            kind=kind, amount=amount, budget=root_budget, now=utcnow())
     try:
+        if wants_generation and http is not None:
+            await _plan_spend(kind="request", amount=1)
+            generation_ready = await _generation_available(http, now=now)
         # 摘要 -> 选目标 -> 探测：顺序不能反。摘要没取到就退化为确定性
         # local_first 排序，成员一个不少（穷查仍然全量）。
-        descriptors, descriptor_notes = await _gather_descriptors(
+        descriptors, descriptor_notes, capability_only = await _gather_descriptors(
             session, actor, node=node, all_targets=all_targets, manifest=manifest,
             consent=consent, budget=root_budget, peers=peers,
-            valid_until=datetime.fromtimestamp(valid_until, timezone.utc))
-        selected = _select_targets(all_targets, task_spec, node, descriptors=descriptors)
-        remote_count = sum(1 for target in selected if target["origin_node_id"] != node)
-        budget = _root_budget(consent, target_count=len(selected),
-                              remote_count=remote_count, deadline=deadline,
-                              generation_ready=generation_ready,
-                              discovery_count=root_budget.used()["discovery"])
+            valid_until=datetime.fromtimestamp(valid_until, timezone.utc),
+            spend=_plan_spend)
+        candidate_graph = (row.result_json or {}).get(
+            federation_budget.CANDIDATE_GRAPH_FIELD) or _select_targets(
+                all_targets, task_spec, node, descriptors=descriptors, rank_all=True)
+        pending = (row.result_json or {}).get("_continuation_targets")
+        selected = pending if pending is not None else _select_targets(
+            all_targets, task_spec, node, descriptors=descriptors)
+        budget = federation_budget.limits(ledger)
         probes, outcome, extra = await _probe_targets(
             session, actor, row, targets=selected, now=now, http=http, index=index,
             peers=peers, budget=root_budget, manifest=manifest,
-            descriptors=_descriptor_index(descriptors))
-        if wants_answer and not generation_ready:
+            descriptors=_descriptor_index(descriptors), spend=_plan_spend)
+        if wants_generation and not generation_ready:
             # 本地没有生成能力：在探索许可与根预算之内问候选执行节点
-            # "你能不能生成带出处的答案"。没有任何 ready 节点就保持诚实的
-            # 无答案结果（不伪造答案，也不再多发一个字节）。
+            # "你能不能生成"。answer 问 `rag.answer.cited`，wiki 问 `wiki.pages`
+            # —— 真能力就绪才给 token 预算；没有任何 ready 节点就保持诚实的
+            # 无生成结果（不伪造答案/Wiki，也不再多发一个字节）。
             delegated, answer_outcomes = await _probe_answer_candidates(
                 root_task_id=root_task_id, task_spec_digest=task_spec_digest,
                 consent=consent, scope_ref=scope_ref, targets=selected,
-                peers=peers, budget=root_budget)
+                peers=peers, budget=root_budget, extra_nodes=capability_only,
+                operation="wiki.pages" if wants_wiki else "rag.answer.cited",
+                revision=int(row.plan_revision or 0) + 1, spend=_plan_spend)
+    except ApplicationError as exc:
+        raise federation.api_error(exc) from None
     finally:
         await peers.aclose()
     # Probe 路径在碰撞时可能回滚过 SAVEPOINT，行会被 expire；按主键重读，后面
@@ -1403,19 +1564,31 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
     except ApplicationError as exc:
         raise federation.api_error(exc) from None
     steps, edges = _drop_answer_steps(steps, edges)
-    # 只取证据的任务不会走到这里的任何一支：`generation_ready` 与 `delegated` 都只在
-    # `wants_answer` 时才可能为真 —— 既不白跑一次生成，也不留生成预算。
-    if generation_ready:
-        # 本地就绪：保持既有本地生成路径。
+    # 只取证据的任务不会走到这里的任何一支：`generation_ready` 与 `delegated`
+    # 都只在要生成（answer/wiki）时才可能为真 —— 既不白跑一次生成，也不留生成预算。
+    generates = False
+    if wants_wiki:
+        # 生成位置可远端、提交权留 A：本地就绪则本地生成；否则委托真实 probe
+        # 就绪的 C 只做生成（原始页面草稿），A 收到后校验绑定再本地提交。
+        # No ready generator means no generation step; execution reports that absence.
+        generator = node if generation_ready else delegated
+        if generator is not None:
+            steps, edges = _append_wiki_steps(
+                steps, edges, coordinator=node, generator=generator)
+            budget["max_generation_tokens"] = min(
+                budget["max_generation_tokens"], GENERATION_TOKEN_BUDGET)
+            generates = True
+    elif wants_answer and generation_ready:
         steps = _append_local_answer_step(steps, coordinator=node)
-    elif delegated is not None:
-        # 远端就绪：计划先在审批之前落下 answer 步与类型化数据边；许可覆盖不到
-        # 这条边，approve 会 egress_denied，证据一个字节都不会发。
+        generates = True
+    elif wants_answer and delegated is not None:
         steps, edges = _append_delegated_answer_step(
             steps, edges, coordinator=node, executor=delegated)
-        budget["max_hops"] = max(1, budget["max_hops"] + 1)
-        budget["max_bytes"] = budget["max_bytes"] + EVIDENCE_BYTES_PER_TARGET
-        budget["max_generation_tokens"] = GENERATION_TOKEN_BUDGET
+        generates = True
+    if not generates:
+        # The ledger freezes a generation reservation at intent time, before readiness is
+        # known; the plan is what gets approved, so it must not carry tokens it never spends.
+        budget["max_generation_tokens"] = 0
     steps_by_target = _steps_by_target({"steps": steps}, selected)
     for target in _ordered_targets(selected):
         key = (target["origin_node_id"], target["collection_id"], target["operation"])
@@ -1430,10 +1603,17 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
         step["fixed_inputs"] = fixed_inputs
         probe_id = extra["probe_ids"].get(key)
         step["probe_refs"] = [probe_id] if probe_id else []
+    revision = int(row.plan_revision or 0) + 1
+    if revision > 1:
+        # A new approved graph must never collide with an old admission key.
+        step_ids = {step["step_id"]: f"r{revision}-{step['step_id']}" for step in steps}
+        for step in steps:
+            step["step_id"] = step_ids[step["step_id"]]
+            step["depends_on"] = [step_ids[dependency] for dependency in step["depends_on"]]
     plan = {
         "schema": "ddp-plan-admission/1#TaskPlan",
         "plan_id": "plan-" + row.root_task_id,
-        "revision": int(row.plan_revision or 0) + 1,
+        "revision": revision,
         "task_spec_digest": row.task_spec_digest,
         "root_coordinator_node_id": node,
         "planning_state": "ready",
@@ -1468,7 +1648,19 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
         "answer_executor": delegated,
         "answer_probes": answer_outcomes,
         "generation_ready": generation_ready,
+        # fast 可审查的停止原因与预声明候选图：首轮只选有界候选，完整排序
+        # 与 capability-only 候选持久化在结果内部字段，供 resume 逐批继续；
+        # 扩展超原批准图必须 plan_changed/新审批，不能静默增边。
+        "fast_stop": _fast_stop_reason(task_spec, all_targets, selected,
+                                       outcome, generation_ready, delegated),
+        "capability_only_nodes": sorted(capability_only),
     }, now=now)
+    row.result_json = {**row.result_json,
+                       federation_budget.CANDIDATE_GRAPH_FIELD: candidate_graph,
+                       federation_budget.FAST_STOP_FIELD: _fast_stop_reason(
+                           task_spec, all_targets, selected, outcome,
+                           generation_ready, delegated)}
+    row.result_json.pop("_continuation_targets", None)
     await _commit(session)
     return plan
 
@@ -1659,7 +1851,10 @@ async def _lookup_remote_receipt(client, key: str) -> dict | None:
 async def _run_local_step(session: AsyncSession, actor: Actor, *, root_task_id: str,
                           plan: dict, task_spec: dict, consent: dict, step: dict,
                           target: dict, generation: int, now: datetime, http,
-                          index, reconcile: bool) -> tuple[str, str | None, list[dict],
+                          index, reconcile: bool,
+                          budget: routing.RootBudget | None = None,
+                          spend=None
+                          ) -> tuple[str, str | None, list[dict],
                                                             str | None, list[str]]:
     """本地目标一律经 `federation.admit` 走同一条执行路径。
 
@@ -1684,6 +1879,8 @@ async def _run_local_step(session: AsyncSession, actor: Actor, *, root_task_id: 
                 session, actor, receipt, now=now, http=http, index=index,
                 retry_expired=True)
     try:
+        if spend is not None:
+            await spend(kind="request", amount=1)
         receipt, created = await federation.admit(session, actor, body, now=now,
                                                   http=http, index=index)
     except APIError:
@@ -1773,27 +1970,44 @@ async def _local_execution_outcome(session: AsyncSession, actor: Actor,
             list(status.get("internal_limits") or []))
 
 
-async def _poll_execution(client, executor_task_id: str) -> dict:
-    """轮询到终态；超时返回 `peer_execution_timeout` 的显式状态。
-
-    返回对端最后一次状态（或合成的超时状态）；调用方按 state/error 决定结局。
-    **超时不取消对端执行**：它仍受对端自己的执行时限约束，而 resume 的对账
-    会找回同一条执行继续等。取消它等于把可重做的目标永久钉死（对账只能
-    拿回 cancelled，换代次重受理是同键异体 409）。
-    """
-    deadline = time.monotonic() + PEER_POLL_DEADLINE_SECONDS
-    status = await client.execution(executor_task_id)
-    while status.get("state") not in ("succeeded", "failed", "cancelled"):
+async def _poll_execution(client, executor_task_id: str, *, deadline_ts: float,
+                           budget: routing.RootBudget | None = None,
+                           spend=None) -> dict:
+    """Poll within the approved deadline; every physical attempt is prepaid."""
+    remaining = max(0.0, deadline_ts - _ts(utcnow()))
+    deadline = time.monotonic() + remaining
+    while True:
+        try:
+            if spend is not None:
+                await spend(kind="request", amount=1)
+            elif budget is not None:
+                budget.reserve("request")
+        except ApplicationError:
+            return {"state": "unreachable", "error": "budget_exhausted"}
+        status = await client.execution(executor_task_id)
+        if status.get("state") in ("succeeded", "failed", "cancelled"):
+            return status
+        lease = status.get("lease_until")
+        if lease is not None:
+            try:
+                if plans.instant(lease) <= _ts(utcnow()):
+                    return {"state": "unreachable", "error": "lease_expired"}
+            except ApplicationError:
+                return {"state": "unreachable", "error": "invalid_execution_lease"}
+        wait = deadline - time.monotonic()
+        if wait <= 0:
+            return {"state": "unreachable", "error": "peer_execution_timeout"}
+        await asyncio.sleep(min(PEER_POLL_INTERVAL_SECONDS, wait))
         if time.monotonic() >= deadline:
             return {"state": "unreachable", "error": "peer_execution_timeout"}
-        await asyncio.sleep(PEER_POLL_INTERVAL_SECONDS)
-        status = await client.execution(executor_task_id)
-    return status
 
 
 async def _run_remote_step(peers: PeerDirectory, *, root_task_id: str, plan: dict,
                            task_spec: dict, consent: dict, step: dict, target: dict,
-                           generation: int, reconcile: bool) -> tuple[str, str | None,
+                           generation: int, reconcile: bool,
+                           budget: routing.RootBudget | None = None,
+                           spend=None
+                           ) -> tuple[str, str | None,
                                                                         list[dict],
                                                                         str | None,
                                                                         list[str]]:
@@ -1811,15 +2025,26 @@ async def _run_remote_step(peers: PeerDirectory, *, root_task_id: str, plan: dic
                                inputs=_step_inputs(task_spec.get("query") or ""),
                                generation=generation)
         key = body["idempotency_key"]
-        expected = {"key": key, "root_task_id": root_task_id, "step_id": step["step_id"],
-                    "plan_digest": plan["plan_digest"], "executor_node_id": node_id}
+        expected = {"key": key, "root_task_id": root_task_id,
+                    "step_id": step["step_id"], "plan_digest": plan["plan_digest"],
+                    "executor_node_id": node_id}
+        if reconcile and spend is not None:
+            await spend(kind="request", amount=1)
         receipt = await _lookup_remote_receipt(client, key) if reconcile else None
         if receipt is None:
+            # egress 前先持久记账：admission 外发一次 request + hops（数据边一跳）。
+            if spend is not None:
+                await spend(kind="request", amount=1)
+                await spend(kind="hops", amount=2)  # query and evidence-return edges
+                await spend(kind="egress_bytes", amount=len(plans.canonical_bytes(body)))
             try:
                 receipt = await client.admit(body, idempotency_key=key)
             except PeerUnavailable as exc:
                 if not _unknown_admission(exc):
                     raise
+                # 对账本身也是 egress：先记账再发 lookup。
+                if spend is not None:
+                    await spend(kind="request", amount=1)
                 receipt = await _lookup_remote_receipt(client, key)
                 if receipt is None:
                     # 对账证明从未受理；这次的未知结果如实上报，补做时再来。
@@ -1835,7 +2060,8 @@ async def _run_remote_step(peers: PeerDirectory, *, root_task_id: str, plan: dic
         executor_task_id = str(receipt.get("executor_task_id") or "")
         if not executor_task_id:
             return "failed", "invalid_admission_receipt", [], None, []
-        status = await _poll_execution(client, executor_task_id)
+        status = await _poll_execution(client, executor_task_id, budget=budget,
+                                       spend=spend, deadline_ts=plans.instant(plan["budget"]["deadline"]))
         if status.get("state") == "unreachable":
             return "unreachable", str(status.get("error") or "peer_unreachable"), [], None, []
         if status.get("state") == "cancelled":
@@ -1847,7 +2073,12 @@ async def _run_remote_step(peers: PeerDirectory, *, root_task_id: str, plan: dic
         evidence: list[dict] = []
         set_ref = status.get("evidence_set_ref")
         if set_ref:
+            if spend is not None:
+                await spend(kind="request", amount=1)
             evidence = list((await client.evidence_set(str(set_ref))).get("items") or [])
+            if spend is not None:
+                await spend(kind="bytes",
+                            amount=len(plans.canonical_bytes({"items": evidence})))
         return ("succeeded", None, evidence, None,
                 list(status.get("internal_limits") or []))
     except PeerUnavailable as exc:
@@ -1960,7 +2191,9 @@ def _validated_delegated_answer(document, *, evidence_ids: list[str]) -> dict:
 
 async def _delegated_answer(row: FederationRequest, *, plan: dict, step: dict,
                             fused: list[dict], excerpts: dict[str, str],
-                            actor: Actor) -> dict:
+                            actor: Actor,
+                            budget: routing.RootBudget | None = None,
+                            spend=None) -> dict:
     """把整项答案委托给已就绪的远端执行者（计划里的 `answer-1`）。
 
     只发**有界且逐条带摘要**的证据摘录（`evidence_excerpts` 数据边），绝不发
@@ -1996,13 +2229,23 @@ async def _delegated_answer(row: FederationRequest, *, plan: dict, step: dict,
         client = peers.client(executor)
         # 先对账再受理：resume/重放不得为同一个 (root, step) 触发第二次生成。
         try:
+            if spend is not None:
+                await spend(kind="request", amount=1)
             receipt = await _lookup_remote_receipt(client, key)
             if receipt is None:
+                if spend is not None:
+                    await spend(kind="request", amount=1)
+                    await spend(kind="hops", amount=1)
+                    await spend(kind="egress_bytes", amount=len(plans.canonical_bytes(body)))
+                    await spend(kind="generation_tokens",
+                                amount=int(plan["budget"].get("max_generation_tokens", 0)))
                 receipt = await client.admit(body, idempotency_key=key)
         except PeerUnavailable as exc:
             receipt = None
             if _unknown_admission(exc):
                 try:
+                    if spend is not None:
+                        await spend(kind="request", amount=1)
                     receipt = await _lookup_remote_receipt(client, key)
                 except PeerUnavailable:
                     receipt = None
@@ -2017,7 +2260,8 @@ async def _delegated_answer(row: FederationRequest, *, plan: dict, step: dict,
         executor_task_id = str(receipt.get("executor_task_id") or "")
         if not executor_task_id:
             return _delegated_failure("invalid_admission_receipt")
-        status = await _poll_execution(client, executor_task_id)
+        status = await _poll_execution(client, executor_task_id, budget=budget,
+                                       spend=spend, deadline_ts=plans.instant(plan["budget"]["deadline"]))
         if status.get("state") != "succeeded":
             # 超时（本节点合成的 peer_execution_timeout）、对端 failed/cancelled：
             # 代码固定，具体是哪一种进细节 —— 界面能分清，又不会冒出未声明的代码。
@@ -2128,10 +2372,11 @@ _ATTRIBUTED_FIELD = "_attributed_evidence"
 
 
 def _public_result(result: dict | None) -> dict | None:
-    """状态出口只出结果文档字段；内部簿记（`_` 开头）不外泄。"""
+    """状态出口只出结果文档字段；内部簿记（`_` 开头）不外泄，无公开字段时为 null。"""
     if not result:
         return None
-    return {key: value for key, value in result.items() if not str(key).startswith("_")}
+    public = {key: value for key, value in result.items() if not str(key).startswith("_")}
+    return public or None
 
 
 def _recorded_conflicts(row: FederationRequest) -> list[dict]:
@@ -2280,10 +2525,310 @@ async def _grounded_answer(http, *, query: str, fused: list[dict],
         provider_endpoint=settings.chat_endpoint, location="local")
 
 
+def _wiki_failure(reason: str) -> dict:
+    """Wiki 生成没成功时的答案字段：空答案 + 显式原因 + failed。"""
+    head = str(reason or "").partition(":")[0]
+    if reason not in FEDERATED_ANSWER_REASON_VALUES and head not in (
+            "peer_unavailable", "delegated_admission_not_accepted",
+            "delegated_execution_failed", "receipt_binding_mismatch"):
+        # 未声明代码不伪装成契约原因：这类只能是内部 bug，进 upstream_error。
+        reason = "upstream_error"
+    return {**federation.unavailable_answer(reason), "validation_state": "failed"}
+
+
+def _wiki_error_reason(code: str | None) -> str:
+    """federated_wiki helper 的错误码 -> 契约 `federated_answer_reason`。"""
+    if code in FEDERATED_ANSWER_REASON_VALUES:
+        return code
+    mapping = {
+        "wiki_source_unavailable": "insufficient_evidence",
+        "wiki_source_permission": "insufficient_evidence",
+        "wiki_budget_exceeded": "budget_exceeded",
+        "wiki_budget_invalid": "budget_exceeded",
+        "wiki_generation_invalid": "unsupported_generation",
+        "unsupported_generation": "unsupported_generation",
+        "wiki_relation_unsupported": "unsupported_generation",
+        "wiki_title_invalid": "unsupported_generation",
+    }
+    return mapping.get(code or "", "upstream_error")
+
+
+def _validate_remote_wiki_draft(document, *, evidence_ids: list[str]) -> dict | None:
+    """校验 C 回传的原始页面草稿；返回可用草稿或失败答案字段。
+
+    - 引用绑定的 evidence id 必须是本次发送证据 id 的子集（与 answer 同口径）；
+    - 只复制已知字段，绝不把对端的任意 JSON 透传进任务结果；
+    - `semantic_review` 一律重写成 `needs_review`。
+    返回 None 表示校验通过（调用方用 document 本体继续）；否则返回失败字段。
+    """
+    if not isinstance(document, dict):
+        return _wiki_failure("delegated_answer_missing")
+    pages = document.get("pages")
+    if not isinstance(pages, list) or not pages:
+        return _wiki_failure("delegated_bindings_missing")
+    allowed = set(evidence_ids)
+    for page in pages:
+        if not isinstance(page, dict):
+            return _wiki_failure("delegated_binding_out_of_scope")
+        for section in page.get("generated_sections") or []:
+            if not isinstance(section, dict):
+                return _wiki_failure("delegated_binding_out_of_scope")
+            for claim in section.get("sentences") or []:
+                if not isinstance(claim, dict):
+                    return _wiki_failure("delegated_binding_out_of_scope")
+                refs = claim.get("evidence_ids")
+                if not isinstance(refs, list) or not refs \
+                        or not set(map(str, refs)) <= allowed:
+                    return _wiki_failure("delegated_binding_out_of_scope")
+                claim["semantic_review"] = "needs_review"
+    return None
+
+
+def _fused_evidence_items(fused: list[dict], excerpts: dict[str, str],
+                          *, node: str) -> tuple[list[dict], str | None]:
+    """融合证据 -> federated_wiki 证据条目（envelope + 有界 excerpt）。
+
+    本地来源取内部 `_excerpt`（同一把 2000 字符尺子），远端用证据集 `excerpt`
+    原样；缺失/越界返回 (None, reason)，调用方显式失败，不静默截断。
+    外来 relay 自报不能覆盖权威来源同键证据（`_evidence_key` 归属防伪已在
+    `_execute_plan` 落定，这里只收调用方传进来的已归属 fused）。
+    """
+    from ddp_corpus import federated_wiki as federated_wiki_plane
+    _ = federated_wiki_plane
+    items: list[dict] = []
+    for item in fused:
+        evidence_id = str(item.get("evidence_id") or "")
+        text = excerpts.get(evidence_id)
+        reason = _excerpt_reason(text)
+        if reason is not None or not evidence_id:
+            return [], reason or "evidence_excerpt_unavailable"
+        envelope = {key: value for key, value in item.items()
+                    if not str(key).startswith("_") and key != "excerpt"}
+        items.append({**envelope, "excerpt": text})
+    _ = node
+    return items, None
+
+
+async def _delegated_wiki_draft(row: FederationRequest, *, plan: dict, step: dict,
+                                items: list[dict], actor: Actor,
+                                budget: routing.RootBudget | None = None,
+                                spend=None) -> dict:
+    """把 wiki 生成委托给已就绪的 C：有界证据摘录经 `evidence_excerpts` 边外发。
+
+    受理与对账复用 answer 委托同一套幂等语义；C 只出原始页面草稿（`wiki_draft`），
+    版本化提交永远由 A 完成。未知受理只对账不盲重发。
+    """
+    executor = step["executor_node_id"]
+    evidence = []
+    for item in items:
+        # Main 冻结契约：payload evidence_id = source_ref(真实信封)，
+        # source_envelope.evidence_id 保留原始 ID（helper 校验绑定一致）。
+        envelope = {key: value for key, value in item.items() if key != "excerpt"}
+        from ddp_corpus import federated_wiki as _fw
+        ref = _fw.source_ref(envelope)
+        text = str(item.get("excerpt") or "")
+        if not text:
+            return _wiki_failure("evidence_excerpt_unavailable")
+        payload = {"evidence_id": ref, "excerpt": text,
+                   "digest": plans.content_digest(text.encode("utf-8")),
+                   "source_envelope": envelope}
+        grant = item.get("derivative_grant")
+        if isinstance(grant, str) and grant:
+            payload["derivative_grant"] = grant
+        evidence.append(payload)
+    body = _admission_body(
+        root_task_id=row.root_task_id, plan=plan, task_spec=row.task_spec_json,
+        consent=row.execution_consent_json, step=step,
+        inputs=_step_inputs(row.task_spec_json.get("query") or ""),
+        generation=int(row.delegation_generation or 0), evidence=evidence)
+    key = body["idempotency_key"]
+    expected = {"key": key, "root_task_id": row.root_task_id, "step_id": step["step_id"],
+                "plan_digest": plan["plan_digest"], "executor_node_id": executor}
+    peers = peer_directory(actor, Delegation(root_task_id=row.root_task_id,
+                                             task_spec_digest=row.task_spec_digest))
+    try:
+        client = peers.client(executor)
+        try:
+            if spend is not None:
+                await spend(kind="request", amount=1)
+            receipt = await _lookup_remote_receipt(client, key)
+            if receipt is None:
+                if spend is not None:
+                    await spend(kind="request", amount=1)
+                    await spend(kind="hops", amount=2)  # evidence and draft-return edges
+                    await spend(kind="egress_bytes", amount=len(plans.canonical_bytes(body)))
+                    await spend(kind="generation_tokens",
+                                amount=int(plan["budget"].get("max_generation_tokens", 0)))
+                receipt = await client.admit(body, idempotency_key=key)
+        except PeerUnavailable as exc:
+            receipt = None
+            if _unknown_admission(exc):
+                try:
+                    if spend is not None:
+                        await spend(kind="request", amount=1)
+                    receipt = await _lookup_remote_receipt(client, key)
+                except PeerUnavailable:
+                    receipt = None
+            if receipt is None:
+                return _wiki_failure(f"peer_unavailable:{_reason_detail(exc.code or 'transport')}")
+        mismatch = _receipt_binding_error(receipt, **expected)
+        if mismatch is not None:
+            return _wiki_failure(mismatch)
+        if receipt.get("state") != "accepted":
+            return _wiki_failure(
+                f"delegated_admission_not_accepted:{_reason_detail(receipt.get('state'))}")
+        executor_task_id = str(receipt.get("executor_task_id") or "")
+        if not executor_task_id:
+            return _wiki_failure("invalid_admission_receipt")
+        status = await _poll_execution(client, executor_task_id, budget=budget,
+                                       spend=spend, deadline_ts=plans.instant(plan["budget"]["deadline"]))
+        if status.get("state") != "succeeded":
+            return _wiki_failure(f"delegated_execution_failed:"
+                                 f"{_reason_detail(status.get('error') or status.get('state'))}")
+        draft = status.get("wiki_draft")
+        if not isinstance(draft, dict) or draft.get("validation_state") != "passed":
+            return _wiki_failure("delegated_answer_missing")
+        # C 原始 kernel 草稿不静默丢关系/审计字段：pages/relations/provider/
+        # limits/protocol/decoder/semantic_review/source_type 全量带回 A，
+        # 提交前再按本次证据编号域校验（`_validate_remote_wiki_draft`）。
+        return {"pages": draft.get("pages"), "relations": draft.get("relations", []),
+                "provider": draft.get("provider"),
+                "limits": draft.get("limits") or {},
+                "protocol": draft.get("protocol"),
+                "decoder_revision": draft.get("decoder_revision"),
+                "semantic_review": draft.get("semantic_review", "needs_review"),
+                "source_type": draft.get("source_type", "generated"),
+                "validation_state": "passed"}
+    except PeerUnavailable as exc:
+        return _wiki_failure(f"peer_unavailable:{_reason_detail(exc.code or 'transport')}")
+    finally:
+        await peers.aclose()
+
+
+async def _live_recheck_evidence(session: AsyncSession, actor: Actor, *,
+                                 fused: list[dict], now: datetime) -> tuple[list[dict], str | None]:
+    """生成前实时复查：逐条 `resolve_evidence` 重判本地来源授权。"""
+    node = federation.local_node_id()
+    live: list[dict] = []
+    for item in fused:
+        if item.get("origin_node_id") != node:
+            live.append(item)
+            continue
+        try:
+            await federation.resolve_evidence(
+                session, actor, evidence_ref=str(item.get("evidence_id") or ""),
+                now=now)
+        except APIError as exc:
+            if exc.code == "source_revoked":
+                return [], "source_revoked"
+            return [], "input_not_verified"
+    return live, None
+
+
+async def _wiki_result(session: AsyncSession, actor: Actor, row: FederationRequest, *,
+                       plan: dict, fused: list[dict], live_excerpts: dict[str, str],
+                       sufficiency: str, http,
+                       budget: routing.RootBudget | None = None,
+                       spend=None) -> dict:
+    """wiki.pages 执行决定：证据复查 -> 生成（本地/C 委托）-> A 本地提交。"""
+    from ddp_corpus import federated_wiki as federated_wiki_plane
+    node = federation.local_node_id()
+    wiki_step = next((step for step in plan["steps"]
+                      if step["operation"] == "wiki_pages"), None)
+    if wiki_step is None:
+        return _wiki_failure("local_model_missing")
+    if sufficiency == "insufficient" or not fused:
+        return _wiki_failure("insufficient_evidence")
+    excerpts = await _load_excerpts(session, actor, plan)
+    excerpts.update({key: value for key, value in live_excerpts.items()
+                     if isinstance(value, str) and value.strip()})
+    live, failure = await _live_recheck_evidence(
+        session, actor, fused=fused, now=utcnow())
+    if failure is not None:
+        # `source_revoked`/`input_not_verified` 不是 answer 原因闭集的成员：
+        # 撤销即证据不可用，走 `insufficient_evidence`，明细留给 error 轴。
+        return _wiki_failure("insufficient_evidence")
+    fused = live
+    items, reason = _fused_evidence_items(fused, excerpts, node=node)
+    if reason is not None:
+        return _wiki_failure(reason)
+    if len(items) > federation.ADMISSION_EVIDENCE_LIMIT:
+        return _wiki_failure("evidence_delegation_over_limit")
+    cap = int((plan.get("budget") or {}).get("max_generation_tokens") or 0)
+    if cap <= 0:
+        return _wiki_failure("budget_exceeded")
+    task_spec = row.task_spec_json
+    wiki_req = (task_spec.get("requirements") or {}).get("wiki") or {}
+    title = wiki_req.get("title")
+    if not isinstance(title, str) or not title.strip():
+        # 新 Wiki 必须带 title（plans.requirements_wiki 已校验）；这里不截断、
+        # 不编造——缺 title 即显式失败。
+        return _wiki_failure("unsupported_generation")
+    max_pages = wiki_req.get("max_pages", 4)
+    if type(max_pages) is not int or not 1 <= max_pages <= 12:
+        return _wiki_failure("budget_exceeded")
+    body = {"title": title.strip(), "max_pages": max_pages}
+    if wiki_req.get("wiki_id") is not None:
+        body["wiki_id"] = wiki_req["wiki_id"]
+    if wiki_req.get("base_revision_id") is not None:
+        body["base_revision_id"] = wiki_req["base_revision_id"]
+    generator = wiki_step["executor_node_id"]
+    # Main 冻结：payload evidence_id = source_ref(真实信封)；校验域取 refs，
+    # source_envelope.evidence_id 的原始 ID 由 helper 绑定校验。
+    from ddp_corpus import federated_wiki as _fw2
+    evidence_ids = [_fw2.source_ref(
+        {key: value for key, value in item.items() if key != "excerpt"})
+        for item in items]
+    if generator == node:
+        if spend is not None:
+            await spend(kind="generation_tokens", amount=cap)
+            await spend(kind="request", amount=1)
+        try:
+            draft = await federated_wiki_plane.generate_federated(
+                http, body=body, evidence=items, max_tokens=cap)
+        except (APIError, ApplicationError) as exc:
+            return _wiki_failure(_wiki_error_reason(getattr(exc, "code", None)))
+    else:
+        draft = await _delegated_wiki_draft(
+            row, plan=plan, step=wiki_step, items=items, actor=actor,
+            budget=budget, spend=spend)
+        if not isinstance(draft, dict) or draft.get("validation_state") != "passed":
+            return draft if isinstance(draft, dict) else _wiki_failure("delegated_answer_missing")
+    failure = _validate_remote_wiki_draft(draft, evidence_ids=evidence_ids) \
+        if generator != node else None
+    if failure is not None:
+        return failure
+    try:
+        revision_out = await federated_wiki_plane.commit_federated_revision(
+            session, actor, root_task_id=row.root_task_id,
+            task_spec=task_spec, result=draft, evidence=items)
+    except (APIError, ApplicationError) as exc:
+        return _wiki_failure(_wiki_error_reason(getattr(exc, "code", None)))
+    wiki_id = (revision_out.get("wiki") or {}).get("id")
+    revision_id = (revision_out.get("revision") or {}).get("id")
+    if not wiki_id or not revision_id:
+        return _wiki_failure("delegated_answer_missing")
+    return {**federation.answer_skeleton(),
+            "answer": None, "answer_reason": None,
+            "validation_state": "passed",
+            "provider": draft.get("provider"),
+            "disclosure": {"remote": generator != node,
+                           "payload": ["question", "selected_evidence"]},
+            "wiki": {"wiki_id": wiki_id, "revision_id": revision_id}}
+
+
 async def _answer_result(session: AsyncSession, actor: Actor, row: FederationRequest, *,
                          plan: dict, fused: list[dict], live_excerpts: dict[str, str],
-                         sufficiency: str, http) -> dict:
-    """执行阶段的答案决定：不要答案 / 没有模型 / 证据不足 / 本地生成 / 委托生成，都可见。"""
+                         sufficiency: str, http,
+                         budget: routing.RootBudget | None = None,
+                         spend=None) -> dict:
+    """执行阶段的答案/Wiki 决定：不要生成 / 没有模型 / 证据不足 / 本地生成 /
+    委托生成，都可见。Wiki 走 `_wiki_result`（生成位置可远端、提交权留 A）。"""
+    if row.task_spec_json["operation"] == WIKI_OPERATION:
+        return await _wiki_result(session, actor, row, plan=plan, fused=fused,
+                                  live_excerpts=live_excerpts,
+                                  sufficiency=sufficiency, http=http,
+                                  budget=budget, spend=spend)
     node = federation.local_node_id()
     if row.task_spec_json["operation"] != ANSWER_OPERATION:
         # 只取证据：没有答案也**没有原因** —— "没模型"和"你没要答案"是两件事，
@@ -2299,15 +2844,19 @@ async def _answer_result(session: AsyncSession, actor: Actor, row: FederationReq
         # insufficient 时绑定必须为空（ddp-evidence/v1 FederatedAnswer 的 allOf）。
         # 远端委托同理：没有证据就不发数据边。
         return _unavailable_answer("insufficient_evidence")
+    cap = int((plan.get("budget") or {}).get("max_generation_tokens") or 0)
+    if cap <= 0:
+        return _unavailable_answer("budget_exceeded")
     excerpts = await _load_excerpts(session, actor, plan)
     excerpts.update({key: value for key, value in live_excerpts.items()
                      if isinstance(value, str) and value.strip()})
     if answer_step["executor_node_id"] != node:
         return await _delegated_answer(row, plan=plan, step=answer_step, fused=fused,
-                                       excerpts=excerpts, actor=actor)
-    cap = int((plan.get("budget") or {}).get("max_generation_tokens") or 0)
-    if cap <= 0:
-        return _unavailable_answer("local_model_missing")
+                                       excerpts=excerpts, actor=actor,
+                                       budget=budget, spend=spend)
+    if spend is not None:
+        await spend(kind="generation_tokens", amount=cap)
+        await spend(kind="request", amount=1)
     return await _grounded_answer(http, query=row.task_spec_json.get("query") or "",
                                   fused=fused, excerpts=excerpts,
                                   max_generation_tokens=cap)
@@ -2364,16 +2913,33 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
     scope_id = row.scope_id
     exploration_consent = row.exploration_consent_json
     request_created_at = as_aware(row.created_at)
+    from ddp_corpus.db import get_sessionmaker
+    async with get_sessionmaker()() as ledger_session:
+        root_ledger = await federation_budget.ensure_ledger(
+            ledger_session, root_task_id=root_task_id, organization_id=actor.organization_id,
+            caller_budget=None,
+            server_caps={**_intent_budget(task_spec, manifest, exploration_consent, now=now),
+                         **plan["budget"]},
+            legacy_result=previous, now=now)
+        await ledger_session.commit()
+    try:
+        exec_budget = federation_budget.rebuild_from_ledger(
+            root_ledger, plan["budget"], now=_ts(now))
+    except ApplicationError as exc:
+        raise federation.api_error(exc) from None
     peers = peer_directory(actor, Delegation(root_task_id=root_task_id,
                                              task_spec_digest=row.task_spec_digest))
+
+    async def _spend(kind: str, amount: int = 1) -> None:
+        await federation_budget.spend(
+            root_task_id=root_task_id, organization_id=actor.organization_id,
+            kind=kind, amount=amount, budget=exec_budget, now=utcnow())
     try:
         for target in candidates:
             key = (target["origin_node_id"], target["collection_id"], target["operation"])
             digest = _target_digest(target)
             current = entries.get(digest)
-            if current is not None and (
-                    current["state"] not in _RETRYABLE_STATES
-                    or current.get("last_error") == "search_mode_fast"):
+            if current is not None and current["state"] not in _RETRYABLE_STATES:
                 continue
             step = steps_by_target.get(key)
             if step is None:
@@ -2400,9 +2966,8 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
                 # 这一行的探测回执来自更早的任务：账本照实带缓存标记，
                 # 不把它读成"这一轮真的重新探测过"。
                 entry["search_profile"] = CACHED_PROBE_PROFILE
-            # bytes 记账留 0：精确外发字节需要数据面测量（socket/网关侧计数器），
-            # 本切片只能诚实地记"次数已发生、字节未测"，不编一个看起来精确的数。
-            entry["used_budget"] = {"requests": 1, "bytes": 0}
+            before_cost = exec_budget.used()
+            entry["used_budget"] = {"requests": 0, "bytes": 0}
             if target["origin_node_id"] != node:
                 # 探索许可门在执行阶段仍然生效：探都不许探的目标，admission 更
                 # 不许发。local_only / 未列入接收方 / 载荷不许的目标保持 denied。
@@ -2420,15 +2985,23 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
                         task_spec=task_spec,
                         consent=consent, step=step, target=target, generation=generation,
                         now=now, http=http, index=index,
-                        reconcile=retry_only or current is not None)
+                        reconcile=retry_only or current is not None,
+                        budget=exec_budget, spend=_spend)
                 else:
                     state, error, items, revision, internal_limits = await _run_remote_step(
                         peers, root_task_id=root_task_id, plan=plan, task_spec=task_spec,
                         consent=consent,
                         step=step, target=target, generation=generation,
-                        reconcile=retry_only or current is not None)
-            except APIError as exc:
+                        reconcile=retry_only or current is not None,
+                        budget=exec_budget, spend=_spend)
+            except (APIError, ApplicationError) as exc:
                 state, error, items, revision, internal_limits = "failed", exc.code, [], None, []
+            after_cost = exec_budget.used()
+            entry["used_budget"] = {key: after_cost[key] - before_cost[key]
+                                    for key in ("requests", "bytes")}
+            # A probe's set reference is not evidence: the set may be empty,
+            # or execution may fail after a successful planning probe.
+            entry["evidence_refs"] = []
             if state == "succeeded" and revision:
                 # 执行报了自己检索的索引修订就以它为准：规划期探测的修订最多可能
                 # 是计划有效期（900s）之前的，覆盖账本要记"实际检索的是哪一版"。
@@ -2440,7 +3013,14 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
                 else:
                     local_source = target["origin_node_id"] == node
                     for item in items:
-                        evidence[_evidence_key(item)] = _public_item(item)
+                        key = _evidence_key(item)
+                        # A relay's self-reported envelope cannot replace evidence
+                        # already obtained from its source, including after resume.
+                        if item.get("origin_node_id") != target["origin_node_id"] \
+                                and key in evidence:
+                            continue
+                        evidence[key] = _public_item(item)
+                        entry["evidence_refs"].append(str(item["evidence_id"]))
                         if item.get("origin_node_id") == target["origin_node_id"]:
                             attributed.append(_public_item(item))
                         excerpt = _generation_excerpt(item, local_source=local_source)
@@ -2484,7 +3064,7 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
         # 迟到的成功/失败结果一律不许覆盖，覆盖账本也不许重写 —— cancel 已经把
         # 未完成目标记成 not_attempted，这里再写一遍会把那份账目改掉。
         await session.rollback()
-        return _status_output(await session.get(FederationRequest, root_task_id,
+        return await _status_output(session, await session.get(FederationRequest, root_task_id,
                                                 populate_existing=True))
     ordered = [entries[_target_digest(target)] for target in _ordered_targets(all_targets)]
     fused = list(evidence.values())
@@ -2508,9 +3088,15 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
     unretrieved = [{"target_key": entry["target_key"], "state": entry["state"],
                     "last_error": entry.get("last_error")}
                    for entry in ordered if entry["state"] != "succeeded"]
-    answer = await _answer_result(
-        session, actor, row, plan=plan, fused=fused, live_excerpts=live_excerpts,
-        sufficiency=ledger["evidence_sufficiency"], http=http)
+    try:
+        answer = await _answer_result(
+            session, actor, row, plan=plan, fused=fused, live_excerpts=live_excerpts,
+            sufficiency=ledger["evidence_sufficiency"], http=http,
+            budget=exec_budget, spend=_spend)
+    except ApplicationError as exc:
+        if exc.code != "budget_exhausted":
+            raise
+        answer = _unavailable_answer("budget_exceeded")
     if answer.get("conflicts"):
         # 生成一路标出的矛盾（已按本次证据编号域校验）并入账本：只会把充分性压成
         # conflicting，不会把 insufficient 抬高 —— 没有证据就根本不会走到生成。
@@ -2534,6 +3120,9 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
     result = {**document, "result_manifest_digest": plans.digest(document),
               _ATTRIBUTED_FIELD: sorted({_evidence_key(item) for item in attributed},
                                         key=lambda key: tuple(str(part) for part in key))}
+    for key in (federation_budget.CANDIDATE_GRAPH_FIELD, federation_budget.FAST_STOP_FIELD):
+        if key in previous:
+            result[key] = previous[key]
     await session.execute(delete(CoverageEntry).where(
         CoverageEntry.root_task_id == row.root_task_id))
     ledger_row = await session.get(CoverageLedger, row.root_task_id)
@@ -2565,7 +3154,7 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
         .execution_options(synchronize_session=False))
     if changed.rowcount == 0:
         await session.rollback()
-        return _status_output(await session.get(FederationRequest, root_task_id,
+        return await _status_output(session, await session.get(FederationRequest, root_task_id,
                                                 populate_existing=True))
     await session.refresh(row)
     if status == "succeeded":
@@ -2582,7 +3171,7 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
             "delivery_id": row.delivery_id,
             "result_manifest_digest": result["result_manifest_digest"]}, now=now)
     await session.commit()
-    return _status_output(row)
+    return await _status_output(session, row)
 
 
 async def execute_task(session: AsyncSession, actor: Actor, root_task_id: str, *,
@@ -2614,7 +3203,7 @@ async def execute_task(session: AsyncSession, actor: Actor, root_task_id: str, *
         if row.idempotency_key != idempotency_key:
             raise APIError(409, "root task already accepted under another idempotency key",
                            "invalid_request_error", "idempotency_conflict")
-        return _status_output(row), False
+        return await _status_output(session, row), False
     validate_execution_consent(row.execution_consent_json, now=now)
     try:
         plans.validate_plan(row.plan_json, row.task_spec_json,
@@ -2654,7 +3243,7 @@ async def execute_task(session: AsyncSession, actor: Actor, root_task_id: str, *
                            "invalid_request_error", "idempotency_conflict") from None
         raise
     if not settings.federation_execution_inline:
-        return _status_output(row), True
+        return await _status_output(session, row), True
     try:
         result = await _execute_plan(session, actor, row, now=now, http=http, index=index,
                                      retry_only=False)
@@ -2678,18 +3267,58 @@ async def run_queued(session: AsyncSession, actor: Actor, root_task_id: str, *,
     await catalog.lock_key(session, "federation-task:" + root_task_id)
     row = await _load_request(session, actor, root_task_id)
     if row.status != "running":
-        return _status_output(row)
+        return await _status_output(session, row)
     try:
         return await _execute_plan(session, actor, row, now=now, http=http, index=index,
                                    retry_only=retry_only)
     except APIError as exc:
         await _mark_failed(session, root_task_id, now=now, error=exc.code or "task_failed")
-        return _status_output(await session.get(FederationRequest, root_task_id,
+        return await _status_output(session, await session.get(FederationRequest, root_task_id,
                                                 populate_existing=True))
     except ApplicationError as exc:
         await _mark_failed(session, root_task_id, now=now, error=exc.code)
-        return _status_output(await session.get(FederationRequest, root_task_id,
+        return await _status_output(session, await session.get(FederationRequest, root_task_id,
                                                 populate_existing=True))
+
+
+async def _resume_continuation_gate(session: AsyncSession, actor: Actor,
+                                    row: FederationRequest, *,
+                                    now: datetime, http, index) -> bool:
+    """Stage the next fast batch behind a fresh approval, retaining the root ledger."""
+    task_spec = row.task_spec_json
+    if (row.status not in ("succeeded", "failed")
+            or task_spec["search_policy"]["mode"] != "fast"
+            or task_spec["resource_scope"]["kind"] == "fixed_resources"):
+        return False
+    graph = (row.result_json or {}).get(federation_budget.CANDIDATE_GRAPH_FIELD)
+    if not graph:
+        return False
+    selected = _plan_selected_targets(row.plan_json, graph)
+    entries = list(await session.scalars(select(CoverageEntry).where(
+        CoverageEntry.root_task_id == row.root_task_id)))
+    outcomes = {tuple(entry.target_key_json[field] for field in
+                      ("origin_node_id", "collection_id", "operation")):
+                (entry.state, entry.last_error) for entry in entries}
+    # Reconcile unknown receipts/crashed work before changing its graph binding.
+    if any(outcomes.get(tuple(target[field] for field in
+                             ("origin_node_id", "collection_id", "operation")),
+                        ("planned", None))[0] in ("planned", "in_flight", "unreachable")
+           for target in selected):
+        return False
+    additions = _fast_continuation_targets(graph, selected)
+    if not additions:
+        return False
+    row.result_json = {**row.result_json, "_continuation_targets": selected + additions}
+    row.planning_state = "draft"
+    row.execution_consent_json = None
+    row.execution_consent_ref = None
+    row.status = "queued"
+    # Previous delivery remains immutable and addressable, but is not this revision's result.
+    row.delivery_id = None
+    row.delivery_state = "not_requested"
+    row.error = None
+    await create_plan(session, actor, row.root_task_id, now=now, http=http, index=index)
+    return True
 
 
 async def resume(session: AsyncSession, actor: Actor, root_task_id: str, *, now: datetime,
@@ -2719,6 +3348,8 @@ async def resume(session: AsyncSession, actor: Actor, root_task_id: str, *, now:
                             local_node_id=federation.local_node_id(), now=_ts(now))
     except ApplicationError as exc:
         raise federation.api_error(exc) from None
+    if await _resume_continuation_gate(session, actor, row, now=now, http=http, index=index):
+        return await _status_output(session, row)
     row.delegation_generation = int(row.delegation_generation or 0) + 1
     row.status = "running"
     row.updated_at = now
@@ -2733,7 +3364,7 @@ async def resume(session: AsyncSession, actor: Actor, root_task_id: str, *, now:
             dedupe_key=f"federation-request:{root_task_id}")
     await _commit(session)
     if not settings.federation_execution_inline:
-        return _status_output(row)
+        return await _status_output(session, row)
     try:
         return await _execute_plan(session, actor, row, now=now, http=http, index=index,
                                    retry_only=True)
@@ -2763,7 +3394,7 @@ async def cancel(session: AsyncSession, actor: Actor, root_task_id: str, *,
     await catalog.lock_key(session, "federation-task:" + root_task_id)
     row = await _load_request(session, actor, root_task_id)
     if row.status in ("succeeded", "failed", "cancelled"):
-        return _status_output(row)
+        return await _status_output(session, row)
     entries = list(await session.scalars(select(CoverageEntry).where(
         CoverageEntry.root_task_id == root_task_id)))
     if not entries:
@@ -2811,7 +3442,7 @@ async def cancel(session: AsyncSession, actor: Actor, root_task_id: str, *,
     if not settings.federation_execution_inline:
         await queue.cancel_by_dedupe(session, kind="federation_plan",
                                      dedupe_key=f"federation-request:{root_task_id}")
-    return _status_output(row)
+    return await _status_output(session, row)
 
 
 async def mark_stalled(session: AsyncSession, root_task_id: str, *, now: datetime,
@@ -2856,8 +3487,41 @@ async def heartbeat_request(session: AsyncSession, root_task_id: str) -> bool:
 # 读路径
 # ---------------------------------------------------------------------------
 
+async def _revocation_sweep(session: AsyncSession, actor: Actor, *,
+                            fused: list[dict], now: datetime) -> str | None:
+    """读路径实时复查：本地证据逐条 resolve，任一条撤销即返回 machine code。
+
+    远端证据按存它的组织/调用者绑定信任，不用本地 ACL 复核；本地证据 404 视为
+    不可见（同形，不泄露存在性），`source_revoked`/withdrawn（410）则 fail-closed。
+    返回 None 表示无已知撤销，否则返回 `source_revoked`（调用方显式失败）。
+    """
+    node = federation.local_node_id()
+    for item in fused:
+        if item.get("origin_node_id") != node:
+            continue
+        try:
+            await federation.resolve_evidence(
+                session, actor, evidence_ref=str(item.get("evidence_id") or ""),
+                now=now)
+        except APIError as exc:
+            if exc.code == "source_revoked":
+                return "source_revoked"
+    return None
+
+
 async def read_task(session: AsyncSession, actor: Actor, root_task_id: str) -> dict:
-    return _status_output(await _load_request(session, actor, root_task_id))
+    row = await _load_request(session, actor, root_task_id)
+    out = await _status_output(session, row)
+    fused = (row.result_json or {}).get("evidence") or []
+    if out.get("result") is not None and fused:
+        revoked = await _revocation_sweep(session, actor, fused=fused, now=utcnow())
+        if revoked is not None:
+            # 撤销读路径 fail-closed：证据与派生（answer/wiki）不得因缓存继续暴露。
+            failed = {**out["result"], "evidence": [], "answer": None,
+                      "answer_reason": revoked, "validation_state": "failed",
+                      "wiki": None, "error": revoked}
+            out = {**out, "result": failed, "error": revoked}
+    return out
 
 
 async def read_coverage(session: AsyncSession, actor: Actor, root_task_id: str) -> dict:
@@ -2971,6 +3635,7 @@ async def read_delivery(session: AsyncSession, actor: Actor, delivery_id: str, *
     - confirmed 是终态，不再受 TTL 影响（客户端已经校验并持有）；
     - `result` 是规范文档，`content_digest(canonical result)` 必须等于
       `result_manifest_digest`；超界未持久化时是 null，客户端必须拒绝确认。
+    - 交付字节同样实时复查撤销：失效证据经交付暴露即 410 `source_revoked`。
     """
     delivery = await session.get(FederationDelivery, delivery_id)
     row = await session.get(FederationRequest, delivery.root_task_id) if delivery else None
@@ -2989,6 +3654,12 @@ async def read_delivery(session: AsyncSession, actor: Actor, delivery_id: str, *
     if delivery.state == "expired":
         raise APIError(410, "delivery has expired and was never confirmed locally",
                        "invalid_request_error", "delivery_expired")
+    fused = ((delivery.result_json or {}).get("evidence")) or []
+    if fused:
+        revoked = await _revocation_sweep(session, actor, fused=fused, now=now)
+        if revoked is not None:
+            raise APIError(410, "evidence source was revoked", "invalid_request_error",
+                           "source_revoked")
     return {
         "delivery_id": delivery.delivery_id,
         "root_task_id": delivery.root_task_id,

@@ -8,6 +8,7 @@ import type {
 } from '@/types/api'
 
 import { http } from './http'
+import type { ResourceContext } from './resource-context'
 
 export const knowledgeApi = {
   entities: (params: { q?: string; entity_type?: string; uncertain?: boolean } = {}) =>
@@ -16,9 +17,9 @@ export const knowledgeApi = {
     http.get<KnowledgeGraph>('/api/knowledge/graph', { params: entity ? { entity, depth } : { depth } }),
   wikiList: () => http.get<WikiSummary[]>('/api/wiki'),
   wiki: (idOrTitle: string) => http.get<WikiDetail>(`/api/wiki/${encodeURIComponent(idOrTitle)}`),
-  backlinks: (evidenceId: string) =>
+  backlinks: (evidenceId: string, context?: ResourceContext) =>
     http.get<{ evidence_id: string; backlinks: EvidenceBacklink[] }>(
-      `/api/evidence/${evidenceId}/backlinks`,
+      `/api/evidence/${evidenceId}/backlinks`, { params: context },
     ),
   reviews: () => http.get<{ items: KnowledgeReviewItem[]; truncated: boolean; limit: number }>('/api/reviews'),
   review: (

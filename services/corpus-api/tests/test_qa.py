@@ -36,17 +36,67 @@ def _real_pdf() -> bytes:
 PDF = _real_pdf()
 
 
-def _chat_sse(*texts: str, cited: bool = False) -> httpx.Response:
-    values = list(texts)
-    if cited and values:
-        values[-1] += " [1]"
+def _grounded_doc(*claims: tuple[str, list[int]], status: str = "answered") -> str:
+    """按 grounded-claims 协议组装模型输出：`[n]` 是 1-based 的可见 sources 下标。"""
+    if status == "insufficient_evidence":
+        return json.dumps({"status": status}, ensure_ascii=False)
+    return json.dumps({"status": status, "claims": [
+        {"text": text, "evidence_ids": [f"__EVIDENCE_{n}__" for n in refs]}
+        for text, refs in claims]}, ensure_ascii=False)
+
+
+def _visible_evidence_ids(request: httpx.Request) -> list[str]:
+    """从回答请求的 user 消息 JSON 里读出本轮模型实际看到的 evidence id。"""
+    body = json.loads(request.content)
+    ids: list[str] = []
+    for message in body["messages"]:
+        content = message.get("content")
+        if isinstance(content, list):
+            for part in content:
+                text = part.get("text") or ""
+                if '"sources"' not in text:
+                    continue
+                try:
+                    ids.extend(source["evidence_id"]
+                               for source in json.loads(text)["sources"])
+                except (ValueError, KeyError, TypeError):
+                    continue
+    return ids
+
+
+def _bind_ids(text: str, evidence_ids: list[str]) -> str:
+    for n, eid in enumerate(evidence_ids, 1):
+        text = text.replace(f"__EVIDENCE_{n}__", eid)
+    return text
+
+def _sse_frames(text: str):
+    """把完整模型输出按 SSE delta 帧流出；故意切在奇怪的位置。"""
+    # 首帧只给一个字符：claim 一定还没闭合，decoder 不许提前吐数
+    cuts = [1, len(text) // 2, len(text) * 3 // 4, len(text)]
+    prev = 0
+    for cut in cuts:
+        if cut > prev:
+            yield (f'data: {json.dumps({"choices": [{"delta": {"content": text[prev:cut]}}]})}\n\n').encode()
+            prev = cut
+
+
+def _grounded_response(template: str, request: httpx.Request) -> httpx.Response:
+    """把 `__EVIDENCE_n__` 占位按本轮可见 id 换成真实值后做成 SSE 流。"""
+    text = _bind_ids(template, _visible_evidence_ids(request))
 
     async def frames():
-        for text in values:
-            yield (f'data: {json.dumps({"choices": [{"delta": {"content": text}}]})}\n\n').encode()
+        for chunk in _sse_frames(text):
+            yield chunk
         yield b"data: [DONE]\n\n"
 
     return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=frames())
+
+
+def _grounded_side_effect(template: str):
+    """`respx side_effect`：按每轮请求的可见 evidence id 绑定后再流式返回。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _grounded_response(template, request)
+    return handler
 
 
 async def _ready_document(actor_client) -> dict:
@@ -86,7 +136,12 @@ async def _ask(actor_client, cid: str, question: str = "第二页的表格") -> 
 
 def _agent_chat(*, need_retrieval: bool, answer: str,
                 transcript: str = "第二页的表格数据内容完整可见"):
-    """同时 mock 判定、回答与自动核对三种 chat 请求。"""
+    """同时 mock 判定、回答与自动核对三种 chat 请求。
+
+    `answer` 是自由文本：含 `[n]`（如 `"结论。[1][2]"`）按 grounded-claims 协议
+    转成引用第 n 条可见 evidence 的 claim；不含 `[n]` 则按 insufficient 拒答处理。
+    """
+    import re
     calls = {"decision": 0, "answer": 0, "verify": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -105,7 +160,13 @@ def _agent_chat(*, need_retrieval: bool, answer: str,
             return httpx.Response(200, json={
                 "choices": [{"message": {"role": "assistant", "content": transcript}}]})
         calls["answer"] += 1
-        return _chat_sse(answer)
+        refs = [int(n) for n in re.findall(r"\[(\d+)\]", answer)]
+        text = re.sub(r"\s*\[\d+\]", "", answer).strip()
+        if refs:
+            template = _grounded_doc((text, refs))
+        else:
+            template = _grounded_doc(status="insufficient_evidence")
+        return _grounded_response(template, request)
 
     return handler, calls
 
@@ -114,15 +175,16 @@ def _agent_chat(*, need_retrieval: bool, answer: str,
 async def test_ask_streams_answer_with_citations(actor_client, session):
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("第二页", "讲的是表格数据。", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(
+        _grounded_doc(("第二页讲的是表格数据。", [1]))))
 
     events = await _ask(actor_client, cid)
     names = [name for name, _ in events]
     assert names[0] == "meta" and names[-1] == "done"
-    assert names.count("delta") == 2, "必须逐帧流式返回，不能攒完一次性给"
+    assert names.count("delta") == 1, "单 claim 按一条 delta 流式返回"
 
     answer = "".join(d["text"] for n, d in events if n == "delta")
-    assert answer == "第二页讲的是表格数据。 [1]"
+    assert answer == "第二页讲的是表格数据。\n"
 
     citations = dict(events)["citations"]["citations"]
     # 断到具体页：问的是"表格"，只有第 2 页（page_idx=1）那块讲表格。
@@ -162,8 +224,10 @@ async def test_stream_reindex_race_preserves_explicit_evidence_and_marks_invalid
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
 
-    async def answer_then_reindex():
-        yield (f'data: {json.dumps({"choices": [{"delta": {"content": "旧索引答案。[1]"}}]})}'
+    async def answer_then_reindex(request: httpx.Request):
+        template = _grounded_doc(("旧索引答案。", [1]))
+        text = _bind_ids(template, _visible_evidence_ids(request))
+        yield (f'data: {json.dumps({"choices": [{"delta": {"content": text}}]})}'
                '\n\n').encode()
         async with get_sessionmaker()() as concurrent:
             row = await concurrent.get(Document, document["id"])
@@ -184,7 +248,7 @@ async def test_stream_reindex_race_preserves_explicit_evidence_and_marks_invalid
             }}]})
         return httpx.Response(
             200, headers={"content-type": "text/event-stream"},
-            content=answer_then_reindex())
+            content=answer_then_reindex(request))
 
     respx.post(CHAT).mock(side_effect=handler)
     events = dict(await _ask(actor_client, cid))
@@ -232,7 +296,7 @@ async def test_ask_degrades_visibly_when_vision_runtime_is_down(actor_client, se
         calls["verify" if is_verify else "answer"] += 1
         if has_image:
             return httpx.Response(502, json={"error": {"message": "vqa unreachable"}})
-        return _chat_sse("纯文本回答")
+        return _grounded_response(_grounded_doc(("纯文本回答", [1])), request)
 
     respx.post(CHAT).mock(side_effect=handler)
 
@@ -248,6 +312,32 @@ async def test_ask_degrades_visibly_when_vision_runtime_is_down(actor_client, se
     message = (await session.execute(
         select(Message).where(Message.role == "assistant"))).scalars().one()
     assert message.degraded == "vision_unavailable" and message.content == "纯文本回答"
+
+
+@respx.mock
+async def test_vision_fallback_does_not_hide_an_embedding_outage(actor_client, session):
+    """向量化与视觉同时不可用：回答只能标"仅关键词检索"，不能只剩"没做视觉验证"。
+
+    真栈实测过：停掉 embedding 问答，done 里只有 vision_unavailable —— 用户看不出
+    这轮依据是只靠关键词找来的。没核对这件事由 verified=False 表达。"""
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+    respx.post(EMBEDDINGS).mock(return_value=httpx.Response(503))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        parts = [part for message in json.loads(request.content)["messages"]
+                 if isinstance(message["content"], list) for part in message["content"]]
+        if any(part.get("type") == "image_url" for part in parts):
+            return httpx.Response(502, json={"error": {"message": "vqa unreachable"}})
+        return _grounded_response(_grounded_doc(("表格在第二页", [1])), request)
+
+    respx.post(CHAT).mock(side_effect=handler)
+    done = dict(await _ask(actor_client, cid, question="表格"))["done"]
+    assert done["degraded"] == "embedding_unavailable"
+    assert done["verified"] is False
+    message = (await session.execute(
+        select(Message).where(Message.role == "assistant"))).scalars().one()
+    assert message.degraded == "embedding_unavailable" and message.verified is False
 
 
 @respx.mock
@@ -274,12 +364,16 @@ async def test_ask_survives_midstream_upstream_failure(actor_client, session):
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
 
-    async def half_then_die():
-        yield f'data: {json.dumps({"choices": [{"delta": {"content": "开头"}}]})}\n\n'.encode()
+    async def half_then_die(request: httpx.Request):
+        template = _grounded_doc(("开头", [1]))
+        text = _bind_ids(template, _visible_evidence_ids(request))
+        # 只吐一半就断：decoder 收到的是截断文档，finish 必须报截断而不是吞掉
+        half = text[: len(text) // 2]
+        yield f'data: {json.dumps({"choices": [{"delta": {"content": half}}]})}\n\n'.encode()
         raise httpx.ReadTimeout("upstream stalled")
 
-    respx.post(CHAT).mock(return_value=httpx.Response(
-        200, headers={"content-type": "text/event-stream"}, content=half_then_die()))
+    respx.post(CHAT).mock(side_effect=lambda request: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=half_then_die(request)))
 
     events = await _ask(actor_client, cid)
     names = [n for n, _ in events]
@@ -289,7 +383,64 @@ async def test_ask_survives_midstream_upstream_failure(actor_client, session):
 
     message = (await session.execute(
         select(Message).where(Message.role == "assistant"))).scalars().one()
-    assert message.content == "开头", "已产出的部分必须留住"
+    # 截断的 JSON 里 claim 还没闭合：decoder 不产出部分文本，落库为空但错误可见
+    assert "delta" not in names, "未闭合的 claim 不许流式输出"
+    assert message.content == "" and message.degraded == "upstream_error"
+
+
+@respx.mock
+async def test_ask_keeps_completed_claim_when_stream_dies_midway(actor_client, session):
+    """上游在第一条 claim 闭合后、第二条中途断流：已闭合的要留住并如实报错。"""
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+
+    async def one_then_die(request: httpx.Request):
+        template = _grounded_doc(("第一条。", [1]), ("第二条没说完", [1]))
+        text = _bind_ids(template, _visible_evidence_ids(request))
+        cut = text.index("}, {") + 1  # 第一条 claim 的 } 刚闭合
+        yield f'data: {json.dumps({"choices": [{"delta": {"content": text[:cut]}}]})}\n\n'.encode()
+        yield f'data: {json.dumps({"choices": [{"delta": {"content": text[cut:cut + 5]}}]})}\n\n'.encode()
+        raise httpx.ReadTimeout("upstream stalled")
+
+    respx.post(CHAT).mock(side_effect=lambda request: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=one_then_die(request)))
+
+    events = await _ask(actor_client, cid)
+    assert dict(events)["error"]["code"] == "upstream_interrupted"
+    assert "".join(d["text"] for n, d in events if n == "delta") == "第一条。\n"
+    message = (await session.execute(
+        select(Message).where(Message.role == "assistant"))).scalars().one()
+    assert message.content == "第一条。", "已闭合的 claim 必须留住"
+
+
+@respx.mock
+async def test_text_only_fallback_reports_midstream_break_as_interrupted(actor_client, session):
+    """视觉不可用时走纯文本重试（CPU 栈上每一问都走这条）。重试输出到一半断流，
+    必须与主路径一样报"中途断流"并留住已闭合的断言，不能报成"服务不可用"。"""
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+
+    async def one_then_die(request: httpx.Request):
+        template = _grounded_doc(("第一条。", [1]), ("第二条没说完", [1]))
+        text = _bind_ids(template, _visible_evidence_ids(request))
+        cut = text.index("}, {") + 1
+        yield f'data: {json.dumps({"choices": [{"delta": {"content": text[:cut]}}]})}\n\n'.encode()
+        raise httpx.RemoteProtocolError("peer closed connection")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        parts = [part for message in json.loads(request.content)["messages"]
+                 if isinstance(message["content"], list) for part in message["content"]]
+        if any(part.get("type") == "image_url" for part in parts):
+            return httpx.Response(502, json={"error": {"message": "vqa unreachable"}})
+        return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                              content=one_then_die(request))
+
+    respx.post(CHAT).mock(side_effect=handler)
+    events = await _ask(actor_client, cid)
+    assert dict(events)["error"]["code"] == "upstream_interrupted"
+    message = (await session.execute(
+        select(Message).where(Message.role == "assistant"))).scalars().one()
+    assert message.content == "第一条。", "已闭合的断言必须留住"
 
 
 @respx.mock
@@ -301,7 +452,7 @@ async def test_ask_reports_no_hits_for_unrelated_question(actor_client, session)
     """
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("文档中未找到相关内容"))
+    route = respx.post(CHAT).mock(side_effect=AssertionError("refusing path must not call the answer model"))
 
     events = await _ask(actor_client, cid, question="量子纠缠退相干时间")
     done = dict(events)["done"]
@@ -316,6 +467,7 @@ async def test_ask_reports_no_hits_for_unrelated_question(actor_client, session)
 
     assert not (await session.execute(select(Citation).where(
         Citation.source_id == message.id))).scalars().all(), "无关问题不得凭空落出处"
+    assert route.call_count == 0, "拒答路径不许调用回答模型"
 
 
 @respx.mock
@@ -336,7 +488,7 @@ async def test_keyword_only_match_below_floor_is_not_a_citation(actor_client, se
     """
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("文档中未找到"))
+    route = respx.post(CHAT).mock(side_effect=AssertionError("refusing path must not call the answer model"))
 
     chunks = (await session.execute(select(Chunk).order_by(Chunk.seq))).scalars().all()
     texts = [c.text for c in chunks]
@@ -366,6 +518,7 @@ async def test_keyword_only_match_below_floor_is_not_a_citation(actor_client, se
     done = dict(events)["done"]
     assert done["degraded"] == "gate_rejected_all" and done["verified"] is False
     assert dict(events)["citations"]["citations"] == []
+    assert route.call_count == 0, "拒答路径不许调用回答模型"
 
 
 @respx.mock
@@ -387,7 +540,7 @@ async def test_similarity_floor_also_filters_the_keyword_path(actor_client, sess
     """
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("文档中未找到"))
+    route = respx.post(CHAT).mock(side_effect=AssertionError("refusing path must not call the answer model"))
 
     from ddp_corpus.config import settings as cfg
     from ddp_core.search import MemoryIndex, _cosine, _query_tokens
@@ -419,6 +572,7 @@ async def test_similarity_floor_also_filters_the_keyword_path(actor_client, sess
     done = dict(events)["done"]
     assert done["degraded"] == "gate_rejected_all" and done["verified"] is False
     assert dict(events)["citations"]["citations"] == []
+    assert route.call_count == 0, "拒答路径不许调用回答模型"
 
 
 @respx.mock
@@ -430,7 +584,7 @@ async def test_keyword_path_still_works_when_embedding_is_down(actor_client, ses
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
     respx.post(EMBEDDINGS).mock(return_value=httpx.Response(503))
-    respx.post(CHAT).mock(return_value=_chat_sse("表格在第二页", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("表格在第二页", [1]))))
 
     events = await _ask(actor_client, cid, question="表格")
     done = dict(events)["done"]
@@ -462,7 +616,7 @@ async def test_ask_marks_embedding_outage_instead_of_faking_it(actor_client, ses
         pytest.skip("索引未就绪，本例只验降级标记")
 
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("基于关键词的回答", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("基于关键词的回答", [1]))))
     events = await _ask(actor_client, cid, question="表格")
 
     assert dict(events)["done"]["degraded"] == "embedding_unavailable", f"events={events}"
@@ -478,7 +632,7 @@ async def test_ask_marks_crop_unsupported_for_non_pdf(actor_client, session):
     document = await _upload(actor_client, b"\x89PNG fake image bytes", "scan.png", "image/png")
     await _callback(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("看起来是一张图", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("看起来是一张图", [1]))))
 
     events = await _ask(actor_client, cid, question="第二页的表格数据")
     done = dict(events)["done"]
@@ -488,23 +642,31 @@ async def test_ask_marks_crop_unsupported_for_non_pdf(actor_client, session):
 
 @respx.mock
 async def test_ask_persists_partial_answer_when_client_disconnects(actor_client, session):
-    """用户关页面：已产出的部分回答要落库并标 client_aborted。
+    """用户关页面：已闭合的 claim 要落库，已产出的部分回答不丢。
 
     落库跑在生成器的 finally 里，而那时作用域已被取消 —— 不 shield 就根本写不进去，
     用户回来只会看到一条有问无答的会话。
+
+    上游先完整送出第一条 claim 再停住：decoder 已经产出它，客户端掉头后它必须落库。
+    （claim 没闭合时的"部分文本"本来就不产出，不断言。）
     """
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
 
-    async def slow():
-        yield f'data: {json.dumps({"choices": [{"delta": {"content": "开头"}}]})}\n\n'.encode()
+    async def slow(request: httpx.Request):
+        template = _grounded_doc(("开头", [1]), ("没说完的第二条", [1]))
+        text = _bind_ids(template, _visible_evidence_ids(request))
+        cut = text.index("}, {") + 1  # 第一条 claim 的 } 刚闭合
+        yield f'data: {json.dumps({"choices": [{"delta": {"content": text[:cut]}}]})}\n\n'.encode()
         # 客户端读到第一帧就立刻掉头，所以这里只要"还没结束"即可。
         # 别写成几十秒：进程内 ASGI 传输会等这个生成器跑完，那个时长会原样计到
         # 套件总时间上（曾经是 30s，占掉整个 backend 单测的一半以上）
         await asyncio.sleep(1)
+        yield f'data: {json.dumps({"choices": [{"delta": {"content": text[cut:]}}]})}\n\n'.encode()
+        yield b"data: [DONE]\n\n"
 
-    respx.post(CHAT).mock(return_value=httpx.Response(
-        200, headers={"content-type": "text/event-stream"}, content=slow()))
+    respx.post(CHAT).mock(side_effect=lambda request: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=slow(request)))
 
     async with actor_client.stream("POST", f"/api/conversations/{cid}/ask",
                                   json={"question": "第二页的表格"}) as resp:
@@ -514,7 +676,8 @@ async def test_ask_persists_partial_answer_when_client_disconnects(actor_client,
 
     message = (await session.execute(
         select(Message).where(Message.role == "assistant"))).scalars().one()
-    assert message.content == "开头", "已产出的部分必须留住"
+    # 进程内传输不断开：上游的剩余部分照常跑完，两条 claim 都落库
+    assert message.content == "开头\n没说完的第二条", "已产出的 claim 必须留住"
     # 标记在这条路径上不保证：httpx 的进程内 ASGI 传输不会把断开变成生成器里的异常，
     # 流是"正常结束"。标记本身由下面那条用 aclose() 直接驱动生成器的用例硬测。
     assert message.degraded in ("verification_unavailable", "client_aborted"), message.degraded
@@ -529,20 +692,49 @@ async def test_generator_close_marks_client_aborted_and_persists(actor_client, s
     """
     from ddp_corpus.qa import Retrieval
     from ddp_corpus.routers.conversations import _stream_answer
+    from ddp_corpus.db import get_sessionmaker
+    from ddp_core.models import Chunk, Evidence
 
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
 
-    async def never_ends():
-        yield f'data: {json.dumps({"choices": [{"delta": {"content": "半句"}}]})}\n\n'.encode()
+    # 直接驱动生成器时也要走真实检索：decoder 的允许集必须与 prompt 里展示的一致，
+    # 否则"半句"会因为 unknown evidence id 被拒，测的就不是 client_aborted 了。
+    # 合成消息里没有 sources JSON，回读请求拿不到 id —— 直接按真实 id 绑定。
+    async with get_sessionmaker()() as probe:
+        chunk = (await probe.execute(select(Chunk).where(
+            Chunk.document_id == document["id"]).order_by(Chunk.seq))).scalars().first()
+        evidence = await probe.get(Evidence, chunk.evidence_id)
+        eid = evidence.id
+
+    async def never_ends(request: httpx.Request):
+        text = _bind_ids(_grounded_doc(("半句", [1]), ("没说完", [1])), [eid])
+        cut = text.index("}, {") + 1  # 第一条 claim 的 } 刚闭合
+        yield f'data: {json.dumps({"choices": [{"delta": {"content": text[:cut]}}]})}\n\n'.encode()
         await asyncio.sleep(30)
 
-    respx.post(CHAT).mock(return_value=httpx.Response(
-        200, headers={"content-type": "text/event-stream"}, content=never_ends()))
+    respx.post(CHAT).mock(side_effect=lambda request: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=never_ends(request)))
+
+
+    from ddp_core.search import Hit
+    hit = Hit(chunk_id=chunk.id, document_id=chunk.document_id,
+              parse_job_id=chunk.parse_job_id, seq=chunk.seq, page_idx=chunk.page_idx,
+              bbox=chunk.bbox, page_size=chunk.page_size, text=chunk.text,
+              derived_text=None, evidence_id=chunk.evidence_id,
+              derived_evidence_id=None, block_type=chunk.block_type, table_html=None,
+              score=0.03, similarity=0.8)
+    retrieval = Retrieval(hits=[hit], citations=[{
+        "chunk_id": chunk.id, "parse_job_id": chunk.parse_job_id, "seq": chunk.seq,
+        "page_idx": chunk.page_idx, "bbox": chunk.bbox, "page_size": chunk.page_size,
+        "crop_key": None, "snippet": (chunk.text or "")[:160],
+        "evidence_id": evidence.id, "source_type": "source",
+        "score": 0.03, "similarity": 0.8}])
+    messages = [{"role": "user", "content": "问题"}]
 
     actor_id = (await session.get(Document, document["id"])).uploaded_by
     gen = _stream_answer(actor_client._transport.app.state.http,  # type: ignore[attr-defined]
-                         [{"role": "user", "content": "问题"}], Retrieval(),
+                         messages, retrieval,
                          conversation_id=cid, document_id=document["id"], actor_id=actor_id,
                          organization_id=ORG,
                          has_image=False)
@@ -591,7 +783,7 @@ async def test_index_failure_is_visible_and_blocks_ask(actor_client, session):
 async def test_conversation_isolation_and_history(actor_client, client, session):
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("答案", [1]))))
     await _ask(actor_client, cid)
 
     listed = (await actor_client.get(f"/api/conversations?document={document['id']}")).json()
@@ -646,7 +838,7 @@ async def test_deleted_document_is_not_searchable(actor_client, session):
     """
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("有答案", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("有答案", [1]))))
     await _ask(actor_client, cid)
     assert (await session.execute(select(Message))).scalars().all(), "先造出消息再删"
 
@@ -671,7 +863,7 @@ async def test_citations_survive_reindex(actor_client, session, app_state):
     """
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("答案", [1]))))
     await _ask(actor_client, cid)
 
     before = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
@@ -712,7 +904,7 @@ async def test_unresolvable_citation_is_marked_not_silently_dropped(actor_client
 
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("答案", [1]))))
     await _ask(actor_client, cid)
 
     # 先造出历史上确实显示过“已验证”的消息；随后让出处失效，验证兼容字段
@@ -766,7 +958,7 @@ async def test_changed_block_content_invalidates_the_citation(actor_client, sess
     """
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("答案", [1]))))
     await _ask(actor_client, cid)
 
     before = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
@@ -796,7 +988,7 @@ async def test_answer_records_model_and_retrieval_snapshot(actor_client, session
     """回答要带模型戳：不记下用了哪个模型/哪套检索参数，换模型后历史无法分组对比。"""
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("答案", [1]))))
     await _ask(actor_client, cid)
 
     from ddp_corpus.config import settings as cfg
@@ -825,7 +1017,7 @@ async def test_confidence_is_reported_and_separates_strong_from_marginal(actor_c
     document = await _ready_document(actor_client)
     # side_effect 而不是 return_value：一个 httpx 流式响应只能被消费一次，
     # 这个用例要问两轮
-    respx.post(CHAT).mock(side_effect=lambda _request: _chat_sse("答案", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("答案", [1]))))
 
     strong = await _conversation(actor_client, document["id"])
     done = dict(await _ask(actor_client, strong, question="表格数据"))["done"]
@@ -849,7 +1041,7 @@ async def test_confidence_is_unknown_not_high_when_similarity_cannot_be_measured
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
     respx.post(EMBEDDINGS).mock(return_value=httpx.Response(503))
-    respx.post(CHAT).mock(return_value=_chat_sse("关键词回答", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("关键词回答", [1]))))
 
     done = dict(await _ask(actor_client, cid, question="表格"))["done"]
     assert done["degraded"] == "embedding_unavailable"
@@ -862,7 +1054,7 @@ async def test_history_carries_similarity_and_confidence(actor_client):
     """历史消息也要带可信度，否则翻回去看旧回答时这个信息就丢了。"""
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("答案", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("答案", [1]))))
     await _ask(actor_client, cid, question="表格数据")
 
     listed = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
@@ -887,7 +1079,7 @@ def _verify_aware_chat(transcript: str | None, answer: str = "回答"):
                 return httpx.Response(503, text="vqa down")
             return httpx.Response(200, json={
                 "choices": [{"message": {"role": "assistant", "content": transcript}}]})
-        return _chat_sse(answer, cited=True)
+        return _grounded_response(_grounded_doc((answer, [1])), request)
 
     return handler
 
@@ -1061,7 +1253,7 @@ async def test_agent_persists_typed_assertion_candidates_and_assertion_citation(
 @respx.mock
 async def test_agent_never_attaches_retrieved_evidence_without_explicit_reference(
         actor_client, session, monkeypatch):
-    """候选进入 prompt 不等于模型引用；没写 [n] 的断言必须显式 unsupported。"""
+    """模型不引用可见 evidence（报 insufficient）时不得暗挂 Citation，必须显式 unsupported。"""
     from ddp_corpus.config import settings as cfg
     from ddp_core.models import Citation
 
@@ -1098,7 +1290,7 @@ async def test_citation_persist_failure_is_unsupported_in_the_first_sse(
         return 0
 
     monkeypatch.setattr(mod, "record_evidence", lose_all_citations)
-    respx.post(CHAT).mock(return_value=_chat_sse("表格在第二页。", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("表格在第二页。", [1]))))
     events = dict(await _ask(actor_client, cid))
     assertion = events["assertions"]["assertions"][0]
     assert assertion["unsupported"] is True
@@ -1227,10 +1419,128 @@ async def test_context_budget_cannot_leave_hidden_citation_numbers(
     assert len(events["meta"]["retrieval"]["chunk_ids"]) == 1
     assert sum(candidate["accepted"] for candidate in
                events["meta"]["retrieval"]["candidates"]) >= 2
+    # [2] 不在可见域里：decoder 报 schema_violation，已产出为空、错误可见
+    assert dict(events)["error"]["code"] == "schema_violation"
+    assert dict(events)["done"]["degraded"] == "schema_violation"
+    assert events["assertions"]["assertions"] == []
+    assert events["citations"]["citations"] == []
+    assert not (await session.execute(select(Citation))).scalars().all()
+
+
+@respx.mock
+async def test_answer_binds_only_the_subset_it_names(actor_client, session, monkeypatch):
+    """模型只绑定可见 evidence 的子集时：仅被绑定的落引用，其余候选不成引用。"""
+    from ddp_corpus.config import settings as cfg
+    from ddp_core.models import Citation
+
+    monkeypatch.setattr(cfg, "qa_decision_enabled", True)
+    monkeypatch.setattr(cfg, "qa_verify_parse", False)
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+    handler, _ = _agent_chat(need_retrieval=True, answer="只有第一条有依据。[1]")
+    respx.post(CHAT).mock(side_effect=handler)
+
+    events = dict(await _ask(actor_client, cid))
+    candidates = events["meta"]["retrieval"]["candidates"]
+    assert sum(candidate["accepted"] for candidate in candidates) >= 2, \
+        "前提不成立：需要至少两条可见候选才能验子集绑定"
+    assertion = events["assertions"]["assertions"][0]
+    assert assertion["unsupported"] is False
+    assert len(assertion["evidence_ids"]) == 1
+    assert len(assertion["citations"]) == 1
+    assert events["citations"]["citations"] == assertion["citations"]
+    rows = (await session.execute(select(Citation))).scalars().all()
+    assert [row.evidence_id for row in rows] == assertion["evidence_ids"]
+
+
+@respx.mock
+async def test_insufficient_evidence_refuses_without_citations(actor_client, session, monkeypatch):
+    """模型报 insufficient_evidence：拒答 unsupported、无引用、未验证。"""
+    from ddp_corpus.config import settings as cfg
+    from ddp_core.models import Citation
+
+    monkeypatch.setattr(cfg, "qa_decision_enabled", True)
+    monkeypatch.setattr(cfg, "qa_verify_parse", False)
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        return _grounded_response(_grounded_doc(status="insufficient_evidence"), request)
+
+    respx.post(CHAT).mock(side_effect=refuse)
+    events = dict(await _ask(actor_client, cid))
+    assert "error" not in dict(events)
     assertion = events["assertions"]["assertions"][0]
     assert assertion["unsupported"] is True and assertion["evidence_ids"] == []
     assert events["citations"]["citations"] == []
+    assert events["done"]["verified"] is False
+    # 判定 mock 缺席时 decision_unavailable 会如实保留：拒答本身不新增引用才是断言点
+    assert events["done"]["degraded"] in (None, "decision_unavailable")
     assert not (await session.execute(select(Citation))).scalars().all()
+
+
+@respx.mock
+async def test_unknown_evidence_id_after_valid_claim_reports_and_keeps_first(
+        actor_client, session, monkeypatch):
+    """第二条 claim 引用未知 id：首条保留落库，错误帧与 done 降级均为 schema_violation。"""
+    from ddp_corpus.config import settings as cfg
+    from ddp_core.models import Citation
+
+    monkeypatch.setattr(cfg, "qa_decision_enabled", True)
+    monkeypatch.setattr(cfg, "qa_verify_parse", False)
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+
+    def poisoned(request: httpx.Request) -> httpx.Response:
+        visible = _visible_evidence_ids(request)
+        assert visible, "前提不成立：本轮应当有可见 evidence"
+        raw = json.dumps({"status": "answered", "claims": [
+            {"text": "第一条有依据。", "evidence_ids": [visible[0]]},
+            {"text": "第二条引用了不可见的证据。", "evidence_ids": ["evidence-does-not-exist"]},
+        ]}, ensure_ascii=False)
+
+        async def frames():
+            for chunk in _sse_frames(raw):
+                yield chunk
+            yield b"data: [DONE]\n\n"
+
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=frames())
+
+    respx.post(CHAT).mock(side_effect=poisoned)
+    events = await _ask(actor_client, cid)
+    assert dict(events)["error"]["code"] == "schema_violation"
+    assert dict(events)["done"]["degraded"] == "schema_violation"
+    assertions = dict(events)["assertions"]["assertions"]
+    assert [a["text"] for a in assertions] == ["第一条有依据。"]
+    assert assertions[0]["unsupported"] is False
+    stored = (await session.execute(select(Assertion))).scalars().all()
+    assert [row.text for row in stored] == ["第一条有依据。"]
+    rows = (await session.execute(select(Citation))).scalars().all()
+    assert len(rows) == 1 and rows[0].source_id == stored[0].id
+
+
+@respx.mock
+async def test_bracket_marker_in_claim_text_creates_no_extra_binding(
+        actor_client, session, monkeypatch):
+    """claim 文本里的 `[1]` 只是文字：不产生额外绑定，引用仍以 evidence_ids 为准。"""
+    from ddp_corpus.config import settings as cfg
+    from ddp_core.models import Citation
+
+    monkeypatch.setattr(cfg, "qa_decision_enabled", True)
+    monkeypatch.setattr(cfg, "qa_verify_parse", False)
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+
+    def bracket(request: httpx.Request) -> httpx.Response:
+        return _grounded_response(_grounded_doc(("结果见 [2]，以 [1] 为准。", [1])), request)
+
+    respx.post(CHAT).mock(side_effect=bracket)
+    events = dict(await _ask(actor_client, cid))
+    assertion = events["assertions"]["assertions"][0]
+    assert assertion["text"] == "结果见 [2]，以 [1] 为准。"
+    assert len(assertion["evidence_ids"]) == 1
+    assert len(assertion["citations"]) == 1
+    assert len((await session.execute(select(Citation))).scalars().all()) == 1
 
 
 @respx.mock
@@ -1295,7 +1605,7 @@ async def test_evidence_detail_does_not_attach_unrelated_same_seq_chunk(
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("表格在第二页。", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("表格在第二页。", [1]))))
     events = dict(await _ask(actor_client, cid))
     evidence_id = events["assertions"]["assertions"][0]["evidence_ids"][0]
     before = (await actor_client.get(f"/api/evidence/{evidence_id}")).json()
@@ -1349,7 +1659,8 @@ async def test_crop_is_cached_immutably_and_revalidates_for_free(actor_client, s
     """
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(return_value=_chat_sse("第二页", "讲的是表格数据。", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(
+        _grounded_doc(("第二页讲的是表格数据。", [1]))))
     await _ask(actor_client, cid)
 
     messages = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()

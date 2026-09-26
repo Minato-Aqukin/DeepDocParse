@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 """验收台账守卫 —— `docs/refactor/ACCEPTANCE-MATRIX-v3.md` 与仓库对得上。
 
-    python scripts/check_acceptance_matrix.py            # 校验（门禁用）
-    python scripts/check_acceptance_matrix.py --write    # 按逐行状态重写汇总表
+    python scripts/check_acceptance_matrix.py                     # 开发：引用一致性
+    python scripts/check_acceptance_matrix.py --write             # 按逐行状态重写汇总
+    python scripts/check_acceptance_matrix.py --require-complete  # 发布：还须全部已验证
 
 ## 它守的是什么
 
@@ -32,7 +33,8 @@
 5. **✅ 行的缺口栏只能是 `—` 或以"（判据外）"开头。** 缺口栏自己承认缺了判据的
    一半而状态是 ✅，是自相矛盾（形式约定；语义仍靠验收）。
 
-它**不**判断状态是否正确 —— 那要读判据和测试，是提交验收的事。
+它**不**判断状态是否正确 —— 那要读判据、实际记录和测试。开发守卫通过不代表
+计划完成；发布使用 --require-complete，部分、未验证和外部条件项都阻止发布。
 """
 from __future__ import annotations
 
@@ -71,10 +73,13 @@ def fail(message: str) -> None:
     sys.exit(1)
 
 
-def tracked(*patterns: str) -> list[str]:
-    out = subprocess.run(["git", "ls-files", *patterns], cwd=ROOT, capture_output=True,
-                         text=True, check=True).stdout.split()
-    return out
+def project_files() -> list[str]:
+    """包含当前新增源码，不把未提交误判为不存在；忽略文件不充当证据。"""
+    out = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout
+    return sorted(set(path for path in out.split("\0") if path))
 
 
 def counts_table(counts: dict[str, int]) -> str:
@@ -85,7 +90,7 @@ def counts_table(counts: dict[str, int]) -> str:
 
 
 def locate(ref: str, files: list[str]) -> list[str]:
-    """按路径后缀定位跟踪文件；`*` 通配只用于文件存在性检查。"""
+    """按路径后缀定位项目文件；`*` 通配只用于文件存在性检查。"""
     if "*" in ref:
         pattern = re.compile(r"(^|.*/)" + re.escape(ref).replace(r"\*", r"[^/]*") + r"$")
         return [path for path in files if pattern.match(path)]
@@ -128,7 +133,9 @@ def defines(source: str, name: str, *, go: bool) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--write", action="store_true", help="按逐行状态重写汇总表")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--write", action="store_true", help="按逐行状态重写汇总表")
+    mode.add_argument("--require-complete", action="store_true", help="发布时要求全部判据已验证")
     args = parser.parse_args()
     text = MATRIX.read_text(encoding="utf-8")
 
@@ -161,7 +168,7 @@ def main() -> None:
     if block.group(2).strip() != table:
         fail(f"汇总表与逐行状态不一致（逐行计数 {counts}），跑 --write 重写")
 
-    files = tracked()
+    files = project_files()
     source_cache: dict[str, str] = {}
 
     def source(path: str) -> str:
@@ -266,6 +273,10 @@ def main() -> None:
     problems = list(dict.fromkeys(problems))
     if problems:
         fail("引用不成立：\n  " + "\n  ".join(problems))
+    if args.require_complete:
+        incomplete = [test_id for test_id, (status, _) in sorted(rows.items()) if status != "✅"]
+        if incomplete:
+            fail("v3 发布阻断：尚未完成真实验收的判据 " + ", ".join(incomplete))
     print(f"验收台账 OK：88 条（{', '.join(f'{STATUSES[k]} {v}' for k, v in counts.items())}），"
           "每个 ✅ 行都有可校验的测试引用，引用的文件与用例全部存在且指得准")
 

@@ -5,11 +5,8 @@
     <link rel="icon" href="/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DeepDocParse</title>
-    <!-- 视觉规范用两族字：Inter 排界面，IBM Plex Mono 排数据（哈希/时间戳/编号）。
-         Noto Sans SC 兜中文 —— 前两族都没有汉字，缺了它中文会掉到系统字体。 -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+    <!-- Offline in both Web and App: CDN preconnect bypasses ordinary request interception. -->
+    <link rel="stylesheet" href="/fonts/fonts.css">
     <script>
       // 防白闪：在首帧之前定好主题，否则深色用户会先看到一帧白底。
       // 键名与取值必须和 @vueuse/core 的 useDark 对齐（见 src/composables/useTheme.ts）：

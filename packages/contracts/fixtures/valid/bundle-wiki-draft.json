@@ -1,0 +1,21 @@
+{
+  "schema": "ddp-bundle-wiki/1",
+  "state": "draft",
+  "title": "Private imported notes",
+  "pages": [
+    {
+      "page_key": "notes",
+      "title": "Notes",
+      "generated_sections": [],
+      "human_paragraphs": [
+        {
+          "id": "human-1",
+          "text": "Keep this human paragraph verbatim.\n保留人工修订。"
+        }
+      ]
+    }
+  ],
+  "reason": null,
+  "relations": [],
+  "dependency_manifest": []
+}

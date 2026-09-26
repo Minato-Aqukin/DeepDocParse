@@ -101,12 +101,12 @@ async def test_create_plan_survives_a_remote_probe_savepoint_collision(
         actor_client, session, monkeypatch):
     stub = StubPeer(items=[{**peer_evidence(), "excerpt": "peer excerpt"}])
     peers = parse_peers(json.dumps({PEER_NODE: {
-        "endpoint": "https://peer.example"}}), shared_token=False)
+        "endpoint": "https://peer.example"}}))
 
     def factory(actor, delegation=None):
         return PeerDirectory(peers, actor=actor, transport=stub.transport(),
                              signer=LocalControlSigner(issuer_node_id=NODE),
-                             delegation=delegation, shared_token=False)
+                             delegation=delegation)
 
     monkeypatch.setattr(federation_tasks, "peer_directory", factory)
 

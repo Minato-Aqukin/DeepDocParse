@@ -1,11 +1,18 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 
+import { isDesktop } from '@/platform/desktop'
 import { authGuard } from './guard'
 import { routes } from './routes'
 
+// 桌面不注册浏览器专有页（login / members / keys / usage / web 设置 / 抽取 / 图谱），
+// 浏览器不注册桌面专有页（sources / models / desktop-settings / updates）。
 const router = createRouter({
   history: createWebHashHistory(import.meta.env.BASE_URL),
-  routes,
+  routes: routes.filter((r) => {
+    const platform = r.meta?.platform
+    if (!platform) return true
+    return isDesktop() ? platform === 'desktop' : platform === 'web'
+  }),
 })
 
 // 守卫本身在 ./guard.ts —— 抽出来是为了让单测引用**同一份**代码

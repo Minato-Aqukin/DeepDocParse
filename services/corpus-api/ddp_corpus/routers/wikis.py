@@ -78,6 +78,7 @@ async def create(body: BuildIn, request: Request,
                  session: AsyncSession = Depends(get_session)):
     _write_actor(actor)
     return await _write(session, wiki.build(session, actor, request.app.state.http,
+                                            request.app.state.search_index,
                                             body.model_dump(), idempotency_key))
 
 
@@ -107,7 +108,7 @@ async def rebuild(wiki_id: str, body: RebuildIn, request: Request,
                   session: AsyncSession = Depends(get_session)):
     _write_actor(actor)
     return await _write(session, wiki.build(session, actor, request.app.state.http,
-        body.model_dump(), idempotency_key, wiki_id=wiki_id))
+        request.app.state.search_index, body.model_dump(), idempotency_key, wiki_id=wiki_id))
 
 
 @router.patch("/wikis/{wiki_id}/pages/{page_key}", status_code=201)

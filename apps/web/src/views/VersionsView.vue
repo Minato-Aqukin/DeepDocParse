@@ -1,78 +1,124 @@
 <script setup lang="ts">
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { documentsApi } from '@/api'
+import { documentContext, selectedResource, selectedVersion } from '@/api/resource-context'
 import StatusTag from '@/components/common/StatusTag.vue'
 import EngineOptionsForm from '@/components/engine/EngineOptionsForm.vue'
 import { pruneOptions } from '@/constants/engines'
 import { parseStatusOf } from '@/constants/status'
 import type { DocumentInfo, EngineChoice, JobInfo } from '@/types/api'
 import { loadEnginePreference } from '@/utils/preferences'
+import { useAuthStore } from '@/stores/auth'
+import { approvedPlanLabel, onLocalSource, onReadOnlySource } from '@/platform/desktop'
 
 /**
- * 解析版本：同一份文件换引擎/参数会产生新的 ParseJob，两个版本并存。
- * 切换"当前版本"会连带重建索引——否则问答会引用到旧版本的块。
+ * 解析历史按资源隔离。选择另一个解析会追加不可变资源版本，
+ * 不重写原版本或旧出处；问答与引用继续使用各自固定的 ParseJob。
  */
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 
 const document = ref<DocumentInfo>()
 const jobs = ref<JobInfo[]>([])
 const loading = ref(false)
 const dialog = ref(false)
 const choice = ref<EngineChoice>(loadEnginePreference())
+const reparsing = ref(false)
+let loadGeneration = 0
+let pollTimer: number | undefined
 
-async function load() {
+function stopPolling() {
+  if (pollTimer !== undefined) window.clearTimeout(pollTimer)
+  pollTimer = undefined
+}
+
+async function load(quiet = false) {
+  stopPolling()
+  const generation = ++loadGeneration
   const id = String(route.params.id)
-  loading.value = true
+  const url = `/api/documents/${id}`
+  const context = {
+    resource_id: selectedResource(url, location.hash),
+    version_id: selectedVersion(url, location.hash),
+  }
+  if (!quiet) loading.value = true
   try {
-    document.value = (await documentsApi.get(id)).data
-    jobs.value = (await documentsApi.listJobs(id)).data
+    const [detail, history] = await Promise.all([
+      documentsApi.get(id, context), documentsApi.listJobs(id, context),
+    ])
+    if (generation !== loadGeneration) return
+    document.value = detail.data
+    jobs.value = history.data
+    if (jobs.value.some(job => job.status === 'pending' || job.status === 'running')) {
+      pollTimer = window.setTimeout(() => { void load(true) }, 2000)
+    }
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
 }
 
 async function reparse() {
-  await documentsApi.reparse(String(route.params.id), {
-    engine: choice.value.engine,
-    options: pruneOptions(choice.value.options),
-  })
-  dialog.value = false
-  ElMessage.success('已提交重新解析')
-  await load()
+  if (!document.value || reparsing.value) return
+  const path = route.fullPath
+  const context = documentContext(document.value)
+  reparsing.value = true
+  try {
+    await documentsApi.reparse(String(route.params.id), {
+      engine: choice.value.engine,
+      options: pruneOptions(choice.value.options),
+    }, context)
+    if (route.fullPath !== path) return
+    dialog.value = false
+    ElMessage.success('已提交重新解析')
+    await load()
+  } finally {
+    reparsing.value = false
+  }
 }
 
 async function makeCurrent(job: JobInfo) {
+  if (!document.value) return
   const documentId = String(route.params.id)
-  const validation = (await documentsApi.validateIndex(documentId, job.id)).data
-  if (!validation.safe_to_reindex) {
-    await ElMessageBox.confirm(
-      `切换后 ${validation.citation_invalidations} 条当前出处会明确标为失效，` +
-      `目标版本可接回 ${validation.citation_reconnectable} 条。继续切换？`,
-      '确认出处失效',
-      { type: 'warning', confirmButtonText: '确认切换', cancelButtonText: '取消' },
-    )
-  }
-  await documentsApi.setCurrentJob(documentId, job.id, !validation.safe_to_reindex)
+  const path = route.fullPath
+  const context = documentContext(document.value)
+  const { data } = await documentsApi.setCurrentJob(documentId, job.id, context)
   ElMessage.success('已切换当前版本，索引将重建')
-  await load()
+  if (route.fullPath !== path) return
+  await router.replace({ query: { ...route.query, ...documentContext(data) } })
+  if (route.fullPath === path) await load()
 }
 
-onMounted(load)
+watch(() => [route.params.id, route.query.resource_id, route.query.version_id], () => {
+  document.value = undefined
+  jobs.value = []
+  dialog.value = false
+  void load()
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  loadGeneration++
+  stopPolling()
+})
 </script>
 
 <template>
   <div class="page">
     <div class="head">
       <div>
-        <el-button link @click="router.push(`/documents/${route.params.id}`)">← 工作台</el-button>
+        <el-button link :disabled="!document" @click="router.push({ name: 'workbench',
+          params: { id: route.params.id }, query: document
+            ? { ...documentContext(document), job: document.current_job_id ?? undefined } : {} })">← 工作台</el-button>
         <span class="name">{{ document?.filename }}</span>
       </div>
-      <el-button type="primary" @click="dialog = true">换参数重新解析</el-button>
+      <el-button :loading="loading" @click="load()">刷新</el-button>
+      <el-button v-if="!onLocalSource" type="primary" :disabled="!document || !auth.canUpload || !document.can_delete"
+                 @click="dialog = true">换参数重新解析</el-button>
     </div>
+    <p v-if="onReadOnlySource" class="readonly-hint" role="note">{{ approvedPlanLabel() }}</p>
 
     <el-table :data="jobs" v-loading="loading">
       <el-table-column label="版本" width="200">
@@ -98,9 +144,10 @@ onMounted(load)
           <span class="ddp-num">{{ row.archived_at ? new Date(row.archived_at).toLocaleString('zh-CN') : '—' }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="120" fixed="right">
+      <el-table-column v-if="!onLocalSource" label="操作" width="120" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" :disabled="row.is_current || row.status !== 'succeeded'"
+          <el-button link type="primary"
+                     :disabled="row.is_current || row.status !== 'succeeded' || !auth.canUpload || !document?.can_delete"
                      @click="makeCurrent(row)">设为当前</el-button>
         </template>
       </el-table-column>
@@ -112,7 +159,7 @@ onMounted(load)
                 title="同一组参数已经解析过时会直接复用，不会重复消耗额度" />
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" @click="reparse">提交</el-button>
+        <el-button type="primary" :loading="reparsing" @click="reparse">提交</el-button>
       </template>
     </el-dialog>
   </div>
@@ -133,4 +180,5 @@ onMounted(load)
 .tag {
   margin-left: 6px;
 }
+.readonly-hint { color: var(--ddp-ink-3); font-size: 13px; }
 </style>

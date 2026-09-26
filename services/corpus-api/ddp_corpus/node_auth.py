@@ -5,14 +5,18 @@
 把验过的凭证变成一个本地 `Actor`。契约与验证顺序：
 `packages/contracts/ddp/node-credential-format.md`。
 
-## 远端主体（T32）
+## 远端主体（T32）与跨组织边界
 
 凭证通过 ≠ 资源权限。执行者构造的是 `Actor(kind="peer", role="viewer")`：
 
 - `id` 由 (issuer, 发行者组织, kind, subject) 派生、带 `peer-` 前缀 —— 永远不等于
   本地任何用户，所以远端同名 `alice` 继承不了本地 `alice` 的私有资产；
-- `organization_id` 取**本节点控制面批准该 issuer 的成员记录**，不取凭证里发行者自报的组织；
-- 只读 viewer：本组织已发布的资源可见，任何人的私有资源不可见，按本地 ACL 同形 404。
+- `organization_id` 取**本节点控制面批准该 issuer 的成员记录**（控制面只在默认组织
+  查信任记录），不取凭证里发行者自报的组织；凭证里的原始 actor（发行者组织 /
+  subject / kind）只进审计与绑定（`FederationProbe.actor_id` 经 `acting_actor` 由
+  派生 peer id 落账），不参与任何本地用户权限判定；
+- 只读 viewer：按本地 ACL 同形 404 —— 本组织已发布的资源可见，任何人的私有资源
+  不可见。跨组织部署下这是组织级隔离，不是"异组织一律 404"或"异组织也能看私有"。
 """
 from __future__ import annotations
 
@@ -217,20 +221,18 @@ async def sweep_nonces(session: AsyncSession, *, now: datetime) -> int:
 
 @dataclass(frozen=True)
 class PeerContext:
-    """一次已认证的节点对节点请求。`claims` 在共享口令档位下为 None。"""
+    """一次已认证的节点对节点请求：恒带已验签的 claims 与信任记录。"""
 
     actor: Actor
-    claims: dict | None = None
-    trust: dict | None = None
+    claims: dict
+    trust: dict
 
     @property
-    def issuer_node_id(self) -> str | None:
-        return None if self.claims is None else self.claims["issuer_node_id"]
+    def issuer_node_id(self) -> str:
+        return self.claims["issuer_node_id"]
 
     def require(self, **observed) -> None:
         """请求体里的值：凭证约束必须逐字相等（缺省不是通配）。"""
-        if self.claims is None:
-            return
         try:
             nc.require_constraints(self.claims, **observed)
         except ApplicationError as exc:
@@ -238,8 +240,6 @@ class PeerContext:
 
     def within(self, **row) -> None:
         """被读写的那一行：凭证带了哪个约束就比哪个；root_task_id 恒比。"""
-        if self.claims is None:
-            return
         present = self.claims.get("constraints") or {}
         observed = {name: value for name, value in row.items()
                     if name == "root_task_id" or name in present}
@@ -252,26 +252,6 @@ def peer_actor(claims: dict, trust: dict, *, request_id: str = "") -> Actor:
                  request_id=request_id)
 
 
-async def _shared_token_context(request: Request) -> PeerContext:
-    """开发档位：旧的服务凭据 + actor 头 + 共享口令。只在显式配置下可达。"""
-    import hmac
-
-    from ddp_corpus.deps import current_actor, require_gateway_credentials
-
-    await require_gateway_credentials(request.headers.get("authorization"))
-    headers = request.headers
-    actor = await current_actor(
-        request, None, headers.get("x-ddp-organization"), headers.get("x-ddp-actor"),
-        headers.get("x-ddp-actor-kind"), headers.get("x-ddp-role"),
-        headers.get("x-ddp-api-key"), headers.get("x-ddp-user"), headers.get("x-request-id"))
-    configured = settings.federation_peer_token or ""
-    presented = headers.get("x-ddp-peer-token") or ""
-    if not configured or not presented or not hmac.compare_digest(configured, presented):
-        raise APIError(401, "invalid or missing peer credentials", "authentication_error",
-                       "peer_unauthenticated")
-    return PeerContext(actor=actor)
-
-
 def peer_context(operation: str):
     """FastAPI 依赖工厂：本端点的凭证操作写死在路由上（与契约 x-ddp-node-credential-operation 一致）。"""
     if operation not in nc.NODE_CREDENTIAL_OPERATION_VALUES:
@@ -280,8 +260,9 @@ def peer_context(operation: str):
     async def dependency(request: Request, session: AsyncSession = Depends(get_session),
                          x_ddp_node_credential: str | None = Header(default=None)
                          ) -> PeerContext:
-        if node_identity.shared_token_mode():
-            return await _shared_token_context(request)
+        # 节点对节点端点只认单次节点凭证：没有 X-DDP-Node-Credential 一律 401
+        # peer_unauthenticated。SERVICE_TOKEN 与自报 actor 头在这里无效 —— 它们只
+        # 用于同一节点 control↔corpus 内部请求（签发/信任/身份绑定），不跨节点。
         if not x_ddp_node_credential:
             raise APIError(401, "a node credential is required", "authentication_error",
                            "peer_unauthenticated")

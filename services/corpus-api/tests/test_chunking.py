@@ -91,6 +91,20 @@ def test_single_oversized_block_is_split():
     assert [c["seq"] for c in chunks] == list(range(len(chunks)))
 
 
+def test_split_block_tail_does_not_merge_with_the_next_block():
+    """切开的块每段只能带整块的 bbox（版面没有行坐标）。尾段若并进紧挨着的下一段，
+    下一段的出处框会把上面那一整段一起框上 —— ESP32 第 25 页实测，框从 0.25 页高涨到 0.67。"""
+    body = "这是一段很长的正文。" * 65          # 650 字：切成 300/300/50，尾段装得下下一段
+    layout = {"pdf_info": [_page(0, [(body, [10, 10, 300, 400]),
+                                     ("紧接着的下一段。", [10, 410, 300, 420])])]}
+
+    chunks = layout_to_chunks(layout, max_chars=300)
+
+    assert chunks[-1]["text"] == "紧接着的下一段。"
+    assert chunks[-1]["bbox"] == [10, 410, 300, 420]
+    assert "".join(c["text"] for c in chunks[:-1]).replace("\n", "") == body
+
+
 def test_oversized_block_prefers_sentence_boundaries():
     """能在句读处断就别硬切 —— 硬切会把一句话劈成两半，检索与出处都变难看。"""
     body = "。".join(f"第{i}句话内容" for i in range(60)) + "。"

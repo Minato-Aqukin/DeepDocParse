@@ -29,12 +29,13 @@ from ddp_corpus.errors import install_error_handlers
 from ddp_corpus.outbox import deliver_loop
 from ddp_corpus.reconcile import reconcile_loop, sweep_federation_loop
 from ddp_corpus.routers import (
-    conversations, documents, external, extractions, internal, knowledge, search, file_access, resources, bundles, mcp_tools,
+    conversations, documents, external, extractions, internal, knowledge, search, file_access, resources, bundles, bundle_replicas, mcp_tools,
 )
 from ddp_corpus.routers import client as client_router
 from ddp_corpus.routers import collections as collections_router
 from ddp_corpus.routers import federation as federation_router
 from ddp_corpus.routers import tasks as tasks_router
+from ddp_corpus.routers import remote_compute as remote_compute_router
 from ddp_core.search import PgVectorIndex
 from ddp_core.tokenize import backend as tokenize_backend
 from ddp_corpus.service_client import ServiceClient, new_http_client
@@ -120,6 +121,7 @@ app.include_router(documents.router, prefix="/api/documents", tags=["documents"]
 app.include_router(conversations.router, prefix="/api", tags=["qa"])
 app.include_router(search.router, prefix="/api", tags=["search"])
 app.include_router(bundles.router, tags=["bundles"])
+app.include_router(bundle_replicas.router, tags=["bundles"])
 app.include_router(resources.router, prefix="/api/resources", tags=["resources"])
 app.include_router(resources.router, prefix="/api/v1/resources", tags=["resources"])
 app.include_router(extractions.router, prefix="/api", tags=["extractions"])
@@ -134,6 +136,7 @@ app.include_router(federation_router.router, tags=["federation"])
 # P5 协调者入口面（task-intents/plans/tasks/deliveries）。**走入口鉴权**，
 # 由 control-api 按 corpusPrefixes 转发；节点面在 routers/federation.py。
 app.include_router(tasks_router.router, tags=["federation-tasks"])
+app.include_router(remote_compute_router.router, tags=["remote-compute"])
 app.include_router(internal.router, tags=["internal"]) # /internal/* 回调与事件
 # 对外解析平面在语料侧的那一半：它会在语料里留下 Document 与 ParseJob，
 # 而那两张表 Go 一个字都写不了。**只有 /v1/parse\*** —— 其余 /v1/* 是纯算力，
@@ -184,9 +187,9 @@ async def readyz():
             checks["redis"] = f"error: {type(exc).__name__}"
 
     ready = all(v == "ok" for v in checks.values())
-    # 联邦身份与认证档位如实报出来（不变式 2）。**它不参与 ready**：联邦是可选
-    # 能力，控制面没起来时本节点的检索/问答照常可用 —— 但"节点凭证跑在共享口令
-    # 档位"和"身份还没绑上/对不上"必须看得见，而不是只体现在联邦端点的 503 里。
+    # 联邦身份与认证形态如实报出来。**它不参与 ready**：联邦是可选能力，
+    # 控制面没起来时本节点的检索/问答照常可用 —— 但"身份还没绑上/对不上"
+    # 必须看得见，而不是只体现在联邦端点的 503 里。
     return JSONResponse(status_code=200 if ready else 503,
                         content={"ready": ready, "checks": checks,
                                  "federation": node_identity.status()})

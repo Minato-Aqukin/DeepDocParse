@@ -56,6 +56,10 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) error {
 		if errors.Is(err, store.ErrNotFound) {
 			return apierr.NotFound("no_such_user", "没有这个账号")
 		}
+		if errors.Is(err, store.ErrLastAdmin) {
+			return apierr.Conflict("last_admin",
+				"不能把最后一个管理员降级 —— 那会让组织永久失去管理能力")
+		}
 		return err
 	}
 	s.store.Audit(r.Context(), actor.OrganizationID, actor.ID, string(actor.Kind),

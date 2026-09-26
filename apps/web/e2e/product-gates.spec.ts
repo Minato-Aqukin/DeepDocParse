@@ -374,7 +374,7 @@ test.describe('后端出错时界面必须说出原因', () => {
   test.beforeEach(async ({ page }) => { await fakeLogin(page); await stubApi(page) })
 
   for (const [path, api, label] of [
-    ['/wiki', '/api/wiki', 'Wiki 列表'],
+    ['/wiki', '/api/wikis', 'Wiki 列表'],
     ['/graph', '/api/knowledge/graph', '图谱'],
   ] as const) {
     test(`${label}加载失败时给出错误态而不是空列表`, async ({ page }) => {

@@ -113,9 +113,11 @@ enums:
         severity: warn
       - value: schema_violation
         summary: |
-          模型输出反复不合 schema（已按 EXTRACT_MAX_RETRIES 重试仍失败）。
-          **绝不能被静默当成 not_found** —— 那会把系统故障伪装成"文档里没有"。
-        label: 模型输出不符合 schema（已重试仍失败）
+          模型输出不符合约定结构。抽取平面：按 EXTRACT_MAX_RETRIES 重试仍失败；
+          问答平面：回答未满足逐条证据绑定协议（非法 JSON、缺失/越界 evidence_id、
+          截断），不重试，已校验的完整断言作为显式失败的部分回答保留。
+          **绝不能被静默当成 not_found / 文档中没有** —— 那会把系统故障伪装成"文档里没有"。
+        label: 模型输出不符合约定格式
         severity: error
       - value: rerank_unavailable
         summary: 配了精排但上游没注册 rerank 模型，本轮没重排
@@ -178,6 +180,10 @@ enums:
       - value: compile_failed
         summary: 版面编译整体失败
         label: 版面编译失败
+        severity: error
+      - value: layout_unavailable
+        summary: 导入的来源没有可用版面（layout.json 缺失或无效），未编译、未建索引
+        label: 来源版面不可用，未编译
         severity: error
 
   # ------------------------------------------------------------------
@@ -384,6 +390,46 @@ enums:
       - {value: ready,     summary: 校验通过，已发出 DocumentSubmitted, label: 已就绪, severity: ok}
       - {value: failed,    summary: 校验失败或客户端放弃,           label: 失败,     severity: error}
       - {value: expired,   summary: 预签名过期未完成,               label: 已过期,   severity: warn}
+
+  ingest_status:
+    description: |
+      永久上传字节就绪（`upload_status=ready`）之后的**语料登记确认**：control 把
+      `DocumentSubmitted` 投递给语料域，只有 2xx 或 `409 duplicate_event` 算确认。
+      与 `upload_status` 是两段：`ready` 只表示已登记，**不是解析/索引完成**。
+      字节未就绪、或临时计算上传时，该字段为 null。
+    applies_to: [control]
+    values:
+      - {value: pending,  summary: 登记事件尚未得到确认（含事件尚未落库）, label: 登记中,     severity: progress, active: true}
+      - {value: retrying, summary: 投递遇到暂时故障，按退避重试同一事件,   label: 登记重试中, severity: warn,     active: true}
+      - {value: ready,    summary: 语料域已确认登记；解析/索引另行展示,     label: 已登记,     severity: ok}
+      - {value: rejected, summary: 语料域确定性拒绝，终态，不再重投,         label: 登记被拒绝, severity: error}
+
+  ingest_rejection:
+    description: |
+      `ingest_status=rejected` 时 `ingest_error` 的取值：语料域对 `DocumentSubmitted`
+      的**确定性**拒绝码。投递器只把这一组当终态；其余非 2xx（含 5xx、
+      `document_state_changed`、校验错误）一律按暂时故障重试 —— 把可恢复的失败
+      判成终态会让一份已校验的上传永远进不了语料库。
+    applies_to: [control]
+    values:
+      - {value: resource_not_found,      summary: 目标资源已删除、已撤回或不属于上传者, label: 目标资源不存在、已撤回或无权追加, severity: error}
+      - {value: resource_version_exists, summary: 相同字节已是目标资源的一个固定版本,   label: 该内容已是目标资源的一个版本,     severity: error}
+      - {value: invalid_upload_target,   summary: 目标字段非法，或临时计算上传带了目标, label: 目标资源无效,                     severity: error}
+      - {value: idempotency_conflict,    summary: 同一登记键绑定了不同的输入,           label: 登记幂等键冲突,                   severity: error}
+      - {value: source_missing,          summary: 内容对应的原件已不可用,               label: 原件已不可用,                     severity: error}
+
+  wiki_stale_reason:
+    description: |
+      版本化 Wiki 修订 `stale_reasons` 里按页给出的原因（读时依据来源的当前状态现算）。
+      页面只在它对某资源的依赖**没有一条**落在最新版本时才因新版本而过期（wiki-format）。
+    applies_to: [wiki]
+    values:
+      - {value: source_version_changed, summary: 该页依赖的资源有了更新的固定版本,   label: 来源有了新版本,         severity: warn}
+      - {value: parse_revision_changed, summary: 固定版本绑定的解析修订与依赖记录不一致, label: 来源的解析修订已变化,   severity: warn}
+      - {value: source_digest_changed,  summary: 版本或原始证据的摘要与依赖记录不一致,   label: 来源原文摘要已变化,     severity: warn}
+      - {value: permission_unresolved,  summary: 跨节点来源的授权无法确认,               label: 来源授权无法确认,       severity: warn}
+      - {value: source_withdrawn,       summary: 依赖的固定版本已被撤回（本机工作区可撤回单个版本）, label: 来源版本已撤回, severity: warn}
+      - {value: source_unavailable,     summary: 依赖的固定版本或其原始证据已读不到（删除、未就绪）, label: 来源版本不可用, severity: warn}
 
   # ================================================================
   # 以下是「桌面与可验证联邦路由升级计划 v3」P0 冻结的协议枚举。
@@ -610,14 +656,15 @@ enums:
 
       为什么必须闭集：规划只按 operation 决定要不要加生成步骤。以前不看 operation，
       本地模型就绪时**任何** operation 都会被追加一个 `answer` 步 —— 提交
-      `corpus.retrieve`（只取证据）会白跑一次生成，提交一个没实现的 operation
-      （例如 `wiki.pages`）会拿回一个 RAG 答案。那是静默错义，不是报错。
+      `corpus.retrieve`（只取证据）会白跑一次生成；未登记的操作必须明确拒绝，
+      不得用 RAG 答案冒充其他业务产物。
 
       本地运行时的 TaskSpec 还有别的 operation（本机自己的计划许可），不受这里约束。
     applies_to: [federation]
     values:
       - {value: corpus.retrieve, summary: 只按范围取证据，不生成结论, label: 只取证据, severity: neutral}
       - {value: rag.answer.cited, summary: 取证据并生成带出处的回答, label: 带出处的回答, severity: neutral}
+      - {value: wiki.pages, summary: 按固定原始证据生成并验证版本化 Wiki 草稿, label: 构建 Wiki 草稿, severity: neutral}
 
   task_event_type:
     description: |
@@ -974,24 +1021,20 @@ enums:
       - {value: resource_locate,   summary: 'POST /api/v1/federation/resources/locate',              label: 定位资源版本,   severity: neutral}
       - {value: result_resolve,    summary: 'POST /api/v1/federation/results/resolve',               label: 解析证据引用,   severity: neutral}
       - {value: catalog_read,      summary: 'GET /api/v1/federation/published-collections',          label: 读取发布目录,   severity: neutral}
+      - {value: directory_members_read, summary: 'GET /api/v1/federation/members',                  label: 读取目录成员,   severity: neutral}
+      - {value: directory_collections_read, summary: 'GET /api/v1/federation/collections',          label: 读取目录集合,   severity: neutral}
 
   peer_auth_mode:
     description: |
-      语料服务节点对节点端点的认证方式。`node_credential` 是唯一的生产形态；
-      `shared_token_insecure` 只给没有控制面的开发夹具，**必须显式配置且同时
-      打开 ALLOW_INSECURE_DEFAULTS**，并在 /readyz 与能力声明里如实报成降级。
+      语料服务节点对节点端点的认证方式。唯一取值 `node_credential`：控制面持有
+      节点私钥，按请求签发限定 audience/actor/操作/范围/有效期的单次凭证。
+      旧的共享口令形态已删除，不再有兼容取值。
     applies_to: [federation]
     values:
       - value: node_credential
         summary: 控制面持有节点私钥，按请求签发限定 audience/actor/操作/范围/有效期的单次凭证
         label: 节点签名凭证
         severity: ok
-      - value: shared_token_insecure
-        summary: |
-          旧的共享 peer token + 服务凭据 + actor 头。所有登记同伴共用一个秘密、
-          调用方身份未签名、同名用户会被直接合并 —— 只许开发用
-        label: 共享口令（不安全，仅开发）
-        severity: warn
 
   node_membership_state:
     description: 控制域管理员批准的直接节点成员状态，批准不授予资源权限或证明远端持有密钥。
@@ -1008,3 +1051,367 @@ enums:
       - {value: not_requested, summary: 成员支持枚举但尚未请求下级目录, label: 尚未展开, severity: neutral}
       - {value: unexpanded_subtree, summary: 下级不可枚举，不等于空目录, label: 下级未展开, severity: warn}
       - {value: source_revoked, summary: 原快照成员已撤销或当前调用者不可见, label: 来源已撤销, severity: warn}
+
+  source_state:
+    description: |
+      桌面端数据源的状态（DESKTOP-APPSHELL-PLAN §1.6）。
+      与 `transport_state` 分开：那条是 client-runtime 的连接状态，
+      这里是"当前数据源能不能按其能力读写" —— 本机工作区与已连接中心各自一态。
+    applies_to: [client, desktop]
+    values:
+      - {value: ready,      summary: 数据源可用，可按其能力读写,                   label: 可用,         severity: ok}
+      - {value: connecting, summary: 正在连接（本机运行时启动中或中心登录握手中）, label: 连接中,       severity: progress, active: true}
+      - {value: signed_out, summary: 中心登录已过期，需重新连接该中心,             label: 需要重新登录, severity: warn}
+      - {value: unavailable, summary: 数据源不可用（本机运行时起不来或中心不可达）, label: 不可用,       severity: error}
+
+  source_error:
+    description: |
+      桌面端数据源错误的机器可读码（宿主 `/api` 代理与数据源具名方法返回）。
+      命名对齐项目既有约定（snake_case）。`approved_plan_required` 是中心只读的
+      写拒绝：不是权限不足，而是写必须走联邦任务、经原生对话框批准后派发。
+    applies_to: [client, desktop]
+    values:
+      - value: no_active_source
+        summary: 还没有任何当前数据源（首运或全部移除后），/api 直接 503
+        label: 还没有选择数据源
+        severity: error
+      - value: approved_plan_required
+        summary: 中心源只放行 GET/HEAD；写操作须作为联邦任务发起并经批准派发
+        label: 中心在桌面里只读；写操作请作为联邦任务发起并批准
+        severity: error
+      - value: source_signed_out
+        summary: 中心 JWT 过期（上游 401），该源变为"需要重新登录"
+        label: 登录已过期，请重新连接该中心
+        severity: error
+      - value: source_changed
+        summary: 在途请求返回时当前源已切换，页面丢弃该响应
+        label: 数据源已切换，此结果已丢弃
+        severity: error
+      - value: not_supported_locally
+        summary: 本机工作区没实现这项中心接口（发布、重解析等）
+        label: 本机工作区不支持这项功能
+        severity: error
+  desktop_error:
+    description: |
+      桌面端渲染进程的本机错误码（旧工作台 `platform/desktop.ts` 的 `reasons` 表搬入）。
+      命名对齐项目既有约定（snake_case）。这些码来自宿主具名方法与本地账本，
+      不是中心契约：含义只在"本机工作区 + 已配对中心"这套桌面链路下成立。
+    applies_to: [client, desktop]
+    values:
+      - value: connection_failed
+        summary: 本机连接暂不可用，写操作未发出，草稿已保留
+        label: 连接暂不可用，已保留草稿。
+        severity: error
+      - value: authentication_required
+        summary: 当前身份需要重新认证后才能操作
+        label: 此身份需要重新认证。
+        severity: error
+      - value: identity_mismatch
+        summary: 环境身份与已配对记录不一致，拒绝操作
+        label: 环境身份与已配对记录不一致。
+        severity: error
+      - value: profile_mismatch
+        summary: 登录身份与已配对记录不一致，拒绝操作
+        label: 登录身份与已配对记录不一致。
+        severity: error
+      - value: protocol_incompatible
+        summary: 当前环境没有提供所需的工作台协议
+        label: 此环境未提供所需的工作台协议。
+        severity: error
+      - value: cache_failure
+        summary: 本地缓存/草稿写不进去（先持久再出网不断言失败）
+        label: 本地缓存无法写入，请检查可用空间。
+        severity: error
+      - value: model_unavailable
+        summary: 生成模型尚不可用，检索与原文不受影响
+        label: 生成模型尚不可用，可以继续检索和查看原文。
+        severity: warn
+      - value: unsupported_operation
+        summary: 当前环境不支持这项操作，未发出请求
+        label: 此环境暂不支持这项操作。
+        severity: error
+      - value: approved_plan_required
+        summary: 中心源只读，写操作须作为联邦任务发起并经批准派发
+        label: 此操作需要先确认远端执行与外发许可。
+        severity: error
+      - value: outcome_unknown
+        summary: 请求发出但回执丢失，须按幂等键查询回执后再处理
+        label: 提交结果未确认，请查询回执后再处理。
+        severity: warn
+      - value: receipt_required
+        summary: 有未对账的操作键，先查回执再做新的写操作
+        label: 请查询已保存操作的回执。
+        severity: warn
+      - value: disposed
+        summary: 连接已切换或释放，旧连接上的操作不再受理
+        label: 连接已切换，请在当前工作区重新操作。
+        severity: error
+      - value: draft_conflict
+        summary: 草稿被另一窗口先写，CAS 修订对不上
+        label: 草稿已被另一窗口更新，请重新打开后合并。
+        severity: warn
+      - value: revision_conflict
+        summary: 草稿被另一窗口先写，CAS 修订对不上
+        label: 草稿已被另一窗口更新，请重新打开后合并。
+        severity: warn
+      - value: input_too_large
+        summary: 文件超过当前操作的大小限制，未发送
+        label: 文件超过当前操作的大小限制。
+        severity: error
+      - value: not_found
+        summary: 资料不存在或当前身份无权访问
+        label: 该资料不存在或当前身份无权访问。
+        severity: error
+      - value: source_unavailable
+        summary: 来源的访问许可已撤销或过期，不能继续读取快照
+        label: 此来源的访问许可已撤销或过期，不能继续读取快照。
+        severity: error
+      - value: source_digest_mismatch
+        summary: 收到的原文与固定版本摘要不一致，已阻止显示
+        label: 收到的原文与固定版本摘要不一致，已阻止显示。
+        severity: error
+      - value: wiki_response_too_large
+        summary: Wiki 修订超过当前读取大小限制
+        label: Wiki 修订超过当前读取大小限制。
+        severity: error
+      - value: wiki_source_unavailable
+        summary: Wiki 的固定来源已不可用，需重新选择来源
+        label: Wiki 的固定来源已经不可用，请重新选择来源。
+        severity: error
+      - value: wiki_generation_invalid
+        summary: 模型输出未通过 Wiki 格式或引用检查，本次没有发布修订
+        label: 模型输出未通过 Wiki 格式或引用检查，此次没有发布修订。
+        severity: error
+      - value: unsupported_generation
+        summary: 生成内容缺少有效的原始出处，本次没有发布
+        label: 生成内容缺少有效的原始出处，此次没有发布。
+        severity: error
+      - value: wiki_relation_unsupported
+        summary: 模型选择了不存在或缺少原文支撑的关系，本次没有发布修订
+        label: 模型选择了不存在或缺少原文支撑的关系，此次没有发布 Wiki 修订。请缩小主题或调整模型后重试。
+        severity: error
+      - value: out_of_memory
+        summary: 本机内存不足，模型已停止，可查看任务后重启
+        label: 本机内存不足，模型已经停止；可以查看任务后重新启动。
+        severity: error
+      - value: cursor_expired
+        summary: 目录已更新或快照已失效，需重新读取首页
+        label: 目录已更新或快照已失效，请重新读取首页。
+        severity: warn
+      - value: approval_cancelled
+        summary: 用户在系统确认框里取消了批准，没有授予任何外发许可
+        label: 已取消批准，没有授予任何外发许可。
+        severity: neutral
+      - value: plan_changed
+        summary: 计划修订变了，原批准不再适用
+        label: 执行计划已变更，需重新批准。
+        severity: warn
+      - value: approval_unavailable
+        summary: 当前宿主无法显示系统确认框，不能批准外发
+        label: 当前宿主无法显示系统确认框，不能批准外发。
+        severity: error
+      - value: consent_required
+        summary: 该阶段尚未批准，未发送任何内容
+        label: 该阶段尚未批准，未发送任何内容。
+        severity: warn
+      - value: consent_revoked
+        summary: 批准已撤销，需准备并批准新计划
+        label: 批准已撤销；需要准备并批准新计划。
+        severity: warn
+      - value: consent_expired
+        summary: 计划或批准已过期，需准备新计划
+        label: 计划或批准已过期；需要准备新计划。
+        severity: warn
+      - value: budget_exceeded
+        summary: 超出已批准的请求或外发字节预算，未发送
+        label: 超出已批准的请求或外发字节预算，未发送。
+        severity: warn
+      - value: policy_denied
+        summary: 接收方、地址或数据边超出已批准范围，未发送
+        label: 接收方、地址或数据边超出已批准范围，未发送。
+        severity: error
+      - value: input_changed
+        summary: 本地输入与锁定摘要不一致，未发送
+        label: 本地输入与锁定摘要不一致，未发送。
+        severity: error
+      - value: local_only
+        summary: 工作区处于仅本地模式，禁止外发
+        label: 工作区处于仅本地模式，禁止外发。
+        severity: error
+      - value: center_not_paired
+        summary: 计划中的中心尚未配对
+        label: 尚未配对计划中的中心。
+        severity: error
+      - value: center_not_current
+        summary: 中心连接未就绪，需重连并核对节点身份
+        label: 中心连接未就绪；重新连接并核对节点身份后再操作。
+        severity: error
+      - value: center_identity_changed
+        summary: 中心地址或身份与已审阅计划不一致，已拒绝发送
+        label: 中心地址或身份与已审阅计划不一致，已拒绝发送。
+        severity: error
+      - value: center_binding_required
+        summary: 计划没有唯一的已审阅接收方，不能派发
+        label: 计划没有唯一的已审阅接收方，不能派发。
+        severity: error
+      - value: center_unavailable
+        summary: 当前连接无法取得中心凭证
+        label: 当前连接无法取得中心凭证。
+        severity: error
+      - value: delivery_unverified
+        summary: 交付结果没有通过本地摘要重算，不能确认
+        label: 交付结果没有通过本地摘要重算，不能确认。
+        severity: error
+      - value: dispatch_already_reserved
+        summary: 这次发送已占用预算，先对账再重试
+        label: 这次发送已经占用预算，请先对账再重试。
+        severity: warn
+      - value: connection_not_current
+        summary: 本机工作区连接未就绪，草稿已保留
+        label: 本机工作区连接未就绪，已保留草稿。
+        severity: warn
+      - value: unreachable
+        summary: 中心暂时无法连接，未确认任何结果
+        label: 中心暂时无法连接，未确认任何结果。
+        severity: error
+      - value: delivery_expired
+        summary: 交付已过期，结果没有保存到本机
+        label: 交付已过期，结果没有保存到本机。
+        severity: error
+      - value: delivery_not_found
+        summary: 中心暂时没有这份交付，可稍后再取
+        label: 中心暂时没有这份交付，可以稍后再取。
+        severity: warn
+      - value: delivery_id_missing
+        summary: 中心尚未给出交付编号
+        label: 中心尚未给出交付编号。
+        severity: warn
+      - value: result_manifest_mismatch
+        summary: 取回的结果与中心声明的摘要不一致，没有保存
+        label: 取回的结果与中心声明的摘要不一致，没有保存。
+        severity: error
+      - value: result_unavailable
+        summary: 中心没有返回可校验的结果
+        label: 中心没有返回可校验的结果。
+        severity: error
+      - value: ack_not_confirmed
+        summary: 中心没有确认这次交付，可以再次确认
+        label: 中心没有确认这次交付，可以再次确认。
+        severity: warn
+      - value: transfer_unknown
+        summary: 传输结果未确认，保留原创建编号，先查回执再对账，不自动重传
+        label: 传输结果未确认。保留原创建编号，先查询回执，再显式对账或继续缺片；不会自动重传。
+        severity: warn
+      - value: resume_unknown
+        summary: 继续请求的结果未确认，查回执后再处理，不自动批准或派发
+        label: 继续请求的结果未确认，请查询回执后再处理；不会自动批准或派发。
+        severity: warn
+      - value: transfer_in_progress
+        summary: 此计划已有主机传输在执行，可查看进度或停止传输
+        label: 此计划已有主机传输在执行，可查看进度或停止传输。
+        severity: neutral
+      - value: upload_expired
+        summary: 临时上传已过期，需重新准备并批准计划
+        label: 临时上传已过期，需要重新准备并批准计划。
+        severity: warn
+      - value: upload_failed
+        summary: 服务端拒绝了这份输入，未提交解析任务
+        label: 服务端拒绝了这份输入，未提交解析任务。
+        severity: error
+      - value: upload_incomplete
+        summary: 中心返回的分片清单不完整，没有继续发送
+        label: 中心返回的分片清单不完整，没有继续发送。
+        severity: error
+      - value: storage_origin_not_approved
+        summary: 对象存储地址不在已审阅的传输范围内，原件未发送
+        label: 对象存储地址不在已审阅的传输范围内，原件未发送。
+        severity: error
+      - value: delivery_too_large
+        summary: 交付超过本机 64 MiB 校验上限，尚未确认或清理
+        label: 交付超过本机 64 MiB 校验上限，尚未确认或清理。
+        severity: error
+      - value: gpu_device_unsupported
+        summary: 所选 Vulkan 设备是软件渲染器，未启动，也未自动退回 CPU
+        label: 所选 Vulkan 设备是软件渲染器，未启动，也未自动退回 CPU。
+        severity: error
+      - value: gpu_offload_unverified
+        summary: 没有观测到物理 GPU 上的模型层卸载，已停止该进程
+        label: 没有观测到物理 GPU 上的模型层卸载，已停止该进程。需要 CPU 时请明确选择 CPU 运行包。
+        severity: error
+      - value: model_backend_incompatible
+        summary: 所选模型与运行包不兼容
+        label: 所选模型与运行包不兼容。
+        severity: error
+      - value: model_process_busy
+        summary: 受管模型正在运行，先停止再切换模型或后端
+        label: 请先停止当前受管模型，再切换模型或后端。
+        severity: warn
+      - value: egress_denied
+        summary: 中心拒绝了这次外发许可
+        label: 中心拒绝了这次外发许可。
+        severity: error
+      - value: invalid_response
+        summary: 中心返回的内容无法识别
+        label: 中心返回的内容无法识别。
+        severity: error
+      - value: invalid_arguments
+        summary: 请求参数不合法，宿主拒绝执行
+        label: 请求参数不正确，宿主拒绝执行。
+        severity: error
+      - value: host_operation_failed
+        summary: 宿主操作失败且结果未知，须按幂等键对账
+        label: 宿主操作结果未知，请查询回执后再处理。
+        severity: warn
+
+  local_dispatch_state:
+    description: |
+      本机运行时联邦派发状态机（`ddp_local/federation_dispatch.py` 的 `state`）。
+      与契约轴分开：它是"本机镜像看到的进展"，中心的权威状态以对账结果为准。
+      展示时按契约轴摆（规划/受理/交付），明细收进详情 —— 不许压成一个绿色完成。
+    applies_to: [client, desktop]
+    values:
+      - {value: prepared,          summary: 计划已建，还没派发,                       label: 尚未派发,                     severity: neutral}
+      - {value: exploring,         summary: 已派发探索，中心规划中,                   label: 中心规划中,                   severity: progress, active: true}
+      - {value: planned,           summary: 中心计划已就绪，待审阅批准,               label: 中心计划已就绪,               severity: progress, active: true}
+      - {value: explore_unknown,   summary: 探索发出但回执丢失，需对账,               label: 探索结果未知 · 需对账,         severity: warn, active: true}
+      - {value: submitted,         summary: 已提交中心执行,                           label: 中心执行中,                   severity: progress, active: true}
+      - {value: submit_unknown,    summary: 提交发出但回执丢失，需对账,               label: 提交结果未知 · 需对账,         severity: warn, active: true}
+      - {value: approved,          summary: 中心已批准（中心侧状态）,                 label: 中心已批准,                   severity: progress, active: true}
+      - {value: succeeded,         summary: 中心已完成,                               label: 中心已完成,                   severity: ok}
+      - {value: failed,            summary: 失败，失败原因持久化在镜像里,             label: 失败,                         severity: error}
+      - {value: cancelled,         summary: 已取消（显式终态）,                       label: 已取消,                       severity: neutral}
+      - {value: delivered,         summary: 已交付并经本地确认,                       label: 已交付,                       severity: ok}
+      - {value: waiting_input,     summary: 文件计划：等原始输入上传完，不占算力,     label: 等待原始输入,                 severity: progress, active: true}
+      - {value: uploading,         summary: 文件计划：原始输入上传中,                 label: 上传中,                       severity: progress, active: true}
+      - {value: content_verifying, summary: 文件计划：服务端全量校验中,               label: 完整摘要校验中,               severity: progress, active: true}
+      - {value: content_verified,  summary: 文件计划：输入已校验，待执行,             label: 输入已校验 · 等待执行,         severity: progress, active: true}
+      - {value: running,           summary: 中心计算执行中,                           label: 中心计算中,                   severity: progress, active: true}
+      - {value: expired,           summary: 临时产物已过期,                           label: 临时产物已过期,               severity: warn}
+      - {value: acked,             summary: 本机已确认交付,                           label: 本机已确认交付,               severity: ok}
+      - {value: cancel_unknown,    summary: 取消发出但回执丢失，需对账,               label: 取消结果未知 · 需对账,         severity: warn}
+      - {value: resume_unknown,    summary: 继续请求发出但回执丢失，需对账,           label: 继续请求结果未知 · 需对账,     severity: warn, active: true}
+
+  local_verify_state:
+    description: |
+      宿主对取回的交付字节重算摘要的结果（`bridge.d.ts` 的 `PlanDetail.verification`）。
+      与契约 `validation_state` 分开：那条是中心对输出引用的结构校验，
+      这里是本机对交付字节的摘要重算 —— 只有 `passed` 才允许确认交付。
+    applies_to: [client, desktop]
+    values:
+      - {value: passed,      summary: 本地重算摘要与中心声明一致，可以确认, label: 本地重算摘要一致,     severity: ok}
+      - {value: failed,      summary: 本地重算摘要与中心声明不一致，禁止确认, label: 本地重算摘要不一致, severity: error}
+      - {value: unavailable, summary: 尚无取回的交付可校验,                   label: 尚无可校验的本地结果, severity: neutral}
+
+  local_transfer_state:
+    description: |
+      文件计划的对象存储传输相位（`bridge.d.ts` 的 `PlanDetail.transfer`）。
+      上传走的是宿主独占的传输循环，账本只记录相位与字节 ——
+      上传完成不等于解析完成，界面不许把两者混成一个"成功"。
+    applies_to: [client, desktop]
+    values:
+      - {value: prepared,  summary: 传输尚未开始,                         label: 待发送,                       severity: neutral}
+      - {value: creating,  summary: 正在准备临时上传,                     label: 准备临时上传,                 severity: progress, active: true}
+      - {value: uploading, summary: 正在上传缺片,                         label: 正在上传缺片,                 severity: progress, active: true}
+      - {value: verifying, summary: 已上传，服务端全量校验中,             label: 已上传，服务端全量校验中,     severity: progress, active: true}
+      - {value: verified,  summary: 输入已通过服务端校验,                 label: 输入已通过服务端校验,         severity: ok}
+      - {value: unknown,   summary: 上次传输中断，需先对账再继续,         label: 上次传输中断，需对账,         severity: warn}

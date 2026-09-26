@@ -7,6 +7,7 @@ import type { DocumentInfo } from '@/types/api'
 function row(patch: Partial<DocumentInfo>): DocumentInfo {
   return {
     id: 'doc', filename: 'manual.pdf', doc_id: 'd', origin: 'web', mime: 'application/pdf',
+    resource_id: null, source_version_id: null,
     size_bytes: 1, page_count: 1, status: 'succeeded', error: null,
     index_status: 'failed', index_error: '需版本校验', compile_status: 'failed',
     compile_degraded: ['reindex_validation_required'], compile_fingerprint: '',

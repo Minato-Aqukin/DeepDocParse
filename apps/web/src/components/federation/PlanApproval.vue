@@ -59,10 +59,13 @@ async function run() {
       await tasksApi.approve(props.rootTaskId, props.plan.plan_digest, consent)
     }
     busy.value = 'submit'
-    // 受理的幂等键绑到这一份修订：批准后重试不会变成第二次受理，
-    // 而重新规划出的新修订本来就该是一次新的受理。
-    await tasksApi.submit(props.rootTaskId, props.plan.plan_digest,
-      `execute-${props.rootTaskId}-r${props.plan.revision}`)
+    if (props.plan.revision > 1) {
+      // A continuation shares the existing root and its original budget.
+      await tasksApi.resume(props.rootTaskId)
+    } else {
+      await tasksApi.submit(props.rootTaskId, props.plan.plan_digest,
+        `execute-${props.rootTaskId}-r${props.plan.revision}`)
+    }
     emit('changed')
   } catch (cause) {
     error.value = busy.value === 'approve' ? problem(cause, '批准失败') : problem(cause, '受理执行失败')

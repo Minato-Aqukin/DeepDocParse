@@ -70,7 +70,7 @@ python -m routing.dataset --check             # 只校验冻结摘要
 |---|---|---|
 | ScopeManifest 校验与目标枚举 | `routing.targets` + 协调者 `_validate_manifest` | 真实 |
 | 候选选择（fast 上限 / 穷查全量 / local_first） | 协调者 `_select_targets`（内部 `routing.candidates`） | 真实 |
-| 根预算推导与记账 | 协调者 `_root_budget` + `routing.RootBudget` | 真实 |
+| 根预算推导与记账 | 协调者 `_root_budget` + `federation_budget` 独立持久账本（0037）；规划、物理请求与显式续查共用冻结上限和单调消耗 | 真实 |
 | 探索许可门（deny 零外发） | 协调者 `_peer_probe_denial` | 真实 |
 | Probe 构造与校验 | `probe.build_probe` / `validate_probe` | 真实 |
 | 步骤图与计划合法性 | `routing.plan_steps` + `plans.validate_plan` | 真实 |

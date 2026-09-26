@@ -21,19 +21,39 @@ const edge = {
 }
 
 async function stubKnowledge(page: Page) {
+  // 版本化 Wiki（`/api/wikis`，见 `packages/contracts/openapi/wiki-v1.yaml`）：
+  // 逐句证据、unsupported、反链四类照旧断言，stub 形状跟着版本化契约走。
+  const document = {
+    wiki: { id: 'wiki-1', title: 'DeepDocParse',
+      current_revision_id: 'revision-1', published_revision_id: null },
+    revision: {
+      id: 'revision-1', wiki_id: 'wiki-1', base_revision_id: null, kind: 'generated',
+      title: 'DeepDocParse', created_by: 'u-1', created_at: '2026-09-15T08:00:00Z',
+      provider: {}, limits: {}, merge_conflicts: [], stale: false, stale_reasons: {},
+      pages: [{ page_key: 'arch', title: '架构',
+        generated_sections: [{ heading: '架构', sentences: [
+          { id: 'sentence-1', text: '系统使用 Qwen3-VL。', evidence_ids: ['evidence-1'],
+            unsupported: false, conflict_group: null },
+          { id: 'sentence-2', text: '尚无来源的推断。', evidence_ids: [],
+            unsupported: true, conflict_group: null },
+        ] }],
+        human_paragraphs: [], stale: false }],
+      dependency_manifest: [{
+        page_key: 'arch', resource_id: 'resource-1', source_version_id: 'version-1',
+        document_id: 'doc-1', source_digest: 'a'.repeat(64), parse_revision: 'job-1',
+        evidence_id: 'evidence-1', excerpt_digest: `sha256:${'b'.repeat(64)}`,
+        locator: { kind: 'text', page_idx: 2, seq: 0, bbox: [10, 20, 110, 80] },
+      }],
+    },
+  }
   await page.route((url) => url.pathname.startsWith('/api/'), (route) => {
     const path = new URL(route.request().url()).pathname
-    if (path === '/api/wiki') return route.fulfill({ json: [{
-      id: 'wiki-1', entity: entityA, title: 'DeepDocParse', outline: ['架构'], provider: {},
-    }] })
-    if (path === '/api/wiki/wiki-1') return route.fulfill({ json: {
-      entry: { id: 'wiki-1', entity: entityA, title: 'DeepDocParse', outline: ['架构'], provider: {} },
-      sections: [{ id: 'section-1', heading: '架构', sentences: [
-        { id: 'sentence-1', text: '系统使用 Qwen3-VL。', evidence_ids: ['evidence-1'],
-          unsupported: false, conflict_group: null, review_state: 'unreviewed', provider: {}, citations: [citation] },
-        { id: 'sentence-2', text: '尚无来源的推断。', evidence_ids: [], unsupported: true,
-          conflict_group: null, review_state: 'unreviewed', provider: {}, citations: [] },
-      ] }],
+    if (path === '/api/wikis') return route.fulfill({ json: [document] })
+    if (path === '/api/wikis/wiki-1') return route.fulfill({ json: document })
+    if (path === '/api/v1/capabilities') return route.fulfill({ json: {
+      protocol_version: 'ddp-client/1',
+      identity: { environment_id: 'node-center-a', authority_node_id: 'node-center-a', workspace_id: 'org-1' },
+      profile: { issuer: 'node-center-a', subject: 'u-1' },
     } })
     if (path === '/api/knowledge/graph') return route.fulfill({ json: {
       graph_version: 'ddp-graph/1', entities: [entityA, entityB], edges: [edge],
@@ -66,7 +86,7 @@ test('Wiki 逐句点回证据、unsupported 可见、反链四类齐全', async 
   await expect(page.getByText('unsupported · 无法指回 bbox')).toBeVisible()
   await page.getByText('系统使用 Qwen3-VL。').click()
   await expect(page.getByText('证据预览')).toBeVisible()
-  await expect(page.getByText('第 3 页')).toBeVisible()
+  await expect(page.locator('.evidence-preview').getByText('第 3 页')).toBeVisible()
   await expect(page.locator('.backlinks article')).toHaveCount(4)
 })
 
@@ -89,6 +109,10 @@ test('千节点图谱在 canvas 首屏门限内完成且不创建千个 DOM 节�
   }))
   await page.route((url) => url.pathname === '/api/knowledge/graph',
     (route) => route.fulfill({ json: { graph_version: 'ddp-graph/1', entities, edges } }))
+  // 固定图谱负载回归：千节点首屏不画标签，外部字体下载不属于必要输入。
+  // 仅隔离本例的字体 CSS；生产环境的字体网络首屏延迟仍需单独验证。
+  await page.route((url) => url.hostname === 'fonts.googleapis.com',
+    (route) => route.fulfill({ status: 200, contentType: 'text/css', body: '' }))
   const started = Date.now()
   await page.goto('/#/graph')
   await expect(page.getByLabel('实体关系图谱；可拖拽节点、滚轮缩放、点击边查看证据')).toBeVisible()

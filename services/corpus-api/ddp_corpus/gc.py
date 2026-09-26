@@ -11,6 +11,7 @@ from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ddp_corpus.config import settings
+from ddp_corpus.bundle_models import BundleReplica, BundleReplicaRevokeKey, replica_is_live
 from ddp_corpus.models import (
     Citation,
     ClaimEvidenceBinding,
@@ -28,6 +29,11 @@ from ddp_corpus.storage import Storage, job_result_prefix, prefix_of
 
 ACTIVE_TASKS = ("queued", "claimed", "running")
 ACTIVE_PARSES = ("pending", "running", "archiving")
+
+#: Remote file-compute tmp input space (agreed with the 0035 owner). Only keys
+#: under `tmp-remote-compute/{org}/{compute_id}/` may be collected by the
+#: compute sweep, never by the generic document sweep below.
+REMOTE_COMPUTE_TMP_PREFIX = "tmp-remote-compute/"
 
 
 def _live_versions(document_id):
@@ -52,9 +58,37 @@ def _references(value, identities: set[str]) -> bool:
     return False
 
 
+async def _remote_compute_protected(session, document) -> bool:
+    """Temporary inputs stay while their compute is active or in grace window."""
+    try:
+        from ddp_corpus.remote_compute_models import (
+            ACTIVE_REMOTE_COMPUTE, TERMINAL_REMOTE_COMPUTE, RemoteCompute,
+        )
+        from ddp_corpus.routers.remote_compute import TERMINAL_GRACE_SECONDS
+    except Exception:
+        return False
+    rows = (await session.execute(select(RemoteCompute).where(
+        RemoteCompute.input_object_key == document.object_key))).scalars().all()
+    if not rows:
+        return False
+    now = utcnow()
+    for row in rows:
+        if row.status in ACTIVE_REMOTE_COMPUTE:
+            return True
+        if row.status in TERMINAL_REMOTE_COMPUTE and row.updated_at is not None:
+            if (now - as_aware(row.updated_at)).total_seconds() < TERMINAL_GRACE_SECONDS:
+                return True
+    return False
+
+
 async def _protected(session, document, versions, jobs) -> bool:
     if await session.scalar(select(_live_versions(document.id))):
         return True
+    if document.object_key and document.object_key.startswith(REMOTE_COMPUTE_TMP_PREFIX):
+        # Tmp inputs are owned by the compute sweep, never by generic GC: an
+        # active (or grace-window terminal) compute protects its input key.
+        if await _remote_compute_protected(session, document):
+            return True
     if any(job.status in ACTIVE_PARSES for job in jobs):
         return True
     if await session.scalar(
@@ -76,6 +110,45 @@ async def _protected(session, document, versions, jobs) -> bool:
         .limit(1)
     ):
         return True
+    # A live licensed-copy replica pins its fixed snapshot exactly like a live
+    # version does: the GC must not collect `bundles/{version}/` bytes while a
+    # live replica row references a still-live version's snapshot.
+    # Revoked/expired rows protect nothing, and a deleted version/resource
+    # leaves no readable licensed copy behind: deleted own replicas must not
+    # become immortal GC roots. Scope is per logical resource/version, so a
+    # live replica on one resource never pins another resource's same-hash
+    # snapshot.
+    live_resources = {
+        r.id: r
+        for r in (
+            await session.execute(
+                select(Resource).where(
+                    Resource.id.in_([v.resource_id for v in versions])
+                )
+            )
+        ).scalars()
+    }
+    live_version_ids = {
+        v.id
+        for v in versions
+        if v.deleted_at is None
+        and (live_resources.get(v.resource_id) is not None)
+        and live_resources[v.resource_id].deleted_at is None
+    }
+    if live_version_ids:
+        live_replica = select(BundleReplica.id).where(
+            BundleReplica.source_version_id.in_(list(live_version_ids)),
+            BundleReplica.resource_id.in_(
+                [v.resource_id for v in versions if v.id in live_version_ids]
+            ),
+        )
+        for row in (
+            await session.execute(
+                select(BundleReplica).where(BundleReplica.id.in_(live_replica))
+            )
+        ).scalars():
+            if replica_is_live(row, utcnow()):
+                return True
     if await session.scalar(
         select(ClaimEvidenceBinding.id)
         .join(Evidence, Evidence.id == ClaimEvidenceBinding.evidence_id)
@@ -169,6 +242,9 @@ async def _collect_keys(session, storage, document, versions, jobs):
         ).scalars()
     )
     keys = set(document.gc_pending_keys)
+    # Tmp compute inputs never enter the generic prefix sweep: even outside
+    # the grace window they are collected only by the compute-scoped sweep.
+    tmp_owned = bool(document.object_key and document.object_key.startswith(REMOTE_COMPUTE_TMP_PREFIX))
     for prefix in prefixes - shared_prefixes:
         if any(key.startswith(prefix) for key in other_keys):
             continue
@@ -180,13 +256,14 @@ async def _collect_keys(session, storage, document, versions, jobs):
         ):
             continue
         keys.update(key for key in await storage.list_prefix(prefix) if key.startswith(prefix))
-    if document.object_key and document.object_key not in other_keys:
+    if document.object_key and document.object_key not in other_keys and not tmp_owned:
         keys.add(document.object_key)
     # Recheck old pending keys too: another document may now reference a formerly unique key.
     return sorted(
         key
         for key in keys
         if key not in other_keys and not any(key.startswith(prefix) for prefix in shared_prefixes)
+        and not key.startswith(REMOTE_COMPUTE_TMP_PREFIX)
     )
 
 

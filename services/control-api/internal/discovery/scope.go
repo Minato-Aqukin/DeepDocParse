@@ -64,10 +64,11 @@ type ScopeTargetPage struct {
 	Expired        bool          `json:"expired"`
 }
 type ScopeOptions struct {
-	Operation        string `json:"operation"`
-	MemberSnapshotID string `json:"member_snapshot_id,omitempty"`
-	PageSize         int    `json:"page_size"`
-	MaxMembers       int    `json:"max_members"`
+	Operation        string   `json:"operation"`
+	MemberSnapshotID string   `json:"member_snapshot_id,omitempty"`
+	AllowedNodeIDs   []string `json:"allowed_node_ids,omitempty"`
+	PageSize         int      `json:"page_size"`
+	MaxMembers       int      `json:"max_members"`
 	// MaxDiscoveryRequests bounds the outbound peer directory requests made while
 	// collecting this scope. MaxRemoteMembers bounds how many distinct remote
 	// nodes are contacted. Both default to a conservative non-zero value in the
@@ -82,7 +83,23 @@ func (o ScopeOptions) Validate() error {
 	if strings.TrimSpace(o.Operation) != o.Operation || o.Operation == "" || len(o.Operation) > 100 || strings.ContainsAny(o.Operation, "\r\n\t") || o.PageSize < 1 || o.PageSize > 100 || o.MaxMembers < 1 || o.MaxMembers > 10000 || o.MaxDiscoveryRequests < 0 || o.MaxDiscoveryRequests > 10000 || o.MaxRemoteMembers < 0 || o.MaxRemoteMembers > 10000 || o.TTLSeconds < 30 || o.TTLSeconds > 3600 {
 		return errors.New("invalid scope options")
 	}
+	if o.AllowedNodeIDs != nil {
+		if len(o.AllowedNodeIDs) < 1 || len(o.AllowedNodeIDs) > 100 {
+			return errors.New("invalid approved node boundary")
+		}
+		seen := make(map[string]bool, len(o.AllowedNodeIDs))
+		for _, nodeID := range o.AllowedNodeIDs {
+			if !peerNodePattern.MatchString(nodeID) || seen[nodeID] {
+				return errors.New("invalid approved node boundary")
+			}
+			seen[nodeID] = true
+		}
+	}
 	return nil
+}
+
+func (o ScopeOptions) AllowsNode(nodeID string) bool {
+	return o.AllowedNodeIDs == nil || slices.Contains(o.AllowedNodeIDs, nodeID)
 }
 
 // CollectionCatalog is server-owned input obtained through the configured corpus

@@ -30,6 +30,9 @@ x-corpus-env: &corpus-env
   MINIO_BUCKET: deepdocparse
   REDIS_URL: redis://redis:6379/0
   DEFAULT_PARSE_ENGINE: ${DEFAULT_PARSE_ENGINE:-borndigital}
+  FEDERATION_ADMISSIONS_ENABLED: ${FEDERATION_ADMISSIONS_ENABLED:-true}
+  FEDERATION_PEERS: ${FEDERATION_PEERS:-}
+  FEDERATION_ALLOW_LOOPBACK: ${FEDERATION_ALLOW_LOOPBACK:-false}
 
 # 模型网关与它的 worker 共用这一份。**别复制成两份** ——
 # 它们必须看到同一个 Redis 库与同一份注册表，而"复制品靠人同步"
@@ -48,7 +51,7 @@ services:
       POSTGRES_USER: ddp
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ddp}
       POSTGRES_DB: deepdocparse
-    ports: ["15432:5432"]
+    ports: ["${DATA_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-15432}:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ddp"]
@@ -65,7 +68,9 @@ services:
     environment:
       MINIO_ROOT_USER: ${OBJECT_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${OBJECT_SECRET_KEY:?OBJECT_SECRET_KEY 必须显式设置}
-    ports: ["19000:9000", "19001:9001"]
+    ports:
+      - "${DATA_BIND_ADDRESS:-127.0.0.1}:${OBJECT_PORT:-19000}:9000"
+      - "${DATA_BIND_ADDRESS:-127.0.0.1}:${OBJECT_CONSOLE_PORT:-19001}:9001"
     volumes: [miniodata:/data]
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
@@ -75,7 +80,7 @@ services:
 
   redis:
     image: redis/redis-stack-server:7.4.0-v3
-    ports: ["16379:6379"]
+    ports: ["${DATA_BIND_ADDRESS:-127.0.0.1}:${REDIS_PORT:-16379}:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -152,8 +157,10 @@ services:
       # 它在容器里，解析不了 127.0.0.1
       INTERNAL_BASE_URL: http://control-api:8080
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      FEDERATION_PEERS: ${FEDERATION_PEERS:-}
+      FEDERATION_ALLOW_LOOPBACK: ${FEDERATION_ALLOW_LOOPBACK:-false}
     volumes: [control_identity:/var/lib/ddp/node-identity]
-    ports: ["8080:8080"]
+    ports: ["${CONTROL_BIND_ADDRESS:-127.0.0.1}:${CONTROL_PORT:-8080}:8080"]
     depends_on:
       postgres: {condition: service_healthy}
       control-migrate: {condition: service_completed_successfully}

@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
 from ddp_core.application.plans import reject
 from ddp_local.federation_dispatch import (
@@ -13,7 +13,7 @@ from ddp_local.federation_dispatch import (
     resolve_center,
     resolve_center_ref,
 )
-from ddp_local.plan_templates import center_query_scope
+from ddp_local.plan_templates import center_file_scope, center_query_scope
 
 
 class PreparePlan(BaseModel):
@@ -28,7 +28,13 @@ class PreparePlan(BaseModel):
 
 
 class ProposalCenter(BaseModel):
-    """Public paired transport binding. Never a credential."""
+    """Public paired transport binding. Never a credential.
+
+    `upload_endpoint` is the optional paired object-upload origin fixed by the
+    host pairing metadata (HTTPS bare origin, default = center origin). File
+    plans bind it as a second `center-storage` transport; the renderer never
+    supplies a URL.
+    """
 
     model_config = ConfigDict(extra="forbid")
     recipient_node_id: str = Field(min_length=3, max_length=64)
@@ -38,6 +44,7 @@ class ProposalCenter(BaseModel):
     issuer: str = Field(min_length=1, max_length=128)
     subject: str = Field(min_length=1, max_length=128)
     endpoint: str = Field(min_length=1, max_length=2048)
+    upload_endpoint: str | None = Field(default=None, min_length=1, max_length=2048)
 
 
 class ProposalInput(BaseModel):
@@ -48,12 +55,56 @@ class ProposalInput(BaseModel):
 
 
 class ProposePlan(BaseModel):
-    """`center_query` template request; everything else is fixed by the template."""
+    """`center_query` template request; everything else is fixed by the template.
 
+    `template=center_only` (default): exactly the paired center. `template=
+    trusted_federation`: frozen `recipients` (1..100 node ids, must contain
+    the center recipient; resolved by native host from paired connections,
+    never renderer-supplied URLs) plus optional `scope_manifest` mirror only
+    (center-returned verbatim; never trusted as authority).
+    """
     model_config = ConfigDict(extra="forbid")
     center: ProposalCenter
     query: str = Field(min_length=1, max_length=4096)
+    purpose: Literal["answer", "wiki"] = "answer"
+    wiki: dict[str, Any] | None = None
     inputs: list[ProposalInput] = Field(max_length=20)
+    retention: Literal["temporary", "task_pinned"]
+    valid_seconds: StrictInt = Field(ge=300, le=86400)
+    template: Literal["center_only", "trusted_federation"] = "center_only"
+    recipients: list[str] | None = Field(default=None, min_length=1, max_length=100)
+    scope_manifest: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _check_wiki_intent(self):
+        # purpose=wiki requires the typed wiki request (wiki.pages +
+        # requirements.wiki); answer must never carry it. Extra wiki keys are
+        # rejected by the template's requirements_wiki check, not silently cut.
+        if self.purpose == "wiki" and self.wiki is None:
+            raise ValueError("purpose=wiki requires a typed wiki request")
+        if self.purpose != "wiki" and self.wiki is not None:
+            raise ValueError("requirements.wiki is only valid for wiki.pages")
+        if isinstance(self.wiki, dict):
+            extra = set(self.wiki) - {"title", "max_pages"}
+            if extra:
+                raise ValueError("typed wiki request carries unknown fields")
+        return self
+
+
+class ProposeFilePlan(BaseModel):
+    """`center_file_parse` template request: one pinned local file to one paired center.
+
+    The renderer names only the paired center, a filename label and the pinned
+    digest/size of an already imported local version. The template fixes the
+    `corpus.parse` operation, edges, budget and retention; the ledger rechecks
+    the snapshot on approval and dispatch. The old query path stays available
+    but never impersonates file compute.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    center: ProposalCenter
+    filename: str = Field(min_length=1, max_length=255)
+    inputs: list[ProposalInput] = Field(min_length=1, max_length=1)
     retention: Literal["temporary", "task_pinned"]
     valid_seconds: StrictInt = Field(ge=300, le=86400)
 
@@ -95,6 +146,24 @@ class CenterRequest(BaseModel):
     center: CenterBinding | None = None
     workspace: str | None = Field(default=None, min_length=1, max_length=128)
 
+
+class TransferAuthorize(BaseModel):
+    """Host-only per-action upload authorization (never in renderer whitelist).
+
+    `action`: create|resume|part|finalize. `upload_id` binds the recorded
+    control upload; `offset`/`length` only for part transfers. Returns a fixed
+    host-only ticket (remote_compute_id, input_ref, filename, input_sha256
+    bare hex, input_size, recipient_node_id, retention, upload_id) with no
+    credential, path or URL.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    center: CenterBinding
+    action: str = Field(pattern=r"^(create|resume|part|finalize)$")
+    upload_id: str | None = Field(default=None, min_length=1, max_length=128)
+    offset: int | None = Field(default=None, ge=0)
+    length: int | None = Field(default=None, gt=0)
+    workspace: str | None = Field(default=None, min_length=1, max_length=128)
 
 class DeliveryAck(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -154,15 +223,44 @@ def plan_router(runtime):
         scope = body.model_dump()
         check_imported(scope["input_manifest"])
         return runtime.consents.prepare(identity, scope, operation_key=operation_key(request))
-
     @router.post("/propose", status_code=201)
     async def propose(body: ProposePlan, request: Request):
+        from ddp_local.plan_templates import center_trusted_query_scope
         typed = body.model_dump()
+        check_imported(typed["inputs"])
+        def build(value, now):
+            if (value.get("template") or "center_only") == "trusted_federation":
+                return center_trusted_query_scope(value, local_node_id=runtime.store.environment_id,
+                                                  workspace_id=runtime.store.workspace_id, now=now)
+            return center_query_scope(value, local_node_id=runtime.store.environment_id,
+                                      workspace_id=runtime.store.workspace_id, now=now)
+        return runtime.consents.propose(identity, typed, build, operation_key=operation_key(request))
+
+    @router.post("/{plan_id}/review-center", status_code=201)
+    async def review_center(plan_id: str, request: Request):
+        """Mint a reviewed child scope bound to C's persisted plan mirror.
+
+        Body is empty ({}): only the Idempotency-Key header (operation_key)
+        is read. Returns the new prepared child plan view (same shape as
+        propose); it carries no execution consent. Renderer must never
+        supply C plans/URLs/credentials.
+        """
+        from ddp_local.federation_dispatch import review_center_plan
+        return review_center_plan(runtime, plan_id, operation_key=operation_key(request))
+    @router.post("/propose-file", status_code=201)
+    async def propose_file(body: ProposeFilePlan, request: Request):
+        typed = body.model_dump()
+        # Filename is a display label only: it must exactly match the stored
+        # filename of the single pinned local version. A renderer-controlled
+        # label must never relabel a sensitive file as an ordinary name.
+        stored = runtime.store.version(typed["inputs"][0]["ref"])
+        if typed["filename"] != stored["filename"]:
+            reject("input_changed", "filename must match the pinned local version")
         check_imported(typed["inputs"])
 
         def build(value, now):
-            return center_query_scope(value, local_node_id=runtime.store.environment_id,
-                                      workspace_id=runtime.store.workspace_id, now=now)
+            return center_file_scope(value, local_node_id=runtime.store.environment_id,
+                                     workspace_id=runtime.store.workspace_id, now=now)
 
         return runtime.consents.propose(identity, typed, build, operation_key=operation_key(request))
 
@@ -184,6 +282,36 @@ def plan_router(runtime):
     @router.post("/{plan_id}/revoke")
     async def revoke(plan_id: str, request: Request):
         return runtime.consents.revoke(identity, plan_id, operation_key=operation_key(request))
+    @router.post("/{plan_id}/cancel")
+    async def cancel(plan_id: str, body: CenterRequest, request: Request):
+        # Operable cancel for file-compute: calls the center cancel through the
+        # persisted remote_compute_id and saves the authoritative receipt. Works
+        # even after local revoke (reconcile stays available) but never sends
+        # original bytes again. Mandatory Idempotency-Key; transport failures
+        # stay unknown and are raised, never mapped to cancelled.
+        check_workspace(body.workspace if body else None)
+        config = center_config(body.center if body else None, plan_id)
+        from ddp_local.federation_dispatch import cancel_remote_compute
+        try:
+            return await cancel_remote_compute(
+                runtime, plan_id, config, actor_headers=actor_headers(request),
+                operation_key=operation_key(request))
+        except CenterFault as exc:
+            return center_fault(plan_id, exc)
+
+    @router.post("/{plan_id}/transfer/authorize")
+    async def transfer_authorize(plan_id: str, body: TransferAuthorize, request: Request):
+        # Host-only fixed restricted transfer authorization, read as a query
+        # (not a cached command): the host calls it before every upload/resume
+        # action with a fresh Idempotency-Key, so a revoked/expired approval
+        # can never reuse an old ticket. Never in the renderer whitelist.
+        check_workspace(body.workspace)
+        config = center_config(body.center, plan_id)
+        from ddp_local.federation_dispatch import authorize_file_transfer
+        return authorize_file_transfer(
+            runtime, plan_id, config, action=body.action,
+            operation_key=operation_key(request), upload_id=body.upload_id,
+            offset=body.offset, length=body.length)
 
     @router.post("/{plan_id}/dispatch")
     async def dispatch(plan_id: str, body: DispatchPlan, request: Request):
@@ -206,10 +334,32 @@ def plan_router(runtime):
 
     @router.post("/{plan_id}/reconcile")
     async def reconcile(plan_id: str, request: Request, body: CenterRequest | None = None):
+        # Read-only: refresh the persisted center mirror, never stage new edges.
         check_workspace(body.workspace if body else None)
         config = center_config(body.center if body else None, plan_id)
         try:
             return await runtime.federation_reconcile(plan_id, config, actor_headers=actor_headers(request))
+        except CenterFault as exc:
+            return center_fault(plan_id, exc)
+
+    @router.post("/{plan_id}/resume", status_code=201)
+    async def resume(plan_id: str, request: Request, body: CenterRequest | None = None):
+        """Stage a fresh center ready revision for a terminal query plan.
+
+        Same CenterRequest binding and error handling as reconcile: mandatory
+        Idempotency-Key, reviewed-center credential resolution inside
+        `runtime.federation_resume`, result is the ordinary persisted
+        federation state. New approval followed by resume (not POST /tasks)
+        is required to execute the staged revision; same root budget. Never
+        automatically approved here: the caller must show, review and approve
+        the staged revision.
+        """
+        check_workspace(body.workspace if body else None)
+        config = center_config(body.center if body else None, plan_id)
+        try:
+            return await runtime.federation_resume(
+                plan_id, config, operation_key=operation_key(request),
+                actor_headers=actor_headers(request))
         except CenterFault as exc:
             return center_fault(plan_id, exc)
 

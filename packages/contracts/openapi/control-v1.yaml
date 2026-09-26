@@ -28,7 +28,8 @@ info:
 
     - `/api/documents/*` `/api/conversations/*` `/api/search` `/api/extractions/*`
       `/api/knowledge/*` `/api/wiki/*` `/api/reviews/*` `/api/evidence/*`
-      → `services/corpus-api`（见 `corpus-v1.yaml`）
+      → `services/corpus-api`（Web 调用的读子集见 `content-v1.yaml`；
+      注意旧的 `corpus-v1.yaml` 引用已失效，语料面没有这个文件）
     - `/v1/parse` `/v1/chat/completions` `/v1/embeddings` `/v1/extract` `/v1/rerank`
       → `services/model-gateway`（见 `gateway-v1.yaml`）
     - `/mcp` → `services/mcp`
@@ -70,6 +71,7 @@ tags:
   - name: audit
   - name: uploads
   - name: files
+  - name: remote-compute
   - name: health
 
 components:
@@ -111,6 +113,19 @@ components:
     UploadStatus:
       type: string
       enum: [created, uploading, verifying, ready, failed, expired]
+
+    IngestStatus:
+      type: string
+      enum: [pending, retrying, ready, rejected]
+      description: |
+        取值与文案的唯一来源是 enums.yaml 的 `ingest_status`。永久上传字节就绪之后
+        的语料登记确认：只有 corpus 2xx 或 `409 duplicate_event` 才是 ready；
+        ready **不是**解析/索引完成。
+
+    IngestRejection:
+      type: string
+      enum: [resource_not_found, resource_version_exists, invalid_upload_target, idempotency_conflict, source_missing]
+      description: 取值与文案的唯一来源是 enums.yaml 的 `ingest_rejection`；语料域对 DocumentSubmitted 的确定性拒绝码。
 
     User:
       type: object
@@ -217,7 +232,31 @@ components:
         target: { type: string, nullable: true }
         request_id: { type: string, nullable: true }
         detail: { type: object }
-
+    UploadPurpose:
+      type: string
+      enum: [permanent, temporary_compute]
+      description: |
+        上传用途。缺省 permanent 保持现有永久上传行为；temporary_compute 仅用于获批远端原件计算的临时输入，不默认发布或永久存语料。
+    RemoteComputeStatus:
+      type: string
+      enum: [waiting_input, content_verifying, content_verified, running, succeeded, failed, expired, cancelled, acked]
+      description: |
+        持久计算记录状态。waiting_input=已创建等输入上传；content_verifying/content_verified=输入摘要校验中/通过；running/succeeded=已有真实解析工作排队/完成；failed/expired/cancelled=终态失败；acked=本地已原子提交并确认，可清理临时区。
+    RemoteCompute:
+      type: object
+      required: [id, status, input_sha256, input_size, plan_digest, source_identity, target_identity, retention]
+      properties:
+        id: { type: string }
+        status: { $ref: '#/components/schemas/RemoteComputeStatus' }
+        input_sha256: { type: string, pattern: '^[a-f0-9]{64}$', description: '获批输入计划的完整文件 sha256（hex）；上传等待阶段不排计算，完整摘要验证后才复用已有真实解析队列' }
+        input_size: { type: integer, description: '获批输入字节数；finalize 真实大小必须一致' }
+        plan_digest: { type: string, pattern: '^sha256:[a-f0-9]{64}$', description: '批准的 plan 摘要；执行时重放比对，不一致拒绝' }
+        source_identity: { type: object, description: '发起方固定身份（actor/org 摘要），跨 actor 任务绑定拒绝' }
+        target_identity: { type: object, description: '目标中心/执行方固定身份' }
+        retention: { type: string, enum: [temporary, task_pinned], description: '临时保留策略；ack/TTL/取消/失败后清理输入与派生数据但保留其他引用' }
+        expires_at: { type: string, format: date-time }
+        upload_id: { type: string, nullable: true }
+        manifest: { type: object, nullable: true, description: '交付 manifest：固定源/版本/输出 hash；输出经 Bundle/存储通道校验后本地原子提交再 ack' }
     UploadSession:
       type: object
       required: [id, status, object_key]
@@ -228,6 +267,20 @@ components:
         filename: { type: string }
         mime: { type: string }
         declared_size: { type: integer }
+        purpose: { $ref: '#/components/schemas/UploadPurpose' }
+        remote_compute_id: { type: string, nullable: true, description: 'temporary_compute 上传绑定的持久计算记录；permanent 上传为 null' }
+        target_resource_id:
+          type: string
+          nullable: true
+          description: 追加版本的目标资源；创建时冻结，事件载荷只从会话行取。null 表示独立建资源
+        ingest_status:
+          allOf: [{ $ref: '#/components/schemas/IngestStatus' }]
+          nullable: true
+          description: 字节就绪（status=ready）之前、以及 temporary_compute 上传恒为 null；之后从持久事件推导，缺事件读作 pending
+        ingest_error:
+          allOf: [{ $ref: '#/components/schemas/IngestRejection' }]
+          nullable: true
+          description: 仅 ingest_status=rejected 时非空。重试原因只留在服务端事件行，不透给上传者
         part_size: { type: integer, description: 创建时持久绑定的分片大小（字节），恢复不受配置改变影响 }
         allocation_state:
           type: string
@@ -237,6 +290,7 @@ components:
           type: string
           enum: [waiting_input, content_verifying, content_verified, failed, expired]
         request_digest: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+        declared_sha256: { type: string, pattern: '^[a-f0-9]{64}$', description: '客户端声明的完整文件摘要（hex）；仅用于恢复时核对绑定，绝不作为服务端校验依据' }
         verified_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
         actual_size: { type: integer }
         allocation_reason: { type: string, enum: [receipt_unconfirmed_or_ambiguous] }
@@ -369,6 +423,9 @@ paths:
     post:
       tags: [organization]
       summary: 添加成员（admin）
+      description: |
+        已是本组织成员的账号按 upsert 处理：该成员的角色改为请求里的 role，而不是报错或新增第二条成员记录。
+        经这条 upsert 路径把最后一个 admin 降级与经 PATCH 降级一样拒绝，返回 409（错误码 last_admin）。
       security: [{ session: [] }]
       requestBody:
         required: true
@@ -383,6 +440,9 @@ paths:
       responses:
         "201": { description: 已添加, content: { application/json: { schema: { $ref: '#/components/schemas/Member' } } } }
         "403": { description: 需要 admin }
+        "409":
+          description: |
+            不能经已存在成员的 upsert 把最后一个 admin 降级（错误码 last_admin），成员角色不变。
 
   /api/org/members/{user_id}:
     patch:
@@ -536,6 +596,15 @@ paths:
                 filename: { type: string }
                 size: { type: integer, description: 预期字节数，服务端 finalize 时会核对真实大小 }
                 mime: { type: string }
+                purpose: { $ref: '#/components/schemas/UploadPurpose', description: '缺省 permanent 保持现有永久上传行为；temporary_compute 必须同时绑定 remote_compute_id，且仅用于获批远端原件计算的临时输入' }
+                remote_compute_id: { type: string, nullable: true, description: 'temporary_compute 上传必须绑定已创建等待输入的持久计算记录；permanent 上传不得带' }
+                target_resource_id:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{1,128}$'
+                  description: |
+                    向已有资源追加一个固定版本（仅 permanent）。进入创建摘要：同键换目标返回 409 idempotency_conflict。
+                    分配存储前由语料域按上传者本人准入（存活、同组织、本人所有、未撤回；声明了 sha256 时
+                    还要求目标里没有同内容版本）。同键重放直接取回原会话，不再准入。finalize 不接受此字段。
                 sha256:
                   type: string
                   nullable: true
@@ -543,11 +612,15 @@ paths:
                     客户端算的内容哈希。**服务端不信它** —— finalize 后由后台
                     流式重算并比对，不一致则整个会话作废。传它只是为了让
                     带幂等键的重试绑定相同内容；无键上传不做跨用户或跨组织内容复用。
+                    temporary_compute 上传的声明摘要还必须等于所绑计算记录的 input 摘要，否则拒绝排计算。
       responses:
         "201": { description: 已创建输入传输会话, content: { application/json: { schema: { $ref: '#/components/schemas/UploadSession' } } } }
         "200": { description: 相同 key 与正文的已有会话，刷新缺失分片预签名, content: { application/json: { schema: { $ref: '#/components/schemas/UploadSession' } } } }
         "202": { description: 上传身份已持久化，但分配进行中或回执未知，必须按原 key 对账, content: { application/json: { schema: { $ref: '#/components/schemas/UploadSession' } } } }
-        "409": { description: idempotency_conflict，同 key 绑定不同正文 }
+        "409": { description: idempotency_conflict（同 key 绑定不同正文，含换目标）；resource_version_exists（目标里已有同内容版本） }
+        "400": { description: invalid_upload_target（临时计算上传带目标，或目标 id 非法） }
+        "404": { description: resource_not_found（目标资源不存在、已删除/撤回或不属于上传者） }
+        "502": { description: upload_target_unavailable（语料域准入不可达；未分配任何存储，可原样重试） }
         "402": { description: 配额不足 }
         "413": { description: 超过单文件上限 }
         "415": { description: MIME 不在白名单 }
@@ -678,6 +751,86 @@ paths:
                   expires_at: { type: string, format: date-time }
                   supports_range: { type: boolean }
         "403": { description: 无权访问 }
+  # ----------------------------------------------- remote-compute（远端原件计算）
+  /api/v1/remote-compute:
+    post:
+      tags: [remote-compute]
+      summary: 幂等创建等待输入的持久计算记录
+      description: |
+        本任务外部能力采用 `corpus.parse` 的获批输入计划；不经过仅支持 retrieve/answer 的现有联邦根任务入口。
+        调用方先以 Idempotency-Key 创建 waiting_input 记录（固定 input 摘要/plan 摘要/source 身份/target 身份/retention），再用复用的 `/api/uploads` multipart+reconcile+finalize 数据通道上传 `temporary_compute` 输入。
+        上传等待阶段不排计算；完整摘要验证后复用已有真实解析队列（borndigital 真实解析），不把元数据预检冒充 content_verified，不把临时资料加入永久公开检索。
+        同一 actor/org 才能绑定输入；input 摘要/plan 摘要/source 身份固定，不得默认发布或永久存语料。
+      security: [{ session: [] }]
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 200, pattern: '^[!-~]+$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input_sha256, input_size, plan_digest, source_identity, target_identity]
+              properties:
+                input_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+                input_size: { type: integer }
+                plan_digest: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+                source_identity: { type: object }
+                target_identity: { type: object }
+                retention: { type: string, enum: [temporary, task_pinned], default: temporary }
+      responses:
+        "201": { description: 已创建等待输入的计算记录, content: { application/json: { schema: { $ref: '#/components/schemas/RemoteCompute' } } } }
+        "200": { description: 同键同正文的已有记录, content: { application/json: { schema: { $ref: '#/components/schemas/RemoteCompute' } } } }
+        "409": { description: idempotency_conflict，同键绑定不同输入/计划/身份 }
+  /api/v1/remote-compute/{id}:
+    get:
+      tags: [remote-compute]
+      summary: 计算状态与固定输入输出 manifest
+      description: |
+        返回持久记录状态与固定输入输出 manifest（源/版本/输出 hash）。TTL/取消/失败/确认状态可见；输出通过既有 Bundle/存储通道，校验后本地原子提交再 ack。
+      security: [{ session: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RemoteCompute' } } } }
+        "404": { description: 不存在或非同一 actor/org }
+  /api/v1/remote-compute/{id}/cancel:
+    post:
+      tags: [remote-compute]
+      summary: 幂等取消持久计算
+      description: |
+        显式幂等取消；取消后清理输入与派生数据但保留其他引用（引用安全 GC）。已 ack 的记录不可再取消。
+      security: [{ session: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string, minLength: 1, maxLength: 200, pattern: '^[!-~]+$' } }
+      responses:
+        "200": { description: 取消后的记录, content: { application/json: { schema: { $ref: '#/components/schemas/RemoteCompute' } } } }
+        "404": { description: 不存在或非同一 actor/org }
+        "409": { description: 已终态确认，不可取消 }
+  /api/v1/remote-compute/{id}/ack:
+    post:
+      tags: [remote-compute]
+      summary: 本地原子提交后的确认
+      description: |
+        本地断点下载验证、原子导入后，以固定输出 hash 确认；重复/丢失回执可重放（同键同摘要返回已有确认，同键异摘要 409）。ack 后清理输入与派生数据但保留其他引用。
+      security: [{ session: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string, minLength: 1, maxLength: 200, pattern: '^[!-~]+$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [output_sha256]
+              properties:
+                output_sha256: { type: string, pattern: '^[a-f0-9]{64}$', description: '本地校验通过的固定输出 hash，必须等于交付 manifest' }
+      responses:
+        "200": { description: 已确认, content: { application/json: { schema: { $ref: '#/components/schemas/RemoteCompute' } } } }
+        "404": { description: 不存在或非同一 actor/org }
+        "409": { description: 输出 hash 不符或状态不可确认 }
 
   # --------------------------------------------------------------- health
   /healthz:

@@ -1,0 +1,12 @@
+{
+  "schema": "ddp-bundle-vectors/1",
+  "state": "missing",
+  "model": null,
+  "dimension": 1024,
+  "preprocessing": null,
+  "chunking": null,
+  "format": null,
+  "source": null,
+  "vectors": [],
+  "reason": "model_identity_unavailable"
+}

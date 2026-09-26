@@ -49,7 +49,7 @@
       "properties": {
         "root_task_id": {"description": "协调者的根任务。执行状态/取消/受理/执行证据集必须属于它。", "$ref": "#/$defs/ref_text"},
         "step_id": {"description": "受理时必须等于请求体的 step_id。", "$ref": "#/$defs/ref_text"},
-        "scope_ref": {"description": "探测请求体带 scope_ref 时必须相等；请求体不带时凭证也不许带。", "$ref": "#/$defs/ref_text"},
+        "scope_ref": {"description": "探测请求体带 scope_ref 时必须相等；目录 members/collections GET 必须是规范化查询串（按字段名排序、重复值保留次序的 application/x-www-form-urlencoded）的 sha256: 摘要，空查询也必须绑定。", "$ref": "#/$defs/ref_text"},
         "task_spec_digest": {"description": "探测、探测回执与探测证据集必须属于这份需求修订。", "$ref": "#/$defs/digest"}
       },
       "required": ["root_task_id"],
@@ -88,13 +88,17 @@
       "additionalProperties": false,
       "allOf": [
         {
-          "if": {"properties": {"operation": {"enum": ["probe_read", "execution_read", "evidence_set_read", "catalog_read"]}}, "required": ["operation"]},
+          "if": {"properties": {"operation": {"enum": ["probe_read", "execution_read", "evidence_set_read", "catalog_read", "directory_members_read", "directory_collections_read"]}}, "required": ["operation"]},
           "then": {"properties": {"request": {"properties": {"method": {"const": "GET"}}}}},
           "else": {"properties": {"request": {"properties": {"method": {"const": "POST"}}}}}
         },
         {
           "if": {"properties": {"operation": {"const": "admission_create"}}, "required": ["operation"]},
           "then": {"properties": {"constraints": {"required": ["root_task_id", "step_id"]}}}
+        },
+        {
+          "if": {"properties": {"operation": {"enum": ["directory_members_read", "directory_collections_read"]}}, "required": ["operation"]},
+          "then": {"properties": {"constraints": {"required": ["root_task_id", "scope_ref"], "properties": {"scope_ref": {"$ref": "#/$defs/digest"}}}}}
         },
         {
           "if": {"properties": {"operation": {"enum": ["probe_create", "probe_read"]}}, "required": ["operation"]},

@@ -32,6 +32,47 @@ never handed to remote browser content. Errors are `{error:{code,message}}`.
 | POST | `/api/v1/answer` | `{query,version_ids?,execution_policy?,allow_remote?}` |
 | POST | `/api/v1/wiki` | Same request, persists a generated Wiki draft with evidence bindings |
 
+## Center-content subset (same paths, same shapes)
+
+The desktop Web shell talks to this runtime through the center content paths
+(`packages/contracts/openapi/content-v1.yaml`), so one page runs on both a
+local workspace and a connected center. Subset declaration and deviations live
+in `packages/contracts/ddp/local-content-subset.md`; behavior here follows it.
+The existing private `/api/v1/*` routes above keep working unchanged.
+
+| Method | Path | Local behavior |
+| --- | --- | --- |
+| GET | `/api/auth/me` | Single local owner (`admin`); no login, no organization |
+| GET | `/api/resources?scope=mine&offset&limit` | Local resources with version lists; `scope=site_public` → empty |
+| GET | `/api/resources/{id}` | Resource with versions |
+| DELETE | `/api/resources/{id}` | `Idempotency-Key`; refuses while Wiki/answer citations retain a version |
+| POST | `/api/uploads` | `{filename,size,mime,sha256?,target_resource_id?}`; part URLs are same-origin relative `/api/uploads/{id}/parts/{n}`; `Idempotency-Key` replays the session |
+| GET | `/api/uploads/{id}` | Session with `ingest_status` (`pending` → `ready`/`rejected`) |
+| PUT | `/api/uploads/{id}/parts/{n}` | Raw part bytes (8 MiB/part, 32 MiB total); content-addressed, never by name |
+| POST | `/api/uploads/{id}/finalize` | Verifies size/digest/PDF, creates the resource/version, starts the parse task |
+| GET | `/api/documents`, `/api/documents/stats/summary` | Local versions as documents; `q`/`status` filters, `limit`/`offset` |
+| GET | `/api/documents/{id}`, `/jobs`, `/pages`, `/layout`, `/result` | Detail/pages/layout/result from the stored parse; unknown job → 404 |
+| GET | `/api/documents/{id}/download-url` | `{"url": "/api/documents/{id}/source", …}` relative; no presigned URL |
+| GET | `/api/documents/{id}/source` | Original PDF bytes (center does not implement this path) |
+| DELETE | `/api/documents/{id}` | `Idempotency-Key`; deletes the owning resource (same retention refusals) |
+| GET | `/api/search?q&doc&limit` | Keyword search; empty `q` → empty groups; unknown `doc` → 404 |
+| POST | `/api/documents/{id}/conversations` | New conversation bound to the version |
+| GET | `/api/conversations?document=` | Conversations, newest first |
+| GET | `/api/conversations/{id}/messages` | User/assistant messages with assertions and citations |
+| DELETE | `/api/conversations/{id}` | Deletes messages, assertions, citations |
+| POST | `/api/conversations/{id}/ask` | SSE `meta → delta → citations → assertions → done` (`error` on failure); **one `delta`** with the whole answer (documented, not faked streaming); `execution_policy=local_only, allow_remote=false`; no evidence → refusal |
+| GET | `/api/evidence/{id}` | Detail with `crop_url: null` (no local crops; EvidencePreview shows text + locator) |
+| GET | `/api/evidence/{id}/backlinks` | `assertion` rows plus current-revision `wiki_claim` rows |
+| GET/POST | `/api/wikis`, `/api/wikis/{id}`, `/api/wikis/{id}/revisions/{rid}`, `POST .../revisions`, `PATCH .../pages/{key}` | wiki-v1 shapes; writes need `Idempotency-Key` |
+| GET | `/api/resources/{id}/versions/{vid}/bundle`, `.../bundle/evidence` | DDP-Bundle v1 export and frozen evidence |
+| GET | `/api/v1/capabilities` | Gains `content_features: ["resources","documents","search","wiki","federation_tasks"]` |
+
+Anything else under `/api/` → `404 {"error":{"code":"not_supported_locally",…}}`
+(message from the generated `source_error` labels). In particular: `PATCH
+/api/resources/{id}` (publication), `POST /api/wikis/{id}/publish`, reparse /
+reindex / validate-index / current-job, download/source-url, crops, and
+`POST /api/evidence/{id}/verification`.
+
 Upload is capped at 32 MiB / 500 PDF pages; archives at 64 MiB with the shared Bundle
 expanded-size, compression-ratio and path rules. Model selection is runtime configuration,
 not a request-controlled URL. Default `local_only` never makes a remote request. Selecting

@@ -5,10 +5,12 @@ What is real, and what is not
 
 **Node B runs in a real `uvicorn` subprocess on `127.0.0.1` with its own SQLite
 file database.** The coordinator (node A) reaches it through the production
-`PeerClient` / `PeerDirectory` code path over **real loopback TCP**, with the
-real `Authorization` service bearer, `X-DDP-Peer-Token`, actor headers and
-`X-DDP-Target-Node` header. Nothing about the peer protocol is stubbed: the
-only test scaffolding on B is a request-log middleware and an opt-in fault
+`PeerClient` / `PeerDirectory` code path over **real loopback TCP**, with a
+real single-use `X-DDP-Node-Credential` (Ed25519, issued by A's test signer)
+and `X-DDP-Target-Node` header. No shared service bearer, no shared peer token,
+and no caller-asserted actor headers cross the wire: B derives the caller as a
+read-only `peer-*` principal from its own approved-member trust record.
+The only test scaffolding on B is a request-log middleware and an opt-in fault
 injection middleware, both defined in this file on top of the unmodified
 `ddp_corpus.routers.federation` router.
 
@@ -34,6 +36,8 @@ node A's `settings.federation_peers` at `peers_json()`.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import os
 import socket
@@ -46,21 +50,29 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from ddp_core.application import node_credentials as _two_node_nc
 
-#: Node identities. `NODE_PATTERN` (ddp_core) accepts all three.
-NODE_A = "node-a"
-NODE_B = "node-b"
+
+def _two_node_key(label: str) -> Ed25519PrivateKey:
+    return Ed25519PrivateKey.from_private_bytes(hashlib.sha256(label.encode()).digest())
+
+
+def _two_node_public_b64(key: Ed25519PrivateKey) -> str:
+    return base64.b64encode(
+        key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)).decode("ascii")
+
+
+A_KEY = _two_node_key("ddp-two-node-a")
+A_PUBLIC_B64 = _two_node_public_b64(A_KEY)
+NODE_A = _two_node_nc.node_id_for_public_key(A_PUBLIC_B64)
+
+B_KEY = _two_node_key("ddp-two-node-b")
+B_PUBLIC_B64 = _two_node_public_b64(B_KEY)
+NODE_B = _two_node_nc.node_id_for_public_key(B_PUBLIC_B64)
 NODE_C = "node-c"
-
-#: Default keyword-findable fact seeded into node B. Distinct from A's split text.
 NODE_B_TEXTS = ("beta federation keyword fact",)
-
-SERVICE_TOKEN_A = "test-service-token"
-SERVICE_TOKEN_B = "two-node-service-token-b"
-PEER_TOKEN_A = "two-node-peer-token-a"
-PEER_TOKEN_B = "two-node-peer-token-b"
-C_SERVICE_TOKEN = "two-node-service-token-c"
-C_PEER_TOKEN = "two-node-peer-token-c"
 
 
 @dataclass(frozen=True)
@@ -223,7 +235,8 @@ class ModelStub:
             self._server = None
 
 
-def build_node_app(*, call_log: str = "", fault_file: str = "", generate: bool = False):
+def build_node_app(*, call_log: str = "", fault_file: str = "", generate: bool = False,
+                   peer_trust: dict | None = None):
     """A real FastAPI app mounting the unmodified federation executor router.
 
     No lifespan: this process intentionally has no MinIO/PG dependency. Search
@@ -232,13 +245,21 @@ def build_node_app(*, call_log: str = "", fault_file: str = "", generate: bool =
     reports unknown — the honest not-ready shape. `generate=True` gives the
     node a real HTTP client so its capability producer and grounded answer can
     reach the test's `ModelStub` via `settings.service_url`.
+
+    `peer_trust` is B's approved-member directory: node A must be approved
+    there with A's real Ed25519 public key, otherwise B answers 401
+    node_unknown. Identity comes from `bind_static_for_tests`-equivalent state
+    (the subprocess has no control plane); there is no shared-token fallback.
     """
     from ddp_core.search import MemoryIndex
+    from ddp_corpus import node_identity
     from ddp_corpus.errors import install_error_handlers
     from ddp_corpus.routers.federation import router as federation_router
     from fastapi import FastAPI
     from fastapi.responses import JSONResponse
 
+    node_identity.reset()
+    node_identity.bind_static_for_tests(NODE_B)
     app = FastAPI(title="P5 two-node acceptance peer")
     install_error_handlers(app)
     app.include_router(federation_router)
@@ -246,6 +267,10 @@ def build_node_app(*, call_log: str = "", fault_file: str = "", generate: bool =
     app.state.http = (httpx.AsyncClient(trust_env=False, follow_redirects=False)
                       if generate else None)
     app.state.redis = None
+    if peer_trust is not None:
+        from node_credentials_fixture import StaticPeerTrust
+
+        app.state.peer_trust = StaticPeerTrust(dict(peer_trust))
 
     @app.get("/healthz")
     async def healthz() -> dict:
@@ -273,7 +298,6 @@ def build_node_app(*, call_log: str = "", fault_file: str = "", generate: bool =
 
     return app
 
-
 def _serve(argv=None) -> None:
     import argparse
 
@@ -285,9 +309,8 @@ def _serve(argv=None) -> None:
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--database", required=True)
-    parser.add_argument("--node-id", default=NODE_B)
-    parser.add_argument("--service-token", required=True)
-    parser.add_argument("--peer-token", required=True)
+    parser.add_argument("--trust", required=True,
+                        help="JSON file: B's approved-member trust records, keyed by node id")
     parser.add_argument("--call-log", default="")
     parser.add_argument("--fault-file", default="")
     parser.add_argument("--service-url", default="",
@@ -295,9 +318,7 @@ def _serve(argv=None) -> None:
     args = parser.parse_args(argv)
 
     settings.database_url = "sqlite+aiosqlite:///" + str(Path(args.database).resolve())
-    settings.bundle_node_id = args.node_id
-    settings.service_token = args.service_token
-    settings.federation_peer_token = args.peer_token
+    settings.bundle_node_id = NODE_B
     settings.federation_admissions_enabled = True
     # 验收夹具的 B 节点没有 worker 进程：执行留在请求内完成，否则受理后的
     # `federation_execute` 任务永远没人领取，A 会看到 queued/超时。
@@ -306,8 +327,9 @@ def _serve(argv=None) -> None:
     if args.service_url:
         settings.service_url = args.service_url
     db.reset_engine()
+    trust = json.loads(Path(args.trust).read_text(encoding="utf-8"))
     uvicorn.run(build_node_app(call_log=args.call_log, fault_file=args.fault_file,
-                               generate=bool(args.service_url)),
+                               generate=bool(args.service_url), peer_trust=trust),
                 host="127.0.0.1", port=args.port, log_level="warning")
 
 
@@ -328,8 +350,6 @@ class TwoNodeFixture:
         self.model_stub = model_stub
         self.b_endpoint = f"http://127.0.0.1:{b_port}"
         self.c_endpoint = f"http://127.0.0.1:{c_port}"
-        self.service_token_b = SERVICE_TOKEN_B
-        self.peer_token_b = PEER_TOKEN_B
         self.outbound: list[dict] = []
 
     # ------------------------------------------------------------- lifecycle
@@ -337,8 +357,21 @@ class TwoNodeFixture:
     @classmethod
     async def create(cls, tmpdir, *, b_texts=NODE_B_TEXTS,
                      b_name: str = "Node B federation collection",
-                     b_generate_answer: str | None = None) -> TwoNodeFixture:
+                     b_generate_answer: str | None = None,
+                     b_trust: dict | None = None) -> TwoNodeFixture:
+        """Spawn B with an explicit approved-member trust file.
+
+        `b_trust` maps node id -> trust record (the `GET peer-keys/{id}` shape).
+        Default approves A with A's real public key under the same organization
+        the seed data lives in (`conftest.ORG`): the peer actor B derives gets
+        that organization, so B's published collections stay visible to it.
+        There is deliberately no shared secret: A signs every request with A's
+        own key and B verifies it.
+        """
+        from conftest import ORG as _SEED_ORG
+
         tmpdir = Path(tmpdir)
+
         database = tmpdir / "node-b.sqlite3"
         b_seed = await seed_sqlite(database, texts=tuple(b_texts), collection_name=b_name)
         b_port = _free_port()
@@ -350,6 +383,7 @@ class TwoNodeFixture:
         call_log.write_text("", encoding="utf-8")
         log_path = tmpdir / "node-b.log"
 
+
         # A real (threaded) model endpoint on loopback: B's generation plane
         # must be exercised over HTTP too, not by monkeypatching B's process.
         model_stub = None
@@ -357,6 +391,15 @@ class TwoNodeFixture:
         if b_generate_answer is not None:
             model_stub = ModelStub(b_generate_answer)
             service_url = model_stub.start()
+
+        if b_trust is None:
+            raw = base64.b64decode(A_PUBLIC_B64)
+            b_trust = {NODE_A: {
+                "node_id": NODE_A, "state": "approved", "public_key": A_PUBLIC_B64,
+                "key_fingerprint": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                "organization_id": _SEED_ORG, "authority_node_id": NODE_B, "revision": 1}}
+        trust_path = tmpdir / "node-b-trust.json"
+        trust_path.write_text(json.dumps(b_trust), encoding="utf-8")
 
         corpus_api = Path(__file__).resolve().parents[1]
         env = dict(os.environ)
@@ -368,9 +411,7 @@ class TwoNodeFixture:
 
         args = [sys.executable, str(Path(__file__).resolve()), "--serve",
                 "--port", str(b_port), "--database", str(database),
-                "--node-id", NODE_B,
-                "--service-token", SERVICE_TOKEN_B,
-                "--peer-token", PEER_TOKEN_B,
+                "--trust", str(trust_path),
                 "--call-log", str(call_log), "--fault-file", str(fault_file)]
         if service_url:
             args += ["--service-url", service_url]
@@ -424,19 +465,17 @@ class TwoNodeFixture:
 
     # ----------------------------------------------------------- A's config
 
-    def peers_json(self, *, peer_token_b: str | None = None,
-                   service_token_b: str | None = None,
-                   endpoint_b: str | None = None, include_c: bool = True) -> str:
-        """Exactly the JSON an administrator would register for node A."""
-        peers = {NODE_B: {
-            "endpoint": endpoint_b or self.b_endpoint,
-            "service_token": service_token_b or self.service_token_b,
-            "peer_token": peer_token_b or self.peer_token_b,
-        }}
+    def peers_json(self, *, endpoint_b: str | None = None,
+                   include_c: bool = True) -> str:
+        """Exactly the JSON an administrator would register for node A.
+
+        Endpoint-only: no shared secrets cross the wire. A signs every request
+        with A's own key (see `install_counting_transport`); B verifies against
+        its approved-member record.
+        """
+        peers = {NODE_B: {"endpoint": endpoint_b or self.b_endpoint}}
         if include_c:
-            peers[NODE_C] = {"endpoint": self.c_endpoint,
-                             "service_token": C_SERVICE_TOKEN,
-                             "peer_token": C_PEER_TOKEN}
+            peers[NODE_C] = {"endpoint": self.c_endpoint}
         return json.dumps(peers)
 
     def install_counting_transport(self, monkeypatch) -> None:
@@ -444,18 +483,23 @@ class TwoNodeFixture:
 
         `peer_directory` is the same seam the existing P5 tests use to inject a
         transport; here the injected transport wraps `httpx.AsyncHTTPTransport`,
-        so requests still go out on real loopback sockets.
+        so requests still go out on real loopback sockets. The signer is A's
+        own control-plane stand-in (A_KEY), and delegation comes from the live
+        coordinator call -- every request carries a fresh single-use credential.
         """
         from ddp_corpus import federation_tasks
         from ddp_corpus.config import settings
         from ddp_corpus.federation_peers import PeerDirectory, parse_peers
+        from node_credentials_fixture import LocalControlSigner
+
+        signer = LocalControlSigner(issuer_node_id=NODE_A, key=A_KEY)
 
         def factory(actor, delegation=None):
             peers = parse_peers(settings.federation_peers,
                                 allow_loopback=settings.federation_allow_loopback)
             return PeerDirectory(peers, actor=actor,
                                  transport=_CountingTransport(self.outbound),
-                                 delegation=delegation)
+                                 signer=signer, delegation=delegation)
 
         monkeypatch.setattr(federation_tasks, "peer_directory", factory)
 

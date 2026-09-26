@@ -176,7 +176,7 @@ async def test_withdraw_between_embedding_batches_blocks_next_dispatch(session, 
 async def test_b_qa_uses_its_ready_job_when_a_cache_failed(actor_client, session, app_state, monkeypatch):
     from ddp_corpus.config import settings
     from tests.conftest import CHAT, actor_headers
-    from tests.test_qa import _chat_sse
+    from tests.test_qa import _grounded_doc, _grounded_side_effect
     document, (resource_a, a, _), (resource_b, b, _) = await pair(session, app_state.storage)
     embedding_mock()
     for job in (a, b):
@@ -189,7 +189,8 @@ async def test_b_qa_uses_its_ready_job_when_a_cache_failed(actor_client, session
     created = await actor_client.post(f"/api/documents/{document.id}/conversations?resource_id={resource_b.id}", headers=headers)
     assert created.status_code == 201, created.text
     monkeypatch.setattr(settings, "qa_verify_parse", False)
-    respx.post(CHAT).mock(return_value=_chat_sse("bob original fact", cited=True))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(
+        _grounded_doc(("bob original fact", [1]))))
     answer = await actor_client.post(f"/api/conversations/{created.json()['id']}/ask",
                                      json={"question": "bob original fact"}, headers=headers)
     assert answer.status_code == 200, answer.text
@@ -199,3 +200,43 @@ async def test_b_qa_uses_its_ready_job_when_a_cache_failed(actor_client, session
     private_ids = {row.id for row in (await session.execute(select(Evidence).where(
         Evidence.parse_job_id == a.id))).scalars()}
     assert not any(eid in answer.text for eid in private_ids)
+
+
+@respx.mock
+async def test_owned_private_origin_can_index_until_withdrawn(session, app_state):
+    document, (resource, job, _), _ = await pair(session, app_state.storage)
+    origin = Resource(owner_id="alice", uploaded_by="alice", organization_id="org-a")
+    session.add(origin)
+    await session.flush()
+    resource.copied_from = origin.id
+    await session.commit()
+    calls = embedding_mock()
+
+    assert await index_document(session, app_state.storage, app_state.http, document.id, job_id=job.id) == 1
+    await session.refresh(job)
+    assert job.index_status == "ready"
+    dispatched = calls.call_count
+
+    origin.publication = "withdrawn"
+    await mark_index_pending(session, job.id)
+    await session.commit()
+    assert await index_document(session, app_state.storage, app_state.http, document.id, job_id=job.id) == 0
+    await session.refresh(job)
+    assert job.index_status == "failed"
+    assert calls.call_count == dispatched
+
+
+@respx.mock
+async def test_another_owners_private_origin_blocks_index_dispatch(session, app_state):
+    document, (resource, job, _), _ = await pair(session, app_state.storage)
+    origin = Resource(owner_id="charlie", uploaded_by="charlie", organization_id="org-a")
+    session.add(origin)
+    await session.flush()
+    resource.copied_from = origin.id
+    await session.commit()
+    calls = embedding_mock()
+
+    assert await index_document(session, app_state.storage, app_state.http, document.id, job_id=job.id) == 0
+    await session.refresh(job)
+    assert job.index_status == "failed"
+    assert calls.call_count == 0

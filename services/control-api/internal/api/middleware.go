@@ -155,6 +155,18 @@ func apiKeyGate(keys apiKeyStore, limiter ratelimit.Limiter, scope rbac.Scope,
 				"这把 key 没有 "+string(scope)+" 作用域"))
 			return
 		}
+		// 角色是每次请求现读的（AuthenticateAPIKey JOIN 成员表），签发时也用同一条
+		// AllowedScopes 挡越权 —— 但只在签发时查，降级前签的 key 会一直带着旧作用域：
+		// 降成 viewer 的人手里那把 parse key 照样能往语料库里建资源（2026-09-24 E 实测）。
+		// 所以使用时按当前角色再判一次：key 永远不能超过它主人此刻的角色。
+		if err := role.AllowedScopes([]rbac.Scope{scope}); err != nil {
+			keys.Audit(r.Context(), actor.OrganizationID, actor.ID, string(actor.Kind),
+				"apikey.role_denied", string(scope), actor.RequestID,
+				map[string]any{"path": r.URL.Path, "role": string(role)})
+			apierr.Write(w, r, apierr.Forbidden("insufficient_role",
+				"key 所属成员当前角色（"+string(role)+"）不能使用 "+string(scope)+" 作用域"))
+			return
+		}
 
 		// 限速：按 key 计，跨副本共享计数
 		allowed, remaining, err := limiter.Allow(r.Context(),

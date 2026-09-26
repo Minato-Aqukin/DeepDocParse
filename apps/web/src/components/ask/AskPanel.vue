@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 
 import { askStream, conversationsApi } from '@/api'
 import CitationChip from '@/components/ask/CitationChip.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { confidenceOf, degradedLabelOf } from '@/constants/status'
+import { approvedPlanLabel, federationTaskNewLocation, isDesktop } from '@/platform/desktop'
+import { useAuthStore } from '@/stores/auth'
 import type { AnswerAssertion, CandidateDecision, ChatMessage, Citation, DocumentInfo } from '@/types/api'
 import { fetchAuthedImage } from '@/utils/markdown'
 
@@ -17,6 +20,17 @@ import { fetchAuthedImage } from '@/utils/markdown'
  */
 const props = defineProps<{ document: DocumentInfo }>()
 const emit = defineEmits<{ (e: 'locate', citation: Citation): void }>()
+// 中心只读入口（plan §1.5）：问答框旁预填当前问题跳到联邦任务新建页。
+// router/pinia 按"没有就不显示入口"处理 —— 不在 setup 顶层硬拿，
+// 否则只 mock @/api 的旧用例挂载即崩（与只读入口无关）。
+let panelRouter: ReturnType<typeof useRouter> | undefined
+try { panelRouter = useRouter() } catch { panelRouter = undefined }
+let panelAuth: ReturnType<typeof useAuthStore> | undefined
+try { panelAuth = useAuthStore() } catch { panelAuth = undefined }
+const readonlyHint = computed(() => (isDesktop() && panelAuth?.readOnly ? approvedPlanLabel() : ''))
+function proposeAsTask() {
+  panelRouter?.push(federationTaskNewLocation(question.value.trim()))
+}
 
 const conversations = ref<{ id: string; title: string }[]>([])
 const activeId = ref<string>('')
@@ -44,6 +58,14 @@ const indexHint = computed(() =>
     ready: '',
   })[props.document.index_status],
 )
+/**
+ * 没有回答跟在后面的问题。服务端先落问题、生成结束（含出错、停止）才落回答；进程在
+ * 生成中途被杀时收尾跑不到，库里只剩问题本身。不标出来的话它看起来像还在等（2026-09-24 E 实测）。
+ */
+const unanswered = computed(() => new Set(messages.value
+  .filter((message, i) => message.role === 'user' && messages.value[i + 1]?.role !== 'assistant'
+    && !(streaming.value && i === messages.value.length - 1))
+  .map((message) => message.id)))
 
 async function loadConversations() {
   conversations.value = (await conversationsApi.list(props.document.id)).data
@@ -104,14 +126,25 @@ function revokeCrops() {
   cropUrls.value = {}
 }
 
+/**
+ * 刚新建的会话在服务端一定是空的，切过去时不用读。读回来的空列表晚于本地刚放上的问题气泡
+ * 到达，会把它冲掉：新会话的第一问在回答中途断开时（服务端正好不可达、重读失败），
+ * 问题从面板上直接消失（2026-09-24 E 浏览器实测）。
+ */
+let created = ''
+
 async function newConversation() {
+  // Creating/deleting a conversation is a center write: read-only desktop centers refuse it.
+  if (readonlyHint.value) return
   const { data } = await conversationsApi.create(props.document.id)
   conversations.value.unshift({ id: data.id, title: data.title })
+  created = data.id
   activeId.value = data.id
   messages.value = []
 }
 
 async function removeConversation(cid: string) {
+  if (readonlyHint.value) return
   await conversationsApi.remove(cid)
   conversations.value = conversations.value.filter((c) => c.id !== cid)
   if (activeId.value === cid) {
@@ -123,6 +156,12 @@ async function removeConversation(cid: string) {
 async function send() {
   const text = question.value.trim()
   if (!text || streaming.value) return
+  // Asking spends center compute (conversation + answer are POSTs): a read-only
+  // desktop center only offers the federated-task entry; the host would 403 anyway.
+  if (readonlyHint.value) {
+    ElMessage.info(readonlyHint.value)
+    return
+  }
   if (!askable.value) {
     ElMessage.warning(indexHint.value)
     return
@@ -138,12 +177,16 @@ async function send() {
   streamText.value = ''
   await scrollToEnd()
 
+  let interrupted = false
   abort = askStream(activeId.value, text, {
     onDelta: (piece) => {
       streamText.value += piece
       void scrollToEnd()
     },
-    onError: ({ message }) => ElMessage.error(message),
+    onError: ({ message, code }) => {
+      ElMessage.error(message)
+      interrupted ||= code === 'stream_incomplete' || code === 'network_error'
+    },
     onDone: async () => {
       await loadMessages()
       if (conversations.value.length) await loadConversations()
@@ -154,12 +197,21 @@ async function send() {
     onSettled: () => {
       streaming.value = false
       streamText.value = ''
+      // 流在 done 之前断了：这一轮落没落库只有服务端知道，以会话记录为准重读。
+      // 服务还没回来时重读会失败，留着本地的问题气泡（它下面会标"没有回答"）
+      if (interrupted) loadMessages().catch(() => undefined)
     },
   })
 }
 
 function stop() {
   abort?.()
+  // 服务端把这一轮落成 degraded=client_aborted（已产出的文字留着）。本地也立刻显示同一个
+  // 状态：不这样做，停止后问题下面什么都没有，要刷新才看得到"回答被中断"（C 阶段浏览器实测）
+  messages.value.push({
+    id: `local-aborted-${Date.now()}`, role: 'assistant', content: streamText.value, citations: [],
+    verified: false, degraded: 'client_aborted', created_at: new Date().toISOString(),
+  })
   streaming.value = false
   streamText.value = ''
 }
@@ -173,7 +225,13 @@ watch(() => props.document.id, async () => {
   revokeCrops()
   await loadConversations()
 }, { immediate: true })
-watch(activeId, loadMessages)
+watch(activeId, (id) => {
+  if (id === created) {
+    created = ''
+    return
+  }
+  void loadMessages()
+})
 onBeforeUnmount(() => {
   alive = false
   abort?.()
@@ -187,8 +245,8 @@ onBeforeUnmount(() => {
       <el-select v-model="activeId" size="small" placeholder="选择会话" class="picker">
         <el-option v-for="c in conversations" :key="c.id" :value="c.id" :label="c.title" />
       </el-select>
-      <el-button size="small" @click="newConversation">新会话</el-button>
-      <el-button v-if="activeId" size="small" link type="danger"
+      <el-button size="small" :disabled="!!readonlyHint" @click="newConversation">新会话</el-button>
+      <el-button v-if="activeId" size="small" link type="danger" :disabled="!!readonlyHint"
                  @click="removeConversation(activeId)">删除</el-button>
     </div>
 
@@ -232,6 +290,10 @@ onBeforeUnmount(() => {
             </div>
           </section>
         </div>
+        <div v-if="unanswered.has(message.id)" class="meta">
+          <StatusTag label="没有回答" type="warning" />
+          <span class="unanswered-hint">回答生成时连接或服务中断，这一轮没有保存下回答，可以重新提问</span>
+        </div>
 
         <div v-if="message.role === 'assistant' && message.query_decision" class="agent-trace">
           <StatusTag
@@ -240,7 +302,12 @@ onBeforeUnmount(() => {
               : `继承上一轮 ${message.query_decision.inherited_evidence_ids.length} 条证据`"
             type="info"
           />
-          <span>{{ message.query_decision.reason }}</span>
+          <!-- 这是"要不要检索"判定模型的理由，不是对回答的评价。不加前缀时
+               "当前证据不足"会紧挨着一个有出处的答案，读起来像答案没依据（C 阶段浏览器实测）。
+               判定模型不可用时理由就是降级码本身，旁边的降级标签已经说了，不再原样重复 -->
+          <span v-if="message.query_decision.reason !== message.query_decision.degraded">
+            检索判定理由：{{ message.query_decision.reason }}
+          </span>
           <StatusTag
             v-if="message.query_decision.degraded"
             :label="degradedLabelOf(message.query_decision.degraded) ?? message.query_decision.degraded"
@@ -314,9 +381,11 @@ onBeforeUnmount(() => {
       <el-input v-model="question" type="textarea" :rows="2" :disabled="!askable"
                 placeholder="例如：第 3 页的表格说明了什么？（Enter 发送）"
                 @keydown.enter.exact.prevent="send" />
-      <el-button v-if="!streaming" type="primary" :disabled="!askable" @click="send">发送</el-button>
+      <el-button v-if="!streaming" type="primary" :disabled="!askable || !!readonlyHint" @click="send">发送</el-button>
       <el-button v-else @click="stop">停止</el-button>
+      <el-button v-if="readonlyHint" link @click="proposeAsTask">作为联邦任务发起</el-button>
     </div>
+    <p v-if="readonlyHint" class="readonly-hint" role="note">{{ readonlyHint }}</p>
   </div>
 </template>
 
@@ -426,6 +495,11 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 6px;
 }
+.unanswered-hint {
+  margin-left: 8px;
+  color: var(--ddp-ink-2);
+  font-size: 12px;
+}
 .confidence-hint {
   margin-top: 8px;
   padding: 6px 10px;
@@ -434,6 +508,11 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 8px;
   align-items: flex-end;
+}
+.readonly-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ddp-ink-3);
 }
 .caret {
   opacity: 0.5;

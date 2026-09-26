@@ -12,6 +12,7 @@ import type {
 } from '@/types/api'
 
 import { http } from './http'
+import type { ResourceContext } from './resource-context'
 
 export interface DocumentQuery {
   q?: string
@@ -23,9 +24,10 @@ export interface DocumentQuery {
 
 export const documentsApi = {
   list: (params: DocumentQuery = {}) => http.get<DocumentInfo[]>('/api/documents', { params }),
-  get: (id: string) => http.get<DocumentInfo>(`/api/documents/${id}`),
+  get: (id: string, context?: ResourceContext) =>
+    http.get<DocumentInfo>(`/api/documents/${id}`, { params: context }),
   stats: () => http.get<DocumentStats>('/api/documents/stats/summary'),
-  remove: (id: string) => http.delete(`/api/documents/${id}`),
+  remove: (id: string, context?: ResourceContext) => http.delete(`/api/documents/${id}`, { params: context }),
 
   // **没有 upload。** 上传走 `@/api/uploads` 的直传链路：
   // 拿预签名 -> 分片 PUT 到对象存储 -> finalize。字节流不经过任何应用进程
@@ -51,21 +53,19 @@ export const documentsApi = {
   sourceViewUrl: (id: string, disposition: 'inline' | 'attachment' = 'inline') =>
     http.get<DownloadUrl>(`/api/documents/${id}/download-url`, { params: { disposition } }),
 
-  listJobs: (id: string) => http.get<JobInfo[]>(`/api/documents/${id}/jobs`),
-  reparse: (id: string, choice: EngineChoice) =>
-    http.post<JobInfo>(`/api/documents/${id}/reparse`, choice),
-  setCurrentJob: (id: string, job_id: string, acknowledgeInvalidations = false) =>
-    http.put<DocumentInfo>(`/api/documents/${id}/current-job`, {
-      job_id,
-      acknowledge_invalidations: acknowledgeInvalidations,
-    }),
-  validateIndex: (id: string, jobId?: string) =>
+  listJobs: (id: string, context?: ResourceContext) =>
+    http.get<JobInfo[]>(`/api/documents/${id}/jobs`, { params: context }),
+  reparse: (id: string, choice: EngineChoice, context?: ResourceContext) =>
+    http.post<JobInfo>(`/api/documents/${id}/reparse`, choice, { params: context }),
+  setCurrentJob: (id: string, job_id: string, context?: ResourceContext) =>
+    http.put<DocumentInfo>(`/api/documents/${id}/current-job`, { job_id }, { params: context }),
+  validateIndex: (id: string, jobId?: string, context?: ResourceContext) =>
     http.post<IndexValidation>(`/api/documents/${id}/validate-index`, null, {
-      params: jobId ? { job_id: jobId } : {},
+      params: { ...context, ...(jobId ? { job_id: jobId } : {}) },
     }),
-  reindex: (id: string, acknowledgeInvalidations = false) =>
+  reindex: (id: string, acknowledgeInvalidations = false, context?: ResourceContext) =>
     http.post<DocumentInfo>(`/api/documents/${id}/reindex`, null, {
-      params: acknowledgeInvalidations ? { acknowledge_invalidations: true } : {},
+      params: { ...context, ...(acknowledgeInvalidations ? { acknowledge_invalidations: true } : {}) },
     }),
 
   /** 解析产物（markdown / json / zip）的下载路径。与原件预览是两回事。 */

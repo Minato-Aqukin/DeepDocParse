@@ -1,0 +1,7 @@
+# Used with compose.dev.yml by scripts/dev.sh --profile compute-worker.
+# Only the gateway, its persistent worker, Redis and explicitly enabled model services start.
+# No user/control database, corpus database, object store or permanent catalog is created.
+services:
+  model-gateway:
+    ports:
+      - "${GATEWAY_BIND_ADDRESS:-127.0.0.1}:${GATEWAY_PORT:-19090}:9000"

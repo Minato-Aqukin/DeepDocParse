@@ -11,7 +11,7 @@ Go 这边由容器/systemd 注入环境变量）。
 user_id 伪造一个有效会话，且运行时不报任何错。一次性容器 / CI 可用
 `ALLOW_INSECURE_DEFAULTS=true` 显式跳过 —— 逃生口必须显式且留痕。
 
-共 **45** 项。
+共 **44** 项。
 
 ## 通用
 
@@ -65,8 +65,7 @@ user_id 伪造一个有效会话，且运行时不报任何错。一次性容器
 
 | 环境变量 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `FEDERATION_PEER_TOKEN` | `string` | `""` | 本节点作为目录提供者接受对端调用时校验的同伴凭据（`X-DDP-Peer-Token`）。 **留空 = 一律 401 `peer_unauthenticated`（Fail Closed）** —— 没有配置信任凭据的节点不该被任何对端读取目录、集合或成员。 比较用 constant time；**绝不回显、绝不入日志、绝不进错误消息**。 |
-| `FEDERATION_PEERS` | `string` | `""` | 出站目录展开的已登记节点目录。JSON 对象： `{"<node_id>": {"endpoint": "https://…", "service_token": "…", "peer_token": "…"}}`。 **Fail Closed**：没登记的 node_id 一个请求都不发（不解析 DNS、不试端口）。 endpoint 必须 HTTPS 且无 userinfo/query/fragment；三个凭据字段 **绝不回显、绝不入日志、绝不进错误消息**。 |
+| `FEDERATION_PEERS` | `string` | `""` | 出站目录展开的已登记节点目录。JSON 对象： `{"<node_id>": {"endpoint": "https://…"}}`。 未登记/未批准节点不会获得签名凭据。没有跨节点共享密钥。 endpoint 必须 HTTPS 且无 userinfo/query/fragment。 |
 | `FEDERATION_ALLOW_LOOPBACK` | `bool` | `false` | 只给本地回环集成测试用的逃生口：允许 `http://127.0.0.1` 或 `http://[::1]` 的 peer endpoint。**只认字面回环地址**（`localhost` 会走 DNS，不给过）。 生产保持 false —— 打开它等于允许明文外发目录与集合摘要。 |
 
 ## 对象存储

@@ -1,0 +1,31 @@
+{
+  "schema": "ddp-task-probe/1#TaskSpec",
+  "protocol": "ddp-task/1",
+  "operation": "wiki.pages",
+  "workspace_ref": "local-env:workspace-1",
+  "query": "用固定证据解释主题",
+  "resource_scope": {
+    "kind": "federation_public",
+    "scope_ref": "scope-17"
+  },
+  "search_policy": {
+    "mode": "exhaustive_scope",
+    "ordering": "local_first"
+  },
+  "execution_policy": {
+    "mode": "trusted_federation",
+    "coordinator_ref": "node-a"
+  },
+  "consent_refs": {
+    "exploration": "consent-probe-4",
+    "execution": null
+  },
+  "requirements": {
+    "citations": "required",
+    "wiki": {
+      "title": "固定证据主题",
+      "max_pages": 2
+    }
+  },
+  "budget_ref": "budget-9"
+}

@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import { tasksApi } from '@/api/tasks'
 import StatusTag from '@/components/common/StatusTag.vue'
+import DirectoryBrowser from '@/components/federation/DirectoryBrowser.vue'
+import CenterProposeSwitch from '@/components/federation/CenterProposeSwitch.vue'
+import LocalTaskList from '@/components/federation/LocalTaskList.vue'
 import TaskComposer from '@/components/federation/TaskComposer.vue'
 import {
+  DELIVERY_STATE,
   EVIDENCE_SUFFICIENCY,
+  FEDERATION_OPERATION,
   RETRIEVAL_COMPLETENESS,
   SCOPE_KIND_LABEL,
   TASK_STATUS,
@@ -14,19 +19,48 @@ import {
   searchModeLabel,
 } from '@/constants/federation'
 import type { TaskListItem } from '@/federation/task-model'
+import { approvedPlanLabel, getActiveSource, isDesktop } from '@/platform/desktop'
+import { useAuthStore } from '@/stores/auth'
 
 /**
- * 本人发起的联邦任务（`GET /api/v1/tasks`）。列表只有状态轴；结果、证据与覆盖账本进详情页读。
- * 翻页用服务端给的不透明游标：记下走过的游标栈，"上一页"回到栈里的上一个，不自己算偏移。
+ * 联邦任务列表。数据源决定形态：
+ *
+ * - 桌面本机源：本机账本（`LocalTaskList`：`clientPlanList`，`connectionId` = local `sourceId`）。
+ * - 桌面中心源：只读镜像 —— 沿用下面的 Web 列表（经 GET 代理读），新建/写入口禁用并写明原因；
+ *   「作为联邦任务发起」是本机工作区切换入口（`CenterProposeSwitch`），切源重载后落在
+ *   `/tasks/new` 准备页，不再跳回只读页循环。
+ * - 浏览器：下面的 Web 列表（`GET /api/v1/tasks`），行为不变。
+ *
+ * 列表只有状态轴；结果、证据与覆盖账本进详情页读。Web 形态翻页用服务端给的
+ * 不透明游标：记下走过的游标栈，"上一页"回到栈里的上一个，不自己算偏移。
  */
 const router = useRouter()
+const route = useRoute()
+const auth = useAuthStore()
+const desktop = isDesktop()
+const activeSource = computed(() => getActiveSource())
+const isLocalSource = computed(() => desktop && activeSource.value?.kind === 'local')
+const isCenterSource = computed(() => desktop && activeSource.value?.kind === 'center')
+// 中心只读：新建走本机源的准备页；这里的 composer 与写按钮一律禁用（plan §1.5）。
+const centerReadonly = computed(() => isCenterSource.value && auth.readOnly)
+const composing = ref(false)
 const items = ref<TaskListItem[]>([])
 const loading = ref(false)
 const error = ref('')
-const composing = ref(false)
+const browsing = ref(false)
 const cursors = ref<(string | undefined)[]>([undefined])
 const next = ref<string | null>(null)
 let generation = 0
+// 「作为联邦任务发起」入口（plan §1.5）：问答框/Wiki 带着预填问题跳到 `/tasks/new?query=…`。
+// 桌面本机源下那条路由是真正的准备页（`LocalTaskPrepare`），不在这里复用新建区。
+const prefill = ref(typeof route.query.query === 'string' ? route.query.query : '')
+watch(() => route.query.query, (q) => {
+  if (typeof q === 'string' && q) {
+    prefill.value = q
+    composing.value = true
+  }
+})
+if (route.name === 'federation-task-new' && prefill.value) composing.value = true
 
 async function load() {
   const current = ++generation
@@ -65,27 +99,52 @@ function created(rootTaskId: string) {
   void router.push({ name: 'federation-task', params: { rootTaskId } })
 }
 
-onMounted(load)
+function proposeLocal() {
+  void router.push({ name: 'federation-task-new', query: { ...route.query } })
+}
+
+onMounted(() => {
+  if (!isLocalSource.value) void load()
+})
+watch(isLocalSource, (local) => {
+  if (!local) void load()
+})
 onBeforeUnmount(() => { generation++ })
 </script>
 
 <template>
-  <section class="tasks">
+  <LocalTaskList v-if="isLocalSource" />
+  <section v-else class="tasks">
     <header>
       <div>
         <h1>联邦任务</h1>
         <p>你发起的跨节点检索与带出处回答。每个任务都保留执行计划、覆盖账本与原始证据。</p>
+        <p v-if="centerReadonly" class="readonly-hint" role="note">{{ approvedPlanLabel() }}</p>
       </div>
       <div class="header-actions">
         <el-button :disabled="loading" @click="load">刷新</el-button>
-        <el-button type="primary" @click="composing = !composing">
+        <el-button @click="browsing = !browsing">{{ browsing ? '收起目录' : '互联目录' }}</el-button>
+        <el-tooltip v-if="centerReadonly" :content="approvedPlanLabel()">
+          <span><el-button disabled>新建任务</el-button></span>
+        </el-tooltip>
+        <el-button v-if="!centerReadonly" type="primary" @click="composing = !composing">
           {{ composing ? '收起' : '新建任务' }}
         </el-button>
+        <el-button v-if="isCenterSource && !centerReadonly" link @click="proposeLocal">作为联邦任务发起</el-button>
       </div>
     </header>
-    <section v-if="composing" class="compose">
+    <section v-if="centerReadonly" class="compose">
+      <h2>在本机准备联邦任务</h2>
+      <CenterProposeSwitch :query="prefill" />
+    </section>
+    <section v-if="browsing" class="compose">
+      <h2>互联公开目录</h2>
+      <DirectoryBrowser />
+    </section>
+    <section v-if="composing && !centerReadonly" class="compose">
       <h2>新建联邦任务</h2>
-      <TaskComposer @created="created" />
+      <p v-if="prefill" class="muted">从只读页面带入的问题已预填，可直接提交或再改。</p>
+      <TaskComposer :initial-query="prefill" @created="created" />
     </section>
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <p v-if="loading" role="status">正在读取任务…</p>
@@ -93,7 +152,7 @@ onBeforeUnmount(() => { generation++ })
     <div v-if="items.length" class="scroll">
       <table>
         <thead>
-          <tr><th>问题</th><th>范围</th><th>执行</th><th>检索完成度</th><th>证据充分性</th><th>创建时间</th></tr>
+          <tr><th>问题</th><th>操作</th><th>范围</th><th>执行</th><th>检索完成度</th><th>证据充分性</th><th>交付</th><th>创建时间</th></tr>
         </thead>
         <tbody>
           <tr v-for="item in items" :key="item.root_task_id">
@@ -103,10 +162,12 @@ onBeforeUnmount(() => { generation++ })
               </RouterLink>
               <span class="ddp-mono muted id">{{ item.root_task_id }}</span>
             </td>
+            <td><StatusTag :meta="metaOf(FEDERATION_OPERATION, item.operation)" /></td>
             <td>{{ SCOPE_KIND_LABEL[item.scope_kind] ?? item.scope_kind }} · {{ searchModeLabel(item.search_mode) }}</td>
             <td><StatusTag :meta="metaOf(TASK_STATUS, item.status)" /></td>
             <td><StatusTag :meta="metaOf(RETRIEVAL_COMPLETENESS, item.retrieval_completeness)" /></td>
             <td><StatusTag :meta="metaOf(EVIDENCE_SUFFICIENCY, item.evidence_sufficiency)" /></td>
+            <td><StatusTag :meta="metaOf(DELIVERY_STATE, item.delivery_state)" /></td>
             <td class="ddp-mono">{{ item.created_at }}</td>
           </tr>
         </tbody>
@@ -123,11 +184,12 @@ onBeforeUnmount(() => { generation++ })
 <style scoped>
 .tasks { max-width: 1120px; margin: auto; }
 header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
-.header-actions { display: flex; gap: 12px; flex-shrink: 0; }
+.header-actions { display: flex; gap: 12px; flex-shrink: 0; flex-wrap: wrap; }
 .compose { padding: 20px 0 24px; border-top: var(--ddp-bw) solid var(--ddp-line); border-bottom: var(--ddp-bw) solid var(--ddp-line); margin-bottom: 24px; }
 .compose h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; }
 h1 { font-size: 27px; font-weight: 600; margin: 0; }
 header p { color: var(--ddp-ink-2); margin: 8px 0 0; }
+.readonly-hint { color: var(--ddp-ink-3); font-size: 13px; }
 .muted { color: var(--ddp-ink-3); }
 .error { border-left: 2px solid var(--ddp-danger); padding-left: 12px; color: var(--ddp-danger); }
 .scroll { overflow-x: auto; }

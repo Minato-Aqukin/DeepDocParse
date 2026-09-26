@@ -109,6 +109,9 @@ async def _authorized_job(session, document_id, job_id, generation):
                 or resource.publication not in ("private", "draft", "published")):
             raise IndexSourceUnavailable("resource was withdrawn, deleted or unbound")
         # Copied assets retain their source ancestry; a withdrawn ancestor stops new processing.
+        # An owner's private source is still authorized. Only another owner's
+        # source requires publication; otherwise appending one's own new PDF
+        # makes an older revision impossible to reindex.
         seen = {resource.id}
         parent_id = resource.copied_from
         while parent_id:
@@ -116,8 +119,11 @@ async def _authorized_job(session, document_id, job_id, generation):
                 raise IndexSourceUnavailable("resource ancestry cycle")
             seen.add(parent_id)
             parent = await session.get(Resource, parent_id, populate_existing=True)
-            if parent is None or parent.deleted_at is not None or parent.publication != "published":
-                raise IndexSourceUnavailable("resource origin is no longer public")
+            if (parent is None or parent.deleted_at is not None
+                    or parent.organization_id != resource.organization_id
+                    or parent.publication not in ("private", "draft", "published")
+                    or (parent.owner_id != resource.owner_id and parent.publication != "published")):
+                raise IndexSourceUnavailable("resource origin is no longer available")
             parent_id = parent.copied_from
         actor_id, organization_id = job.initiated_by or resource.owner_id, resource.organization_id
     else:

@@ -3,6 +3,7 @@ import StatusTag from '@/components/common/StatusTag.vue'
 import type { DocumentInfo, DownloadFormat } from '@/types/api'
 import { indexStatusOf, parseStatusOf } from '@/constants/status'
 import { codeDetectionOf } from '@/constants/compilation'
+import { approvedPlanLabel, onLocalSource, onReadOnlySource } from '@/platform/desktop'
 
 /**
  * 文档表格。
@@ -10,6 +11,9 @@ import { codeDetectionOf } from '@/constants/compilation'
  * 两个预留的扩展点（本轮已接上，供后续文档组织功能复用）：
  * - `selectable`：打开后出现多选列并向上抛 selection，批量操作走 #toolbar 插槽
  * - `#toolbar`：表格上方的操作条，父组件想放什么都行
+ *
+ * 桌面数据源：本机工作区不提供解析产物下载、重解析与重建索引（local-content-subset），
+ * 这些项隐藏；中心只读，重解析/重建索引/删除换成一条写明原因的禁用项。
  */
 withDefaults(
   defineProps<{
@@ -106,25 +110,32 @@ function onCommand(command: string, doc: DocumentInfo) {
             <el-button link type="primary">更多<el-icon><component is="ArrowDown" /></el-icon></el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="dl:md" :disabled="row.status !== 'succeeded'">
-                  下载 Markdown
-                </el-dropdown-item>
-                <el-dropdown-item command="dl:json" :disabled="row.status !== 'succeeded'">
-                  下载版面 JSON
-                </el-dropdown-item>
-                <el-dropdown-item command="dl:zip" :disabled="row.status !== 'succeeded'">
-                  下载打包（含图片）
-                </el-dropdown-item>
+                <template v-if="!onLocalSource">
+                  <el-dropdown-item command="dl:md" :disabled="row.status !== 'succeeded'">
+                    下载 Markdown
+                  </el-dropdown-item>
+                  <el-dropdown-item command="dl:json" :disabled="row.status !== 'succeeded'">
+                    下载版面 JSON
+                  </el-dropdown-item>
+                  <el-dropdown-item command="dl:zip" :disabled="row.status !== 'succeeded'">
+                    下载打包（含图片）
+                  </el-dropdown-item>
+                </template>
                 <el-dropdown-item command="dl:source">下载原件</el-dropdown-item>
-                <el-dropdown-item command="reparse" divided>换参数重解析</el-dropdown-item>
-                <el-dropdown-item command="reindex" :disabled="row.status !== 'succeeded'">
-                  重建索引
-                </el-dropdown-item>
-                <!-- 语料共享后文档库里会有别人传的东西，而删除是全站唯一还判权限的
-                     动作。禁用而不是让它 403：用户点之前就该知道自己删不了 -->
-                <el-dropdown-item command="remove" divided :disabled="!row.can_delete">
-                  {{ row.can_delete ? '删除' : '删除（只有上传者能删）' }}
-                </el-dropdown-item>
+                <el-dropdown-item v-if="onReadOnlySource" divided disabled>{{ approvedPlanLabel() }}</el-dropdown-item>
+                <template v-else>
+                  <template v-if="!onLocalSource">
+                    <el-dropdown-item command="reparse" divided>换参数重解析</el-dropdown-item>
+                    <el-dropdown-item command="reindex" :disabled="row.status !== 'succeeded'">
+                      重建索引
+                    </el-dropdown-item>
+                  </template>
+                  <!-- 语料共享后文档库里会有别人传的东西，而删除是全站唯一还判权限的
+                       动作。禁用而不是让它 403：用户点之前就该知道自己删不了 -->
+                  <el-dropdown-item command="remove" divided :disabled="!row.can_delete">
+                    {{ row.can_delete ? '删除' : '删除（只有上传者能删）' }}
+                  </el-dropdown-item>
+                </template>
               </el-dropdown-menu>
             </template>
           </el-dropdown>

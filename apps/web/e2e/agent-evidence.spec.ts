@@ -86,7 +86,7 @@ test('断言、拒绝候选与四层 1:1 证据预览都可复核', async ({ pag
     hasText: 'document_below_similarity',
   })).toBeVisible()
 
-  await page.getByText('[1] 第 1 页').click()
+  await page.getByText('[1] PDF 第 1 页').click()
   const preview = page.locator('.evidence-preview')
   await expect(preview).toContainText('文档demo.pdf')
   await expect(preview).toContainText('页第 1 页')

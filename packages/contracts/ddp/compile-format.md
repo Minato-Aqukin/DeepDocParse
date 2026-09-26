@@ -55,7 +55,7 @@ derived evidence
   "layout_version": "ddp-layout/1",
   "parse_options_hash": "...",
   "compiler": "ddp-compile/1",
-  "chunker": "ddp-chunk/2",
+  "chunker": "ddp-chunk/3",
   "tokenizer": "jieba|bigram",
   "embedding_model": "BAAI/bge-m3",
   "vision_model": "Qwen3-VL-8B",
@@ -69,6 +69,15 @@ derived evidence
 `provider_unresolved`，不得把两次无法观测的默认选择称为 `current`。
 派生 evidence 在这份完整 provider 上另加 `content_role=generated`，因此它的
 `provider_fingerprint` 与源原子不同，且可机械证明内容不是原文。
+
+`ddp-chunk/3`（2026-09-24）只把**版面相邻**的正文块并进同一 chunk：与前一块竖直空隙
+超过 2.5 倍行高、往上跳（换栏）、左右不重叠，或一块有 bbox 一块没有，都另起一块。
+没有字母/数字的正文块（只有项目符号、破折号、标点）不出 chunk，也不参与相邻判断。
+页眉页脚同样不出 chunk：块中心在页面上下 8% 带内、去掉数字后同一文字在同一条带里
+出现至少 3 页（含纯页码）。它们仍在版面里，只是不进索引、不当证据。
+超过 `max_chars` 被切开的块，每段只带整块 bbox，之后另起一块，不与下一块合并。
+`ddp-chunk/2` 只按字数合并，页内正文会与远处页脚页码并成一块，外接 bbox 撑满整页。
+chunker 变化使期望指纹变化；老索引在版本校验中为 `stale`，按下节规则确认后才重建。
 
 ## 版本校验动作
 

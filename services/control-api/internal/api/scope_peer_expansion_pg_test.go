@@ -71,7 +71,7 @@ func TestScopeCreateExpandsRemoteDirectoryAndPersistsChildManifests(t *testing.T
 		[]discovery.CollectionRef{{CollectionID: "p-col", OriginNodeID: pNode}})
 	b := newFakePeerServer(bNode, nil,
 		[]discovery.CollectionRef{{CollectionID: "b-col", OriginNodeID: bNode}})
-	f.server.peers = peerDirectoryFor(map[string]*httptest.Server{pNode: p.serve(t), bNode: b.serve(t)})
+	f.server.peers = peerDirectoryFor(t, map[string]*httptest.Server{pNode: p.serve(t), bNode: b.serve(t)})
 
 	out := createScope(t, f, map[string]any{"operation": "search"})
 	if out.Manifest.EnumerationState != "sealed" || out.TotalTargets != 2 {
@@ -156,7 +156,7 @@ func TestScopeCreateToleratesMutualMemberDirectoriesAndSeals(t *testing.T) {
 	b := newFakePeerServer(bNode,
 		[]discovery.PeerMember{enumerablePeerMember(pNode), enumerablePeerMember(f.server.nodeIdentity.NodeID())},
 		[]discovery.CollectionRef{{CollectionID: "b-col", OriginNodeID: bNode}})
-	f.server.peers = peerDirectoryFor(map[string]*httptest.Server{pNode: p.serve(t), bNode: b.serve(t)})
+	f.server.peers = peerDirectoryFor(t, map[string]*httptest.Server{pNode: p.serve(t), bNode: b.serve(t)})
 	out := createScope(t, f, map[string]any{"operation": "search"})
 	if out.Manifest.EnumerationState != "sealed" || out.TotalTargets != 2 || len(out.Manifest.UnexpandedSubtrees) != 0 {
 		t.Fatalf("mutual directories did not seal cleanly: %+v", out.Manifest)
@@ -176,7 +176,7 @@ func TestScopeCreateNeverContactsRevokedMember(t *testing.T) {
 	approveEnumerableNode(t, f, registration)
 	nodeID := registration.Descriptor.NodeID
 	fake := newFakePeerServer(nodeID, nil, []discovery.CollectionRef{{CollectionID: "revoked-col", OriginNodeID: nodeID}})
-	f.server.peers = peerDirectoryFor(map[string]*httptest.Server{nodeID: fake.serve(t)})
+	f.server.peers = peerDirectoryFor(t, map[string]*httptest.Server{nodeID: fake.serve(t)})
 	decodeDiscovery[map[string]any](t, requestDiscovery(t, f.handler, "POST", "/api/v1/federation/nodes/"+nodeID+"/revoke", f.adminToken, nil), 200)
 	out := createScope(t, f, map[string]any{"operation": "search"})
 	if fake.count() != 0 {
@@ -197,7 +197,7 @@ func TestScopeCreateRemoteDeniedKeepsObservedTargets(t *testing.T) {
 		[]discovery.PeerMember{enumerablePeerMember(freshNodeID(t))},
 		[]discovery.CollectionRef{{CollectionID: "denied-member-col", OriginNodeID: nodeID}})
 	denied.membersState = http.StatusUnauthorized
-	f.server.peers = peerDirectoryFor(map[string]*httptest.Server{nodeID: denied.serve(t)})
+	f.server.peers = peerDirectoryFor(t, map[string]*httptest.Server{nodeID: denied.serve(t)})
 	out := createScope(t, f, map[string]any{"operation": "search"})
 	if out.Manifest.EnumerationState != "partial" {
 		t.Fatalf("denied scope claimed sealed: %+v", out.Manifest)
@@ -214,6 +214,54 @@ func TestScopeCreateRemoteDeniedKeepsObservedTargets(t *testing.T) {
 	}
 }
 
+func TestScopeCreateApprovedBoundaryExcludesDirectAndTransitivePeers(t *testing.T) {
+	f := discoveryPGFixture(t)
+	verifiedEmptyCatalog(t, f)
+	pRegistration := remoteRegistration(t, true)
+	excludedRegistration := remoteRegistration(t, true)
+	approveEnumerableNode(t, f, pRegistration)
+	approveEnumerableNode(t, f, excludedRegistration)
+	pNode := pRegistration.Descriptor.NodeID
+	excludedNode := excludedRegistration.Descriptor.NodeID
+	bNode, childNode := freshNodeID(t), freshNodeID(t)
+	p := newFakePeerServer(pNode,
+		[]discovery.PeerMember{enumerablePeerMember(bNode), enumerablePeerMember(childNode)},
+		[]discovery.CollectionRef{{CollectionID: "p-col", OriginNodeID: pNode}})
+	b := newFakePeerServer(bNode, nil, []discovery.CollectionRef{{CollectionID: "b-col", OriginNodeID: bNode}})
+	excluded := newFakePeerServer(excludedNode, nil, nil)
+	child := newFakePeerServer(childNode, nil, nil)
+	f.server.peers = peerDirectoryFor(t, map[string]*httptest.Server{
+		pNode: p.serve(t), bNode: b.serve(t), excludedNode: excluded.serve(t), childNode: child.serve(t),
+	})
+	invalid := requestDiscovery(t, f.handler, "POST", "/api/v1/federation/scopes", f.aliceToken,
+		map[string]any{"operation": "search", "allowed_node_ids": []string{pNode, bNode}})
+	if invalid.Code != http.StatusBadRequest || p.count() != 0 || b.count() != 0 {
+		t.Fatal("a boundary omitting the coordinator must fail before contacting peers")
+	}
+	out := createScope(t, f, map[string]any{
+		"operation": "search", "max_members": 2,
+		"allowed_node_ids": []string{f.server.nodeIdentity.NodeID(), pNode, bNode},
+	})
+	if excluded.count() != 0 || child.count() != 0 {
+		t.Fatal("directory traversal crossed the approved direct/transitive recipient boundary")
+	}
+	if out.Manifest.EnumerationState != "sealed" || out.TotalTargets != 2 {
+		t.Fatalf("excluded recipients or already-accounted targets depleted the approved scope: %+v", out.Manifest)
+	}
+	targets := map[string]string{}
+	for _, target := range out.Manifest.ExpandedMembers {
+		targets[target.CollectionID] = target.OriginNodeID
+	}
+	if targets["p-col"] != pNode || targets["b-col"] != bNode {
+		t.Fatalf("the approved scope lost its actual collections: %+v", out.Manifest.ExpandedMembers)
+	}
+	stored := decodeDiscovery[discovery.ScopeEnvelope](t, requestDiscovery(t, f.handler, "GET",
+		"/api/v1/federation/scopes/"+out.Manifest.ScopeID, f.aliceToken, nil), http.StatusOK)
+	if stored.Manifest.ManifestDigest != out.Manifest.ManifestDigest || stored.TotalTargets != 2 {
+		t.Fatal("the persisted scope differs from the approved frozen denominator")
+	}
+}
+
 func TestScopeCreateRemoteBudgetStopsRecursionHonestly(t *testing.T) {
 	f := discoveryPGFixture(t)
 	verifiedEmptyCatalog(t, f)
@@ -226,7 +274,7 @@ func TestScopeCreateRemoteBudgetStopsRecursionHonestly(t *testing.T) {
 		[]discovery.CollectionRef{{CollectionID: "p-col", OriginNodeID: pNode}})
 	b := newFakePeerServer(bNode, nil,
 		[]discovery.CollectionRef{{CollectionID: "b-col", OriginNodeID: bNode}})
-	f.server.peers = peerDirectoryFor(map[string]*httptest.Server{pNode: p.serve(t), bNode: b.serve(t)})
+	f.server.peers = peerDirectoryFor(t, map[string]*httptest.Server{pNode: p.serve(t), bNode: b.serve(t)})
 	out := createScope(t, f, map[string]any{"operation": "search", "max_remote_members": 1})
 	if out.Manifest.EnumerationState != "partial" {
 		t.Fatalf("budgeted scope claimed sealed: %+v", out.Manifest)
@@ -261,8 +309,8 @@ func TestScopeCreateRemoteTimeoutIsHonestAndPartial(t *testing.T) {
 	f.server.peers = func() *discovery.PeerDirectory {
 		server := slow.serve(t)
 		return discovery.NewPeerDirectory(map[string]discovery.PeerConfig{
-			nodeID: {NodeID: nodeID, Endpoint: server.URL, ServiceToken: "s", PeerToken: "p"},
-		}, nil, 40*time.Millisecond)
+			nodeID: {NodeID: nodeID, Endpoint: server.URL},
+		}, nil, 40*time.Millisecond, peerCollectorSigner(t))
 	}()
 	out := createScope(t, f, map[string]any{"operation": "search"})
 	found := false

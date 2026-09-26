@@ -20,10 +20,10 @@ probe/admission/evidence id 去问，如果"不是你的"返回 403/409 而"不�
 调用者本组织曾拥有它 -> 410）；这里同时钉它的**边界**：对没有授权路径的
 调用方与其它组织，410 必须退化成与不存在引用同形的 404。
 
-凭据纪律：错误消息里永远没有凭据。新模型下出站带的是
-`X-DDP-Node-Credential` 头（单次签发的 Ed25519 凭证），入站错误回执不得
-回显它的任何字节；旧的共享口令形态（`X-DDP-Peer-Token`）在生产档位下
-不再被接受，同样不得出现在错误回执里。每条负向断言都附带不泄露检查。
+凭据纪律：错误消息里永远没有凭据。出站带的是 `X-DDP-Node-Credential` 头
+（单次签发的 Ed25519 凭证），入站错误回执不得回显它的任何字节；
+不接受的 `X-DDP-Peer-Token` 等旧头同样不得出现在错误回执里。
+每条负向断言都附带不泄露检查。
 """
 from __future__ import annotations
 
@@ -55,7 +55,6 @@ from node_credentials_fixture import (
 from test_federation_probes import (
     BASE,
     NODE,
-    PEER,
     configure_federation,
     headers,
     indexed_source,
@@ -99,17 +98,12 @@ def _same_shape(one, other) -> None:
 
 
 def _assert_no_credential_leak(response, *callers) -> None:
-    """错误回执里永远没有凭据：新旧两种形态都不许出现。
-
-    新形态是各调用方现签的 `X-DDP-Node-Credential` token（`caller.tokens`）；
-    旧形态是共享口令档位的 `X-DDP-Peer-Token`（`PEER`）。生产档位下旧头不被
-    接受，但即使调用方顺手带上，服务端也不许把它回显出来。
-    """
+    """错误回执里永远没有凭据：现签的节点凭证与旧共享头都不许出现。"""
     text = response.text
     for peer_caller in callers:
         for token in peer_caller.tokens:
             assert token not in text, "节点凭证不得出现在错误回执里"
-    assert PEER not in text, "旧共享口令不得出现在错误回执里"
+    assert "x-ddp-peer-token" not in text.lower()
 
 
 def _probe_constraints(digest: str, *, root_task_id: str = "root-1") -> dict:

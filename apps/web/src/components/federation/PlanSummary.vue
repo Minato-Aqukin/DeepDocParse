@@ -19,9 +19,11 @@ const budget = computed(() => props.plan.budget)
     <p class="summary">
       修订 <span class="ddp-num">{{ plan.revision }}</span> ·
       <StatusTag :meta="metaOf(PLANNING_STATE, plan.planning_state)" /> ·
-      摘要 <span class="ddp-mono">{{ plan.plan_digest.slice(7, 19) }}</span> ·
+      摘要 <span class="ddp-mono">{{ plan.plan_digest }}</span> ·
       有效至 <span class="ddp-mono">{{ plan.valid_until }}</span>
     </p>
+    <p class="summary">根协调者 <span class="ddp-mono">{{ plan.root_coordinator_node_id }}</span> ·
+      最终结果写入方 <span class="ddp-mono">{{ plan.final_result_writer }}</span></p>
     <div class="scroll">
       <table>
         <thead><tr><th>步骤</th><th>操作</th><th>执行者</th><th>依赖</th></tr></thead>

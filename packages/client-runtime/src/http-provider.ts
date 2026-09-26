@@ -70,6 +70,8 @@ export interface HttpProviderOptions {
    * runtime, in a request body, and is never part of a command payload or receipt.
    */
   planCenter?: (binding: CenterBinding, signal: AbortSignal) => Promise<{ endpoint: string; credential: string }>
+  /** The native host hashes large local ZIP deliveries incrementally, without exposing bytes to the renderer. */
+  hashLocalDelivery?: (environment: Environment, planId: string, signal: AbortSignal) => Promise<string>
 }
 const PLAN_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/
 const DIGEST = /^sha256:[0-9a-f]{64}$/
@@ -102,7 +104,7 @@ export class HttpProvider implements Provider {
     return url.href.replace(/\/$/, '')
   }
   private async request(environment: Environment, path: string, signal: AbortSignal, token?: string,
-                        body?: Json, key?: string, missingIsNull = false, method?: 'PATCH', raw = false): Promise<unknown> {
+                        body?: Json, key?: string, missingIsNull = false, method?: 'PATCH' | 'DELETE', raw = false): Promise<unknown> {
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (token) headers.Authorization = `Bearer ${token}`
     if (key) headers['Idempotency-Key'] = key
@@ -190,15 +192,17 @@ export class HttpProvider implements Provider {
     if (actual.environmentId !== environment.environmentId || actual.workspaceId !== environment.workspaceId ||
         actual.authorityNodeId !== environment.authorityNodeId) throw new ConnectionFault('identity_mismatch')
     if (actor.issuer !== profile.issuer || actor.subject !== profile.subject) throw new ConnectionFault('profile_mismatch')
-    const request = (path: string, extraSignal: AbortSignal, body?: Json, key?: string, missingIsNull?: boolean, method?: 'PATCH', raw?: boolean) =>
+    const request = (path: string, extraSignal: AbortSignal, body?: Json, key?: string, missingIsNull?: boolean, method?: 'PATCH' | 'DELETE', raw?: boolean) =>
       this.request(environment, path, AbortSignal.any([sessionSignal, extraSignal]), credential, body, key, missingIsNull, method, raw)
     const options = this.options
     const planPath = (planId: string, suffix = '') => '/api/v1/plans/' + encodeURIComponent(planId) + suffix
     /** Resolve the credential only for the reviewed center of a plan the local ledger holds. */
     const reviewedCenter = async (plan: ObjectValue, abort: AbortSignal) => {
       const transports = object(plan.scope).transport_bindings
-      if (!Array.isArray(transports) || transports.length !== 1) throw new OperationFault('center_binding_required')
-      const t = object(transports[0]), text = (value: unknown, maximum = 512) => {
+      if (!Array.isArray(transports)) throw new OperationFault('center_binding_required')
+      const centers = transports.length === 1 ? transports : transports.filter(item => object(item).transport_ref === 'center')
+      if (centers.length !== 1) throw new OperationFault('center_binding_required')
+      const t = object(centers[0]), text = (value: unknown, maximum = 512) => {
         if (typeof value !== 'string' || !value || value.length > maximum) throw new OperationFault('center_binding_required')
         return value
       }
@@ -219,9 +223,15 @@ export class HttpProvider implements Provider {
       const expected = typeof record.result_manifest_digest === 'string' && DIGEST.test(record.result_manifest_digest)
         ? record.result_manifest_digest : null
       if (record.verified !== true || !expected) return { state: 'unavailable', expected, actual: null } as Json
-      const bytes = await request(planPath(planId, '/delivery/result'), abort, undefined, undefined, false, undefined, true)
-      if (!(bytes instanceof Uint8Array)) throw new ConnectionFault('protocol_incompatible')
-      const actual = await sha256(bytes)
+      let actual: string
+      if (options.hashLocalDelivery) {
+        actual = await options.hashLocalDelivery(environment, planId, AbortSignal.any([sessionSignal, abort]))
+        if (!DIGEST.test(actual)) throw new ConnectionFault('protocol_incompatible')
+      } else {
+        const bytes = await request(planPath(planId, '/delivery/result'), abort, undefined, undefined, false, undefined, true)
+        if (!(bytes instanceof Uint8Array)) throw new ConnectionFault('protocol_incompatible')
+        actual = await sha256(bytes)
+      }
       return { state: actual === expected ? 'passed' : 'failed', expected, actual } as Json
     }
     const approvedFor = (plan: ObjectValue, phase: string) => {
@@ -250,7 +260,7 @@ export class HttpProvider implements Provider {
         const raw = object(payload)
         if (!options.localCommands) {
           if (!capabilities.includes('client.query') ||
-              !['corpus.search','evidence.get','resource.page','task.page'].includes(name))
+              !['corpus.search','evidence.get','resource.page','task.page','wiki.list','wiki.get','wiki.revisions'].includes(name))
             throw new OperationFault('unsupported_operation')
           if (['resource.page','task.page'].includes(name) && !capabilities.includes('client.windows'))
             throw new OperationFault('unsupported_operation')
@@ -262,6 +272,20 @@ export class HttpProvider implements Provider {
           if (body.limit !== undefined && (!Number.isInteger(body.limit) || Number(body.limit) < 1 || Number(body.limit) > 50))
             throw new OperationFault('unsupported_operation')
           return await request('/api/v1/plans' + (body.limit ? '?limit=' + Number(body.limit) : ''), abort) as Json
+        }
+        if (name === 'plan.file.authorize') {
+          // Never use the cached command/receipt path for permission checks: revocation,
+          // expiry and budgets must be rechecked immediately before every HTTP action.
+          const body = exactKeys(raw, ['plan_id', 'action', 'operation_key', 'upload_id', 'offset', 'length'])
+          const planId = planIdOf(body.plan_id)
+          if (!['create', 'resume', 'part', 'finalize'].includes(String(body.action)) ||
+              typeof body.operation_key !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(body.operation_key))
+            throw new OperationFault('unsupported_operation')
+          const plan = object(await request(planPath(planId), abort))
+          if (!approvedFor(plan, 'execution')) throw new OperationFault('approved_plan_required')
+          const center = await reviewedCenter(plan, abort)
+          return await request(planPath(planId, '/transfer/authorize'), abort, { center, action: body.action as Json,
+            upload_id: body.upload_id as Json, offset: body.offset as Json, length: body.length as Json }, body.operation_key) as Json
         }
         if (['plan.get', 'plan.reconcile', 'plan.delivery.fetch'].includes(name)) {
           const planId = planIdOf(exactKeys(raw, ['plan_id']).plan_id)
@@ -300,9 +324,19 @@ export class HttpProvider implements Provider {
       async command(name,payload,key,abort) {
         if (!options.localCommands) throw new OperationFault('approved_plan_required')
         const raw = object(payload)
-        if (['models.install','models.start'].includes(name) && Object.keys(raw).length === 1 &&
-            typeof raw.model_id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(raw.model_id))
-          return await request('/api/v1/models/'+raw.model_id+'/'+(name === 'models.install' ? 'install' : 'start'),abort,{},key) as Json
+        if (['version.withdraw', 'version.delete', 'resource.delete'].includes(name)) {
+          const field = name === 'resource.delete' ? 'resource_id' : 'version_id'
+          const target = planIdOf(exactKeys(raw, [field])[field])
+          const path = name === 'resource.delete' ? '/api/v1/resources/' + encodeURIComponent(target)
+            : '/api/v1/versions/' + encodeURIComponent(target) + (name === 'version.withdraw' ? '/withdraw' : '')
+          return await request(path, abort, {}, key, false, name.endsWith('.delete') ? 'DELETE' : undefined) as Json
+        }
+        if (['models.install','models.start'].includes(name) &&
+            Object.keys(raw).every(field => field === 'model_id' || (name === 'models.start' && field === 'runtime_id')) &&
+            typeof raw.model_id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(raw.model_id) &&
+            (raw.runtime_id === undefined || (typeof raw.runtime_id === 'string' && /^[a-z0-9][a-z0-9_.-]{0,95}$/.test(raw.runtime_id))))
+          return await request('/api/v1/models/'+raw.model_id+'/'+(name === 'models.install' ? 'install' : 'start'),
+            abort, raw.runtime_id === undefined ? {} : { runtime_id: raw.runtime_id }, key) as Json
         if (name === 'models.stop' && Object.keys(raw).length === 0)
           return await request('/api/v1/models/stop',abort,{},key) as Json
         const wikiId = (value: unknown) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value)
@@ -316,18 +350,41 @@ export class HttpProvider implements Provider {
             ? '/api/v1/wikis/'+raw.wiki_id+'/revisions' : '/api/v1/wikis/'+raw.wiki_id+'/pages/'+raw.page_key
           return await request(path,abort,raw.body as Json,key,false,name==='wiki.edit'?'PATCH':undefined) as Json
         }
-        const path = name === 'answer.generate' ? '/api/v1/answer' : name === 'wiki.build' ? '/api/v1/wiki' : null
-        if (path) return await request(path,abort,payload,key) as Json
+        if (name === 'answer.generate') return await request('/api/v1/answer',abort,payload,key) as Json
         if (name === 'task.cancel' && typeof raw.task_id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(raw.task_id))
           return await request('/api/v1/tasks/'+raw.task_id+'/cancel',abort,{},key) as Json
-        if (name === 'plan.propose') {
+        if (name === 'plan.propose' || name === 'plan.propose-file') {
           // The runtime's template builds the whole scope; only these typed fields cross.
-          exactKeys(raw, ['center', 'query', 'inputs', 'retention', 'valid_seconds'])
-          exactKeys(raw.center, ['recipient_node_id', 'environment_id', 'workspace_id', 'profile_id', 'issuer', 'subject', 'endpoint'])
+          const file = name === 'plan.propose-file'
+          exactKeys(raw, ['center', file ? 'filename' : 'query', 'inputs', 'retention', 'valid_seconds',
+            ...(file ? [] : ['template', 'recipients',
+              ...(Object.hasOwn(raw, 'purpose') ? ['purpose'] : []),
+              ...(Object.hasOwn(raw, 'wiki') ? ['wiki'] : [])])])
+          exactKeys(raw.center, ['recipient_node_id', 'environment_id', 'workspace_id', 'profile_id', 'issuer', 'subject', 'endpoint',
+            ...(file ? ['upload_endpoint'] : [])])
           if (!Array.isArray(raw.inputs)) throw new OperationFault('unsupported_operation')
           for (const item of raw.inputs) exactKeys(item, ['ref', 'digest', 'size_bytes'])
-          return await request('/api/v1/plans/propose', abort, raw as Json, key) as Json
+          if (file && raw.inputs.length !== 1) throw new OperationFault('unsupported_operation')
+          if (!file) {
+            // Typed intent, same names and bounds as the desktop host and local HTTP.
+            const purpose = Object.hasOwn(raw, 'purpose') ? raw.purpose : 'answer'
+            if (purpose !== 'answer' && purpose !== 'wiki') throw new OperationFault('unsupported_operation')
+            const hasWiki = Object.hasOwn(raw, 'wiki')
+            if ((purpose === 'wiki') !== hasWiki) throw new OperationFault('unsupported_operation')
+            if (hasWiki) {
+              const wiki = object(raw.wiki)
+              exactKeys(wiki, ['title', ...(Object.hasOwn(wiki, 'max_pages') ? ['max_pages'] : [])])
+              if (typeof wiki.title !== 'string' || !wiki.title.trim() || wiki.title.length > 255)
+                throw new OperationFault('unsupported_operation')
+              const maxPages = wiki.max_pages as number | undefined
+              if (maxPages !== undefined && (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 12))
+                throw new OperationFault('unsupported_operation')
+            }
+          }
+          return await request('/api/v1/plans/' + (file ? 'propose-file' : 'propose'), abort, raw as Json, key) as Json
         }
+        if (name === 'plan.review-center')
+          return await request(planPath(planIdOf(exactKeys(raw, ['plan_id']).plan_id), '/review-center'), abort, {}, key) as Json
         if (name === 'plan.approve') {
           const body = exactKeys(raw, ['plan_id', 'phase', 'confirmed_scope_digest', 'user_confirmed'])
           if (!['exploration', 'execution'].includes(String(body.phase)) || body.user_confirmed !== true
@@ -338,6 +395,20 @@ export class HttpProvider implements Provider {
         }
         if (name === 'plan.revoke')
           return await request(planPath(planIdOf(exactKeys(raw, ['plan_id']).plan_id), '/revoke'), abort, {}, key) as Json
+        if (name === 'plan.resume') {
+          // Stages a fresh center ready revision for a terminal query plan;
+          // reconcile stays read-only. New approval is required before dispatch.
+          const planId = planIdOf(exactKeys(raw, ['plan_id']).plan_id)
+          const plan = object(await request(planPath(planId), abort))
+          const center = await reviewedCenter(plan, abort)
+          return await request(planPath(planId, '/resume'), abort, { center }, key) as Json
+        }
+        if (name === 'plan.cancel') {
+          const planId = planIdOf(exactKeys(raw, ['plan_id']).plan_id)
+          const plan = object(await request(planPath(planId), abort))
+          const center = await reviewedCenter(plan, abort)
+          return await request(planPath(planId, '/cancel'), abort, { center }, key) as Json
+        }
         if (name === 'plan.dispatch') {
           const body = exactKeys(raw, ['plan_id', 'phase'])
           const planId = planIdOf(body.plan_id)

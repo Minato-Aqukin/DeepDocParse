@@ -146,6 +146,26 @@ async def answer_generation_ready(http: httpx.AsyncClient | None, *,
                and profile.get("readiness") == "ready" for profile in profiles)
 
 
+async def wiki_generation_ready(http: httpx.AsyncClient | None, *,
+                                now: datetime | None = None) -> bool:
+    """本层现在真的能做 `wiki.pages` 生成吗（规划与接单共用的一条判据）。
+
+    与 `answer_generation_ready` 同一口径：只认 `collect_capability_profiles`
+    的组合结论，观测不到一律 False —— 读不出来就按不可用处理，绝不猜。
+    无模型 A 靠它决定 wiki 生成步骤放本地还是委托已就绪的 C。
+    """
+    if http is None:
+        return False
+    try:
+        profiles, status = await collect_capability_profiles(http, now=now)
+    except Exception:                      # noqa: BLE001 —— 可用性探测不许打挂调用方
+        return False
+    if status != "observed":
+        return False
+    return any(profile.get("operation") == "wiki.pages"
+               and profile.get("readiness") == "ready" for profile in profiles)
+
+
 # --------------------------------------------------------------------------
 # 依赖一：本层自己的检索库
 # --------------------------------------------------------------------------

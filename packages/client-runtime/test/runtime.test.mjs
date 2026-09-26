@@ -161,15 +161,15 @@ test('intent precedes command; uncertain writes never replay on wake or execute;
   let store=new MemoryProjectionStore(), f=fixture({session:{async command(){f.calls.command++;throw Error('response lost')}}})
   const c=new Connection(environment,profile,f.provider,store,options)
   c.start();await until(()=>c.state.transport==='ready')
-  await assert.rejects(c.execute('wiki.build',{name:'test'},'command-key'))
+  await assert.rejects(c.execute('wiki.create',{name:'test'},'command-key'))
   const intent=await store.readIntent(scopeKey(environment,profile),'command-key')
   assert.equal(intent.status,'unknown');assert.ok(intent.digest)
   await c.wake();await until(()=>c.state.transport==='ready')
-  await assert.rejects(c.execute('wiki.build',{name:'test'},'command-key'));assert.equal(f.calls.command,1)
+  await assert.rejects(c.execute('wiki.create',{name:'test'},'command-key'));assert.equal(f.calls.command,1)
   assert.deepEqual(await c.receipt('command-key'),{task:'one'})
-  assert.deepEqual(await c.execute('wiki.build',{name:'test'},'command-key'),{task:'one'})
+  assert.deepEqual(await c.execute('wiki.create',{name:'test'},'command-key'),{task:'one'})
   assert.equal(f.calls.command,1)
-  await assert.rejects(c.execute('wiki.build',{name:'different'},'command-key'),/idempotency_conflict/)
+  await assert.rejects(c.execute('wiki.create',{name:'different'},'command-key'),/idempotency_conflict/)
   await c.stop()
 })
 
@@ -195,12 +195,12 @@ test('disposing while persisting an intent prevents a late write from being disp
   class PausedStore extends MemoryProjectionStore { async intent(...args) {const intent=await super.intent(...args);await barrier.promise;return intent} }
   const store=new PausedStore(), f=fixture(), c=new Connection(environment,profile,f.provider,store,options)
   c.start();await until(()=>c.state.transport==='ready')
-  const write=c.execute('wiki.build',{},'command-key')
+  const write=c.execute('wiki.create',{},'command-key')
   await until(()=>store.rows.get(c.scope)?.intents.size===1)
   await c.stop();barrier.resolve();await assert.rejects(write,/disposed/)
   assert.equal(f.calls.command,0);assert.equal(await store.readIntent(c.scope,'command-key'),null)
   await c.wake();await until(()=>c.state.transport==='ready')
-  assert.deepEqual(await c.execute('wiki.build',{},'command-key'),{task:'one'});assert.equal(f.calls.command,1);await c.stop()
+  assert.deepEqual(await c.execute('wiki.create',{},'command-key'),{task:'one'});assert.equal(f.calls.command,1);await c.stop()
 })
 
 test('a transport whose close never settles cannot block a replacement connection', async()=>{
@@ -212,7 +212,7 @@ test('a transport whose close never settles cannot block a replacement connectio
 test('invalid cyclic command JSON is rejected before an intent or network write', async()=>{
   const f=fixture(),c=new Connection(environment,profile,f.provider,new MemoryProjectionStore(),options),payload={}
   payload.self=payload;c.start();await until(()=>c.state.transport==='ready')
-  await assert.rejects(c.execute('wiki.build',payload,'command-key'),/invalid_event/)
+  await assert.rejects(c.execute('wiki.create',payload,'command-key'),/invalid_event/)
   assert.equal(f.calls.command,0);await c.stop()
 })
 

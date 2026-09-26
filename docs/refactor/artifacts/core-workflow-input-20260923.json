@@ -1,0 +1,332 @@
+{
+  "annotation_origin": "agent_extraction_from_publisher_originals",
+  "cases": [
+    {
+      "id": "pico-core-frequency",
+      "question": "What processor cores does the RP2040 on the Raspberry Pi Pico have, and what is their maximum core frequency, according to the Pico datasheet headline features?",
+      "references": [
+        {
+          "excerpt": "Dual-core cortex M0+ at up to 133 MHz",
+          "facts": {
+            "cores": "dual-core Cortex-M0+",
+            "maximum_core_frequency_mhz": 133
+          },
+          "page_index": 3,
+          "source": "pico"
+        }
+      ],
+      "sources": [
+        "pico"
+      ]
+    },
+    {
+      "id": "pico-esp32-sram-compare",
+      "question": "How much SRAM does the Raspberry Pi Pico (RP2040) provide compared with the ESP32's on-chip SRAM, according to the two vendor datasheets?",
+      "references": [
+        {
+          "excerpt": "264 kB multi-bank high performance SRAM",
+          "facts": {
+            "pico_sram_kb": 264
+          },
+          "page_index": 3,
+          "source": "pico"
+        },
+        {
+          "excerpt": "520 KB SRAM",
+          "facts": {
+            "esp32_sram_kb": 520
+          },
+          "page_index": 3,
+          "source": "esp32"
+        },
+        {
+          "excerpt": "520 KB of on-chip SRAM for data and instructions",
+          "facts": {
+            "esp32_sram_kb": 520,
+            "esp32_sram_use": "data and instructions"
+          },
+          "page_index": 25,
+          "source": "esp32"
+        }
+      ],
+      "sources": [
+        "esp32",
+        "pico"
+      ]
+    },
+    {
+      "id": "esp32-radio",
+      "question": "Which Wi-Fi protocols (and at what maximum 802.11n rate) and which Bluetooth version does the ESP32 support, according to the Features section of its datasheet?",
+      "references": [
+        {
+          "excerpt": "802.11b/g/n",
+          "facts": {
+            "wifi_protocols": [
+              "802.11b",
+              "802.11g",
+              "802.11n"
+            ]
+          },
+          "page_index": 2,
+          "source": "esp32"
+        },
+        {
+          "excerpt": "802.11n (2.4 GHz), up to 150 Mbps",
+          "facts": {
+            "wifi_band_ghz": 2.4,
+            "wifi_max_rate_mbps": 150
+          },
+          "page_index": 2,
+          "source": "esp32"
+        },
+        {
+          "excerpt": "Compliant with Bluetooth v4.2 BR/EDR and Bluetooth LE specifications",
+          "facts": {
+            "bluetooth": "v4.2 BR/EDR and Bluetooth LE"
+          },
+          "page_index": 2,
+          "source": "esp32"
+        }
+      ],
+      "sources": [
+        "esp32"
+      ]
+    },
+    {
+      "id": "esp32-cpu",
+      "question": "What CPU cores and maximum clock frequency does the ESP32 have, according to the functional description in its datasheet?",
+      "references": [
+        {
+          "excerpt": "ESP32 contains one or two low-power Xtensa",
+          "facts": {
+            "cpu": "single-/dual-core Xtensa 32-bit LX6"
+          },
+          "page_index": 25,
+          "source": "esp32"
+        },
+        {
+          "excerpt": "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))",
+          "facts": {
+            "esp32_s0wd_max_mhz": 160,
+            "maximum_cpu_frequency_mhz": 240,
+            "pipeline_stages": 7
+          },
+          "page_index": 25,
+          "source": "esp32"
+        }
+      ],
+      "sources": [
+        "esp32"
+      ]
+    },
+    {
+      "id": "attention-en-de-bleu",
+      "question": "What BLEU score did the Transformer achieve on the WMT 2014 English-to-German translation task, and how much did that improve over the existing best results?",
+      "references": [
+        {
+          "excerpt": "Our model achieves 28.4 BLEU on the WMT 2014 English",
+          "facts": {
+            "en_de_bleu": 28.4,
+            "task": "WMT 2014 English-to-German"
+          },
+          "page_index": 0,
+          "source": "attention"
+        },
+        {
+          "excerpt": "ensembles, by over 2 BLEU",
+          "facts": {
+            "improvement_over_prior_best_bleu": "over 2"
+          },
+          "page_index": 0,
+          "source": "attention"
+        }
+      ],
+      "sources": [
+        "attention"
+      ]
+    },
+    {
+      "id": "attention-multi-head",
+      "question": "How many parallel attention heads does the Transformer use in the paper, and what per-head key/value dimension does that imply?",
+      "references": [
+        {
+          "excerpt": "In this work we employ h = 8 parallel attention layers, or heads.",
+          "facts": {
+            "num_attention_heads": 8
+          },
+          "page_index": 4,
+          "source": "attention"
+        },
+        {
+          "excerpt": "dk = dv = dmodel/h = 64",
+          "facts": {
+            "dk": 64,
+            "dv": 64
+          },
+          "page_index": 4,
+          "source": "attention"
+        }
+      ],
+      "sources": [
+        "attention"
+      ]
+    }
+  ],
+  "human_review_status": "pending",
+  "retrieved_utc": "2026-09-23",
+  "schema": "ddp-core-workflow-input/1",
+  "sources": [
+    {
+      "domain": "hardware",
+      "id": "pico",
+      "license_notice": "This documentation is licensed under a Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND). RPL grants users permission to use the RESOURCES solely in conjunction with the Raspberry Pi products.",
+      "path": "pico-datasheet.pdf",
+      "publisher": "Raspberry Pi Ltd",
+      "retrieved_utc": "2026-09-23",
+      "sha256": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+      "title": "Raspberry Pi Pico Datasheet",
+      "url": "https://datasheets.raspberrypi.com/pico/pico-datasheet.pdf",
+      "version": "Release 21; build date 03/07/2026; build version d4e0f1799616"
+    },
+    {
+      "domain": "hardware",
+      "id": "esp32",
+      "path": "esp32-datasheet.pdf",
+      "publisher": "Espressif Systems",
+      "retrieved_utc": "2026-09-23",
+      "sha256": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+      "title": "ESP32 Series Datasheet",
+      "url": "https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf",
+      "version": "Version 5.3"
+    },
+    {
+      "domain": "machine-learning",
+      "id": "attention",
+      "path": "attention-is-all-you-need.pdf",
+      "publisher": "Google Brain, Google Research, University of Toronto (authors); 31st Conference on Neural Information Processing Systems (NIPS 2017)",
+      "retrieved_utc": "2026-09-23",
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "title": "Attention Is All You Need",
+      "url": "https://arxiv.org/pdf/1706.03762",
+      "version": "arXiv:1706.03762v7 [cs.CL] 2 Aug 2023"
+    }
+  ],
+  "scope": "single_center_web",
+  "source_validation": {
+    "sources": [
+      {
+        "source": "pico",
+        "sha256": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+        "pages": 31,
+        "bytes": 18176869
+      },
+      {
+        "source": "esp32",
+        "sha256": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+        "pages": 78,
+        "bytes": 989523
+      },
+      {
+        "source": "attention",
+        "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "pages": 15,
+        "bytes": 2215244
+      }
+    ],
+    "references": [
+      {
+        "case": "pico-core-frequency",
+        "source": "pico",
+        "page_index": 3,
+        "excerpt_found": true
+      },
+      {
+        "case": "pico-esp32-sram-compare",
+        "source": "pico",
+        "page_index": 3,
+        "excerpt_found": true
+      },
+      {
+        "case": "pico-esp32-sram-compare",
+        "source": "esp32",
+        "page_index": 3,
+        "excerpt_found": true
+      },
+      {
+        "case": "pico-esp32-sram-compare",
+        "source": "esp32",
+        "page_index": 25,
+        "excerpt_found": true
+      },
+      {
+        "case": "esp32-radio",
+        "source": "esp32",
+        "page_index": 2,
+        "excerpt_found": true
+      },
+      {
+        "case": "esp32-radio",
+        "source": "esp32",
+        "page_index": 2,
+        "excerpt_found": true
+      },
+      {
+        "case": "esp32-radio",
+        "source": "esp32",
+        "page_index": 2,
+        "excerpt_found": true
+      },
+      {
+        "case": "esp32-cpu",
+        "source": "esp32",
+        "page_index": 25,
+        "excerpt_found": true
+      },
+      {
+        "case": "esp32-cpu",
+        "source": "esp32",
+        "page_index": 25,
+        "excerpt_found": true
+      },
+      {
+        "case": "attention-en-de-bleu",
+        "source": "attention",
+        "page_index": 0,
+        "excerpt_found": true
+      },
+      {
+        "case": "attention-en-de-bleu",
+        "source": "attention",
+        "page_index": 0,
+        "excerpt_found": true
+      },
+      {
+        "case": "attention-multi-head",
+        "source": "attention",
+        "page_index": 4,
+        "excerpt_found": true
+      },
+      {
+        "case": "attention-multi-head",
+        "source": "attention",
+        "page_index": 4,
+        "excerpt_found": true
+      }
+    ],
+    "all_references_matched": true
+  },
+  "negative_cases": [
+    {
+      "id": "pico-private-board-serial",
+      "sources": [
+        "pico"
+      ],
+      "question": "According only to the uploaded Pico datasheet, what is the exact unique serial number of the individual board I purchased yesterday?",
+      "expected": "State that the supplied document does not establish this individual serial number; do not invent a number or a supporting citation."
+    }
+  ],
+  "quality_boundary": {
+    "these_samples": "Original text-layer PDFs, including prose, technical specifications and mathematical notation. Excerpt presence is checked mechanically, not a human semantic-quality label.",
+    "not_proven": "Scanned OCR, general table reconstruction, general formula recognition, GPU execution and human-reviewed entailment accuracy."
+  }
+}

@@ -1,11 +1,15 @@
 <script setup lang="ts">
+
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { tasksApi } from '@/api/tasks'
+import { approvedPlanLabel } from '@/platform/desktop'
 import StatusTag from '@/components/common/StatusTag.vue'
 import CoveragePanel from '@/components/federation/CoveragePanel.vue'
+import DeliveryPanel from '@/components/federation/DeliveryPanel.vue'
 import EventTimeline from '@/components/federation/EventTimeline.vue'
+import FederatedWikiPanel from '@/components/federation/FederatedWikiPanel.vue'
 import PlanApproval from '@/components/federation/PlanApproval.vue'
 import PlanSummary from '@/components/federation/PlanSummary.vue'
 import TaskResultPanel from '@/components/federation/TaskResultPanel.vue'
@@ -25,6 +29,7 @@ import {
   collectEvents,
   isSettled,
   type CoverageLedger,
+  type FederatedWikiRef,
   type TaskEvent,
   type TaskPlan,
   type TaskStatus,
@@ -36,8 +41,8 @@ import {
  *
  * 任务还在动时轮询状态并续读事件（`after=next_seq`，断线不丢）；落定后停下来。
  */
-const route = useRoute()
-const rootTaskId = computed(() => String(route.params.rootTaskId ?? ''))
+const props = defineProps<{ rootTaskId: string; readOnly?: boolean }>()
+const rootTaskId = computed(() => props.rootTaskId)
 
 const status = shallowRef<TaskStatus | null>(null)
 const coverage = shallowRef<CoverageLedger | null>(null)
@@ -91,9 +96,11 @@ async function refresh() {
       }
     }
   }
-  if (!plan.value && (data.planning_state === 'ready' || data.planning_state === 'approved')) {
+  if ((plan.value?.plan_digest !== data.plan_digest
+       || plan.value?.planning_state !== data.planning_state)
+      && (data.planning_state === 'ready' || data.planning_state === 'approved')) {
     try {
-      const replay = await tasksApi.plan(rootTaskId.value)
+      const replay = await tasksApi.readPlan(rootTaskId.value)
       if (current === generation) { plan.value = replay.data; planError.value = '' }
     } catch (cause) {
       if (current === generation) planError.value = problem(cause, '执行计划读取失败')
@@ -134,12 +141,7 @@ async function load() {
   }
 }
 
-/**
- * 还没受理过。受理会立刻把状态推到 `running`（`execute_task`），所以 `queued`
- * 唯一地表示"计划还没被提交执行" —— 权威的那个标记（受理幂等键）是内部字段，
- * 状态响应里没有。批准入口只在这个窗口里给：已经跑起来的任务再点"批准并执行"
- * 只会拿到 409。
- */
+/** Initial submission and a newly staged continuation both require explicit approval. */
 const awaitingSubmission = computed(() => status.value?.status === 'queued'
   && (status.value.planning_state === 'ready' || status.value.planning_state === 'approved'))
 
@@ -177,7 +179,6 @@ onBeforeUnmount(() => { generation++ })
 
 const settledLabel = computed(() => (status.value && !isSettled(status.value) ? '执行中，每 2 秒刷新一次' : ''))
 </script>
-
 <template>
   <section class="task-detail">
     <header>
@@ -202,18 +203,23 @@ const settledLabel = computed(() => (status.value && !isSettled(status.value) ? 
       </p>
       <p v-if="status.error" class="ddp-degraded is-danger" role="status">执行出错：<span class="ddp-mono">{{ status.error }}</span></p>
 
-      <div v-if="canCancel(status) || canResume(status)" class="task-actions">
+      <div v-if="(canCancel(status) || canResume(status)) && !readOnly" class="task-actions">
         <el-button v-if="canCancel(status)" :loading="acting === 'cancel'"
           :disabled="!!acting" @click="act('cancel')">取消任务</el-button>
         <el-button v-if="canResume(status)" :loading="acting === 'resume'"
           :disabled="!!acting" @click="act('resume')">补做未完成目标</el-button>
       </div>
+      <p v-if="readOnly && (canCancel(status) || canResume(status))" class="muted" role="note">
+        中心在桌面里只读：取消与补做已禁用（{{ approvedPlanLabel() }}）。</p>
       <p v-if="actionError" role="alert" class="error">{{ actionError }}</p>
 
       <section v-if="awaitingSubmission" class="block">
         <h2>批准计划</h2>
         <p v-if="planError" class="ddp-degraded is-danger">{{ planError }}</p>
-        <PlanApproval v-if="plan" :root-task-id="rootTaskId" :plan="plan" @changed="afterAction" />
+        <PlanApproval v-if="plan && !readOnly" :root-task-id="rootTaskId" :plan="plan" @changed="afterAction" />
+        <p v-else-if="readOnly" class="muted" role="note">
+          中心在桌面里只读：批准与受理已禁用（{{ approvedPlanLabel() }}）。计划内容仍可审阅。</p>
+        <PlanSummary v-else-if="plan" :plan="plan" />
         <p v-else-if="!planError" class="muted">计划还没生成。</p>
       </section>
 
@@ -225,6 +231,19 @@ const settledLabel = computed(() => (status.value && !isSettled(status.value) ? 
           {{ status.status === 'cancelled' ? '任务已取消，没有结果。'
             : status.status === 'failed' ? '执行失败，没有产出结果。' : '还没有结果；执行结束后显示在这里。' }}
         </p>
+      </section>
+
+      <section v-if="status.result && (status.result as unknown as { wiki?: FederatedWikiRef }).wiki" class="block">
+        <h2>Wiki 修订</h2>
+        <FederatedWikiPanel :wiki="(status.result as unknown as { wiki: FederatedWikiRef }).wiki" />
+      </section>
+
+      <section class="block">
+        <h2>交付下载与确认</h2>
+        <DeliveryPanel :delivery-id="status.delivery_id" :delivery-state="status.delivery_state"
+          :read-only="readOnly" />
+        <p v-if="readOnly" class="muted" role="note">
+          中心在桌面里只读：交付确认已禁用（{{ approvedPlanLabel() }}）。下载与校验仍可查看。</p>
       </section>
 
       <section class="block">
@@ -242,6 +261,24 @@ const settledLabel = computed(() => (status.value && !isSettled(status.value) ? 
       </section>
 
       <section class="block">
+        <h2>续查与重规划</h2>
+        <p v-if="status.planning_state === 'invalidated'" class="ddp-degraded" role="status">
+          计划已失效（过期、输入版本变化或授权撤销）：旧计划不许被执行。请新建一条任务重新规划并重新批准；
+          本页不提供“沿用旧计划”按钮。
+        </p>
+        <p v-else-if="status.planning_state !== 'approved'" class="muted">
+          续查需要一份已批准的计划。当前规划状态下协调者的 resume 会拒绝，界面不提供续查按钮。
+        </p>
+        <p v-else-if="status.status === 'cancelled'" class="muted">
+          任务已取消：取消是显式终态，重跑必须另起一条新任务，续查不会复活它。
+        </p>
+        <p v-else class="muted">
+          补做未完成目标走上面的“补做未完成目标”按钮（重新判权后只补可重做目标，不隐式扩权）。
+          范围过期时后端回 410 `scope_expired`：请重新枚举范围并新建任务，而不是拿旧授权补做。
+        </p>
+      </section>
+
+      <section class="block">
         <h2>事件</h2>
         <EventTimeline v-if="events.length" :events="events" />
         <p v-else class="muted">暂无事件。</p>
@@ -249,6 +286,7 @@ const settledLabel = computed(() => (status.value && !isSettled(status.value) ? 
     </template>
   </section>
 </template>
+
 
 <style scoped>
 .task-detail { max-width: 1120px; margin: auto; display: grid; gap: 16px; }

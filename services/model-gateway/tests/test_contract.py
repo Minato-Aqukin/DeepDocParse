@@ -441,7 +441,7 @@ def test_layout_chunking():
             block("a" * 500, [0, 0, 10, 10]),
             block("b" * 500, [5, 5, 20, 20]),   # 超 800 上限 -> 与前块分开
             block("", [0, 0, 1, 1]),            # 空块跳过
-            block("c" * 100, [30, 30, 40, 40]),
+            block("c" * 100, [5, 22, 20, 32]),  # 紧贴 b 下方（ddp-chunk/3 只并版面相邻块）
         ]},
         {"page_idx": 1, "para_blocks": [block("d" * 100, [1, 1, 2, 2])]},
     ]}
@@ -449,7 +449,7 @@ def test_layout_chunking():
     assert [c["page_idx"] for c in chunks] == [0, 0, 1], "不得跨页合并"
     assert chunks[0]["text"] == "a" * 500
     assert chunks[1]["text"] == "b" * 500 + "\n" + "c" * 100, "页内应合并至上限"
-    assert chunks[1]["bbox"] == [5, 5, 40, 40], "bbox 取外接矩形"
+    assert chunks[1]["bbox"] == [5, 5, 20, 32], "bbox 取外接矩形"
 
 
 @pytest.mark.parametrize("placeholder", ["change-me", "", "  CHANGE-ME  "])

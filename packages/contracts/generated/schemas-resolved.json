@@ -19,7 +19,7 @@
                         }
                       }
                     },
-                    "maxItems": 3
+                    "maxItems": 5
                   }
                 }
               },
@@ -50,6 +50,100 @@
                     "maxContains": 1,
                     "minContains": 1,
                     "minItems": 4
+                  }
+                }
+              }
+            },
+            {
+              "else": {
+                "properties": {
+                  "files": {
+                    "not": {
+                      "contains": {
+                        "properties": {
+                          "path": {
+                            "const": "wiki.json"
+                          }
+                        },
+                        "required": [
+                          "path"
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "if": {
+                "properties": {
+                  "required_features": {
+                    "contains": {
+                      "const": "wiki"
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "files": {
+                    "contains": {
+                      "properties": {
+                        "path": {
+                          "const": "wiki.json"
+                        }
+                      },
+                      "required": [
+                        "path"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  }
+                }
+              }
+            },
+            {
+              "else": {
+                "properties": {
+                  "files": {
+                    "not": {
+                      "contains": {
+                        "properties": {
+                          "path": {
+                            "const": "vectors.json"
+                          }
+                        },
+                        "required": [
+                          "path"
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "if": {
+                "properties": {
+                  "required_features": {
+                    "contains": {
+                      "const": "vectors"
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "files": {
+                    "contains": {
+                      "properties": {
+                        "path": {
+                          "const": "vectors.json"
+                        }
+                      },
+                      "required": [
+                        "path"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
                   }
                 }
               }
@@ -105,14 +199,21 @@
               "items": {
                 "$ref": "#/$defs/VersionFile"
               },
-              "maxItems": 4,
+              "maxItems": 6,
               "minItems": 3,
               "type": "array",
               "uniqueItems": true
             },
             "required_features": {
-              "maxItems": 0,
-              "type": "array"
+              "items": {
+                "enum": [
+                  "wiki",
+                  "vectors"
+                ]
+              },
+              "maxItems": 2,
+              "type": "array",
+              "uniqueItems": true
             },
             "schema": {
               "const": "ddp-bundle/1"
@@ -253,6 +354,628 @@
           ],
           "type": "object"
         },
+        "BundleVectors": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "else": {
+                "properties": {
+                  "chunking": {
+                    "type": "object"
+                  },
+                  "dimension": {
+                    "type": "integer"
+                  },
+                  "format": {
+                    "type": "object"
+                  },
+                  "model": {
+                    "type": "object"
+                  },
+                  "preprocessing": {
+                    "type": "object"
+                  },
+                  "reason": {
+                    "type": "null"
+                  },
+                  "source": {
+                    "type": "object"
+                  }
+                }
+              },
+              "if": {
+                "properties": {
+                  "state": {
+                    "const": "missing"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "chunking": {
+                    "type": "null"
+                  },
+                  "dimension": {
+                    "type": "null"
+                  },
+                  "format": {
+                    "type": "null"
+                  },
+                  "model": {
+                    "type": "null"
+                  },
+                  "preprocessing": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "null"
+                  },
+                  "vectors": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          ],
+          "description": "Observed model identity only, never a guessed version. Runtime verifies distinct model name/version, equal dimensions, finite values, fixed source revision, vector count and exact bundled evidence/excerpt digests. Matching metadata alone does not mean an index is ready.",
+          "properties": {
+            "chunking": {
+              "additionalProperties": false,
+              "properties": {
+                "chunker": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "max_chars": {
+                  "maximum": 100000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "tokenizer": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "max_chars",
+                "tokenizer",
+                "chunker"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "dimension": {
+              "maximum": 4096,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "format": {
+              "additionalProperties": false,
+              "properties": {
+                "dtype": {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "encoding": {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "dtype",
+                "encoding"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "model": {
+              "additionalProperties": false,
+              "properties": {
+                "dimension": {
+                  "maximum": 4096,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "name": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "version",
+                "dimension"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "preprocessing": {
+              "additionalProperties": false,
+              "properties": {
+                "normalization": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "tokenizer": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tokenizer",
+                "normalization"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "reason": {
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schema": {
+              "const": "ddp-bundle-vectors/1"
+            },
+            "source": {
+              "additionalProperties": false,
+              "properties": {
+                "evidence_count": {
+                  "maximum": 100000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "parse_revision": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "source_digest": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source_digest",
+                "parse_revision",
+                "evidence_count"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "state": {
+              "enum": [
+                "present",
+                "missing"
+              ]
+            },
+            "vectors": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "embedding": {
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 4096,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "evidence_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "excerpt_digest": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "evidence_id",
+                  "excerpt_digest",
+                  "embedding"
+                ],
+                "type": "object"
+              },
+              "maxItems": 100000,
+              "type": "array"
+            }
+          },
+          "required": [
+            "schema",
+            "state",
+            "model",
+            "dimension",
+            "preprocessing",
+            "chunking",
+            "format",
+            "source",
+            "vectors",
+            "reason"
+          ],
+          "type": "object"
+        },
+        "BundleWiki": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "else": {
+                "properties": {
+                  "pages": {
+                    "minItems": 1
+                  },
+                  "reason": {
+                    "type": "null"
+                  }
+                }
+              },
+              "if": {
+                "properties": {
+                  "state": {
+                    "const": "empty"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "dependency_manifest": {
+                    "maxItems": 0
+                  },
+                  "pages": {
+                    "maxItems": 0
+                  },
+                  "reason": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "relations": {
+                    "maxItems": 0
+                  },
+                  "title": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          ],
+          "description": "Private draft only. Runtime also validates page/claim identity uniqueness, relation endpoints, exact source/evidence/digest bindings and external dependencies requiring review. Human paragraph text is preserved verbatim.",
+          "properties": {
+            "dependency_manifest": {
+              "items": {
+                "additionalProperties": false,
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "review": {
+                          "const": "available"
+                        }
+                      },
+                      "required": [
+                        "review"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "locator": false,
+                        "policy_revision": false,
+                        "source_evidence_id": false
+                      }
+                    }
+                  }
+                ],
+                "properties": {
+                  "evidence_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "excerpt_digest": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "locator": {
+                    "$ref": "#/$defs/ddp-evidence:v1.json:Locator"
+                  },
+                  "page_key": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "policy_revision": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "review": {
+                    "enum": [
+                      "available",
+                      "needs_review",
+                      "unavailable"
+                    ]
+                  },
+                  "source": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "authority_node_id": {
+                        "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$",
+                        "type": "string"
+                      },
+                      "origin_node_id": {
+                        "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$",
+                        "type": "string"
+                      },
+                      "parse_revision": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "resource_id": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "source_digest": {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      "source_version_id": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "origin_node_id",
+                      "authority_node_id",
+                      "resource_id",
+                      "source_version_id",
+                      "source_digest",
+                      "parse_revision"
+                    ],
+                    "type": "object"
+                  },
+                  "source_evidence_id": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "page_key",
+                  "evidence_id",
+                  "excerpt_digest",
+                  "source",
+                  "review"
+                ],
+                "type": "object"
+              },
+              "maxItems": 10000,
+              "type": "array"
+            },
+            "pages": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "generated_sections": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "claims": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "claim_id": {
+                                "maxLength": 64,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "conflict_group": {
+                                "minLength": 1,
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "evidence_ids": {
+                                "items": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "text": {
+                                "maxLength": 10000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "unsupported": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "claim_id",
+                              "text",
+                              "evidence_ids",
+                              "unsupported"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 100,
+                          "type": "array"
+                        },
+                        "heading": {
+                          "maxLength": 512,
+                          "minLength": 0,
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "heading",
+                        "claims"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 50,
+                    "type": "array"
+                  },
+                  "human_paragraphs": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "text": {
+                          "maxLength": 10000,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "text"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  "page_key": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "title": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "page_key",
+                  "title",
+                  "generated_sections",
+                  "human_paragraphs"
+                ],
+                "type": "object"
+              },
+              "maxItems": 50,
+              "type": "array"
+            },
+            "reason": {
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "relations": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "evidence_ids": {
+                    "items": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "object_page": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "predicate": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "\\S",
+                    "type": "string"
+                  },
+                  "subject_page": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "unsupported": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "subject_page",
+                  "object_page",
+                  "predicate",
+                  "evidence_ids",
+                  "unsupported"
+                ],
+                "type": "object"
+              },
+              "maxItems": 50,
+              "type": "array"
+            },
+            "schema": {
+              "const": "ddp-bundle-wiki/1"
+            },
+            "state": {
+              "enum": [
+                "draft",
+                "empty"
+              ]
+            },
+            "title": {
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "schema",
+            "state",
+            "title",
+            "pages",
+            "reason"
+          ],
+          "type": "object"
+        },
         "VersionFile": {
           "additionalProperties": false,
           "allOf": [
@@ -319,6 +1042,38 @@
                   }
                 }
               }
+            },
+            {
+              "if": {
+                "properties": {
+                  "path": {
+                    "const": "wiki.json"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "role": {
+                    "const": "wiki"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "path": {
+                    "const": "vectors.json"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "role": {
+                    "const": "vectors"
+                  }
+                }
+              }
             }
           ],
           "description": "One exact archive member. Runtime verifies its actual length and bytes against this digest.",
@@ -332,7 +1087,9 @@
                 "source.bin",
                 "layout.json",
                 "evidence.json",
-                "provenance.json"
+                "provenance.json",
+                "wiki.json",
+                "vectors.json"
               ]
             },
             "role": {
@@ -340,7 +1097,9 @@
                 "original",
                 "layout",
                 "evidence",
-                "provenance"
+                "provenance",
+                "wiki",
+                "vectors"
               ]
             },
             "size": {
@@ -356,6 +1115,109 @@
             "digest"
           ],
           "type": "object"
+        },
+        "ddp-evidence:v1.json:Locator": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "$comment": "**有 bbox 就必须有 page_size**。没有 page_size 的 bbox 在 CropBox 偏移或旋转页上会裁到错的区域，而裁图与原文对不上正是 parse_mismatch 想抓的那类假出处。",
+              "if": {
+                "properties": {
+                  "bbox": {
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "bbox"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "page_size": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "page_size"
+                ]
+              }
+            }
+          ],
+          "description": "原文位置。",
+          "properties": {
+            "bbox": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "page_block",
+                "table_cell",
+                "paragraph"
+              ],
+              "type": "string"
+            },
+            "page_size": {
+              "additionalProperties": false,
+              "properties": {
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                "rotation": {
+                  "enum": [
+                    0,
+                    90,
+                    180,
+                    270
+                  ],
+                  "type": "integer"
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "width",
+                "height"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "physical_page_index": {
+              "description": "从 0 起的物理页序。**与印刷页码分开** —— 前言用罗马数字时两者差一大截。",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "printed_page_label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "seq": {
+              "description": "块序。出处定位键的后两段是 (parse_revision, seq) —— 与既有 chunks/evidence 的稳定键一致。",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "physical_page_index",
+            "seq"
+          ],
+          "type": "object",
+          "x-ddp-doc": "**PDF 用既有真实坐标约定，明确页旋转、crop box、物理页序与印刷页码；非 PDF 不伪造页码**（§4.3）。项目已经在 evidence.page_size 上吃过这个亏 —— 缺它遇到 CropBox 偏移/旋转页会裁错区域，而「出处图对不上原文」是最恶劣的错。所以 page_size 在这里是 bbox 的**同级必填伴随字段**，不是可选补充。"
         }
       },
       "$id": "https://deepdocparse.dev/schemas/ddp-bundle/1",
@@ -1644,7 +2506,9 @@
                       "probe_read",
                       "execution_read",
                       "evidence_set_read",
-                      "catalog_read"
+                      "catalog_read",
+                      "directory_members_read",
+                      "directory_collections_read"
                     ]
                   }
                 },
@@ -1681,6 +2545,36 @@
                     "required": [
                       "root_task_id",
                       "step_id"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "operation": {
+                    "enum": [
+                      "directory_members_read",
+                      "directory_collections_read"
+                    ]
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "constraints": {
+                    "properties": {
+                      "scope_ref": {
+                        "$ref": "#/$defs/digest"
+                      }
+                    },
+                    "required": [
+                      "root_task_id",
+                      "scope_ref"
                     ]
                   }
                 }
@@ -1753,7 +2647,9 @@
                 "evidence_set_read",
                 "resource_locate",
                 "result_resolve",
-                "catalog_read"
+                "catalog_read",
+                "directory_members_read",
+                "directory_collections_read"
               ],
               "type": "string",
               "x-ddp-enum": "node_credential_operation"
@@ -1791,7 +2687,7 @@
             },
             "scope_ref": {
               "$ref": "#/$defs/ref_text",
-              "description": "探测请求体带 scope_ref 时必须相等；请求体不带时凭证也不许带。"
+              "description": "探测请求体带 scope_ref 时必须相等；目录 members/collections GET 必须是规范化查询串（按字段名排序、重复值保留次序的 application/x-www-form-urlencoded）的 sha256: 摘要，空查询也必须绑定。"
             },
             "step_id": {
               "$ref": "#/$defs/ref_text",
@@ -1926,7 +2822,9 @@
                 "evidence_set_read",
                 "resource_locate",
                 "result_resolve",
-                "catalog_read"
+                "catalog_read",
+                "directory_members_read",
+                "directory_collections_read"
               ],
               "type": "string",
               "x-ddp-enum": "node_credential_operation"
@@ -3866,6 +4764,41 @@
                   }
                 }
               }
+            },
+            {
+              "$comment": "requirements.wiki 只属于 wiki.pages；别的 operation 带 wiki 一律拒绝，wiki.pages 则必须带 requirements.wiki（与 plans.requirements_wiki 一致，防止静默错义）。",
+              "else": {
+                "properties": {
+                  "requirements": {
+                    "properties": {
+                      "wiki": false
+                    },
+                    "required": []
+                  }
+                }
+              },
+              "if": {
+                "properties": {
+                  "operation": {
+                    "const": "wiki.pages"
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "requirements": {
+                    "required": [
+                      "wiki"
+                    ]
+                  }
+                },
+                "required": [
+                  "requirements"
+                ]
+              }
             }
           ],
           "description": "需求描述 —— **不是执行计划**（§6.3）。",
@@ -3940,6 +4873,58 @@
                 },
                 "output_schema": {
                   "type": "string"
+                },
+                "wiki": {
+                  "additionalProperties": false,
+                  "allOf": [
+                    {
+                      "$comment": "wiki.pages 更新（有 wiki_id）必须带 base_revision_id 做 CAS；新建（无 wiki_id）必须给 title。",
+                      "else": {
+                        "required": [
+                          "title"
+                        ]
+                      },
+                      "if": {
+                        "properties": {
+                          "wiki_id": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "wiki_id"
+                        ]
+                      },
+                      "then": {
+                        "required": [
+                          "base_revision_id"
+                        ]
+                      }
+                    }
+                  ],
+                  "description": "wiki.pages 的 Wiki 需求（与 ddp_core.application.plans.requirements_wiki 同形）。",
+                  "properties": {
+                    "base_revision_id": {
+                      "maxLength": 32,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "max_pages": {
+                      "maximum": 12,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "wiki_id": {
+                      "maxLength": 32,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
                 }
               },
               "type": "object"

@@ -8,7 +8,7 @@ import respx
 from sqlalchemy import func, select
 
 from ddp_corpus.models import (
-    ClaimEvidenceBinding, DependencyManifest, Document, Evidence, ParseJob, Resource,
+    Chunk, ClaimEvidenceBinding, DependencyManifest, Document, Evidence, ParseJob, Resource,
     ResourceVersion, Wiki, WikiHumanEdit, WikiRevision, WikiWriteKey, utcnow,
 )
 from tests.conftest import ACTOR, CHAT, ORG, actor_headers
@@ -35,8 +35,17 @@ async def source(session, *, owner=ACTOR, publication="private", text="Original 
                         content=text, content_digest=digest, kind="text", page_idx=0,
                         bbox=[0, 0, 50, 50], page_size=[100, 100])
     session.add_all([version, evidence])
+    await session.flush()
+    # 与真实索引同形：原始 Evidence 由当前索引的 Chunk 指回（Wiki 只从这里选证）
+    session.add(index_chunk(evidence))
     await session.commit()
     return resource, version, evidence, document
+
+
+def index_chunk(evidence) -> Chunk:
+    return Chunk(document_id=evidence.document_id, parse_job_id=evidence.parse_job_id,
+                 seq=evidence.seq, page_idx=evidence.page_idx, text=evidence.content,
+                 text_tokenized=evidence.content, evidence_id=evidence.id)
 
 
 def body(resource, version, **kwargs):
@@ -48,10 +57,14 @@ def model(evidence, *, title="Overview", cited=True):
     def respond(request):
         prompt = json.loads(request.content)
         assert prompt["max_tokens"] > 0
-        planning = "Plan a Wiki" in prompt["messages"][0]["content"]
-        payload = {"pages": [{"title": title, "sections": ["Facts"]}]} if planning else {
-            "sections": [{"heading": "Facts", "sentences": [{"text": "Original fact.",
-                "evidence_ids": [evidence.id] if cited else ["invented-evidence"]}]}]}
+        assert prompt["response_format"]["type"] == "json_schema"
+        assert prompt["response_format"]["json_schema"]["strict"] is True
+        planning = "pages" in prompt["response_format"]["json_schema"]["schema"]["properties"]
+        payload = {"pages": [{"title": title, "sections": ["Facts"], "references": [1],
+                              "source_term": None}]} if planning else {
+            "sections": [{"heading": "Facts", "sentences": [{"text": evidence.content,
+                "evidence_ids": [evidence.id] if cited else ["invented-evidence"],
+                "conflict_group": None}]}]}
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
                                                     "finish_reason": "stop"}]})
     return respx.post(CHAT).mock(side_effect=respond)
@@ -70,7 +83,12 @@ async def test_fixed_manifest_human_edits_cas_rebuild_and_retry(actor_client, se
     assert (manifest["resource_id"], manifest["source_version_id"], manifest["parse_revision"],
             manifest["evidence_id"], manifest["excerpt_digest"]) == (
                 resource.id, version.id, version.parse_job_id, evidence.id, evidence.content_digest)
-    assert await session.scalar(select(func.count()).select_from(ClaimEvidenceBinding)) == 1
+    # 这里没有向量化服务：选证只走关键词路，必须在报告里说出来
+    assert first["revision"]["limits"]["evidence_selection"] == {
+        "total_original_evidence": 1, "selected_evidence": 1, "omitted_evidence": 0,
+        "complete": True, "ranking_degraded": "embedding_unavailable",
+        "sources": [{"resource_id": resource.id, "source_version_id": version.id,
+                     "total_original_evidence": 1, "selected_evidence": 1}]}
     retried = await actor_client.post("/api/wikis", json=create_body, headers={"Idempotency-Key": "create"})
     assert retried.json()["revision"]["id"] == revision_id and calls.call_count == 2
     conflict = await actor_client.post("/api/wikis", json={**create_body, "title": "Other"},
@@ -94,6 +112,67 @@ async def test_fixed_manifest_human_edits_cas_rebuild_and_retry(actor_client, se
     assert await session.scalar(select(func.count()).select_from(WikiRevision)) == 3
     assert await session.scalar(select(func.count()).select_from(WikiHumanEdit)) == 1
     assert await session.scalar(select(func.count()).select_from(WikiWriteKey)) == 3
+
+
+@respx.mock
+async def test_source_with_unsucceeded_parse_is_refused_before_any_model_call(actor_client, session):
+    """A bound parse_job_id is not a successful parse; the server must not trust the chooser."""
+    resource, version, evidence, _ = await source(session)
+    calls = model(evidence)
+    job = await session.get(ParseJob, version.parse_job_id)
+    for status in ("running", "failed"):
+        job.status = status
+        await session.commit()
+        refused = await actor_client.post("/api/wikis", json=body(resource, version),
+                                          headers={"Idempotency-Key": f"parse-{status}"})
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["error"]["code"] == "wiki_source_unavailable"
+    assert calls.call_count == 0
+    assert await session.scalar(select(func.count()).select_from(WikiRevision)) == 0
+
+
+def scripted(plan_pages, sentences):
+    def respond(request):
+        schema = json.loads(request.content)["response_format"]["json_schema"]["schema"]
+        payload = ({"pages": plan_pages} if "pages" in schema["properties"]
+                   else {"sections": [{"heading": "Facts", "sentences": sentences}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
+                                                    "finish_reason": "stop"}]})
+    return respx.post(CHAT).mock(side_effect=respond)
+
+
+@respx.mock
+async def test_claims_citing_the_reference_number_bind_to_that_evidence(actor_client, session):
+    """The page prompt shows each evidence with its planner `reference` and its `evidence_id`.
+    Qwen3-4B cited references ("4") and every SRAM claim came back unsupported although it
+    named the right block (2026-09-25, §4F retest). A known reference resolves; others drop."""
+    resource, version, evidence, _ = await source(session)
+    page = {"title": "Overview", "sections": ["Facts"], "references": [1], "source_term": None}
+    scripted([page], [{"text": evidence.content, "evidence_ids": ["1"], "conflict_group": None},
+                      {"text": "Made up.", "evidence_ids": ["7"], "conflict_group": None}])
+    created = await actor_client.post("/api/wikis", json=body(resource, version),
+                                      headers={"Idempotency-Key": "by-reference"})
+    assert created.status_code == 201, created.text
+    claims = [claim for page in created.json()["revision"]["pages"]
+              for section in page["generated_sections"] for claim in section["sentences"]]
+    assert [(claim["evidence_ids"], claim["unsupported"]) for claim in claims] == [
+        ([evidence.id], False), ([], True)]
+    bindings = (await session.execute(select(ClaimEvidenceBinding.claim_id,
+                                             ClaimEvidenceBinding.evidence_id))).all()
+    assert [tuple(row) for row in bindings] == [(claims[0]["id"], evidence.id)]
+
+
+@respx.mock
+async def test_rejected_planner_output_names_its_fault(actor_client, session):
+    """A planner that repeated a page was reported as "invalid source bindings" (§4F retest)."""
+    resource, version, evidence, _ = await source(session)
+    page = {"title": "Overview", "sections": ["Facts"], "references": [1], "source_term": None}
+    scripted([page, page], [])
+    refused = await actor_client.post("/api/wikis", json=body(resource, version, max_pages=2),
+                                      headers={"Idempotency-Key": "repeated-page"})
+    assert refused.status_code == 502, refused.text
+    assert refused.json()["error"]["code"] == "wiki_generation_failed"
+    assert "repeated a page" in refused.json()["error"]["message"]
 
 
 @respx.mock
@@ -151,6 +230,57 @@ async def test_exact_parse_binding_stale_and_missing_binding(actor_client, sessi
 
 
 @respx.mock
+async def test_rebuild_on_the_newest_version_clears_stale_and_keeps_human_paragraphs(
+        actor_client, session):
+    """资料更新 → 过期 → 在新版本上重建：人工段落保留、页面不再过期、可以发布，旧修订仍指旧版本。
+    重建把旧页的依赖随人工段落一起带上（发布仍要查它们）；逐行判版本时，这一页在最新版本上
+    重建后也永远"待更新"、永远发布不了（D 阶段浏览器实测）。"""
+    resource, v1, e1, _ = await source(session, publication="published", text="Reset delay is 17 ms.")
+    model(e1)
+    created = (await actor_client.post("/api/wikis", json=body(resource, v1),
+                                       headers={"Idempotency-Key": "v1"})).json()
+    wiki_id, first = created["wiki"]["id"], created["revision"]
+    edited = (await actor_client.patch(
+        f"/api/wikis/{wiki_id}/pages/{first['pages'][0]['page_key']}",
+        json={"base_revision_id": first["id"], "paragraphs": [{"id": "n", "text": "Wait longer."}]},
+        headers={"Idempotency-Key": "note"})).json()["revision"]
+
+    text = "Reset delay is 23 ms."
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    doc2 = Document(uploaded_by=ACTOR, organization_id=ORG, doc_id=digest, filename="manual.pdf")
+    session.add(doc2)
+    await session.flush()
+    job2 = ParseJob(document_id=doc2.id, engine="borndigital", options_hash="v1", status="succeeded")
+    session.add(job2)
+    await session.flush()
+    v2 = ResourceVersion(resource_id=resource.id, document_id=doc2.id, parse_job_id=job2.id,
+                         source_digest=digest, version_no=2)
+    e2 = Evidence(document_id=doc2.id, parse_job_id=job2.id, seq=0, atom_key="text-0", content=text,
+                  content_digest=digest, kind="text", page_idx=0, bbox=[0, 0, 50, 50],
+                  page_size=[100, 100])
+    session.add_all([v2, e2])
+    await session.flush()
+    session.add(index_chunk(e2))
+    await session.commit()
+    assert (await actor_client.get(f"/api/wikis/{wiki_id}")).json()["revision"]["stale"] is True
+
+    model(e2)
+    rebuilt = await actor_client.post(f"/api/wikis/{wiki_id}/revisions", json=body(
+        resource, v2, base_revision_id=edited["id"]), headers={"Idempotency-Key": "v2"})
+    assert rebuilt.status_code == 201, rebuilt.text
+    revision = rebuilt.json()["revision"]
+    assert revision["pages"][0]["human_paragraphs"][0]["text"] == "Wait longer."
+    assert {d["source_version_id"] for d in revision["dependency_manifest"]} == {v1.id, v2.id}
+    assert revision["stale"] is False
+    published = await actor_client.post(f"/api/wikis/{wiki_id}/publish",
+                                        json={"base_revision_id": revision["id"]})
+    assert published.status_code == 200, published.text
+    old = (await actor_client.get(f"/api/wikis/{wiki_id}/revisions/{first['id']}")).json()["revision"]
+    assert old["stale"] is True
+    assert {d["source_version_id"] for d in old["dependency_manifest"]} == {v1.id}
+
+
+@respx.mock
 async def test_private_context_cannot_launder_via_public_citation(actor_client, session):
     private, pv, _, _ = await source(session, text="Private fact.")
     public, uv, ue, _ = await source(session, publication="published", text="Public fact.")
@@ -176,7 +306,8 @@ async def test_revoke_between_model_calls_stops_next_request(actor_client, sessi
         resource.publication = "private"
         await session.commit()
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
-            "pages": [{"title": "Overview", "sections": ["Facts"]}]})}}]})
+            "pages": [{"title": "Overview", "sections": ["Facts"], "references": [1],
+                       "source_term": None}]})}, "finish_reason": "stop"}]})
     calls = respx.post(CHAT).mock(side_effect=revoke)
     result = await actor_client.post("/api/wikis", json=body(resource, version),
                                      headers={"Idempotency-Key": "revocation"})
@@ -197,12 +328,314 @@ async def test_budget_generated_evidence_and_failure_leave_no_partial_revision(a
     evidence.derived_from = None
     await session.commit()
     respx.post(CHAT).mock(return_value=httpx.Response(200, json={"choices": [{"message": {
-        "content": json.dumps({"pages": [{"title": "A"}, {"title": "B"}]})}}]}))
+        "content": json.dumps({"pages": [{"title": "A"}, {"title": "B"}]})}, "finish_reason": "stop"}]}))
     too_many = await actor_client.post("/api/wikis", json=body(resource, version, max_pages=1),
                                        headers={"Idempotency-Key": "budget"})
     assert too_many.status_code == 409 and too_many.json()["error"]["code"] == "wiki_budget_exceeded"
     assert await session.scalar(select(func.count()).select_from(WikiRevision)) == 0
     assert await session.scalar(select(func.count()).select_from(DependencyManifest)) == 0
+
+
+async def long_source(session, *, count=4, topic="watchdog timer triggers controller reset"):
+    return await source_with(session, [
+        f"{topic} detail {seq}." if seq < 2 else f"Unrelated appendix filler {seq}."
+        for seq in range(count)])
+
+
+async def source_with(session, texts: list[str]):
+    digest = hashlib.sha256("\n".join(texts).encode()).hexdigest()
+    document = Document(uploaded_by=ACTOR, organization_id=ORG, doc_id=digest, filename="manual.pdf")
+    session.add(document)
+    await session.flush()
+    job = ParseJob(document_id=document.id, engine="borndigital", options_hash="v1", status="succeeded")
+    session.add(job)
+    await session.flush()
+    document.current_job_id = job.id
+    resource = Resource(owner_id=ACTOR, uploaded_by=ACTOR, organization_id=ORG, publication="private")
+    session.add(resource)
+    await session.flush()
+    version = ResourceVersion(resource_id=resource.id, document_id=document.id, parse_job_id=job.id,
+                              source_digest=digest, version_no=1)
+    session.add(version)
+    await session.flush()
+    rows = []
+    for seq, text in enumerate(texts):
+        row = Evidence(document_id=document.id, parse_job_id=job.id, seq=seq, atom_key=f"text-{seq}",
+                       content=text, content_digest=hashlib.sha256(text.encode()).hexdigest(),
+                       kind="text", page_idx=seq, bbox=[0, 0, 50, 50], page_size=[100, 100])
+        session.add(row)
+        rows.append(row)
+    await session.flush()
+    session.add_all([index_chunk(row) for row in rows])
+    await session.commit()
+    return resource, version, rows
+
+
+def topic_model(rows, *, relations=()):
+    def respond(request):
+        prompt = json.loads(request.content)
+        assert prompt["response_format"]["json_schema"]["strict"] is True
+        properties = prompt["response_format"]["json_schema"]["schema"]["properties"]
+        if "pages" in properties:
+            payload = {"pages": [
+                {"title": "Controller reset", "sections": ["Reset"], "references": [1],
+                 "source_term": "controller reset"},
+                {"title": "Watchdog settings", "sections": ["Watchdog"], "references": [1],
+                 "source_term": "watchdog"},
+            ]}
+        elif "selected_relations" in properties:
+            payload = {"selected_relations": list(relations)}
+        else:
+            payload = {"sections": [{"heading": "Facts", "sentences": [
+                {"text": rows[0].content, "evidence_ids": [rows[0].id], "conflict_group": None},
+                {"text": rows[1].content, "evidence_ids": [rows[1].id], "conflict_group": None}]}]}
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
+                                                    "finish_reason": "stop"}]})
+    return respx.post(CHAT).mock(side_effect=respond)
+
+
+@respx.mock
+async def test_bounded_selection_stores_source_grounded_relations(actor_client, session):
+    resource, version, evidence, _ = await source(
+        session, text="Controller reset uses watchdog settings and status register coordination.")
+    available_tokens = 2048
+
+    def respond(request):
+        nonlocal available_tokens
+        prompt = json.loads(request.content)
+        available_tokens -= prompt["max_tokens"]
+        if available_tokens < 0:
+            return httpx.Response(429, json={"error": {"message": "Completion allowance exhausted"}})
+        properties = prompt["response_format"]["json_schema"]["schema"]["properties"]
+        if "pages" in properties:
+            payload = {"pages": [
+                {"title": title, "sections": ["Facts"], "references": [1], "source_term": term}
+                for title, term in [
+                    ("Controller reset", "Controller reset"),
+                    ("Watchdog settings", "watchdog settings"),
+                    ("Status register", "status register"),
+                ]
+            ]}
+        elif "selected_relations" in properties:
+            candidates = json.loads(prompt["messages"][1]["content"])["candidates"]
+            payload = {"selected_relations": [candidate["id"] for candidate in candidates]}
+        else:
+            payload = {"sections": [{"heading": "Facts", "sentences": [{
+                "text": evidence.content, "evidence_ids": [evidence.id], "conflict_group": None,
+            }]}]}
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
+                                                    "finish_reason": "stop"}]})
+
+    respx.post(CHAT).mock(side_effect=respond)
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Controller reset, watchdog settings and status register",
+        max_pages=3, max_evidence=2, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "relations"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    titles = {page["page_key"]: page["title"] for page in revision["pages"]}
+    assert {(titles[edge["subject_id"]], titles[edge["object_id"]])
+            for edge in revision["relations"]} == {
+        ("Controller reset", "Watchdog settings"),
+        ("Controller reset", "Status register"),
+        ("Watchdog settings", "Status register"),
+    }
+    for edge in revision["relations"]:
+        assert edge["predicate"] == evidence.content
+        assert edge["evidence_ids"] == [evidence.id]
+
+    wiki_id = created.json()["wiki"]["id"]
+    edited = await actor_client.patch(
+        f"/api/wikis/{wiki_id}/pages/{revision['pages'][0]['page_key']}",
+        json={"base_revision_id": revision["id"],
+              "paragraphs": [{"id": "operator-note", "text": "Check these settings before startup."}]},
+        headers={"Idempotency-Key": "relation-human-edit"})
+    assert edited.status_code == 201, edited.text
+    assert edited.json()["revision"]["relations"] == revision["relations"]
+    historical = await actor_client.get(f"/api/wikis/{wiki_id}/revisions/{revision['id']}")
+    assert historical.json()["revision"]["relations"] == revision["relations"]
+
+
+@respx.mock
+async def test_bounded_selection_reports_omitted_coverage(actor_client, session):
+    resource, version, rows = await long_source(session)
+    topic_model(rows)
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Controller reset delay and watchdog settings",
+        max_pages=2, max_evidence=2, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "bounded"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    assert revision["limits"]["evidence_selection"] == {
+        "total_original_evidence": 4, "selected_evidence": 2, "omitted_evidence": 2,
+        "complete": False, "ranking_degraded": "embedding_unavailable",
+        "sources": [{"resource_id": resource.id, "source_version_id": version.id,
+                     "total_original_evidence": 4, "selected_evidence": 2}]}
+    assert {d["evidence_id"] for d in revision["dependency_manifest"]} == {rows[0].id, rows[1].id}
+    assert {c for page in revision["pages"] for section in page["generated_sections"]
+            for claim in section["sentences"] for c in claim["evidence_ids"]} == {rows[0].id, rows[1].id}
+
+
+@respx.mock
+async def test_selection_ignores_evidence_superseded_by_an_index_rebuild(actor_client, session):
+    """重建索引后旧 Evidence 行留给历史出处，但不能再当 Wiki 候选：真栈上 Pico 474 行里
+    只有 162 行是当前索引，旧行带整页 bbox、同文不同 ID，覆盖数也被放大到 8319。"""
+    resource, version, rows = await long_source(session, count=2)
+    text = "watchdog timer triggers controller reset detail 0. (old whole-page chunk)"
+    superseded = Evidence(document_id=rows[0].document_id, parse_job_id=rows[0].parse_job_id, seq=0,
+                          atom_key="source:0:old", content=text, kind="text", page_idx=0,
+                          content_digest=hashlib.sha256(text.encode()).hexdigest(),
+                          bbox=[0, 0, 100, 100], page_size=[100, 100])
+    session.add(superseded)
+    await session.commit()
+    topic_model(rows)
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Controller reset delay and watchdog settings",
+        max_pages=2, max_evidence=10, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "current-index"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    assert superseded.id not in {d["evidence_id"] for d in revision["dependency_manifest"]}
+    assert revision["limits"]["evidence_selection"]["total_original_evidence"] == 2
+
+
+@respx.mock
+async def test_sources_take_turns_so_a_repeated_title_word_cannot_fill_the_budget(
+        actor_client, session):
+    """双源 Wiki：一个来源每块都重复标题里的词（Pico 页眉），也不能占满名额、
+    把两个来源各自最相关的那条挤掉。真栈上 Pico 拿了 24 个名额里的 23 个。"""
+    pico, pico_version, pico_rows = await source_with(session, [
+        *(f"Raspberry Pi Pico RP2040 datasheet page {n}" for n in range(6)),
+        "RP2040 provides 264 kB of SRAM."])
+    esp, esp_version, esp_rows = await source_with(session, [
+        *(f"Series datasheet page {n}" for n in range(6)), "ESP32 has 520 KB of on-chip SRAM."])
+    facts = [pico_rows[-1], esp_rows[-1]]
+    topic_model(facts)
+    request = body(pico, pico_version, title="Raspberry Pi Pico RP2040 SRAM compared with ESP32 on-chip SRAM",
+                   max_pages=2, max_evidence=4, max_input_chars=12000, max_output_tokens=2048)
+    request["sources"].append({"resource_id": esp.id, "source_version_id": esp_version.id})
+    created = await actor_client.post("/api/wikis", json=request, headers={"Idempotency-Key": "turns"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    assert [s["selected_evidence"] for s in revision["limits"]["evidence_selection"]["sources"]] == [2, 2]
+    assert {fact.id for fact in facts} <= {d["evidence_id"] for d in revision["dependency_manifest"]}
+
+
+@respx.mock
+async def test_evidence_backlinks_list_the_visible_wiki_revision_claims(actor_client, session):
+    """版本化 Wiki 的结论绑定不在 citations 表里，证据的反链曾经完全看不到它们。
+    只算读者从 Wiki 本身能读到的那一版：属主看当前修订，其他人看已发布修订。"""
+    resource, version, evidence, _ = await source(session, publication="published")
+    model(evidence)
+    created = (await actor_client.post("/api/wikis", json=body(resource, version),
+                                       headers={"Idempotency-Key": "backlinks"})).json()
+    wiki_id, first = created["wiki"]["id"], created["revision"]
+    page_key = first["pages"][0]["page_key"]
+    edited = (await actor_client.patch(f"/api/wikis/{wiki_id}/pages/{page_key}", json={
+        "base_revision_id": first["id"], "paragraphs": [{"id": "n", "text": "Note."}]},
+        headers={"Idempotency-Key": "backlinks-edit"})).json()["revision"]
+    path = f"/api/evidence/{evidence.id}/backlinks"
+
+    mine = [item for item in (await actor_client.get(path)).json()["backlinks"]
+            if item["source_kind"] == "wiki_claim"]
+    assert [(item["label"], item["revision_id"], item["wiki_id"]) for item in mine] == [
+        (evidence.content, edited["id"], wiki_id)], "只算当前修订，历史修订不重复出现"
+    bob = actor_headers("bob")
+    assert not [item for item in (await actor_client.get(path, headers=bob)).json()["backlinks"]
+                if item["source_kind"] == "wiki_claim"], "未发布的 Wiki 不能从反链泄露给别人"
+    published = await actor_client.post(f"/api/wikis/{wiki_id}/publish",
+                                        json={"base_revision_id": edited["id"]})
+    assert published.status_code == 200, published.text
+    theirs = [item for item in (await actor_client.get(path, headers=bob)).json()["backlinks"]
+              if item["source_kind"] == "wiki_claim"]
+    assert [item["revision_id"] for item in theirs] == [edited["id"]]
+
+
+@respx.mock
+async def test_bounded_selection_rejects_unsupported_and_revoked_sources(actor_client, session):
+    resource, version, rows = await long_source(session, count=2)
+    topic_model(rows)
+    bad_body = body(resource, version, title="Controller reset delay and watchdog settings",
+                    max_pages=2, max_evidence=2, max_input_chars=12000, max_output_tokens=2048)
+    bad_body["sources"][0]["source_version_id"] = "missing-version"
+    bad = await actor_client.post("/api/wikis", json=bad_body,
+                                  headers={"Idempotency-Key": "unsupported"})
+    assert bad.status_code == 404
+    resource2, version2, rows2 = await long_source(session, count=2, topic="second manual topic")
+    topic_model(rows2)
+    request = body(resource, version, title="Controller reset delay and watchdog settings",
+                   max_pages=2, max_evidence=2, max_input_chars=12000, max_output_tokens=2048)
+    request["sources"].append({"resource_id": resource2.id, "source_version_id": version2.id})
+    resource2.publication = "withdrawn"
+    await session.commit()
+    # Withdrawn second source is still resolved (never silently skipped): its
+    # authorization fails closed before any selection or model call.
+    revoked = await actor_client.post("/api/wikis", json=request, headers={"Idempotency-Key": "revoked"})
+    assert revoked.status_code == 409
+    assert revoked.json()["error"]["code"] == "wiki_source_unavailable"
+
+
+@respx.mock
+async def test_bounded_selection_keeps_human_paragraphs(actor_client, session):
+    resource, version, rows = await long_source(session, count=2)
+    topic_model(rows)
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Controller reset delay and watchdog settings",
+        max_pages=2, max_evidence=2, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "human"})
+    assert created.status_code == 201, created.text
+    first = created.json()
+    wiki_id, revision_id = first["wiki"]["id"], first["revision"]["id"]
+    key = first["revision"]["pages"][0]["page_key"]
+    edited = await actor_client.patch(f"/api/wikis/{wiki_id}/pages/{key}",
+        json={"base_revision_id": revision_id, "paragraphs": [{"id": "note", "text": "Keep me."}]},
+        headers={"Idempotency-Key": "human-edit"})
+    assert edited.status_code == 201, edited.text
+    rebuilt = await actor_client.post(f"/api/wikis/{wiki_id}/revisions", json=body(
+        resource, version, title="Controller reset delay and watchdog settings",
+        max_pages=2, max_evidence=2, max_input_chars=12000, max_output_tokens=2048,
+        base_revision_id=edited.json()["revision"]["id"]), headers={"Idempotency-Key": "human-rebuild"})
+    assert rebuilt.status_code == 201, rebuilt.text
+    assert rebuilt.json()["revision"]["pages"][0]["human_paragraphs"][0]["text"] == "Keep me."
+
+
+@respx.mock
+async def test_invalid_relation_selection_cannot_become_an_empty_graph(actor_client, session):
+    resource, version, rows = await long_source(session, count=2)
+    topic_model(rows, relations=[999])
+    response = await actor_client.post("/api/wikis", json=body(resource, version, max_pages=2),
+                                       headers={"Idempotency-Key": "invalid-relation"})
+    assert response.status_code == 502, response.text
+    assert response.json()["error"]["code"] == "wiki_generation_failed"
+    assert await session.scalar(select(func.count()).select_from(WikiRevision)) == 0
+
+
+@respx.mock
+async def test_bounded_selection_cannot_launder_an_omitted_private_source(actor_client, session):
+    public, public_version, rows = await long_source(session, topic="Controller reset")
+    public.publication = "published"
+    await session.commit()
+    private, private_version, _, _ = await source(session, text="Private appendix details.")
+    model(rows[0])
+    request = body(public, public_version, title="Controller reset", max_evidence=1)
+    request["sources"].append({"resource_id": private.id, "source_version_id": private_version.id})
+    headers = {"Idempotency-Key": "source-coverage"}
+    denied = await actor_client.post("/api/wikis", json=request, headers=headers)
+    assert denied.status_code == 409, denied.text
+    assert denied.json()["error"]["code"] == "wiki_budget_exceeded"
+    assert await session.scalar(select(func.count()).select_from(Wiki)) == 0
+
+    request["max_evidence"] = 2
+    created = await actor_client.post("/api/wikis", json=request, headers=headers)
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    assert {item["resource_id"] for item in revision["dependency_manifest"]} == {public.id, private.id}
+    assert all(item["selected_evidence"] == 1
+               for item in revision["limits"]["evidence_selection"]["sources"])
+    published = await actor_client.post(f"/api/wikis/{created.json()['wiki']['id']}/publish",
+        json={"base_revision_id": revision["id"]})
+    assert published.status_code == 403, published.text
+    assert published.json()["error"]["code"] == "wiki_source_permission"
 
 
 def legacy_model(evidence):

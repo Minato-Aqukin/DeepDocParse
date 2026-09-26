@@ -11,7 +11,9 @@ from ddp_core.tokenize import backend as tokenizer_backend
 from ddp_core.tokenize import code_tokenized, tokenized
 
 COMPILER_VERSION = "ddp-compile/1"
-CHUNKER_VERSION = "ddp-chunk/2"
+# ddp-chunk/3：只合并版面相邻的块（见 chunking.py 模块说明）。版本变 = 指纹变 =
+# 老索引在「校验版本」里显示 stale，重建前必须先看历史出处会失效多少条
+CHUNKER_VERSION = "ddp-chunk/3"
 VISUAL_KINDS = frozenset({"code", "equation", "table", "figure"})
 CODE_DETECTION_VALUES = frozenset({"native", "heuristic", "unavailable"})
 UNRESOLVED_MODEL = "<upstream-default:unresolved>"

@@ -12,18 +12,30 @@ import { createPinia } from 'pinia'
 import { createApp } from 'vue'
 
 import App from './App.vue'
+import { initDesktopSource } from './platform/desktop'
 import router from './router'
 
-const app = createApp(App)
+async function boot() {
+  // 桌面：挂载前先读宿主的当前源 —— 守卫、导航、权限都要在首屏前知道它。
+  // 读不到也不挡挂载：根路由会把首屏落在数据源页。
+  try {
+    await initDesktopSource()
+  } catch {
+    // initDesktopSource 内部已兜住，这里只是不再让启动崩掉
+  }
+  const app = createApp(App)
 
-app.use(createPinia())
-app.use(router)
-app.use(ElementPlus)
+  app.use(createPinia())
+  app.use(router)
+  app.use(ElementPlus)
 
-// 全局注册图标：路由 meta 里写图标名（如 'Files'）就能直接 <component :is="name" /> 用上，
-// 加页面时不用再手动 import 图标组件
-for (const [name, component] of Object.entries(ElementPlusIcons)) {
-  app.component(name, component)
+  // 全局注册图标：路由 meta 里写图标名（如 'Files'）就能直接 <component :is="name" /> 用上，
+  // 加页面时不用再手动 import 图标组件
+  for (const [name, component] of Object.entries(ElementPlusIcons)) {
+    app.component(name, component)
+  }
+
+  app.mount('#app')
 }
 
-app.mount('#app')
+void boot()

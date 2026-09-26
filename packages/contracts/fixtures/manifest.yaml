@@ -108,9 +108,18 @@
 - {fixture: valid/exploration-consent-listed.json,     schema: ddp-task-probe/v1.json, def: ExplorationConsent, expect: valid}
 - {fixture: valid/exploration-consent-local-only.json, schema: ddp-task-probe/v1.json, def: ExplorationConsent, expect: valid}
 - {fixture: valid/task-spec-exhaustive.json,           schema: ddp-task-probe/v1.json, def: TaskSpec,           expect: valid}
+- {fixture: valid/task-spec-wiki.json,                schema: ddp-task-probe/v1.json, def: TaskSpec,           expect: valid}
 - {fixture: valid/probe-evidence-succeeded.json,       schema: ddp-task-probe/v1.json, def: ProbeResult,        expect: valid}
 - {fixture: valid/probe-evidence-partial.json,         schema: ddp-task-probe/v1.json, def: ProbeResult,        expect: valid}
 - {fixture: valid/probe-with-offer.json,               schema: ddp-task-probe/v1.json, def: ProbeResult,        expect: valid}
+
+- fixture: invalid/task-spec-wiki-on-answer.json
+  schema: ddp-task-probe/v1.json
+  def: TaskSpec
+  expect: invalid
+  violates: $.requirements
+  violates_keyword: false
+  because: requirements.wiki 只属于 wiki.pages；rag.answer.cited 带 wiki 一律拒绝（与 plans.requirements_wiki 一致，防止静默错义）。
 
 - fixture: invalid/consent-local-only-with-payload.json
   schema: ddp-task-probe/v1.json
@@ -352,7 +361,7 @@
   schema: ddp-bundle/v1.json
   def: BundleManifest
   expect: invalid
-  violates: "$.required_features"
+  violates: "$.required_features[0]"
 - fixture: invalid/bundle-unsafe-path.json
   schema: ddp-bundle/v1.json
   def: BundleManifest
@@ -426,3 +435,45 @@
   violates: $.ttl_seconds
   violates_keyword: maximum
   because: 凭证是短期的（≤120s）；小时级的委托凭证等于把节点信任变成了一张可转手的长期票据。
+
+- fixture: valid/bundle-optional-payloads.json
+  schema: ddp-bundle/v1.json
+  def: BundleManifest
+  expect: valid
+- fixture: valid/bundle-wiki-draft.json
+  schema: ddp-bundle/v1.json
+  def: BundleWiki
+  expect: valid
+- fixture: valid/bundle-vectors-missing.json
+  schema: ddp-bundle/v1.json
+  def: BundleVectors
+  expect: valid
+- fixture: invalid/bundle-undeclared-wiki.json
+  schema: ddp-bundle/v1.json
+  def: BundleManifest
+  expect: invalid
+  violates: $.files
+  because: 可选成员必须声明对应必需特性，旧读取器不能悄悄丢弃知识页。
+- fixture: invalid/bundle-empty-wiki-with-pages.json
+  schema: ddp-bundle/v1.json
+  def: BundleWiki
+  expect: invalid
+  violates: $.pages
+  because: 明确缺失的知识页载荷不能同时携带隐蔽页面。
+- fixture: invalid/bundle-missing-vectors-with-identity.json
+  schema: ddp-bundle/v1.json
+  def: BundleVectors
+  expect: invalid
+  violates: $.dimension
+  because: 缺失向量必须如实缺失模型元数据，不能伪装成可复用的索引。
+- fixture: valid/bundle-wiki-foreign-locator.json
+  schema: ddp-bundle/v1.json
+  def: BundleWiki
+  expect: valid
+- fixture: invalid/bundle-wiki-bbox-without-page-size.json
+  schema: ddp-bundle/v1.json
+  def: BundleWiki
+  expect: invalid
+  violates: $.dependency_manifest[0].locator
+  violates_keyword: required
+  because: 外部来源的定位仍遵循既有证据坐标契约，不能缺少页尺寸后伪造可核对位置。

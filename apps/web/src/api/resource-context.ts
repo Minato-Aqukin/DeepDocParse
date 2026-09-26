@@ -1,7 +1,21 @@
+import type { DocumentInfo } from '@/types/api'
+
 /** A resource selected in the URL is explicit UI context, never an authorization claim.
  * Attach it only to reads of that document (or its evidence), never another document
  * or a remote URL. The server always checks the binding again.
  */
+export interface ResourceContext {
+  resource_id?: string
+  version_id?: string
+}
+
+export function documentContext(document: DocumentInfo): ResourceContext {
+  return {
+    resource_id: document.resource_id ?? undefined,
+    version_id: document.source_version_id ?? undefined,
+  }
+}
+
 export function selectedResource(url: string, hash: string, params?: Record<string, unknown>): string | undefined {
   const current = /^#\/documents\/([^/?]+)(?:\/[^?]*)?(?:\?(.*))?$/.exec(hash)
   if (!current || !url.startsWith('/api/')) return undefined

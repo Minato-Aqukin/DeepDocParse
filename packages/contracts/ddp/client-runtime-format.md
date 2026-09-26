@@ -87,10 +87,10 @@ and rejects late results after that connection generation is disposed. Its curre
 local HTTP adapter uses fixed endpoints; center reads use the fixed client query
 endpoint below. Remote commands require an approved plan. The renderer cannot choose a URL.
 
-The local adapter also exposes fixed Wiki reads: `wiki.list` with optional
-`cursor`/`limit`, `wiki.get` with `wiki_id` and optional fixed `revision_id`, and
-`wiki.revisions` with `wiki_id` and optional bounded metadata window. List items
-are summaries; page bodies and dependency manifests come only from `wiki.get`.
+Both adapters expose fixed Wiki reads: `wiki.list` with optional `cursor`/`limit`,
+`wiki.get` with `wiki_id` and optional fixed `revision_id`, and `wiki.revisions`
+with `wiki_id` and optional bounded metadata window. List items are summaries;
+page bodies and dependency manifests come only from `wiki.get`.
 `wiki.create` carries `{body}`, `wiki.rebuild` carries `{wiki_id,body}`, and
 `wiki.edit` carries `{wiki_id,page_key,body}`. They map to fixed POST/POST/PATCH
 routes documented in `python/ddp_local/docs/local-api.md`. Builds bind selected
@@ -98,6 +98,28 @@ resource/version pairs and local-only policy; edits require `base_revision_id`
 and identified human paragraphs. Every write uses the shared durable intent and
 receipt ledger; a receipt without a committed revision is not a successful edit.
 The renderer has no arbitrary URL, HTTP method or remote-policy override.
+
+## Fixed-version assets (`client.assets`)
+
+A paired center may advertise authenticated read-only assets at
+`GET /api/v1/client/versions/{version_id}/source` and
+`GET /api/v1/client/versions/{version_id}/bundle`. Selecting an already authorized
+source is not a remote computation or permission to upload local data. These routes
+resolve the exact ResourceVersion through current resource ACLs; a missing or
+inaccessible version returns the same 404. Replica revocation and expiry remain
+effective here, not only on the replica-management route.
+
+Responses are private and non-cacheable. `X-DDP-Authority-Node` and
+`X-DDP-Actor-Subject` bind the response to the established connection.
+Source responses also carry `X-DDP-Source-Digest` (`sha256:<hex>`) and
+`X-DDP-Source-Availability` (`online` or `offline_snapshot`). A snapshot is available
+only through an actual valid permission; a withdrawn permission returns 410.
+The native host verifies the complete source digest before displaying it, and
+validates a complete Bundle before atomically saving it. It never follows a
+redirect or forwards the center credential to an object-store URL. The renderer
+supplies only the selected connection and fixed version, never an endpoint or path.
+Late reads from a disposed connection are rejected. Remote writes still require
+their approved plan.
 
 ## Center metadata windows (`client.windows`)
 
@@ -167,6 +189,17 @@ projection. `POST /api/v1/client/query` takes `{name,payload}`. The fixed names 
   binding are not advertised as indexed evidence. Missing verified source digest or
   authority fails explicitly with 409 `evidence_provenance_unavailable`. Oversized
   responses fail explicitly rather than truncating evidence.
+- `wiki.list`: `{cursor?,limit?:1..100}` returns the current principal's own Wiki
+  summaries, not a public or cross-principal catalog. `wiki.revisions` takes
+  `{wiki_id,cursor?,limit?:1..100}` and returns revision metadata. Both return
+  `{items,visible_total,has_more,next_cursor}`; cursors bind the authenticated
+  client scope, list identity, and fixed upper creation boundary. Each new read
+  rechecks ownership/publication; a non-owner can see only the currently published
+  revision, after its source authorization checks. No page body appears in a window.
+- `wiki.get`: `{wiki_id,revision_id?}` uses the existing Wiki authorization and
+  exact immutable revision reader. An omitted revision means the owner's current
+  revision or the non-owner's currently published revision. Foreign evidence
+  identities remain qualified and never become arbitrary outbound requests.
 
 Unknown query names/fields fail. Callers cannot supply a URL. Queries never write a
 command intent, accept a task or regenerate results. Remote commands remain

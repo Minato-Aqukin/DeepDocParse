@@ -17,7 +17,6 @@ from ddp_corpus.indexing import index_document
 from ddp_corpus.models import (
     Chunk, Citation, Document, Evidence, ParseJob, as_aware, utcnow,
 )
-from ddp_corpus.qa import Retrieval, build_messages
 from ddp_corpus.storage import MemoryStorage
 from ddp_core.compilation import provider_of
 from ddp_core.search import MemoryIndex, exact_identifiers
@@ -649,16 +648,6 @@ async def test_exact_identifier_query_gives_code_keyword_route_extra_weight(sess
     assert hits[0]["score"] > hits[1]["score"]
 
 
-def test_generated_visual_description_is_labeled_in_answer_context():
-    retrieval = Retrieval(hits=[{
-        "page_idx": 0, "text": "图 1 延迟曲线", "derived_text": "80ms 后趋稳",
-        "evidence_id": "source-e1",
-    }])
-    messages = build_messages("趋势如何？", retrieval, [], [])
-    body = messages[-1]["content"][-1]["text"]
-    assert "[生成理解，原子证据 source-e1]" in body
-    assert "[原文/OCR]" in body
-    assert "80ms 后趋稳" in body and "图 1 延迟曲线" in body
 
 
 def test_exact_identifier_extraction_works_inside_natural_language_questions():

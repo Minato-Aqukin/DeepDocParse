@@ -195,6 +195,26 @@ func TestGateDeniesMissingScopeAndAudits(t *testing.T) {
 	}
 }
 
+// 签发时带 parse 的 key，主人降成 viewer 之后不能再用 parse：角色每次请求现读，
+// 作用域只是 key 的上限，不是一份在签发时冻结的权限。403 且留审计。
+func TestGateDeniesScopeTheOwnersCurrentRoleNoLongerAllows(t *testing.T) {
+	keys := &fakeKeyStore{key: liveKey(), role: rbac.Viewer}
+	rec, reached, _ := run(t, keys, nil, rbac.ScopeParse, "Bearer sk-live")
+	if rec.Code != http.StatusForbidden || errCode(t, rec) != "insufficient_role" {
+		t.Errorf("降级后的 key 应当 403 insufficient_role，得到 %d %s", rec.Code, rec.Body.String())
+	}
+	if reached {
+		t.Error("下游被调到了 —— 降级对旧 key 没生效")
+	}
+	if len(keys.auditLog) != 1 || !strings.HasPrefix(keys.auditLog[0], "apikey.role_denied:") {
+		t.Errorf("降级后的越权尝试没留审计：%v", keys.auditLog)
+	}
+	// 同一把 key 的只读作用域仍在 viewer 的权限内
+	if _, reached, _ := run(t, &fakeKeyStore{key: liveKey(), role: rbac.Viewer}, nil, rbac.ScopeRead, "Bearer sk-live"); !reached {
+		t.Error("viewer 的只读作用域被误拦")
+	}
+}
+
 func TestGatePassesWithScopeAndBuildsActor(t *testing.T) {
 	keys := &fakeKeyStore{key: liveKey(), role: rbac.Contributor}
 	rec, reached, actor := run(t, keys, nil, rbac.ScopeParse, "Bearer sk-live")

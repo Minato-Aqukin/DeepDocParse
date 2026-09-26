@@ -4,6 +4,7 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { documentsApi, downloadAs, downloadViaSignedUrl } from '@/api'
+import { documentContext } from '@/api/resource-context'
 import AskPanel from '@/components/ask/AskPanel.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import EvidencePreview from '@/components/evidence/EvidencePreview.vue'
@@ -17,6 +18,8 @@ import {
 import type {
   Block, Citation, DocumentInfo, DownloadFormat, IndexValidation, PageBlocks,
 } from '@/types/api'
+import { apiUrl, approvedPlanLabel, onLocalSource, onReadOnlySource } from '@/platform/desktop'
+import { useAuthStore } from '@/stores/auth'
 import type { Highlight } from '@/types/workbench'
 import { validateAndReindex } from '@/utils/reindex'
 
@@ -27,6 +30,7 @@ import { validateAndReindex } from '@/utils/reindex'
 const route = useRoute()
 const router = useRouter()
 
+const auth = useAuthStore()
 const document = ref<DocumentInfo>()
 const pages = ref<PageBlocks[]>([])
 const markdown = ref('')
@@ -37,6 +41,9 @@ const selectedChunkId = ref<string | null>(null)
 const selectedCitation = ref<Citation | null>(null)
 const showChunks = ref(false)
 const loading = ref(true)
+const loadError = ref(false)
+const sourceFocusError = ref(false)
+let loadGeneration = 0
 const validation = ref<IndexValidation>()
 let poller: number | undefined
 
@@ -74,20 +81,36 @@ const overlays = computed<Highlight[]>(() => [...chunkBoundaries.value, ...highl
 
 async function load() {
   const id = String(route.params.id)
+  const generation = ++loadGeneration
+  const job = typeof route.query.job === 'string' ? route.query.job : undefined
+  loadError.value = false
   loading.value = true
   try {
-    document.value = (await documentsApi.get(id)).data
+    const response = await documentsApi.get(id)
+    if (generation !== loadGeneration) return
+    document.value = response.data
     if (document.value.status !== 'succeeded') return
     const [result, pageData, source] = await Promise.all([
-      documentsApi.result(id, typeof route.query.job === 'string' ? route.query.job : undefined),
-      documentsApi.pages(id, typeof route.query.job === 'string' ? route.query.job : undefined),
+      documentsApi.result(id, job),
+      documentsApi.pages(id, job),
       documentsApi.sourceViewUrl(id).catch(() => null),
     ])
+    if (generation !== loadGeneration) return
     markdown.value = result.data.markdown
     pages.value = pageData.data.pages
-    sourcePath.value = source?.data.url ?? ''
+    // 桌面中心源：宿主把预签名地址改写成 `ddp://app/_object/...`，
+    // 直接可用；本机/浏览器：相对地址经宿主或同源解析，一律走 `apiUrl`。
+    sourcePath.value = source?.data.url ? apiUrl(source.data.url) : ''
+    focusRequestedSource()
+  } catch {
+    if (generation !== loadGeneration) return
+    document.value = undefined
+    pages.value = []
+    markdown.value = ''
+    sourcePath.value = ''
+    loadError.value = true
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
 }
 
@@ -98,6 +121,11 @@ const polling = usePolling(load, () => {
   return Boolean(parseStatusOf(doc.status).active || indexStatusOf(doc.index_status).active ||
     compileStatusOf(doc.compile_status).active)
 })
+
+async function reload() {
+  await load()
+  polling.start()
+}
 
 function locate(citation: Citation) {
   selectedCitation.value = citation
@@ -127,6 +155,34 @@ function selectBlock(block: Block) {
   }]
 }
 
+function focusRequestedSource() {
+  sourceFocusError.value = false
+  if (route.query.page !== undefined) {
+    const page = typeof route.query.page === 'string' ? Number(route.query.page) : NaN
+    if (Number.isSafeInteger(page) && page >= 1 && page <= (document.value?.page_count ?? 0)) {
+      activePage.value = page - 1
+    } else {
+      sourceFocusError.value = true
+    }
+  }
+  const chunk = route.query.chunk
+  if (chunk === undefined) return
+  if (typeof chunk === 'string' && chunk) {
+    for (const page of pages.value) {
+      const block = page.blocks.find(candidate => candidate.chunk_id === chunk)
+      if (block) {
+        selectBlock(block)
+        sourceFocusError.value = false
+        return
+      }
+    }
+  }
+  selectedCitation.value = null
+  selectedChunkId.value = null
+  highlights.value = []
+  sourceFocusError.value = true
+}
+
 async function download(format: DownloadFormat) {
   const id = String(route.params.id)
   // 原件走签名直读，产物走应用进程 —— 两条路刻意不同（不变式 6）
@@ -138,8 +194,7 @@ async function download(format: DownloadFormat) {
 async function reindex() {
   validation.value = await validateAndReindex(String(route.params.id))
   ElMessage.success('已重新排队建立索引')
-  await load()
-  polling.start()
+  await reload()
 }
 
 async function validateIndex() {
@@ -154,13 +209,25 @@ async function validateIndex() {
 }
 
 watch(
-  () => route.params.id,
+  () => [route.params.id, route.query.resource_id, route.query.version_id, route.query.job],
   async () => {
-    await load()
-    polling.start()
+    document.value = undefined
+    pages.value = []
+    markdown.value = ''
+    sourcePath.value = ''
+    activePage.value = 0
+    highlights.value = []
+    selectedCitation.value = null
+    selectedChunkId.value = null
+    sourceFocusError.value = false
+    await reload()
   },
   { immediate: true },
 )
+
+watch(() => [route.query.chunk, route.query.page], () => {
+  if (!loading.value && document.value?.status === 'succeeded') focusRequestedSource()
+})
 </script>
 
 <template>
@@ -169,7 +236,9 @@ watch(
       <div class="title">
         <el-button link @click="router.push('/documents')">← 文档库</el-button>
         <span class="name">{{ document?.filename }}</span>
-        <span class="pages">{{ document?.page_count }} 页</span>
+        <!-- 同一资源各版本文件名通常相同：不写版本号，用户分不清正在问的是哪一版 -->
+        <span v-if="document?.source_version_no" class="meta">第 {{ document.source_version_no }} 版</span>
+        <span class="meta">{{ document?.page_count }} 页</span>
         <el-tooltip v-if="document && document.index_status !== 'ready'"
                     :content="document.index_error" :disabled="!document.index_error">
           <StatusTag
@@ -178,29 +247,45 @@ watch(
         </el-tooltip>
       </div>
       <div class="actions">
-        <el-button size="small" @click="router.push(`/documents/${document?.id}/versions`)">
+        <el-button size="small" :disabled="!document"
+          @click="router.push({ name: 'versions', params: { id: document?.id },
+            query: { resource_id: document?.resource_id ?? undefined } })">
           解析版本
         </el-button>
-        <el-button size="small" @click="validateIndex">校验版本</el-button>
-        <el-button size="small" @click="reindex">重建索引</el-button>
+        <template v-if="!onLocalSource">
+          <!-- validate-index is a POST: a read-only desktop center rejects it (host 403) -->
+          <el-button size="small" :disabled="!document || auth.readOnly" @click="validateIndex">校验版本</el-button>
+          <el-button size="small" :disabled="!document || !auth.canUpload || !document.can_delete"
+                     @click="reindex">重建索引</el-button>
+        </template>
         <el-dropdown @command="download">
-          <el-button size="small">下载<el-icon class="el-icon--right">▾</el-icon></el-button>
+          <el-button size="small" :disabled="!document">下载<el-icon class="el-icon--right">▾</el-icon></el-button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="md">Markdown</el-dropdown-item>
-              <el-dropdown-item command="json">版面 JSON</el-dropdown-item>
-              <el-dropdown-item command="zip">打包（含图片）</el-dropdown-item>
+              <template v-if="!onLocalSource">
+                <el-dropdown-item command="md">Markdown</el-dropdown-item>
+                <el-dropdown-item command="json">版面 JSON</el-dropdown-item>
+                <el-dropdown-item command="zip">打包（含图片）</el-dropdown-item>
+              </template>
               <el-dropdown-item command="source">原件</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
       </div>
     </div>
+    <p v-if="onReadOnlySource" class="readonly-hint" role="note">{{ approvedPlanLabel() }}</p>
 
-    <el-alert v-if="document?.status === 'failed'" type="error" :closable="false"
+    <el-alert v-if="loadError" type="error" :closable="false"
+              title="文档读取失败。请重试，或从资源库选择固定版本。">
+      <el-button @click="reload">重试读取</el-button>
+      <el-button @click="router.push('/resources')">选择资源版本</el-button>
+    </el-alert>
+    <el-alert v-else-if="document?.status === 'failed'" type="error" :closable="false"
               :title="`解析失败：${document.error}`" />
-    <el-alert v-else-if="document?.status !== 'succeeded'" type="info" :closable="false"
+    <el-alert v-else-if="document && document.status !== 'succeeded'" type="info" :closable="false"
               title="解析中，完成后自动刷新" />
+    <el-alert v-if="sourceFocusError && !loadError" type="warning" :closable="false"
+              title="无法定位所选的原文区域，请重新检索或选择解析段落。" />
 
     <div v-if="document?.status === 'succeeded'" class="compile-line">
       <StatusTag :meta="compileStatusOf(document.compile_status)" />
@@ -224,12 +309,12 @@ watch(
             分块边界
           </el-checkbox>
           <el-pagination
-            v-model:current-page="activePage"
+            :current-page="activePage + 1"
             :page-count="document?.page_count ?? 0"
             :pager-count="5"
             layout="prev, pager, next"
             size="small"
-            @update:current-page="highlights = []"
+            @update:current-page="activePage = $event - 1; highlights = []"
           />
         </div>
         <div class="pane-body">
@@ -246,9 +331,11 @@ watch(
       </section>
 
       <section class="pane result">
+        <!-- 证据预览比格子高时在格内滚动；否则在两栏布局（≤1400px）里会盖住下方的问答栏。 -->
         <EvidencePreview
           v-if="selectedCitation?.evidence_id"
           :evidence-id="selectedCitation.evidence_id"
+          :context="document ? documentContext(document) : undefined"
           @close="selectedCitation = null"
         />
         <ResultPane
@@ -310,8 +397,8 @@ watch(
   font-size: 16px;
   font-weight: 600;
 }
-/* 页数是元信息不是状态，按准则二排成普通文字 */
-.pages {
+/* 版本号、页数是元信息不是状态，按准则二排成普通文字 */
+.meta {
   font-family: var(--ddp-font-mono);
   font-size: 12px;
   color: var(--ddp-ink-3);
@@ -352,6 +439,9 @@ watch(
   flex: 1;
   overflow: auto;
 }
+.pane.result {
+  overflow: auto;
+}
 .image-source {
   max-width: 100%;
 }
@@ -368,4 +458,5 @@ watch(
     height: 420px;
   }
 }
+.readonly-hint { color: var(--ddp-ink-3); font-size: 13px; margin: 0; }
 </style>

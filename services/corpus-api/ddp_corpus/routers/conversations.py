@@ -42,7 +42,8 @@ from ddp_corpus.qa import (
 )
 from ddp_corpus.storage import Storage, crop_key as build_crop_key
 from ddp_corpus.upstream import chat_request
-from ddp_core.agent import CandidateDecision, QueryDecision, assertions_from_text
+from ddp_core.agent import CandidateDecision, QueryDecision
+from ddp_core.answer import AnswerFormatError, GroundedAnswerStream, grounded_answer_schema
 
 router = APIRouter()
 
@@ -60,6 +61,12 @@ class AskRequest(BaseModel):
 
 REFUSAL_NO_EVIDENCE = "本轮没有可继承的文档证据，无法在不检索的情况下回答。"
 REFUSAL_INCOMPLETE_EVIDENCE = "上一轮证据已部分失效，无法在不重新检索的情况下可靠回答。"
+REFUSAL_INSUFFICIENT_EVIDENCE = "文档中未找到支持该问题的证据。"
+# 模型拿到了通过门控的段落、却报 insufficient_evidence。不能沿用上一句："文档中未找到"
+# 是对文档的断言，而模型也会错拒 —— 真栈 ESP32 问 CPU 时正确段落就在上下文里（相似度 0.73），
+# 1.7B 模型三次都拒答，界面却告诉用户"文档里没有"（2026-09-24，C）
+REFUSAL_MODEL_INSUFFICIENT = ("已检索到相关段落，但回答模型判断它们不足以回答该问题；"
+                              "可展开候选自行核对。")
 
 
 class HumanVerificationRequest(BaseModel):
@@ -108,6 +115,11 @@ async def list_conversations(document: str = "", actor: Actor = Depends(current_
         visible_document_condition(actor))
     if document:
         stmt = stmt.where(Conversation.document_id == document)
+    if actor.resource_id:
+        # A conversation answers from and cites its own bound resource. Two resources with the
+        # same bytes share a Document, so a document-only filter listed the other resource's
+        # conversations in this workbench, and their citations 404ed here (2026-09-24, E).
+        stmt = stmt.where(Conversation.resource_id == actor.resource_id)
     rows = (await session.execute(stmt.order_by(Conversation.updated_at.desc()))).scalars().all()
     permitted = []
     for row in rows:
@@ -585,7 +597,8 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
         return
     message_id = None
     decision = decision or QueryDecision(need_retrieval=True, reason="legacy_caller")
-    chunks: list[str] = []
+    assertions: list[dict] = []
+    evidence_ids = [item["evidence_id"] for item in retrieval.citations if item.get("evidence_id")]
     degraded = retrieval.degraded
     verified = False
     verify_verdict: bool | None = None
@@ -595,7 +608,8 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
     # 出处一致性核对（A4）与回答**并发**跑：核对要多打一次视觉模型，
     # 串行做会把首字延迟顶上去，而它的结论只在最后的 done 帧里才用得上
     verify_task: asyncio.Task | None = None
-    refusing = decision.degraded in {"no_evidence_in_turn", "inherited_evidence_incomplete"}
+    refusing = (decision.degraded in {"no_evidence_in_turn", "inherited_evidence_incomplete"}
+                or not evidence_ids)
     if settings.qa_verify_parse and verify_pair and not refusing:
         async def checked_verification():
             await authorize()
@@ -616,34 +630,54 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
 
     try:
         try:
-            if decision.degraded in {"no_evidence_in_turn", "inherited_evidence_incomplete"}:
+            if refusing:
                 refusal = (REFUSAL_INCOMPLETE_EVIDENCE
                            if decision.degraded == "inherited_evidence_incomplete"
-                           else REFUSAL_NO_EVIDENCE)
-                chunks.append(refusal)
+                           else REFUSAL_NO_EVIDENCE if decision.degraded == "no_evidence_in_turn"
+                           else REFUSAL_INSUFFICIENT_EVIDENCE)
+                assertions.append({"position": 0, "text": refusal,
+                                   "evidence_ids": [], "unsupported": True})
                 yield _sse("delta", {"text": refusal})
             else:
                 await authorize()
-                async for piece in _relay_chat(http, messages):
-                    chunks.append(piece)
-                    yield _sse("delta", {"text": piece})
+                async for claim in _relay_chat(http, messages, evidence_ids=evidence_ids):
+                    assertions.append(claim)
+                    refusing = refusing or claim["unsupported"]
+                    yield _sse("delta", {"text": claim["text"] + "\n"})
         except _UpstreamDown:
             # 请求就没建立起来，大概率是视觉运行时没起（dev 常态）——退回纯文本再试一次，
             # 并把降级如实标出来，绝不静默
             if has_image:
-                degraded, verified = "vision_unavailable", False
+                # degraded 只有一个值。向量化不可用决定了**依据是怎么找来的**（只走了关键词路），
+                # 比"没做视觉核对"更要紧，不能被它盖掉（与 qa.retrieve 里 rerank 的规则同理）；
+                # 没核对这件事 verified=False 已经表达了，界面不会显示"已做视觉验证"。
+                # 真栈实测（2026-09-24，C）：停掉 embedding 问答，回答只标了"视觉模型不可用"
+                if degraded != "embedding_unavailable":
+                    degraded = "vision_unavailable"
+                verified = False
                 text_only = _strip_images(messages)
                 try:
                     await authorize()
-                    async for piece in _relay_chat(http, text_only):
-                        chunks.append(piece)
-                        yield _sse("delta", {"text": piece})
+                    async for claim in _relay_chat(http, text_only, evidence_ids=evidence_ids):
+                        assertions.append(claim)
+                        refusing = refusing or claim["unsupported"]
+                        yield _sse("delta", {"text": claim["text"] + "\n"})
+                except AnswerFormatError:
+                    error = {"message": "问答模型未返回有效的逐条证据绑定", "code": "schema_violation"}
                 except APIError:
                     error = {"message": "source access was revoked", "code": "resource_access_revoked"}
-                except (_UpstreamDown, httpx.HTTPError) as exc:
+                except _UpstreamDown as exc:
                     error = {"message": str(exc), "code": "upstream_unavailable"}
+                except httpx.HTTPError as exc:
+                    # 与主路径同一口径：请求已建立、输出到一半断了 = 中途断流，不是"不可用"。
+                    # CPU 栈上视觉必然失败、每次都走这条退路，真栈停模型时这里报成了
+                    # upstream_unavailable（2026-09-24，C）
+                    error = {"message": f"上游响应中断：{exc!s} ({type(exc).__name__})",
+                             "code": "upstream_interrupted"}
             else:
                 error = {"message": "问答服务不可用", "code": "upstream_unavailable"}
+        except AnswerFormatError:
+            error = {"message": "问答模型未返回有效的逐条证据绑定", "code": "schema_violation"}
         except APIError:
             error = {"message": "source access was revoked", "code": "resource_access_revoked"}
         except httpx.HTTPError as exc:
@@ -654,9 +688,10 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
                      "code": "upstream_interrupted"}
 
         if error:
-            degraded, verified = "upstream_error", False
+            degraded = "schema_violation" if error["code"] == "schema_violation" else "upstream_error"
+            verified = False
             yield _sse("error", error)
-        elif verify_task is not None:
+        elif verify_task is not None and not refusing:
             verify_verdict = await _verdict(verify_task)
             if verify_verdict is True:
                 verified = True
@@ -689,7 +724,7 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
         (message_id, verified, degraded, index_changed,
          assertion_payload) = await asyncio.shield(_persist(
             conversation_id=conversation_id, actor_id=actor_id,
-            organization_id=organization_id, content="".join(chunks),
+            organization_id=organization_id, assertions=assertions,
             citations=retrieval.citations, verified=verified and not error, degraded=degraded,
             model_meta=answer_model_meta(), document_id=document_id,
             expected_job_id=expected_job_id, expected_generation=expected_generation,
@@ -749,7 +784,7 @@ async def _verdict(task: asyncio.Task) -> bool | None:
 
 
 async def _persist(*, conversation_id: str, actor_id: str, organization_id: str,
-                   content: str, citations: list,
+                   assertions: list[dict], citations: list,
                    verified: bool, degraded: str | None, model_meta: dict | None = None,
                    document_id: str | None = None, expected_job_id: str | None = None,
                    expected_generation: int | None = None,
@@ -782,10 +817,7 @@ async def _persist(*, conversation_id: str, actor_id: str, organization_id: str,
                 # 切换后继续把断言标 passed，更不能落一条无效的自动核对记录。
                 verified, verify_verdict, verify_evidence_id = False, None, None
                 degraded = "index_changed_during_answer"
-        ordered_evidence = [citation.get("evidence_id") for citation in citations
-                            if citation.get("evidence_id")]
-        parsed = assertions_from_text(content, ordered_evidence)
-        projected_content = "\n".join(item["text"] for item in parsed)
+        projected_content = "\n".join(item["text"] for item in assertions)
         message = Message(conversation_id=conversation_id, role="assistant",
                           content=projected_content,
                           verified=verified, degraded=degraded, model_meta=model_meta or {})
@@ -818,7 +850,7 @@ async def _persist(*, conversation_id: str, actor_id: str, organization_id: str,
 
         payloads: list[dict] = []
         assertion_rows: list[Assertion] = []
-        for item in parsed:
+        for item in assertions:
             requested_refs = item["evidence_ids"]
             if not requested_refs:
                 state, mode = "unverified", None
@@ -899,9 +931,15 @@ class _UpstreamDown(RuntimeError):
     pass
 
 
-async def _relay_chat(http: httpx.AsyncClient, messages: list[dict]):
-    """消费上游的 OpenAI 流式响应，逐段吐出文本增量。"""
-    request = chat_request(http, messages, stream=True)
+async def _relay_chat(http: httpx.AsyncClient, messages: list[dict], *, evidence_ids: list[str]):
+    """流式解码完整断言；模型 JSON 与未经绑定的片段不进入展示或持久化。"""
+    decoder = GroundedAnswerStream(evidence_ids)
+    request = chat_request(http, messages, stream=True, temperature=0, response_format={
+        "type": "json_schema", "json_schema": {
+            "name": "grounded_answer", "strict": True,
+            "schema": grounded_answer_schema(evidence_ids),
+        },
+    })
     try:
         response = await http.send(request, stream=True)
     except httpx.HTTPError as exc:
@@ -923,7 +961,15 @@ async def _relay_chat(http: httpx.AsyncClient, messages: list[dict]):
                 continue
             text = delta.get("content")
             if text:
-                yield text
+                if not isinstance(text, str):
+                    raise AnswerFormatError("answer fragment is not text")
+                for claim in decoder.feed(text):
+                    yield claim
+        for claim in decoder.finish():
+            yield claim
+        if decoder.insufficient_evidence:
+            yield {"position": 0, "text": REFUSAL_MODEL_INSUFFICIENT,
+                   "evidence_ids": [], "unsupported": True}
     finally:
         await response.aclose()
 

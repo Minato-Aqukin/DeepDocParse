@@ -174,12 +174,12 @@ func (s *Server) handleNodeRegister(w http.ResponseWriter, r *http.Request) erro
 	if len(in.AllowedSubjects) > 100 {
 		return apierr.BadRequest("invalid_scope", "成员共享列表过长")
 	}
-	rev, err := s.store.RegisterNode(r.Context(), a.OrganizationID, in)
+	registration, err := s.store.RegisterNode(r.Context(), a.OrganizationID, in)
 	if err != nil {
 		return discoveryError(err)
 	}
-	s.store.Audit(r.Context(), a.OrganizationID, a.ID, string(a.Kind), "node.register", in.Descriptor.NodeID, a.RequestID, map[string]any{"revision": rev})
-	return httpx.JSON(w, 201, map[string]any{"node_id": in.Descriptor.NodeID, "state": discovery.MemberPending, "registry_revision": rev, "health": "unknown", "accepting_admissions": false})
+	s.store.Audit(r.Context(), a.OrganizationID, a.ID, string(a.Kind), "node.register", in.Descriptor.NodeID, a.RequestID, map[string]any{"revision": registration.RegistryRevision})
+	return httpx.JSON(w, 201, map[string]any{"node_id": in.Descriptor.NodeID, "state": registration.State, "registry_revision": registration.RegistryRevision, "health": "unknown", "accepting_admissions": false})
 }
 func (s *Server) handleNodeList(w http.ResponseWriter, r *http.Request) error {
 	a, err := s.discoveryAdmin(r)

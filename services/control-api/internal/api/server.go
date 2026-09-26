@@ -99,7 +99,7 @@ func NewServer(ctx context.Context, d Deps) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.peers = discovery.NewPeerDirectory(peers, nil, 0)
+	s.peers = discovery.NewPeerDirectory(peers, nil, 0, s.signPeerRead)
 
 	if s.corpus, err = proxy.New("corpus-api", d.Config.CorpusURL, d.Config.ServiceToken); err != nil {
 		return nil, err
@@ -253,6 +253,10 @@ var corpusPrefixes = []string{
 	"/api/v1/tasks/",
 	"/api/v1/deliveries",
 	"/api/v1/deliveries/",
+	// File-compute persistent coordination records (corpus owns rows + parse
+	// enqueue; this entry only forwards after session auth + actor headers).
+	"/api/v1/remote-compute",
+	"/api/v1/remote-compute/",
 }
 
 func (s *Server) observe(next http.Handler) http.Handler {

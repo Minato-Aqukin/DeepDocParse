@@ -54,10 +54,10 @@ async def evaluate(args):
     report = {'schema': 'ddp-local-wiki-eval/1', 'run_id': run_id, 'python': platform.python_version(),
               'platform': platform.platform(), 'net_namespace': os.readlink('/proc/self/ns/net'),
               'interfaces': socket.if_nameindex(), 'ipv4_routes': routes, 'started_at': time.time(),
-              'source_sha256': hashlib.sha256(data).hexdigest(), 'status': 'running'}
+              'source_sha256': hashlib.sha256(data).hexdigest(), 'model_id': args.model, 'status': 'running'}
     task_id = None
     try:
-        await runtime.start_model('qwen3-1.7b-q8_0')
+        await runtime.start_model(args.model, runtime_id=args.runtime_id)
         report['provider'] = runtime.provider.model.provenance
         task = runtime.upload_stream(io.BytesIO(data), filename='aurora-wiki-source.pdf', operation_key='wiki-eval-source-v1')
         if runtime.store.task(task['id'])['status'] != 'succeeded':
@@ -104,8 +104,15 @@ async def evaluate(args):
         reopened = runtime.wikis.get(wid)
         report['restart'] = {'revision_id': reopened['revision']['id'],
             'original_revision_preserved': runtime.wikis.get(wid, revision['id'])['revision']['id'] == revision['id'],
-            'human_paragraph_preserved': bool(reopened['revision']['pages'][0]['human_paragraphs']),
+            'human_paragraph_preserved': any(
+                paragraph.get('id') == 'review-note'
+                and paragraph.get('text') == 'Operator note: semantic review remains pending.'
+                for page in reopened['revision']['pages'] for paragraph in page['human_paragraphs']),
             'build_task_state': runtime.store.receipt(key)['status']}
+        if not (report['restart']['original_revision_preserved']
+                and report['restart']['human_paragraph_preserved']
+                and report['restart']['build_task_state'] == 'succeeded'):
+            raise RuntimeError('restart lost the original revision, human edit or committed task')
         report['status'] = 'passed'
     except Exception as exc:
         report.update(status='failed', error=getattr(exc, 'code', type(exc).__name__), message=str(exc))
@@ -127,6 +134,8 @@ async def evaluate(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--workspace', required=True)
+    parser.add_argument('--model', default='qwen3-1.7b-q8_0')
+    parser.add_argument('--runtime-id', help='explicit reviewed runtime profile; never silently falls back')
     parser.add_argument('--output', required=True, type=Path)
     raise SystemExit(asyncio.run(evaluate(parser.parse_args())))
 

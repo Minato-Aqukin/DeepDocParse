@@ -108,6 +108,60 @@ async def test_runtime_compatibility_and_missing_model_fail_before_process_launc
     assert missing.value.code == "model_not_installed" and owned.process is None
 
 
+def install_gpu_fixture(installed, tmp_path, startup_log):
+    """Supervisor protocol only; these messages are not hardware validation."""
+    body = SERVER.replace(b"import http.server,json,sys\n",
+                          b"import http.server,json,sys\n" + f"print({startup_log!r}, flush=True)\n".encode())
+    payload = archive_bytes(body)
+    backend = {**installed.artifact("fixture-runtime"), "id": "fixture-vulkan", "device": "gpu",
+               "gpu_api": "vulkan", "default_gpu_layers": 99, "bytes": len(payload),
+               "sha256": hashlib.sha256(payload).hexdigest()}
+    installed.definitions["artifacts"].append(backend)
+    installed.artifact("fixture-model")["runtime_ids"] = ["fixture-runtime", "fixture-vulkan"]
+    source = tmp_path / "vulkan.tar.gz"
+    source.write_bytes(payload)
+    installed.import_file("fixture-vulkan", source)
+
+
+@pytest.mark.parametrize(("startup_log", "error"), [
+    ("CPU endpoint is healthy, but nothing was offloaded", "gpu_offload_unverified"),
+    ("llama_prepare_model_devices: using device Vulkan0 (llvmpipe LLVM software) (0000:00:00.0) - 100 MiB free\n"
+     "load_tensors: offloaded 2/2 layers to GPU\n"
+     "load_tensors: Vulkan0 model buffer size = 1.00 MiB\n", "gpu_device_unsupported"),
+])
+async def test_http_health_cannot_disguise_cpu_or_software_as_physical_gpu(installed, tmp_path, startup_log, error):
+    install_gpu_fixture(installed, tmp_path, startup_log)
+    owned = ModelProcess(installed)
+    try:
+        with pytest.raises(ApplicationError) as failure:
+            await owned.start("fixture-model", runtime_id="fixture-vulkan", timeout=5)
+        assert failure.value.code == error
+        assert owned.process is None and owned.selection is None
+        assert owned.status()["status"] == "failed" and owned.status()["error"] == error
+        # Recovery is an explicit new CPU selection, not a hidden retry.
+        recovered = await owned.start("fixture-model", runtime_id="fixture-runtime", timeout=5)
+        assert recovered.provenance["device"] == "cpu"
+    finally:
+        await owned.stop()
+
+
+async def test_selected_profile_requires_observed_offload_and_cannot_silently_switch_a_live_model(installed, tmp_path):
+    install_gpu_fixture(installed, tmp_path,
+        "llama_prepare_model_devices: using device Vulkan0 (Fixture physical device (vendor)) (0000:00:00.0) - 100 MiB free\n"
+        "load_tensors: offloaded 2/2 layers to GPU\n"
+        "load_tensors: Vulkan0 model buffer size = 1.00 MiB\n")
+    owned = ModelProcess(installed)
+    try:
+        selected = await owned.start("fixture-model", runtime_id="fixture-vulkan", timeout=5)
+        assert selected.provenance["device"] == "gpu" and selected.provenance["offloaded_layers"] == 2
+        with pytest.raises(ApplicationError) as busy:
+            await owned.start("fixture-model", runtime_id="fixture-runtime")
+        assert busy.value.code == "model_process_busy"
+        assert owned.selection is selected and owned.process.poll() is None
+    finally:
+        await owned.stop()
+
+
 @pytest.mark.parametrize("filename", ["../outside", "/tmp/outside", "safe/../../outside"])
 def test_runtime_archive_cannot_escape_output(tmp_path, filename):
     archive = tmp_path / "bad.tar.gz"

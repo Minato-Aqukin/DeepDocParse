@@ -36,6 +36,7 @@ from ddp_corpus.collection_models import (  # noqa: F401
     Collection, CollectionMember, CollectionReceipt, CollectionCatalogView,
     CollectionCatalogSnapshot, CollectionCatalogPage,
 )
+from ddp_corpus.bundle_models import BundleReplica, BundleReplicaRevokeKey  # noqa: F401
 
 
 class Conversation(Base):
@@ -377,6 +378,8 @@ class WikiRevision(Base):
     provider: Mapped[dict] = mapped_column(JSON, default=dict)
     limits: Mapped[dict] = mapped_column(JSON, default=dict)
     merge_conflicts: Mapped[list] = mapped_column(JSON, default=list)
+    root_task_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
+    relations: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -398,14 +401,21 @@ class DependencyManifest(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     revision_id: Mapped[str] = mapped_column(String(32), ForeignKey("wiki_revisions.id"), index=True)
     page_key: Mapped[str] = mapped_column(String(64))
-    resource_id: Mapped[str] = mapped_column(String(32), index=True)
-    source_version_id: Mapped[str] = mapped_column(String(32))
-    document_id: Mapped[str] = mapped_column(String(32))
+    resource_id: Mapped[str] = mapped_column(String(128), index=True)
+    source_version_id: Mapped[str] = mapped_column(String(128))
+    document_id: Mapped[str] = mapped_column(String(128))
     source_digest: Mapped[str] = mapped_column(String(64))
-    parse_revision: Mapped[str] = mapped_column(String(32))
-    evidence_id: Mapped[str] = mapped_column(String(32), index=True)
+    parse_revision: Mapped[str] = mapped_column(String(128))
+    evidence_id: Mapped[str] = mapped_column(String(128), index=True)
+    source_evidence_id: Mapped[str | None] = mapped_column(String(128), default=None)
     excerpt_digest: Mapped[str] = mapped_column(String(64))
     locator: Mapped[dict] = mapped_column(JSON, default=dict)
+    origin_node_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
+    authority_node_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    source_publication: Mapped[str | None] = mapped_column(String(16), default=None)
+    policy_revision: Mapped[str | None] = mapped_column(String(128), default=None)
+    derivative_grant: Mapped[str | None] = mapped_column(String(128), default=None)
+    retrieval_receipt_ref: Mapped[str | None] = mapped_column(String(128), default=None)
     __table_args__ = (UniqueConstraint("revision_id", "page_key", "resource_id", "evidence_id",
                                       name="uq_wiki_dependencies_binding"),)
 
@@ -415,8 +425,8 @@ class ClaimEvidenceBinding(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     revision_id: Mapped[str] = mapped_column(String(32), ForeignKey("wiki_revisions.id"), index=True)
     page_key: Mapped[str] = mapped_column(String(64))
-    claim_id: Mapped[str] = mapped_column(String(32))
-    evidence_id: Mapped[str] = mapped_column(String(32))
+    claim_id: Mapped[str] = mapped_column(String(128))
+    evidence_id: Mapped[str] = mapped_column(String(128))
     excerpt_digest: Mapped[str] = mapped_column(String(64))
     __table_args__ = (UniqueConstraint("revision_id", "claim_id", "evidence_id",
                                       name="uq_wiki_claim_evidence"),)
@@ -442,5 +452,6 @@ class WikiWriteKey(Base):
     idempotency_key: Mapped[str] = mapped_column(String(128))
     request_digest: Mapped[str] = mapped_column(String(64))
     revision_id: Mapped[str] = mapped_column(String(32), ForeignKey("wiki_revisions.id"))
+    root_task_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
     __table_args__ = (UniqueConstraint("organization_id", "actor_id", "idempotency_key",
                                       name="uq_wiki_write_keys_actor_key"),)

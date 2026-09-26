@@ -55,8 +55,7 @@ async def run(kinds: list[str]) -> None:
     stopping = asyncio.Event()
     install_signal_handlers(stopping)
     # 与 API 进程同一份绑定：federation_execute/federation_plan 处理器读
-    # `node_identity.local_node_id()`，不绑定就 503。后台重试直到绑上；
-    # shared 档位直接返回，测试跟随配置（`follow_configuration_for_tests`）。
+    # `node_identity.local_node_id()`，不绑定就 503。后台重试直到绑上。
     binder = asyncio.create_task(node_identity.keep_bound(http))
     try:
         await loop(pools, state, stopping)

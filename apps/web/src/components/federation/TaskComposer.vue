@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, shallowRef } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 
 import { resourcesApi, type Resource } from '@/api/resources'
 import { tasksApi } from '@/api/tasks'
+import ScopeTargets from '@/components/federation/ScopeTargets.vue'
 import { PROBE_PAYLOAD_LABEL } from '@/constants/federation'
 import {
   buildIntent,
@@ -23,10 +24,24 @@ import {
  * 这一步只创建需求并请求计划；**要不要执行是下一步的事**（详情页里批准计划）。
  */
 const emit = defineEmits<{ (e: 'created', rootTaskId: string): void }>()
+const props = withDefaults(defineProps<{ initialQuery?: string }>(), { initialQuery: '' })
 
-const query = ref('')
+const query = ref(props.initialQuery)
+watch(() => props.initialQuery, (q) => {
+  if (q) query.value = q
+})
 const operation = ref<TaskOperation>('rag.answer.cited')
 const scopeKind = ref<ScopeKind>('site_public')
+/**
+ * wiki.pages 需求输入（`TaskSpec.requirements.wiki` 形状：`{wiki_id?,base_revision_id?,title?,max_pages?}`）。
+ * 协调者分支落地前提交入口保持禁用（见 submit 守卫 + 模板 disabled），不发请求；
+ * 启用条件由 CoordinatorClosure 的共享契约确认后在此一处打开。
+ */
+const wikiTitle = ref('')
+const wikiMaxPages = ref(4)
+const wikiId = ref('')
+const wikiBaseRevision = ref('')
+const wikiUnavailable = '中心暂不支持构建 Wiki 草稿（wiki.pages），等协调者规划/执行分支落地后再启用。'
 const mode = ref<'fast' | 'exhaustive_scope'>('fast')
 const resourceRefs = ref<string[]>([])
 const payload = ref<ProbePayload[]>(['query_text'])
@@ -92,11 +107,18 @@ function draft(): TaskDraft {
     scope: scope.value ?? undefined, resourceRefs: resourceRefs.value, mode: mode.value,
     payload: payload.value,
     maxProbeRequests: maxProbeRequests.value, maxEgressBytes: maxEgressBytes.value,
+    wiki: operation.value === 'wiki.pages' ? {
+      ...(wikiId.value.trim() ? { wiki_id: wikiId.value.trim() } : {}),
+      ...(wikiBaseRevision.value.trim() ? { base_revision_id: wikiBaseRevision.value.trim() } : {}),
+      ...(wikiTitle.value.trim() ? { title: wikiTitle.value.trim() } : {}),
+      max_pages: wikiMaxPages.value,
+    } : undefined,
   }
 }
 
 async function submit() {
   error.value = ''
+  if (operation.value === 'wiki.pages') { error.value = wikiUnavailable; return }
   let body
   try {
     attemptKey ||= `intent-${crypto.randomUUID()}`
@@ -140,7 +162,23 @@ onMounted(loadContext)
       <el-radio-group v-model="operation">
         <el-radio value="rag.answer.cited">带出处的回答</el-radio>
         <el-radio value="corpus.retrieve">只取证据</el-radio>
+        <el-radio value="wiki.pages" disabled>构建 Wiki 草稿（中心暂不支持）</el-radio>
       </el-radio-group>
+      <p v-if="operation === 'wiki.pages'" class="hint" role="status">{{ wikiUnavailable }}</p>
+      <div v-if="operation === 'wiki.pages'" class="scope">
+        <label class="field"><span>Wiki 标题（requirements.wiki.title）</span>
+          <el-input v-model="wikiTitle" placeholder="用固定证据解释什么？" maxlength="255" />
+        </label>
+        <label class="field"><span>页数上限（1–12，requirements.wiki.max_pages）</span>
+          <el-input-number v-model="wikiMaxPages" :min="1" :max="12" />
+        </label>
+        <label class="field"><span>更新已有 Wiki（可选，requirements.wiki.wiki_id）</span>
+          <el-input v-model="wikiId" placeholder="留空=新建 Wiki" />
+        </label>
+        <label class="field"><span>基于修订（更新时必填，requirements.wiki.base_revision_id）</span>
+          <el-input v-model="wikiBaseRevision" placeholder="留空=新建 Wiki" />
+        </label>
+      </div>
     </fieldset>
 
     <fieldset class="field">
@@ -163,6 +201,7 @@ onMounted(loadContext)
           远端节点 {{ remoteNodes.length ? remoteNodes.join('、') : '无' }}
         </p>
         <p v-else class="hint">穷查要先把范围枚举并封存下来，否则“查全了”没有分母。</p>
+        <ScopeTargets v-if="scope" :scope-id="scope.manifest.scope_id" />
       </div>
     </fieldset>
 

@@ -34,6 +34,28 @@ def load(name: str):
 update_check = load("update_check")
 build_desktop = load("build_desktop")
 
+
+def expected_workspace_schemas() -> dict:
+    """Single-source-of-truth readable set, mirrored from ddp_local.
+
+    ddp_local owns `python/ddp_local/ddp_local/workspace_schemas.py`; this is
+    the test-side projection the synthetic markers use. A store that writes a
+    new user_version without updating the declaration fails the drift guard
+    below before it can ship a refusing installer.
+    """
+    try:
+        from ddp_local.workspace_schemas import WORKSPACE_SCHEMA_VERSIONS as live
+    except Exception:
+        live = None
+    if live is not None:
+        return {name: sorted(versions) for name, versions in live.items()}
+    root = Path(__file__).resolve().parents[1]
+    namespace: dict = {}
+    path = root / "python/ddp_local/ddp_local/workspace_schemas.py"
+    exec(compile(path.read_text(), str(path), "exec"), namespace)
+    return {name: sorted(versions)
+            for name, versions in namespace["WORKSPACE_SCHEMA_VERSIONS"].items()}
+
 # The real release-shape floors, captured before the autouse fixture below
 # shrinks them for the synthetic fixtures.
 REAL_WSL_SHAPE = {
@@ -70,14 +92,16 @@ WSL_ABI = {"major_minor": [3, 12], "cache_tag": "cpython-312", "soabi": None,
 def marker(version: str) -> dict:
     return {"format": 1, "name": "deepdocparse-desktop", "version": version,
             "epoch": 1789257600, "platform": {"system": "linux", "machine": ABI["machine"]},
-            "python": ABI, "electron": "44.3.0", "runtime_lock_sha256": "0" * 64}
+            "python": ABI, "electron": "44.3.0", "runtime_lock_sha256": "0" * 64,
+            "workspace_schemas": expected_workspace_schemas()}
 
 
 def windows_marker(version: str, machine: str = "amd64") -> dict:
     return {"format": 1, "name": "deepdocparse-desktop", "version": version,
             "epoch": 1789257600, "platform": {"system": "windows", "machine": machine},
             "python": dict(WSL_ABI), "electron": "44.3.0",
-            "runtime_lock_sha256": "0" * 64}
+            "runtime_lock_sha256": "0" * 64,
+            "workspace_schemas": expected_workspace_schemas()}
 
 
 def make_tree(path: Path, version: str, body: str = "") -> None:
@@ -183,6 +207,7 @@ def make_manifest(tmp: Path, archive: Path, version: str, *, name: str | None = 
         "platform": platform_,
         "python": abi, "electron": "44.3.0",
         "build_manifest_sha256": hashlib.sha256(build_bytes).hexdigest(),
+        "workspace_schemas": expected_workspace_schemas(),
         "signature": None,
     }
     path = tmp / "release.json"
@@ -503,6 +528,9 @@ def make_package_dir(path: Path, version: str = "0.1.0") -> Path:
     make_tree(path, version)
     (path / "LICENSE").write_text("electron license\n")
     (path / "LICENSES.chromium.html").write_text("chromium notices\n")
+    application = path / "resources/app"
+    application.mkdir(parents=True)
+    (application / "package.json").write_text(json.dumps({"name": "@ddp/desktop", "version": version}))
     runtime = path / "resources/runtime"
     runtime.mkdir(parents=True)
     (runtime / "runtime-info.json").write_text(json.dumps({
@@ -719,6 +747,9 @@ def make_windows_package_dir(path: Path, version: str = "0.1.0") -> Path:
     make_windows_tree(path, version)
     (path / "LICENSE").write_text("electron license\n")
     (path / "LICENSES.chromium.html").write_text("chromium notices\n")
+    application = path / "resources/app"
+    application.mkdir(parents=True)
+    (application / "package.json").write_text(json.dumps({"name": "@ddp/desktop", "version": version}))
     runtime = path / "resources/runtime"
     runtime.mkdir(parents=True)
     release_dir = path.parent / (path.name + "-wsl")
@@ -1431,3 +1462,295 @@ def test_verify_windows_package_installer_payload_floor(tmp_path, capsys):
                           "--installer", str(portable)]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["installers"][0]["size"] == portable.stat().st_size
+
+# --------------------------------------------------------------- lifecycle
+#
+# update_check.py owns the install/upgrade/rollback/uninstall lifecycle for the
+# directory package: active-task barrier, consistent SQLite backups, app+data
+# rollback semantics, model retention, and uninstall that keeps user data.
+
+def make_workspace(path: Path, *, tasks=(), workspace_version: int = 1,
+                   consent_version: int = 1) -> Path:
+    import sqlite3
+    path.mkdir(parents=True, exist_ok=True)
+    workspace_db = path / "workspace.sqlite3"
+    connection = sqlite3.connect(workspace_db)
+    try:
+        connection.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY, kind TEXT NOT NULL, "
+                           "status TEXT NOT NULL)")
+        for task_id, kind, status in tasks:
+            connection.execute("INSERT INTO tasks VALUES(?,?,?)", (task_id, kind, status))
+        connection.execute(f"PRAGMA user_version={workspace_version}")
+        connection.commit()
+    finally:
+        connection.close()
+    consent_db = path / "consents.sqlite3"
+    connection = sqlite3.connect(consent_db)
+    try:
+        connection.execute("CREATE TABLE plans(owner TEXT PRIMARY KEY)")
+        connection.execute(f"PRAGMA user_version={consent_version}")
+        connection.commit()
+    finally:
+        connection.close()
+    return path
+
+
+def apply_argv(root: Path, archive: Path, manifest: Path, *,
+               backup: Path | None = None, workspace: Path | None = None,
+               models: Path | None = None, extra: list | None = None):
+    argv = ["apply", "--root", str(root), "--manifest", str(manifest),
+            "--archive", str(archive), "--allow-unsigned"]
+    if backup is not None:
+        argv += ["--backup-dir", str(backup)]
+    if workspace is not None:
+        argv += ["--workspace", str(workspace)]
+    if models is not None:
+        argv += ["--models", str(models)]
+    return argv + (extra or [])
+
+
+def test_apply_refuses_active_workspace_tasks_until_allowed(tmp_path, capsys):
+    root = tmp_path / "opt" / "deepdocparse"
+    make_tree(root, "0.1.0")
+    workspace = make_workspace(tmp_path / "workspace",
+                               tasks=[("t1", "parse", "running"),
+                                      ("t2", "answer.generate", "queued")])
+    models = tmp_path / "models"
+    models.mkdir()
+    archive = make_archive(tmp_path, "0.2.0")
+    manifest = make_manifest(tmp_path, archive, "0.2.0")
+    backup = tmp_path / "backups"
+    assert update_check.main(apply_argv(root, archive, manifest, backup=backup,
+                                        workspace=workspace)) == 1
+    assert "pre-upgrade barrier" in capsys.readouterr().err
+    assert json.loads((root / "RELEASE-MANIFEST.json").read_text())["version"] == "0.1.0"
+    assert not root.with_name(root.name + ".previous").exists()
+    assert update_check.main(apply_argv(root, archive, manifest, backup=backup,
+                                        workspace=workspace,
+                                        extra=["--allow-active"])) == 0
+    state = json.loads((root / "UPDATE-STATE.json").read_text())
+    assert state["preflight_overridden"] is True
+    assert state["workspace_backup"]["workspaces"][0]["workspace"] == str(workspace)
+
+
+def test_apply_backs_up_sqlite_online_and_rollback_restores_on_request(tmp_path):
+    import sqlite3
+    root = tmp_path / "opt" / "deepdocparse"
+    make_tree(root, "0.1.0")
+    workspace = make_workspace(tmp_path / "workspace",
+                               tasks=[("t1", "parse", "succeeded")])
+    backup = tmp_path / "backups"
+    archive = make_archive(tmp_path, "0.2.0")
+    manifest = make_manifest(tmp_path, archive, "0.2.0")
+    assert update_check.main(apply_argv(root, archive, manifest, backup=backup,
+                                        workspace=workspace)) == 0
+    state = json.loads((root / "UPDATE-STATE.json").read_text())
+    entry = next(e for e in state["workspace_backup"]["workspaces"]
+                 if e["workspace"] == str(workspace))
+    stored = Path(state["workspace_backup"]["directory"]) / entry["backup"] / "workspace.sqlite3"
+    assert stored.is_file()
+    assert update_check._sqlite_user_version(stored) == 1
+    # Post-upgrade user writes survive a default rollback (app-only revert).
+    connection = sqlite3.connect(workspace / "workspace.sqlite3")
+    try:
+        connection.execute("INSERT INTO tasks VALUES(?,?,?)", ("t-new", "parse", "succeeded"))
+        connection.commit()
+    finally:
+        connection.close()
+    assert update_check.main(["rollback", "--root", str(root)]) == 0
+    assert json.loads((root / "RELEASE-MANIFEST.json").read_text())["version"] == "0.1.0"
+    connection = sqlite3.connect(workspace / "workspace.sqlite3")
+    try:
+        assert connection.execute("SELECT 1 FROM tasks WHERE id='t-new'").fetchone() is not None
+    finally:
+        connection.close()
+
+
+def test_rollback_restore_workspaces_rejects_schema_drift(tmp_path):
+    import sqlite3
+    root = tmp_path / "opt" / "deepdocparse"
+    make_tree(root, "0.1.0")
+    workspace = make_workspace(tmp_path / "workspace",
+                               tasks=[("t1", "parse", "succeeded")])
+    backup = tmp_path / "backups"
+    archive = make_archive(tmp_path, "0.2.0")
+    manifest = make_manifest(tmp_path, archive, "0.2.0")
+    assert update_check.main(apply_argv(root, archive, manifest, backup=backup,
+                                        workspace=workspace)) == 0
+    # Simulate a same-tree schema migration after the upgrade: the recorded
+    # v1 backup must not be blindly restored over a v2 live database.
+    connection = sqlite3.connect(workspace / "workspace.sqlite3")
+    try:
+        connection.execute("PRAGMA user_version=2")
+        connection.commit()
+    finally:
+        connection.close()
+    assert update_check.main(["rollback", "--root", str(root),
+                              "--restore-workspaces",
+                              "--workspace", str(workspace)]) == 1
+
+
+def test_apply_refuses_partial_model_downloads_and_keeps_cache(tmp_path, capsys):
+    root = tmp_path / "opt" / "deepdocparse"
+    make_tree(root, "0.1.0")
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "qwen3-1.7b-q8_0.abc123").write_bytes(b"weights")
+    (models / "qwen3-1.7b-q8_0.abc123.part").write_bytes(b"partial")
+    archive = make_archive(tmp_path, "0.2.0")
+    manifest = make_manifest(tmp_path, archive, "0.2.0")
+    assert update_check.main(apply_argv(root, archive, manifest, models=models)) == 1
+    assert "partial downloads" in capsys.readouterr().err
+    assert (models / "qwen3-1.7b-q8_0.abc123").read_bytes() == b"weights"
+    (models / "qwen3-1.7b-q8_0.abc123.part").unlink()
+    backup = tmp_path / "backups"
+    assert update_check.main(apply_argv(root, archive, manifest, backup=backup,
+                                        models=models)) == 0
+    assert (models / "qwen3-1.7b-q8_0.abc123").read_bytes() == b"weights"
+
+
+def test_uninstall_removes_only_the_application_tree(tmp_path):
+    root = tmp_path / "opt" / "deepdocparse"
+    make_tree(root, "0.1.0")
+    workspace = make_workspace(tmp_path / "workspace")
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "weights.bin").write_bytes(b"weights")
+    foreign = tmp_path / "opt" / "deepdocparse-unrelated"
+    foreign.mkdir(parents=True)
+    (foreign / "keep.txt").write_text("not ours\n")
+    assert update_check.main(["uninstall", "--root", str(root),
+                              "--workspace", str(workspace),
+                              "--models", str(models)]) == 0
+    assert not root.exists()
+    assert (workspace / "workspace.sqlite3").is_file()
+    assert (models / "weights.bin").read_bytes() == b"weights"
+    assert (foreign / "keep.txt").read_text() == "not ours\n"
+
+
+def test_status_reports_workspace_barrier(tmp_path, capsys):
+    root = tmp_path / "opt" / "deepdocparse"
+    make_tree(root, "0.1.0")
+    workspace = make_workspace(tmp_path / "workspace",
+                               tasks=[("t1", "parse", "queued")])
+    assert update_check.main(["status", "--root", str(root),
+                              "--workspace", str(workspace)]) == 0
+    state = json.loads(capsys.readouterr().out)
+    assert state["workspaces"][0]["ok"] is False
+    assert len(state["workspaces"][0]["active"]) == 1
+
+
+def test_idle_runtime_fences_maintenance_even_when_active_override_is_requested(tmp_path):
+    from ddp_local.runtime import LocalRuntime
+    root = tmp_path / "opt" / "deepdocparse"
+    make_tree(root, "0.1.0")
+    workspace = tmp_path / "workspace"
+    runtime = LocalRuntime(workspace)
+    identity = runtime.store.workspace_id
+    try:
+        assert update_check.main(["uninstall", "--root", str(root),
+                                  "--workspace", str(workspace), "--allow-active"]) == 1
+        assert root.is_dir()
+        assert runtime.store.workspace_id == identity
+    finally:
+        runtime.close()
+    assert update_check.main(["uninstall", "--root", str(root),
+                              "--workspace", str(workspace)]) == 0
+    reopened = LocalRuntime(workspace)
+    try:
+        assert reopened.store.workspace_id == identity
+    finally:
+        reopened.close()
+
+
+def test_uninstall_keeps_backups_by_default_and_never_claims_foreign_neighbours(tmp_path):
+    root = tmp_path / "opt" / "deepdocparse"
+    make_tree(root, "0.2.0")
+    previous = root.with_name(root.name + ".previous")
+    make_tree(previous, "0.1.0")
+    foreign = root.with_name(root.name + ".staging-foreign")
+    foreign.mkdir()
+    (foreign / "owner.txt").write_text("not an application tree")
+    assert update_check.main(["uninstall", "--root", str(root)]) == 0
+    assert previous.is_dir()
+    assert update_check.main(["uninstall", "--root", str(root), "--remove-backups"]) == 0
+    assert not previous.exists()
+    assert (foreign / "owner.txt").read_text() == "not an application tree"
+
+
+def test_default_rollback_never_activates_a_reader_older_than_workspace_schema(tmp_path):
+    import sqlite3
+    root = tmp_path / "opt" / "deepdocparse"
+    make_tree(root, "0.1.0")
+    old = marker("0.1.0")
+    old["workspace_schemas"]["workspace.sqlite3"] = [1]
+    (root / "RELEASE-MANIFEST.json").write_text(json.dumps(old))
+    workspace = make_workspace(tmp_path / "workspace")
+    archive = make_archive(tmp_path, "0.2.0")
+    manifest = make_manifest(tmp_path, archive, "0.2.0")
+    assert update_check.main(apply_argv(root, archive, manifest, backup=tmp_path / "backups",
+                                        workspace=workspace)) == 0
+    with sqlite3.connect(workspace / "workspace.sqlite3") as connection:
+        connection.execute("PRAGMA user_version=2")
+    assert update_check.main(["rollback", "--root", str(root)]) == 1
+    assert json.loads((root / "RELEASE-MANIFEST.json").read_text())["version"] == "0.2.0"
+    assert update_check._sqlite_user_version(workspace / "workspace.sqlite3") == 2
+
+
+def test_workspace_schema_declaration_matches_stores(tmp_path):
+    """Drift guard: declared readable versions cover what the stores write.
+
+    Opens a fresh LocalRuntime (workspace.sqlite3) and ConsentStore
+    (consents.sqlite3), records the user_version each store actually writes,
+    and requires the single-source-of-truth declaration plus the installer's
+    preflight set and the release marker built from it to include those
+    versions. A migration that bumps a store's written version without
+    updating the declaration fails here instead of shipping an installer
+    that refuses real databases.
+    """
+    import sqlite3
+
+    from ddp_local.consents import ConsentStore
+    from ddp_local.runtime import LocalRuntime
+    from ddp_local.workspace_schemas import (
+        WORKSPACE_CURRENT_VERSIONS,
+        WORKSPACE_SCHEMA_VERSIONS,
+    )
+
+    workspace = tmp_path / "workspace"
+    runtime = LocalRuntime(workspace)
+    try:
+        with sqlite3.connect(workspace / "workspace.sqlite3") as connection:
+            written = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        assert written == WORKSPACE_CURRENT_VERSIONS["workspace.sqlite3"]
+        assert written in WORKSPACE_SCHEMA_VERSIONS["workspace.sqlite3"]
+        assert written in update_check.WORKSPACE_EXPECTED_VERSIONS["workspace.sqlite3"]
+        assert written in expected_workspace_schemas()["workspace.sqlite3"]
+        assert written in build_desktop._workspace_schemas()["workspace.sqlite3"]
+    finally:
+        runtime.close()
+    (tmp_path / "consents").mkdir(parents=True, exist_ok=True)
+    store = ConsentStore(tmp_path / "consents", local_node_id="drift-guard")
+    try:
+        with sqlite3.connect(tmp_path / "consents/consents.sqlite3") as connection:
+            written = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        assert written == WORKSPACE_CURRENT_VERSIONS["consents.sqlite3"]
+        assert written in WORKSPACE_SCHEMA_VERSIONS["consents.sqlite3"]
+        assert written in update_check.WORKSPACE_EXPECTED_VERSIONS["consents.sqlite3"]
+        assert written in expected_workspace_schemas()["consents.sqlite3"]
+        assert written in build_desktop._workspace_schemas()["consents.sqlite3"]
+    finally:
+        store.close()
+
+
+def test_self_consistent_package_with_wrong_app_version_is_rejected(tmp_path):
+    directory = make_package_dir(tmp_path / "package", "0.2.0")
+    package = directory / "resources/app/package.json"
+    value = json.loads(package.read_text())
+    value["version"] = "0.1.0"
+    package.write_text(json.dumps(value))
+    manifest = json.loads((directory / "BUILD-MANIFEST.json").read_text())
+    manifest["files"]["resources/app/package.json"] = hashlib.sha256(package.read_bytes()).hexdigest()
+    (directory / "BUILD-MANIFEST.json").write_text(json.dumps(manifest))
+    with pytest.raises(SystemExit):
+        build_desktop.verify_directory(directory)

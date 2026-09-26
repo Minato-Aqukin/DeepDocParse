@@ -90,6 +90,28 @@ def digest(file):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def _workspace_schemas():
+    """Release-canonical readable set; single source of truth is ddp_local.
+
+    Prefers the live `ddp_local.workspace_schemas` package (editable install
+    in dev/CI, site-packages copy in the built tree); the file exec fallback
+    covers a bare checkout without an installed ddp_local. Either way the next
+    store migration changes the release marker automatically instead of
+    drifting behind a stale literal.
+    """
+    try:
+        from ddp_local.workspace_schemas import WORKSPACE_SCHEMA_VERSIONS as live
+    except Exception:
+        live = None
+    if live is not None:
+        return {name: sorted(versions) for name, versions in live.items()}
+    path = ROOT / "python/ddp_local/ddp_local/workspace_schemas.py"
+    namespace: dict = {}
+    exec(compile(path.read_text(), str(path), "exec"), namespace)
+    return {name: sorted(versions)
+            for name, versions in namespace["WORKSPACE_SCHEMA_VERSIONS"].items()}
+
+
 _WSL_SHAPE_MODULE = None
 _WSL_SHAPE_NAME = "ddp_wsl_runtime_shape"
 
@@ -830,9 +852,14 @@ def verify_packaged_payload(directory, version, stage=None):
         source_manifest = root / "apps/desktop/package.json"
     if not source_manifest.is_file():
         problems.append(f"no apps/desktop package.json under {label}")
-    elif canonical_package_view((packaged_app / "package.json").read_bytes()) \
-            != canonical_package_view(source_manifest.read_bytes()):
-        problems.append(f"package.json payload differs from {label}")
+    else:
+        expected_package = json.loads(source_manifest.read_bytes())
+        if manifest_files is None:
+            # Build-time version substitution is the only source-field change.
+            expected_package["version"] = version
+        if canonical_package_view((packaged_app / "package.json").read_bytes()) \
+                != canonical_package_view(json.dumps(expected_package)):
+            problems.append(f"package.json payload differs from {label}")
     if problems:
         raise SystemExit(
             "packaged app payload does not match its build source: "
@@ -971,6 +998,10 @@ def verify_directory(directory):
             problems.append(f"modified file: {relative}")
     if problems:
         raise SystemExit("package integrity check failed: " + "; ".join(problems[:5]))
+    release = json.loads((directory / "RELEASE-MANIFEST.json").read_text())
+    application = json.loads((directory / "resources/app/package.json").read_text())
+    if application.get("version") != release.get("version"):
+        raise SystemExit("Electron application version differs from RELEASE-MANIFEST.json")
     if (manifest.get("platform") or {}).get("system") == "windows":
         return verify_windows_directory(directory, manifest)
     embedded = json.loads((directory / "resources/runtime/runtime-lock.json").read_text())
@@ -986,8 +1017,7 @@ def verify_directory(directory):
     if manifest.get("license_manifest") != expected:
         raise SystemExit("license manifest does not match the files in the package")
     return {"files": len(manifest["files"]), "distributions": len(distributions),
-            "electron": manifest.get("electron"), "version": json.loads(
-                (directory / "RELEASE-MANIFEST.json").read_text())["version"]}
+            "electron": manifest.get("electron"), "version": release["version"]}
 
 
 def build_linux(args):
@@ -1031,7 +1061,9 @@ def build_linux(args):
     (stage / "resources/default_app.asar").unlink(missing_ok=True)
     application = stage / "resources/app"
     application.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "apps/desktop/package.json", application / "package.json")
+    package = json.loads((ROOT / "apps/desktop/package.json").read_text())
+    package["version"] = args.version
+    (application / "package.json").write_text(json.dumps(package, indent=2) + "\n")
     copy_tree(ROOT / "apps/desktop/src", application / "src")
     copy_tree(ROOT / "packages/client-runtime/src", stage / "resources/client-runtime")
     (stage / "resources/client-runtime/package.json").write_text(
@@ -1076,6 +1108,7 @@ def build_linux(args):
         "python": python_abi,
         "electron": "44.3.0",
         "runtime_lock_sha256": digest(LOCK),
+        "workspace_schemas": _workspace_schemas(),
     }
     (stage / "RELEASE-MANIFEST.json").write_text(json.dumps(release, indent=2) + "\n")
     license_manifest = collect_license_manifest(stage, current["distributions"])
@@ -1186,7 +1219,9 @@ def build_windows(args):
     (stage / "resources/default_app.asar").unlink(missing_ok=True)
     application = stage / "resources/app"
     application.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "apps/desktop/package.json", application / "package.json")
+    package = json.loads((ROOT / "apps/desktop/package.json").read_text())
+    package["version"] = args.version
+    (application / "package.json").write_text(json.dumps(package, indent=2) + "\n")
     copy_tree(ROOT / "apps/desktop/src", application / "src")
     copy_tree(ROOT / "packages/client-runtime/src", stage / "resources/client-runtime")
     (stage / "resources/client-runtime/package.json").write_text(
@@ -1223,6 +1258,7 @@ def build_windows(args):
         "runtime_lock_sha256": digest(runtime / "wsl-runtime.json"),
         "wsl_runtime": {"archive": wsl["archive"], "size": wsl["size"],
                         "sha256": wsl["sha256"]},
+        "workspace_schemas": _workspace_schemas(),
     }
     (stage / "RELEASE-MANIFEST.json").write_text(json.dumps(release, indent=2) + "\n")
     license_manifest = collect_license_manifest(stage, {})

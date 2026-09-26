@@ -1,3 +1,19 @@
+# Desktop AppShell validation — 2026-09-26
+
+Author self-validation; independent acceptance of the commit diff is separate.
+
+| Check | Actual result |
+| --- | --- |
+| Node host suite | `npm test` **88 passed** (source registry, `/api` proxy incl. stripped Cookie/Origin/Referer, `_object` rewrite incl. fail-closed JSON and dropped Content-Length, private-route gate, narrowed IPC, loopback centers/storage origins, settle-before-ready, node proof before the password is sent) |
+| Real window, local source | Electron 44.3.0 on niri/Wayland: first run → open workspace → upload → parse → search → ask with citation located on the PDF → build Wiki → append version → Wiki reads stale (`source_version_changed`) → rebuild on the latest version clears it. Screenshots 01–26 in `.dev-logs/desktop-walk-20260926/shots/` (local only, not in git) |
+| Real window, center source | Against the local B stack (`http://127.0.0.1:45173`): browse resources/documents/search/Wiki; original PDF fetched from the storage origin via `_object`, the page never saw the storage URL; upstream methods during browsing were GET only; a forced `POST ddp://app/api/answers` returned 403 `approved_plan_required` with zero upstream requests; 「作为联邦任务发起」 switched to the local source with the question prefilled and the center offered as receiver. Screenshots 30–37 |
+| Found by the walk and fixed | loopback center stuck `unavailable` (provider https-only); transient `unavailable` right after activation; Go's `\u0026` split the presigned URL during rewrite and leaked the signature into the page |
+
+The earlier 2026-09-13 record below describes the pre-AppShell `/workspaces`
+workbench, which no longer exists.
+
+---
+
 # Desktop host + shared client validation — 2026-09-13
 
 Author self-validation only. Independent acceptance of the final diff remains

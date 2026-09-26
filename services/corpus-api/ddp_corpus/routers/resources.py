@@ -30,23 +30,25 @@ class UpdateResource(BaseModel):
     publication: Literal["private", "draft", "published", "withdrawn"] | None = None
 
 
-def version_out(v):
+def version_out(v, parse_status, index_status=None):
     return {"id": v.id, "resource_id": v.resource_id, "version_no": v.version_no,
             "document_id": v.document_id, "source_digest": v.source_digest,
             "source_digest_verified": bool(v.source_digest),
             "filename": v.filename, "size_bytes": v.size_bytes,
-            "parse_job_id": getattr(v, "parse_job_id", None), "created_at": v.created_at}
+            "parse_job_id": v.parse_job_id, "parse_status": parse_status,
+            "index_status": index_status, "created_at": v.created_at}
 
 async def resource_out(session, row):
-    versions = (await session.execute(select(ResourceVersion).where(
-        ResourceVersion.resource_id == row.id, ResourceVersion.deleted_at.is_(None))
-        .order_by(ResourceVersion.version_no))).scalars().all()
+    versions = (await session.execute(select(ResourceVersion, ParseJob.status, ParseJob.index_status)
+        .outerjoin(ParseJob, ParseJob.id == ResourceVersion.parse_job_id).where(
+            ResourceVersion.resource_id == row.id, ResourceVersion.deleted_at.is_(None))
+        .order_by(ResourceVersion.version_no))).all()
     return {"id": row.id, "organization_id": row.organization_id,
             "owner_id": row.owner_id, "uploader_ref": {"issuer": row.organization_id,
             "subject": row.uploaded_by}, "display_name": row.display_name,
             "publication": row.publication, "copied_from": row.copied_from,
             "created_at": row.created_at, "updated_at": row.updated_at,
-            "versions": [version_out(v) for v in versions]}
+            "versions": [version_out(v, status, index) for v, status, index in versions]}
 
 @router.get("")
 async def list_resources(scope: Literal["mine", "site_public"] = "mine",
@@ -142,12 +144,14 @@ async def get_version(resource_id: str, version_id: str,
                       actor: Actor = Depends(current_actor),
                       session: AsyncSession = Depends(get_session)):
     await require_resource(session, actor, resource_id)
-    version = await session.scalar(select(ResourceVersion).where(
-        ResourceVersion.id == version_id, ResourceVersion.resource_id == resource_id,
-        ResourceVersion.deleted_at.is_(None)))
-    if version is None:
+    result = (await session.execute(select(ResourceVersion, ParseJob.status, ParseJob.index_status)
+        .outerjoin(ParseJob, ParseJob.id == ResourceVersion.parse_job_id).where(
+            ResourceVersion.id == version_id, ResourceVersion.resource_id == resource_id,
+            ResourceVersion.deleted_at.is_(None)))).one_or_none()
+    if result is None:
         raise APIError(404, "version not found", "invalid_request_error", "resource_version_not_found")
-    return version_out(version)
+    version, parse_status, index_status = result
+    return version_out(version, parse_status, index_status)
 
 @router.post("/{resource_id}/versions", status_code=201)
 async def add_version(resource_id: str, body: CreateResource,

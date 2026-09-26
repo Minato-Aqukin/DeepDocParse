@@ -19,6 +19,7 @@
 
 import ctypes
 import re
+from collections.abc import Callable
 from statistics import median
 
 from ddp_core.crops import _pdfium_serialized
@@ -68,13 +69,51 @@ def _font_name(textpage, char_index: int) -> str:
         return ""
 
 
-def _char_fonts(textpage) -> list[tuple[tuple[float, float, float, float], str]]:
-    out = []
+def _char_runs(textpage) -> list[dict]:
+    """一页的字符流：[{box(PDF 空间), text, font}]，按 PDFium 原生字符序。
+
+    一次遍历同时拿文本、字符盒与字体名：旧实现先全页扫一遍盒与字体，
+    再对每个 rect 做一次全页矩形包含判定（字符数 × 矩形数），大页上
+    就是上千字符 × 上百矩形的二次扫描。这里字符只读一次，
+    字体信息跟着字符走，后续分组不再做任何全页回查。
+
+    换行符（\\r/\\n）只做分行标记，不进文本、不参与 bbox：
+    它们的字符盒是退化的零宽点，纳进来会把行高/行距算坏。
+    """
+    runs: list[dict] = []
     for i in range(textpage.count_chars()):
         try:
-            out.append((textpage.get_charbox(i), _font_name(textpage, i)))
+            text = textpage.get_text_range(i, 1) or ""
         except Exception:
             continue
+        if text in ("\r", "\n", "\x00"):
+            runs.append({"break": True})
+            continue
+        if text in (" ", "\xa0"):
+            # 词间空格：留占位给词间断行用，但不取盒、不取字体
+            # （空格盒多为零宽点，且字体对 code 判定没有信息量）。
+            # 制表符不走这里：它是 code 缩进信号，要进文本。
+            runs.append({"break": False, "space": True})
+            continue
+        if not text.strip():
+            runs.append({"break": False, "box": None, "text": text,
+                         "font": _font_name(textpage, i)})
+            continue
+        try:
+            box = textpage.get_charbox(i)
+        except Exception:
+            continue
+        runs.append({"break": False, "box": box, "text": text,
+                     "font": _font_name(textpage, i)})
+    return runs
+
+
+def _char_fonts(textpage) -> list[tuple[tuple[float, float, float, float], str]]:
+    out = []
+    for run in _char_runs(textpage):
+        if run.get("break") or run.get("space"):
+            continue
+        out.append((run["box"], run["font"]))
     return out
 
 
@@ -118,54 +157,201 @@ def _to_display_bbox(
     return [left, h0 - top, right, h0 - bottom]
 
 
-def _lines_of_page(page) -> tuple[list[dict], list[float]]:
-    """抽出一页的行：[{bbox(显示空间), text}]，以及该页的 page_size。"""
+def _lines_of_page(page) -> tuple[list[dict], list[float], Callable[[list[float]], list[float]]]:
+    """抽出一页的行：[{bbox(阅读坐标系), text}]、该页的 page_size，以及
+    阅读坐标系 -> 显示空间的换算函数。
+
+    **行缝合与分段必须在文字自己的阅读坐标系（未旋转、左上原点）里做。**
+    旋转页在显示空间里每一行都是一根竖条，并排的两行看起来就像"同一行的左右
+    两个碎片"：旧实现在显示空间缝合，把 /Rotate 90 页上的两行倒序拼成一行、
+    行间连空格都没有（2026-09-24 版面探针实测）。bbox 最后再换算到显示空间。
+    """
     textpage = page.get_textpage()
     try:
         rotation = (page.get_rotation() or 0) % 360
         # get_size() 已经考虑旋转（就是渲染出来的尺寸），page_size 用它；
         # 而 charbox/rect 在未旋转空间里，换算要用未旋转尺寸
         page_size = [float(v) for v in page.get_size()]
-        cropbox = page.get_cropbox() or (0.0, 0.0, *page.get_size())
+        # get_cropbox() does not inherit page-tree boxes and can return a
+        # synthetic Letter box for an A4 page. PDFium's effective bounding box
+        # resolves inheritance and intersects MediaBox/CropBox before rotation.
+        cropbox = page.get_bbox()
+        if cropbox is None or cropbox[0] >= cropbox[2] or cropbox[1] >= cropbox[3]:
+            raise ValueError("PDF page has no visible bounding box")
         unrotated = (cropbox[2] - cropbox[0], cropbox[3] - cropbox[1])
 
+        # 行基元 = 字符盒的几何聚类，不是 PDFium 的 count_rects()/get_rect()。
+        # rect（字体矩形）会横跨多行、叠住混排的异体字片段：
+        # 以它为"行"再做 bounded 重提，文本丢序、bbox 退化成整片版心
+        # （ESP32 index25 的 CPU 主频句、Attention index4 的 h=8 与
+        # dk=dv=dmodel/h=64 就是这么丢的）。字符只读一次（_char_runs），
+        # 这里只做线性分组，不再有字符数 × 矩形数的二次扫描。
+        # 内联字形/数学符号按字符原文保留，不做公式结构识别。
+        runs = _char_runs(textpage)
         lines: list[dict] = []
-        char_fonts = _char_fonts(textpage)
-        for i in range(textpage.count_rects()):
-            raw_rect = textpage.get_rect(i)
-            # PDF text objects may extend beyond the crop box. Only extract the
-            # visible intersection, so every excerpt has a renderable page bbox.
-            rect = (
-                max(raw_rect[0], cropbox[0]),
-                max(raw_rect[1], cropbox[1]),
-                min(raw_rect[2], cropbox[2]),
-                min(raw_rect[3], cropbox[3]),
-            )
-            if rect[0] >= rect[2] or rect[1] >= rect[3]:
-                continue
-            raw_text = textpage.get_text_bounded(*rect) or ""
-            indented = any(line.startswith(("\t", "  ")) for line in raw_text.splitlines())
+        pending_space = False
+        current: dict | None = None
+
+        def _visible(box) -> dict | None:
+            left = max(box[0], cropbox[0])
+            bottom = max(box[1], cropbox[1])
+            right = min(box[2], cropbox[2])
+            top = min(box[3], cropbox[3])
+            if left >= right or bottom >= top:
+                return None
+            return {"box": (left, bottom, right, top)}
+
+        def _emit(box, parts, fonts) -> None:
+            raw_text = "".join(parts)
+            # PDFium can collapse several leading spaces into one character.
+            indented = raw_text.startswith(("\t", " "))
             text = raw_text.strip()
-            if not text:
-                continue
-            fonts = _fonts_in_rect(char_fonts, rect)
-            lines.append(
-                {
-                    "bbox": _to_display_bbox(
-                        (
-                            rect[0] - cropbox[0],
-                            rect[1] - cropbox[1],
-                            rect[2] - cropbox[0],
-                            rect[3] - cropbox[1],
+            if text and box is not None:
+                lines.append(
+                    {
+                        "bbox": _to_display_bbox(
+                            (
+                                box[0] - cropbox[0],
+                                box[1] - cropbox[1],
+                                box[2] - cropbox[0],
+                                box[3] - cropbox[1],
+                            ),
+                            unrotated,
+                            0,
                         ),
-                        unrotated,
-                        rotation,
-                    ),
-                    "text": text,
-                    "type": "code" if _looks_like_code(text, fonts, indented=indented) else "text",
-                }
+                        "text": text,
+                        "type": (
+                            "code"
+                            if _looks_like_code(text, fonts,
+                                                indented=indented)
+                            else "text"
+                        ),
+                    }
+                )
+
+        def _flush() -> None:
+            nonlocal current, pending_space
+            if current is None:
+                pending_space = False
+                return
+            _emit(current["box"], current["parts"], current["fonts"])
+            current = None
+            pending_space = False
+
+        for run in runs:
+            if run.get("break"):
+                _flush()
+                continue
+            if run.get("space"):
+                # 行首空格保留到 code 判定；词间空格不参与几何盒。
+                if current is None:
+                    current = {"box": None, "parts": [" "], "fonts": set()}
+                elif current["box"] is None:
+                    current["parts"].append(" ")
+                else:
+                    pending_space = True
+                continue
+            if run.get("box") is None:
+                # 制表符等无盒空白：进文本（code 缩进信号），不碰 bbox。
+                if current is None:
+                    current = {"box": None, "parts": [run["text"]],
+                               "fonts": {run["font"]} if run["font"] else set()}
+                else:
+                    if pending_space:
+                        current["parts"].append(" ")
+                        pending_space = False
+                    current["parts"].append(run["text"])
+                    if run["font"]:
+                        current["fonts"].add(run["font"])
+                continue
+            vis = _visible(run["box"])
+            if vis is None:
+                # 不可见字符直接跳过：旧实现按矩形裁交集还会留半句，
+                # 这里字符级裁剪与 cropbox 测试的"CLI 半句保留"一致
+                # （保留的是可见字符，不是整句）。
+                continue
+            box = vis["box"]
+            if current is None or current["box"] is None:
+                if current is not None:
+                    if pending_space:
+                        current["parts"].append(" ")
+                        pending_space = False
+                    current["parts"].append(run["text"])
+                    if run["font"]:
+                        current["fonts"].add(run["font"])
+                    current["box"] = box
+                else:
+                    current = {"box": box, "parts": [run["text"]],
+                               "fonts": {run["font"]} if run["font"] else set()}
+                    pending_space = False
+                continue
+            # 行带判定：字符的底边/顶边落在当前行盒内即同行。
+            # 双向包容：上标顶边仍在行盒内（顶边 <= 行顶），
+            # 下标底边仍在行盒内（底边 >= 行底）—— 大小字混排不断行；
+            # 隔行字两个边都在盒外才算换行。
+            # 不用"底边在半行带内"：半带上限遇到版权页式的大行高会被撑爆。
+            # 不用"中心在盒内"：混排数学行里大小字中心点上下差 2~3pt，
+            # 中心判定会把下标踢出去、把隔行吸进来。
+            cbox = current["box"]
+            same_row = (cbox[1] - 1.0 <= box[1] <= cbox[3]) or (cbox[1] <= box[3] <= cbox[3] + 1.0)
+            if not same_row:
+                _flush()
+                current = {"box": box, "parts": [run["text"]],
+                           "fonts": {run["font"]} if run["font"] else set()}
+                pending_space = False
+                continue
+            if pending_space:
+                current["parts"].append(" ")
+                pending_space = False
+            current["parts"].append(run["text"])
+            if run["font"]:
+                current["fonts"].add(run["font"])
+            current["box"] = (
+                min(cbox[0], box[0]),
+                min(cbox[1], box[1]),
+                max(cbox[2], box[2]),
+                max(cbox[3], box[3]),
             )
-        return lines, page_size
+        _flush()
+        # 碎片缝合：同一视觉行的混排/上下标字符会被原生换行拆成多个
+        # "字符行"（如 Where 行的 W^Q_i 与 d_model×d_k 各占一个换行段）。
+        # 只拼"原生换行两侧、首字 x 单调递增且垂直同带"的碎片；
+        # 真正的换行（下一行 x 回到行首、或 y 差超过半行高）不断。
+        # 行内空格按字符间隙恢复：碎片首字 x 与上一碎片尾字 x 的
+        # 间隙超过半个行高即补一个空格（原生换行不带空格信息）。
+        # 缝合只拼文本与外接 bbox，不认公式结构。
+        stitched: list[dict] = []
+        for line in lines:
+            if not stitched:
+                stitched.append(line)
+                continue
+            prev = stitched[-1]
+            # 阅读坐标系 y 向下：prev 在上、line 在下时 dy >= 0
+            dy = line["bbox"][1] - prev["bbox"][1]
+            prev_h = prev["bbox"][3] - prev["bbox"][1]
+            same_band = -1.0 <= dy <= max(prev_h / 2, 2.0)
+            x_advance = line["bbox"][0] >= prev["bbox"][0]
+            x_gap = line["bbox"][0] - prev["bbox"][2]
+            near = x_gap <= max(prev_h, 4.0)
+            if same_band and x_advance and near and line.get("type") == prev.get("type"):
+                if x_gap > max(prev_h / 2, 2.0):
+                    prev["text"] = prev["text"] + " " + line["text"]
+                else:
+                    prev["text"] = prev["text"] + line["text"]
+                prev["bbox"] = [
+                    min(prev["bbox"][0], line["bbox"][0]),
+                    min(prev["bbox"][1], line["bbox"][1]),
+                    max(prev["bbox"][2], line["bbox"][2]),
+                    max(prev["bbox"][3], line["bbox"][3]),
+                ]
+                continue
+            stitched.append(line)
+
+        def to_display(bbox: list[float]) -> list[float]:
+            x0, y0, x1, y1 = bbox
+            return _to_display_bbox((x0, unrotated[1] - y1, x1, unrotated[1] - y0), unrotated, rotation)
+
+        return stitched, page_size, to_display
     finally:
         textpage.close()
 
@@ -260,10 +446,10 @@ def extract_pages(pdf_bytes: bytes) -> list[dict]:
         pages = []
         for page_idx in range(len(document)):
             page = document[page_idx]
-            lines, page_size = _lines_of_page(page)
-            pages.append(
-                {"page_idx": page_idx, "page_size": page_size, "blocks": _merge_lines(lines)}
-            )
+            lines, page_size, to_display = _lines_of_page(page)
+            # 分段在阅读坐标系里做，块序也是阅读序；最后才把 bbox 换到显示空间
+            blocks = [{**block, "bbox": to_display(block["bbox"])} for block in _merge_lines(lines)]
+            pages.append({"page_idx": page_idx, "page_size": page_size, "blocks": blocks})
         return pages if any(page["blocks"] for page in pages) else []
     finally:
         document.close()

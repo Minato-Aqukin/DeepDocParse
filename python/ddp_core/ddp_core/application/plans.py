@@ -107,6 +107,46 @@ def utc_instant(timestamp):
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def requirements_wiki(value, *, operation):
+    """TaskSpec.requirements.wiki 的精确形状：{wiki_id?, base_revision_id?, title?, max_pages?}。
+
+    只属于 operation=wiki.pages：别的 operation 带 wiki 一律拒绝（防止静默错义）；
+    wiki.pages 则必须带 requirements.wiki。新增（无 wiki_id）必须给 title；
+    更新（有 wiki_id）必须给 base_revision_id 做 CAS。max_pages 与版本化 Wiki
+    的页预算一致（1..12）。本函数只做形状与边界校验，不碰 validate_scope。
+    """
+    if value is None:
+        if operation == "wiki.pages":
+            reject(message="wiki.pages requires requirements.wiki")
+        return
+    if operation != "wiki.pages":
+        reject(message="requirements.wiki is only valid for wiki.pages")
+    obj(value, (), ("wiki_id", "base_revision_id", "title", "max_pages"))
+    wiki_id = value.get("wiki_id")
+    if wiki_id is not None:
+        string(wiki_id)
+        if not 1 <= len(wiki_id) <= 32:
+            reject(message="requirements.wiki.wiki_id must be within 1..32 characters")
+    base_revision_id = value.get("base_revision_id")
+    if base_revision_id is not None:
+        string(base_revision_id)
+        if not 1 <= len(base_revision_id) <= 32:
+            reject(message="requirements.wiki.base_revision_id must be within 1..32 characters")
+    title = value.get("title")
+    if title is not None:
+        string(title)
+        if not title.strip() or len(title) > 255:
+            reject(message="requirements.wiki.title must be within 1..255 characters")
+    if "max_pages" in value:
+        integer(value["max_pages"], minimum=1)
+        if value["max_pages"] > 12:
+            reject(message="requirements.wiki.max_pages must be within 1..12")
+    if wiki_id is None and (title is None or not title.strip()):
+        reject(message="wiki.pages requires a title for a new Wiki")
+    if wiki_id is not None and base_revision_id is None:
+        reject(message="wiki.pages requires base_revision_id for a Wiki update")
+
+
 def validate_spec(spec):
     obj(spec, ("schema", "protocol", "operation", "workspace_ref", "resource_scope", "search_policy", "execution_policy", "consent_refs", "budget_ref"), ("query", "requirements"))
     if spec["schema"] != "ddp-task-probe/1#TaskSpec" or spec["protocol"] != "ddp-task/1":
@@ -142,11 +182,12 @@ def validate_spec(spec):
         if ref is not None:
             string(ref)
     if "requirements" in spec:
-        obj(spec["requirements"], (), ("citations", "output_schema"))
+        obj(spec["requirements"], (), ("citations", "output_schema", "wiki"))
         if spec["requirements"].get("citations", "required") not in {"required", "preferred", "not_required"}:
             reject(message="invalid citation requirement")
         if "output_schema" in spec["requirements"]:
             string(spec["requirements"]["output_schema"])
+    requirements_wiki(spec.get("requirements", {}).get("wiki"), operation=spec["operation"])
 
 
 def validate_plan(plan, spec, *, local_node_id, now):
@@ -252,12 +293,56 @@ def validate_plan(plan, spec, *, local_node_id, now):
     return nodes
 
 
+def validate_center_execution(value, *, local_node_id, now, parent_scope):
+    """Reviewed child binding to center C's persisted plan mirror.
+
+    Never replaces the local transport plan: the child scope keeps its local
+    plan/inputs/transports, and this mirror only authorizes the approve/submit
+    control requests against the exact C revision the user reviewed. Shape and
+    digest failures are plan_changed; node/expiry escapes are denied.
+    """
+    obj(value, ("root_task_id", "parent_plan_id", "transport_ref", "plan"), ("plan_digest", "fetched_at"))
+    string(value["root_task_id"])
+    string(value["parent_plan_id"])
+    string(value["transport_ref"])
+    if value["parent_plan_id"] != parent_scope["plan"]["plan_id"]:
+        reject("plan_changed", "center binding must reference the reviewed parent plan")
+    transports = {item["transport_ref"]: item for item in parent_scope.get("transport_bindings", [])}
+    transport = transports.get(value["transport_ref"])
+    if transport is None:
+        reject("policy_denied", "center binding needs its reviewed parent transport")
+    center = transport["recipient_node_id"]
+    plan = value["plan"]
+    if not isinstance(plan, dict):
+        reject("plan_changed", "center plan mirror must be a typed object")
+    if plan.get("plan_digest") != task_plan_digest(plan):
+        reject("plan_changed", "center plan digest differs from its content")
+    if value.get("plan_digest") is not None and value["plan_digest"] != plan["plan_digest"]:
+        reject("plan_changed", "center binding digest differs from the mirrored plan")
+    if "fetched_at" in value:
+        string(value["fetched_at"])
+    if plan.get("planning_state") not in {"ready", "awaiting_approval", "approved"}:
+        reject("plan_changed", "center plan is not in a reviewable revision")
+    spec = parent_scope["task_spec"]
+    if plan.get("task_spec_digest") != task_spec_digest(spec):
+        reject("plan_changed", "center plan was not planned for the approved task")
+    if min(instant(plan["valid_until"]), instant(plan["budget"]["deadline"])) <= now:
+        reject("consent_expired", "center plan revision has expired")
+    nodes = validate_plan(plan, spec, local_node_id=local_node_id, now=now)
+    allowed = set(parent_scope["exploration"]["allowed_recipients"]) | {local_node_id, center}
+    if nodes - allowed:
+        reject("policy_denied", "center plan reaches nodes outside the frozen recipient set")
+    if plan["root_coordinator_node_id"] != center or plan["final_result_writer"] != center:
+        reject("policy_denied", "center execution must be rooted at the paired center")
+    return nodes
+
+
 def validate_scope(scope, *, local_node_id, now, source_policies):
     """source_policies is a trusted adapter snapshot, never a model/request claim."""
     # transport_bindings is optional. It used to be missing here, so every scope that
     # carried one failed this shape check and the reviewed-transport rules below were
     # unreachable; ConsentStore.prepare already admitted the field.
-    obj(scope, ("task_spec", "plan", "input_manifest", "payload_bindings", "output_locations", "retention", "exploration"), ("transport_bindings",))
+    obj(scope, ("task_spec", "plan", "input_manifest", "payload_bindings", "output_locations", "retention", "exploration"), ("transport_bindings", "center_execution", "parent_plan_id", "parent_scope"))
     spec, plan = scope["task_spec"], scope["plan"]
     nodes = validate_plan(plan, spec, local_node_id=local_node_id, now=now)
     strings(scope["output_locations"])
@@ -359,6 +444,10 @@ def validate_scope(scope, *, local_node_id, now, source_policies):
                 reject("policy_denied", "execution payload needs its exact approved data edge")
         else:
             reject(message="unknown payload phase")
+    if "center_execution" in scope:
+        if scope["payload_bindings"]:
+            reject("policy_denied", "a reviewed child carries no payloads; the query already left during exploration")
+        validate_center_execution(scope["center_execution"], local_node_id=local_node_id, now=now, parent_scope=scope.get("parent_scope") or scope)
     return nodes
 
 

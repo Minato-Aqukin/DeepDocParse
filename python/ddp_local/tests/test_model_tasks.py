@@ -11,6 +11,31 @@ from ddp_core.application.ports import ApplicationError
 from ddp_local.runtime import LocalRuntime
 
 
+async def test_install_of_a_copied_complete_artifact_verifies_instead_of_downloading(tmp_path, monkeypatch):
+    """A copied/restored workspace keeps the file but not its recorded signature. The UI
+    offers "校验已下载文件" for that state; it must not start a fresh multi-GB download
+    (2026-09-26 desktop walkthrough: offline re-download of Qwen3 failed)."""
+    runtime = LocalRuntime(tmp_path / 'workspace')
+    payload = b'GGUF\x03\0\0\0' + b'copied-model' * 100
+    artifact = {'id': 'copied-model', 'kind': 'model', 'filename': 'copied.gguf',
+        'version': 'protocol-only', 'format': 'gguf-v3', 'sha256': hashlib.sha256(payload).hexdigest(),
+        'bytes': len(payload), 'license': 'MIT', 'url': 'https://fixture.example/model',
+        'license_url': 'https://fixture.example/license', 'backend': 'llama.cpp', 'device': 'cpu'}
+    installer = runtime.model_installer
+    installer.definitions['artifacts'].append(artifact)
+    try:
+        (tmp_path / 'workspace' / 'models' / installer.name(artifact)).write_bytes(payload)
+        assert installer.status('copied-model')['status'] == 'verification_required'
+        async def no_network(identifier, **_):
+            raise AssertionError('a complete local artifact must be verified, not downloaded')
+        monkeypatch.setattr(installer, 'download', no_network)
+        result = await runtime.model_operation('install', 'copied-model', operation_key='verify-copied')
+        assert result['status'] == 'installed'
+        assert installer.status('copied-model')['status'] == 'installed'
+    finally:
+        runtime.close()
+
+
 async def test_install_cancel_has_receipt_keeps_partial_and_explicit_retry_is_idempotent(tmp_path, monkeypatch):
     runtime = LocalRuntime(tmp_path / 'workspace')
     payload = b'GGUF\x03\0\0\0' + b'fixture-only' * 100
@@ -63,7 +88,7 @@ async def test_install_cancel_has_receipt_keeps_partial_and_explicit_retry_is_id
 async def test_start_receipt_replays_after_restart_and_expired_operation_never_reexecutes(tmp_path, monkeypatch):
     runtime = LocalRuntime(tmp_path / 'workspace')
     calls = []
-    async def start(identifier):
+    async def start(identifier, *, runtime_id=None):
         calls.append(identifier)
         return {'status': 'ready', 'model_id': identifier}
     monkeypatch.setattr(runtime, 'start_model', start)
@@ -78,6 +103,11 @@ async def test_start_receipt_replays_after_restart_and_expired_operation_never_r
         with pytest.raises(ApplicationError) as reused:
             await reopened.model_operation('stop', operation_key='start-once')
         assert reused.value.code == 'idempotency_conflict'
+        with pytest.raises(ApplicationError) as changed_backend:
+            await reopened.model_operation('start', 'qwen3-1.7b-q8_0', runtime_id='llama-cpp-vulkan-linux-x64',
+                                           operation_key='start-once')
+        assert changed_backend.value.code == 'idempotency_conflict'
+        assert len(calls) == 1, 'a historical CPU receipt cannot authorize a new GPU execution'
         task, _ = reopened.store.begin_generation('model_install', {'artifact_id': 'fixture'}, 'crash')
         reopened.store.db.execute('UPDATE tasks SET lease_until=? WHERE id=?', (time.time()-1, task['id']))
         assert reopened.store.claim() is None

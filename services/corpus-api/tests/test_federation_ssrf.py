@@ -99,7 +99,7 @@ def stop_server(server, thread):
 
 
 def directory_for(server, *, allow_loopback: bool = True) -> PeerDirectory:
-    """node_credential 档位的登记：只有 endpoint，出站现签发一张节点凭证。
+    """peer 登记：只有 endpoint，出站现签发一张节点凭证。
 
     signer + Delegation 必须给，否则请求连签发都过不了（`credential_unavailable`，
     status None），到不了原来要量的重定向/跨主机行为 —— 参考
@@ -108,7 +108,7 @@ def directory_for(server, *, allow_loopback: bool = True) -> PeerDirectory:
     config = PeerConfig(node_id=NODE, endpoint=f"http://127.0.0.1:{server.server_port}")
     return PeerDirectory({NODE: config}, actor=ACTOR_OBJECT,
                          signer=LocalControlSigner(issuer_node_id=LOCAL_NODE),
-                         delegation=DELEGATION, shared_token=False)
+                         delegation=DELEGATION)
 
 
 async def test_redirect_to_another_listener_is_not_followed_and_never_sees_the_token():
@@ -174,12 +174,12 @@ async def test_loopback_flag_is_required_and_tokens_only_go_to_the_registered_li
         endpoint = f"http://127.0.0.1:{server.server_port}"
         with pytest.raises(PeerUnavailable):
             parse_peers(json.dumps({NODE: {"endpoint": endpoint}}),
-                        allow_loopback=False, shared_token=False)
+                        allow_loopback=False)
         parsed = parse_peers(json.dumps({NODE: {"endpoint": endpoint}}),
-                             allow_loopback=True, shared_token=False)
+                             allow_loopback=True)
         directory = PeerDirectory(parsed, actor=ACTOR_OBJECT,
                                   signer=LocalControlSigner(issuer_node_id=LOCAL_NODE),
-                                  delegation=DELEGATION, shared_token=False)
+                                  delegation=DELEGATION)
         await directory.client(NODE).execution("exec-1")
         assert len(server.seen) == 1
         assert server.seen[0]["node_credential"]
@@ -226,11 +226,10 @@ async def test_registered_host_is_the_only_host_ever_asked_for():
         return httpx.Response(409, json={"error": {"code": "wrong_target"}})
 
     peers = PeerDirectory(
-        parse_peers(json.dumps({NODE: {"endpoint": "https://peer.example"}}),
-                    shared_token=False),
+        parse_peers(json.dumps({NODE: {"endpoint": "https://peer.example"}})),
         actor=ACTOR_OBJECT, transport=httpx.MockTransport(handler),
         signer=LocalControlSigner(issuer_node_id=LOCAL_NODE),
-        delegation=DELEGATION, shared_token=False)
+        delegation=DELEGATION)
     client = peers.client(NODE)
     with pytest.raises(PeerUnavailable) as info:
         await client.execution("exec-1")
@@ -257,11 +256,10 @@ async def test_dns_swapped_response_identity_is_never_treated_as_the_approved_pe
             "state": "succeeded", "operation": "retrieve"})
 
     peers = PeerDirectory(
-        parse_peers(json.dumps({NODE: {"endpoint": "https://peer.example"}}),
-                    shared_token=False),
+        parse_peers(json.dumps({NODE: {"endpoint": "https://peer.example"}})),
         actor=ACTOR_OBJECT, transport=httpx.MockTransport(handler),
         signer=LocalControlSigner(issuer_node_id=LOCAL_NODE),
-        delegation=DELEGATION, shared_token=False)
+        delegation=DELEGATION)
     body = await peers.client(NODE).execution("exec-1")
     assert body["node_id"] == OTHER, "测试夹具必须真的带一个外来身份"
     # 这一层不把外来身份当自己人：没有目录变更入口，也没有身份提升。

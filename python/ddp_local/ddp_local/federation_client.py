@@ -16,6 +16,7 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from ddp_core.application.plans import digest, reject
+from ddp_core.bundle import MAX_ARCHIVE
 
 RESPONSE_BYTES_LIMIT = 4 * 1024 * 1024
 DEFAULT_TIMEOUT = 30.0
@@ -44,6 +45,34 @@ def validate_endpoint(endpoint, allow_loopback=False):
             "center endpoint must be an exact HTTPS origin (HTTP only for literal 127.0.0.1/[::1] "
             "with allow_loopback), without userinfo, query, fragment or trailing slash",
         )
+def validate_upload_origin(origin, allow_loopback=False):
+    """Paired object-upload origin: HTTPS bare origin, no path/query/fragment.
+
+    Defaults to the center origin when pairing omits it. Like the center
+    endpoint it is fixed by host pairing metadata, never by the renderer; the
+    storage PUT URL's `.origin` must equal the reviewed `center-storage`
+    endpoint, with `redirect:error` and no Authorization header.
+    """
+    if not isinstance(origin, str) or not origin or len(origin) > 2048:
+        reject("policy_denied", "upload origin must be a bounded string")
+    if any(c.isspace() or ord(c) < 32 for c in origin):
+        reject("policy_denied", "upload origin cannot contain whitespace or control characters")
+    try:
+        url = urlsplit(origin)
+        if (not url.hostname or url.username or url.password or url.query or url.fragment
+                or url.path not in ("", "/") or origin.endswith("/")):
+            raise ValueError
+        if url.scheme != "https" and not (
+            url.scheme == "http" and allow_loopback and url.hostname in LOOPBACK_HOSTS
+        ):
+            raise ValueError
+        _ = url.port
+    except ValueError:
+        reject(
+            "policy_denied",
+            "upload origin must be an exact HTTPS bare origin (HTTP only for literal 127.0.0.1/[::1] "
+            "with allow_loopback), without userinfo, path, query, fragment or trailing slash",
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -52,9 +81,16 @@ class CenterConfig:
     credential: str = dataclasses.field(repr=False)
     timeout_seconds: float = DEFAULT_TIMEOUT
     allow_loopback: bool = False
+    # Paired object-upload origin for `center-storage` bytes. HTTPS bare
+    # origin fixed by host pairing metadata (default = center origin). Never
+    # goes through the credential broker; presigned PUT carries its own
+    # query-string credential. `None` means "same as endpoint".
+    upload_origin: str | None = None
 
     def __post_init__(self):
         validate_endpoint(self.endpoint, self.allow_loopback)
+        if self.upload_origin is not None:
+            validate_upload_origin(self.upload_origin, self.allow_loopback)
         if type(self.credential) is not str or not self.credential or len(self.credential) > 4096:
             reject("policy_denied", "a center service credential is required")
         if type(self.allow_loopback) is not bool:
@@ -91,7 +127,7 @@ def _stable_key(prefix, value):
 class CenterFederationClient:
     """协调者端点的最小异步客户端；跨节点凭据由调用方以 actor 头上报。"""
 
-    def __init__(self, config, *, transport=None, actor_headers=None):
+    def __init__(self, config, *, transport=None, actor_headers=None, before_send=None):
         if not isinstance(config, CenterConfig):
             reject("invalid_plan", "a validated CenterConfig is required")
         self.config = config
@@ -106,6 +142,7 @@ class CenterFederationClient:
             follow_redirects=False,
             timeout=httpx.Timeout(config.timeout_seconds),
             transport=transport,
+            event_hooks={"request": [before_send]} if before_send is not None else None,
         )
 
     async def __aenter__(self):
@@ -117,12 +154,12 @@ class CenterFederationClient:
     async def aclose(self):
         await self._client.aclose()
 
-    async def _bounded_body(self, response):
+    async def _bounded_body(self, response, limit=RESPONSE_BYTES_LIMIT):
         total = 0
         chunks = []
         async for chunk in response.aiter_bytes():
             total += len(chunk)
-            if total > RESPONSE_BYTES_LIMIT:
+            if total > limit:
                 raise CenterFault("response_too_large", response.status_code, False)
             chunks.append(chunk)
         return b"".join(chunks)
@@ -176,11 +213,13 @@ class CenterFederationClient:
         except ValueError:
             raise CenterFault("invalid_response", status, False) from None
 
-    async def create_intent(self, task_spec, exploration_consent, scope_manifest=None, *, idempotency_key=None):
+    async def create_intent(self, task_spec, exploration_consent, scope_manifest=None, *, budget=None, idempotency_key=None):
         """持久化任务需求与已批准的探索许可；稳定幂等键让丢响应后的显式重试不造第二个 intent。"""
         body = {"task_spec": task_spec, "exploration_consent": exploration_consent}
         if scope_manifest is not None:
             body["scope_manifest"] = scope_manifest
+        if budget is not None:
+            body["budget"] = budget
         return await self._request(
             "POST", "/api/v1/task-intents", payload=body,
             idempotency_key=idempotency_key or _stable_key("intent-", body),
@@ -194,6 +233,10 @@ class CenterFederationClient:
             idempotency_key=_stable_key("plan-", {"root_task_id": root_task_id}),
             accepted=(200, 202), write=True,
         )
+
+    async def read_plan(self, root_task_id):
+        return await self._request(
+            "GET", "/api/v1/task-plans/%s" % quote(root_task_id, safe=""))
 
     async def approve(self, root_task_id, plan_digest, execution_consent):
         """批准精确的中心计划修订 + 执行许可；同键重提由中心幂等。"""
@@ -258,3 +301,79 @@ class CenterFederationClient:
             idempotency_key=_stable_key("ack-", [delivery_id, result_manifest_digest]),
             accepted=(200, 204), write=True,
         )
+    async def create_remote_compute(self, body, *, idempotency_key):
+        """幂等创建等待输入的持久计算记录；丢响应抛 outcome_unknown，用读对账，绝不在内部重放。"""
+        return await self._request(
+            "POST", "/api/v1/remote-compute", payload=body,
+            idempotency_key=idempotency_key, accepted=(200, 201), write=True,
+        )
+
+    async def remote_compute(self, compute_id):
+        """只读持久计算状态与固定输入输出 manifest；绝不重放写请求。"""
+        return await self._request(
+            "GET", "/api/v1/remote-compute/%s" % quote(compute_id, safe=""), accepted=(200,)
+        )
+
+    async def cancel_remote_compute(self, compute_id, *, idempotency_key=None):
+        """幂等取消持久计算；已 ack 终态由中心拒绝。"""
+        return await self._request(
+            "POST", "/api/v1/remote-compute/%s/cancel" % quote(compute_id, safe=""),
+            payload={}, idempotency_key=idempotency_key or _stable_key("remote-cancel-", compute_id),
+            accepted=(200,), write=True,
+        )
+
+    async def ack_remote_compute(self, compute_id, output_sha256, *, idempotency_key=None):
+        """本地原子提交后确认固定输出 hash；同键同摘要安全重放。"""
+        body = {"output_sha256": output_sha256}
+        return await self._request(
+            "POST", "/api/v1/remote-compute/%s/ack" % quote(compute_id, safe=""), payload=body,
+            idempotency_key=idempotency_key or _stable_key("remote-ack-", [compute_id, output_sha256]),
+            accepted=(200,), write=True,
+        )
+
+    async def create_scope(self, body, *, idempotency_key):
+        """Create the frozen federation scope inside the approved exploration budget.
+
+        Body is fixed by the caller: {operation, allowed_node_ids, ...budgets}.
+        The returned envelope's manifest is persisted verbatim; it is never
+        filtered-then-rehashed locally (the Go side constrains expansion with
+        allowed_node_ids before any outbound request).
+        """
+        return await self._request(
+            "POST", "/api/v1/federation/scopes", payload=body,
+            idempotency_key=idempotency_key, accepted=(200, 201), write=True,
+        )
+
+    async def scope_targets(self, scope_id, *, cursor=None):
+        """Read one frozen scope target page; reads never grant or replay."""
+        params = {"cursor": cursor} if cursor else None
+        return await self._request(
+            "GET", "/api/v1/federation/scopes/%s/targets" % quote(scope_id, safe=""),
+            params=params, accepted=(200,),
+        )
+
+    async def download_bundle(self, compute_id):
+        """Stream the fixed-manifest ZIP bytes; hashing happens on the caller.
+
+        Returns (bytes, output_sha256_header). Reading is not confirmation.
+        """
+        headers = dict(self.actor_headers)
+        headers["Authorization"] = "Bearer " + self.config.credential
+        try:
+            async with self._client.stream(
+                "GET", self.config.endpoint + "/api/v1/remote-compute/%s/bundle" % quote(compute_id, safe=""),
+                headers=headers,
+            ) as response:
+                status = response.status_code
+                body = await self._bounded_body(response, MAX_ARCHIVE)
+        except CenterFault:
+            raise
+        except httpx.HTTPError as exc:
+            raise self._transport_fault(exc, write=False) from None
+        if status != 200:
+            raise self._error_fault(status, body)
+        try:
+            output = response.headers.get("x-output-sha256")
+        except Exception:
+            output = None
+        return body, output

@@ -290,9 +290,10 @@ func directoryFor(t *testing.T, peers map[string]string) *PeerDirectory {
 	t.Helper()
 	configs := map[string]PeerConfig{}
 	for nodeID, endpoint := range peers {
-		configs[nodeID] = PeerConfig{NodeID: nodeID, Endpoint: endpoint, ServiceToken: "service-" + nodeID, PeerToken: "peer-" + nodeID}
+		configs[nodeID] = PeerConfig{NodeID: nodeID, Endpoint: endpoint}
 	}
-	return NewPeerDirectory(configs, nil, 2*time.Second)
+	sign, _ := peerTestSigner(t)
+	return NewPeerDirectory(configs, nil, 2*time.Second, sign)
 }
 
 func TestExpandScopeRecursesThroughDirectoryAndCatalogs(t *testing.T) {
@@ -475,8 +476,9 @@ func TestExpandScopeDeniedAndUnregisteredStayUncontacted(t *testing.T) {
 func TestExpandScopeTimeoutIsReportedHonestly(t *testing.T) {
 	p := &fakeDirectory{delay: 150 * time.Millisecond}
 	pServer := p.serve(t, "node-p")
-	configs := map[string]PeerConfig{"node-p": {NodeID: "node-p", Endpoint: pServer.URL, ServiceToken: "s", PeerToken: "p"}}
-	dir := NewPeerDirectory(configs, nil, 40*time.Millisecond)
+	configs := map[string]PeerConfig{"node-p": {NodeID: "node-p", Endpoint: pServer.URL}}
+	sign, _ := peerTestSigner(t)
+	dir := NewPeerDirectory(configs, nil, 40*time.Millisecond, sign)
 	out := ExpandScope(context.Background(), dir, ExpansionInput{
 		Members: []Member{federatedMemberDescriptor("node-p", true)}, LocalNodeID: "node-a",
 		Operation: "search", MaxTargets: 100, MaxRequests: 64, MaxNodes: 32, Now: time.Now().UTC(),

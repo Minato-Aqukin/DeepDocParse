@@ -10,9 +10,11 @@
 // A packaged exe (win-unpacked/deepdocparse.exe, DeepDocParse-*-setup.exe,
 // DeepDocParse-*-portable.exe) therefore enters the smoke path when launched
 // with `--smoke` and the two environment variables below; this script always
-// passes the flag. The CI step still runs continue-on-error for the first
-// iteration because a runner session may not be able to open an Electron
-// window, but the report assertions are real.
+// passes the flag. Since T-007 the CI step is a blocking gate (no
+// continue-on-error): a failure turns the job red and no source receipt or
+// installer artifact is uploaded. The report assertions are real, and a host
+// without a WSL distro still passes as Tier A (wsl_unavailable), which the
+// assertions distinguish from a real failure.
 //
 // Usage:
 //   node scripts/smoke-windows.mjs [TARGET] [--timeout[=]ms] [--report[=]path] [--host]
@@ -135,8 +137,12 @@ export function assertReport(report) {
     assert.deepEqual(report.ready.identity, report.resumed.identity)
     assert.equal(report.stopped.state, 'stopped')
     assert.equal(report.sharedClient.pdfRendered, true)
-    assert.ok(report.sharedClient.fileResults.originalBytes > 0)
-    assert.equal(report.sharedClient.fileResults.exported.value.saved, true)
+    assert.equal(report.sharedClient.fileResults.status, 'succeeded')
+    assert.ok(report.sharedClient.fileResults.resourceId)
+    assert.ok(report.sharedClient.fileResults.versionId)
+    assert.ok(report.sharedClient.fileResults.appendedVersion)
+    assert.ok(Array.isArray(report.sharedClient.tokenAudit.meKeys))
+    assert.ok(!report.sharedClient.tokenAudit.methods.includes('getCredential'))
     return
   }
   // Tier A: a Windows runner without a WSL2 distribution reports the honest

@@ -24,7 +24,7 @@ func (s *Store) CreateScope(ctx context.Context, org, subject, callerScope, loca
 // the observed remote directories. Remote targets/revisions/unknowns are
 // server-observed input: a caller can never assert them.
 func (s *Store) CreateExpandedScope(ctx context.Context, org, subject, callerScope, localID, scopeID string, admin bool, opts discovery.ScopeOptions, catalog discovery.CollectionCatalog, remote discovery.RemoteExpansion) (*discovery.ScopeEnvelope, error) {
-	if opts.Validate() != nil || scopeID == "" {
+	if opts.Validate() != nil || !opts.AllowsNode(localID) || scopeID == "" {
 		return nil, ErrDiscoveryConflict
 	}
 	out := &discovery.ScopeEnvelope{ContentSnapshot: "not_frozen"}
@@ -138,28 +138,21 @@ func (s *Store) CreateExpandedScope(ctx context.Context, org, subject, callerSco
 				break
 			}
 			for _, member := range members {
+				if !opts.AllowsNode(member.NodeID) || remote.Handled[member.NodeID] {
+					// Excluded nodes are outside this frozen scope. Expanded nodes
+					// already consumed the target budget and recorded their outcome.
+					continue
+				}
 				if remaining == 0 {
 					unknown(localID, "budget_exhausted")
 					break
 				}
 				remaining--
-				if remote.Handled[member.NodeID] {
-					// The expansion already recorded this member's outcome: either it
-					// contributed observed remote directories or it has an explicit
-					// unexpanded reason. Never invent a second, different one.
-					continue
-				}
-				// Remote catalog credentials/collection enumeration have not been
-				// implemented. Membership is retained as an explicit unknown subtree.
 				reason := "unknown"
 				if member.Descriptor != nil && member.Descriptor.ValidUntil.After(now) && !member.Descriptor.DiscoveryCapabilities.EnumerateMembers {
 					reason = "enumeration_unsupported"
 				}
 				unknown(member.NodeID, reason)
-			}
-			if remaining == 0 && (len(members) > 0 || next != nil) {
-				unknown(localID, "budget_exhausted")
-				break
 			}
 			if next == nil {
 				unknown(localID, "unknown")

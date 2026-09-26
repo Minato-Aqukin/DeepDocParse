@@ -100,10 +100,11 @@ paths:
   /api/v1/federation/collections:
     get:
       operationId: readPeerPublishedCollections
-      security: [{peer: []}]
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: directory_collections_read
       description: |
-        Node-entry peer read served by control-api. Control authenticates X-DDP-Peer-Token
-        (fail closed), proxies to the service-only corpus producer with its service identity,
+        Node-entry peer read served by control-api. Control verifies a single-use signed
+        node credential and its query digest, proxies to its own corpus with local service identity,
         and re-checks that every descriptor is originated by this node before any peer sees
         it. Caller scope, caller digest and readiness internals are never exposed.
       parameters:
@@ -112,7 +113,8 @@ paths:
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
       responses:
         '200': {description: Stable node catalog page; continuation cannot change the page size, content: {application/json: {schema: {$ref: '#/components/schemas/PeerCatalogPage'}}}}
-        '401': {description: peer_unauthenticated; unconfigured or wrong peer token}
+        '401': {description: 'credential_invalid, credential_expired or credential_replayed'}
+        '403': {description: 'node_unknown, node_revoked, credential_audience_mismatch or credential_scope_denied'}
         '409': {description: wrong_target or snapshot revision conflict}
         '410': {description: Peer catalog snapshot expired or withdrawn; already observed targets are retained by the caller}
         '502': {description: Upstream corpus producer unavailable or inconsistent}
@@ -123,7 +125,7 @@ components:
     session: {type: http, scheme: bearer}
     userKey: {type: apiKey, in: header, name: X-API-Key}
     service: {type: http, scheme: bearer}
-    peer: {type: apiKey, in: header, name: X-DDP-Peer-Token, description: Node-level shared directory credential; fail closed when unconfigured}
+    nodeCredential: {type: apiKey, in: header, name: X-DDP-Node-Credential, description: Single-use Ed25519 directory credential with live approval and durable replay protection}
   parameters:
     CollectionId: {name: collection_id, in: path, required: true, schema: {type: string}}
     IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 128}}

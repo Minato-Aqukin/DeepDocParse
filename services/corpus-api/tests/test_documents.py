@@ -127,48 +127,76 @@ async def _upload(client, content: bytes = PDF, filename: str = "sample.pdf",
 
 async def _callback(client, status: str = "succeeded", task_id: str = "s-1",
                     drain: bool = True):
-    """网关的解析回调。**必须带服务身份头**，不是只带服务凭据 ——
-    `/internal/*` 现在要求 `X-DDP-Actor-Kind: service`（见 ddp_corpus/deps.py）。
+    """网关的解析回调。**只带服务凭据**，与 `ddp_gateway/worker/tasks.py::_notify_callback`
+    实际发出的一模一样 —— 网关无状态、不认识组织，发不出 actor 头。
+    （这个 helper 以前给回调补上了服务 actor 头：测试绿，真网关的每一次回调都 401。）
 
     回调会把索引排进持久队列。合仓前那是进程内的 BackgroundTask，
     客户端返回时已经跑完了；现在要显式把队列跑一轮（`drain=False` 可关掉，
     用来验"任务确实排上了但还没跑"）。
     """
+    from ddp_corpus.config import settings
     from ddp_corpus.main import app
-    from tests.conftest import actor_headers, drain_tasks
+    from tests.conftest import drain_tasks
 
-    resp = await client.post("/internal/parse-callback",
-                             json={"task_id": task_id, "status": status},
-                             headers=actor_headers("model-gateway", role="admin",
-                                                   kind="service"))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://corpus",
+                                 trust_env=False) as gateway:
+        resp = await gateway.post("/internal/parse-callback",
+                                  json={"task_id": task_id, "status": status},
+                                  headers={"Authorization": f"Bearer {settings.service_token}"})
     if drain:
         await drain_tasks(app.state)
     return resp
 
 
+async def test_parse_callback_still_requires_the_service_credential(client):
+    """放宽的是 actor 头，不是凭据：没有 SERVICE_TOKEN 的回调一律 401。"""
+    for headers in ({}, {"Authorization": "Bearer wrong-token"}):
+        resp = await client.post("/internal/parse-callback",
+                                 json={"task_id": "s-1", "status": "failed"}, headers=headers)
+        assert resp.status_code == 401, resp.text
+
+
 @respx.mock
-async def test_upload_preserves_content_hash_and_namespaces_parse_identity(actor_client, session):
-    """Content identity is immutable; revocable parse attempts have an asset namespace."""
-    routes = _mock_service()
-    document = await _upload(actor_client)
+async def test_parse_callback_commits_the_index_task_it_enqueues(actor_client, tmp_path, monkeypatch):
+    """The callback must commit the durable index task it enqueues.
 
-    assert document["status"] == "pending" and document["doc_id"] == DOC_ID
-    body = json.loads(routes["submit"].calls.last.request.content)
-    from ddp_corpus.ingest import parse_identity
-    job = (await session.execute(select(ParseJob))).scalars().one()
-    assert body["doc_id"] == parse_identity(DOC_ID, job.resource_id)
-    assert body["doc_id"] != DOC_ID and job.resource_id is not None
-    assert body["callback_url"].endswith("/internal/parse-callback")
+    `enqueue` never commits (the caller commits it with its own writes), and the callback
+    committed nothing after it. On PostgreSQL that task was rolled back when the request session
+    closed, so the worker never saw an index task after a parse: every upload waited up to one
+    reconcile interval and was indexed by the API process instead (2026-09-24, phase E). The
+    shared suite cannot see it: pysqlite's RELEASE of an outermost SAVEPOINT commits. This
+    engine lets SQLAlchemy emit BEGIN itself, so savepoints behave as they do on PostgreSQL.
+    """
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from ddp_corpus.models import Base
+    from ddp_corpus.models import Task
 
-    # 稳定文件 URL 的凭证住在 control schema（Go 拥有），所以这里断言的是
-    # "本服务确实去要了一个"，而不是本地有没有那一行
-    assert routes["file_grant"].called, "必须向 control-api 申请稳定文件 URL"
-    assert body["file_url"] == f"{CONTROL}/files/stable-token"
-    assert "X-Amz-Signature" not in body["file_url"], "不得用预签名 URL（每次签名不同）"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'pg-like.sqlite'}")
 
-    # 网关就是靠这个 URL 下载原件的。**它由 control-api 服务**（302 到短期
-    # 签名 URL），本服务只负责把它拿到并原样传给网关 —— 所以这里断言的是
-    # "传出去的是那个稳定 URL"，端点本身的行为由 Go 侧的用例守
+    @event.listens_for(engine.sync_engine, "connect")
+    def _autocommit_driver(dbapi_connection, _record):
+        dbapi_connection.isolation_level = None
+
+    @event.listens_for(engine.sync_engine, "begin")
+    def _explicit_begin(connection):
+        connection.exec_driver_sql("BEGIN")
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    monkeypatch.setattr(db, "_engine", engine)
+    monkeypatch.setattr(db, "_sessionmaker", async_sessionmaker(engine, expire_on_commit=False))
+    try:
+        _mock_service()
+        await _upload(actor_client)
+        assert (await _callback(actor_client, drain=False)).json()["archived"] == 1
+        async with db.get_sessionmaker()() as fresh:
+            queued = (await fresh.execute(select(Task.kind, Task.status))).all()
+        assert queued == [("index", "queued")]
+    finally:
+        await engine.dispose()
+
 
 
 @respx.mock
@@ -351,16 +379,25 @@ async def test_duplicate_upload_reuses_content_with_independent_parse_attempts(a
 
 @respx.mock
 async def test_reparse_creates_new_job_and_keeps_old(actor_client, session):
-    """换参数重解析：新版本与旧版本并存，切换 current_job 才影响预览与索引。"""
+    """A gateway cache must not make a new parse revision reuse old output."""
     _mock_service()
+    cached = {}
+
+    def cached_submit(request):
+        identity = json.loads(request.content)["doc_id"]
+        if identity not in cached:
+            cached[identity] = f"s-{len(cached) + 1}"
+        return httpx.Response(202, json={"task_id": cached[identity]})
+
+    respx.post(f"{SERVICE}/v1/parse").mock(side_effect=cached_submit)
     document = await _upload(actor_client)
     await _callback(actor_client)
     first_job = (await actor_client.get(f"/api/documents/{document['id']}/result")).json()["job_id"]
 
-    respx.post(f"{SERVICE}/v1/parse").mock(return_value=httpx.Response(202, json={"task_id": "s-2"}))
     respx.get(f"{SERVICE}/v1/parse/s-2").mock(
         return_value=httpx.Response(200, json={"task_id": "s-2", "status": "running"}))
-    respx.get(f"{SERVICE}/v1/parse/s-2/result").mock(return_value=httpx.Response(200, json=RESULT))
+    second_result = {**RESULT, "markdown": "Changed parser output"}
+    respx.get(f"{SERVICE}/v1/parse/s-2/result").mock(return_value=httpx.Response(200, json=second_result))
 
     again = await actor_client.post(f"/api/documents/{document['id']}/reparse",
                                    json={"engine": "mineru", "options": {"backend": "vlm"}})
@@ -384,6 +421,10 @@ async def test_reparse_creates_new_job_and_keeps_old(actor_client, session):
     # 旧版本仍然可读
     old = await actor_client.get(f"/api/documents/{document['id']}/result?job={first_job}")
     assert old.status_code == 200
+    assert old.json()["markdown"] != "Changed parser output"
+    current = await actor_client.get(f"/api/documents/{document['id']}/result")
+    assert current.status_code == 200
+    assert current.json()["markdown"] == "Changed parser output"
 
 
 # ---------------------------------------------------------------------------

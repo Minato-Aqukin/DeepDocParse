@@ -1,0 +1,9 @@
+[2026-09-23T14:48:19+0800] [PACMAN] Running '/usr/bin/pacman --root .dev-logs/v3-finish-20260923/pacman-root --dbpath .dev-logs/v3-finish-20260923/pacman-db --cachedir .dev-logs/v3-finish-20260923/pacman-cache --logfile .dev-logs/v3-finish-20260923/pacman-install.log --hookdir .dev-logs/v3-finish-20260923/empty-hooks -U --noconfirm /home/minatoaqukin/Projects/CSIE/DeepDocParse/dist/desktop/arch/deepdocparse-desktop-spike-0.1.0-1-x86_64.pkg.tar.zst'
+[2026-09-23T14:51:14+0800] [PACMAN] Running '/usr/bin/pacman --config .dev-logs/v3-finish-20260923/pacman-offline.conf --root .dev-logs/v3-finish-20260923/pacman-root --dbpath .dev-logs/v3-finish-20260923/pacman-db --cachedir .dev-logs/v3-finish-20260923/pacman-cache --logfile .dev-logs/v3-finish-20260923/pacman-install.log --hookdir .dev-logs/v3-finish-20260923/empty-hooks -U --noconfirm /home/minatoaqukin/Projects/CSIE/DeepDocParse/dist/desktop/arch/deepdocparse-desktop-spike-0.1.0-1-x86_64.pkg.tar.zst'
+[2026-09-23T14:51:14+0800] [ALPM] transaction started
+[2026-09-23T14:51:15+0800] [ALPM] installed deepdocparse-desktop-spike (0.1.0-1)
+[2026-09-23T14:51:15+0800] [ALPM] transaction completed
+[2026-09-23T14:57:17+0800] [PACMAN] Running '/usr/bin/pacman --config .dev-logs/v3-finish-20260923/pacman-offline.conf --root .dev-logs/v3-finish-20260923/pacman-root --dbpath .dev-logs/v3-finish-20260923/pacman-db --cachedir .dev-logs/v3-finish-20260923/pacman-cache --logfile .dev-logs/v3-finish-20260923/pacman-install.log --hookdir .dev-logs/v3-finish-20260923/empty-hooks -U --noconfirm .dev-logs/v3-finish-20260923/upgrade-recipe/deepdocparse-desktop-spike-0.1.1-1-x86_64.pkg.tar.zst'
+[2026-09-23T14:57:17+0800] [ALPM] transaction started
+[2026-09-23T14:57:17+0800] [ALPM] upgraded deepdocparse-desktop-spike (0.1.0-1 -> 0.1.1-1)
+[2026-09-23T14:57:17+0800] [ALPM] transaction completed

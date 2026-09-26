@@ -72,13 +72,12 @@ def install_peer(monkeypatch, peer: StubPeer) -> None:
     工厂签名与生产 `federation_tasks.peer_directory(actor, delegation)` 一致：
     委托范围（root_task_id / task_spec_digest）按调用点传入，不从请求体里抄。
     """
-    peers = parse_peers(json.dumps({PEER_NODE: {"endpoint": "https://peer.example"}}),
-                        shared_token=False)
+    peers = parse_peers(json.dumps({PEER_NODE: {"endpoint": "https://peer.example"}}))
 
     def factory(actor, delegation=None):
         return PeerDirectory(peers, actor=actor, transport=peer.transport(),
                              signer=LocalControlSigner(issuer_node_id=NODE),
-                             delegation=delegation, shared_token=False)
+                             delegation=delegation)
 
     monkeypatch.setattr(federation_tasks, "peer_directory", factory)
 
@@ -538,10 +537,10 @@ async def test_executor_readiness_is_rechecked_at_admission(client, _peer_auth):
     assert response.json()["error"]["code"] == "capability_unsupported"
 
 
-# ------------------------------------------------ 矛盾不能盖掉"证据不足"（第五次验收）
+# --------------------------------------------- 探测结果不代替执行期证据
 
 def _zero_hit_probes(monkeypatch):
-    """规划期探测照常成功，但没有证据集（零命中）：覆盖记录里没有绑定。"""
+    """规划探测零命中；正式检索仍可取得固定范围内的证据。"""
     import test_federation_tasks as tasks_module
     original = tasks_module.peer_probe
 
@@ -564,15 +563,33 @@ def _two_versions(peer, *, origin=PEER_NODE):
 
 
 @respx.mock
-async def test_version_divergence_never_hides_insufficient_or_opens_the_generation_gate(
+async def test_empty_probe_does_not_hide_evidence_found_during_execution(
         actor_client, monkeypatch):
-    """复现形状：探测零命中（没有绑定），执行期对端返回同一定位的两版不同正文。
+    mock_gateway_not_ready()
+    _zero_hit_probes(monkeypatch)
+    peer = peer_with_excerpt()
+    peer.can_generate = True
+    peer.answer_document = ready_document()
+    install_peer(monkeypatch, peer)
+    root, plan = await start_delegated(actor_client, peer=peer)
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
+    status = (await submit_task(
+        actor_client, root, plan["plan_digest"], "execution-after-empty-probe")).json()
 
-    旧行为：矛盾优先于"没有绑定"，账本从 insufficient 被改写成 conflicting，
-    `_answer_result` 只拦 insufficient —— 生成闸被绕过，远端借规则一路藏掉了
-    "证据不足"。现在：充分性保持 insufficient、矛盾记录照样保留，一个 answer
-    受理都不发。
-    """
+    assert status["status"] == "succeeded"
+    assert status["evidence_sufficiency"] == "sufficient_by_policy"
+    assert status["result"]["answer"] == peer.answer_document["answer"]
+    assert status["result"]["claim_evidence_bindings"][0]["evidence_refs"] == [
+        "peer-evidence-1"]
+    coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
+    assert coverage["evidence_sufficiency"] == "sufficient_by_policy"
+
+
+@respx.mock
+async def test_divergence_found_after_an_empty_probe_is_surfaced_before_the_answer(
+        actor_client, monkeypatch):
+    """探测零命中、执行期同一定位取回两版不同正文：证据是执行期取到的（不是"不足"），
+    但矛盾必须记进账本并随答案一起给出，不能被答案盖掉。"""
     mock_gateway_not_ready()
     _zero_hit_probes(monkeypatch)
     peer = peer_with_excerpt()
@@ -581,19 +598,16 @@ async def test_version_divergence_never_hides_insufficient_or_opens_the_generati
     peer.answer_document = ready_document(refs=("peer-old",))
     install_peer(monkeypatch, peer)
     root, plan = await start_delegated(actor_client, peer=peer)
-    assert answer_step(plan) is not None, "前提：计划里有委托生成这一步，闸才有意义"
     await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
-    status = (await submit_task(actor_client, root, plan["plan_digest"], "thin-divergent")).json()
+    status = (await submit_task(actor_client, root, plan["plan_digest"], "divergent-after-empty-probe")).json()
 
     assert status["status"] == "succeeded"
-    assert status["evidence_sufficiency"] == "insufficient"
+    assert status["evidence_sufficiency"] == "conflicting"
     result = status["result"]
-    assert result["answer"] is None and result["answer_reason"] == "insufficient_evidence"
     assert [item["basis"] for item in result["conflicts"]] == ["version_divergence"]
-    assert not [body for body in peer.admissions if body.get("step_id") == "answer-1"], \
-        "证据不足时一个 answer 受理都不许发"
+    assert result["answer"] == peer.answer_document["answer"]
     coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
-    assert coverage["evidence_sufficiency"] == "insufficient"
+    assert coverage["evidence_sufficiency"] == "conflicting"
     assert coverage["conflicts"] == result["conflicts"]
     from test_federation_tasks import validate_ledger_contract
     validate_ledger_contract(coverage)
@@ -629,7 +643,6 @@ async def _delegated_reason(actor_client, monkeypatch, peer, key):
 
 
 @pytest.mark.parametrize(("execution", "expected"), [
-    ({"state": "running"}, "delegated_execution_failed:peer_execution_timeout"),
     ({"state": "cancelled", "error": None}, "delegated_execution_failed:cancelled"),
     ({"state": "failed", "error": None}, "delegated_execution_failed:failed"),
     ({"state": "failed", "error": "input_not_verified"}, "delegated_execution_failed:input_not_verified"),
@@ -638,16 +651,30 @@ async def _delegated_reason(actor_client, monkeypatch, peer, key):
 @respx.mock
 async def test_remote_execution_failures_map_to_declared_reasons(
         actor_client, monkeypatch, execution, expected):
-    """第一次验收复现：超时/取消/无错误码的失败曾把 `peer_execution_timeout`、`cancelled`、
-    `failed` 原样写成答案原因 —— 契约里没有，界面只能显示原始代码。"""
+    """远端取消和错误必须映射为契约原因，不能直接暴露未声明的状态码。"""
     mock_gateway_not_ready()
-    monkeypatch.setattr(federation_tasks, "PEER_POLL_DEADLINE_SECONDS", 0.0)
     peer = peer_with_excerpt()
     peer.can_generate = True
     peer.answer_document = ready_document()
     peer.answer_execution = execution
     assert await _delegated_reason(actor_client, monkeypatch, peer,
                                    f"exec-{execution['state']}-{execution.get('error')}") == expected
+
+
+async def test_running_peer_past_the_approved_deadline_is_a_declared_timeout():
+    """轮询以已批准计划的 deadline 为界：过了仍在运行就是合成的 peer_execution_timeout，
+    经上面同一条映射成 `delegated_execution_failed:peer_execution_timeout`；不取消对端执行。"""
+    polled = []
+
+    class Running:
+        async def execution(self, executor_task_id):
+            polled.append(executor_task_id)
+            return {"state": "running"}
+
+    status = await federation_tasks._poll_execution(
+        Running(), "exec-1", deadline_ts=federation_tasks._ts(federation_tasks.utcnow()) - 1)
+    assert status == {"state": "unreachable", "error": "peer_execution_timeout"}
+    assert polled == ["exec-1"]
 
 
 @respx.mock

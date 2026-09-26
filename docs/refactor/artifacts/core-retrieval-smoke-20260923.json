@@ -1,0 +1,257 @@
+{
+  "schema": "ddp-core-retrieval-probe/1",
+  "state": "postgres_keyword_verified_live_api_restart_pending",
+  "query": "Compare the SRAM capacities of Raspberry Pi Pico and ESP32.",
+  "authorized_parse_job_ids": [
+    "09b6b483d11c41d58e00ac91d9b0f7db",
+    "470cb463257f439dbcbb671ab1c6bcd4",
+    "20ffa502b6294e068a21b7e73c427399"
+  ],
+  "before": [
+    {
+      "id": "0226bac799004d7e8795e4fc14369906",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 24,
+      "text": "Raspberry Pi Pico Datasheet\nAppendix A. Availability\nRaspberry Pi guarantee availability of the Raspberry Pi Pico product until at least January 2028.\nA.1. Support\nFor support see the Pico section of the Raspberry Pi documentation , and post questions on the Raspberry Pi forum .\nA.2. Ordering code\nTable 6. Part Number Model Order Code EAN Minimal Order Quantity RRP Raspberry Pi Pico SC0915 5056561801445 1+ pcs / Bulk US$4.00 SC0916 0617588405587 1+ pcs / Bulk US$4.00 Raspberry Pi Pico H SC0917 5056561803180 1+ pcs / Bulk US$5.00\nNote RRP was correct at time of publication and excludes taxes.\nAvailability 24"
+    },
+    {
+      "id": "c404f5e26a264e65811c4bad0af38e27",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 5,
+      "text": "The source design files, including the schematic and PCB layout, are made available openly, with no limitations. Schematic The full schematic is reproduced in Appendix B. Pico schematic. The schematic is also distributed alongside the layout files at Pico design files (ZIP file) . Layout The full CAD files, including PCB layout, can be found in the Pico design files (ZIP file) . Note that Raspberry Pi Pico was designed in Cadence Allegro PCB Editor, and opening in other PCB CAD packages requires an import script or plugin. STEP 3D A STEP 3D model of Raspberry Pi Pico, for 3D visualisation and fit check of designs which include Raspberry Pi Pico as a module, can be found in the Raspberry Pi Pico step file . Fritzing A Fritzing part for use in e.g. breadboard layouts can be found in the"
+    },
+    {
+      "id": "118d6ad2a9154bd589c587c40e8c41a1",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 6,
+      "text": "Raspberry Pi Pico Datasheet\n2. Mechanical specification\nThe Raspberry Pi Pico is a single sided 51×21 mm 1 mm thick PCB with a micro-USB port overhanging the top edge and dual castellated/through-hole pins around the remaining edges. Pico is designed to be usable as a surface mount module as well as being in Dual Inline Package (DIP) type format, with the 40 main user pins on a 2.54 mm (0.1″) pitch grid with 1 mm holes and hence compatible with veroboard and breadboard. Pico also has 4× 2.1 mm (± 0.05 mm) drilled mounting holes to provide for mechanical fixing, see Figure 3.\nFigure 3. The dimensions of the Raspberry Pi Pico Rev3 board.\n2.1. Raspberry Pi Pico pinout"
+    },
+    {
+      "id": "1b7295a961e04b7e9c8747515b5b64bb",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 3,
+      "text": "Raspberry Pi Pico Datasheet\n1. About Raspberry Pi Pico\nRaspberry Pi Pico is a microcontroller board based on the Raspberry Pi RP2040 microcontroller chip.\nFigure 1. The Raspberry Pi Pico Rev3 board."
+    },
+    {
+      "id": "8757a6822fd9462ca9be669f586ca0c5",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 10,
+      "text": "_ Voltage ESP32-D0WD-V3 Dual core v3.0/v3.14 — QFN 5*5 1.8 V/3.3 V ESP32-D0WDR2-V3 (EOL) Upgraded to ESP32-D0WDRH2-V3 7 ESP32-U4WDH Dual core3 v3.0/v3.14 4 MB flash6 QFN 5*5 3.3 V ESP32-D0WDQ6-V3 (NRND) Dual core v3.0/v3.14 — QFN 6*6 1.8 V/3.3 V ESP32-D0WD (NRND) Dual core v1.0/v1.15 — QFN 5*5 1.8 V/3.3 V ESP32-D0WDQ6 (NRND) Dual core v1.0/v1.15 — QFN 6*6 1.8 V/3.3 V ESP32-S0WD (NRND) Single core v1.0/v1.15 — QFN 5*5 1.8 V/3.3 V 1 All above chips support Wi-Fi b/g/n + Bluetooth/Bluetooth LE Dual Mode connection. For details on chip marking and packing, see Section 6 Packaging. 2 Differences between ESP32 chip revisions and how to distinguish them are described in ESP32 Series SoC Errata. 3 ESP32-U4WDH will be produced as dual-core instead of single core. See PCN-2021-021 for details. 4"
+    },
+    {
+      "id": "0a57ec549c434bc6b00cbc42740825a1",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 7,
+      "text": "Raspberry Pi Pico Datasheet\nFigure 4. The pin numbering of the Raspberry Pi Pico Rev3 board.\nNote\nThe physical pin numbering is shown in Figure 4, for the pin allocation see Figure 2 or the full Raspberry Pi Pico schematics in Appendix B. Pico schematic.\nA few RP2040 GPIO pins are used for internal board functions, these are: GPIO29 IP Used in ADC mode (ADC3) to measure VSYS/3 GPIO25 OP Connected to user LED GPIO24 IP VBUS sense - high if VBUS is present, else low GPIO23 OP Controls the on-board SMPS Power Save pin (Section 4.4. Powerchain) Apart from GPIO and ground pins, there are 7 other pins on the main 40-pin interface: PIN40 VBUS PIN39 VSYS PIN37 3V3_EN PIN36 3V3 PIN35 ADC_VREF PIN33 AGND\nMechanical specification 7"
+    },
+    {
+      "id": "5ab7920b39e24819bc5890d0c6ec5715",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 0,
+      "text": "Raspberry Pi | Raspberry Pi Pico Datasheet Datasheet\nRaspberry Pi Pico Datasheet An RP2040-based microcontroller board\nRaspberry Pi Ltd"
+    },
+    {
+      "id": "86b8af9c939b42f692c093147fdc4e36",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 23,
+      "text": "Raspberry Pi Pico Datasheet\n4.7. USB\nRP2040 has an integrated USB1.1 PHY and controller which can be used in both Device and Host mode. Pico adds the two required 27 Ω external resistors and brings this interface to a standard micro-USB port. The USB port can be used to access the USB bootloader (BOOTSEL mode) stored in the RP2040 boot ROM. It can also be used by user code, to access an external USB device or host.\n4.8. Debugging\nRaspberry Pi Pico brings the RP2040 Serial Wire Debug (SWD) interface to a 3 pin debug header on the lower edge of the board. To get started using the debug port see the Debugging with SWD section of Getting started with Raspberry Pi Pico-series..\nNote The RP2040 chip has internal pull up resistors on the SWDIO and SWCLK pins, both nominally 60 kΩ."
+    },
+    {
+      "id": "ac1aa6be8b974bcdb07510b0f30c07ae",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 59,
+      "text": "Related Documentation • ESP32 Technical Reference Manual – Detailed information on how to use the ESP32 memory and peripherals. • ESP32 Hardware Design Guidelines – Guidelines on how to integrate the ESP32 into your hardware product. • ESP32 ECO and Workarounds for Bugs – Correction of ESP32 design errors. • ESP32 Series SoC Errata – Descriptions of known errors in ESP32 series of SoCs. • Certificates https://espressif.com/en/support/documents/certificates • ESP32 Product/Process Change Notifications (PCN) https://espressif.com/en/support/documents/pcns • ESP32 Advisories – Information on security, bugs, compatibility, component reliability. https://espressif.com/en/support/documents/advisories • Documentation Updates and Update Notification Subscription https://espressif."
+    },
+    {
+      "id": "fabb9563a1ce4b92b5d207cd671988b9",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 20,
+      "text": "Raspberry Pi Pico Datasheet\n4.4. Powerchain\nRaspberry Pi Pico has been designed with a simple yet flexible power supply architecture and can easily be powered from other sources such as batteries or external supplies. Integrating the Pico with external charging circuits is also straightforward. Figure 15 shows the power supply circuitry.\nFigure 15. The powerchain of the Raspberry Pi Pico Rev3 board."
+    },
+    {
+      "id": "4010b3fe9f534f8e9dcbc5974d3abb09",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 0,
+      "text": "ESP32 Series Datasheet Version 5.3\n2.4 GHz Wi-Fi + Bluetooth® + Bluetooth LE SoC\nIncluding: ESP32-D0WD-V3 ESP32-U4WDH ESP32-S0WD – Not Recommended for New Designs (NRND) ESP32-D0WD – Not Recommended for New Designs (NRND) ESP32-D0WDQ6 – Not Recommended for New Designs (NRND) ESP32-D0WDQ6-V3 – Not Recommended for New Designs (NRND) ESP32-D0WDR2-V3 – End of Life (EOL), upgraded to ESP32-D0WDRH2-V3\nwww.espressif.com"
+    },
+    {
+      "id": "7a5891785ebd41debf65573840c4f70d",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 19,
+      "text": "Raspberry Pi Pico Datasheet\n4. Applications information\n4.1. Programming the flash\nThe on-board 2 MB QSPI Flash can be (re)programmed either using the Serial Wire Debug port or by the special USB Mass Storage Device mode. The simplest way to reprogram the Pico’s Flash is to use the USB mode. To do this, depower the board, then hold the BOOTSEL button down during board power-up (e.g. hold BOOTSEL down while connecting the USB). The Pico will then appear as a USB Mass Storage Device. Dragging a special ‘.uf2’ file onto the disk will write this file to the Flash and restart the Pico. The USB boot code is stored in ROM on RP2040, so can not be accidentally overwritten. To get started using the SWD port see the Debugging with SWD section of Getting started with Raspberry Pi Pico-series.."
+    },
+    {
+      "id": "94054630ff6c4f5f87959de42a41713b",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 10,
+      "text": "Raspberry Pi Pico Datasheet\nFigure 6. The paste stencil of the Raspberry Pi Pico Rev3 board.\n4 5 . 2\n0 2 . 2\n3.80\n15.58\n2.3. Recommended operating conditions\nOperating conditions for the Raspberry Pi Pico are largely a function of the operating conditions specified by its components. Operating Temp Max 85°C (including self-heating) Operating Temp Min 20°C\n− VBUS 5 V ± 10%.\nMechanical specification 10"
+    },
+    {
+      "id": "caa4a0c363334973ad0b69dc623a506a",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 2,
+      "text": "1. About Raspberry Pi Pico . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 3 1.1. Raspberry Pi Pico design files . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5 2. Mechanical specification . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 6 2.1. Raspberry Pi Pico pinout . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ."
+    },
+    {
+      "id": "9d89d4bfa07c4350b982879e5561682e",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 26,
+      "text": "Raspberry Pi Pico Datasheet\nAppendix C. Pico component locations\nFigure 20. The Raspberry Pi Pico Rev3 board component locations.\nPico component locations 26"
+    },
+    {
+      "id": "a8249f73be624b59b1eb936481ae899d",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 29,
+      "text": "The CPU is powered up.\nModem-sleep\n160 MHz\nNormal speed: 80 MHz Light-sleep - 0.8 mA The ULP coprocessor is powered up. 150 µA ULP sensor-monitored pattern 100 µA @1% duty RTC timer + RTC memory 10 µA Hibernation RTC timer only 5 µA PU is set to low level, the chip is powered down. 1 µA\nDeep-sleep\nPower off CHIP\n_\n• * Among the ESP32 series of SoCs, ESP32-D0WD-V3, ESP32-D0WDRH2-V3, ESP32-U4WDH, ESP32-D0WD (NRND), ESP32-D0WDQ6 (NRND), and ESP32-D0WDQ6-V3 (NRND) have a maximum CPU frequency of 240 MHz,\nESP32 Series Datasheet v5.3\nEspressif Systems 30 Submit Documentation Feedback"
+    },
+    {
+      "id": "b4f840f3ba1c40ef897acf86ed1f8075",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 25,
+      "text": "Raspberry Pi Pico Datasheet\nAppendix B. Pico schematic\nSee Figure 19 on the following page.\nFigure 19. The Raspberry Pi Pico Rev3 board schematic.\nPico schematic 25"
+    },
+    {
+      "id": "c1f5e51db9ae477fb72359d7e65feb2e",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 30,
+      "text": "Raspberry Pi\nRaspberry Pi is a trademark of Raspberry Pi Ltd\nRaspberry Pi Ltd"
+    },
+    {
+      "id": "0cf10ee460bf45b09ae2d197bfc670e1",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 4,
+      "text": "loading programs onto the board, and shows how to install the C/C++ SDK and build the example C programs. See the Raspberry Pi Pico-series Python SDK book to get started with MicroPython, which is the fastest way to get code running on Pico.\nAbout Raspberry Pi Pico 4"
+    },
+    {
+      "id": "247c81cfcadd4e32a938481fa651923d",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 21,
+      "text": "Raspberry Pi Pico Datasheet\nImportant If you are using Raspberry Pi Pico in USB Host mode (e.g. using one of the TinyUSB host examples) then you must power Pico by providing 5 V to the VBUS pin."
+    }
+  ],
+  "after": [
+    {
+      "id": "2e928ca503804e9389dfc6a88529a3d7",
+      "document_id": "48f5edc41df343d285ead2dc3e6834bf",
+      "page_idx": 5,
+      "text": "key factor affecting the ability to learn such dependencies is the length of the paths forward and backward signals have to traverse in the network. The shorter these paths between any combination of positions in the input and output sequences, the easier it is to learn long-range dependencies [12]. Hence we also compare the maximum path length between any two input and output positions in networks composed of the different layer types. As noted in Table 1, a self-attention layer connects all positions with a constant number of sequentially executed operations, whereas a recurrent layer requires O(n) sequential operations. In terms of computational complexity, self-attention layers are faster than recurrent layers when the sequence\n6"
+    },
+    {
+      "id": "70d9db8746cb451d9d292fec625a3e0c",
+      "document_id": "48f5edc41df343d285ead2dc3e6834bf",
+      "page_idx": 5,
+      "text": "4 Why Self-Attention In this section we compare various aspects of self-attention layers to the recurrent and convolu￾ tional layers commonly used for mapping one variable-length sequence of symbol representations (x1, ..., xn) to another sequence of equal length (z1, ..., zn), with xi, zi ∈ Rd, such as a hidden layer in a typical sequence transduction encoder or decoder. Motivating our use of self-attention we consider three desiderata. One is the total computational complexity per layer. Another is the amount of computation that can be parallelized, as measured by the minimum number of sequential operations required. The third is the path length between long-range dependencies in the network. Learning long-range dependencies is a key challenge in many sequence transduction tasks. One"
+    },
+    {
+      "id": "0e924aca82ee4a849861522ee3a5edd6",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 3,
+      "text": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequency 264 kB multi-bank high performance SRAM External Quad-SPI Flash with eXecute In Place (XIP) and 16 kB on-chip cache High performance full-crossbar bus fabric On-board USB1.1 (device or host) 30 multi-function General Purpose IO (4 can be used for ADC) 1.8-3.3 V IO Voltage (NOTE Pico IO voltage is fixed at 3.3 V)\n• • •\n◦ ◦ ◦\n• •\n◦\n• •\n•\n◦\n• • • • •\n◦\nAbout Raspberry Pi Pico 3"
+    },
+    {
+      "id": "11b2d68531bc45a2804a22c31d2c76f8",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 26,
+      "text": "4.1.3 External Flash and RAM ESP32 supports multiple external QSPI flash and external RAM (SRAM) chips. More details can be found in ESP32 Technical Reference Manual > Chapter SPI Controller. ESP32 also supports hardware encryption/decryption based on AES to protect developers’ programs and data in flash. ESP32 can access the external QSPI flash and SRAM through high-speed caches. • Up to 16 MB of external flash can be mapped into CPU instruction memory space and read-only memory space simultaneously. When external flash is mapped into CPU instruction memory space, up to 11 MB + 248 KB can be mapped at a time. Note that if more than 3 MB + 248 KB are mapped, cache performance will be reduced due to speculative reads by the CPU. When external flash is mapped into read-only data memory"
+    },
+    {
+      "id": "3aee2abda9cb45dd8fb202f663a92090",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 41,
+      "text": "The pins for the Two-wire Automotive Interface can be chosen from any GPIOs via the GPIO Matrix. For more information about the pin assignment, see Section 4.10 Peripheral Pin Configurations and ESP32 Technical Reference Manual > Chapter IO_MUX and GPIO Matrix.\n4.8.13 Ethernet MAC Interface An IEEE-802.3-2008-compliant Media Access Controller (MAC) is provided for Ethernet LAN communications. ESP32 requires an external physical interface device (PHY) to connect to the physical LAN bus (twisted-pair, fiber, etc.). The PHY is connected to ESP32 through 17 signals of MII or nine signals of RMII.\nFeature List\n• 10 Mbps and 100 Mbps rates • Dedicated DMA controller allowing high-speed transfer between the dedicated SRAM and Ethernet MAC • Tagged MAC frame (VLAN support)\nESP32 Series Datasheet v5.3"
+    },
+    {
+      "id": "a6909fe7ac4a4c7aa68795f5464cb1a8",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 25,
+      "text": "Instruction Set Architecture (ISA) Summary.\n4.1.2 Internal Memory ESP32’s internal memory includes: • 448 KB of ROM for booting and core functions • 520 KB of on-chip SRAM for data and instructions • 8 KB of SRAM in RTC, which is called RTC FAST Memory and can be used for data storage; it is accessed by the main CPU during RTC Boot from the Deep-sleep mode. • 8 KB of SRAM in RTC, which is called RTC SLOW Memory and can be accessed by the ULP coprocessor during the Deep-sleep mode. • 1 Kbit of eFuse: 256 bits are used for the system (MAC address and chip configuration) and the remaining 768 bits are reserved for customer applications, including flash-encryption and chip-ID. • In-package flash or PSRAM"
+    },
+    {
+      "id": "d2053fefd2274a3db6256d68fc9a9c2a",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 26,
+      "text": "space, up to 4 MB can be mapped at a time. 8-bit, 16-bit and 32-bit reads are supported. • External RAM can be mapped into CPU data memory space. SRAM up to 8 MB is supported and up to 4 MB can be mapped at a time. 8-bit, 16-bit and 32-bit reads and writes are supported.\n–\n–\nNote: After ESP32 is initialized, firmware can customize the mapping of external RAM or flash into the CPU address space.\n4.1.4 Address Mapping Structure The structure of address mapping is shown in Figure 4-1. The memory and peripheral mapping is shown in Table 4-1.\nFigure 4-1. Address Mapping Structure\nESP32 Series Datasheet v5.3\nEspressif Systems 27 Submit Documentation Feedback"
+    },
+    {
+      "id": "04d15f693b754a4581afd6022446a6e1",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 18,
+      "text": "2 Pins\nThe internal LDO can be configured as having 1.8 V, or the same voltage as VDD3P3_RTC. It can be powered off via software to minimize the current of flash/SRAM during the Deep-sleep mode.\n2.5.3 Chip Power-up and Reset Once the power is supplied to the chip, its power rails need a short time to stabilize. After that, CHIP_PU – the pin used for power-up and reset – is pulled high to activate the chip. For information on CHIP_PU as well as power-up and reset timing, see Figure 2-4 and Table 2-4.\ntST BL tRST\nVDD3P3_RTC Min\nVDD\nVIL_nRST\nCHIP_PU\nFigure 2-4. Visualization of Timing Parameters for Power-up and Reset\nTable 2-4. Description of Timing Parameters for Power-up and Reset"
+    },
+    {
+      "id": "ad33f98d0be648c1bdaeb52b25fed12c",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 33,
+      "text": "4.7.1 Bluetooth Radio and Baseband The Bluetooth Radio and Baseband support the following features: • Class-1, class-2 and class-3 transmit output powers, and a dynamic control range of up to 21 dB • π/4 DQPSK and 8 DPSK modulation • High performance in NZIF receiver sensitivity with a minimum sensitivity of -94 dBm • Class-1 operation without external PA • Internal SRAM allows full-speed data-transfer, mixed voice and data, and full piconet operation • Logic for forward error correction, header error control, access code correlation, CRC, demodulation, encryption bit stream generation, whitening and transmit pulse shaping • ACL, SCO, eSCO, and AFH • A-law, µ-law, and CVSD digital audio CODEC in PCM interface • SBC audio CODEC • Power management for low-power applications • SMP with"
+    },
+    {
+      "id": "214f2cc36eaf464787139ad819e1b2df",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 3,
+      "text": "2 cores at 240 MHz: 1079.96 CoreMark; 4.50 CoreMark/MHz\n–\n• 448 KB ROM\n• 520 KB SRAM\n• 16 KB SRAM in RTC\n• QSPI supports multiple flash/SRAM chips\nClocks and Timers\n• Internal 8 MHz oscillator with calibration\n• Internal RC oscillator with calibration\n• External 2 MHz ~ 60 MHz crystal oscillator (40 MHz only for Wi-Fi/Bluetooth functionality) • External 32 kHz crystal oscillator for RTC with calibration • Two timer groups, including 2 × 64-bit timers and 1 × main watchdog in each group • One RTC timer\n• RTC watchdog\nAdvanced Peripheral Interfaces\n• 34 programmable GPIOs Five strapping GPIOs Six input-only GPIOs Six GPIOs needed for in-package flash (ESP32-U4WDH) and in-package PSRAM (ESP32-D0WDRH2-V3)\n–\n–\n–\n• 12-bit SAR ADC up to 18 channels • Two 8-bit DAC\n• 10 touch sensors\n• Four SPI interfaces"
+    },
+    {
+      "id": "e001ffb8188a4f53b2e6922fd00f1d69",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 1,
+      "text": "Core and memory 2 (or 1) x Xtensa® 32-bit LX6 Microprocessors\nTWAI®\nETH\nSHA RSA\nRMT\nROM\nSRAM RNG AES\nPWM\nTouch sensor\nRTC\nDAC\nULP coprocessor\nRecovery memory\nADC\nPMU\nTimers\nESP32 Functional Block Diagram\nESP32 Series Datasheet v5.3\nEspressif Systems 2 Submit Documentation Feedback"
+    },
+    {
+      "id": "c84210427fd545bf9e7e4041a051ee2c",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 48,
+      "text": "4 Functional Description\nInterface Signal Pin Function SPIHD SD SPIWP SD SPICS0 SD SPICLK SD SPIQ SD SPID SD\nDATA DATA CMD CLK DATA DATA\n2 3\n_\n_\n_\n_\n_\n_\n0 1\n_\n_\n_ HSPICLK MTMS HSPICS0 MTDO HSPIQ MTDI HSPID MTCK HSPIHD GPIO4 HSPIWP GPIO2 VSPICLK GPIO18 VSPICS0 GPIO5 VSPIQ GPIO19 VSPID GPIO23 VSPIHD GPIO21 VSPIWP GPIO22 EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC EMAC\n_\nSupports Standard SPI, Dual SPI, and Quad SPI that can be connected to the external flash and SRAM\nParallel QSPI\nCLK GPIO0 CLK GPIO5 EN GPIO21\nTX\n_\n_ RX TX\n_\n_\n_\n_ TXD0 GPIO19 TXD1 GPIO22 TXD2 MTMS TXD3 MTDI ER MTCK DV GPIO27\n_\n_\n_\n_\nRX RX\n_\n_\n_\n_ RXD0 GPIO25 RXD1 GPIO26 RXD2 U0TXD RXD3 MTDO CLK CLK TX\n_\nEthernet MAC with MII/RMII interface\nEMAC\n_\n_\n_\nOUT GPIO16 OUT\n_\n_\n180 GPIO17\n_"
+    },
+    {
+      "id": "3304a445a96240fc8bc50494f7f5eee0",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "page_idx": 27,
+      "text": "4 Functional Description\nTable 4-1. Memory and Peripheral Mapping\nCategory Target Start Address End Address Size Internal ROM 0 0×4000 Internal ROM 1 0×3FF9 Internal SRAM 0 0×4007 0×3FFE\nFFFF 384 KB FFFF 64 KB FFFF 192 KB FFFF FFFF FFFF 200 KB\n0000 0×4005 0000 0×3FF9 0000 0×4009 0000 0×3FFF\n_\n_\n_\n_\n_\n_\nEmbedded Memory\nInternal SRAM 1\n128 KB\n_ 0×400A Internal SRAM 2 0×3FFA 0×3FF8\n_ 0000 0×400B E000 0×3FFD 0000 0×3FF8\n_\n_\n_\n_ 1FFF 1FFF\nRTC FAST Memory\n8 KB\n_ 0×400C\n_ 0000 0×400C\n_ RTC SLOW Memory 0×5000_0000 0×5000_1FFF 8 KB 0×3F40 0×400C External RAM 0×3F80\n_\n0000 0×3F7F 2000 0×40BF 0000 0×3FBF\nFFFF 4 MB FFFF 11 MB+248 KB FFFF 4 MB\nExternal Memory\nExternal Flash\n_\n_\n_\n_"
+    },
+    {
+      "id": "0226bac799004d7e8795e4fc14369906",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 24,
+      "text": "Raspberry Pi Pico Datasheet\nAppendix A. Availability\nRaspberry Pi guarantee availability of the Raspberry Pi Pico product until at least January 2028.\nA.1. Support\nFor support see the Pico section of the Raspberry Pi documentation , and post questions on the Raspberry Pi forum .\nA.2. Ordering code\nTable 6. Part Number Model Order Code EAN Minimal Order Quantity RRP Raspberry Pi Pico SC0915 5056561801445 1+ pcs / Bulk US$4.00 SC0916 0617588405587 1+ pcs / Bulk US$4.00 Raspberry Pi Pico H SC0917 5056561803180 1+ pcs / Bulk US$5.00\nNote RRP was correct at time of publication and excludes taxes.\nAvailability 24"
+    },
+    {
+      "id": "0a57ec549c434bc6b00cbc42740825a1",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 7,
+      "text": "Raspberry Pi Pico Datasheet\nFigure 4. The pin numbering of the Raspberry Pi Pico Rev3 board.\nNote\nThe physical pin numbering is shown in Figure 4, for the pin allocation see Figure 2 or the full Raspberry Pi Pico schematics in Appendix B. Pico schematic.\nA few RP2040 GPIO pins are used for internal board functions, these are: GPIO29 IP Used in ADC mode (ADC3) to measure VSYS/3 GPIO25 OP Connected to user LED GPIO24 IP VBUS sense - high if VBUS is present, else low GPIO23 OP Controls the on-board SMPS Power Save pin (Section 4.4. Powerchain) Apart from GPIO and ground pins, there are 7 other pins on the main 40-pin interface: PIN40 VBUS PIN39 VSYS PIN37 3V3_EN PIN36 3V3 PIN35 ADC_VREF PIN33 AGND\nMechanical specification 7"
+    },
+    {
+      "id": "118d6ad2a9154bd589c587c40e8c41a1",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 6,
+      "text": "Raspberry Pi Pico Datasheet\n2. Mechanical specification\nThe Raspberry Pi Pico is a single sided 51×21 mm 1 mm thick PCB with a micro-USB port overhanging the top edge and dual castellated/through-hole pins around the remaining edges. Pico is designed to be usable as a surface mount module as well as being in Dual Inline Package (DIP) type format, with the 40 main user pins on a 2.54 mm (0.1″) pitch grid with 1 mm holes and hence compatible with veroboard and breadboard. Pico also has 4× 2.1 mm (± 0.05 mm) drilled mounting holes to provide for mechanical fixing, see Figure 3.\nFigure 3. The dimensions of the Raspberry Pi Pico Rev3 board.\n2.1. Raspberry Pi Pico pinout"
+    },
+    {
+      "id": "6f841cdbede14c60b302d510db32c509",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 4,
+      "text": "Pico uses an on-board buck-boost SMPS which is able to generate the required 3.3 V (to power RP2040 and external circuitry) from a wide range of input voltages (~1.8 to 5.5 V). This allows significant flexibility in powering the unit from various sources such as a single Lithium-Ion cell, or 3 AA cells in series. Battery chargers can also be very easily integrated with the Pico powerchain. Reprogramming the Pico Flash can be done using USB (simply drag and drop a file onto the Pico which appears as a mass storage device), or the standard Serial Wire Debug (SWD) port can reset the system and load and run code without any button presses. The SWD port can also be used to interactively debug code running on the RP2040. Tip The Getting started with Raspberry Pi Pico-series book walks through"
+    },
+    {
+      "id": "75442bbbeb47486d8ac2c0de28810178",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 12,
+      "text": "The ‘Popcorn’ media player demo uses the VGA, SD card, and audio board. This demo uses VGA video, I2S audio and 4-bit SD card access. This has been performed both with power-saving mode (Table 1), and without power-saving mode (Table 2). The power saving (PS) mode of Raspberry Pi Pico’s voltage regulator is controlled by GPIO23. The ‘Average’ data shows the mean current consumption over several seconds of video, with varying colour and intensity. The ‘Maximum’ data is obtained during periods of white video, when the current required is at its highest.\nTable 1. Popcorn running on the VGA board (VGA video, SD card and I2S audio) Pico board"
+    },
+    {
+      "id": "7a5891785ebd41debf65573840c4f70d",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 19,
+      "text": "Raspberry Pi Pico Datasheet\n4. Applications information\n4.1. Programming the flash\nThe on-board 2 MB QSPI Flash can be (re)programmed either using the Serial Wire Debug port or by the special USB Mass Storage Device mode. The simplest way to reprogram the Pico’s Flash is to use the USB mode. To do this, depower the board, then hold the BOOTSEL button down during board power-up (e.g. hold BOOTSEL down while connecting the USB). The Pico will then appear as a USB Mass Storage Device. Dragging a special ‘.uf2’ file onto the disk will write this file to the Flash and restart the Pico. The USB boot code is stored in ROM on RP2040, so can not be accidentally overwritten. To get started using the SWD port see the Debugging with SWD section of Getting started with Raspberry Pi Pico-series.."
+    },
+    {
+      "id": "836ab096061b4d228f48dfb03d2ba271",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "page_idx": 19,
+      "text": "The Raspberry Pi Pico’s GPIO is powered from the on-board 3.3 V rail and is therefore fixed at 3.3 V. The Pico exposes 26 of the 30 possible RP2040 GPIO pins by routing them straight out to Pico header pins. GPIO0 to GPIO22 are digital only and GPIO 26-28 are able to be used either as digital GPIO or as ADC inputs (software selectable). One thing to note is that the ADC capable GPIO26-29 have an internal reverse diode to the IOVDD (3V3) rail and so the input voltage must not exceed IOVDD plus about 300 mV. Also, if the RP2040 is unpowered, applying a voltage to these GPIO pins will ‘leak’ through the diode into the IOVDD rail. Normal digital GPIO pins 0-25 (and also the debug pins) do not have this restriction and therefore voltage can safely be applied to these pins when RP2040 is"
+    }
+  ],
+  "method": "Each matching query term contributes once per chunk, weighted by inverse frequency within the authorized chunk scope. OR recall, vector floor, exact-code route and RRF remain unchanged.",
+  "live_browser_baseline": "Neither SRAM quantity was in the top 20 on freshly parsed/indexed sources.",
+  "scope_limit": "This proof exercises real PostgreSQL keyword ranking. Full live hybrid Web search and QA verification remain pending service restart."
+}

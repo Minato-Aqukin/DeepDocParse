@@ -16,7 +16,7 @@ after an authorization check — never dumped whole into a response by the route
 """
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ddp_core.models import Base, new_id, utcnow
@@ -279,3 +279,43 @@ class FederationCredentialNonce(Base):
     operation: Mapped[str] = mapped_column(String(32))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FederationRootLedger(Base):
+    """Independent persistent root cost ledger (0037, no FK to requests).
+    One row per logical ``root_task_id``. No foreign key on purpose: the
+    parent ``federation_requests`` row may be locked by the business
+    transaction (advisory + row lock); a FK KEY SHARE from another session
+    would deadlock. Logical id only, independent row lock, committed before
+    the HTTP send. Parent business rollback/crash never refunds it.
+
+    ``caller_budget_json`` freezes the caller-owned slice (TaskIntent.budget,
+    TaskPlan.budget shape) for audit; NULL = old row, server-derived default.
+    ``max_*``/``deadline`` are the frozen effective caps (server-derived
+    intersect caller). All plan revisions/retries/resumes of the same root
+    share these caps and the monotonic ``used_*`` counters.
+    """
+
+    __tablename__ = "federation_root_ledgers"
+
+    root_task_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(32), index=True)
+    caller_budget_json: Mapped[dict | None] = mapped_column(JSON, default=None)
+    max_requests: Mapped[int] = mapped_column(BigInteger)
+    max_bytes: Mapped[int] = mapped_column(BigInteger)
+    max_hops: Mapped[int] = mapped_column(BigInteger)
+    deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    max_generation_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    max_probe_requests: Mapped[int] = mapped_column(BigInteger, default=0)
+    max_egress_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    max_discovery_requests: Mapped[int] = mapped_column(BigInteger, default=0)
+    used_requests: Mapped[int] = mapped_column(BigInteger, default=0)
+    used_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    used_generation_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    used_hops: Mapped[int] = mapped_column(BigInteger, default=0)
+    used_discovery: Mapped[int] = mapped_column(BigInteger, default=0)
+    used_probes: Mapped[int] = mapped_column(BigInteger, default=0)
+    used_egress_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 onupdate=utcnow)

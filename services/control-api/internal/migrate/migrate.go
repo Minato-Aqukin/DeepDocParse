@@ -10,11 +10,13 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -83,26 +85,41 @@ func Up(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
 			}
 			continue
 		}
-		tx, err := pool.Begin(ctx)
-		if err != nil {
-			return ran, err
-		}
-		if _, err := tx.Exec(ctx, m.SQL); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := applyMigration(ctx, pool, m); err != nil {
 			return ran, fmt.Errorf("迁移 %s 失败：%w", m.Version, err)
-		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO control.schema_migrations (version, checksum) VALUES ($1, $2)`,
-			m.Version, m.Checksum); err != nil {
-			_ = tx.Rollback(ctx)
-			return ran, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return ran, err
 		}
 		ran = append(ran, m.Version)
 	}
 	return ran, nil
+}
+
+func applyMigration(ctx context.Context, pool *pgxpool.Pool, m Migration) error {
+	for attempt := 0; ; attempt++ {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, m.SQL); err != nil {
+			_ = tx.Rollback(ctx)
+			var conflict *pgconn.PgError
+			// Roles are cluster-wide, unlike migration ledgers and advisory locks.
+			// Concurrent first starts in different databases can each see no role.
+			// Retry the rolled-back transaction once per role; keep SQL checksums
+			// immutable, and never ignore other unique-constraint failures.
+			if attempt < 2 && errors.As(err, &conflict) &&
+				conflict.Code == "23505" && conflict.ConstraintName == "pg_authid_rolname_index" {
+				continue
+			}
+			return err
+		}
+		if _, err = tx.Exec(ctx,
+			`INSERT INTO control.schema_migrations (version, checksum) VALUES ($1, $2)`,
+			m.Version, m.Checksum); err != nil {
+			_ = tx.Rollback(ctx)
+			return err
+		}
+		return tx.Commit(ctx)
+	}
 }
 
 type Status struct {

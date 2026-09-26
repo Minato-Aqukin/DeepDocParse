@@ -14,12 +14,13 @@ const env = { ...process.env, DDP_DESKTOP_SMOKE: '1', DDP_DESKTOP_SMOKE_DIRECTOR
 delete env.ELECTRON_RUN_AS_NODE
 if (!env.WAYLAND_DISPLAY && !env.DISPLAY) throw new Error('No display selected; set the actual Wayland/X11 session environment')
 const flags = env.WAYLAND_DISPLAY ? ['--ozone-platform=wayland'] : ['--ozone-platform=x11']
+if (env.DDP_DESKTOP_SMOKE_NETWORK_LOG === '1') flags.push('--log-net-log=' + path.join(directory, 'netlog.json'))
 const child = spawn(electron, [...flags, root], { env, stdio: ['ignore', 'pipe', 'pipe'] })
 // Keep diagnostics private. They can contain paths; no token is printed by the host/runtime.
 const diagnostics = []
 child.stdout.on('data', data => diagnostics.push(data))
 child.stderr.on('data', data => diagnostics.push(data))
-const timeout = setTimeout(() => child.kill('SIGTERM'), 45000)
+const timeout = setTimeout(() => child.kill('SIGTERM'), env.DDP_DESKTOP_SMOKE_MODEL ? 180000 : 45000)
 const exit = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve) })
 clearTimeout(timeout)
 await writeFile(path.join(directory, 'electron.log'), Buffer.concat(diagnostics), { mode: 0o600 })
@@ -37,8 +38,16 @@ assert.equal(report.resumed.state, 'ready')
 assert.deepEqual(report.ready.identity, report.resumed.identity)
 assert.equal(report.stopped.state, 'stopped')
 assert.equal(report.sharedClient.pdfRendered, true)
-assert.ok(report.sharedClient.fileResults.originalBytes > 0)
-assert.equal(report.sharedClient.fileResults.exported.value.saved, true)
+assert.equal(report.sharedClient.fileResults.status, 'succeeded')
+assert.ok(report.sharedClient.fileResults.resourceId)
+assert.ok(report.sharedClient.fileResults.versionId)
+assert.ok(report.sharedClient.fileResults.appendedVersion)
+assert.ok(Array.isArray(report.sharedClient.tokenAudit.meKeys))
+assert.ok(!report.sharedClient.tokenAudit.methods.includes('getCredential'))
+if (env.DDP_DESKTOP_SMOKE_MODEL) {
+  assert.equal(report.sharedClient.modelResults?.model_id, env.DDP_DESKTOP_SMOKE_MODEL)
+  assert.deepEqual(report.sharedClient.modelResults.cases.map(item => item.operation), ['conversations.ask', 'wikis.create'])
+}
 assert.equal(report.renderer.methods.includes('getCredential'), false)
 const artifacts = path.join(root, 'artifacts')
 await mkdir(artifacts, { recursive: true })
@@ -46,4 +55,5 @@ await writeFile(path.join(artifacts, 'smoke-report.json'), JSON.stringify(report
 await writeFile(path.join(artifacts, 'desktop.png'), await readFile(path.join(directory, 'desktop.png')))
 process.stdout.write(JSON.stringify({ passed: true, report: path.join(artifacts, 'smoke-report.json'),
   screenshot: path.join(artifacts, 'desktop.png'), electron: report.renderer.host.value.electron,
-  secretBackend: report.renderer.host.value.secrets, display: report.display }) + '\n')
+  secretBackend: report.renderer.host.value.secrets, display: report.display,
+  ...(env.DDP_DESKTOP_SMOKE_NETWORK_LOG === '1' ? { networkLog: path.join(directory, 'netlog.json') } : {}) }) + '\n')

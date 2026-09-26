@@ -183,3 +183,26 @@ func (s *Store) PeerMemberSnapshotPage(ctx context.Context, org, localID, snapsh
 	out.Complete = cursor == out.TerminalCursor
 	return out, nil
 }
+
+// ConsumePeerCredential commits replay protection before a directory response.
+// The live key and approval check share the insert's database snapshot.
+func (s *Store) ConsumePeerCredential(ctx context.Context, org string, claims discovery.CredentialClaims, publicKey string) (bool, error) {
+	consumed := false
+	err := s.InTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM control.federation_credential_nonces WHERE expires_at<=clock_timestamp()`); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `INSERT INTO control.federation_credential_nonces(jti,issuer,operation,expires_at)
+			SELECT $1,$2,$3,$4 WHERE EXISTS (
+				SELECT 1 FROM control.node_members WHERE organization_id=$5 AND node_id=$2
+				AND state='approved' AND public_key=$6)
+			ON CONFLICT(jti) DO NOTHING`, claims.JTI, claims.IssuerNodeID, claims.Operation,
+			time.Unix(claims.ExpiresAt, 0).UTC(), org, publicKey)
+		if err != nil {
+			return err
+		}
+		consumed = tag.RowsAffected() == 1
+		return nil
+	})
+	return consumed, err
+}

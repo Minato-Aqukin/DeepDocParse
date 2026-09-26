@@ -1,6 +1,6 @@
 {
   "schema": "ddp-model-catalog/1",
-  "revision": "2026-09-12.1",
+  "revision": "2026-09-20.1",
   "artifacts": [
     {
       "id": "qwen3-1.7b-q8_0",
@@ -26,7 +26,36 @@
       "minimum_memory_bytes": 4294967296,
       "context_tokens": 8192,
       "runtime_id": "llama-cpp-cpu-linux-x64",
+      "runtime_ids": ["llama-cpp-cpu-linux-x64", "llama-cpp-vulkan-linux-x64"],
       "validation": "partial_real_cpu_validation"
+    },
+    {
+      "id": "llama-cpp-vulkan-linux-x64",
+      "kind": "runtime",
+      "name": "llama.cpp Vulkan Linux x64",
+      "version": "b10809",
+      "filename": "llama-b10809-bin-ubuntu-vulkan-x64.tar.gz",
+      "bytes": 33799345,
+      "sha256": "07f029cef440c82c3cff5310641eb6347e5cbcd865a5d88990215058aa049e93",
+      "license": "MIT",
+      "license_url": "https://github.com/ggml-org/llama.cpp/blob/b10809/LICENSE",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10809/llama-b10809-bin-ubuntu-vulkan-x64.tar.gz",
+      "format": "tar-gz",
+      "backend": "llama.cpp",
+      "device": "gpu",
+      "gpu_api": "vulkan",
+      "platform": "linux-x86_64",
+      "architectures": [
+        "qwen3"
+      ],
+      "executable": "llama-b10809/llama-server",
+      "library_dirs": [
+        "llama-b10809"
+      ],
+      "unpacked_bytes": 268435456,
+      "default_gpu_layers": 99,
+      "default_log_verbosity": 5,
+      "validation": "real_gpu_independent_start_validated"
     },
     {
       "id": "llama-cpp-cpu-linux-x64",

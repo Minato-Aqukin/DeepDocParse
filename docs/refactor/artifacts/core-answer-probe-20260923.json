@@ -1,0 +1,84 @@
+{
+  "schema": "ddp-core-answer-probe/1",
+  "scope": "single_center_web",
+  "model": "qwen3-1.7b",
+  "state": "transport_integration_pending",
+  "baseline_conversation_id": "dacb688e5b5046bd886370c167f5c4ed",
+  "baseline": "Correct factual text, but both assertions unsupported because model omitted numbered citations.",
+  "stronger_free_text_prompt": {
+    "raw": "The RP2040 on the Raspberry Pi Pico has a Dual-core cortex M0+ processor. The maximum core frequency is up to 133 MHz [1].",
+    "assertions": [
+      {
+        "position": 0,
+        "text": "The RP2040 on the Raspberry Pi Pico has a Dual-core cortex M0+ processor.",
+        "evidence_ids": [],
+        "unsupported": true
+      },
+      {
+        "position": 1,
+        "text": "The maximum core frequency is up to 133 MHz .",
+        "evidence_ids": [
+          "30c08db54354466283831fc08632c6d0"
+        ],
+        "unsupported": false
+      }
+    ]
+  },
+  "untagged_claims": {
+    "raw": "{\n  \"claims\": []\n}",
+    "structured": {
+      "claims": []
+    }
+  },
+  "tagged_answer": {
+    "raw": "{\n  \"status\": \"answered\",\n  \"claims\": [\n    {\n      \"text\": \"The RP2040 on the Raspberry Pi Pico has 2 processor cores.\",\n      \"evidence_ids\": [\"30c08db54354466283831fc08632c6d0\"]\n    },\n    {\n      \"text\": \"The RP2040 on the Raspberry Pi Pico has a maximum core frequency of 133 MHz.\",\n      \"evidence_ids\": [\"30c08db54354466283831fc08632c6d0\"]\n    },\n    {\n      \"text\": \"The RP2040 on the Raspberry Pi Pico has a dual-core Cortex M0+ processor.\",\n      \"evidence_ids\": [\"30c08db54354466283831fc08632c6d0\"]\n    },\n    {\n      \"text\": \"The RP2040 on the Raspberry Pi Pico has an on-chip PLL that allows variable core frequency.\",\n      \"evidence_ids\": [\"30c08db54354466283831fc08632c6d0\"]\n    },\n    {\n      \"text\": \"The RP2040 on the Raspberry Pi Pico has 26 of the 30 possible RP2040 GPIO pins exposed.\",\n      \"evidence_ids\": [\"8ffefc2ce95640bcaceac5b65ffafdbb\"]\n    },\n    {\n      \"text\": \"The RP2040 on the Raspberry Pi Pico has a fixed IO voltage of 3.3 V.\",\n      \"evidence_ids\": [\"8ffefc2ce95640bcaceac5b65ffafdbb\"]\n    }\n  ]\n}",
+    "structured": {
+      "status": "answered",
+      "claims": [
+        {
+          "text": "The RP2040 on the Raspberry Pi Pico has 2 processor cores.",
+          "evidence_ids": [
+            "30c08db54354466283831fc08632c6d0"
+          ]
+        },
+        {
+          "text": "The RP2040 on the Raspberry Pi Pico has a maximum core frequency of 133 MHz.",
+          "evidence_ids": [
+            "30c08db54354466283831fc08632c6d0"
+          ]
+        },
+        {
+          "text": "The RP2040 on the Raspberry Pi Pico has a dual-core Cortex M0+ processor.",
+          "evidence_ids": [
+            "30c08db54354466283831fc08632c6d0"
+          ]
+        },
+        {
+          "text": "The RP2040 on the Raspberry Pi Pico has an on-chip PLL that allows variable core frequency.",
+          "evidence_ids": [
+            "30c08db54354466283831fc08632c6d0"
+          ]
+        },
+        {
+          "text": "The RP2040 on the Raspberry Pi Pico has 26 of the 30 possible RP2040 GPIO pins exposed.",
+          "evidence_ids": [
+            "8ffefc2ce95640bcaceac5b65ffafdbb"
+          ]
+        },
+        {
+          "text": "The RP2040 on the Raspberry Pi Pico has a fixed IO voltage of 3.3 V.",
+          "evidence_ids": [
+            "8ffefc2ce95640bcaceac5b65ffafdbb"
+          ]
+        }
+      ]
+    }
+  },
+  "tagged_insufficient_evidence": {
+    "raw": "{\n  \"status\": \"insufficient_evidence\"\n}",
+    "structured": {
+      "status": "insufficient_evidence"
+    }
+  },
+  "source_scope": "Same four original Evidence IDs and chunk texts as baseline conversation; no new retrieval or fabricated source data."
+}

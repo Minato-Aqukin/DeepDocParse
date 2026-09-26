@@ -5,7 +5,7 @@ info:
   description: |
     See ../ddp/discovery-control-format.md. Control owns node identity, approvals and
     per-caller persistent directory snapshots. Peer reads expose only the approved,
-    organization-visible direct directory (X-DDP-Peer-Token, fail closed); recursive
+    organization-visible direct directory (single-use signed node credentials); recursive
     expansion, budgets and loop detection live in the scope collector, not here.
     No scanning, address probing or user-credential forwarding is provided.
 security: [{session: []}, {userKey: []}]
@@ -13,13 +13,16 @@ paths:
   /api/v1/federation/members:
     get:
       operationId: readPeerDirectoryMembers
-      security: [{peer: []}]
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: directory_members_read
       description: |
         Node-level read of this directory's approved, organization-visible direct members.
-        Unconfigured peer token is 401. Hidden, pending and unauthorized members never
-        appear; descriptor routes, keys and sharing lists never leave the node. Pages are
+        A trusted, approved issuer must sign for this receiver, operation and canonical
+        query digest. Hidden, pending and unauthorized members never appear.
+        Descriptor keys and sharing lists never leave the node. Pages are
         a persistent frozen snapshot: continuation must pass snapshot_id and cursor, and
-        limit cannot change. Requesting the terminal cursor returns an empty complete page.
+        limit cannot change. An omitted continuation limit retains the snapshot's page size,
+        not the first-request default. Requesting the terminal cursor returns an empty complete page.
       parameters:
         - {name: snapshot_id, in: query, schema: {type: string, maxLength: 128}, description: Omitted on the first request only; a cursor without it is rejected}
         - {name: cursor, in: query, schema: {type: string, maxLength: 128}, description: Opaque cursor bound to the frozen peer snapshot}
@@ -27,7 +30,8 @@ paths:
       responses:
         '200': {description: Stable member page with a separate empty terminal proof, content: {application/json: {schema: {$ref: '#/components/schemas/PeerMemberPage'}}}}
         '400': {description: Invalid page options or cursor without snapshot_id}
-        '401': {description: peer_unauthenticated; unconfigured or wrong peer token}
+        '401': {description: 'credential_invalid, credential_expired or credential_replayed'}
+        '403': {description: 'node_unknown, node_revoked, credential_audience_mismatch or credential_scope_denied'}
         '409': {description: wrong_target; X-DDP-Target-Node names another node}
         '410': {description: Peer snapshot expired; create a new one}
   /api/v1/federation/node:
@@ -73,12 +77,18 @@ paths:
         '403': {description: Administrator session required}
     post:
       operationId: adminRegisterNode
+      description: |
+        New configurations enter pending approval. A same-revision lease renewal is
+        accepted only when the public key, descriptor configuration and local sharing
+        scope are unchanged and valid_until strictly increases. Renewal preserves the
+        existing approval and authorization revision; it cannot revive a revoked node
+        or mutate a frozen member snapshot. Stale or changed same-revision inputs fail.
       security: [{session: []}]
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/DirectoryRegistration'}}}
       responses:
-        '201': {description: Pending metadata registration; no remote request made}
+        '201': {description: Registered metadata or renewed unchanged lease; state reports the actual approval state, not health}
         '400': {description: Invalid identity, protocol or endpoint}
         '403': {description: Administrator session required}
         '404': {description: Sharing subject not in organization}
@@ -185,7 +195,7 @@ components:
     session: {type: http, scheme: bearer, bearerFormat: JWT}
     service: {type: http, scheme: bearer, description: Internal service credential (SERVICE_TOKEN); never a user or node credential}
     userKey: {type: http, scheme: bearer, description: User API key with read scope; never a node credential}
-    peer: {type: apiKey, in: header, name: X-DDP-Peer-Token, description: Node-level shared directory credential; fail closed when unconfigured}
+    nodeCredential: {type: apiKey, in: header, name: X-DDP-Node-Credential, description: 'Single-use Ed25519 credential bound to receiver, operation, request and query; live approval and durable replay protection required'}
   parameters:
     NodeId: {name: node_id, in: path, required: true, schema: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/node_id'}}
   schemas:

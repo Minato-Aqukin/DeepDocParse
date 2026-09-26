@@ -1,0 +1,771 @@
+{
+  "sources": [
+    {
+      "source": "pico",
+      "pages": 31,
+      "blocks": 295,
+      "seconds": 0.425
+    },
+    {
+      "source": "esp32",
+      "pages": 78,
+      "blocks": 3206,
+      "seconds": 1.183
+    },
+    {
+      "source": "attention",
+      "pages": 15,
+      "blocks": 408,
+      "seconds": 0.367
+    }
+  ],
+  "preservation": [
+    {
+      "case_id": "pico-core-frequency",
+      "source": "pico",
+      "page_index": 3,
+      "excerpt": "Dual-core cortex M0+ at up to 133 MHz",
+      "preserved": true,
+      "regions": [
+        [
+          71.53014373779297,
+          474.5745849609375,
+          524.1144409179688,
+          763.6390609741211
+        ]
+      ]
+    },
+    {
+      "case_id": "pico-esp32-sram-compare",
+      "source": "pico",
+      "page_index": 3,
+      "excerpt": "264 kB multi-bank high performance SRAM",
+      "preserved": true,
+      "regions": [
+        [
+          71.53014373779297,
+          474.5745849609375,
+          524.1144409179688,
+          763.6390609741211
+        ]
+      ]
+    },
+    {
+      "case_id": "pico-esp32-sram-compare",
+      "source": "esp32",
+      "page_index": 3,
+      "excerpt": "520 KB SRAM",
+      "preserved": true,
+      "regions": [
+        [
+          72.18494415283203,
+          102.46112060546875,
+          141.345703125,
+          109.83343505859375
+        ]
+      ]
+    },
+    {
+      "case_id": "pico-esp32-sram-compare",
+      "source": "esp32",
+      "page_index": 25,
+      "excerpt": "520 KB of on-chip SRAM for data and instructions",
+      "preserved": true,
+      "regions": [
+        [
+          56.80059814453125,
+          452.5072021484375,
+          537.8870849609375,
+          661.4710845947266
+        ]
+      ]
+    },
+    {
+      "case_id": "esp32-radio",
+      "source": "esp32",
+      "page_index": 2,
+      "excerpt": "802.11b/g/n",
+      "preserved": true,
+      "regions": [
+        [
+          72.18494415283203,
+          116.39385986328125,
+          510.12139892578125,
+          335.27362060546875
+        ]
+      ]
+    },
+    {
+      "case_id": "esp32-radio",
+      "source": "esp32",
+      "page_index": 2,
+      "excerpt": "802.11n (2.4 GHz), up to 150 Mbps",
+      "preserved": true,
+      "regions": [
+        [
+          72.18494415283203,
+          116.39385986328125,
+          510.12139892578125,
+          335.27362060546875
+        ]
+      ]
+    },
+    {
+      "case_id": "esp32-radio",
+      "source": "esp32",
+      "page_index": 2,
+      "excerpt": "Compliant with Bluetooth v4.2 BR/EDR and Bluetooth LE specifications",
+      "preserved": true,
+      "regions": [
+        [
+          72.18494415283203,
+          380.61090087890625,
+          392.85162353515625,
+          670.1760406494141
+        ]
+      ]
+    },
+    {
+      "case_id": "esp32-cpu",
+      "source": "esp32",
+      "page_index": 25,
+      "excerpt": "ESP32 contains one or two low-power Xtensa",
+      "preserved": true,
+      "regions": [
+        [
+          56.334346771240234,
+          101.7464599609375,
+          528.4140625,
+          431.5106201171875
+        ]
+      ]
+    },
+    {
+      "case_id": "esp32-cpu",
+      "source": "esp32",
+      "page_index": 25,
+      "excerpt": "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))",
+      "preserved": true,
+      "regions": [
+        [
+          56.334346771240234,
+          101.7464599609375,
+          528.4140625,
+          431.5106201171875
+        ]
+      ]
+    },
+    {
+      "case_id": "attention-en-de-bleu",
+      "source": "attention",
+      "page_index": 0,
+      "excerpt": "Our model achieves 28.4 BLEU on the WMT 2014 English",
+      "preserved": true,
+      "regions": [
+        [
+          143.72975158691406,
+          414.1605529785156,
+          469.2992248535156,
+          575.8538818359375
+        ]
+      ]
+    },
+    {
+      "case_id": "attention-en-de-bleu",
+      "source": "attention",
+      "page_index": 0,
+      "excerpt": "ensembles, by over 2 BLEU",
+      "preserved": true,
+      "regions": [
+        [
+          143.72975158691406,
+          414.1605529785156,
+          469.2992248535156,
+          575.8538818359375
+        ]
+      ]
+    },
+    {
+      "case_id": "attention-multi-head",
+      "source": "attention",
+      "page_index": 4,
+      "excerpt": "In this work we employ h = 8 parallel attention layers, or heads.",
+      "preserved": true,
+      "regions": [
+        [
+          107.58081817626953,
+          206.5035400390625,
+          504.0072021484375,
+          265.90887451171875
+        ]
+      ]
+    },
+    {
+      "case_id": "attention-multi-head",
+      "source": "attention",
+      "page_index": 4,
+      "excerpt": "dk = dv = dmodel/h = 64",
+      "preserved": true,
+      "regions": [
+        [
+          107.58081817626953,
+          206.5035400390625,
+          504.0072021484375,
+          265.90887451171875
+        ]
+      ]
+    }
+  ],
+  "scope": "native_parser_and_fresh_web_upload_pipeline",
+  "baseline_preserved": 10,
+  "gateway_layout_regressions": {
+    "passed": 87,
+    "skipped": 6
+  },
+  "postgres_keyword_probe": {
+    "vector": null,
+    "case_id": "pico-core-frequency",
+    "top_hit": {
+      "chunk_id": "17e6749e50dc406a9e07931021b0a51c",
+      "page_index": 3,
+      "text": "microcontroller please see the Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequency 264 kB multi-bank high performance SRAM External Quad-SPI Flash with eXecute In Place (XIP) and 16 kB on-chip cache High performance full-crossbar bus fabric On-board USB1.1 (device or host) 30 multi-function General Purpose IO (4 can be used for ADC) 1.8-3.3 V IO Voltage (\n•\n•\n•\n◦ ◦ ◦\n•\n•\n◦\n•\n•\n, however the headline features are:\nRP2040 Datasheet\n•\n◦\n•\n•\n•\n•\n•\nPico IO voltage is fixed at 3.3 V)\nNOTE\n◦\nAbout Raspberry Pi Pico\n3",
+      "score": 0.016393
+    },
+    "scope": "existing_immutable_parse_revision"
+  },
+  "web_pipeline": {
+    "state": "passed",
+    "frozen_excerpts_preserved": 13,
+    "total_frozen_excerpts": 13,
+    "all_indexes_ready": true,
+    "sources": [
+      {
+        "source": "pico",
+        "resource": {
+          "id": "9062dda0a77548d6baa565ceb28cef48",
+          "organization_id": "4d676ba5d26e8628b8a7e9c40872131b",
+          "owner_id": "f42bd8fe9c8fff6b3711ae1976958539",
+          "uploader_ref": {
+            "issuer": "4d676ba5d26e8628b8a7e9c40872131b",
+            "subject": "f42bd8fe9c8fff6b3711ae1976958539"
+          },
+          "display_name": "pico-datasheet.pdf",
+          "publication": "private",
+          "copied_from": null,
+          "created_at": "2026-09-23T13:45:40.021822+00:00",
+          "updated_at": "2026-09-23T14:03:52.352595+00:00",
+          "versions": [
+            {
+              "id": "4bc5ab05fd764193887bde3d07b2737e",
+              "resource_id": "9062dda0a77548d6baa565ceb28cef48",
+              "version_no": 1,
+              "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+              "source_digest": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_digest_verified": true,
+              "filename": "pico-datasheet.pdf",
+              "size_bytes": 18176869,
+              "parse_job_id": "115378a316fe440dba139f855feac8b2",
+              "created_at": "2026-09-23T13:45:40.023496+00:00"
+            },
+            {
+              "id": "41fc0a7d7eeb4475a6ab396525750e0d",
+              "resource_id": "9062dda0a77548d6baa565ceb28cef48",
+              "version_no": 2,
+              "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+              "source_digest": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_digest_verified": true,
+              "filename": "pico-datasheet.pdf",
+              "size_bytes": 18176869,
+              "parse_job_id": "09b6b483d11c41d58e00ac91d9b0f7db",
+              "created_at": "2026-09-23T14:03:52.354028+00:00"
+            }
+          ]
+        },
+        "version": {
+          "id": "41fc0a7d7eeb4475a6ab396525750e0d",
+          "resource_id": "9062dda0a77548d6baa565ceb28cef48",
+          "version_no": 2,
+          "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+          "source_digest": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+          "source_digest_verified": true,
+          "filename": "pico-datasheet.pdf",
+          "size_bytes": 18176869,
+          "parse_job_id": "09b6b483d11c41d58e00ac91d9b0f7db",
+          "created_at": "2026-09-23T14:03:52.354028+00:00"
+        },
+        "document": {
+          "id": "0fe58045cf6447f297efa4e0f06ac9c4",
+          "resource_id": "9062dda0a77548d6baa565ceb28cef48",
+          "source_version_id": "41fc0a7d7eeb4475a6ab396525750e0d",
+          "filename": "pico-datasheet.pdf",
+          "doc_id": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+          "origin": "web",
+          "mime": "application/pdf",
+          "size_bytes": 18176869,
+          "page_count": 31,
+          "status": "succeeded",
+          "error": null,
+          "index_status": "ready",
+          "index_error": null,
+          "compile_status": "partial",
+          "compile_degraded": [
+            "vision_unavailable"
+          ],
+          "compile_fingerprint": "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b",
+          "layout_version": "ddp-layout/1",
+          "code_detection": "heuristic",
+          "current_job_id": "09b6b483d11c41d58e00ac91d9b0f7db",
+          "created_at": "2026-09-23T14:03:52.354028Z",
+          "uploaders": [
+            "v3-same-name-reader"
+          ],
+          "can_delete": true
+        },
+        "layout": {
+          "engine": "borndigital",
+          "layout_version": "ddp-layout/1",
+          "pages": 31,
+          "blocks": 295
+        },
+        "checks": [
+          {
+            "case_id": "pico-core-frequency",
+            "page_index": 3,
+            "excerpt": "Dual-core cortex M0+ at up to 133 MHz",
+            "preserved": true,
+            "regions": [
+              [
+                71.53014373779297,
+                474.5745849609375,
+                524.1144409179688,
+                763.6390609741211
+              ]
+            ]
+          },
+          {
+            "case_id": "pico-esp32-sram-compare",
+            "page_index": 3,
+            "excerpt": "264 kB multi-bank high performance SRAM",
+            "preserved": true,
+            "regions": [
+              [
+                71.53014373779297,
+                474.5745849609375,
+                524.1144409179688,
+                763.6390609741211
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "source": "attention",
+        "resource": {
+          "id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+          "organization_id": "4d676ba5d26e8628b8a7e9c40872131b",
+          "owner_id": "f42bd8fe9c8fff6b3711ae1976958539",
+          "uploader_ref": {
+            "issuer": "4d676ba5d26e8628b8a7e9c40872131b",
+            "subject": "f42bd8fe9c8fff6b3711ae1976958539"
+          },
+          "display_name": "attention-is-all-you-need.pdf",
+          "publication": "private",
+          "copied_from": null,
+          "created_at": "2026-09-23T13:45:39.970296+00:00",
+          "updated_at": "2026-09-23T14:07:36.840408+00:00",
+          "versions": [
+            {
+              "id": "7564c1b1c80c49d29f771e69cb4e6d67",
+              "resource_id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+              "version_no": 1,
+              "document_id": "48f5edc41df343d285ead2dc3e6834bf",
+              "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+              "source_digest_verified": true,
+              "filename": "attention-is-all-you-need.pdf",
+              "size_bytes": 2215244,
+              "parse_job_id": "accd2d1942ee45f79716d3d6050533e2",
+              "created_at": "2026-09-23T13:45:39.971425+00:00"
+            },
+            {
+              "id": "8f70ddbb13384d388d7a1ced1a9c554b",
+              "resource_id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+              "version_no": 2,
+              "document_id": "48f5edc41df343d285ead2dc3e6834bf",
+              "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+              "source_digest_verified": true,
+              "filename": "attention-is-all-you-need.pdf",
+              "size_bytes": 2215244,
+              "parse_job_id": "20ffa502b6294e068a21b7e73c427399",
+              "created_at": "2026-09-23T14:07:36.840968+00:00"
+            }
+          ]
+        },
+        "version": {
+          "id": "8f70ddbb13384d388d7a1ced1a9c554b",
+          "resource_id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+          "version_no": 2,
+          "document_id": "48f5edc41df343d285ead2dc3e6834bf",
+          "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+          "source_digest_verified": true,
+          "filename": "attention-is-all-you-need.pdf",
+          "size_bytes": 2215244,
+          "parse_job_id": "20ffa502b6294e068a21b7e73c427399",
+          "created_at": "2026-09-23T14:07:36.840968+00:00"
+        },
+        "document": {
+          "id": "48f5edc41df343d285ead2dc3e6834bf",
+          "resource_id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+          "source_version_id": "8f70ddbb13384d388d7a1ced1a9c554b",
+          "filename": "attention-is-all-you-need.pdf",
+          "doc_id": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+          "origin": "web",
+          "mime": "application/pdf",
+          "size_bytes": 2215244,
+          "page_count": 15,
+          "status": "succeeded",
+          "error": null,
+          "index_status": "ready",
+          "index_error": null,
+          "compile_status": "ready",
+          "compile_degraded": [],
+          "compile_fingerprint": "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b",
+          "layout_version": "ddp-layout/1",
+          "code_detection": "heuristic",
+          "current_job_id": "20ffa502b6294e068a21b7e73c427399",
+          "created_at": "2026-09-23T14:07:36.840968Z",
+          "uploaders": [
+            "v3-same-name-reader"
+          ],
+          "can_delete": true
+        },
+        "layout": {
+          "engine": "borndigital",
+          "layout_version": "ddp-layout/1",
+          "pages": 15,
+          "blocks": 408
+        },
+        "checks": [
+          {
+            "case_id": "attention-en-de-bleu",
+            "page_index": 0,
+            "excerpt": "Our model achieves 28.4 BLEU on the WMT 2014 English",
+            "preserved": true,
+            "regions": [
+              [
+                143.72975158691406,
+                414.1605529785156,
+                469.2992248535156,
+                575.8538818359375
+              ]
+            ]
+          },
+          {
+            "case_id": "attention-en-de-bleu",
+            "page_index": 0,
+            "excerpt": "ensembles, by over 2 BLEU",
+            "preserved": true,
+            "regions": [
+              [
+                143.72975158691406,
+                414.1605529785156,
+                469.2992248535156,
+                575.8538818359375
+              ]
+            ]
+          },
+          {
+            "case_id": "attention-multi-head",
+            "page_index": 4,
+            "excerpt": "In this work we employ h = 8 parallel attention layers, or heads.",
+            "preserved": true,
+            "regions": [
+              [
+                107.58081817626953,
+                206.5035400390625,
+                504.0072021484375,
+                265.90887451171875
+              ]
+            ]
+          },
+          {
+            "case_id": "attention-multi-head",
+            "page_index": 4,
+            "excerpt": "dk = dv = dmodel/h = 64",
+            "preserved": true,
+            "regions": [
+              [
+                107.58081817626953,
+                206.5035400390625,
+                504.0072021484375,
+                265.90887451171875
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "source": "esp32",
+        "resource": {
+          "id": "820bdc40011744f9861c3263e65c86c9",
+          "organization_id": "4d676ba5d26e8628b8a7e9c40872131b",
+          "owner_id": "f42bd8fe9c8fff6b3711ae1976958539",
+          "uploader_ref": {
+            "issuer": "4d676ba5d26e8628b8a7e9c40872131b",
+            "subject": "f42bd8fe9c8fff6b3711ae1976958539"
+          },
+          "display_name": "esp32-datasheet.pdf",
+          "publication": "private",
+          "copied_from": null,
+          "created_at": "2026-09-23T13:45:39.909138+00:00",
+          "updated_at": "2026-09-23T14:05:33.770832+00:00",
+          "versions": [
+            {
+              "id": "e942acaa94e346ebbecf8e50e1787434",
+              "resource_id": "820bdc40011744f9861c3263e65c86c9",
+              "version_no": 1,
+              "document_id": "f987aec984ec4405866aca55b9a2eec8",
+              "source_digest": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+              "source_digest_verified": true,
+              "filename": "esp32-datasheet.pdf",
+              "size_bytes": 989523,
+              "parse_job_id": "9bc939d792004b83845bad4315015600",
+              "created_at": "2026-09-23T13:45:39.914098+00:00"
+            },
+            {
+              "id": "d23f145778d345b8b3c7e3cf55444ab8",
+              "resource_id": "820bdc40011744f9861c3263e65c86c9",
+              "version_no": 2,
+              "document_id": "f987aec984ec4405866aca55b9a2eec8",
+              "source_digest": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+              "source_digest_verified": true,
+              "filename": "esp32-datasheet.pdf",
+              "size_bytes": 989523,
+              "parse_job_id": "470cb463257f439dbcbb671ab1c6bcd4",
+              "created_at": "2026-09-23T14:05:33.772233+00:00"
+            }
+          ]
+        },
+        "version": {
+          "id": "d23f145778d345b8b3c7e3cf55444ab8",
+          "resource_id": "820bdc40011744f9861c3263e65c86c9",
+          "version_no": 2,
+          "document_id": "f987aec984ec4405866aca55b9a2eec8",
+          "source_digest": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+          "source_digest_verified": true,
+          "filename": "esp32-datasheet.pdf",
+          "size_bytes": 989523,
+          "parse_job_id": "470cb463257f439dbcbb671ab1c6bcd4",
+          "created_at": "2026-09-23T14:05:33.772233+00:00"
+        },
+        "document": {
+          "id": "f987aec984ec4405866aca55b9a2eec8",
+          "resource_id": "820bdc40011744f9861c3263e65c86c9",
+          "source_version_id": "d23f145778d345b8b3c7e3cf55444ab8",
+          "filename": "esp32-datasheet.pdf",
+          "doc_id": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+          "origin": "web",
+          "mime": "application/pdf",
+          "size_bytes": 989523,
+          "page_count": 78,
+          "status": "succeeded",
+          "error": null,
+          "index_status": "ready",
+          "index_error": null,
+          "compile_status": "partial",
+          "compile_degraded": [
+            "vision_unavailable"
+          ],
+          "compile_fingerprint": "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b",
+          "layout_version": "ddp-layout/1",
+          "code_detection": "heuristic",
+          "current_job_id": "470cb463257f439dbcbb671ab1c6bcd4",
+          "created_at": "2026-09-23T14:05:33.772233Z",
+          "uploaders": [
+            "v3-same-name-reader"
+          ],
+          "can_delete": true
+        },
+        "layout": {
+          "engine": "borndigital",
+          "layout_version": "ddp-layout/1",
+          "pages": 78,
+          "blocks": 3206
+        },
+        "checks": [
+          {
+            "case_id": "pico-esp32-sram-compare",
+            "page_index": 3,
+            "excerpt": "520 KB SRAM",
+            "preserved": true,
+            "regions": [
+              [
+                72.18494415283203,
+                102.46112060546875,
+                141.345703125,
+                109.83343505859375
+              ]
+            ]
+          },
+          {
+            "case_id": "pico-esp32-sram-compare",
+            "page_index": 25,
+            "excerpt": "520 KB of on-chip SRAM for data and instructions",
+            "preserved": true,
+            "regions": [
+              [
+                56.80059814453125,
+                452.5072021484375,
+                537.8870849609375,
+                661.4710845947266
+              ]
+            ]
+          },
+          {
+            "case_id": "esp32-radio",
+            "page_index": 2,
+            "excerpt": "802.11b/g/n",
+            "preserved": true,
+            "regions": [
+              [
+                72.18494415283203,
+                116.39385986328125,
+                510.12139892578125,
+                335.27362060546875
+              ]
+            ]
+          },
+          {
+            "case_id": "esp32-radio",
+            "page_index": 2,
+            "excerpt": "802.11n (2.4 GHz), up to 150 Mbps",
+            "preserved": true,
+            "regions": [
+              [
+                72.18494415283203,
+                116.39385986328125,
+                510.12139892578125,
+                335.27362060546875
+              ]
+            ]
+          },
+          {
+            "case_id": "esp32-radio",
+            "page_index": 2,
+            "excerpt": "Compliant with Bluetooth v4.2 BR/EDR and Bluetooth LE specifications",
+            "preserved": true,
+            "regions": [
+              [
+                72.18494415283203,
+                380.61090087890625,
+                392.85162353515625,
+                670.1760406494141
+              ]
+            ]
+          },
+          {
+            "case_id": "esp32-cpu",
+            "page_index": 25,
+            "excerpt": "ESP32 contains one or two low-power Xtensa",
+            "preserved": true,
+            "regions": [
+              [
+                56.334346771240234,
+                101.7464599609375,
+                528.4140625,
+                431.5106201171875
+              ]
+            ]
+          },
+          {
+            "case_id": "esp32-cpu",
+            "page_index": 25,
+            "excerpt": "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))",
+            "preserved": true,
+            "regions": [
+              [
+                56.334346771240234,
+                101.7464599609375,
+                528.4140625,
+                431.5106201171875
+              ]
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "image_only_boundary": {
+    "resource": {
+      "id": "38d861b025134f8ab6e1f5b2f1ad7b34",
+      "organization_id": "4d676ba5d26e8628b8a7e9c40872131b",
+      "owner_id": "f42bd8fe9c8fff6b3711ae1976958539",
+      "uploader_ref": {
+        "issuer": "4d676ba5d26e8628b8a7e9c40872131b",
+        "subject": "f42bd8fe9c8fff6b3711ae1976958539"
+      },
+      "display_name": "controller-manual-scan.pdf",
+      "publication": "private",
+      "copied_from": null,
+      "created_at": "2026-09-23T14:12:01.911426+00:00",
+      "updated_at": "2026-09-23T14:12:01.911429+00:00",
+      "versions": [
+        {
+          "id": "5d70266036f6454c9a6d574a829e1f82",
+          "resource_id": "38d861b025134f8ab6e1f5b2f1ad7b34",
+          "version_no": 1,
+          "document_id": "d227108eac4a4d2d9ec9ff6389af7042",
+          "source_digest": "9bf222893d42750c0150d3851ac78822f74a1d59cb9153c720f25b525379c937",
+          "source_digest_verified": true,
+          "filename": "controller-manual-scan.pdf",
+          "size_bytes": 29573,
+          "parse_job_id": "39c734e775e84d6697055b9e1ff45104",
+          "created_at": "2026-09-23T14:12:01.913460+00:00"
+        }
+      ]
+    },
+    "version": {
+      "id": "5d70266036f6454c9a6d574a829e1f82",
+      "resource_id": "38d861b025134f8ab6e1f5b2f1ad7b34",
+      "version_no": 1,
+      "document_id": "d227108eac4a4d2d9ec9ff6389af7042",
+      "source_digest": "9bf222893d42750c0150d3851ac78822f74a1d59cb9153c720f25b525379c937",
+      "source_digest_verified": true,
+      "filename": "controller-manual-scan.pdf",
+      "size_bytes": 29573,
+      "parse_job_id": "39c734e775e84d6697055b9e1ff45104",
+      "created_at": "2026-09-23T14:12:01.913460+00:00"
+    },
+    "status": 200,
+    "document": {
+      "id": "d227108eac4a4d2d9ec9ff6389af7042",
+      "resource_id": "38d861b025134f8ab6e1f5b2f1ad7b34",
+      "source_version_id": "5d70266036f6454c9a6d574a829e1f82",
+      "filename": "controller-manual-scan.pdf",
+      "doc_id": "9bf222893d42750c0150d3851ac78822f74a1d59cb9153c720f25b525379c937",
+      "origin": "web",
+      "mime": "application/pdf",
+      "size_bytes": 29573,
+      "page_count": 0,
+      "status": "failed",
+      "error": "borndigital 引擎没有从这份 PDF 里提取到任何文字层（多半是扫描件/纯图片）。扫描件需要 OCR，请改用 mineru 引擎",
+      "index_status": "none",
+      "index_error": null,
+      "compile_status": "none",
+      "compile_degraded": [],
+      "compile_fingerprint": "",
+      "layout_version": "",
+      "code_detection": "unavailable",
+      "current_job_id": "39c734e775e84d6697055b9e1ff45104",
+      "created_at": "2026-09-23T14:12:01.913460Z",
+      "uploaders": [
+        "v3-same-name-reader"
+      ],
+      "can_delete": true
+    },
+    "browser": {
+      "url": "http://127.0.0.1:35173/#/documents/d227108eac4a4d2d9ec9ff6389af7042?resource_id=38d861b025134f8ab6e1f5b2f1ad7b34&version_id=5d70266036f6454c9a6d574a829e1f82&job=39c734e775e84d6697055b9e1ff45104",
+      "body": "DeepDocParse\n工作区\n资源库\n文档库\n结构化抽取\n全文检索\n联邦任务\n知识 Wiki\n实体图谱\n开发者\nAPI Key\n用量\n账号\n成员与角色\n设置\n工作台\nv3-same-name-reader\n← 文档库\ncontroller-manual-scan.pdf\n0 页\n未索引\n解析版本\n校验版本\n重建索引\n下载\n▾\n解析失败：borndigital 引擎没有从这份 PDF 里提取到任何文字层（多半是扫描件/纯图片）。扫描件需要 OCR，请改用 mineru 引擎\n文档解析由\nMinerU\n提供支持",
+      "controls": []
+    }
+  }
+}

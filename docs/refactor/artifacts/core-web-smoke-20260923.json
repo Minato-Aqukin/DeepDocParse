@@ -1,0 +1,2007 @@
+{
+  "schema": "ddp-core-web-smoke/1",
+  "state": "in_progress",
+  "scope": "single_center_web",
+  "recorded_at_utc": "2026-09-23T10:00:32.061Z",
+  "session_regressions": {
+    "before": "Four cold-session regressions and two unauthorized-response regressions failed before their respective fixes",
+    "after": {
+      "files": 2,
+      "tests_passed": 15
+    },
+    "command": "npm run test:unit -- src/api/__tests__/http-auth.spec.ts src/router/__tests__/guard.spec.ts"
+  },
+  "upload_identity": {
+    "same_filename": "controller-manual.pdf",
+    "same_size_bytes": 2527,
+    "different_bytes": true,
+    "queue_before": 1,
+    "queue_after": 2,
+    "source_versions": [
+      {
+        "id": "6ee4fb86827e4e7c9e3241f4f8d936bb",
+        "resource_id": "f2672b8cdeea42248aa8605eed069d79",
+        "version_no": 1,
+        "document_id": "dd33732d32c849c998538166cc404521",
+        "source_digest": "e767746230fdaf6921446e4ee31abcea6bc8acd1126cd3ee85c3a6a44eab6833",
+        "source_digest_verified": true,
+        "filename": "controller-manual.pdf",
+        "size_bytes": 2527,
+        "parse_job_id": "96849846d3394c968ef8defd4fd71848",
+        "created_at": "2026-09-23T09:02:25.971058+00:00"
+      },
+      {
+        "id": "7e967ed0ddf44e82b0ba4cda8354ca4c",
+        "resource_id": "58b4674f980a463299c0df6cf01aed58",
+        "version_no": 1,
+        "document_id": "395116795cc84a7495f607909f7569dc",
+        "source_digest": "3d9ccbffb6eaecfa562c35351827d90286926600480a44607fc1a69c0bb491a3",
+        "source_digest_verified": true,
+        "filename": "controller-manual.pdf",
+        "size_bytes": 2527,
+        "parse_job_id": "0193b4dafb214d6c979aad5712fc21d9",
+        "created_at": "2026-09-23T09:02:25.908128+00:00"
+      }
+    ],
+    "handoff_visibility": "Known race: verified uploads closed before corpus resource registration; repair in progress"
+  },
+  "immutable_update": {
+    "resource_id": "f2672b8cdeea42248aa8605eed069d79",
+    "old_version_unchanged": true,
+    "versions": [
+      {
+        "id": "6ee4fb86827e4e7c9e3241f4f8d936bb",
+        "resource_id": "f2672b8cdeea42248aa8605eed069d79",
+        "version_no": 1,
+        "document_id": "dd33732d32c849c998538166cc404521",
+        "source_digest": "e767746230fdaf6921446e4ee31abcea6bc8acd1126cd3ee85c3a6a44eab6833",
+        "source_digest_verified": true,
+        "filename": "controller-manual.pdf",
+        "size_bytes": 2527,
+        "parse_job_id": "96849846d3394c968ef8defd4fd71848",
+        "created_at": "2026-09-23T09:02:25.971058+00:00"
+      },
+      {
+        "id": "b6d499f4d8fa4d51879e0885fde97f64",
+        "resource_id": "f2672b8cdeea42248aa8605eed069d79",
+        "version_no": 2,
+        "document_id": "395116795cc84a7495f607909f7569dc",
+        "source_digest": "3d9ccbffb6eaecfa562c35351827d90286926600480a44607fc1a69c0bb491a3",
+        "source_digest_verified": true,
+        "filename": "controller-manual.pdf",
+        "size_bytes": 2527,
+        "parse_job_id": "0193b4dafb214d6c979aad5712fc21d9",
+        "created_at": "2026-09-23T09:56:20.545079+00:00"
+      }
+    ],
+    "old_answer_after_update": [
+      {
+        "id": "2c3ad740f9cb4fd4ab6e36bdcbfb106d",
+        "role": "assistant",
+        "content": "The reset delay before sending a command is 17 milliseconds.",
+        "citations": [
+          {
+            "chunk_id": "2ea461bc46954222bc14f205b9edcae1",
+            "evidence_id": "3c93419f97b747658df3999e339f2c31",
+            "document_id": "dd33732d32c849c998538166cc404521",
+            "source_type": "source",
+            "derived_from": null,
+            "parse_job_id": "96849846d3394c968ef8defd4fd71848",
+            "seq": 0,
+            "doc_hash": null,
+            "page_idx": 0,
+            "bbox": [
+              55.167999267578125,
+              48.623779296875,
+              329.41595458984375,
+              791.8897705078125
+            ],
+            "page_size": [
+              595.2755737304688,
+              841.8897705078125
+            ],
+            "snippet": "Controller setup manual The reset delay is 17 milliseconds. Wait for the reset delay before sending a command. i",
+            "score": 0.032787,
+            "similarity": 0.8008,
+            "resolved": true,
+            "crop_url": "/api/documents/dd33732d32c849c998538166cc404521/crops/96849846d3394c968ef8defd4fd71848/0_c937decbef01.png"
+          }
+        ],
+        "assertions": [
+          {
+            "id": "50074235085d40bda0c6156c53352352",
+            "position": 0,
+            "text": "The reset delay before sending a command is 17 milliseconds.",
+            "evidence_ids": [
+              "3c93419f97b747658df3999e339f2c31"
+            ],
+            "verification": {
+              "state": "unverified",
+              "mode": null
+            },
+            "unsupported": false,
+            "citations": [
+              {
+                "chunk_id": "2ea461bc46954222bc14f205b9edcae1",
+                "evidence_id": "3c93419f97b747658df3999e339f2c31",
+                "document_id": "dd33732d32c849c998538166cc404521",
+                "source_type": "source",
+                "derived_from": null,
+                "parse_job_id": "96849846d3394c968ef8defd4fd71848",
+                "seq": 0,
+                "doc_hash": null,
+                "page_idx": 0,
+                "bbox": [
+                  55.167999267578125,
+                  48.623779296875,
+                  329.41595458984375,
+                  791.8897705078125
+                ],
+                "page_size": [
+                  595.2755737304688,
+                  841.8897705078125
+                ],
+                "snippet": "Controller setup manual The reset delay is 17 milliseconds. Wait for the reset delay before sending a command. i",
+                "score": 0.032787,
+                "similarity": 0.8008,
+                "resolved": true,
+                "crop_url": "/api/documents/dd33732d32c849c998538166cc404521/crops/96849846d3394c968ef8defd4fd71848/0_c937decbef01.png"
+              }
+            ]
+          }
+        ],
+        "verified": false,
+        "degraded": "vision_unavailable",
+        "model_meta": {
+          "chat_model": "",
+          "chat_endpoint": "http://127.0.0.1:31430/v1/chat/completions",
+          "embedding_model": "bge-m3",
+          "embedding_endpoint": "http://127.0.0.1:31430/v1/embeddings",
+          "embedding_dim": 1024,
+          "retrieval": {
+            "top_k": 4,
+            "candidates": 8,
+            "min_similarity": 0.45,
+            "context_chars": 6000,
+            "crop_count": 1,
+            "rerank_enabled": false,
+            "rerank_model": "",
+            "tokenizer": "jieba",
+            "decision_enabled": true,
+            "document_gate_min_similarity": 0.45
+          }
+        },
+        "confidence": {
+          "level": "high",
+          "top_similarity": 0.8008,
+          "warn_below": 0.6
+        },
+        "query_decision": {
+          "need_retrieval": true,
+          "reason": "问题需要新事实或证据",
+          "inherited_evidence_ids": [],
+          "degraded": null
+        },
+        "retrieval": {
+          "candidates": [
+            {
+              "evidence_id": "3c93419f97b747658df3999e339f2c31",
+              "document_id": "dd33732d32c849c998538166cc404521",
+              "rank": 0,
+              "score": 0.032787,
+              "similarity": 0.8008,
+              "accepted": true,
+              "reason": "document_gate_passed"
+            },
+            {
+              "evidence_id": "de9a77b5d9bb40dabff37cb9c3db0503",
+              "document_id": "dd33732d32c849c998538166cc404521",
+              "rank": 1,
+              "score": 0.032258,
+              "similarity": 0.5829,
+              "accepted": true,
+              "reason": "document_gate_passed"
+            }
+          ]
+        },
+        "created_at": "2026-09-23T09:05:04.779569+00:00"
+      }
+    ],
+    "new_answer": [
+      {
+        "id": "1cbae571a4734ad08b311087e4a2a502",
+        "role": "assistant",
+        "content": "The reset delay before sending a command is 23 milliseconds.",
+        "citations": [
+          {
+            "chunk_id": "c61bda8a053043d3b3e4e9de11f8d731",
+            "evidence_id": "d030c409f19644d694b031d1ce4c8c28",
+            "document_id": "395116795cc84a7495f607909f7569dc",
+            "source_type": "source",
+            "derived_from": null,
+            "parse_job_id": "0193b4dafb214d6c979aad5712fc21d9",
+            "seq": 0,
+            "doc_hash": null,
+            "page_idx": 0,
+            "bbox": [
+              55.167999267578125,
+              48.623779296875,
+              329.41595458984375,
+              791.8897705078125
+            ],
+            "page_size": [
+              595.2755737304688,
+              841.8897705078125
+            ],
+            "snippet": "Controller setup manual The reset delay is 23 milliseconds. Wait for the reset delay before sending a command. i",
+            "score": 0.032787,
+            "similarity": 0.7967,
+            "resolved": true,
+            "crop_url": "/api/documents/395116795cc84a7495f607909f7569dc/crops/0193b4dafb214d6c979aad5712fc21d9/0_c937decbef01.png"
+          }
+        ],
+        "assertions": [
+          {
+            "id": "2d09397d1c2c48098c1a87e3fdaa2dc5",
+            "position": 0,
+            "text": "The reset delay before sending a command is 23 milliseconds.",
+            "evidence_ids": [
+              "d030c409f19644d694b031d1ce4c8c28"
+            ],
+            "verification": {
+              "state": "unverified",
+              "mode": null
+            },
+            "unsupported": false,
+            "citations": [
+              {
+                "chunk_id": "c61bda8a053043d3b3e4e9de11f8d731",
+                "evidence_id": "d030c409f19644d694b031d1ce4c8c28",
+                "document_id": "395116795cc84a7495f607909f7569dc",
+                "source_type": "source",
+                "derived_from": null,
+                "parse_job_id": "0193b4dafb214d6c979aad5712fc21d9",
+                "seq": 0,
+                "doc_hash": null,
+                "page_idx": 0,
+                "bbox": [
+                  55.167999267578125,
+                  48.623779296875,
+                  329.41595458984375,
+                  791.8897705078125
+                ],
+                "page_size": [
+                  595.2755737304688,
+                  841.8897705078125
+                ],
+                "snippet": "Controller setup manual The reset delay is 23 milliseconds. Wait for the reset delay before sending a command. i",
+                "score": 0.032787,
+                "similarity": 0.7967,
+                "resolved": true,
+                "crop_url": "/api/documents/395116795cc84a7495f607909f7569dc/crops/0193b4dafb214d6c979aad5712fc21d9/0_c937decbef01.png"
+              }
+            ]
+          }
+        ],
+        "verified": false,
+        "degraded": "vision_unavailable",
+        "model_meta": {
+          "chat_model": "",
+          "chat_endpoint": "http://127.0.0.1:31430/v1/chat/completions",
+          "embedding_model": "bge-m3",
+          "embedding_endpoint": "http://127.0.0.1:31430/v1/embeddings",
+          "embedding_dim": 1024,
+          "retrieval": {
+            "top_k": 4,
+            "candidates": 8,
+            "min_similarity": 0.45,
+            "context_chars": 6000,
+            "crop_count": 1,
+            "rerank_enabled": false,
+            "rerank_model": "",
+            "tokenizer": "jieba",
+            "decision_enabled": true,
+            "document_gate_min_similarity": 0.45
+          }
+        },
+        "confidence": {
+          "level": "high",
+          "top_similarity": 0.7967,
+          "warn_below": 0.6
+        },
+        "query_decision": {
+          "need_retrieval": true,
+          "reason": "问题需要新事实或证据",
+          "inherited_evidence_ids": [],
+          "degraded": null
+        },
+        "retrieval": {
+          "candidates": [
+            {
+              "evidence_id": "d030c409f19644d694b031d1ce4c8c28",
+              "document_id": "395116795cc84a7495f607909f7569dc",
+              "rank": 0,
+              "score": 0.032787,
+              "similarity": 0.7967,
+              "accepted": true,
+              "reason": "document_gate_passed"
+            },
+            {
+              "evidence_id": "fa303e950afa47cfbc55f51002252a44",
+              "document_id": "395116795cc84a7495f607909f7569dc",
+              "rank": 1,
+              "score": 0.032258,
+              "similarity": 0.5829,
+              "accepted": true,
+              "reason": "document_gate_passed"
+            }
+          ]
+        },
+        "created_at": "2026-09-23T09:58:30.736471+00:00"
+      }
+    ]
+  },
+  "index_readiness": [
+    {
+      "resource_id": "f2672b8cdeea42248aa8605eed069d79",
+      "version_id": "6ee4fb86827e4e7c9e3241f4f8d936bb",
+      "document_id": "dd33732d32c849c998538166cc404521",
+      "filename": "controller-manual.pdf",
+      "status": "succeeded",
+      "index_status": "ready",
+      "error": null,
+      "index_error": null
+    },
+    {
+      "resource_id": "58b4674f980a463299c0df6cf01aed58",
+      "version_id": "7e967ed0ddf44e82b0ba4cda8354ca4c",
+      "document_id": "395116795cc84a7495f607909f7569dc",
+      "filename": "controller-manual.pdf",
+      "status": "succeeded",
+      "index_status": "ready",
+      "error": null,
+      "index_error": null
+    },
+    {
+      "resource_id": "1def42f20fff4f99bc760e27cdb947b6",
+      "version_id": "a74fe28d80464f7d921373ca034de8f8",
+      "document_id": "f987aec984ec4405866aca55b9a2eec8",
+      "filename": "esp32-datasheet.pdf",
+      "status": "succeeded",
+      "index_status": "ready",
+      "error": null,
+      "index_error": null
+    },
+    {
+      "resource_id": "0366a1138bf14dac8372dbbc1deac005",
+      "version_id": "2237ffbc25b042b6ad15d45d649894f2",
+      "document_id": "48f5edc41df343d285ead2dc3e6834bf",
+      "filename": "attention-is-all-you-need.pdf",
+      "status": "succeeded",
+      "index_status": "ready",
+      "error": null,
+      "index_error": null
+    },
+    {
+      "resource_id": "51517ad2a0084fa09427637f8130251d",
+      "version_id": "71ede87e238c4895887d0d63902d50ea",
+      "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+      "filename": "pico-datasheet.pdf",
+      "status": "succeeded",
+      "index_status": "ready",
+      "error": null,
+      "index_error": null
+    }
+  ],
+  "pdf_navigation": {
+    "before": "Selecting pager 1 rendered the physical second page (Watchdog settings)",
+    "after": "Pager 1 renders Controller setup manual; pager 2 renders Watchdog settings; clicking the original citation returns to pager 1 and displays one source-region highlight",
+    "before_screenshot": "core-web-page-one-before-20260923.png",
+    "after_screenshot": "core-web-page-one-after-20260923.png",
+    "page_label_semantics": "Citation and evidence labels explicitly identify physical PDF pages, not printed folio numbers"
+  },
+  "wiki": {
+    "state": "not_yet_passing",
+    "observed_failures": [
+      "Long-manual whole-version evidence freeze exceeds the build budget",
+      "Real Qwen page generation returned malformed JSON"
+    ],
+    "provider_experiment": "Strict JSON Schema was enforced; unstructured/json_object output was not reliable",
+    "verification_pending": true
+  },
+  "quality_boundary": [
+    "Functional version fixtures are synthetic and are not part of the publisher-PDF quality cohort",
+    "Text-layer parsing only; no scanned OCR, structural table/formula recognition, GPU, visual-model, or human semantic-review claim",
+    "Real answers explicitly report vision_unavailable and remain unverified"
+  ],
+  "session_expiration": {
+    "setup": "Expired the active lab JWT with its valid HS256 signer while retaining the loaded browser profile; the real document polling request returned 401.",
+    "state": {
+      "route": "#/login",
+      "hasToken": false,
+      "hasStoredToken": false,
+      "hasProfile": false,
+      "canUpload": false
+    },
+    "unauthorizedRequests": [
+      {
+        "path": "/api/documents/dd33732d32c849c998538166cc404521",
+        "status": 401
+      }
+    ],
+    "passed": true
+  },
+  "document_context": {
+    "before": {
+      "route": "#/documents/395116795cc84a7495f607909f7569dc",
+      "observedMessage": "resource_id is required for this legacy document",
+      "requests": [
+        {
+          "path": "/api/documents/395116795cc84a7495f607909f7569dc",
+          "status": 409
+        },
+        {
+          "path": "/api/documents/395116795cc84a7495f607909f7569dc",
+          "status": 409
+        },
+        {
+          "path": "/api/documents/395116795cc84a7495f607909f7569dc",
+          "status": 409
+        }
+      ]
+    },
+    "after": {
+      "route": "#/documents/395116795cc84a7495f607909f7569dc?resource_id=f2672b8cdeea42248aa8605eed069d79&version_id=b6d499f4d8fa4d51879e0885fde97f64&job=0193b4dafb214d6c979aad5712fc21d9",
+      "parsedText": "按页Markdown共 2 页 · 点击段落可在左栏定位 第 1 页 Controller setup manual\nThe reset delay is 23 milliseconds. Wait for the reset delay before sending a command.\ni 第 2 页 Watchdog settings\nThe watchdog timeout is 7 seconds. Reset timing and watchdog timeout are separate settings.\n1",
+      "sourceCanvas": true,
+      "failedLoad": false
+    },
+    "parseManagementRoute": "#/documents/395116795cc84a7495f607909f7569dc/versions?resource_id=f2672b8cdeea42248aa8605eed069d79",
+    "passed": true
+  },
+  "targeted_upload": {
+    "state": "implementation_in_progress",
+    "note": "The earlier 17→23ms update proof used metadata-copy append. That temporary Web picker is now replaced by direct verified uploads to target_resource_id; a fresh three-version browser exercise remains pending. Existing frozen source versions and historical answers remain unchanged."
+  },
+  "parser_baseline": {
+    "state": "failed_before_correction",
+    "sources": 3,
+    "frozen_excerpts": 13,
+    "preserved_excerpts": 10,
+    "native_pdf_excerpts_present": 13,
+    "missing": [
+      {
+        "case_id": "esp32-cpu",
+        "source": "esp32",
+        "page_index": 25,
+        "physical_pdf_page": 26
+      },
+      {
+        "case_id": "attention-multi-head",
+        "source": "attention",
+        "page_index": 4,
+        "physical_pdf_page": 5,
+        "excerpt_count": 2
+      }
+    ],
+    "annotations": "agent-extracted; human review pending",
+    "corrected_real_parse": "pending"
+  },
+  "streaming_session_expiration": {
+    "regression": "New SSE expiration regression failed before the shared guard; focused authentication suite now 17 passed.",
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/conversations/d05abe49eb2741959f58dc04b44b05ba/ask",
+        "status": 401
+      },
+      {
+        "method": "GET",
+        "path": "/src/views/LoginView.vue",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "path": "/src/views/LoginView.vue",
+        "status": 304
+      }
+    ],
+    "after": {
+      "route": "#/login",
+      "hasToken": false,
+      "hasStoredToken": false,
+      "hasProfile": false,
+      "canUpload": false
+    }
+  },
+  "search_source_navigation": {
+    "before": {
+      "hit": {
+        "label": "第 2 页",
+        "sourceRoute": "#/documents/395116795cc84a7495f607909f7569dc?resource_id=58b4674f980a463299c0df6cf01aed58&version_id=7e967ed0ddf44e82b0ba4cda8354ca4c&job=0193b4dafb214d6c979aad5712fc21d9"
+      },
+      "opened": {
+        "route": "#/documents/395116795cc84a7495f607909f7569dc?resource_id=58b4674f980a463299c0df6cf01aed58&version_id=7e967ed0ddf44e82b0ba4cda8354ca4c&job=0193b4dafb214d6c979aad5712fc21d9",
+        "physicalPage": " 1 ",
+        "highlights": 0
+      }
+    },
+    "after": {
+      "route": "#/documents/395116795cc84a7495f607909f7569dc?resource_id=58b4674f980a463299c0df6cf01aed58&version_id=7e967ed0ddf44e82b0ba4cda8354ca4c&job=0193b4dafb214d6c979aad5712fc21d9&chunk=82cbd5b0c7c74c2ab4da964470c4dd11&page=2",
+      "physicalPage": "2",
+      "highlights": 1,
+      "highlight": "left: 9.26764%; top: 5.80121%; width: 51.2253%; height: 88.2598%;"
+    },
+    "stale_hit": {
+      "warningVisible": true,
+      "highlights": 0,
+      "physicalPage": "2"
+    },
+    "bbox_quality": "The stored pre-fix parser block is page-height; source selection is now correct, but corrected parser geometry remains pending on fresh parses."
+  },
+  "search_request_budget": {
+    "before": {
+      "user_search_actions": 2,
+      "observed_search_requests": 4
+    },
+    "after": {
+      "user_search_actions": 1,
+      "observed_search_requests": 1,
+      "requests": [
+        {
+          "query": "watchdog timeout 7 seconds",
+          "status": 200
+        }
+      ]
+    }
+  },
+  "wiki_real_generation": {
+    "status": 201,
+    "document": {
+      "wiki": {
+        "id": "115f1ce0635f4625910a08e1d9bd65a4",
+        "title": "Controller reset timing and watchdog settings",
+        "current_revision_id": "84304192424c4e9388c8cbe0435fed0f",
+        "published_revision_id": null
+      },
+      "revision": {
+        "id": "84304192424c4e9388c8cbe0435fed0f",
+        "wiki_id": "115f1ce0635f4625910a08e1d9bd65a4",
+        "base_revision_id": null,
+        "kind": "generated",
+        "title": "Controller reset timing and watchdog settings",
+        "created_by": "f42bd8fe9c8fff6b3711ae1976958539",
+        "created_at": "2026-09-23T12:43:39.445888+00:00",
+        "provider": {
+          "model": "qwen3-1.7b",
+          "kind": "wiki_generation",
+          "semantic_verification": "not_performed"
+        },
+        "limits": {
+          "max_pages": 2,
+          "max_evidence": 50,
+          "max_output_tokens": 2048,
+          "max_input_chars": 12000,
+          "evidence_selection": {
+            "total_original_evidence": 2,
+            "selected_evidence": 2,
+            "omitted_evidence": 0,
+            "complete": true,
+            "sources": [
+              {
+                "resource_id": "58b4674f980a463299c0df6cf01aed58",
+                "source_version_id": "7e967ed0ddf44e82b0ba4cda8354ca4c",
+                "total_original_evidence": 2,
+                "selected_evidence": 2
+              }
+            ]
+          }
+        },
+        "merge_conflicts": [],
+        "relations": [],
+        "stale": false,
+        "stale_reasons": {},
+        "pages": [
+          {
+            "page_key": "112f258cb892a89fac3181dac91c632d",
+            "title": "Controller Reset Timing and Watchdog Settings",
+            "generated_sections": [
+              {
+                "heading": "Controller Setup Manual",
+                "sentences": [
+                  {
+                    "id": "48daac2d37e145c28cb8c4a53e97831d",
+                    "text": "The reset delay is 23 milliseconds. Wait for the reset delay before sending a command.",
+                    "evidence_ids": [
+                      "d030c409f19644d694b031d1ce4c8c28"
+                    ],
+                    "unsupported": false,
+                    "conflict_group": null
+                  }
+                ]
+              },
+              {
+                "heading": "Watchdog Settings",
+                "sentences": [
+                  {
+                    "id": "0eb6b508ece94c8ca71edf63ee4dbb56",
+                    "text": "The watchdog timeout is 7 seconds. Reset timing and watchdog timeout are separate settings.",
+                    "evidence_ids": [
+                      "fa303e950afa47cfbc55f51002252a44"
+                    ],
+                    "unsupported": false,
+                    "conflict_group": null
+                  }
+                ]
+              }
+            ],
+            "human_paragraphs": [],
+            "stale": false
+          }
+        ],
+        "dependency_manifest": [
+          {
+            "page_key": "112f258cb892a89fac3181dac91c632d",
+            "resource_id": "58b4674f980a463299c0df6cf01aed58",
+            "source_version_id": "7e967ed0ddf44e82b0ba4cda8354ca4c",
+            "document_id": "395116795cc84a7495f607909f7569dc",
+            "source_digest": "3d9ccbffb6eaecfa562c35351827d90286926600480a44607fc1a69c0bb491a3",
+            "parse_revision": "0193b4dafb214d6c979aad5712fc21d9",
+            "evidence_id": "d030c409f19644d694b031d1ce4c8c28",
+            "source_evidence_id": null,
+            "excerpt_digest": "bcc71d970ea083dee5cb47fb5dac8b2565c1bbeada5a8bc2848b44c0de307756",
+            "locator": {
+              "page_idx": 0,
+              "bbox": [
+                55.167999267578125,
+                48.623779296875,
+                329.41595458984375,
+                791.8897705078125
+              ],
+              "page_size": [
+                595.2755737304688,
+                841.8897705078125
+              ],
+              "kind": "text"
+            },
+            "origin_node_id": null,
+            "authority_node_id": null,
+            "source_publication": null,
+            "policy_revision": null,
+            "derivative_grant": null,
+            "retrieval_receipt_ref": null
+          },
+          {
+            "page_key": "112f258cb892a89fac3181dac91c632d",
+            "resource_id": "58b4674f980a463299c0df6cf01aed58",
+            "source_version_id": "7e967ed0ddf44e82b0ba4cda8354ca4c",
+            "document_id": "395116795cc84a7495f607909f7569dc",
+            "source_digest": "3d9ccbffb6eaecfa562c35351827d90286926600480a44607fc1a69c0bb491a3",
+            "parse_revision": "0193b4dafb214d6c979aad5712fc21d9",
+            "evidence_id": "fa303e950afa47cfbc55f51002252a44",
+            "source_evidence_id": null,
+            "excerpt_digest": "c8d34a1ddc515440df7e65fea949388c23ad047ed60d0293b193abee7e044799",
+            "locator": {
+              "page_idx": 1,
+              "bbox": [
+                55.167999267578125,
+                48.83978271484375,
+                360.0999450683594,
+                791.8897705078125
+              ],
+              "page_size": [
+                595.2755737304688,
+                841.8897705078125
+              ],
+              "kind": "text"
+            },
+            "origin_node_id": null,
+            "authority_node_id": null,
+            "source_publication": null,
+            "policy_revision": null,
+            "derivative_grant": null,
+            "retrieval_receipt_ref": null
+          }
+        ]
+      }
+    },
+    "citation_before": {
+      "detail_status": 409,
+      "backlinks_status": 409
+    },
+    "citation_after": {
+      "text": "证据预览\n待人工复核\n关闭证据\n文档\ncontroller-manual.pdf\nPDF 页\n第 2 页\n块\n#1\n原子\ntext · 原文\n块 / 原子内容\n0193b4dafb214d6c979aad5712fc21d9 · v1\n\nWatchdog settings\nThe watchdog timeout is 7 seconds. Reset timing and watchdog timeout are separate settings.\n1\n\n原子裁图 · 1:1 原始像素\nbbox 55.167999267578125, 48.83978271484375, 360.0999450683594, 791.8897705078125\n人工核对\n只做标注，不修改内容\n通过\n标疑\n驳回\n反链\n\n当前没有其他引用。",
+      "images": [
+        {
+          "complete": true,
+          "width": 658,
+          "height": 1534
+        }
+      ]
+    },
+    "requests": [
+      {
+        "url": "http://127.0.0.1:35173/api/evidence/fa303e950afa47cfbc55f51002252a44/backlinks?resource_id=58b4674f980a463299c0df6cf01aed58&version_id=7e967ed0ddf44e82b0ba4cda8354ca4c",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:35173/api/evidence/fa303e950afa47cfbc55f51002252a44?resource_id=58b4674f980a463299c0df6cf01aed58&version_id=7e967ed0ddf44e82b0ba4cda8354ca4c",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:35173/api/documents/395116795cc84a7495f607909f7569dc/crops/0193b4dafb214d6c979aad5712fc21d9/1_2fe1fe926dcd.png?resource_id=58b4674f980a463299c0df6cf01aed58&version_id=7e967ed0ddf44e82b0ba4cda8354ca4c",
+        "status": 200
+      }
+    ],
+    "bbox_quality": "historical_coarse_box_preserved; fresh_parser_pipeline_pending",
+    "full_pdf_navigation": {
+      "url": "http://127.0.0.1:35173/#/documents/395116795cc84a7495f607909f7569dc?resource_id=58b4674f980a463299c0df6cf01aed58&version_id=7e967ed0ddf44e82b0ba4cda8354ca4c&job=0193b4dafb214d6c979aad5712fc21d9&page=2&chunk=82cbd5b0c7c74c2ab4da964470c4dd11",
+      "selectedRegions": 1,
+      "canvas": true,
+      "physical_page": "2"
+    }
+  },
+  "wiki_human_revision": {
+    "current": {
+      "wiki": {
+        "id": "115f1ce0635f4625910a08e1d9bd65a4",
+        "title": "Controller reset timing and watchdog settings",
+        "current_revision_id": "2f60d48c9cbb467385020580eb0c8435",
+        "published_revision_id": null
+      },
+      "revision": {
+        "id": "2f60d48c9cbb467385020580eb0c8435",
+        "wiki_id": "115f1ce0635f4625910a08e1d9bd65a4",
+        "base_revision_id": "84304192424c4e9388c8cbe0435fed0f",
+        "kind": "human_edit",
+        "title": "Controller reset timing and watchdog settings",
+        "created_by": "f42bd8fe9c8fff6b3711ae1976958539",
+        "created_at": "2026-09-23T13:17:51.236709+00:00",
+        "provider": {
+          "model": "qwen3-1.7b",
+          "kind": "wiki_generation",
+          "semantic_verification": "not_performed"
+        },
+        "limits": {
+          "max_pages": 2,
+          "max_evidence": 50,
+          "max_output_tokens": 2048,
+          "max_input_chars": 12000,
+          "evidence_selection": {
+            "total_original_evidence": 2,
+            "selected_evidence": 2,
+            "omitted_evidence": 0,
+            "complete": true,
+            "sources": [
+              {
+                "resource_id": "58b4674f980a463299c0df6cf01aed58",
+                "source_version_id": "7e967ed0ddf44e82b0ba4cda8354ca4c",
+                "total_original_evidence": 2,
+                "selected_evidence": 2
+              }
+            ]
+          }
+        },
+        "merge_conflicts": [],
+        "relations": [],
+        "stale": false,
+        "stale_reasons": {},
+        "pages": [
+          {
+            "page_key": "112f258cb892a89fac3181dac91c632d",
+            "title": "Controller Reset Timing and Watchdog Settings",
+            "generated_sections": [
+              {
+                "heading": "Controller Setup Manual",
+                "sentences": [
+                  {
+                    "id": "48daac2d37e145c28cb8c4a53e97831d",
+                    "text": "The reset delay is 23 milliseconds. Wait for the reset delay before sending a command.",
+                    "evidence_ids": [
+                      "d030c409f19644d694b031d1ce4c8c28"
+                    ],
+                    "unsupported": false,
+                    "conflict_group": null
+                  }
+                ]
+              },
+              {
+                "heading": "Watchdog Settings",
+                "sentences": [
+                  {
+                    "id": "0eb6b508ece94c8ca71edf63ee4dbb56",
+                    "text": "The watchdog timeout is 7 seconds. Reset timing and watchdog timeout are separate settings.",
+                    "evidence_ids": [
+                      "fa303e950afa47cfbc55f51002252a44"
+                    ],
+                    "unsupported": false,
+                    "conflict_group": null
+                  }
+                ]
+              }
+            ],
+            "human_paragraphs": [
+              {
+                "id": "b94d8029-e9dc-419e-bfb4-c0c57e51314f",
+                "text": "Operator note: verify settings against the installed controller revision.",
+                "kind": "human",
+                "unsupported": true
+              }
+            ],
+            "stale": false
+          }
+        ],
+        "dependency_manifest": [
+          {
+            "page_key": "112f258cb892a89fac3181dac91c632d",
+            "resource_id": "58b4674f980a463299c0df6cf01aed58",
+            "source_version_id": "7e967ed0ddf44e82b0ba4cda8354ca4c",
+            "document_id": "395116795cc84a7495f607909f7569dc",
+            "source_digest": "3d9ccbffb6eaecfa562c35351827d90286926600480a44607fc1a69c0bb491a3",
+            "parse_revision": "0193b4dafb214d6c979aad5712fc21d9",
+            "evidence_id": "d030c409f19644d694b031d1ce4c8c28",
+            "source_evidence_id": null,
+            "excerpt_digest": "bcc71d970ea083dee5cb47fb5dac8b2565c1bbeada5a8bc2848b44c0de307756",
+            "locator": {
+              "page_idx": 0,
+              "bbox": [
+                55.167999267578125,
+                48.623779296875,
+                329.41595458984375,
+                791.8897705078125
+              ],
+              "page_size": [
+                595.2755737304688,
+                841.8897705078125
+              ],
+              "kind": "text"
+            },
+            "origin_node_id": null,
+            "authority_node_id": null,
+            "source_publication": null,
+            "policy_revision": null,
+            "derivative_grant": null,
+            "retrieval_receipt_ref": null
+          },
+          {
+            "page_key": "112f258cb892a89fac3181dac91c632d",
+            "resource_id": "58b4674f980a463299c0df6cf01aed58",
+            "source_version_id": "7e967ed0ddf44e82b0ba4cda8354ca4c",
+            "document_id": "395116795cc84a7495f607909f7569dc",
+            "source_digest": "3d9ccbffb6eaecfa562c35351827d90286926600480a44607fc1a69c0bb491a3",
+            "parse_revision": "0193b4dafb214d6c979aad5712fc21d9",
+            "evidence_id": "fa303e950afa47cfbc55f51002252a44",
+            "source_evidence_id": null,
+            "excerpt_digest": "c8d34a1ddc515440df7e65fea949388c23ad047ed60d0293b193abee7e044799",
+            "locator": {
+              "page_idx": 1,
+              "bbox": [
+                55.167999267578125,
+                48.83978271484375,
+                360.0999450683594,
+                791.8897705078125
+              ],
+              "page_size": [
+                595.2755737304688,
+                841.8897705078125
+              ],
+              "kind": "text"
+            },
+            "origin_node_id": null,
+            "authority_node_id": null,
+            "source_publication": null,
+            "policy_revision": null,
+            "derivative_grant": null,
+            "retrieval_receipt_ref": null
+          }
+        ]
+      }
+    },
+    "original_revision_id": "84304192424c4e9388c8cbe0435fed0f",
+    "original_human_paragraphs": [],
+    "historical_browser_reload": {
+      "url": "http://127.0.0.1:35173/#/wiki?wiki_id=115f1ce0635f4625910a08e1d9bd65a4&revision_id=84304192424c4e9388c8cbe0435fed0f",
+      "historical": true,
+      "originalHasHumanNote": false,
+      "claimTexts": [
+        "The reset delay is 23 milliseconds. Wait for the reset delay before sending a command.引用 1 条",
+        "The watchdog timeout is 7 seconds. Reset timing and watchdog timeout are separate settings.引用 1 条"
+      ],
+      "fixedLink": "http://127.0.0.1:35173/#/wiki?wiki_id=115f1ce0635f4625910a08e1d9bd65a4&revision_id=84304192424c4e9388c8cbe0435fed0f"
+    },
+    "current_revision_restored": "http://127.0.0.1:35173/#/wiki?wiki_id=115f1ce0635f4625910a08e1d9bd65a4"
+  },
+  "historical_private_index_recovery": {
+    "retry_http_status": 202,
+    "document": {
+      "path": "/api/documents/dd33732d32c849c998538166cc404521",
+      "status": 200,
+      "data": {
+        "id": "dd33732d32c849c998538166cc404521",
+        "resource_id": "f2672b8cdeea42248aa8605eed069d79",
+        "source_version_id": "6ee4fb86827e4e7c9e3241f4f8d936bb",
+        "filename": "controller-manual.pdf",
+        "doc_id": "e767746230fdaf6921446e4ee31abcea6bc8acd1126cd3ee85c3a6a44eab6833",
+        "origin": "web",
+        "mime": "application/pdf",
+        "size_bytes": 2527,
+        "page_count": 2,
+        "status": "succeeded",
+        "error": null,
+        "index_status": "ready",
+        "index_error": null,
+        "compile_status": "ready",
+        "compile_degraded": [],
+        "compile_fingerprint": "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b",
+        "layout_version": "ddp-layout/1",
+        "code_detection": "heuristic",
+        "current_job_id": "96849846d3394c968ef8defd4fd71848",
+        "created_at": "2026-09-23T09:02:25.971058Z",
+        "uploaders": [
+          "v3-same-name-reader"
+        ],
+        "can_delete": true
+      }
+    },
+    "evidence": {
+      "path": "/api/evidence/3c93419f97b747658df3999e339f2c31",
+      "status": 200,
+      "data": {
+        "resource_id": "f2672b8cdeea42248aa8605eed069d79",
+        "source_version_id": "6ee4fb86827e4e7c9e3241f4f8d936bb",
+        "source_digest": "e767746230fdaf6921446e4ee31abcea6bc8acd1126cd3ee85c3a6a44eab6833",
+        "parse_revision": "96849846d3394c968ef8defd4fd71848",
+        "id": "3c93419f97b747658df3999e339f2c31",
+        "document": {
+          "id": "dd33732d32c849c998538166cc404521",
+          "filename": "controller-manual.pdf"
+        },
+        "page_idx": 0,
+        "seq": 0,
+        "parse_job_id": "96849846d3394c968ef8defd4fd71848",
+        "doc_version": 1,
+        "bbox": [
+          55.167999267578125,
+          48.623779296875,
+          329.41595458984375,
+          791.8897705078125
+        ],
+        "page_size": [
+          595.2755737304688,
+          841.8897705078125
+        ],
+        "kind": "text",
+        "content": "Controller setup manual\nThe reset delay is 17 milliseconds. Wait for the reset delay before sending a command.\ni",
+        "source_type": "source",
+        "derived_from": null,
+        "crop_url": "/api/documents/dd33732d32c849c998538166cc404521/crops/96849846d3394c968ef8defd4fd71848/0_c937decbef01.png",
+        "review_state": "unreviewed",
+        "chunk_id": "11da0755fab6449cb767a6f8cd8e9c30",
+        "verifications": []
+      }
+    },
+    "old_chunk_id": "2ea461bc46954222bc14f205b9edcae1",
+    "evidence_identity_preserved": true,
+    "native_artifact_reparsed": false
+  },
+  "embedding_outage": {
+    "failed_index": {
+      "status": 200,
+      "data": {
+        "id": "dd33732d32c849c998538166cc404521",
+        "resource_id": "f2672b8cdeea42248aa8605eed069d79",
+        "source_version_id": "6ee4fb86827e4e7c9e3241f4f8d936bb",
+        "filename": "controller-manual.pdf",
+        "doc_id": "e767746230fdaf6921446e4ee31abcea6bc8acd1126cd3ee85c3a6a44eab6833",
+        "origin": "web",
+        "mime": "application/pdf",
+        "size_bytes": 2527,
+        "page_count": 2,
+        "status": "succeeded",
+        "error": null,
+        "index_status": "failed",
+        "index_error": "向量化失败：UpstreamError: upstream returned 502: {\"error\":{\"message\":\"embedding runtime unreachable: Expecting value: line 1 column 1 (char 0)\",\"type\":\"upstream_error\",\"code\":\"embedding_unreachable\"}}",
+        "compile_status": "ready",
+        "compile_degraded": [],
+        "compile_fingerprint": "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b",
+        "layout_version": "ddp-layout/1",
+        "code_detection": "heuristic",
+        "current_job_id": "96849846d3394c968ef8defd4fd71848",
+        "created_at": "2026-09-23T09:02:25.971058Z",
+        "uploaders": [
+          "v3-same-name-reader"
+        ],
+        "can_delete": true
+      }
+    },
+    "visible_index_failure": true,
+    "keyword_fallback": {
+      "url": "http://127.0.0.1:35173/#/search?q=What+processor+cores+does+Raspberry+Pi+Pico+use,+and+what+is+their+maximum+clock+frequency?",
+      "degradedVisible": true,
+      "hits": [
+        {
+          "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=25e0182d494449bf909b4c3d326fb160&page=25",
+          "text": "PDF 第 25 页\nRaspberry Pi Pico Datasheet Appendix A. Availability Raspberry Pi guarantee availability of the Raspberry Pi Pico product until at least January 2028. A.1. Support Pico section of the Raspberry Pi doc"
+        },
+        {
+          "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=e8f35913c78d4703a3d4cf317c7fecb6&page=6",
+          "text": "PDF 第 6 页\nFROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS DESIGN. . Note that Raspbe"
+        },
+        {
+          "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=31ad7a919e0648c8acb9dff31fdc17d3&page=7",
+          "text": "PDF 第 7 页\nRaspberry Pi Pico Datasheet 2. Mechanical specification The Raspberry Pi Pico is a single sided 51×21 mm 1 mm thick PCB with a micro-USB port overhanging the top edge and dual castellated/through-hole"
+        },
+        {
+          "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=bbebb0b7a92643858653c21bff8f5fd1&page=4",
+          "text": "PDF 第 4 页\nRaspberry Pi Pico Datasheet 1. About Raspberry Pi Pico Raspberry Pi Pico is a microcontroller board based on the Raspberry Pi RP2040 microcontroller chip. Figure The Raspberry Pi Pico Rev3 board. 1 ."
+        },
+        {
+          "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=139621e268954470b6eb18183b223188&page=18",
+          "text": "PDF 第 18 页\nRaspberry Pi Pico Datasheet Table {boardname} running the current @5V (mA) Temperature (°C) −25 4 . binary. Board is in mode hello_dormant DORMANT Pico board VBUS 25 85 0.78 1.34 1 1.16 2 1.19 0.92 1."
+        }
+      ]
+    },
+    "worker_pause_did_not_stop_reconciliation": true,
+    "recovery_state": "ready",
+    "durable_worker_restart_proof": "not_yet_tested: API reconciler also executes pending indexes",
+    "recovered_index": {
+      "status": 200,
+      "data": {
+        "id": "dd33732d32c849c998538166cc404521",
+        "resource_id": "f2672b8cdeea42248aa8605eed069d79",
+        "source_version_id": "6ee4fb86827e4e7c9e3241f4f8d936bb",
+        "filename": "controller-manual.pdf",
+        "doc_id": "e767746230fdaf6921446e4ee31abcea6bc8acd1126cd3ee85c3a6a44eab6833",
+        "origin": "web",
+        "mime": "application/pdf",
+        "size_bytes": 2527,
+        "page_count": 2,
+        "status": "succeeded",
+        "error": null,
+        "index_status": "ready",
+        "index_error": null,
+        "compile_status": "ready",
+        "compile_degraded": [],
+        "compile_fingerprint": "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b",
+        "layout_version": "ddp-layout/1",
+        "code_detection": "heuristic",
+        "current_job_id": "96849846d3394c968ef8defd4fd71848",
+        "created_at": "2026-09-23T09:02:25.971058Z",
+        "uploaders": [
+          "v3-same-name-reader"
+        ],
+        "can_delete": true
+      }
+    }
+  },
+  "cross_document_search_before_fresh_parse": {
+    "url": "http://127.0.0.1:35173/#/search?q=Compare+the+SRAM+capacities+of+Raspberry+Pi+Pico+and+ESP32.",
+    "degraded": null,
+    "groups": [
+      {
+        "filename": "esp32-datasheet.pdf",
+        "source": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0",
+        "hits": [
+          {
+            "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=fa6961c122a341ee86efa82eaa92acae&page=11",
+            "text": "PDF 第 11 页\n66%\n1 ESP32 Series Comparison ESP32 Series Comparison 1 Nomenclature 1.1 2 D R H WD 3 0 V Q 6 ESP 32 Chip revision v3.0 or newer Package Q N/A: High temperature In-package PSRAM 2 6 : QFN QFN 6 5 6 5 * *"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=880df7d0a51746d5bd228d383a96800e&page=9",
+            "text": "PDF 第 9 页\n65%\n1-1 ESP32 Series Comparison 2-1 Pin Overview 2-2 Analog Pins 2-3 Power Pins 2-4 Description of Timing Parameters for Power-up and Reset 2-5 Pin-to-Pin Mapping Between Chip and In-Package Flash/PSRAM 2"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=004433b8f31c41658ac13c09539c1ad3&page=41",
+            "text": "PDF 第 41 页\n63%\nFor more information about the pin assignment, see Section ESP32 Technical Reference Manual Peripheral Pin Configurations IO_MUX and GPIO Matrix and 4.10 > Chapter . SDIO/SPI Slave Controller 4.8.11 E"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=fa77e334d2f340cbbcab15d91bd682ad&page=2",
+            "text": "PDF 第 2 页\n62%\nProduct Overview ESP32 is a single 2.4 GHz Wi-Fi-and-Bluetooth combo chip designed with the TSMC low-power 40 nm technology. It is designed to achieve the best power and RF performance, showing robust"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=acab888ec77b4527aa7929dd6635d02a&page=36",
+            "text": "PDF 第 36 页\n62%\nother functions, such as the SDIO, UART, SPI, etc. (More details can be found in the . ) For low-power operations, the GPIOs can be set to hold their states. Peripheral Pin Configurations ESP32 Techni"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=76603596fb564e83b3154c1704c4641e&page=26",
+            "text": "PDF 第 26 页\n61%\nInstruction Set Architecture, please refer to Instruction Set Architecture (ISA) Summary Xtensa . Internal Memory ESP32’s internal memory includes: 448 KB of ROM for booting and core functions 520 KB"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=cf11a1f9fd3249edb64db8c9c4221347&page=27",
+            "text": "PDF 第 27 页\n61%\n4 Functional Description External Flash and RAM ESP32 supports multiple external QSPI flash and external RAM (SRAM) chips. More details can be found in ESP32 Technical Reference Manual 4.1.3"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=785848fdae3c43f48779bcc7a846e74e&page=60",
+            "text": "PDF 第 60 页\n56%\nRelated Documentation and Resources Related Documentation and Resources Related Documentation Technical Hardware and Series Certificates https://espressif.com/en/support/documents/certificates ESP32 P"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=f9d6eb69d7b84f74896a2639d7d75590&page=21",
+            "text": "PDF 第 21 页\n60%\n2 Pins Table 2-6 – cont’d from previous page Chip Pin Chip Pin SD_DATA_1 SD_DATA_0 SD_DATA_3 SD_DATA_2 SD_CLK/GPIO17 2 Off-Package PSRAM Off-Package PSRAM SIO0/SI SIO1/SO SIO2 SIO3 SCLK CE# VSS VDD 3"
+          }
+        ]
+      },
+      {
+        "filename": "pico-datasheet.pdf",
+        "source": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c",
+        "hits": [
+          {
+            "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=31ad7a919e0648c8acb9dff31fdc17d3&page=7",
+            "text": "PDF 第 7 页\n60%\nRaspberry Pi Pico Datasheet 2. Mechanical specification The Raspberry Pi Pico is a single sided 51×21 mm 1 mm thick PCB with a micro-USB port overhanging the top edge and dual castellated/through-hole"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=25e0182d494449bf909b4c3d326fb160&page=25",
+            "text": "PDF 第 25 页\n56%\nRaspberry Pi Pico Datasheet Appendix A. Availability Raspberry Pi guarantee availability of the Raspberry Pi Pico product until at least January 2028. A.1. Support Pico section of the Raspberry Pi doc"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=e8f35913c78d4703a3d4cf317c7fecb6&page=6",
+            "text": "PDF 第 6 页\n53%\nFROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS DESIGN. . Note that Raspbe"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=bbebb0b7a92643858653c21bff8f5fd1&page=4",
+            "text": "PDF 第 4 页\n57%\nRaspberry Pi Pico Datasheet 1. About Raspberry Pi Pico Raspberry Pi Pico is a microcontroller board based on the Raspberry Pi RP2040 microcontroller chip. Figure The Raspberry Pi Pico Rev3 board. 1 ."
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=670075ad9c9e4ca195da52c11958d506&page=3",
+            "text": "PDF 第 3 页\n55%\nRaspberry Pi Pico Datasheet Table of Contents About Raspberry Pi Pico 1. 3 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ."
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=057356b3225d4b1dbe56d4273206d1ed&page=8",
+            "text": "PDF 第 8 页\n57%\nRaspberry Pi Pico Datasheet Figure The pin numbering of the Raspberry Pi Pico Rev3 board. 4 . Note , for the pin allocation see or the full Raspberry Pi Pico schematics The physical pin numbering is s"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=16137b197da247a9aa1885926021474a&page=1",
+            "text": "PDF 第 1 页\n51%\n| Raspberry Pi Raspberry Pi Pico Datasheet Datasheet Raspberry Pi Pico Datasheet An RP2040-based microcontroller board Raspberry Pi Ltd"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=23609b4668f24ea187bba299daef1697&page=9",
+            "text": "PDF 第 9 页\n61%\nRaspberry Pi Pico Datasheet"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=4051f5bdec58444085407870a6acc392&page=5",
+            "text": "PDF 第 5 页\n61%\nRaspberry Pi Pico Datasheet"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=a1add2e342d04cb19087f0ff7a248e9e&page=5",
+            "text": "PDF 第 5 页\n52%\nGetting started with Raspberry Pi Pico-series install the C/C++ SDK and build the example C programs. See the with MicroPython, which is the fastest way to get code running on Pico. book walks through"
+          },
+          {
+            "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=a2d3254d61314df885d18c6cc188b830&page=24",
+            "text": "PDF 第 24 页\n57%\nRaspberry Pi Pico Datasheet 4.7. USB RP2040 has an integrated USB1.1 PHY and controller which can be used in both Device and Host mode. Pico adds the two required external resistors and brings this in"
+          }
+        ]
+      }
+    ]
+  },
+  "fresh_publisher_imports": {
+    "initial_imports": [
+      {
+        "resource": {
+          "id": "9062dda0a77548d6baa565ceb28cef48",
+          "organization_id": "4d676ba5d26e8628b8a7e9c40872131b",
+          "owner_id": "f42bd8fe9c8fff6b3711ae1976958539",
+          "uploader_ref": {
+            "issuer": "4d676ba5d26e8628b8a7e9c40872131b",
+            "subject": "f42bd8fe9c8fff6b3711ae1976958539"
+          },
+          "display_name": "pico-datasheet.pdf",
+          "publication": "private",
+          "copied_from": null,
+          "created_at": "2026-09-23T13:45:40.021822+00:00",
+          "updated_at": "2026-09-23T13:45:40.021825+00:00",
+          "versions": [
+            {
+              "id": "4bc5ab05fd764193887bde3d07b2737e",
+              "resource_id": "9062dda0a77548d6baa565ceb28cef48",
+              "version_no": 1,
+              "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+              "source_digest": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_digest_verified": true,
+              "filename": "pico-datasheet.pdf",
+              "size_bytes": 18176869,
+              "parse_job_id": "115378a316fe440dba139f855feac8b2",
+              "created_at": "2026-09-23T13:45:40.023496+00:00"
+            }
+          ]
+        },
+        "document": {
+          "id": "0fe58045cf6447f297efa4e0f06ac9c4",
+          "resource_id": "9062dda0a77548d6baa565ceb28cef48",
+          "source_version_id": "4bc5ab05fd764193887bde3d07b2737e",
+          "filename": "pico-datasheet.pdf",
+          "doc_id": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+          "origin": "web",
+          "mime": "application/pdf",
+          "size_bytes": 18176869,
+          "page_count": 0,
+          "status": "failed",
+          "error": "service rejected the task: service returned 404: {\"error\":{\"message\":\"unknown parse engine: mineru\",\"type\":\"invalid_request_error\",\"code\":\"unknown_engine\"}}",
+          "index_status": "none",
+          "index_error": null,
+          "compile_status": "none",
+          "compile_degraded": [],
+          "compile_fingerprint": "",
+          "layout_version": "",
+          "code_detection": "unavailable",
+          "current_job_id": "115378a316fe440dba139f855feac8b2",
+          "created_at": "2026-09-23T13:45:40.023496Z",
+          "uploaders": [
+            "v3-same-name-reader"
+          ],
+          "can_delete": true
+        }
+      },
+      {
+        "resource": {
+          "id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+          "organization_id": "4d676ba5d26e8628b8a7e9c40872131b",
+          "owner_id": "f42bd8fe9c8fff6b3711ae1976958539",
+          "uploader_ref": {
+            "issuer": "4d676ba5d26e8628b8a7e9c40872131b",
+            "subject": "f42bd8fe9c8fff6b3711ae1976958539"
+          },
+          "display_name": "attention-is-all-you-need.pdf",
+          "publication": "private",
+          "copied_from": null,
+          "created_at": "2026-09-23T13:45:39.970296+00:00",
+          "updated_at": "2026-09-23T13:45:39.970298+00:00",
+          "versions": [
+            {
+              "id": "7564c1b1c80c49d29f771e69cb4e6d67",
+              "resource_id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+              "version_no": 1,
+              "document_id": "48f5edc41df343d285ead2dc3e6834bf",
+              "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+              "source_digest_verified": true,
+              "filename": "attention-is-all-you-need.pdf",
+              "size_bytes": 2215244,
+              "parse_job_id": "accd2d1942ee45f79716d3d6050533e2",
+              "created_at": "2026-09-23T13:45:39.971425+00:00"
+            }
+          ]
+        },
+        "document": {
+          "id": "48f5edc41df343d285ead2dc3e6834bf",
+          "resource_id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+          "source_version_id": "7564c1b1c80c49d29f771e69cb4e6d67",
+          "filename": "attention-is-all-you-need.pdf",
+          "doc_id": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+          "origin": "web",
+          "mime": "application/pdf",
+          "size_bytes": 2215244,
+          "page_count": 0,
+          "status": "failed",
+          "error": "service rejected the task: service returned 404: {\"error\":{\"message\":\"unknown parse engine: mineru\",\"type\":\"invalid_request_error\",\"code\":\"unknown_engine\"}}",
+          "index_status": "none",
+          "index_error": null,
+          "compile_status": "none",
+          "compile_degraded": [],
+          "compile_fingerprint": "",
+          "layout_version": "",
+          "code_detection": "unavailable",
+          "current_job_id": "accd2d1942ee45f79716d3d6050533e2",
+          "created_at": "2026-09-23T13:45:39.971425Z",
+          "uploaders": [
+            "v3-same-name-reader"
+          ],
+          "can_delete": true
+        }
+      },
+      {
+        "resource": {
+          "id": "820bdc40011744f9861c3263e65c86c9",
+          "organization_id": "4d676ba5d26e8628b8a7e9c40872131b",
+          "owner_id": "f42bd8fe9c8fff6b3711ae1976958539",
+          "uploader_ref": {
+            "issuer": "4d676ba5d26e8628b8a7e9c40872131b",
+            "subject": "f42bd8fe9c8fff6b3711ae1976958539"
+          },
+          "display_name": "esp32-datasheet.pdf",
+          "publication": "private",
+          "copied_from": null,
+          "created_at": "2026-09-23T13:45:39.909138+00:00",
+          "updated_at": "2026-09-23T13:45:39.909141+00:00",
+          "versions": [
+            {
+              "id": "e942acaa94e346ebbecf8e50e1787434",
+              "resource_id": "820bdc40011744f9861c3263e65c86c9",
+              "version_no": 1,
+              "document_id": "f987aec984ec4405866aca55b9a2eec8",
+              "source_digest": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+              "source_digest_verified": true,
+              "filename": "esp32-datasheet.pdf",
+              "size_bytes": 989523,
+              "parse_job_id": "9bc939d792004b83845bad4315015600",
+              "created_at": "2026-09-23T13:45:39.914098+00:00"
+            }
+          ]
+        },
+        "document": {
+          "id": "f987aec984ec4405866aca55b9a2eec8",
+          "resource_id": "820bdc40011744f9861c3263e65c86c9",
+          "source_version_id": "e942acaa94e346ebbecf8e50e1787434",
+          "filename": "esp32-datasheet.pdf",
+          "doc_id": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+          "origin": "web",
+          "mime": "application/pdf",
+          "size_bytes": 989523,
+          "page_count": 0,
+          "status": "failed",
+          "error": "service rejected the task: service returned 404: {\"error\":{\"message\":\"unknown parse engine: mineru\",\"type\":\"invalid_request_error\",\"code\":\"unknown_engine\"}}",
+          "index_status": "none",
+          "index_error": null,
+          "compile_status": "none",
+          "compile_degraded": [],
+          "compile_fingerprint": "",
+          "layout_version": "",
+          "code_detection": "unavailable",
+          "current_job_id": "9bc939d792004b83845bad4315015600",
+          "created_at": "2026-09-23T13:45:39.914098Z",
+          "uploaders": [
+            "v3-same-name-reader"
+          ],
+          "can_delete": true
+        }
+      }
+    ],
+    "configuration_failure": "The verifier Web dev process omitted VITE_DEFAULT_ENGINE and sent mineru; registry correctly rejected all three attempts with unknown_engine.",
+    "corrected_web_environment": {
+      "VITE_API_TARGET": "http://127.0.0.1:33430",
+      "VITE_DEFAULT_ENGINE": "borndigital"
+    },
+    "pico_selection": {
+      "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4/versions?resource_id=9062dda0a77548d6baa565ceb28cef48&version_id=41fc0a7d7eeb4475a6ab396525750e0d",
+      "body": "DeepDocParse\n工作区\n资源库\n文档库\n结构化抽取\n全文检索\n联邦任务\n知识 Wiki\n实体图谱\n开发者\nAPI Key\n用量\n账号\n成员与角色\n设置\n解析版本\nv3-same-name-reader\n← 工作台\n刷新\n换参数重新解析\n版本\n\t\n引擎\n\t\n参数\n\t\n状态\n\t\n页数\n\t\n完成时间\n\t\n操作\n暂无数据\n文档解析由\nMinerU\n提供支持\n\n已切换当前版本，索引将重建"
+    },
+    "esp32_retry": {
+      "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8/versions?resource_id=820bdc40011744f9861c3263e65c86c9&version_id=e942acaa94e346ebbecf8e50e1787434",
+      "dialogText": "换参数重新解析\n解析引擎\nBorn-digital（无 GPU）\n直接抽 PDF 文字层与坐标，出处三件套一样齐全；不处理扫描件、表格结构与公式\n同一组参数已经解析过时会直接复用，不会重复消耗额度\n取消\n提交"
+    },
+    "esp32_polling": {
+      "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8/versions?resource_id=820bdc40011744f9861c3263e65c86c9&version_id=e942acaa94e346ebbecf8e50e1787434",
+      "body": "DeepDocParse\n工作区\n资源库\n文档库\n结构化抽取\n全文检索\n联邦任务\n知识 Wiki\n实体图谱\n开发者\nAPI Key\n用量\n账号\n成员与角色\n设置\n解析版本\nv3-same-name-reader\n← 工作台\nesp32-datasheet.pdf\n刷新\n换参数重新解析\n版本\n\t\n引擎\n\t\n参数\n\t\n状态\n\t\n页数\n\t\n完成时间\n\t\n操作\nv3 · 470cb463\n\t\nborndigital\n\t\n默认\n\t\n已完成\n\t\n78\n\t\n2026/9/23 22:05:33\n\t\n设为当前\n\n\nv2 · 9bc939d7当前\n\t\nmineru\n\t\n{\"backend\":\"pipeline\"}\n\t\n失败\n\t\n0\n\t\n—\n\t\n设为当前\n文档解析由\nMinerU\n提供支持",
+      "manual_reload": false
+    },
+    "esp32_selected_url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8/versions?resource_id=820bdc40011744f9861c3263e65c86c9&version_id=d23f145778d345b8b3c7e3cf55444ab8",
+    "attention_retry": {
+      "url": "http://127.0.0.1:35173/#/documents/48f5edc41df343d285ead2dc3e6834bf/versions?resource_id=4bf310f908734c0983f6c1fb6f4cfe2f&version_id=7564c1b1c80c49d29f771e69cb4e6d67",
+      "dialogText": "换参数重新解析\n解析引擎\nBorn-digital（无 GPU）\n直接抽 PDF 文字层与坐标，出处三件套一样齐全；不处理扫描件、表格结构与公式\n同一组参数已经解析过时会直接复用，不会重复消耗额度\n取消\n提交"
+    },
+    "state": "parsed_and_indexed",
+    "attention_selected_url": "http://127.0.0.1:35173/#/documents/48f5edc41df343d285ead2dc3e6834bf/versions?resource_id=4bf310f908734c0983f6c1fb6f4cfe2f&version_id=8f70ddbb13384d388d7a1ced1a9c554b",
+    "pipeline": [
+      {
+        "source": "pico",
+        "resource": {
+          "id": "9062dda0a77548d6baa565ceb28cef48",
+          "organization_id": "4d676ba5d26e8628b8a7e9c40872131b",
+          "owner_id": "f42bd8fe9c8fff6b3711ae1976958539",
+          "uploader_ref": {
+            "issuer": "4d676ba5d26e8628b8a7e9c40872131b",
+            "subject": "f42bd8fe9c8fff6b3711ae1976958539"
+          },
+          "display_name": "pico-datasheet.pdf",
+          "publication": "private",
+          "copied_from": null,
+          "created_at": "2026-09-23T13:45:40.021822+00:00",
+          "updated_at": "2026-09-23T14:03:52.352595+00:00",
+          "versions": [
+            {
+              "id": "4bc5ab05fd764193887bde3d07b2737e",
+              "resource_id": "9062dda0a77548d6baa565ceb28cef48",
+              "version_no": 1,
+              "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+              "source_digest": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_digest_verified": true,
+              "filename": "pico-datasheet.pdf",
+              "size_bytes": 18176869,
+              "parse_job_id": "115378a316fe440dba139f855feac8b2",
+              "created_at": "2026-09-23T13:45:40.023496+00:00"
+            },
+            {
+              "id": "41fc0a7d7eeb4475a6ab396525750e0d",
+              "resource_id": "9062dda0a77548d6baa565ceb28cef48",
+              "version_no": 2,
+              "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+              "source_digest": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+              "source_digest_verified": true,
+              "filename": "pico-datasheet.pdf",
+              "size_bytes": 18176869,
+              "parse_job_id": "09b6b483d11c41d58e00ac91d9b0f7db",
+              "created_at": "2026-09-23T14:03:52.354028+00:00"
+            }
+          ]
+        },
+        "version": {
+          "id": "41fc0a7d7eeb4475a6ab396525750e0d",
+          "resource_id": "9062dda0a77548d6baa565ceb28cef48",
+          "version_no": 2,
+          "document_id": "0fe58045cf6447f297efa4e0f06ac9c4",
+          "source_digest": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+          "source_digest_verified": true,
+          "filename": "pico-datasheet.pdf",
+          "size_bytes": 18176869,
+          "parse_job_id": "09b6b483d11c41d58e00ac91d9b0f7db",
+          "created_at": "2026-09-23T14:03:52.354028+00:00"
+        },
+        "document": {
+          "id": "0fe58045cf6447f297efa4e0f06ac9c4",
+          "resource_id": "9062dda0a77548d6baa565ceb28cef48",
+          "source_version_id": "41fc0a7d7eeb4475a6ab396525750e0d",
+          "filename": "pico-datasheet.pdf",
+          "doc_id": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+          "origin": "web",
+          "mime": "application/pdf",
+          "size_bytes": 18176869,
+          "page_count": 31,
+          "status": "succeeded",
+          "error": null,
+          "index_status": "ready",
+          "index_error": null,
+          "compile_status": "partial",
+          "compile_degraded": [
+            "vision_unavailable"
+          ],
+          "compile_fingerprint": "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b",
+          "layout_version": "ddp-layout/1",
+          "code_detection": "heuristic",
+          "current_job_id": "09b6b483d11c41d58e00ac91d9b0f7db",
+          "created_at": "2026-09-23T14:03:52.354028Z",
+          "uploaders": [
+            "v3-same-name-reader"
+          ],
+          "can_delete": true
+        },
+        "layout": {
+          "engine": "borndigital",
+          "layout_version": "ddp-layout/1",
+          "pages": 31,
+          "blocks": 295
+        },
+        "checks": [
+          {
+            "case_id": "pico-core-frequency",
+            "page_index": 3,
+            "excerpt": "Dual-core cortex M0+ at up to 133 MHz",
+            "preserved": true,
+            "regions": [
+              [
+                71.53014373779297,
+                474.5745849609375,
+                524.1144409179688,
+                763.6390609741211
+              ]
+            ]
+          },
+          {
+            "case_id": "pico-esp32-sram-compare",
+            "page_index": 3,
+            "excerpt": "264 kB multi-bank high performance SRAM",
+            "preserved": true,
+            "regions": [
+              [
+                71.53014373779297,
+                474.5745849609375,
+                524.1144409179688,
+                763.6390609741211
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "source": "attention",
+        "resource": {
+          "id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+          "organization_id": "4d676ba5d26e8628b8a7e9c40872131b",
+          "owner_id": "f42bd8fe9c8fff6b3711ae1976958539",
+          "uploader_ref": {
+            "issuer": "4d676ba5d26e8628b8a7e9c40872131b",
+            "subject": "f42bd8fe9c8fff6b3711ae1976958539"
+          },
+          "display_name": "attention-is-all-you-need.pdf",
+          "publication": "private",
+          "copied_from": null,
+          "created_at": "2026-09-23T13:45:39.970296+00:00",
+          "updated_at": "2026-09-23T14:07:36.840408+00:00",
+          "versions": [
+            {
+              "id": "7564c1b1c80c49d29f771e69cb4e6d67",
+              "resource_id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+              "version_no": 1,
+              "document_id": "48f5edc41df343d285ead2dc3e6834bf",
+              "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+              "source_digest_verified": true,
+              "filename": "attention-is-all-you-need.pdf",
+              "size_bytes": 2215244,
+              "parse_job_id": "accd2d1942ee45f79716d3d6050533e2",
+              "created_at": "2026-09-23T13:45:39.971425+00:00"
+            },
+            {
+              "id": "8f70ddbb13384d388d7a1ced1a9c554b",
+              "resource_id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+              "version_no": 2,
+              "document_id": "48f5edc41df343d285ead2dc3e6834bf",
+              "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+              "source_digest_verified": true,
+              "filename": "attention-is-all-you-need.pdf",
+              "size_bytes": 2215244,
+              "parse_job_id": "20ffa502b6294e068a21b7e73c427399",
+              "created_at": "2026-09-23T14:07:36.840968+00:00"
+            }
+          ]
+        },
+        "version": {
+          "id": "8f70ddbb13384d388d7a1ced1a9c554b",
+          "resource_id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+          "version_no": 2,
+          "document_id": "48f5edc41df343d285ead2dc3e6834bf",
+          "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+          "source_digest_verified": true,
+          "filename": "attention-is-all-you-need.pdf",
+          "size_bytes": 2215244,
+          "parse_job_id": "20ffa502b6294e068a21b7e73c427399",
+          "created_at": "2026-09-23T14:07:36.840968+00:00"
+        },
+        "document": {
+          "id": "48f5edc41df343d285ead2dc3e6834bf",
+          "resource_id": "4bf310f908734c0983f6c1fb6f4cfe2f",
+          "source_version_id": "8f70ddbb13384d388d7a1ced1a9c554b",
+          "filename": "attention-is-all-you-need.pdf",
+          "doc_id": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+          "origin": "web",
+          "mime": "application/pdf",
+          "size_bytes": 2215244,
+          "page_count": 15,
+          "status": "succeeded",
+          "error": null,
+          "index_status": "ready",
+          "index_error": null,
+          "compile_status": "ready",
+          "compile_degraded": [],
+          "compile_fingerprint": "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b",
+          "layout_version": "ddp-layout/1",
+          "code_detection": "heuristic",
+          "current_job_id": "20ffa502b6294e068a21b7e73c427399",
+          "created_at": "2026-09-23T14:07:36.840968Z",
+          "uploaders": [
+            "v3-same-name-reader"
+          ],
+          "can_delete": true
+        },
+        "layout": {
+          "engine": "borndigital",
+          "layout_version": "ddp-layout/1",
+          "pages": 15,
+          "blocks": 408
+        },
+        "checks": [
+          {
+            "case_id": "attention-en-de-bleu",
+            "page_index": 0,
+            "excerpt": "Our model achieves 28.4 BLEU on the WMT 2014 English",
+            "preserved": true,
+            "regions": [
+              [
+                143.72975158691406,
+                414.1605529785156,
+                469.2992248535156,
+                575.8538818359375
+              ]
+            ]
+          },
+          {
+            "case_id": "attention-en-de-bleu",
+            "page_index": 0,
+            "excerpt": "ensembles, by over 2 BLEU",
+            "preserved": true,
+            "regions": [
+              [
+                143.72975158691406,
+                414.1605529785156,
+                469.2992248535156,
+                575.8538818359375
+              ]
+            ]
+          },
+          {
+            "case_id": "attention-multi-head",
+            "page_index": 4,
+            "excerpt": "In this work we employ h = 8 parallel attention layers, or heads.",
+            "preserved": true,
+            "regions": [
+              [
+                107.58081817626953,
+                206.5035400390625,
+                504.0072021484375,
+                265.90887451171875
+              ]
+            ]
+          },
+          {
+            "case_id": "attention-multi-head",
+            "page_index": 4,
+            "excerpt": "dk = dv = dmodel/h = 64",
+            "preserved": true,
+            "regions": [
+              [
+                107.58081817626953,
+                206.5035400390625,
+                504.0072021484375,
+                265.90887451171875
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "source": "esp32",
+        "resource": {
+          "id": "820bdc40011744f9861c3263e65c86c9",
+          "organization_id": "4d676ba5d26e8628b8a7e9c40872131b",
+          "owner_id": "f42bd8fe9c8fff6b3711ae1976958539",
+          "uploader_ref": {
+            "issuer": "4d676ba5d26e8628b8a7e9c40872131b",
+            "subject": "f42bd8fe9c8fff6b3711ae1976958539"
+          },
+          "display_name": "esp32-datasheet.pdf",
+          "publication": "private",
+          "copied_from": null,
+          "created_at": "2026-09-23T13:45:39.909138+00:00",
+          "updated_at": "2026-09-23T14:05:33.770832+00:00",
+          "versions": [
+            {
+              "id": "e942acaa94e346ebbecf8e50e1787434",
+              "resource_id": "820bdc40011744f9861c3263e65c86c9",
+              "version_no": 1,
+              "document_id": "f987aec984ec4405866aca55b9a2eec8",
+              "source_digest": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+              "source_digest_verified": true,
+              "filename": "esp32-datasheet.pdf",
+              "size_bytes": 989523,
+              "parse_job_id": "9bc939d792004b83845bad4315015600",
+              "created_at": "2026-09-23T13:45:39.914098+00:00"
+            },
+            {
+              "id": "d23f145778d345b8b3c7e3cf55444ab8",
+              "resource_id": "820bdc40011744f9861c3263e65c86c9",
+              "version_no": 2,
+              "document_id": "f987aec984ec4405866aca55b9a2eec8",
+              "source_digest": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+              "source_digest_verified": true,
+              "filename": "esp32-datasheet.pdf",
+              "size_bytes": 989523,
+              "parse_job_id": "470cb463257f439dbcbb671ab1c6bcd4",
+              "created_at": "2026-09-23T14:05:33.772233+00:00"
+            }
+          ]
+        },
+        "version": {
+          "id": "d23f145778d345b8b3c7e3cf55444ab8",
+          "resource_id": "820bdc40011744f9861c3263e65c86c9",
+          "version_no": 2,
+          "document_id": "f987aec984ec4405866aca55b9a2eec8",
+          "source_digest": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+          "source_digest_verified": true,
+          "filename": "esp32-datasheet.pdf",
+          "size_bytes": 989523,
+          "parse_job_id": "470cb463257f439dbcbb671ab1c6bcd4",
+          "created_at": "2026-09-23T14:05:33.772233+00:00"
+        },
+        "document": {
+          "id": "f987aec984ec4405866aca55b9a2eec8",
+          "resource_id": "820bdc40011744f9861c3263e65c86c9",
+          "source_version_id": "d23f145778d345b8b3c7e3cf55444ab8",
+          "filename": "esp32-datasheet.pdf",
+          "doc_id": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+          "origin": "web",
+          "mime": "application/pdf",
+          "size_bytes": 989523,
+          "page_count": 78,
+          "status": "succeeded",
+          "error": null,
+          "index_status": "ready",
+          "index_error": null,
+          "compile_status": "partial",
+          "compile_degraded": [
+            "vision_unavailable"
+          ],
+          "compile_fingerprint": "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b",
+          "layout_version": "ddp-layout/1",
+          "code_detection": "heuristic",
+          "current_job_id": "470cb463257f439dbcbb671ab1c6bcd4",
+          "created_at": "2026-09-23T14:05:33.772233Z",
+          "uploaders": [
+            "v3-same-name-reader"
+          ],
+          "can_delete": true
+        },
+        "layout": {
+          "engine": "borndigital",
+          "layout_version": "ddp-layout/1",
+          "pages": 78,
+          "blocks": 3206
+        },
+        "checks": [
+          {
+            "case_id": "pico-esp32-sram-compare",
+            "page_index": 3,
+            "excerpt": "520 KB SRAM",
+            "preserved": true,
+            "regions": [
+              [
+                72.18494415283203,
+                102.46112060546875,
+                141.345703125,
+                109.83343505859375
+              ]
+            ]
+          },
+          {
+            "case_id": "pico-esp32-sram-compare",
+            "page_index": 25,
+            "excerpt": "520 KB of on-chip SRAM for data and instructions",
+            "preserved": true,
+            "regions": [
+              [
+                56.80059814453125,
+                452.5072021484375,
+                537.8870849609375,
+                661.4710845947266
+              ]
+            ]
+          },
+          {
+            "case_id": "esp32-radio",
+            "page_index": 2,
+            "excerpt": "802.11b/g/n",
+            "preserved": true,
+            "regions": [
+              [
+                72.18494415283203,
+                116.39385986328125,
+                510.12139892578125,
+                335.27362060546875
+              ]
+            ]
+          },
+          {
+            "case_id": "esp32-radio",
+            "page_index": 2,
+            "excerpt": "802.11n (2.4 GHz), up to 150 Mbps",
+            "preserved": true,
+            "regions": [
+              [
+                72.18494415283203,
+                116.39385986328125,
+                510.12139892578125,
+                335.27362060546875
+              ]
+            ]
+          },
+          {
+            "case_id": "esp32-radio",
+            "page_index": 2,
+            "excerpt": "Compliant with Bluetooth v4.2 BR/EDR and Bluetooth LE specifications",
+            "preserved": true,
+            "regions": [
+              [
+                72.18494415283203,
+                380.61090087890625,
+                392.85162353515625,
+                670.1760406494141
+              ]
+            ]
+          },
+          {
+            "case_id": "esp32-cpu",
+            "page_index": 25,
+            "excerpt": "ESP32 contains one or two low-power Xtensa",
+            "preserved": true,
+            "regions": [
+              [
+                56.334346771240234,
+                101.7464599609375,
+                528.4140625,
+                431.5106201171875
+              ]
+            ]
+          },
+          {
+            "case_id": "esp32-cpu",
+            "page_index": 25,
+            "excerpt": "7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND))",
+            "preserved": true,
+            "regions": [
+              [
+                56.334346771240234,
+                101.7464599609375,
+                528.4140625,
+                431.5106201171875
+              ]
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "image_only_boundary": {
+    "resource": {
+      "id": "38d861b025134f8ab6e1f5b2f1ad7b34",
+      "organization_id": "4d676ba5d26e8628b8a7e9c40872131b",
+      "owner_id": "f42bd8fe9c8fff6b3711ae1976958539",
+      "uploader_ref": {
+        "issuer": "4d676ba5d26e8628b8a7e9c40872131b",
+        "subject": "f42bd8fe9c8fff6b3711ae1976958539"
+      },
+      "display_name": "controller-manual-scan.pdf",
+      "publication": "private",
+      "copied_from": null,
+      "created_at": "2026-09-23T14:12:01.911426+00:00",
+      "updated_at": "2026-09-23T14:12:01.911429+00:00",
+      "versions": [
+        {
+          "id": "5d70266036f6454c9a6d574a829e1f82",
+          "resource_id": "38d861b025134f8ab6e1f5b2f1ad7b34",
+          "version_no": 1,
+          "document_id": "d227108eac4a4d2d9ec9ff6389af7042",
+          "source_digest": "9bf222893d42750c0150d3851ac78822f74a1d59cb9153c720f25b525379c937",
+          "source_digest_verified": true,
+          "filename": "controller-manual-scan.pdf",
+          "size_bytes": 29573,
+          "parse_job_id": "39c734e775e84d6697055b9e1ff45104",
+          "created_at": "2026-09-23T14:12:01.913460+00:00"
+        }
+      ]
+    },
+    "version": {
+      "id": "5d70266036f6454c9a6d574a829e1f82",
+      "resource_id": "38d861b025134f8ab6e1f5b2f1ad7b34",
+      "version_no": 1,
+      "document_id": "d227108eac4a4d2d9ec9ff6389af7042",
+      "source_digest": "9bf222893d42750c0150d3851ac78822f74a1d59cb9153c720f25b525379c937",
+      "source_digest_verified": true,
+      "filename": "controller-manual-scan.pdf",
+      "size_bytes": 29573,
+      "parse_job_id": "39c734e775e84d6697055b9e1ff45104",
+      "created_at": "2026-09-23T14:12:01.913460+00:00"
+    },
+    "status": 200,
+    "document": {
+      "id": "d227108eac4a4d2d9ec9ff6389af7042",
+      "resource_id": "38d861b025134f8ab6e1f5b2f1ad7b34",
+      "source_version_id": "5d70266036f6454c9a6d574a829e1f82",
+      "filename": "controller-manual-scan.pdf",
+      "doc_id": "9bf222893d42750c0150d3851ac78822f74a1d59cb9153c720f25b525379c937",
+      "origin": "web",
+      "mime": "application/pdf",
+      "size_bytes": 29573,
+      "page_count": 0,
+      "status": "failed",
+      "error": "borndigital 引擎没有从这份 PDF 里提取到任何文字层（多半是扫描件/纯图片）。扫描件需要 OCR，请改用 mineru 引擎",
+      "index_status": "none",
+      "index_error": null,
+      "compile_status": "none",
+      "compile_degraded": [],
+      "compile_fingerprint": "",
+      "layout_version": "",
+      "code_detection": "unavailable",
+      "current_job_id": "39c734e775e84d6697055b9e1ff45104",
+      "created_at": "2026-09-23T14:12:01.913460Z",
+      "uploaders": [
+        "v3-same-name-reader"
+      ],
+      "can_delete": true
+    },
+    "browser": {
+      "url": "http://127.0.0.1:35173/#/documents/d227108eac4a4d2d9ec9ff6389af7042?resource_id=38d861b025134f8ab6e1f5b2f1ad7b34&version_id=5d70266036f6454c9a6d574a829e1f82&job=39c734e775e84d6697055b9e1ff45104",
+      "body": "DeepDocParse\n工作区\n资源库\n文档库\n结构化抽取\n全文检索\n联邦任务\n知识 Wiki\n实体图谱\n开发者\nAPI Key\n用量\n账号\n成员与角色\n设置\n工作台\nv3-same-name-reader\n← 文档库\ncontroller-manual-scan.pdf\n0 页\n未索引\n解析版本\n校验版本\n重建索引\n下载\n▾\n解析失败：borndigital 引擎没有从这份 PDF 里提取到任何文字层（多半是扫描件/纯图片）。扫描件需要 OCR，请改用 mineru 引擎\n文档解析由\nMinerU\n提供支持",
+      "controls": []
+    }
+  },
+  "cross_document_search_fresh_before_weighted_ranking": {
+    "url": "http://127.0.0.1:35173/#/search?q=Compare%20the%20SRAM%20capacities%20of%20Raspberry%20Pi%20Pico%20and%20ESP32.",
+    "degraded": null,
+    "hits": [
+      {
+        "filename": "pico-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=9062dda0a77548d6baa565ceb28cef48&version_id=41fc0a7d7eeb4475a6ab396525750e0d&job=09b6b483d11c41d58e00ac91d9b0f7db&chunk=0226bac799004d7e8795e4fc14369906&page=25",
+        "text": "PDF 第 25 页\n56%\nRaspberry Pi Pico Datasheet Appendix A. Availability Raspberry Pi guarantee availability of the Raspberry Pi Pico product until at least January 2028. A.1. Support For support see the Pico section of"
+      },
+      {
+        "filename": "pico-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=9062dda0a77548d6baa565ceb28cef48&version_id=41fc0a7d7eeb4475a6ab396525750e0d&job=09b6b483d11c41d58e00ac91d9b0f7db&chunk=c404f5e26a264e65811c4bad0af38e27&page=6",
+        "text": "PDF 第 6 页\n49%\nThe source design files, including the schematic and PCB layout, are made available openly, with no limitations. Schematic The full schematic is reproduced in Appendix B. Pico schematic. The schematic"
+      },
+      {
+        "filename": "pico-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=9062dda0a77548d6baa565ceb28cef48&version_id=41fc0a7d7eeb4475a6ab396525750e0d&job=09b6b483d11c41d58e00ac91d9b0f7db&chunk=118d6ad2a9154bd589c587c40e8c41a1&page=7",
+        "text": "PDF 第 7 页\n60%\nRaspberry Pi Pico Datasheet 2. Mechanical specification The Raspberry Pi Pico is a single sided 51×21 mm 1 mm thick PCB with a micro-USB port overhanging the top edge and dual castellated/through-hole"
+      },
+      {
+        "filename": "pico-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=9062dda0a77548d6baa565ceb28cef48&version_id=41fc0a7d7eeb4475a6ab396525750e0d&job=09b6b483d11c41d58e00ac91d9b0f7db&chunk=1b7295a961e04b7e9c8747515b5b64bb&page=4",
+        "text": "PDF 第 4 页\n57%\nRaspberry Pi Pico Datasheet 1. About Raspberry Pi Pico Raspberry Pi Pico is a microcontroller board based on the Raspberry Pi RP2040 microcontroller chip. Figure 1. The Raspberry Pi Pico Rev3 board."
+      },
+      {
+        "filename": "esp32-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=fa6961c122a341ee86efa82eaa92acae&page=11",
+        "text": "PDF 第 11 页\n66%\n1 ESP32 Series Comparison ESP32 Series Comparison 1 Nomenclature 1.1 2 D R H WD 3 0 V Q 6 ESP 32 Chip revision v3.0 or newer Package Q N/A: High temperature In-package PSRAM 2 6 : QFN QFN 6 5 6 5 * *"
+      },
+      {
+        "filename": "esp32-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=880df7d0a51746d5bd228d383a96800e&page=9",
+        "text": "PDF 第 9 页\n65%\n1-1 ESP32 Series Comparison 2-1 Pin Overview 2-2 Analog Pins 2-3 Power Pins 2-4 Description of Timing Parameters for Power-up and Reset 2-5 Pin-to-Pin Mapping Between Chip and In-Package Flash/PSRAM 2"
+      },
+      {
+        "filename": "esp32-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=004433b8f31c41658ac13c09539c1ad3&page=41",
+        "text": "PDF 第 41 页\n63%\nFor more information about the pin assignment, see Section ESP32 Technical Reference Manual Peripheral Pin Configurations IO_MUX and GPIO Matrix and 4.10 > Chapter . SDIO/SPI Slave Controller 4.8.11 E"
+      },
+      {
+        "filename": "esp32-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=1def42f20fff4f99bc760e27cdb947b6&version_id=a74fe28d80464f7d921373ca034de8f8&job=8b23e17401b14f04bbadadc2852751a0&chunk=fa77e334d2f340cbbcab15d91bd682ad&page=2",
+        "text": "PDF 第 2 页\n62%\nProduct Overview ESP32 is a single 2.4 GHz Wi-Fi-and-Bluetooth combo chip designed with the TSMC low-power 40 nm technology. It is designed to achieve the best power and RF performance, showing robust"
+      },
+      {
+        "filename": "pico-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=25e0182d494449bf909b4c3d326fb160&page=25",
+        "text": "PDF 第 25 页\n56%\nRaspberry Pi Pico Datasheet Appendix A. Availability Raspberry Pi guarantee availability of the Raspberry Pi Pico product until at least January 2028. A.1. Support Pico section of the Raspberry Pi doc"
+      },
+      {
+        "filename": "pico-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=e8f35913c78d4703a3d4cf317c7fecb6&page=6",
+        "text": "PDF 第 6 页\n53%\nFROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS DESIGN. . Note that Raspbe"
+      },
+      {
+        "filename": "pico-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=31ad7a919e0648c8acb9dff31fdc17d3&page=7",
+        "text": "PDF 第 7 页\n60%\nRaspberry Pi Pico Datasheet 2. Mechanical specification The Raspberry Pi Pico is a single sided 51×21 mm 1 mm thick PCB with a micro-USB port overhanging the top edge and dual castellated/through-hole"
+      },
+      {
+        "filename": "pico-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=bbebb0b7a92643858653c21bff8f5fd1&page=4",
+        "text": "PDF 第 4 页\n57%\nRaspberry Pi Pico Datasheet 1. About Raspberry Pi Pico Raspberry Pi Pico is a microcontroller board based on the Raspberry Pi RP2040 microcontroller chip. Figure The Raspberry Pi Pico Rev3 board. 1 ."
+      },
+      {
+        "filename": "pico-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/0fe58045cf6447f297efa4e0f06ac9c4?resource_id=51517ad2a0084fa09427637f8130251d&version_id=71ede87e238c4895887d0d63902d50ea&job=8639a088b4a645d4876f8521fd46c01c&chunk=670075ad9c9e4ca195da52c11958d506&page=3",
+        "text": "PDF 第 3 页\n55%\nRaspberry Pi Pico Datasheet Table of Contents About Raspberry Pi Pico 1. 3 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ."
+      },
+      {
+        "filename": "esp32-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=820bdc40011744f9861c3263e65c86c9&version_id=d23f145778d345b8b3c7e3cf55444ab8&job=470cb463257f439dbcbb671ab1c6bcd4&chunk=cd724a6620d3435f9db797b353f371e5&page=11",
+        "text": "PDF 第 11 页\n66%\n1 ESP32 Series Comparison 1 ESP32 Series Comparison 1.1 Nomenclature R2 H ESP32 D WD 0 V3 Q6 Chip revision v3.0 or newer Package Q6: QFN 6*6 N/A: QFN 5*5 High temperature In-package PSRAM R2: 2 MB PSR"
+      },
+      {
+        "filename": "esp32-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=820bdc40011744f9861c3263e65c86c9&version_id=d23f145778d345b8b3c7e3cf55444ab8&job=470cb463257f439dbcbb671ab1c6bcd4&chunk=11b2d68531bc45a2804a22c31d2c76f8&page=27",
+        "text": "PDF 第 27 页\n63%\n4.1.3 External Flash and RAM ESP32 supports multiple external QSPI flash and external RAM (SRAM) chips. More details can be found in ESP32 Technical Reference Manual > Chapter SPI Controller. ESP32 al"
+      },
+      {
+        "filename": "esp32-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=820bdc40011744f9861c3263e65c86c9&version_id=d23f145778d345b8b3c7e3cf55444ab8&job=470cb463257f439dbcbb671ab1c6bcd4&chunk=3f2e6a3196c94bea8fcc09b619b3e265&page=17",
+        "text": "PDF 第 17 页\n63%\n_ All IO pins of the ESP32 have GPIO and some have RTC_GPIO pin functions. However, these IO pins are multifunctional and can be configured for different purposes based on the requirements. Some IOs h"
+      },
+      {
+        "filename": "esp32-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=820bdc40011744f9861c3263e65c86c9&version_id=d23f145778d345b8b3c7e3cf55444ab8&job=470cb463257f439dbcbb671ab1c6bcd4&chunk=32cfa940a770430b937f0dbb36c03edc&page=21",
+        "text": "PDF 第 21 页\n63%\n1. As the in-package flash (ESP32-U4WDH) and the in-package PSRAM (ESP32-D0WDRH2-V3) operate at 3.3 V, SDIO must be powered by VDD3P3_RTC via a 6 Ω resistor. See Figure 2-3 ESP32 Power Scheme. 2. If G"
+      },
+      {
+        "filename": "esp32-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=820bdc40011744f9861c3263e65c86c9&version_id=d23f145778d345b8b3c7e3cf55444ab8&job=470cb463257f439dbcbb671ab1c6bcd4&chunk=4cd5c970c3ce4419972d5c8ee74d90b5&page=9",
+        "text": "PDF 第 9 页\n62%\n1-1 ESP32 Series Comparison 11 2-1 Pin Overview 14 2-2 Analog Pins 17 2-3 Power Pins 18 2-4 Description of Timing Parameters for Power-up and Reset 19 2-5 Pin-to-Pin Mapping Between Chip and In-Packag"
+      },
+      {
+        "filename": "esp32-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=820bdc40011744f9861c3263e65c86c9&version_id=d23f145778d345b8b3c7e3cf55444ab8&job=470cb463257f439dbcbb671ab1c6bcd4&chunk=3ac63697bfd74b338b4e890c9a35705a&page=41",
+        "text": "PDF 第 41 页\n62%\nThe pins for SD/SDIO/MMC Host Controller are multiplexed with GPIO2, GPIO4, GPIO6 ~ GPIO15 via IO MUX. For more information about the pin assignment, see Section 4.10 Peripheral Pin Configurations and"
+      },
+      {
+        "filename": "esp32-datasheet.pdf",
+        "url": "http://127.0.0.1:35173/#/documents/f987aec984ec4405866aca55b9a2eec8?resource_id=820bdc40011744f9861c3263e65c86c9&version_id=d23f145778d345b8b3c7e3cf55444ab8&job=470cb463257f439dbcbb671ab1c6bcd4&chunk=8757a6822fd9462ca9be669f586ca0c5&page=11",
+        "text": "PDF 第 11 页\n56%\n_ Voltage ESP32-D0WD-V3 Dual core v3.0/v3.14 — QFN 5*5 1.8 V/3.3 V ESP32-D0WDR2-V3 (EOL) Upgraded to ESP32-D0WDRH2-V3 7 ESP32-U4WDH Dual core3 v3.0/v3.14 4 MB flash6 QFN 5*5 3.3 V ESP32-D0WDQ6-V3 (NRN"
+      }
+    ]
+  }
+}

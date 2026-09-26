@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/contracts"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/identity"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/obs"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/rbac"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/store"
 )
 
 // RunBackground 起三个后台循环，随 ctx 一起结束。
@@ -46,60 +49,113 @@ func (s *Server) deliverOutbox(ctx context.Context) {
 			continue
 		}
 		for _, e := range events {
-			body, _ := json.Marshal(map[string]any{
-				"event_id":        e.ID,
-				"type":            e.Type,
-				"organization_id": e.OrganizationID,
-				"payload":         e.Payload,
-			})
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-				s.cfg.CorpusURL+"/internal/events", bytes.NewReader(body))
-			if err != nil {
-				_ = s.store.MarkOutboxFailed(ctx, e.ID, e.Attempts, err.Error())
-				continue
-			}
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer "+s.cfg.ServiceToken)
-			// **一整套 actor 上下文，不能只发两个头。** corpus 侧的
-			// `current_actor` 缺任何一个就 401，而且它是故意这样设计的
-			// （缺头给默认值的话，"入口挂错中间件"会表现为"这个人突然只读了"）。
-			// 之前这里只发了 Organization + ActorKind，于是**每一条事件
-			// 永远投不出去**：outbox 忠实地重试、如实记下 401、
-			// `/readyz` 也如实报 stale —— 一切都"正确地"坏着，
-			// 而产品的主链路（上传完 -> 文档入库）一次都没通过。
-			// 单测碰不到它：那边直接调消费函数，不经过 HTTP 头这一层。
-			(&identity.Actor{
-				Kind:           identity.KindService,
-				ID:             "control-api",
-				OrganizationID: e.OrganizationID,
-				// 服务身份用最高角色：corpus 侧只校验 kind，
-				// 但 role 必须是契约里的合法值，否则 403 unknown_role
-				Role: rbac.Admin,
-			}).Apply(req, "control-api")
-			// 幂等键就是事件 ID —— 消费端据此去重
-			req.Header.Set(identity.HeaderIdempotency, e.ID)
-
-			resp, err := client.Do(req)
-			if err != nil {
-				_ = s.store.MarkOutboxFailed(ctx, e.ID, e.Attempts, err.Error())
-				continue
-			}
-			// 2xx 与 409（已处理过）都算成功：409 正是幂等消费端对
-			// 重投的正确回应，把它当失败会让事件永远重投
-			ok := resp.StatusCode < 300 || resp.StatusCode == http.StatusConflict
-			resp.Body.Close()
-			if ok {
-				_ = s.store.MarkOutboxDelivered(ctx, e.ID)
-			} else {
-				_ = s.store.MarkOutboxFailed(ctx, e.ID, e.Attempts,
-					fmt.Sprintf("corpus-api 返回 %d", resp.StatusCode))
-			}
+			s.deliverEvent(ctx, client, e)
 		}
 
 		if count, oldest, err := s.store.OutboxBacklog(ctx); err == nil {
 			obs.OutboxState(count, oldest)
 		}
 	}
+}
+
+// deliverEvent 投递一条已领取的事件并把结果落回同一行：ACK、终态拒绝或退避重试。
+func (s *Server) deliverEvent(ctx context.Context, client *http.Client, e store.OutboxEvent) {
+	body, _ := json.Marshal(map[string]any{
+		"event_id":        e.ID,
+		"type":            e.Type,
+		"organization_id": e.OrganizationID,
+		"payload":         e.Payload,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		s.cfg.CorpusURL+"/internal/events", bytes.NewReader(body))
+	if err != nil {
+		_ = s.store.MarkOutboxFailed(ctx, e.ID, e.Attempts, err.Error())
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.cfg.ServiceToken)
+	// **一整套 actor 上下文，不能只发两个头。** corpus 侧的
+	// `current_actor` 缺任何一个就 401，而且它是故意这样设计的
+	// （缺头给默认值的话，"入口挂错中间件"会表现为"这个人突然只读了"）。
+	// 之前这里只发了 Organization + ActorKind，于是**每一条事件
+	// 永远投不出去**：outbox 忠实地重试、如实记下 401、
+	// `/readyz` 也如实报 stale —— 一切都"正确地"坏着，
+	// 而产品的主链路（上传完 -> 文档入库）一次都没通过。
+	// 单测碰不到它：那边直接调消费函数，不经过 HTTP 头这一层。
+	(&identity.Actor{
+		Kind:           identity.KindService,
+		ID:             "control-api",
+		OrganizationID: e.OrganizationID,
+		// 服务身份用最高角色：corpus 侧只校验 kind，
+		// 但 role 必须是契约里的合法值，否则 403 unknown_role
+		Role: rbac.Admin,
+	}).Apply(req, "control-api")
+	// 幂等键就是事件 ID —— 消费端据此去重
+	req.Header.Set(identity.HeaderIdempotency, e.ID)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		_ = s.store.MarkOutboxFailed(ctx, e.ID, e.Attempts, err.Error())
+		return
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+	switch outcome, code, diagnostic := classifyDelivery(e.Type, resp.StatusCode, raw); outcome {
+	case deliveryAcked:
+		_ = s.store.MarkOutboxDelivered(ctx, e.ID)
+	case deliveryRejected:
+		_ = s.store.MarkOutboxRejected(ctx, e.ID, code)
+	default:
+		_ = s.store.MarkOutboxFailed(ctx, e.ID, e.Attempts, diagnostic)
+	}
+}
+
+type deliveryOutcome int
+
+const (
+	deliveryRetry deliveryOutcome = iota
+	deliveryAcked
+	deliveryRejected
+)
+
+// classifyDelivery 把 corpus 对一次投递的回应分成三类（契约 upload-control-format）：
+//
+//   - 2xx，或 409 + `duplicate_event`（已处理过的重投）：ACK；
+//   - DocumentSubmitted 的 4xx + 契约枚举 ingest_rejection 里的码：确定性拒绝，终态；
+//   - 其余一切 —— 5xx、401/403（配置错）、408/429、别的 409（如
+//     `document_state_changed` 明说了 retry）、读不出错误码的回应（路由不存在、
+//     中间代理）：暂时故障，按退避重投同一事件。
+//
+// 以前**所有 409 都算成功**：目标资源被删、同内容版本已存在这类确定性冲突
+// 会被记成"已投递"，上传者看到"已登记"，语料库里却什么都没有。
+// 反过来把可恢复的失败判成终态同样危险 —— 已校验的上传会永远进不了库，
+// 所以终态只认白名单里的码，宁可多重试也不误判。
+func classifyDelivery(eventType string, status int, body []byte) (deliveryOutcome, contracts.IngestRejection, string) {
+	if status >= 200 && status < 300 {
+		return deliveryAcked, "", ""
+	}
+	var envelope struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(body, &envelope)
+	code := envelope.Error.Code
+	diagnostic := fmt.Sprintf("corpus-api 返回 %d", status)
+	if code != "" {
+		diagnostic += " " + code
+	}
+	if status == http.StatusConflict && code == "duplicate_event" {
+		return deliveryAcked, "", ""
+	}
+	transientStatus := status == http.StatusUnauthorized || status == http.StatusForbidden ||
+		status == http.StatusRequestTimeout || status == http.StatusTooManyRequests
+	if eventType == "DocumentSubmitted" && status >= 400 && status < 500 && !transientStatus {
+		if rejection, ok := store.ClassifyIngestRejection(code); ok {
+			return deliveryRejected, rejection, diagnostic
+		}
+	}
+	return deliveryRetry, "", diagnostic
 }
 
 // verifyUploads 是 §9.1 的服务端摘要校验。

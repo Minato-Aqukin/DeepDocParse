@@ -113,10 +113,10 @@ async def test_real_credentials_never_reach_the_prompt_or_the_result_fields(
 
     不改 `settings.service_token`：`actor_client` 的 Authorization 就是用
     它签的，换掉会让请求在门口 401，测不到生成。取当前生效值做断言即可。
+    跨节点没有共享 peer 凭据可断言 —— 出站只带单次节点凭证，且只进请求头。
     """
     service_secret = settings.service_token
-    peer_secret = settings.federation_peer_token
-    assert service_secret and peer_secret
+    assert service_secret
 
     run, chat = await run_injected(
         actor_client, session, key="injection-credentials",
@@ -124,13 +124,11 @@ async def test_real_credentials_never_reach_the_prompt_or_the_result_fields(
 
     prompt = chat.calls[0].request.content.decode()
     assert service_secret not in prompt, "内网服务凭据被写进了生成 prompt"
-    assert peer_secret not in prompt, "peer 信任域凭据被写进了生成 prompt"
     # 注入正文本身仍然在 prompt 里（那是证据），但"请求它"不等于"拿得到"。
     assert "IGNORE ALL PREVIOUS INSTRUCTIONS" in prompt
 
     blob = json.dumps(run["status"]["result"], ensure_ascii=False)
     assert service_secret not in blob
-    assert peer_secret not in blob
     assert run["status"]["result"]["answer"] is None
 
 

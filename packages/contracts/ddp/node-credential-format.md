@@ -106,17 +106,17 @@ organization_id=<PeerTrust.organization_id>, role="viewer")`：
 发布目录的 `origin_node_id`、探测 / 受理回执里的节点身份全部取自这一个绑定值。
 签发响应的 `issuer_node_id` 与信任记录的 `authority_node_id` 都要与之核对。
 
-## 共享口令档位
+## 已删除的旧形态
 
-`FEDERATION_PEER_AUTH=shared_token_insecure` 保留旧的共享口令 + 服务凭据 + actor 头，
-只给没有控制面的开发夹具：**必须同时 `ALLOW_INSECURE_DEFAULTS=true` 才能启动**，
-`/readyz` 的 `federation.peer_auth` 与 `federation.degraded=shared_peer_token` 如实报出。
-默认 `node_credential`。
+旧形态里协调者手持对端的 `SERVICE_TOKEN` 与共享 `FEDERATION_PEER_TOKEN` 并自报
+actor 头的做法已删除：生产源与测试里都不再存在共享 actor 信任路径。`SERVICE_TOKEN`
+只用于同一节点 control↔corpus 内部请求（签发凭证、查信任记录、绑定身份），不跨节点。
 
 ## 已知局限
 
 - 首发单组织：控制面只在默认组织的成员目录里查信任记录；同一节点被多个组织批准时的
   audience 组织选择没有定义。
 - 控制面自己的目录对等读（`/api/v1/federation/members`、`/collections`）与 Go 出站
-  目录展开仍是共享 `X-DDP-Peer-Token`，没有迁到本契约。
+  目录展开同样只认单次节点签名凭证（`directory_members_read` /
+  `directory_collections_read`），不存在共享口令路径。
 - 密钥轮换：node_id 由公钥派生，换钥即换身份；没有轮换协议。

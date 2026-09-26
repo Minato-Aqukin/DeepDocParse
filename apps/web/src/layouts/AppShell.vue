@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 
 import { isDark, toggleTheme } from '@/composables/useTheme'
 import { NAV_GROUPS, type NavGroup } from '@/constants/nav'
+import { bootSource, egressStatus, getActiveSource, isDesktop, type SourceSummary } from '@/platform/desktop'
+import { missingFeatures } from '@/router/guard'
 import { useAuthStore } from '@/stores/auth'
 
 /**
@@ -11,6 +13,8 @@ import { useAuthStore } from '@/stores/auth'
  *
  * 菜单**完全由路由 meta 派生**（meta.nav / meta.group / meta.icon / meta.title），
  * 所以加一个页面只需要在 router/routes.ts 里加一条，不用碰这里。
+ * 桌面多两层过滤（见 `visibleRoutes`）：平台（platform）与内容能力（features ⊆ 当前源能力）。
+ * 顶栏在桌面多出数据源切换器 + 常显的外发状态（plan §1.2 硬要求）。
  */
 const auth = useAuthStore()
 const route = useRoute()
@@ -18,12 +22,18 @@ const router = useRouter()
 
 const collapsed = defineModel<boolean>('collapsed', { default: false })
 
+const desktop = isDesktop()
+const activeSource = computed<SourceSummary | null>(() => getActiveSource() ?? bootSource.value)
+const egress = computed(() => egressStatus(activeSource.value))
+const features = computed<string[]>(() => activeSource.value?.features ?? [])
+
 const menus = computed(() =>
   NAV_GROUPS.map((group) => ({
     ...group,
     items: router
       .getRoutes()
       .filter((r) => r.meta?.nav && r.meta?.group === (group.key as NavGroup))
+      .filter((r) => !missingFeatures(r.meta?.features as string[] | undefined, features.value).length)
       .map((r) => ({ path: r.path, title: r.meta.title as string, icon: r.meta.icon as string })),
   })).filter((group) => group.items.length),
 )
@@ -31,9 +41,55 @@ const menus = computed(() =>
 // 下钻页（工作台/版本页）要让父级菜单保持高亮
 const activeMenu = computed(() => (route.meta.activeMenu as string) || route.path)
 
+const switcherOpen = ref(false)
+const sources = ref<SourceSummary[]>([])
+const switchError = ref('')
+
+async function openSwitcher() {
+  switcherOpen.value = true
+  switchError.value = ''
+  await loadSources()
+}
+
+async function loadSources() {
+  const host = window.ddpDesktop as unknown as {
+    sourceList?: () => Promise<{ ok: boolean; value?: SourceSummary[] }>
+  } | undefined
+  if (!host?.sourceList) return
+  try {
+    const result = await host.sourceList()
+    if (result.ok) sources.value = (result.value ?? []) as SourceSummary[]
+  } catch {
+    switchError.value = '数据源列表读取失败'
+  }
+}
+
+async function activate(sourceId: string) {
+  const host = window.ddpDesktop as unknown as {
+    sourceActivate?: (input: { sourceId: string }) => Promise<{ ok: boolean }>
+  } | undefined
+  if (!host?.sourceActivate) return
+  try {
+    const result = await host.sourceActivate({ sourceId })
+    if (!result.ok) {
+      switchError.value = '切换失败，请在数据源页重试'
+      return
+    }
+    // 切换 = 宿主记下新的当前源 + 页面整体重载（store、缓存、草稿随之清空，不跨源串状态）。
+    location.reload()
+  } catch {
+    switchError.value = '切换失败，请在数据源页重试'
+  }
+}
+
+onMounted(() => {
+  if (desktop) void loadSources()
+})
+
 function logout() {
   auth.logout()
-  router.push({ name: 'login' })
+  if (desktop) router.push({ name: 'sources' })
+  else router.push({ name: 'login' })
 }
 </script>
 
@@ -63,13 +119,19 @@ function logout() {
           <el-icon><component :is="collapsed ? 'Expand' : 'Fold'" /></el-icon>
         </el-button>
         <span class="page-title">{{ route.meta.title }}</span>
+        <template v-if="desktop">
+          <el-button size="small" @click="openSwitcher">
+            {{ activeSource?.label ?? '选择数据源' }}
+          </el-button>
+          <span class="egress" :data-kind="egress.kind" role="status">{{ egress.text }}</span>
+        </template>
         <div class="spacer" />
         <el-tooltip :content="isDark ? '切到浅色' : '切到深色'" placement="bottom">
           <el-button link :aria-label="isDark ? '切到浅色' : '切到深色'" @click="toggleTheme()">
             <el-icon><component :is="isDark ? 'Sunny' : 'Moon'" /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-dropdown>
+        <el-dropdown v-if="!desktop">
           <span class="user">
             <el-icon><component is="User" /></el-icon>
             {{ auth.username || '未登录' }}
@@ -81,9 +143,23 @@ function logout() {
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <el-dropdown v-else>
+          <span class="user">
+            <el-icon><component is="User" /></el-icon>
+            {{ auth.username || activeSource?.label || '未选择数据源' }}
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item @click="router.push('/sources')">数据源</el-dropdown-item>
+              <el-dropdown-item @click="router.push('/desktop-settings')">设置</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </el-header>
 
       <el-main class="main">
+        <el-alert v-if="auth.profileError" type="error" :closable="false"
+                  title="账号信息暂时不可用，写操作已禁用。请刷新页面重试。" />
         <RouterView :key="route.fullPath" />
       </el-main>
 
@@ -101,6 +177,20 @@ function logout() {
       </el-footer>
     </el-container>
   </el-container>
+  <el-dialog v-if="desktop" v-model="switcherOpen" title="切换数据源" width="420px">
+    <p v-if="switchError" role="alert" class="switch-error">{{ switchError }}</p>
+    <p v-if="!sources.length" class="muted">暂无数据源，请到数据源页打开本机工作区或连接中心。</p>
+    <ul v-else class="source-list">
+      <li v-for="s in sources" :key="s.sourceId">
+        <span>{{ s.label }} · {{ s.kind === 'local' ? '本机工作区' : '中心' }}{{ s.active ? '（当前）' : '' }}</span>
+        <el-button v-if="!s.active" size="small" @click="activate(s.sourceId)">切换</el-button>
+      </li>
+    </ul>
+    <template #footer>
+      <el-button @click="switcherOpen = false">关闭</el-button>
+      <el-button type="primary" @click="router.push('/sources'); switcherOpen = false">去数据源页</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -176,6 +266,33 @@ function logout() {
   gap: 6px;
   cursor: pointer;
   color: var(--el-text-color-regular);
+}
+.egress {
+  font-size: 12px;
+  color: var(--ddp-ink-3);
+  white-space: nowrap;
+}
+.egress[data-kind='center'] {
+  color: var(--ddp-warn);
+}
+.switch-error {
+  color: var(--el-color-danger);
+}
+.source-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.source-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.muted {
+  color: var(--el-text-color-secondary);
 }
 .main {
   background: var(--el-bg-color-page);

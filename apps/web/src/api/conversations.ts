@@ -10,7 +10,9 @@ import type {
   RetrievalConfidence,
 } from '@/types/api'
 
-import { TOKEN_KEY, http } from './http'
+import { apiUrl, checkSourceResponse, isDesktop } from '@/platform/desktop'
+import { expireRejectedSession, TOKEN_KEY, http } from './http'
+import type { ResourceContext } from './resource-context'
 
 export const conversationsApi = {
   create: (documentId: string) =>
@@ -19,8 +21,8 @@ export const conversationsApi = {
     http.get<ConversationInfo[]>('/api/conversations', { params: { document: documentId } }),
   messages: (cid: string) => http.get<ChatMessage[]>(`/api/conversations/${cid}/messages`),
   remove: (cid: string) => http.delete(`/api/conversations/${cid}`),
-  evidence: (evidenceId: string) =>
-    http.get<EvidenceDetail>(`/api/evidence/${evidenceId}`),
+  evidence: (evidenceId: string, context?: ResourceContext) =>
+    http.get<EvidenceDetail>(`/api/evidence/${evidenceId}`, { params: context }),
   verifyEvidence: (
     evidenceId: string,
     data: {
@@ -28,8 +30,9 @@ export const conversationsApi = {
       reason_code?: string
       reason_text?: string
     },
+    context?: ResourceContext,
   ) => http.post<EvidenceVerification & { review_state: EvidenceDetail['review_state'] }>(
-    `/api/evidence/${evidenceId}/verification`, data,
+    `/api/evidence/${evidenceId}/verification`, data, { params: context },
   ),
 }
 
@@ -69,20 +72,31 @@ export function askStream(cid: string, question: string, handlers: AskHandlers):
 
   void (async () => {
     try {
-      const resp = await fetch(`/api/conversations/${cid}/ask`, {
+      // 浏览器：带 JWT（EventSource 发不出这个头，所以用 fetch）。
+      // 桌面：不带任何令牌 —— 宿主按当前源附进程令牌或中心 JWT；跨源检查
+      // 只认启动时的当前源，`checkSourceResponse` 负责丢弃串源的流。
+      const authorization = isDesktop() ? null : `Bearer ${localStorage.getItem(TOKEN_KEY)}`
+      const resp = await fetch(apiUrl(`/api/conversations/${cid}/ask`), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem(TOKEN_KEY)}`,
-        },
+        headers: authorization
+          ? { 'Content-Type': 'application/json', Authorization: authorization }
+          : { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question }),
         signal: controller.signal,
       })
+      if (!checkSourceResponse(resp.headers.get('X-DDP-Source'))) {
+        handlers.onError?.({ message: '数据源已切换，此结果已丢弃', code: 'source_changed' })
+        return
+      }
       if (!resp.ok || !resp.body) {
-        const body = await resp.json().catch(() => null)
+        if (resp.status === 401) expireRejectedSession(authorization)
+        const body: unknown = await resp.json().catch(() => null)
+        const detail = body && typeof body === 'object' && 'error' in body ? body.error : null
         handlers.onError?.({
-          message: body?.error?.message || `请求失败（${resp.status}）`,
-          code: body?.error?.code || 'request_failed',
+          message: detail && typeof detail === 'object' && 'message' in detail
+            && typeof detail.message === 'string' ? detail.message : `请求失败（${resp.status}）`,
+          code: detail && typeof detail === 'object' && 'code' in detail
+            && typeof detail.code === 'string' ? detail.code : 'request_failed',
         })
         return
       }
@@ -90,6 +104,19 @@ export function askStream(cid: string, question: string, handlers: AskHandlers):
       const reader = resp.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      // 服务端说明过结局（done，或像撤销访问那样只发一个 error 就收流）才算正常结束
+      let explained = false
+      const tracked: AskHandlers = {
+        ...handlers,
+        onDone: (data) => {
+          explained = true
+          handlers.onDone?.(data)
+        },
+        onError: (data) => {
+          explained = true
+          handlers.onError?.(data)
+        },
+      }
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
@@ -97,11 +124,20 @@ export function askStream(cid: string, question: string, handlers: AskHandlers):
         // SSE 以空行分帧；最后一段可能不完整，留在 buffer 里等下一轮
         const blocks = buffer.split('\n\n')
         buffer = blocks.pop() ?? ''
-        for (const block of blocks) dispatch(block, handlers)
+        for (const block of blocks) dispatch(block, tracked)
       }
-      if (buffer.trim()) dispatch(buffer, handlers)
+      if (buffer.trim()) dispatch(buffer, tracked)
+      // 生成路径上的每一轮都以 done 收尾（出错也先发 error、落库、再发 done）。什么都没说明
+      // 就结束的流说明进程在生成中途没了：入口代理把连接正常关掉，读到的是一次"干净"的结束，
+      // 不报任何错，半截文字随后被清掉 —— 问题下面空空如也（2026-09-24 E 实测）。
+      if (!explained) {
+        handlers.onError?.({
+          message: '回答在完成前中断（生成过程中连接或服务断开），以会话记录为准，没有回答的问题可以重新提问',
+          code: 'stream_incomplete',
+        })
+      }
     } catch (error) {
-      if ((error as Error).name !== 'AbortError') {
+      if (!(error && typeof error === 'object' && 'name' in error && error.name === 'AbortError')) {
         handlers.onError?.({ message: String(error), code: 'network_error' })
       }
     } finally {

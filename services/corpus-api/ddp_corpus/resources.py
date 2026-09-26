@@ -13,6 +13,35 @@ def scoped_upload_key(organization_id: str, key: str) -> str:
     return hashlib.sha256(json.dumps([organization_id, key]).encode()).hexdigest()
 
 
+#: Publication states that still accept appended versions. Withdrawn resources stay
+#: readable to their owner but are closed for new content (a revocation is not a draft).
+UPLOAD_TARGET_PUBLICATIONS = ("private", "draft", "published")
+
+
+async def require_upload_target(session, *, organization_id: str, owner_id: str,
+                                 resource_id: str, source_digest: str | None = None):
+    """The single admission predicate for byte uploads that append to a resource.
+
+    control-api asks it before allocating storage (`/internal/upload-target`), and the
+    DocumentSubmitted consumer asks it again: target deletion, ownership change or a
+    concurrent identical upload between the two checks must surface as a rejection,
+    never as a silently created independent resource. `owner_id` is the upload's
+    `actor_id` (the same value the consumer stamps on a new resource).
+    """
+    target = await session.scalar(select(Resource).where(
+        Resource.id == resource_id, Resource.organization_id == organization_id,
+        Resource.owner_id == owner_id, Resource.deleted_at.is_(None),
+        Resource.publication.in_(UPLOAD_TARGET_PUBLICATIONS)))
+    if target is None:
+        raise APIError(404, "resource not found", "invalid_request_error", "resource_not_found")
+    if source_digest is not None and await session.scalar(select(ResourceVersion.id).where(
+            ResourceVersion.resource_id == target.id,
+            ResourceVersion.source_digest == source_digest).limit(1)):
+        raise APIError(409, "content already has a fixed version in this resource",
+                       "invalid_request_error", "resource_version_exists")
+    return target
+
+
 async def create_asset(session, *, document, actor_id: str, organization_id: str,
                        idempotency_key: str, filename: str, resource=None,
                        copied_from: str | None = None, request_payload: dict | None = None):

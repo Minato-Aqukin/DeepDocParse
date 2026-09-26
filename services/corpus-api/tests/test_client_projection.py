@@ -45,7 +45,7 @@ async def asset(session, owner=ACTOR, *, publication="private", document=None):
     session.add(job)
     await session.flush()
     version = ResourceVersion(id=new_id(), resource_id=resource.id, version_no=1, document_id=document.id,
-        source_digest=document.doc_id, filename="manual.pdf", size_bytes=100, parse_job_id=job.id)
+        source_digest=document.doc_id, filename="manual.pdf", size_bytes=document.size_bytes, parse_job_id=job.id)
     session.add(version)
     await session.flush()
     return resource, version, job, document
@@ -265,3 +265,127 @@ def test_metadata_above_four_mib_remains_explicit_bounded_windows():
     with pytest.raises(projection.APIError) as raised:
         projection.make_snapshot("scope", 2, values, [])
     assert raised.value.code == "projection_item_too_large"
+
+
+async def test_fixed_original_read_authorizes_each_logical_version(client, session, app_state):
+    original = b"%PDF-1.4\noriginal bytes shared by two separately owned resources\n"
+    resource, version, _, document = await asset(session)
+    document.doc_id = version.source_digest = hashlib.sha256(original).hexdigest()
+    document.size_bytes = version.size_bytes = len(original)
+    _, bob_version, _, _ = await asset(session, owner="bob", document=document)
+    await app_state.storage.put(document.object_key, original, "application/pdf")
+    await session.commit()
+
+    route = f"/api/v1/client/versions/{version.id}/source"
+    accepted = await client.get(route, headers=headers())
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.content == original
+    assert accepted.headers["x-ddp-source-digest"] == "sha256:" + version.source_digest
+    assert accepted.headers["x-ddp-actor-subject"] == ACTOR
+    assert accepted.headers["x-ddp-source-availability"] == "online"
+    # Possessing another resource for the same physical document is not an ACL bypass.
+    denied = await client.get(route, headers=headers("bob"))
+    missing = await client.get("/api/v1/client/versions/unknown/source", headers=headers("bob"))
+    assert denied.status_code == missing.status_code == 404
+    assert denied.json() == missing.json()
+    own_copy = await client.get(f"/api/v1/client/versions/{bob_version.id}/source", headers=headers("bob"))
+    assert own_copy.status_code == 200 and own_copy.content == original
+    # Existing caller-scoped metadata is never enough after resource deletion.
+    resource.deleted_at = utcnow()
+    await session.commit()
+    assert (await client.get(route, headers=headers())).status_code == 404
+
+
+async def test_fixed_original_rechecks_permission_after_storage_read(client, session, app_state, monkeypatch):
+    original = b"%PDF-1.4\nfixed original\n"
+    resource, version, _, document = await asset(session, publication="published")
+    document.doc_id = version.source_digest = hashlib.sha256(original).hexdigest()
+    document.size_bytes = version.size_bytes = len(original)
+    await app_state.storage.put(document.object_key, original, "application/pdf")
+    await session.commit()
+    read = app_state.storage.get_limited
+
+    async def withdraw_during_read(key, maximum):
+        content = await read(key, maximum)
+        resource.publication = "withdrawn"
+        await session.commit()
+        return content
+
+    monkeypatch.setattr(app_state.storage, "get_limited", withdraw_during_read)
+    response = await client.get(
+        f"/api/v1/client/versions/{version.id}/source", headers=headers("bob"))
+    assert response.status_code == 404
+    assert original not in response.content
+
+
+@respx.mock
+async def test_center_wiki_windows_fixed_revisions_and_revoked_public_history(client, session):
+    from test_wiki_revisions import body, model, source
+
+    resource, version, evidence, _ = await source(session, publication="published")
+    calls = model(evidence)
+
+    async def create(key):
+        result = await client.post("/api/wikis", json=body(resource, version),
+            headers={**headers(), "Idempotency-Key": key})
+        assert result.status_code == 201, result.text
+        return result.json()
+
+    async def query(name, payload, who=ACTOR):
+        return await client.post("/api/v1/client/query", headers=headers(who),
+                                 json={"name": name, "payload": payload})
+
+    first = await create("wiki-first")
+    second = await create("wiki-second")
+    window = await query("wiki.list", {"limit": 1})
+    assert window.status_code == 200, window.text
+    page = window.json()
+    assert page["visible_total"] == 2 and page["has_more"]
+    assert "pages" not in page["items"][0]["revision"]
+    assert "dependency_manifest" not in page["items"][0]["revision"]
+    await create("wiki-created-after-anchor")
+    following = (await query("wiki.list", {"limit": 1, "cursor": page["next_cursor"]})).json()
+    assert following["visible_total"] == 2 and not following["has_more"]
+    assert {page["items"][0]["wiki"]["id"], following["items"][0]["wiki"]["id"]} == {
+        first["wiki"]["id"], second["wiki"]["id"]}
+    assert (await query("wiki.list", {}, "bob")).json()["visible_total"] == 0
+    assert (await query("wiki.list", {"cursor": page["next_cursor"]}, "bob")).status_code == 409
+
+    wiki_id, revision_id = first["wiki"]["id"], first["revision"]["id"]
+    assert (await query("wiki.get", {"wiki_id": wiki_id}, "bob")).status_code == 404
+    published = await client.post(f"/api/wikis/{wiki_id}/publish", headers=headers(),
+                                  json={"base_revision_id": revision_id})
+    assert published.status_code == 200, published.text
+    page_key = first["revision"]["pages"][0]["page_key"]
+    edited = await client.patch(f"/api/wikis/{wiki_id}/pages/{page_key}",
+        headers={**headers(), "Idempotency-Key": "private-human-edit"},
+        json={"base_revision_id": revision_id,
+              "paragraphs": [{"id": "private-note", "text": "PRIVATE_UNPUBLISHED_NOTE"}]})
+    assert edited.status_code == 201, edited.text
+    edited_revision_id = edited.json()["revision"]["id"]
+    count_before_reads = calls.call_count
+    old = await query("wiki.get", {"wiki_id": wiki_id, "revision_id": revision_id})
+    current = await query("wiki.get", {"wiki_id": wiki_id})
+    assert old.status_code == current.status_code == 200
+    assert old.json()["revision"]["pages"][0]["human_paragraphs"] == []
+    assert "PRIVATE_UNPUBLISHED_NOTE" in current.text
+    history = (await query("wiki.revisions", {"wiki_id": wiki_id, "limit": 1})).json()
+    assert history["visible_total"] == 2 and history["has_more"]
+    historical_page = (await query("wiki.revisions", {
+        "wiki_id": wiki_id, "limit": 1, "cursor": history["next_cursor"]})).json()
+    assert historical_page["items"][0]["id"] == revision_id and not historical_page["has_more"]
+    assert (await query("wiki.revisions", {
+        "wiki_id": second["wiki"]["id"], "cursor": history["next_cursor"]})).status_code == 409
+    public = await query("wiki.get", {"wiki_id": wiki_id}, "bob")
+    public_history = await query("wiki.revisions", {"wiki_id": wiki_id}, "bob")
+    assert public.status_code == public_history.status_code == 200
+    assert public_history.json()["visible_total"] == 1
+    assert public_history.json()["items"][0]["id"] == revision_id
+    assert "PRIVATE_UNPUBLISHED_NOTE" not in public.text + public_history.text
+    assert (await query("wiki.get", {
+        "wiki_id": wiki_id, "revision_id": edited_revision_id}, "bob")).status_code == 404
+    resource.publication = "private"
+    await session.commit()
+    assert (await query("wiki.get", {"wiki_id": wiki_id}, "bob")).status_code == 404
+    assert (await query("wiki.revisions", {"wiki_id": wiki_id}, "bob")).status_code == 404
+    assert calls.call_count == count_before_reads

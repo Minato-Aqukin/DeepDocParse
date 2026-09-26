@@ -95,7 +95,9 @@ export function authorizeSender(event, contents, expected) {
 
 export function contentSecurityPolicy(expected) {
   const dev = expected.protocol === 'http:'
-  const connection = dev ? `${expected.origin} ${expected.origin.replace('http:', 'ws:')}` : "'self'"
+  // The renderer calls same-origin ddp://app/api/* (fetch, SSE ask, upload
+  // PUTs, pdf.js) from the ddp://app page; connect-src must allow it.
+  const connection = dev ? `ddp://app ${expected.origin} ${expected.origin.replace('http:', 'ws:')}` : "'self' ddp://app"
   return `default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; `
     + `img-src 'self' data: blob:; font-src 'self' data:; connect-src ${connection} blob:; `
     + `worker-src 'self' blob:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`

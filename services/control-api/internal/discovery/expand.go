@@ -34,13 +34,14 @@ type RemoteExpansion struct {
 }
 
 type ExpansionInput struct {
-	Members     []Member
-	LocalNodeID string
-	Operation   string
-	MaxTargets  int
-	MaxRequests int
-	MaxNodes    int
-	Now         time.Time
+	Members        []Member
+	LocalNodeID    string
+	Operation      string
+	AllowedNodeIDs []string
+	MaxTargets     int
+	MaxRequests    int
+	MaxNodes       int
+	Now            time.Time
 }
 
 func hasFederationEndpoint(d NodeDescriptor) bool {
@@ -194,6 +195,14 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	var allowedNodes map[string]bool
+	if in.AllowedNodeIDs != nil {
+		allowedNodes = make(map[string]bool, len(in.AllowedNodeIDs))
+		for _, nodeID := range in.AllowedNodeIDs {
+			allowedNodes[nodeID] = true
+		}
+	}
+	allowed := func(nodeID string) bool { return allowedNodes == nil || allowedNodes[nodeID] }
 	requests, nodes := 0, 0
 	stopped := false
 	stop := func() { stopped = true }
@@ -258,7 +267,7 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 	// Seed the frozen direct members. The classification mirrors the store's
 	// historical fallback exactly for a deployment with no registered peers.
 	for _, member := range in.Members {
-		if member.State != MemberApproved {
+		if member.State != MemberApproved || !allowed(member.NodeID) {
 			continue
 		}
 		out.Handled[member.NodeID] = true
@@ -360,7 +369,7 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 		for _, child := range membersPull.items {
 			// Re-entering the local node or an already scheduled directory is the
 			// loop/duplicate path itself, not an unexpanded subtree.
-			if child.NodeID == in.LocalNodeID || visited[child.NodeID] || scheduled[child.NodeID] {
+			if !allowed(child.NodeID) || child.NodeID == in.LocalNodeID || visited[child.NodeID] || scheduled[child.NodeID] {
 				continue
 			}
 			if child.State != MemberApproved {

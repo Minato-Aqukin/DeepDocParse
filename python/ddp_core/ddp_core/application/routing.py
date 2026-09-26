@@ -216,8 +216,8 @@ class RootBudget:
             "egress": budget.get("max_egress_bytes", budget["max_bytes"]),
         }
 
-    def reserve(self, kind: str, amount: int = 1) -> None:
-        """预占额度；先查全部上限再一起记账，失败的预占不产生半截消耗。"""
+    def check(self, kind: str, amount: int = 1) -> None:
+        """Check a reservation without changing counters."""
         _integer(amount, name="reservation amount")
         spec = self._KINDS.get(kind)
         if spec is None:
@@ -233,6 +233,11 @@ class RootBudget:
             raise ApplicationError("budget_exhausted", "egress budget exhausted")
         if sub == "discovery" and self._used["discovery"] + amount > self._sub_caps["discovery"]:
             raise ApplicationError("budget_exhausted", "discovery budget exhausted")
+
+    def reserve(self, kind: str, amount: int = 1) -> None:
+        """预占额度；先查全部上限再一起记账，失败的预占不产生半截消耗。"""
+        self.check(kind, amount)
+        counter, sub = self._KINDS[kind]
         self._used[counter] += amount
         if sub == "probe":
             self._used["probes"] += amount

@@ -1,0 +1,227 @@
+{
+  "state": "paused_by_user_for_planning",
+  "clean_lifecycle_first_upload": {
+    "resource": {
+      "id": "b1cfd61b4e4b4beca3cc18e51d5e1a31",
+      "organization_id": "4d676ba5d26e8628b8a7e9c40872131b",
+      "owner_id": "f42bd8fe9c8fff6b3711ae1976958539",
+      "uploader_ref": {
+        "issuer": "4d676ba5d26e8628b8a7e9c40872131b",
+        "subject": "f42bd8fe9c8fff6b3711ae1976958539"
+      },
+      "display_name": "controller-manual.pdf",
+      "publication": "private",
+      "copied_from": null,
+      "created_at": "2026-09-23T14:37:39.905659+00:00",
+      "updated_at": "2026-09-23T14:37:39.905661+00:00",
+      "versions": [
+        {
+          "id": "018b970f89874581838d197ec7a98f8c",
+          "resource_id": "b1cfd61b4e4b4beca3cc18e51d5e1a31",
+          "version_no": 1,
+          "document_id": "dd33732d32c849c998538166cc404521",
+          "source_digest": "e767746230fdaf6921446e4ee31abcea6bc8acd1126cd3ee85c3a6a44eab6833",
+          "source_digest_verified": true,
+          "filename": "controller-manual.pdf",
+          "size_bytes": 2527,
+          "parse_job_id": "7a4797918d104dcd9cbb0cc2772f463c",
+          "created_at": "2026-09-23T14:37:39.907202+00:00"
+        }
+      ]
+    },
+    "version": {
+      "id": "018b970f89874581838d197ec7a98f8c",
+      "resource_id": "b1cfd61b4e4b4beca3cc18e51d5e1a31",
+      "version_no": 1,
+      "document_id": "dd33732d32c849c998538166cc404521",
+      "source_digest": "e767746230fdaf6921446e4ee31abcea6bc8acd1126cd3ee85c3a6a44eab6833",
+      "source_digest_verified": true,
+      "filename": "controller-manual.pdf",
+      "size_bytes": 2527,
+      "parse_job_id": "7a4797918d104dcd9cbb0cc2772f463c",
+      "created_at": "2026-09-23T14:37:39.907202+00:00"
+    },
+    "document": {
+      "id": "dd33732d32c849c998538166cc404521",
+      "resource_id": "b1cfd61b4e4b4beca3cc18e51d5e1a31",
+      "source_version_id": "018b970f89874581838d197ec7a98f8c",
+      "filename": "controller-manual.pdf",
+      "doc_id": "e767746230fdaf6921446e4ee31abcea6bc8acd1126cd3ee85c3a6a44eab6833",
+      "origin": "web",
+      "mime": "application/pdf",
+      "size_bytes": 2527,
+      "page_count": 2,
+      "status": "succeeded",
+      "error": null,
+      "index_status": "ready",
+      "index_error": null,
+      "compile_status": "ready",
+      "compile_degraded": [],
+      "compile_fingerprint": "bf41e3ba176479b64b76e395fe13f9508d8495df514b75e82782a3fb4db0597b",
+      "layout_version": "ddp-layout/1",
+      "code_detection": "heuristic",
+      "current_job_id": "7a4797918d104dcd9cbb0cc2772f463c",
+      "created_at": "2026-09-23T14:37:39.907202Z",
+      "uploaders": [
+        "v3-same-name-reader"
+      ],
+      "can_delete": true
+    }
+  },
+  "clean_lifecycle_archived_layout": {
+    "layout_version": "ddp-layout/1",
+    "engine": "borndigital",
+    "code_detection": "heuristic",
+    "pdf_info": [
+      {
+        "page_idx": 0,
+        "page_size": [
+          595.2755737304688,
+          841.8897705078125
+        ],
+        "para_blocks": [
+          {
+            "type": "text",
+            "bbox": [
+              55.79199981689453,
+              48.623779296875,
+              260.79400634765625,
+              65.5977783203125
+            ],
+            "lines": [
+              {
+                "spans": [
+                  {
+                    "content": "Controller setup manual"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "bbox": [
+              55.167999267578125,
+              93.27374267578125,
+              329.41595458984375,
+              126.51776123046875
+            ],
+            "lines": [
+              {
+                "spans": [
+                  {
+                    "content": "The reset delay is 17 milliseconds."
+                  }
+                ]
+              },
+              {
+                "spans": [
+                  {
+                    "content": "Wait for the reset delay before sending a command."
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "bbox": [
+              55.80400085449219,
+              783.2737693786621,
+              56.86000061035156,
+              791.8897705078125
+            ],
+            "lines": [
+              {
+                "spans": [
+                  {
+                    "content": "i"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "page_idx": 1,
+        "page_size": [
+          595.2755737304688,
+          841.8897705078125
+        ],
+        "para_blocks": [
+          {
+            "type": "text",
+            "bbox": [
+              55.28799819946289,
+              48.83978271484375,
+              215.34400939941406,
+              65.77777099609375
+            ],
+            "lines": [
+              {
+                "spans": [
+                  {
+                    "content": "Watchdog settings"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "bbox": [
+              55.167999267578125,
+              93.27374267578125,
+              360.0999450683594,
+              126.51776123046875
+            ],
+            "lines": [
+              {
+                "spans": [
+                  {
+                    "content": "The watchdog timeout is 7 seconds."
+                  }
+                ]
+              },
+              {
+                "spans": [
+                  {
+                    "content": "Reset timing and watchdog timeout are separate settings."
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "bbox": [
+              56.21200180053711,
+              783.4537696838379,
+              59.30799865722656,
+              791.8897705078125
+            ],
+            "lines": [
+              {
+                "spans": [
+                  {
+                    "content": "1"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "clean_lifecycle_wiki_fixed_url": "http://127.0.0.1:35173/#/wiki?wiki_id=72b0d48bb6974387a79c32cd6504ec6d&revision_id=8595dc7e7668468584a61ef24acffe4b",
+  "observed_wiki_claims": [
+    "The watchdog timeout is 7 seconds.",
+    "Reset timing and watchdog timeout are separate settings.",
+    "The reset delay is 17 milliseconds.",
+    "Wait for the reset delay before sending a command."
+  ],
+  "observed_wiki_issue": "Evidence merges the body with the distant page footer into a tall bounding box; archived layout itself has separate tight paragraph boxes.",
+  "verification_limit": "No implementation or test commands executed after pause. Claims above transcribed from the already-observed browser; future resume must re-read persisted Wiki before testing updates."
+}

@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"slices"
 	"time"
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/auth"
@@ -79,21 +81,45 @@ func bumpDirectory(ctx context.Context, tx pgx.Tx, org string, rev int64) error 
 	return err
 }
 
-func (s *Store) RegisterNode(ctx context.Context, org string, in discovery.Registration) (int64, error) {
-	var revision int64
+type NodeRegistration struct {
+	RegistryRevision int64
+	State            string
+}
+
+func (s *Store) RegisterNode(ctx context.Context, org string, in discovery.Registration) (NodeRegistration, error) {
+	result := NodeRegistration{State: discovery.MemberPending}
 	err := s.InTx(ctx, func(tx pgx.Tx) error {
 		rev, err := lockDirectory(ctx, tx, org)
 		if err != nil {
 			return err
 		}
 		var oldRev int64
-		var oldState string
-		err = tx.QueryRow(ctx, `SELECT descriptor_revision,state FROM control.node_members WHERE organization_id=$1 AND node_id=$2`, org, in.Descriptor.NodeID).Scan(&oldRev, &oldState)
+		var oldState, oldKey string
+		var oldBody []byte
+		var oldVisible bool
+		var oldSubjects []string
+		err = tx.QueryRow(ctx, `SELECT descriptor_revision,state,public_key,descriptor,visible_to_org,allowed_subjects FROM control.node_members WHERE organization_id=$1 AND node_id=$2`, org, in.Descriptor.NodeID).Scan(&oldRev, &oldState, &oldKey, &oldBody, &oldVisible, &oldSubjects)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		if err == nil && (oldState == discovery.MemberRevoked || oldRev >= in.Descriptor.Revision) {
+		existing := err == nil
+		if existing && (oldState == discovery.MemberRevoked || oldRev > in.Descriptor.Revision) {
 			return ErrDiscoveryConflict
+		}
+		renewal := existing && oldRev == in.Descriptor.Revision
+		if renewal {
+			var oldDescriptor discovery.NodeDescriptor
+			if err := json.Unmarshal(oldBody, &oldDescriptor); err != nil {
+				return err
+			}
+			oldExpiry := oldDescriptor.ValidUntil
+			oldDescriptor.ValidUntil = in.Descriptor.ValidUntil
+			if !in.Descriptor.ValidUntil.After(oldExpiry) || oldKey != in.PublicKey ||
+				oldVisible != in.VisibleToOrg || !slices.Equal(oldSubjects, in.AllowedSubjects) ||
+				!reflect.DeepEqual(oldDescriptor, in.Descriptor) {
+				return ErrDiscoveryConflict
+			}
+			result.State = oldState
 		}
 		// Membership validation is transactionally tied to the registration; arbitrary user IDs
 		// cannot create a hidden sharing scope outside this organization.
@@ -111,20 +137,29 @@ func (s *Store) RegisterNode(ctx context.Context, org string, in discovery.Regis
 		if err != nil {
 			return err
 		}
-		revision = rev + 1
+		result.RegistryRevision = rev + 1
+		if renewal {
+			// A lease is not a new authorization: retained snapshots keep their
+			// frozen expiry, and existing grants do not acquire another epoch.
+			_, err = tx.Exec(ctx, `UPDATE control.node_members SET descriptor=$3,revision=$4,updated_at=now() WHERE organization_id=$1 AND node_id=$2`, org, in.Descriptor.NodeID, body, result.RegistryRevision)
+			if err != nil {
+				return err
+			}
+			return bumpDirectory(ctx, tx, org, result.RegistryRevision)
+		}
 		subjects := in.AllowedSubjects
 		if subjects == nil {
 			subjects = []string{}
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO control.node_members(organization_id,node_id,public_key,descriptor,descriptor_revision,state,visible_to_org,allowed_subjects,revision)
    VALUES($1,$2,$3,$4,$5,'pending',$6,$7,$8)
-   ON CONFLICT(organization_id,node_id) DO UPDATE SET public_key=excluded.public_key,descriptor=excluded.descriptor,descriptor_revision=excluded.descriptor_revision,state='pending',visible_to_org=excluded.visible_to_org,allowed_subjects=excluded.allowed_subjects,revision=excluded.revision,public_revision=control.node_members.public_revision+1,updated_at=now()`, org, in.Descriptor.NodeID, in.PublicKey, body, in.Descriptor.Revision, in.VisibleToOrg, subjects, revision)
+   ON CONFLICT(organization_id,node_id) DO UPDATE SET public_key=excluded.public_key,descriptor=excluded.descriptor,descriptor_revision=excluded.descriptor_revision,state='pending',visible_to_org=excluded.visible_to_org,allowed_subjects=excluded.allowed_subjects,revision=excluded.revision,public_revision=control.node_members.public_revision+1,updated_at=now()`, org, in.Descriptor.NodeID, in.PublicKey, body, in.Descriptor.Revision, in.VisibleToOrg, subjects, result.RegistryRevision)
 		if err != nil {
 			return err
 		}
-		return bumpDirectory(ctx, tx, org, revision)
+		return bumpDirectory(ctx, tx, org, result.RegistryRevision)
 	})
-	return revision, err
+	return result, err
 }
 func (s *Store) SetNodeState(ctx context.Context, org, node, state string) (int64, error) {
 	var revision int64

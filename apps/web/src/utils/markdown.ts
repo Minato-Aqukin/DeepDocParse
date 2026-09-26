@@ -3,6 +3,7 @@ import katex from 'katex'
 import MarkdownIt from 'markdown-it'
 
 import { http } from '@/api/http'
+import type { ResourceContext } from '@/api/resource-context'
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false })
 
@@ -69,9 +70,9 @@ function escapeHtml(text: string): string {
  * 而 crop 端点是 JWT 保护的，直接绑 src 必然 401。
  * 调用方要在卸载时 revoke 返回的 URL。
  */
-export async function fetchAuthedImage(url: string): Promise<string | null> {
+export async function fetchAuthedImage(url: string, context?: ResourceContext): Promise<string | null> {
   try {
-    const { data } = await http.get<Blob>(url, { responseType: 'blob' })
+    const { data } = await http.get<Blob>(url, { responseType: 'blob', params: context })
     return URL.createObjectURL(data)
   } catch {
     return null

@@ -7,9 +7,11 @@
 
 - **解析回调**（网关 -> 本服务）失败只记日志，真正的可靠性由
   `reconcile.py` 的对账保证。
-- **outbox 事件**（control-api -> 本服务）会一直重投直到 2xx 或 409，
-  所以这里必须**幂等**：`processed_events` 按 event_id 去重，
-  重投直接回 409（投递器把 409 当成功，见 Go 侧 deliverOutbox 的注释）。
+- **outbox 事件**（control-api -> 本服务）会一直重投直到 ACK 或确定性拒绝，
+  所以这里必须**幂等**：`processed_events` 按 event_id 去重，重投直接回
+  `409 duplicate_event`。**只有这个码算 ACK**；DocumentSubmitted 的其它 4xx
+  只有落在契约枚举 `ingest_rejection` 里才是终态拒绝，其余一律按暂时故障重投
+  （见 Go 侧 `classifyDelivery`）。所以可恢复的冲突不要用那组码。
 
 没有第二条的话，一次网络抖动就会让同一份上传变成两个 Document、
 两次解析、两次计费。
@@ -26,7 +28,9 @@ from ddp_corpus.archive import archive_job, fail_job
 from ddp_corpus.capabilities import collect_capability_profiles
 from ddp_corpus.control_client import ControlClient
 from ddp_corpus.db import get_session
-from ddp_corpus.deps import Actor, get_service_client, get_storage, require_service_actor
+from ddp_corpus.deps import (
+    Actor, get_service_client, get_storage, require_gateway_credentials, require_service_actor,
+)
 from ddp_corpus.errors import APIError
 from ddp_corpus.ingest import ingest_document
 from ddp_corpus.queue import enqueue
@@ -56,10 +60,16 @@ class ParseCallback(BaseModel):
 
 @router.post("/internal/parse-callback")
 async def parse_callback(body: ParseCallback, request: Request,
-                         _: Actor = Depends(require_service_actor),
+                         _: None = Depends(require_gateway_credentials),
                          session: AsyncSession = Depends(get_session),
                          storage: Storage = Depends(get_storage),
                          service: ServiceClient = Depends(get_service_client)):
+    # **只验服务凭据，不要 actor 头。** 模型网关无状态、不认识组织，它的回调
+    # 只带 `Authorization`（ddp_gateway/worker/tasks.py::_notify_callback）。
+    # 之前这里挂的是 require_service_actor：每一次回调都 401，解析结果全靠
+    # 60 秒一轮的对账捡回来 —— 功能"正确"，只是每份文档都晚一分钟，且毫无报错。
+    # 调用方的可信度就是 SERVICE_TOKEN 持有者的可信度；成功时本层自己去网关取结果。
+    #
     # 同一个网关任务可能对应本层多个 job（网关按 doc_id 去重，
     # 同一份文档从 Web 与对外 API 都提交过）——全部推进
     jobs = (await session.execute(
@@ -78,6 +88,7 @@ async def parse_callback(body: ParseCallback, request: Request,
             except Exception:      # noqa: BLE001 —— 拿不到详情不该挡住落 failed
                 error = "parse failed"
             await fail_job(session, job, error)
+            await _record_remote_outcome(session, storage, job, ok=False, error=error)
             continue
 
         document = await session.get(Document, job.document_id)
@@ -88,8 +99,56 @@ async def parse_callback(body: ParseCallback, request: Request,
         if await archive_job(session, storage, service, job.id):
             archived += 1
             await _schedule_index(session, document.id, job_id=job.id)
+            await _record_remote_outcome(session, storage, job, ok=True)
+            # `enqueue` never commits and archive_job committed before it: without this the
+            # index task was rolled back with the request session, the worker never got one,
+            # and every upload waited for the reconciler to index it (2026-09-24, phase E).
+            await session.commit()
 
     return {"ok": True, "archived": archived}
+
+
+async def _record_remote_outcome(session, storage, job, *, ok: bool, error: str | None = None):
+    """Pin or fail the file-compute delivery manifest for jobs bound to a compute."""
+    from ddp_corpus.remote_compute_models import RemoteCompute
+    row = await session.scalar(select(RemoteCompute).where(
+        RemoteCompute.parse_job_id == job.id).limit(1))
+    if row is None:
+        return
+    if ok:
+        from ddp_corpus.remote_compute_ingest import record_parse_outcome
+        from ddp_corpus.storage import job_result_prefix
+        prefix = job.result_prefix or job_result_prefix(job.id)
+        layout_key = prefix + "layout.json"
+        try:
+            layout = await storage.get(layout_key)
+        except Exception:
+            layout = b"{}"
+        import hashlib
+        from ddp_core.bundle import build_bundle, json_bytes
+        source = {"origin_node_id": "local", "authority_node_id": "local",
+                  "resource_id": job.resource_id or "", "source_version_id": "",
+                  "source_digest": "sha256:" + (job.id or ""),
+                  "parse_revision": job.id, "filename": "result",
+                  "mime": "application/pdf", "original": "missing",
+                  "missing_reason": "remote_compute_layout_only",
+                  "uploader_ref": job.initiated_by or "",
+                  "policy_revision": "temporary"}
+        bundle = build_bundle(source, {"layout.json": layout,
+                                       "evidence.json": json_bytes([]),
+                                       "provenance.json": json_bytes([])})
+        bundle_key = f"bundles/remote-compute/{row.id}/out.zip"
+        await storage.put(bundle_key, bundle, "application/zip")
+        await record_parse_outcome(session, compute_id=row.id,
+                                   organization_id=row.organization_id,
+                                   parse_job_id=job.id, ok=True,
+                                   bundle_key=bundle_key,
+                                   output_sha256=hashlib.sha256(bundle).hexdigest())
+    else:
+        from ddp_corpus.remote_compute_ingest import record_parse_outcome
+        await record_parse_outcome(session, compute_id=row.id,
+                                   organization_id=row.organization_id,
+                                   parse_job_id=job.id, ok=False, error=error)
 
 
 class InboundEvent(BaseModel):
@@ -108,7 +167,7 @@ async def consume_event(event: InboundEvent, request: Request,
     """消费 control-api 的 outbox 事件。**幂等。**
 
     去重先行：先抢 `processed_events` 的主键，抢不到说明这条已经处理过，
-    直接回 409（投递器把 409 当成功）。抢到之后再干活 —— 干活失败会让
+    直接回 409 duplicate_event（投递器只把这个码当 ACK）。抢到之后再干活 —— 干活失败会让
     事务回滚，占位行也跟着没了，下一次重投还能再来。
     """
     try:
@@ -116,7 +175,7 @@ async def consume_event(event: InboundEvent, request: Request,
             session.add(ProcessedEvent(event_id=event.event_id, type=event.type,
                                        organization_id=event.organization_id))
     except IntegrityError:
-        # 已处理过。**409 而不是 200**：投递器把 409 当成功（不再重投），
+        # 已处理过。**409 而不是 200**：投递器认 duplicate_event 为 ACK（不再重投），
         # 但日志与指标上能把"重投"与"首次处理"分开 —— 重投次数突然上升
         # 是投递链路出问题的信号
         raise APIError(409, f"event {event.event_id} already processed",
@@ -143,9 +202,34 @@ async def consume_event(event: InboundEvent, request: Request,
 async def _on_document_submitted(session, storage, service, control,
                                  event: InboundEvent) -> str:
     p = event.payload
+    target_resource_id = p.get("target_resource_id")
+    if target_resource_id is not None and (
+            not isinstance(target_resource_id, str) or not 1 <= len(target_resource_id) <= 128):
+        raise APIError(400, "invalid upload target", "invalid_request_error", "invalid_upload_target")
     options = p.get("options") or {}
     if isinstance(options, str):
         options = json.loads(options or "{}")
+    # Temporary file-compute inputs never take the permanent corpus path:
+    # they bind to their waiting record and reuse the real parse queue only
+    # after full verification, without entering the public catalog.
+    if (p.get("purpose") or "permanent") == "temporary_compute":
+        if target_resource_id is not None:
+            raise APIError(400, "temporary uploads cannot target a resource",
+                           "invalid_request_error", "invalid_upload_target")
+        from ddp_corpus.remote_compute_ingest import bind_verified_upload
+        row, _job = await bind_verified_upload(
+            session, storage, service, control,
+            organization_id=event.organization_id,
+            actor_id=p["actor_id"], actor_kind=p.get("actor_kind") or "user",
+            upload_id=p.get("upload_id") or event.event_id,
+            object_key=p["object_key"],
+            filename=p.get("filename") or "document.pdf",
+            mime=p.get("mime") or "application/octet-stream",
+            size_bytes=int(p.get("size") or 0),
+            sha256=p["sha256"],
+            remote_compute_id=p.get("remote_compute_id") or "",
+        )
+        return row.id
     document, _job = await ingest_document(
         session, storage, service, control,
         organization_id=event.organization_id,
@@ -160,6 +244,7 @@ async def _on_document_submitted(session, storage, service, control,
         options=options,
         upload_key=event.event_id,
         receipt_key=p.get("upload_id") or event.event_id,
+        target_resource_id=target_resource_id,
     )
     # **复活的文档要把索引推回去。** 删除会清空 chunks 并把 index_status 置回
     # none；复活时如果不重新排队，文档看着好好的却永远问不了，而对账只捞

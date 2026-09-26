@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Actual CPU model evaluation. No mock transport, downloads or remote model fallback."""
+"""Actual installed model/profile evaluation; no mock transport, downloads or remote fallback."""
 
 import argparse
 import asyncio
@@ -62,7 +62,7 @@ async def evaluate(args):
               "started_at": time.time(), "cases": [], "status": "running"}
     try:
         started = time.monotonic()
-        await runtime.start_model(args.model)
+        await runtime.start_model(args.model, runtime_id=args.runtime_id)
         report["startup_seconds"] = time.monotonic() - started
         report["provider"] = runtime.provider.model.provenance
         actual_generate = runtime.provider.generate
@@ -99,11 +99,25 @@ async def evaluate(args):
                     began = time.monotonic()
                     trace.clear()
                     try:
-                        result = await runtime.answer(
-                            query, version_ids=[version], wiki=operation == "wiki",
-                            execution_policy="local_only", allow_remote=False,
-                            operation_key=f"model-eval-{run_id}-{name}-{operation}",
-                        )
+                        key = f"model-eval-{run_id}-{name}-{operation}"
+                        revision = None
+                        if operation == "wiki":
+                            source = runtime.store.version(version)
+                            built = await runtime.build_wiki({
+                                "title": query, "sources": [{"resource_id": source["resource_id"], "source_version_id": version}],
+                                "max_pages": 1, "max_output_tokens": 2048, "execution_policy": "local_only", "allow_remote": False,
+                            }, operation_key=key)
+                            revision = runtime.wikis.get(built["wiki"]["id"], built["revision"]["id"])["revision"]
+                            assertions = [sentence for page in revision["pages"]
+                                          for section in page["generated_sections"] for sentence in section["sentences"]]
+                            result = {"answer": "\n".join(item["text"] for item in assertions), "assertions": assertions,
+                                      "evidence": [{"id": item["evidence_id"], "evidence": item["original"]}
+                                                   for item in revision["dependency_manifest"]],
+                                      "pages": revision["pages"], "provider": built.get("provider"),
+                                      "semantic_review": "needs_review"}
+                        else:
+                            result = await runtime.answer(query, version_ids=[version],
+                                execution_policy="local_only", allow_remote=False, operation_key=key)
                         obtained = {item["id"] for item in result["evidence"]}
                         structural = bool(result["assertions"]) and all(
                             not claim["unsupported"] and claim["evidence_ids"] and
@@ -124,6 +138,7 @@ async def evaluate(args):
                             "pages": result.get("pages"), "structural_citations": structural,
                             "original_bbox": original, "expected_value_present": value_correct,
                             "semantic_review": result.get("semantic_review"),
+                            "revision_id": revision["id"] if revision else None,
                             "status": "passed" if structural and original and value_correct else "failed",
                         }
                     except (ApplicationError, RuntimeError) as exc:
@@ -137,7 +152,7 @@ async def evaluate(args):
             report["cases"].append(entry)
         report["status"] = "passed" if all(c["status"] == "passed" for c in report["cases"]) else "failed"
         report["limits"] = ["expected-value checks do not establish general semantic entailment",
-                            "Wiki is a citation-bound draft; multi-page relations and revision editing remain separate acceptance"]
+                            "Wiki cases use committed versioned revisions; multi-page relations and edit/restart acceptance are exercised by eval_wiki.py"]
     except Exception as exc:
         report.update(status="failed", error=getattr(exc, "code", type(exc).__name__), message=str(exc))
     finally:
@@ -160,6 +175,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--model", default="qwen3-1.7b-q8_0")
+    parser.add_argument("--runtime-id", help="explicit reviewed runtime profile; never silently falls back")
     parser.add_argument("--offline-namespace", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     raise SystemExit(asyncio.run(evaluate(parser.parse_args())))

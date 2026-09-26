@@ -1,0 +1,442 @@
+{
+  "schema": "ddp-native-package-verification/1",
+  "date": "2026-09-23",
+  "platform": {
+    "os": "Linux-7.2.6-1-cachyos-x86_64-with-glibc2.44",
+    "session": "Wayland",
+    "architecture": "x86_64"
+  },
+  "scope": "Actual pacman installation in an isolated root and package database, then ordinary-user execution on the real host Wayland session. Not a clean-OS VM, system-global install, Windows test, or physical suspend.",
+  "host_package_database_modified": false,
+  "package_signature_policy": "Host-equivalent local-file policy; no repository/network access during installation.",
+  "versions": [
+    "0.1.0-1",
+    "0.1.1-1"
+  ],
+  "packages": {
+    "0.1.0": "a252cf6c2b876d3cd641ac3d10aefe5a26ca5af4344f45539395b184d7079352",
+    "0.1.1": "fc0bc5b62247e79e69e0ebe6479e78cc5838ef5d4fe4096bb1c711824b996032"
+  },
+  "installed_0_1_0": {
+    "renderer": {
+      "nodeRequire": "undefined",
+      "nodeProcess": "undefined",
+      "methods": [
+        "clientList",
+        "clientConnectLocal",
+        "clientPairRemote",
+        "clientWake",
+        "clientDisconnect",
+        "clientSubscribe",
+        "clientUnsubscribe",
+        "clientCommand",
+        "clientQuery",
+        "clientReceipt",
+        "clientReadDraft",
+        "clientSaveDraft",
+        "clientImportFile",
+        "clientExportBundle",
+        "clientReadOriginal",
+        "clientPlanPropose",
+        "clientPlanProposeFile",
+        "clientPlanList",
+        "clientPlanGet",
+        "clientPlanReviewCenter",
+        "clientPlanApprove",
+        "clientPlanRevoke",
+        "clientPlanCancel",
+        "clientPlanDispatch",
+        "clientPlanResume",
+        "clientPlanReconcile",
+        "clientPlanFetchDelivery",
+        "clientPlanConfirmDelivery",
+        "onClientView",
+        "hostStatus",
+        "selectWorkspace",
+        "startLocal",
+        "stopLocal",
+        "runtimeStatus",
+        "setCredential",
+        "credentialStatus",
+        "clearCredential"
+      ],
+      "host": {
+        "ok": true,
+        "value": {
+          "platform": "linux",
+          "electron": "44.3.0",
+          "secrets": {
+            "backend": "basic_text",
+            "persistentAvailable": false,
+            "reason": "session_only_secret_service_required"
+          },
+          "credentialStorage": {
+            "backend": "basic_text",
+            "persistentAvailable": false,
+            "reason": "session_only_secret_service_required"
+          },
+          "runtimeBackend": "native",
+          "runtimeAvailable": true,
+          "runtimeReason": null,
+          "orphanCleanup": null,
+          "isolation": "posix_mode",
+          "lifecycle": "close_stops_owned_local_tasks",
+          "connectionIntegration": "shared_client_runtime"
+        }
+      },
+      "rejected": {
+        "ok": false,
+        "error": {
+          "code": "invalid_arguments"
+        }
+      },
+      "title": "环境工作台 · DeepDocParse",
+      "rendered": 1
+    },
+    "fonts": [
+      {
+        "font": "16px Inter",
+        "loaded": true
+      },
+      {
+        "font": "16px \"IBM Plex Mono\"",
+        "loaded": true
+      },
+      {
+        "font": "16px \"Noto Sans SC\"",
+        "loaded": true
+      }
+    ],
+    "localRuntime": {
+      "state": "ready",
+      "reason": null
+    },
+    "ready": {
+      "workspaceId": "d21f611a-4037-4441-bb0f-88c756a905c3",
+      "state": "ready",
+      "generation": 1,
+      "reason": null,
+      "identity": {
+        "environment_id": "local-c89c8ea13c3f43e5b95641f0e63b9f74",
+        "workspace_id": "6156815299a24879bc24b9490980878f",
+        "authority_node_id": "local-c89c8ea13c3f43e5b95641f0e63b9f74"
+      }
+    },
+    "suspended": {
+      "workspaceId": "d21f611a-4037-4441-bb0f-88c756a905c3",
+      "state": "stopped",
+      "generation": 1,
+      "reason": "system_suspended",
+      "identity": {
+        "environment_id": "local-c89c8ea13c3f43e5b95641f0e63b9f74",
+        "workspace_id": "6156815299a24879bc24b9490980878f",
+        "authority_node_id": "local-c89c8ea13c3f43e5b95641f0e63b9f74"
+      }
+    },
+    "resumed": {
+      "workspaceId": "d21f611a-4037-4441-bb0f-88c756a905c3",
+      "state": "ready",
+      "generation": 2,
+      "reason": null,
+      "identity": {
+        "environment_id": "local-c89c8ea13c3f43e5b95641f0e63b9f74",
+        "workspace_id": "6156815299a24879bc24b9490980878f",
+        "authority_node_id": "local-c89c8ea13c3f43e5b95641f0e63b9f74"
+      }
+    },
+    "application": {
+      "version": "0.1.0",
+      "packaged": true
+    },
+    "sharedClient": {
+      "connectionId": "connection-6f76dbae4e6482fe5d548092de6ad1c28701c3b6",
+      "fileResults": {
+        "originalBytes": 18176869,
+        "exported": {
+          "ok": true,
+          "value": {
+            "saved": true
+          }
+        },
+        "lifecycle": {
+          "resourceId": "91af0570e43d4f9093cc1277ceff5b1a",
+          "originalVersion": "35c82cd100d243f69f39362ee2e057e5",
+          "appendedVersion": "76e2ea3b80794288addf120ee146b9b0",
+          "withdrawn": "withdrawn",
+          "deleted": true,
+          "receiptTask": "d72dcf0a726441c196462508ba7b0a9a"
+        }
+      },
+      "pdfRendered": true,
+      "modelResults": null
+    },
+    "webPreferences": {
+      "sandbox": true,
+      "contextIsolation": true,
+      "nodeIntegration": false
+    },
+    "display": {
+      "wayland": "wayland-1",
+      "x11": ":1"
+    },
+    "stopped": {
+      "workspaceId": "d21f611a-4037-4441-bb0f-88c756a905c3",
+      "state": "stopped",
+      "generation": 2,
+      "reason": "host_quit",
+      "identity": {
+        "environment_id": "local-c89c8ea13c3f43e5b95641f0e63b9f74",
+        "workspace_id": "6156815299a24879bc24b9490980878f",
+        "authority_node_id": "local-c89c8ea13c3f43e5b95641f0e63b9f74"
+      }
+    }
+  },
+  "upgraded_0_1_1": {
+    "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) DeepDocParse/0.1.1 Chrome/152.0.7977.78 Electron/44.3.0 Safari/537.36",
+    "host": {
+      "ok": true,
+      "value": {
+        "platform": "linux",
+        "electron": "44.3.0",
+        "secrets": {
+          "backend": "basic_text",
+          "persistentAvailable": false,
+          "reason": "session_only_secret_service_required"
+        },
+        "credentialStorage": {
+          "backend": "basic_text",
+          "persistentAvailable": false,
+          "reason": "session_only_secret_service_required"
+        },
+        "runtimeBackend": "native",
+        "runtimeAvailable": true,
+        "runtimeReason": null,
+        "orphanCleanup": null,
+        "isolation": "posix_mode",
+        "lifecycle": "close_stops_owned_local_tasks",
+        "connectionIntegration": "shared_client_runtime"
+      }
+    },
+    "connections": {
+      "ok": true,
+      "value": [
+        {
+          "connectionId": "connection-6f76dbae4e6482fe5d548092de6ad1c28701c3b6",
+          "kind": "local",
+          "label": "pacman-native-workspace",
+          "environment": {
+            "environmentId": "local-c89c8ea13c3f43e5b95641f0e63b9f74",
+            "workspaceId": "6156815299a24879bc24b9490980878f",
+            "authorityNodeId": "local-c89c8ea13c3f43e5b95641f0e63b9f74"
+          },
+          "profile": {
+            "profileId": "profile-a8970a429b4c101cbc6978d1e5661722d7e04ba0",
+            "issuer": "local-c89c8ea13c3f43e5b95641f0e63b9f74",
+            "subject": "workspace:6156815299a24879bc24b9490980878f"
+          },
+          "workspaceId": "bd88c197-df6a-4c36-a0f6-25db832e0b40",
+          "revision": 1721,
+          "view": {
+            "transport": "ready",
+            "snapshot": "current",
+            "reason": null,
+            "projection": {
+              "cursor": "local.6156815299a24879bc24b9490980878f.19",
+              "sequence": 19,
+              "state": {
+                "resources": [
+                  {
+                    "id": "35c82cd100d243f69f39362ee2e057e5",
+                    "resource_id": "91af0570e43d4f9093cc1277ceff5b1a",
+                    "filename": "pico-datasheet.pdf",
+                    "source_digest": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+                    "size_bytes": 18176869,
+                    "blob_key": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+                    "parse_revision": "035b994f283e422285c04b22704b3e2e",
+                    "state": "ready",
+                    "layout_key": "95399b4b18246f3fd860127c93af321e4286cf1af00f8118900975bd34d90ad0",
+                    "bundle_key": "c73198bb7788387ac5bae5e1b63de9b622bf9314ef982a49572c7c9f14e90a32",
+                    "source_json": null,
+                    "provider": {
+                      "layout_engine": "borndigital",
+                      "layout_version": "ddp-layout/1",
+                      "parse_options_hash": "1889c29ba638ae448d065b77a72cfd2277633f9825fee9054b5911c57992e358",
+                      "compiler": "ddp-compile/1",
+                      "chunker": "ddp-chunk/2",
+                      "tokenizer": "bigram",
+                      "embedding_model": "disabled",
+                      "vision_model": "disabled",
+                      "provider_resolved": true
+                    },
+                    "degraded": [
+                      "embedding_unavailable",
+                      "vision_unavailable"
+                    ],
+                    "error": null,
+                    "created_at": 1790146411.5592806
+                  }
+                ],
+                "tasks": [
+                  {
+                    "id": "d72dcf0a726441c196462508ba7b0a9a",
+                    "kind": "version.delete",
+                    "version_id": null,
+                    "operation_key": "gui-delete-e6330693-4941-455d-9570-83e4c9ea7532",
+                    "request_digest": "f3e6dff7ca34e66d2d531710435819d0b9354d6ae042c6707a7b2c88994bcc07",
+                    "status": "succeeded",
+                    "generation": 1,
+                    "attempts": 1,
+                    "result": {
+                      "output_id": "11df183bb5f14710b6e9973433edacdf"
+                    },
+                    "error": null,
+                    "created_at": 1790146427.6341116
+                  },
+                  {
+                    "id": "c3f948db91ec43acbf24db8a1459ad9b",
+                    "kind": "version.withdraw",
+                    "version_id": null,
+                    "operation_key": "gui-smoke-960b6db3-7716-4fe2-8af7-511706684d70",
+                    "request_digest": "df32fd299cfb15f69ba4713ed6cd3ba21cf8911fb54e86e96ebfe1538b13e0e5",
+                    "status": "succeeded",
+                    "generation": 1,
+                    "attempts": 1,
+                    "result": {
+                      "output_id": "8e0c489b139a4d26b94e4eaed486a315"
+                    },
+                    "error": null,
+                    "created_at": 1790146427.621
+                  },
+                  {
+                    "id": "2d1628d2dfcd49baa16e74e91a0818e8",
+                    "kind": "parse",
+                    "version_id": "35c82cd100d243f69f39362ee2e057e5",
+                    "operation_key": "gui-smoke-import-0001",
+                    "request_digest": "5c4b0052949a5d75ceab0820e3d0a157d12312749f838ec9f3d2fd3cedc90d5c",
+                    "status": "succeeded",
+                    "generation": 1,
+                    "attempts": 1,
+                    "result": {
+                      "evidence_count": 77
+                    },
+                    "error": null,
+                    "created_at": 1790146411.5592806
+                  }
+                ],
+                "capabilities": {
+                  "workspace_id": "6156815299a24879bc24b9490980878f",
+                  "environment_id": "local-c89c8ea13c3f43e5b95641f0e63b9f74",
+                  "kind": "local",
+                  "accounts": false,
+                  "parse": {
+                    "available": true,
+                    "provider": "borndigital",
+                    "execution": "cpu_subprocess",
+                    "requires_text_layer": true
+                  },
+                  "retrieval": {
+                    "available": true,
+                    "mode": "keyword",
+                    "vector_available": false
+                  },
+                  "generation": {
+                    "available": false,
+                    "status": "model_unavailable",
+                    "model": null,
+                    "location": null
+                  },
+                  "degraded": [
+                    "embedding_unavailable",
+                    "vision_unavailable"
+                  ]
+                }
+              },
+              "previousSequence": 16
+            }
+          }
+        }
+      ]
+    },
+    "pdf_canvases": 1,
+    "visible_text": "DeepDocParse\npacman-native-workspace\n6156815299a24879bc24b9490980878f\n本机执行 · 原件不外发，远端计划须逐项批准\n浅色\n工作区\npacman-native-workspace\n本机\n打开本地工作区…\n配对中心…\n内容\n资源\n问答\nWiki\n任务\n远端计划\n本地模型\n\n凭证仅保留在本次会话\n\n断开连接\n已连接 · 已同步\n资源\n1\n导入 PDF…\n导入资料包…\n\n点选资源可查看固定版本原文；检索范围将限定为该版本。\n\n追加新版本…\n撤销所选版本\n删除所选版本\n删除全部版本\n固定版本 35c82cd100d243f69f39362ee2e057e5\npico-datasheet.pdf\n可用\n原文与出处\n导出资料包\n面板宽度\n\n35c82cd100d243f69f39362ee2e057e5\n\n上一页\n1 / 31\n下一页"
+  },
+  "sqlite_online_backup_and_upgrade": {
+    "workspace.sqlite3": {
+      "backup_integrity": "ok",
+      "installed_integrity": "ok",
+      "tables": {
+        "metadata": {
+          "backup_rows": 3,
+          "installed_rows": 3,
+          "unchanged": true
+        },
+        "resources": {
+          "backup_rows": 1,
+          "installed_rows": 1,
+          "unchanged": true
+        },
+        "versions": {
+          "backup_rows": 1,
+          "installed_rows": 1,
+          "unchanged": true
+        },
+        "evidence": {
+          "backup_rows": 77,
+          "installed_rows": 77,
+          "unchanged": true
+        }
+      }
+    },
+    "consents.sqlite3": {
+      "backup_integrity": "ok",
+      "installed_integrity": "ok",
+      "tables": {
+        "plans": {
+          "backup_rows": 0,
+          "installed_rows": 0,
+          "unchanged": true
+        },
+        "commands": {
+          "backup_rows": 0,
+          "installed_rows": 0,
+          "unchanged": true
+        },
+        "dispatches": {
+          "backup_rows": 0,
+          "installed_rows": 0,
+          "unchanged": true
+        },
+        "cost_ledger": {
+          "backup_rows": 0,
+          "installed_rows": 0,
+          "unchanged": true
+        },
+        "budget_allocations": {
+          "backup_rows": 0,
+          "installed_rows": 0,
+          "unchanged": true
+        },
+        "workspace_policy": {
+          "backup_rows": 1,
+          "installed_rows": 1,
+          "unchanged": true
+        }
+      }
+    }
+  },
+  "installed_manifest_verification": {
+    "files": 972,
+    "distributions": 18,
+    "electron": "44.3.0",
+    "version": "0.1.1"
+  },
+  "screenshots": [
+    "pacman-installed-pico-20260923.png",
+    "pacman-upgraded-pico-20260923.png"
+  ],
+  "human_review_status": "not_claimed",
+  "limitations": [
+    "No model cache was present in this package-install drill.",
+    "The nested-user-namespace GUI attempt failed; sandbox flags were not weakened. The installed application ran successfully as the normal host user."
+  ]
+}

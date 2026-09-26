@@ -15,11 +15,8 @@ import (
 	"time"
 )
 
-// Peer-facing read APIs are authenticated by a node-level shared credential.
-// The corpus side has the same shape (`ddp_corpus/routers/federation.py`):
-// fail closed on an unconfigured token, constant-time compare, no actor context.
+// Peer reads use the same single-use signed node credentials as corpus requests.
 const (
-	HeaderPeerToken  = "X-DDP-Peer-Token"
 	HeaderPeerTarget = "X-DDP-Target-Node"
 
 	peerMaxResponseBytes = 8 * 1024 * 1024
@@ -28,13 +25,10 @@ const (
 
 var peerNodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{2,63}$`)
 
-// PeerConfig is one administrator-registered outbound node. Credential fields
-// never appear in logs, errors or responses.
+// PeerConfig is one administrator-registered endpoint, never a shared secret.
 type PeerConfig struct {
-	NodeID       string
-	Endpoint     string
-	ServiceToken string
-	PeerToken    string
+	NodeID   string
+	Endpoint string
 }
 
 func validatePeerEndpoint(nodeID, endpoint string, allowLoopback bool) (string, error) {
@@ -59,9 +53,7 @@ func ParsePeers(raw string, allowLoopback bool) (map[string]PeerConfig, error) {
 		return map[string]PeerConfig{}, nil
 	}
 	var value map[string]struct {
-		Endpoint     string `json:"endpoint"`
-		ServiceToken string `json:"service_token"`
-		PeerToken    string `json:"peer_token"`
+		Endpoint string `json:"endpoint"`
 	}
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -77,23 +69,23 @@ func ParsePeers(raw string, allowLoopback bool) (map[string]PeerConfig, error) {
 		if err != nil {
 			return nil, err
 		}
-		if item.ServiceToken == "" || item.PeerToken == "" {
-			return nil, fmt.Errorf("peer %s: service_token and peer_token are required", nodeID)
-		}
-		peers[nodeID] = PeerConfig{NodeID: nodeID, Endpoint: endpoint, ServiceToken: item.ServiceToken, PeerToken: item.PeerToken}
+		peers[nodeID] = PeerConfig{NodeID: nodeID, Endpoint: endpoint}
 	}
 	return peers, nil
 }
 
 // PeerDirectory holds the parsed registry plus the transport used for tests.
+type PeerSigner func(context.Context, PeerConfig, *http.Request) error
+
 // A nil directory means "no outbound expansion": no remote node is contacted.
 type PeerDirectory struct {
 	peers map[string]PeerConfig
 	// client is built once in NewPeerDirectory; the zero value is never used.
 	client *http.Client
+	sign   PeerSigner
 }
 
-func NewPeerDirectory(peers map[string]PeerConfig, transport http.RoundTripper, timeout time.Duration) *PeerDirectory {
+func NewPeerDirectory(peers map[string]PeerConfig, transport http.RoundTripper, timeout time.Duration, sign PeerSigner) *PeerDirectory {
 	if timeout <= 0 {
 		timeout = DefaultPeerTimeout
 	}
@@ -115,6 +107,7 @@ func NewPeerDirectory(peers map[string]PeerConfig, transport http.RoundTripper, 
 	}
 	return &PeerDirectory{
 		peers: peers,
+		sign:  sign,
 		// The client is built once so concurrent scope creations share it without
 		// a lazy-initialization race.
 		client: &http.Client{
@@ -145,6 +138,10 @@ func (d *PeerDirectory) Len() int {
 // The returned reason is "" on a 200, the honest failure reason otherwise
 // (timeout/denied/unknown). Redirects are reported as unknown and never followed.
 func (d *PeerDirectory) peerGet(ctx context.Context, cfg PeerConfig, path string, query url.Values) ([]byte, int, string) {
+	registered, ok := d.Configured(cfg.NodeID)
+	if !ok || registered != cfg || d.sign == nil {
+		return nil, 0, "denied"
+	}
 	target := cfg.Endpoint + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
@@ -153,8 +150,9 @@ func (d *PeerDirectory) peerGet(ctx context.Context, cfg PeerConfig, path string
 	if err != nil {
 		return nil, 0, "unknown"
 	}
-	req.Header.Set("Authorization", "Bearer "+cfg.ServiceToken)
-	req.Header.Set(HeaderPeerToken, cfg.PeerToken)
+	if err := d.sign(ctx, cfg, req); err != nil {
+		return nil, 0, "denied"
+	}
 	req.Header.Set(HeaderPeerTarget, cfg.NodeID)
 	req.Header.Set("Accept", "application/json")
 	resp, err := d.client.Do(req)

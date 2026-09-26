@@ -66,8 +66,9 @@ scripts/dev.sh up             # 起全栈（无 GPU 档位）
 scripts/dev.sh up --gpu       # 叠加模型运行时
 scripts/dev.sh logs corpus-api
 
-./scripts/check.sh            # 全量门禁（22 项），与 CI 同一套判据
+./scripts/check.sh            # 默认门禁（guards python go web，含前端生产构建）
 ./scripts/check.sh guards     # 只跑守卫
+./scripts/check.sh web-e2e    # 可选浏览器门禁；完整验证边界见 docs/DEVELOPMENT.md
 ```
 
 单项：

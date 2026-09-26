@@ -203,7 +203,7 @@ async def test_provider_protocol_failure_and_oom_are_explicit(respx_mock):
 
 
 @pytest.mark.asyncio
-async def test_generated_wiki_is_citation_bound_and_marked_unreviewed(runtime, respx_mock):
+async def test_generated_answer_is_citation_bound_and_marked_unreviewed(runtime, respx_mock):
     await parsed(runtime)
     runtime.provider.model = ModelSelection("http://127.0.0.1:18761/v1", "fixture-protocol-only")
     route = respx_mock.post("http://127.0.0.1:18761/v1/chat/completions")
@@ -212,9 +212,9 @@ async def test_generated_wiki_is_citation_bound_and_marked_unreviewed(runtime, r
             200, json={"choices": [{"message": {"content": "The answer is 42 [1]"}}]}
         )
     )
-    result = await runtime.answer("contract", wiki=True)
+    result = await runtime.answer("contract")
     assert result["source_type"] == "generated" and result["semantic_review"] == "needs_review"
-    assert result["assertions"][0]["evidence_ids"] and result["pages"]
+    assert result["assertions"][0]["evidence_ids"]
     route.mock(
         return_value=httpx.Response(
             200, json={"choices": [{"message": {"content": "Unsupported statement"}}]}
@@ -470,3 +470,175 @@ async def test_source_only_bundle_keeps_missing_revision_and_can_roundtrip(runti
         assert restored.source == source
     finally:
         other.close()
+
+@pytest.mark.asyncio
+async def test_version_append_withdraw_delete_boundary(runtime, tmp_path):
+    task = await parsed(runtime)
+    first = runtime.store.version(task["version_id"])
+    resource_id = first["resource_id"]
+    appended = runtime.append_version_file(
+        resource_id, str(FIXTURES / "sample.pdf"), operation_key="append:v2")
+    assert appended["version_id"] != task["version_id"]
+    assert runtime.store.receipt("append:v2")["id"] == appended["id"]
+    finished = await runtime.work_once()
+    assert finished["id"] == appended["id"] and finished["status"] == "succeeded", finished
+    second = runtime.store.version(appended["version_id"])
+    assert second["resource_id"] == resource_id
+    assert second["source_digest"] == first["source_digest"]
+    assert second["size_bytes"] == first["size_bytes"]
+    assert second["parse_revision"] != first["parse_revision"]
+    assert runtime.store.version(task["version_id"])["source_digest"] == first["source_digest"]
+    assert [v["id"] for v in runtime.store.resource_versions(resource_id)] == [second["id"], first["id"]]
+    withdrawn = runtime.withdraw_version(task["version_id"])
+    assert withdrawn["state"] == "withdrawn"
+    projected = runtime.version_projection(task["version_id"])
+    assert projected["source_digest"] == first["source_digest"]
+    assert projected["size_bytes"] == first["size_bytes"]
+    assert runtime.blobs.read(projected["blob_key"], 32 * 1024 * 1024).startswith(b"%PDF-")
+    with pytest.raises(ApplicationError) as denied:
+        runtime.store.authorize_versions([task["version_id"]])
+    assert denied.value.code == "version_not_ready"
+    with pytest.raises(ApplicationError) as gated:
+        runtime.source_bytes(task["version_id"])
+    assert gated.value.code == "version_not_ready"
+    with pytest.raises(ApplicationError) as consent_denied:
+        runtime._consent_input_bytes(task["version_id"])
+    assert consent_denied.value.code == "version_not_ready"
+    reopened = LocalRuntime(tmp_path / "workspace")
+    try:
+        assert reopened.store.version(task["version_id"])["state"] == "withdrawn"
+        await reopened.work_once()
+        assert reopened.store.version(task["version_id"])["state"] == "withdrawn"
+    finally:
+        reopened.close()
+    removed = runtime.delete_version(second["id"])
+    assert removed == {"version_id": second["id"], "resource_id": resource_id, "deleted": True}
+    with pytest.raises(ApplicationError):
+        runtime.store.version(second["id"])
+    gone = runtime.delete_resource(resource_id)
+    assert gone["resource_id"] == resource_id and gone["deleted"] is True
+    with pytest.raises(ApplicationError):
+        runtime.store.resource(resource_id)
+
+
+@pytest.mark.asyncio
+async def test_unparsed_import_stays_projectable_for_file_plans(runtime, tmp_path):
+    from ddp_core.bundle import build_bundle, json_bytes
+    task = await parsed(runtime)
+    full = read_bundle(io.BytesIO(runtime.export_bundle(task["version_id"])))
+    source = {**full.source, "parse_revision": None}
+    files = {**full.files, "evidence.json": json_bytes([]),
+             "layout.json": json_bytes({"schema": "ddp-bundle-layout/1", "state": "missing",
+                                        "layout": None, "reason": "parse_not_available"})}
+    other = LocalRuntime(tmp_path / "projection-check")
+    try:
+        imported = other.import_bundle(io.BytesIO(build_bundle(source, files)),
+                                       operation_key="projection-source-only")
+        version = other.store.version(imported["version_id"])
+        assert version["state"] == "unparsed"
+        projected = other.version_projection(imported["version_id"])
+        assert projected["source_digest"] == version["source_digest"]
+        assert projected["size_bytes"] == version["size_bytes"]
+        assert other.export_bundle(imported["version_id"])
+        with pytest.raises(ApplicationError) as not_ready:
+            other.store.authorize_versions([imported["version_id"]])
+        assert not_ready.value.code == "version_not_ready"
+    finally:
+        other.close()
+
+
+@pytest.mark.asyncio
+async def test_version_lifecycle_http_surface(runtime):
+    token = "c" * 48
+    app = create_app(
+        runtime, session_token=token, allowed_hosts={"127.0.0.1:18763"}, start_worker=False)
+    task = await parsed(runtime)
+    first = runtime.store.version(task["version_id"])
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:18763",
+        headers={"Authorization": "Bearer " + token},
+    ) as client:
+        detail = await client.get("/api/v1/versions/" + task["version_id"])
+        assert detail.status_code == 200 and detail.json()["source_digest"] == first["source_digest"]
+        versions = await client.get("/api/v1/resources/" + first["resource_id"] + "/versions")
+        assert versions.status_code == 200 and len(versions.json()["items"]) == 1
+        appended = await client.post(
+            "/api/v1/resources/" + first["resource_id"] + "/versions",
+            content=(FIXTURES / "sample.pdf").read_bytes(),
+            headers={"X-Filename": "sample.pdf", "Idempotency-Key": "http-append"})
+        assert appended.status_code == 202, appended.text
+        await runtime.work_once()
+        withdrawn = await client.post("/api/v1/versions/" + task["version_id"] + "/withdraw",
+                                      headers={"Idempotency-Key": "http-withdraw"})
+        assert withdrawn.status_code == 200 and withdrawn.json()["state"] == "withdrawn"
+        assert (await client.get("/api/v1/versions/" + task["version_id"])).status_code == 200
+        assert (await client.get(
+            "/api/v1/versions/" + task["version_id"] + "/source")).status_code == 409
+        second_id = appended.json()["version_id"]
+        deleted = await client.delete("/api/v1/versions/" + second_id,
+                                      headers={"Idempotency-Key": "http-delete-version"})
+        assert deleted.status_code == 200 and deleted.json()["deleted"] is True
+        gone = await client.delete("/api/v1/resources/" + first["resource_id"],
+                                   headers={"Idempotency-Key": "http-delete-resource"})
+        assert gone.status_code == 200 and gone.json()["deleted"] is True
+        # Deletion is already committed: replay and receipt remain available after
+        # the deleted identity can no longer be resolved.
+        replay = await client.delete("/api/v1/resources/" + first["resource_id"],
+                                     headers={"Idempotency-Key": "http-delete-resource"})
+        assert replay.json() == gone.json()
+        receipt = await client.get("/api/v1/client/receipts/http-delete-resource")
+        assert receipt.status_code == 200 and receipt.json()["status"] == "succeeded"
+        conflict = await client.delete("/api/v1/resources/" + first["resource_id"],
+                                       headers={"Idempotency-Key": "http-delete-version"})
+        assert conflict.status_code == 409 and conflict.json()["error"]["code"] == "idempotency_conflict"
+
+
+@pytest.mark.asyncio
+async def test_delete_receipt_failure_preserves_source_and_allows_safe_retry(runtime):
+    task = await parsed(runtime)
+    token = "r" * 48
+    app = create_app(runtime, session_token=token, allowed_hosts={"127.0.0.1:18763"}, start_worker=False)
+    runtime.store.db.execute(
+        "CREATE TEMP TRIGGER fail_delete_receipt BEFORE INSERT ON outputs "
+        "WHEN NEW.kind='version.delete' BEGIN SELECT RAISE(FAIL,'receipt unavailable'); END")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://127.0.0.1:18763", headers={"Authorization": "Bearer " + token},
+    ) as client:
+        endpoint = "/api/v1/versions/" + task["version_id"]
+        failed = await client.delete(endpoint, headers={"Idempotency-Key": "atomic-delete"})
+        assert failed.status_code == 500
+        source = await client.get(endpoint + "/source")
+        assert source.status_code == 200 and source.content == (FIXTURES / "sample.pdf").read_bytes()
+        runtime.store.db.execute("DROP TRIGGER fail_delete_receipt")
+        deleted = await client.delete(endpoint, headers={"Idempotency-Key": "atomic-delete"})
+        assert deleted.status_code == 200 and deleted.json()["deleted"] is True
+        replay = await client.delete(endpoint, headers={"Idempotency-Key": "atomic-delete"})
+        assert replay.json() == deleted.json()
+        assert (await client.get(endpoint)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_keyword_cache_migration_waits_for_other_runtime_and_preserves_sources(tmp_path):
+    directory = tmp_path / "workspace"
+    first = LocalRuntime(directory)
+    try:
+        task = await parsed(first)
+        expected = first.search("contract")["hits"][0]
+        evidence = first.store.evidence(expected["evidence_id"])
+        with first.store.tx():
+            first.store.db.execute("UPDATE metadata SET value='previous-tokenizer' WHERE key='tokenizer'")
+            first.store.db.execute("UPDATE evidence_fts SET content='obsolete-cache'")
+        with pytest.raises(ApplicationError) as blocked:
+            LocalRuntime(directory)
+        assert blocked.value.code == "index_incompatible"
+    finally:
+        first.close()
+    current = LocalRuntime(directory)
+    try:
+        hit = current.search("contract")["hits"][0]
+        assert hit["evidence_id"] == expected["evidence_id"]
+        assert current.store.evidence(hit["evidence_id"]) == evidence
+        assert current.source_bytes(task["version_id"]) == (FIXTURES / "sample.pdf").read_bytes()
+    finally:
+        current.close()

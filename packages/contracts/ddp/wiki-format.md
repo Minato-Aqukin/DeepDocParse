@@ -37,16 +37,30 @@ Failed transactions do not consume a key or leave partial drafts.
 `Wiki` has `id`, `title`, `current_revision_id`, `published_revision_id`.
 `WikiRevision` has `id`, `wiki_id`, `base_revision_id`, `kind` (`generated` or
 `human_edit`), `created_by`, `provider`, `limits`, `merge_conflicts`, `pages`,
-`dependency_manifest`, `stale` and `stale_reasons`. The stored revision,
+`dependency_manifest`, `relations`, `stale` and `stale_reasons`. The stored revision,
 pages, bindings and manifest are append-only. `stale` is evaluated against
 current source state on read, independent from fixed historical metadata.
 
 Each page has a stable `page_key`, title, generated sections of claims, and a
 separate `human_paragraphs` array. Each generated claim has `id`, `text`,
 `evidence_ids`, `unsupported`, and optional `conflict_group`. Claims with no
-valid original evidence remain visibly unsupported. Bindings link claim IDs
+valid original evidence remain visibly unsupported. The model sees every
+supplied evidence with its `evidence_id` and the 1-based `reference` number the
+planner also uses; a claim may cite either, and the reference is resolved to that
+evidence's ID. Anything else is dropped. Bindings link claim IDs
 to stable original evidence IDs and excerpt digests; they do not imply that a
-semantic verifier proved the claim correct.
+semantic verifier proved the claim correct. A planner output that plans more
+than `max_pages` fails `409 wiki_budget_exceeded`; any other planner output
+rejected by plan validation fails `502 wiki_generation_failed` whose message
+states the planner's actual fault (for example a repeated page), not a generic
+binding error.
+
+`relations` contains source-grounded statements connecting two planned pages.
+Endpoints are page keys; each relation retains its original evidence IDs and
+provider metadata. The predicate must occur in its cited original evidence.
+Direction follows source mention order, not inferred causality. No co-mentioned
+source anchors, or an explicit empty model selection, produces no relations.
+Invalid selections fail generation instead of masquerading as an empty graph.
 
 `DependencyManifest` records original evidence actually sent to each writing call (plus
 retained human-page dependencies), conservatively including uncited context so a
@@ -58,18 +72,46 @@ bytes cannot grant publication permission for a private binding.
 
 Source deletion/revocation removes access to derived content. A changed latest
 resource version, parse revision, or original digest marks only dependent pages
-stale and leaves the old revision intact. Owner responses may read the old
+stale and leaves the old revision intact. A newer resource version stales a page
+only when none of that page's dependencies on the resource is at the latest version:
+a rebuild carries the previous page's dependencies with its human paragraphs (so
+publication still checks them), and a Wiki may cite several fixed versions on purpose.
+Owner responses may read the old
 revision while the exact original source remains authorized. Publication is
 rechecked on every read; changing a source back to private stops public access.
 
 ## Work bounds and current scope
 
 Planning receives only authorized original Evidence (`derived_from IS NULL`),
-never generated Wiki pages. One bounded planning call and at most `max_pages`
-writing calls are allowed. Total completion allowance is split between calls
-using the model protocol's `max_tokens`; aggregate source text is bounded by
-`max_input_chars`; evidence count, page count, and response body size are checked.
-Exhausting any bound fails visibly rather than silently publishing a partial Wiki.
+never generated Wiki pages. Every requested fixed source is authorized before
+its evidence is considered, and its fixed parse revision must have
+`status == succeeded` (otherwise `409 wiki_source_unavailable`, before any model
+call). Candidates are the original Evidence behind the version's **current index**
+(rows referenced by its chunks); Evidence superseded by an index rebuild stays readable
+for historical citations but is never selected again. A version without indexed
+original evidence fails with `409 wiki_source_unavailable`. Candidates are ranked by
+the same retrieval as search and QA (vector + keyword fusion with the same similarity
+floor, the title as query), then the rest of each source — including evidence below the
+floor — in document order; sources take turns by rank so one
+source cannot fill the budget. A bounded subset fits `max_evidence` and
+`max_input_chars` (the serialized frozen evidence envelope).
+Every requested source must contribute at least one original block within the
+budget; otherwise generation fails visibly. This also keeps coverage metadata
+subject to the same publication policy as the selected source context. Otherwise
+`limits.evidence_selection` reports `total_original_evidence`, `selected_evidence`,
+`omitted_evidence`, `complete`, `ranking_degraded` (`null`, or `embedding_unavailable`
+when only the keyword path ranked the candidates), and per-source counts keyed by
+`resource_id` and `source_version_id`. This field is absent on older revisions, and
+`ranking_degraded` is absent on revisions built before it existed. Omitted original
+evidence is not claimed as covered; the dependency manifest records selected
+context, not the entire source.
+
+One bounded planning call, at most `max_pages` writing calls, and at most one
+relation-selection call are allowed. The last call is made only when original
+statements co-mention two planned source anchors. Total completion allowance,
+including relation selection, is split between calls using the model protocol's
+`max_tokens`. Page count and response body size are checked. Exhausting a
+generation bound fails visibly rather than publishing truncated model output.
 Original-only sources have dependency expansion depth 0, preventing self-citation
 cycles. This implementation accepts local ResourceVersions only; remote evidence
 requires the separately validated federation retrieval and receipt adapter.

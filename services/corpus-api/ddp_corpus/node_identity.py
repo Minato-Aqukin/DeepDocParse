@@ -18,8 +18,9 @@ BUNDLE_NODE_ID 判"本地"，于是**本地目标被当成远端**，去 peer �
 
 绝不"先用 BUNDLE_NODE_ID 顶着"：那正是要消灭的第二个身份源。
 
-`FEDERATION_PEER_AUTH=shared_token_insecure`（开发档位）没有控制面，仍读
-BUNDLE_NODE_ID，并在 `status()` 里报降级。
+本地回路（同一进程的单测夹具、没有控制面的测试签发方）不走这个绑定：
+测试用 `bind_static_for_tests` 显式钉身份（见 tests/node_credentials_fixture.py），
+不用生产配置伪造节点身份。默认配置下没有控制面就是 503，不是"本地模式免绑定"。
 """
 from __future__ import annotations
 
@@ -50,19 +51,18 @@ def _mismatch() -> APIError:
     return APIError(503, "configured node identity differs from the control-api node identity",
                     "server_error", "node_identity_mismatch")
 
-
-def shared_token_mode() -> bool:
-    return settings.federation_peer_auth == "shared_token_insecure"
-
-
 def _configured() -> str:
     return (settings.bundle_node_id or "").strip()
 
 
 def local_node_id() -> str:
-    """本节点的联邦身份；拿不到可信的就 503，绝不编一个。"""
+    """本节点的联邦身份；拿不到可信的就 503，绝不编一个。
+
+    唯一的生产身份是启动时向本节点控制面绑定来的密钥派生值。`follow_configuration`
+    只给没有控制面的进程内单测（conftest 每条用例重置），生产路径不靠它放行。
+    """
     configured = _configured()
-    if shared_token_mode() or _state["follow_configuration"]:
+    if _state["follow_configuration"]:
         if not _NODE.fullmatch(configured):
             raise APIError(503, "configure a persistent node identity (BUNDLE_NODE_ID)",
                            "server_error", "node_identity_unconfigured")
@@ -85,7 +85,7 @@ def observe_authority(node_id) -> None:
     与绑定值不一致说明控制面换了身份（种子被替换/恢复错了备份）：立刻进入
     mismatch，而不是用新值继续跑 —— 旧 scope、旧回执里记的都是旧身份。
     """
-    if shared_token_mode() or _state["follow_configuration"]:
+    if _state["follow_configuration"]:
         return
     if node_id != local_node_id():
         _state["status"] = "mismatch"
@@ -94,8 +94,6 @@ def observe_authority(node_id) -> None:
 
 async def bind(http: httpx.AsyncClient | None = None) -> str:
     """向本节点控制面取持久身份并绑定。失败抛 APIError（503），状态如实记下。"""
-    if shared_token_mode():
-        return local_node_id()
     owned = http is None
     client = http or httpx.AsyncClient(timeout=5.0, trust_env=False, follow_redirects=False)
     try:
@@ -141,8 +139,6 @@ async def bind(http: httpx.AsyncClient | None = None) -> str:
 async def keep_bound(http: httpx.AsyncClient | None = None) -> None:
     """启动绑定循环：直到绑定成功为止按间隔重试；mismatch 也继续核对（管理员可能
     修正了配置并重启了控制面），但**绝不因为重试成功就覆盖一个已有的不同身份**。"""
-    if shared_token_mode():
-        return
     while _state["status"] != "bound":
         try:
             await bind(http)
@@ -154,24 +150,17 @@ async def keep_bound(http: httpx.AsyncClient | None = None) -> None:
 
 
 def status() -> dict:
-    """给 /readyz 的联邦身份与认证档位。不影响就绪（联邦是可选能力）。
+    """给 /readyz 的联邦身份与认证形态。不影响就绪（联邦是可选能力）。
 
-    **降级就是 `peer_auth` 本身**：`shared_token_insecure` 是契约枚举
-    `peer_auth_mode` 里 `severity: warn` 的那个取值，带着用户可见文案
-    「共享口令（不安全，仅开发）」。这里刻意不再另起一个手写的 `degraded`
-    字符串 —— 那会是同一件事的第二份真相，而且没有枚举守卫看着它。
-    `node_identity` 取 unbound / unavailable / mismatch / bound，
-    后三者说明联邦端点此刻为什么在 503。
+    联邦跨节点只认 `node_credential`（契约 enums.yaml 的 peer_auth_mode 唯一生产
+    取值），这里不再报任何共享档位。`node_identity` 取 unbound / unavailable /
+    mismatch / bound，后三者说明联邦端点此刻为什么在 503。
     """
-    if shared_token_mode():
-        return {"peer_auth": "shared_token_insecure", "node_identity": "configured",
-                "node_id": _configured() or None}
     identity = _state["status"]
     node_id = _state["node_id"] if identity == "bound" else None
     if _state["follow_configuration"]:
         identity, node_id = "bound", _configured() or None
     return {"peer_auth": "node_credential", "node_identity": identity, "node_id": node_id}
-
 
 def ready() -> bool:
     try:

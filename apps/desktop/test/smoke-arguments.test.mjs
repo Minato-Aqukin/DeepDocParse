@@ -33,8 +33,9 @@ test('smoke report accepts a full local run and a Tier A unavailable run', () =>
     ready: { state: 'ready', identity: { environment_id: 'local', workspace_id: 'ws' } },
     suspended: { state: 'stopped' }, resumed: { state: 'ready', identity: { environment_id: 'local', workspace_id: 'ws' } },
     stopped: { state: 'stopped' },
-    sharedClient: { pdfRendered: true, fileResults: { originalBytes: 10,
-      exported: { value: { saved: true } } } } })
+    sharedClient: { pdfRendered: true, fileResults: { status: 'succeeded', resourceId: 'r1',
+      versionId: 'v1', appendedVersion: 'v2' },
+      tokenAudit: { meKeys: ['id'], capabilitiesKeys: ['workspace_id'], methods: ['hostStatus'] } } })
 
   assertReport({ ...COMMON, localRuntime: { state: 'unavailable', reason: 'wsl_unavailable' },
     ready: null, suspended: null, resumed: null, stopped: { state: 'stopped' }, sharedClient: null })
@@ -48,8 +49,9 @@ test('smoke report rejects a non-WSL local failure and a truncated ready report'
     localRuntime: { state: 'ready', reason: null },
     ready: { state: 'ready', identity: {} }, suspended: { state: 'stopped' },
     resumed: { state: 'ready', identity: {} }, stopped: { state: 'stopped' },
-    sharedClient: { pdfRendered: false, fileResults: { originalBytes: 0,
-      exported: { value: { saved: true } } } } }))
+    sharedClient: { pdfRendered: false, fileResults: { status: 'succeeded', resourceId: 'r1',
+      versionId: 'v1', appendedVersion: 'v2' },
+      tokenAudit: { meKeys: [], capabilitiesKeys: [], methods: [] } } }))
 })
 
 test('a broken WSL package or runtime is a smoke failure, never "WSL unavailable"', () => {
@@ -76,4 +78,19 @@ test('a broken WSL package or runtime is a smoke failure, never "WSL unavailable
   // An "unavailable" report cannot also carry a ready runtime.
   assert.throws(() => assertReport({ ...COMMON, localRuntime: { state: 'unavailable', reason: 'wsl_unavailable' },
     ready: { state: 'ready' }, sharedClient: null }))
+})
+test('smoke renderer surface carries no removed file/read/connect methods', () => {
+  // The AppShell smoke asserts absence live (smoke_removed_bridge_present);
+  // this pins the report half: tokenAudit.methods must not resurrect them.
+  assertReport({ renderer: { nodeRequire: 'undefined', nodeProcess: 'undefined', rendered: 1,
+    methods: ['hostStatus', 'sourceList', 'clientQuery', 'clientCommand'], host: { ok: true }, rejected: { ok: false } },
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+    display: { session: null },
+    localRuntime: { state: 'ready', reason: null },
+    ready: { state: 'ready', identity: { environment_id: 'local', workspace_id: 'ws' } },
+    suspended: { state: 'stopped' }, resumed: { state: 'ready', identity: { environment_id: 'local', workspace_id: 'ws' } },
+    stopped: { state: 'stopped' },
+    sharedClient: { pdfRendered: true, fileResults: { status: 'succeeded', resourceId: 'r1',
+      versionId: 'v1', appendedVersion: 'v2' },
+      tokenAudit: { meKeys: [], capabilitiesKeys: [], methods: ['hostStatus', 'sourceList'] } } })
 })
