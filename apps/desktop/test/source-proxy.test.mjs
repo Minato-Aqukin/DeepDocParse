@@ -135,7 +135,6 @@ async function localDouble(t, { capabilities } = {}) {
 
 async function hosts(t, { capabilities, loopbackCenters } = {}) {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'ddp-source-test-'))
-  t.after(() => rm(temporary, { recursive: true, force: true }))
   const workspaces = new WorkspaceHandles()
   const runtime = await localDouble(t, { capabilities })
   const stored = new Map()
@@ -150,7 +149,14 @@ async function hosts(t, { capabilities, loopbackCenters } = {}) {
       async clear(pair) { stored.delete(pair.environmentId + '/' + pair.profileId); return {} },
     } }
   const clients = await new ClientHost(options).initialize()
-  t.after(() => clients.close().catch(() => {}))
+  // One hook, close before delete (same as client-host.test.mjs): Windows cannot remove a
+  // directory while client.sqlite is open, and a throwing after-hook skips the later ones,
+  // leaving the host and runtime double open so the test process never exits.
+  t.after(async () => {
+    try { await clients.close() } catch {} finally {
+      await rm(temporary, { recursive: true, force: true })
+    }
+  })
   return { clients, options, runtime, temporary, stored }
 }
 

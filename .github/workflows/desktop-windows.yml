@@ -189,6 +189,9 @@ jobs:
       - name: 桌面主机测试
         shell: bash
         working-directory: apps/desktop
+        # 全套几十秒跑完。某个用例泄漏句柄时 node --test 的子进程永不退出，
+        # 没有这个上限就要白等整个 job 的 120 分钟（2026-09-26 实测）。
+        timeout-minutes: 15
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: |

@@ -41,6 +41,17 @@ def test_t11_portable_bundle_roundtrip():
     assert restored.evidence[0]["evidence"]["evidence_id"] == "stable-source-evidence"
 
 
+def test_same_content_builds_byte_identical_archives_at_any_time(monkeypatch):
+    """Import idempotency keys on the request digest: re-exporting the same version later
+    must give the same bytes, or a retry with the same key is refused as a conflict."""
+    import time
+
+    monkeypatch.setattr(time, "time", lambda: 1_700_000_000.0)
+    first = sample_bundle()
+    monkeypatch.setattr(time, "time", lambda: 1_700_000_010.0)
+    assert sample_bundle() == first
+
+
 def test_t11_original_missing_is_explicit_and_does_not_invent_bytes():
     verified = read_bundle(io.BytesIO(sample_bundle(missing=True)))
     assert verified.source["original"] == "missing"

@@ -781,11 +781,21 @@ def build_bundle(source: dict, files: dict[str, bytes], *, required_features=Non
     }
     validate_parts(manifest, files)
     output = io.BytesIO()
+
+    def entry(name: str) -> zipfile.ZipInfo:
+        # Same content -> same bytes: import idempotency compares the request digest, so a
+        # re-exported bundle must not differ by `writestr(name)`'s current-time stamp. Mode
+        # bits match what writestr(name) wrote; create_system pinned across platforms.
+        info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+        info.create_system = 3
+        info.external_attr = 0o600 << 16
+        return info
+
     # Stored entries avoid rejecting our own highly repetitive layout/text as a zip bomb.
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
-        archive.writestr("manifest.json", json_bytes(manifest))
+        archive.writestr(entry("manifest.json"), json_bytes(manifest))
         for name, data in sorted(files.items()):
-            archive.writestr(name, data)
+            archive.writestr(entry(name), data)
     value = output.getvalue()
     if len(value) > MAX_ARCHIVE:
         fail("archive exceeds limit", "bundle_too_large")
