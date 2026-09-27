@@ -160,10 +160,13 @@ def center_file_scope(request, *, local_node_id, workspace_id, now):
             "depends_on": [], "fixed_inputs": [pinned["ref"]]}
     # All real control sends and multipart attempts share the displayed root
     # cap. Payload permission checks do not charge a second time. Reserve
-    # bounded protocol metadata plus one full-file retransmission allowance.
+    # bounded protocol metadata plus one full-file retransmission allowance,
+    # plus the bounded output fetch below (one Range per 1MiB chunk plus the
+    # status read, each a 0-byte control reservation).
     part_size_floor = 5 * 1024 * 1024
     max_parts = (pinned["size_bytes"] + part_size_floor - 1) // part_size_floor
-    max_requests = CONTROL_REQUEST_BUDGET + 2 * max_parts
+    fetch_requests = 2
+    max_requests = CONTROL_REQUEST_BUDGET + 2 * max_parts + fetch_requests
     max_bytes = CONTROL_METADATA_BYTES + 2 * pinned["size_bytes"]
     plan = {
         "schema": "ddp-plan-admission/1#TaskPlan", "plan_id": plan_id, "revision": 1,

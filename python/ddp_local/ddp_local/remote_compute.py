@@ -26,12 +26,18 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
+import re
+import stat
 
 from ddp_core.application.plans import content_digest, reject
 from ddp_core.bundle import MAX_ARCHIVE, read_bundle
 
 MAX_FILE_BYTES = 32 * 1024 * 1024
-CHUNK_BYTES = 1024 * 1024
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+PARTIAL_NAME_PATTERN = re.compile(r"delivery-[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\.[a-f0-9]{64}\.part")
+PLAN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
+MANIFEST_PATTERN = re.compile(r"sha256:[a-f0-9]{64}\Z")
 
 
 def snapshot_bytes(read_file, size_hint=None) -> tuple[bytes, str, int]:
@@ -106,3 +112,94 @@ def import_verified_bundle(runtime, data: bytes, *, operation_key: str):
     if verified.source["original"] != "present":
         reject("source_missing", "remote bundle carries no original bytes")
     return runtime.import_bundle(io.BytesIO(data), operation_key=operation_key)
+
+
+def partial_identity(plan_id, manifest_digest):
+    """Workspace-owned partial name; renderer can never supply a native path."""
+    if not isinstance(plan_id, str) or PLAN_ID_PATTERN.fullmatch(plan_id) is None:
+        reject("invalid_plan", "plan id must be a bounded identifier")
+    if not isinstance(manifest_digest, str) or MANIFEST_PATTERN.fullmatch(manifest_digest) is None:
+        reject("invalid_plan", "manifest digest must be a fixed sha256 value")
+    return "delivery-" + plan_id + "." + manifest_digest.removeprefix("sha256:") + ".part"
+
+
+def partial_path(runtime, name):
+    """Pinned workspace-owned partial path; no caller path authority."""
+    if not isinstance(name, str) or PARTIAL_NAME_PATTERN.fullmatch(name) is None:
+        reject("unsafe_path", "delivery partial name is not a fixed transfer identity")
+    directory = workspace_directory(runtime) / "delivery-partials"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077:
+            reject("unsafe_path", "delivery partial directory must be private")
+        target = os.open(name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=fd)
+    finally:
+        os.close(fd)
+    info = os.fstat(target)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid():
+        os.close(target)
+        reject("unsafe_path", "delivery partial must be an owned regular file with one link")
+    return target
+
+
+def partial_size(target):
+    return os.fstat(target).st_size
+
+
+def truncate_partial(target, size):
+    if type(size) is not int or size < 0:
+        reject("invalid_plan", "partial offset must be a non-negative integer")
+    os.ftruncate(target, size)
+    os.fsync(target)
+
+
+def append_complete_chunk(target, chunk, *, expected_offset, manifest_digest):
+    """Persist one validated chunk; only durable complete 1MiB prefixes survive."""
+    if not isinstance(chunk, (bytes, bytearray)) or not chunk:
+        reject("result_manifest_mismatch", "delivery chunk must be concrete bytes")
+    if type(expected_offset) is not int or expected_offset < 0:
+        reject("invalid_plan", "partial offset must be a non-negative integer")
+    os.lseek(target, 0, os.SEEK_END)
+    actual = os.fstat(target).st_size
+    # Crash divergence fails closed: a longer file means an unwritten tail was
+    # never fsynced as complete; truncate back to the durable offset and let
+    # the next Range re-fetch the missing tail instead of keeping a hole.
+    if actual != expected_offset:
+        os.ftruncate(target, min(actual, expected_offset))
+        os.fsync(target)
+        actual = os.fstat(target).st_size
+        if actual != expected_offset:
+            reject("result_manifest_mismatch", "partial offset diverged after a crash; retry the missing range")
+    view = memoryview(bytes(chunk))
+    while view:
+        view = view[os.write(target, view):]
+    os.fsync(target)
+    return os.fstat(target).st_size
+
+
+def discard_partial(runtime, name):
+    """Remove only this transfer's partial; never touch imported versions."""
+    if not isinstance(name, str) or PARTIAL_NAME_PATTERN.fullmatch(name) is None:
+        reject("unsafe_path", "delivery partial name is not a fixed transfer identity")
+    directory = workspace_directory(runtime) / "delivery-partials"
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        try:
+            os.unlink(name, dir_fd=fd)
+        except FileNotFoundError:
+            pass
+        else:
+            os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def workspace_directory(runtime):
+    row = runtime.store.db.execute("PRAGMA database_list").fetchone()
+    found = row[2] if row is not None and len(row) > 2 else ""
+    if not found:
+        reject("not_found", "workspace database has no filesystem path")
+    from pathlib import Path as _Path
+    return _Path(found).parent

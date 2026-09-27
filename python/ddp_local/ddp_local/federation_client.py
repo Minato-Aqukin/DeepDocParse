@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -352,10 +353,106 @@ class CenterFederationClient:
             params=params, accepted=(200,),
         )
 
+    def _range_fault(self, status, headers, body):
+        code = None
+        if body:
+            try:
+                error = json.loads(body).get("error")
+            except (ValueError, AttributeError):
+                error = None
+            if isinstance(error, dict) and isinstance(error.get("code"), str):
+                code = error["code"]
+        if status == 412:
+            return CenterFault(code or "precondition_failed", status, False)
+        if status == 416:
+            return CenterFault(code or "invalid_range", status, False)
+        return self._error_fault(status, body)
+
+
+    @staticmethod
+    def _digest_token(value):
+        if not isinstance(value, str):
+            return None
+        token = value.strip()
+        if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+            token = token[1:-1].strip()
+        if len(token) != 64:
+            return None
+        try:
+            bytes.fromhex(token)
+        except ValueError:
+            return None
+        return token.lower()
+
+    async def download_range(self, compute_id, *, start, end, output_sha256, total=None):
+        """Fetch one frozen Range chunk; the fixed digest is the only authority.
+
+        Single `Range: bytes=start-end` (inclusive) with
+        `If-Match: "<bare 64hex output_sha256>"`. Returns
+        `(chunk, declared_total)` after validating the 206 Content-Range,
+        Content-Length, ETag and X-Output-SHA256 fields against the fixed
+        digest and the requested bounds. Wrong digest, wrong range, wrong
+        length, wrong header, or a non-206 status never returns bytes: 404 and
+        410 stay typed read faults, 412/416 stay typed precondition faults.
+        Reading is not confirmation.
+        """
+        if type(start) is not int or type(end) is not int or start < 0 or end < start:
+            reject("invalid_plan", "range bounds must be non-negative integers with end >= start")
+        expected = self._digest_token(output_sha256 if output_sha256.startswith('"') else f'"{output_sha256}"')
+        if expected is None:
+            reject("invalid_plan", "output digest must be 64 hex characters")
+        headers = dict(self.actor_headers)
+        headers["Authorization"] = "Bearer " + self.config.credential
+        headers["Range"] = f"bytes={start}-{end}"
+        headers["If-Match"] = f'"{expected}"'
+        try:
+            async with self._client.stream(
+                "GET", self.config.endpoint + "/api/v1/remote-compute/%s/bundle" % quote(compute_id, safe=""),
+                headers=headers,
+            ) as response:
+                status = response.status_code
+                body = await self._bounded_body(response, MAX_ARCHIVE)
+                response_headers = dict(response.headers)
+        except CenterFault:
+            raise
+        except httpx.HTTPError as exc:
+            raise self._transport_fault(exc, write=False) from None
+        if status != 206:
+            raise self._range_fault(status, response_headers, body)
+        declared = self._digest_token(response_headers.get("etag", ""))
+        advertised = self._digest_token(response_headers.get("x-output-sha256", ""))
+        content_range = response_headers.get("content-range", "")
+        try:
+            match = re.fullmatch(r"bytes (\d{1,20})-(\d{1,20})/(\d{1,20})", content_range.strip())
+        except (TypeError, AttributeError):
+            match = None
+        if declared != expected or advertised != expected or match is None:
+            raise CenterFault("result_manifest_mismatch", status, False)
+        actual_start, actual_end, actual_total = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        if actual_start != start or actual_end < actual_start or actual_end < start:
+            raise CenterFault("result_manifest_mismatch", status, False)
+        if end >= actual_total:
+            clamped = actual_total - 1
+        else:
+            clamped = end
+        if actual_end != clamped or (total is not None and actual_total != total):
+            raise CenterFault("result_manifest_mismatch", status, False)
+        try:
+            declared_length = int(response_headers.get("content-length", ""))
+        except (TypeError, ValueError):
+            raise CenterFault("result_manifest_mismatch", status, False) from None
+        if declared_length != actual_end - actual_start + 1 or len(body) != declared_length:
+            raise CenterFault("result_manifest_mismatch", status, False)
+        return body, actual_total
+
     async def download_bundle(self, compute_id):
         """Stream the fixed-manifest ZIP bytes; hashing happens on the caller.
 
-        Returns (bytes, output_sha256_header). Reading is not confirmation.
+        Small-bundle compatibility path only: full 200 responses are bounded
+        to MAX_ARCHIVE and digest-checked by the caller. Resumable transfers
+        must use download_range so every chunk is validated before it is
+        persisted. Returns (bytes, output_sha256_header).
+        Reading is not confirmation.
         """
         headers = dict(self.actor_headers)
         headers["Authorization"] = "Bearer " + self.config.credential

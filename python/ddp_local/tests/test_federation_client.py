@@ -316,3 +316,54 @@ async def test_center_error_codes_are_preserved():
         assert exc.value.code == "http_503" and exc.value.retryable is True
     finally:
         await client.aclose()
+
+PAYLOAD = b"0123456789abcdef"
+DIGEST = "e" * 64
+
+
+def range_client(handler):
+    return CenterFederationClient(config(), transport=httpx.MockTransport(handler))
+
+
+def range_headers(start, end, total):
+    return {"Content-Range": f"bytes {start}-{end}/{total}", "Content-Length": str(end - start + 1),
+            "ETag": f'"{DIGEST}"', "X-Output-SHA256": DIGEST}
+
+
+async def test_download_range_validates_fixed_digest_and_bounds():
+    def handler(request):
+        assert request.headers["Range"] == "bytes=4-7"
+        assert request.headers["If-Match"] == f'"{DIGEST}"'
+        return httpx.Response(206, content=PAYLOAD[4:8], headers=range_headers(4, 7, len(PAYLOAD)))
+    client = range_client(handler)
+    try:
+        chunk, total = await client.download_range("rc-1", start=4, end=7, output_sha256=DIGEST)
+        assert (chunk, total) == (PAYLOAD[4:8], len(PAYLOAD))
+    finally:
+        await client.aclose()
+
+
+async def test_download_range_rejects_wrong_status_header_or_length():
+    async def check(handler, code):
+        client = range_client(handler)
+        try:
+            with pytest.raises(CenterFault) as exc:
+                await client.download_range("rc-1", start=0, end=3, output_sha256=DIGEST)
+            assert exc.value.code == code
+        finally:
+            await client.aclose()
+    # 200 full response is never a chunk: the resumable path requires 206.
+    await check(lambda request: httpx.Response(200, content=PAYLOAD[:4], headers={"X-Output-SHA256": DIGEST}), "http_200")
+    # Wrong digest declarations never return bytes.
+    await check(lambda request: httpx.Response(206, content=PAYLOAD[:4],
+                headers={**range_headers(0, 3, len(PAYLOAD)), "ETag": '"' + "0" * 64 + '"'}), "result_manifest_mismatch")
+    # Wrong Content-Range never returns bytes.
+    await check(lambda request: httpx.Response(206, content=PAYLOAD[:4],
+                headers=range_headers(1, 4, len(PAYLOAD))), "result_manifest_mismatch")
+    # Short body against Content-Length never returns bytes.
+    await check(lambda request: httpx.Response(206, content=PAYLOAD[:3],
+                headers=range_headers(0, 3, len(PAYLOAD))), "result_manifest_mismatch")
+    # Typed server faults stay typed.
+    await check(lambda request: httpx.Response(412, json={"error": {"code": "precondition_failed"}}), "precondition_failed")
+    await check(lambda request: httpx.Response(416, json={"error": {"code": "invalid_range"}},
+                headers={"Content-Range": f"bytes */{len(PAYLOAD)}"}), "invalid_range")

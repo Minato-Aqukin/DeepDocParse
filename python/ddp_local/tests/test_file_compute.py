@@ -8,6 +8,10 @@ MockTransport center stub):
 - hash mismatch never imports and never acks;
 - lost/duplicate acks replay safely;
 - cleanup removes only this record's tmp prefix and keeps other references.
+- resumable Range delivery: interrupted downloads resume at the durable
+  offset after runtime rebuild; wrong range/length/header/digest never
+  imports or acks; valid bytes import once and read back as the frozen ZIP;
+  resumed, tampered and expired paths stay honest.
 """
 import hashlib
 import io
@@ -119,6 +123,9 @@ def _view(runtime, plan_id):
     return runtime.consents.get(identity, plan_id)
 
 
+_PROPOSE_SEQ = {"n": 0}
+
+
 async def _propose(runtime, filename="manual.pdf", data=PDF):
     source, body = propose_file(runtime, filename, data)
     app = create_app(runtime, session_token=SESSION,
@@ -126,8 +133,10 @@ async def _propose(runtime, filename="manual.pdf", data=PDF):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8123",
                                  headers={"Authorization": "Bearer " + SESSION}) as client:
+        _PROPOSE_SEQ["n"] += 1
+        tag = f"propose-file-{_PROPOSE_SEQ['n']}"
         resp = await client.post("/api/v1/plans/propose-file", json=body,
-                                 headers={"Idempotency-Key": "propose-file-1"})
+                                 headers={"Idempotency-Key": tag})
         assert resp.status_code == 201, resp.text
         plan_id = resp.json()["plan_id"]
         view = _view(runtime, plan_id)
@@ -136,7 +145,7 @@ async def _propose(runtime, filename="manual.pdf", data=PDF):
                                      json={"phase": phase,
                                            "confirmed_scope_digest": view["scope_digest"],
                                            "user_confirmed": True},
-                                     headers={"Idempotency-Key": f"approve-{phase}-1"})
+                                     headers={"Idempotency-Key": f"approve-{tag}-{phase}-1"})
             assert resp.status_code == 200, resp.text
         return plan_id, source
 
@@ -251,3 +260,227 @@ async def test_local_only_blocks_even_revoked_task_cancellation(runtime, center)
         await module.cancel_remote_compute(runtime, plan_id, cfg, operation_key="offline-cancel")
     assert exc.value.code == "local_only"
     assert len(center.requests) == sent
+
+class RangeCenter(FileCenter):
+    """Frozen Range contract over one fixed Bundle payload."""
+
+    def __init__(self, payload, digest_hex):
+        super().__init__()
+        self.payload = payload
+        self.digest_hex = digest_hex
+        self.tamper_next = 0
+        self.fail_next: list[str] = []
+        self.requests_ranges: list[dict] = []
+
+    def handler(self, request):
+        path = request.url.path
+        if path == "/api/v1/remote-compute/rc-1" and request.method == "GET":
+            record = self.records.get("rc-1")
+            if record is None:
+                return httpx.Response(404, json={"error": {"code": "not_found"}})
+            return httpx.Response(200, json=record)
+        if path == "/api/v1/remote-compute/rc-1/bundle" and request.method == "GET":
+            record = self.records.get("rc-1")
+            if record is None or record.get("status") != "succeeded":
+                return httpx.Response(404, json={"error": {"code": "result_unavailable"}})
+            manifest = record.get("manifest") or {}
+            if manifest.get("output_sha256") != self.digest_hex:
+                return httpx.Response(404, json={"error": {"code": "result_unavailable"}})
+            if_match = request.headers.get("If-Match", "")
+            token = if_match.strip()
+            if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+                token = token[1:-1].strip()
+            if token.lower() != self.digest_hex:
+                return httpx.Response(412, json={"error": {"code": "precondition_failed"}})
+            if self.fail_next:
+                code = self.fail_next.pop(0)
+                status = {"expired": 404, "invalid": 416, "mismatch": 206}[code]
+                if code == "expired":
+                    return httpx.Response(404, json={"error": {"code": "delivery_expired"}})
+                if code == "invalid":
+                    return httpx.Response(416, json={"error": {"code": "invalid_range"}},
+                                          headers={"Content-Range": f"bytes */{len(self.payload)}"})
+                wrong = b"X" * 8
+                return httpx.Response(206, content=wrong,
+                                      headers={"Content-Range": f"bytes 0-7/{len(self.payload)}",
+                                               "Content-Length": "8",
+                                               "ETag": f'"{self.digest_hex}"',
+                                               "X-Output-SHA256": self.digest_hex})
+            range_header = request.headers.get("Range", "")
+            text = range_header.strip()
+            assert text[:6].lower() == "bytes="
+            left, right = text[6:].split("-", 1)
+            start, end = int(left), int(right)
+            assert 0 <= start <= end
+            if start >= len(self.payload):
+                return httpx.Response(416, json={"error": {"code": "range_not_satisfiable"}},
+                                      headers={"Content-Range": f"bytes */{len(self.payload)}"})
+            end = min(end, len(self.payload) - 1)
+            chunk = self.payload[start:end + 1]
+            self.requests_ranges.append({"start": start, "end": end})
+            if self.tamper_next > 0:
+                self.tamper_next -= 1
+                chunk = b"X" + chunk[1:] if chunk else chunk
+            return httpx.Response(206, content=chunk,
+                                  headers={"Content-Range": f"bytes {start}-{end}/{len(self.payload)}",
+                                           "Content-Length": str(len(chunk)),
+                                           "Accept-Ranges": "bytes",
+                                           "ETag": f'"{self.digest_hex}"',
+                                           "X-Output-SHA256": self.digest_hex,
+                                           "Cache-Control": "no-store"})
+        return FileCenter.handler(self, request)
+
+
+def _succeeded_record(center, manifest_digest):
+    base = dict(center.records.get("rc-1", {"id": "rc-1"}))
+    base.update(status="succeeded",
+                manifest={"output_sha256": manifest_digest.removeprefix("sha256:")},
+                result_manifest_digest=manifest_digest)
+    center.records["rc-1"] = base
+
+
+async def test_interrupted_download_resumes_after_runtime_rebuild(tmp_path, center):
+    import sys
+    sys.path.insert(0, "tests")
+    from ddp_bundle_fixture import sample_bundle
+    payload = sample_bundle()
+    manifest_digest = content_digest(payload)
+    digest_hex = manifest_digest.removeprefix("sha256:")
+    workspace = tmp_path / "workspace"
+    first = LocalRuntime(workspace)
+    ranged = RangeCenter(payload, digest_hex)
+    try:
+        plan_id, _ = await _propose(first)
+        cfg = config()
+        await module.dispatch_plan(first, plan_id, cfg, phase="exploration", operation_key="explore-resume")
+        # Swap only the stub state/behavior: the fixture factory keeps
+        # patching the client, so exploration and fetch share one transport.
+        center.records.update(ranged.records)
+        center.payload, center.digest_hex = payload, digest_hex
+        center.tamper_next, center.fail_next, center.requests_ranges = 0, [], []
+        center.handler = RangeCenter.handler.__get__(center, RangeCenter)
+        # Interrupt the first Range after the upstream accepted it, then
+        # resume the same Range after a runtime rebuild.
+        import ddp_local.remote_compute as filemod
+        filemod.DOWNLOAD_CHUNK_BYTES = 1024
+        original = RangeCenter.handler.__get__(center, RangeCenter)
+        calls = {"count": 0}
+
+        def flaky(request):
+            if request.url.path.endswith("/bundle") and request.method == "GET":
+                calls["count"] += 1
+                if calls["count"] == 2:
+                    raise httpx.ConnectError("connection lost after upstream accepted the range")
+            return original(request)
+        import types
+        center.handler = types.MethodType(lambda self, request: flaky(request), center)
+        _succeeded_record(center, manifest_digest)
+        # A lost Range response is an unknown transport outcome: durable
+        # complete chunks stay, nothing imports, nothing acks.
+        with __import__("pytest").raises(CenterFault) as exc:
+            await module.fetch_delivery(first, plan_id, cfg)
+        assert exc.value.code in ("unreachable", "transport_error", "outcome_unknown")
+        partial = workspace / "delivery-partials" / f"delivery-{plan_id}.{digest_hex}.part"
+        assert partial.exists() and partial.stat().st_size == 1024
+        first.close()
+        # Same workspace directory keeps its persisted identity: a rebuilt
+        # runtime must find the same plan state and the same partial file.
+        second = LocalRuntime(workspace)
+        assert second.store.workspace_id == first.store.workspace_id
+        assert second.store.environment_id == first.store.environment_id
+        try:
+            import ddp_local.remote_compute as filemod
+            filemod.DOWNLOAD_CHUNK_BYTES = 1024
+            center.handler = RangeCenter.handler.__get__(center, RangeCenter)
+            center.requests_ranges = []
+            # Rebuild must resume at the persisted offset, not from zero.
+            out = await module.fetch_delivery(second, plan_id, cfg)
+            assert center.requests_ranges and center.requests_ranges[0]["start"] == 1024
+            assert out["delivery"]["verified"] is True
+            assert out["delivery"]["result_manifest_digest"] == manifest_digest
+            assert not partial.exists()
+            stored = out["delivery"]["import_result"]
+            assert set(stored) >= {"version_id", "id"}
+            version = second.store.version(stored["version_id"])
+            assert second.blobs.read(version["bundle_key"], 64 * 1024 * 1024) == payload
+        finally:
+            second.close()
+    finally:
+        import ddp_local.remote_compute as filemod
+        filemod.DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+        try:
+            first.close()
+        except Exception:
+            pass
+
+
+async def test_wrong_range_header_or_digest_never_imports_or_acks(runtime, center):
+    import sys
+    sys.path.insert(0, "tests")
+    from ddp_bundle_fixture import sample_bundle
+    payload = sample_bundle()
+    manifest_digest = content_digest(payload)
+    digest_hex = manifest_digest.removeprefix("sha256:")
+    plan_id, _ = await _propose(runtime)
+    cfg = config()
+    await module.dispatch_plan(runtime, plan_id, cfg, phase="exploration", operation_key="explore-bad-range")
+    _succeeded_record(center, manifest_digest)
+    center.payload, center.digest_hex = payload, digest_hex
+    center.tamper_next, center.fail_next, center.requests_ranges = 0, [], []
+    center.handler = RangeCenter.handler.__get__(center, RangeCenter)
+    stub = center
+    # Corrupt the second chunk bytes: fixed digest mismatch must refuse import/ack.
+    stub.tamper_next = 99
+    out = await module.fetch_delivery(runtime, plan_id, cfg)
+    assert out["delivery"].get("verified") is not True
+    assert out["delivery"]["reason"] == "result_manifest_mismatch"
+    assert "import_result" not in out["delivery"]
+    # Poisoned bytes are discarded so the next honest fetch restarts cleanly.
+    from pathlib import Path as _Path
+    workspace = _Path(runtime.store.db.execute("PRAGMA database_list").fetchone()[2]).parent
+    assert not (workspace / "delivery-partials" / f"delivery-{plan_id}.{digest_hex}.part").exists()
+    stub.tamper_next = 0
+    out = await module.fetch_delivery(runtime, plan_id, cfg)
+    assert out["delivery"].get("verified") is True
+    assert out["delivery"]["result_manifest_digest"] == manifest_digest
+    assert "import_result" in out["delivery"]
+    # A 416 unsatisfiable range is a pending typed fault, never an import.
+    # Fresh plan so no prior import_result carries over.
+    plan_id2, _ = await _propose(runtime, filename="second.pdf")
+    await module.dispatch_plan(runtime, plan_id2, cfg, phase="exploration", operation_key="explore-bad-range-2")
+    _succeeded_record(center, manifest_digest)
+    center.payload, center.digest_hex = payload, digest_hex
+    center.tamper_next, center.fail_next, center.requests_ranges = 0, ["invalid"], []
+    out = await module.fetch_delivery(runtime, plan_id2, cfg)
+    assert out["delivery"].get("verified") is not True
+    assert out["delivery"].get("reason") == "invalid_range"
+    assert "import_result" not in out["delivery"]
+    # A wrong If-Match precondition is a pending typed fault, never an import.
+    async with __import__("httpx").AsyncClient(
+            transport=__import__("httpx").MockTransport(lambda request: RangeCenter.handler(center, request))) as raw:
+        response = await raw.get("https://center.example/api/v1/remote-compute/rc-1/bundle",
+                                 headers={"Range": "bytes=0-7", "If-Match": '"' + "0" * 64 + '"'})
+        assert response.status_code == 412
+
+
+async def test_expired_output_never_shows_saved_and_cleans_only_partial(runtime, center):
+    import sys
+    sys.path.insert(0, "tests")
+    from ddp_bundle_fixture import sample_bundle
+    payload = sample_bundle()
+    manifest_digest = content_digest(payload)
+    digest_hex = manifest_digest.removeprefix("sha256:")
+    plan_id, _ = await _propose(runtime)
+    cfg = config()
+    await module.dispatch_plan(runtime, plan_id, cfg, phase="exploration", operation_key="explore-expired")
+    _succeeded_record(center, manifest_digest)
+    center.payload, center.digest_hex = payload, digest_hex
+    center.tamper_next, center.fail_next, center.requests_ranges = 0, ["expired"], []
+    center.handler = RangeCenter.handler.__get__(center, RangeCenter)
+    out = await module.fetch_delivery(runtime, plan_id, cfg)
+    assert out["delivery"].get("verified") is not True
+    assert out["delivery"]["reason"] == "delivery_expired"
+    assert "import_result" not in out["delivery"]
+    with __import__("pytest").raises(ApplicationError) as exc:
+        await module.confirm_delivery(runtime, plan_id, "rc-1", manifest_digest, cfg)
+    assert exc.value.code == "plan_changed"

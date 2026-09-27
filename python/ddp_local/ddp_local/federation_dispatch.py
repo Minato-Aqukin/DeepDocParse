@@ -10,6 +10,7 @@ Fail Closed。本模块是 App 侧唯一把批准范围变成中心写请求的�
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -18,7 +19,6 @@ import stat
 import time
 import uuid
 from pathlib import Path
-
 from ddp_core.application.plans import canonical_bytes, content_digest, digest, reject
 from ddp_core.application.ports import ApplicationError
 
@@ -1065,19 +1065,35 @@ async def _fetch_file_delivery(runtime, plan_id, config, identity, state, *, act
 
     The center manifest fixes source/version/output hash where
     `delivery.result_manifest_digest` is `sha256:` of the actual ZIP bytes
-    (never a JSON receipt hashed as ZIP). The host streams the ZIP with resume,
-    hashes the complete bytes, and only after full-hash match plus atomic local
-    import sets `bytes_verified` via `note_file_bytes_verified`. Until then
-    `verified` stays false and `confirm` refuses. Expired TTL never displays
-    as saved locally.
+    (never a JSON receipt hashed as ZIP). The host streams the ZIP with
+    resume, hashes the complete bytes, and only after full-hash match plus
+    atomic local import sets `bytes_verified` via `note_file_bytes_verified`.
+    Until then `verified` stays false and `confirm` refuses. Expired TTL never
+    displays as saved locally.
+
+    Resumable path: one workspace-owned partial file
+    (`delivery-<plan_id>.<64hex>.part`) holds only durable complete 1MiB
+    chunks. Each Range chunk is validated (206 Content-Range/Content-Length/
+    ETag/X-Output-SHA256 against the fixed digest and requested bounds) before
+    it is appended and fsynced. A 200 full response is never appended onto
+    partial bytes. Transport failure keeps durable complete chunks; a rebuilt
+    runtime resumes at the persisted offset. Wrong range/length/header/digest
+    never imports or acks. Import happens only after the reassembled bytes
+    match the fixed manifest digest, atomically, exactly once per digest.
+    Only this transfer's partial is cleaned on expiry/cancel/mismatch; already
+    imported versions are never deleted.
     """
+    from ddp_core.bundle import MAX_ARCHIVE
+    from ddp_local.remote_compute import (
+        DOWNLOAD_CHUNK_BYTES, append_complete_chunk, discard_partial,
+        import_verified_bundle, partial_identity, partial_path,
+        verify_output_bytes,
+    )
     compute_id = state.get("remote_compute_id")
     if not isinstance(compute_id, str) or not compute_id:
         reject("not_found", "plan has no remote compute to fetch")
-    
     client = _center_client(runtime, identity, plan_id, config, actor_headers)
     try:
-        
         record = await client.remote_compute(compute_id)
         if not isinstance(record, dict) or record.get("id") != compute_id:
             raise CenterFault("invalid_response", 0, False)
@@ -1096,49 +1112,86 @@ async def _fetch_file_delivery(runtime, plan_id, config, identity, state, *, act
             delivery["result_manifest_digest"] = digest
             state["delivery"] = delivery
             state = _save(runtime, identity, plan_id, state)
-            # Real ZIP path: bounded stream, full sha256, atomic import, and
-            # only then verified. Corrupt bytes stay a visible failure, never
-            # an ack. import_result carries the local version/resource id.
+            name = partial_identity(plan_id, digest)
+            # A single concurrent writer per partial: an exclusive non-blocking
+            # fd lock fails closed when another fetch holds this transfer.
+            target = partial_path(runtime, name)
             try:
-                
-                raw, header = await client.download_bundle(compute_id)
-            except CenterFault as exc:
-                if exc.code in ("result_unavailable", "delivery_expired", "not_found"):
+                fcntl.flock(target, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                os.close(target)
+                raise ApplicationError("task_in_progress", "delivery fetch is already running") from exc
+            try:
+                with runtime.store.lock:
+                    offset = os.fstat(target).st_size
+                    total = None
+                    try:
+                        while True:
+                            chunk, total = await client.download_range(
+                                compute_id, start=offset,
+                                end=offset + DOWNLOAD_CHUNK_BYTES - 1,
+                                output_sha256=digest.removeprefix("sha256:"),
+                                total=total)
+                            offset = append_complete_chunk(
+                                target, chunk, expected_offset=offset,
+                                manifest_digest=digest)
+                            if len(chunk) < DOWNLOAD_CHUNK_BYTES:
+                                break
+                    except CenterFault as exc:
+                        if exc.code in ("result_unavailable", "delivery_expired", "not_found",
+                                        "precondition_failed", "invalid_range",
+                                        "range_not_satisfiable", "result_manifest_mismatch"):
+                            delivery["verified"] = False
+                            delivery["bytes_verified"] = False
+                            delivery["reason"] = exc.code
+                            delivery["received_bytes"] = offset
+                            state["delivery"] = delivery
+                            _record(state, "fetch_delivery", "pending", exc.code, exc.status)
+                            return _save(runtime, identity, plan_id, state)
+                        raise
+                    # Reassemble only from the durable partial: seek back to
+                    # zero, stream the persisted prefix, and rehash the
+                    # complete bytes. A 200 full response path does not exist
+                    # here, so a full body can never append onto partial bytes.
+                    os.lseek(target, 0, os.SEEK_SET)
+                    staged = bytearray()
+                    while True:
+                        piece = os.read(target, 65536)
+                        if not piece:
+                            break
+                        staged += piece
+                        if len(staged) > MAX_ARCHIVE:
+                            reject("result_unavailable", "delivery body is missing or over budget")
+                    raw = bytes(staged)
+                try:
+                    checked = verify_output_bytes(raw, digest)
+                    stored = import_verified_bundle(
+                        runtime, checked,
+                        operation_key="import:" + plan_id + ":" + digest.removeprefix("sha256:")[:32])
+                except Exception as exc:
+                    code = getattr(exc, "code", None) or "result_manifest_mismatch"
                     delivery["verified"] = False
-                    delivery["reason"] = exc.code
+                    delivery["bytes_verified"] = False
+                    delivery["reason"] = code if isinstance(code, str) else "result_manifest_mismatch"
+                    delivery["received_bytes"] = len(raw)
                     state["delivery"] = delivery
-                    _record(state, "fetch_delivery", "pending", exc.code, exc.status)
+                    _record(state, "fetch_delivery", "rejected", delivery["reason"])
+                    # Bytes that fail the fixed manifest can never validate on
+                    # retry: discard only this transfer's partial so the next
+                    # fetch restarts cleanly. Imported versions are untouched.
+                    discard_partial(runtime, name)
                     return _save(runtime, identity, plan_id, state)
-                raise
-            from ddp_local.remote_compute import import_verified_bundle, verify_output_bytes
-            try:
-                checked = verify_output_bytes(raw, digest)
-                stored = import_verified_bundle(
-                    runtime, checked,
-                    operation_key="import:" + plan_id + ":" + digest.removeprefix("sha256:")[:32])
-            except Exception as exc:
-                code = getattr(exc, "code", None) or "result_manifest_mismatch"
-                delivery["verified"] = False
-                delivery["bytes_verified"] = False
-                delivery["reason"] = code if isinstance(code, str) else "result_manifest_mismatch"
-                delivery["received_bytes"] = len(raw) if isinstance(raw, (bytes, bytearray)) else None
+                delivery["bytes_verified"] = True
+                delivery["verified"] = True
+                delivery.pop("reason", None)
+                delivery["received_bytes"] = len(raw)
+                if isinstance(stored, dict):
+                    delivery["import_result"] = {
+                        key: stored[key] for key in ("version_id", "resource_id", "id") if key in stored}
                 state["delivery"] = delivery
-                _record(state, "fetch_delivery", "rejected", delivery["reason"])
-                return _save(runtime, identity, plan_id, state)
-            if isinstance(header, str) and header and header != digest.removeprefix("sha256:"):
-                delivery["verified"] = False
-                delivery["bytes_verified"] = False
-                delivery["reason"] = "result_manifest_mismatch"
-                state["delivery"] = delivery
-                _record(state, "fetch_delivery", "rejected", delivery["reason"])
-                return _save(runtime, identity, plan_id, state)
-            delivery["bytes_verified"] = True
-            delivery["verified"] = True
-            delivery.pop("reason", None)
-            if isinstance(stored, dict):
-                delivery["import_result"] = {
-                    key: stored[key] for key in ("version_id", "resource_id", "id") if key in stored}
-            state["delivery"] = delivery
+                discard_partial(runtime, name)
+            finally:
+                os.close(target)
         _record(state, "fetch_delivery",
                 "ok" if delivery.get("verified") else "pending", delivery.get("reason"))
         return _save(runtime, identity, plan_id, state)
