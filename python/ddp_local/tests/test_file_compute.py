@@ -294,7 +294,7 @@ class RangeCenter(FileCenter):
                 return httpx.Response(412, json={"error": {"code": "precondition_failed"}})
             if self.fail_next:
                 code = self.fail_next.pop(0)
-                status = {"expired": 404, "invalid": 416, "mismatch": 206}[code]
+                assert code in ("expired", "invalid", "mismatch")
                 if code == "expired":
                     return httpx.Response(404, json={"error": {"code": "delivery_expired"}})
                 if code == "invalid":
