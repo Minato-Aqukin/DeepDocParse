@@ -2114,6 +2114,7 @@
                 "gate_rejected_all",
                 "citation_persist_failed",
                 "verification_unavailable",
+                "evidence_unavailable",
                 "schema_violation",
                 "rerank_unavailable",
                 "no_instruct_model",

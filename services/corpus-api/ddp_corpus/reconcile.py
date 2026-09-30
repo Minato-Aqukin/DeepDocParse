@@ -96,9 +96,30 @@ async def reconcile_once(sessionmaker: async_sessionmaker, storage: Storage,
             except Exception as exc:
                 print(f"[reconcile] index failed for job {job_id}: {exc}")
 
+        # A callback can precede compilation or be lost after archival committed.
+        # Recover from durable compute/job bindings, without submitting parse again.
+        from ddp_corpus.remote_compute_models import RemoteCompute
+        from ddp_corpus.routers.internal import _record_remote_outcome
+        deliverable = list((await session.execute(select(ParseJob.id)
+            .join(RemoteCompute, RemoteCompute.parse_job_id == ParseJob.id).where(
+                RemoteCompute.status.in_(("content_verified", "running")),
+                or_(ParseJob.status == "failed", and_(ParseJob.status == "succeeded",
+                    ParseJob.index_status.in_(("ready", "failed")))))
+            .order_by(RemoteCompute.updated_at, RemoteCompute.id).limit(50))).scalars())
+        for job_id in deliverable:
+            try:
+                job = await session.get(ParseJob, job_id, populate_existing=True)
+                if job is None:
+                    continue
+                await _record_remote_outcome(session, storage, job,
+                    ok=job.status == "succeeded", error=job.error)
+            except Exception as exc:
+                await session.rollback()
+                print(f"[reconcile] remote output failed: {type(exc).__name__}")
+
     stats["gc"] = await collect_deleted_objects(sessionmaker, storage)
-    # File-compute TTL + terminal grace cleanup (own tmp prefix only, other
-    # references kept). Failures here must not break the main reconcile stats.
+    # File-compute retention and resource tombstones. Reference-safe GC owns
+    # original/derived deletion; the compute sweep owns its delivery artifacts.
     try:
         from ddp_corpus.routers.remote_compute import sweep_remote_computes
         async with sessionmaker() as sweep_session:

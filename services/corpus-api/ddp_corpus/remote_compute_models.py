@@ -19,13 +19,24 @@ from datetime import datetime
 from sqlalchemy import JSON, DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ddp_core.models import Base, utcnow
+from ddp_core.models import Base, as_aware, utcnow
 
-#: A remote compute that still protects its temporary input key.
+# Execution completion is not delivery completion: succeeded retains its bytes
+# until acknowledgement, cancellation, or the advertised expiry.
 ACTIVE_REMOTE_COMPUTE = ("waiting_input", "content_verifying", "content_verified",
                          "running")
-#: Terminal states that keep the input only inside the grace window.
-TERMINAL_REMOTE_COMPUTE = ("succeeded", "failed", "expired", "cancelled", "acked")
+CLOSED_REMOTE_COMPUTE = ("failed", "expired", "cancelled", "acked")
+UNCONFIRMED_REMOTE_COMPUTE = (*ACTIVE_REMOTE_COMPUTE, "succeeded")
+
+
+def expire_if_due(row, *, at=None) -> bool:
+    now = at or utcnow()
+    if row.status in UNCONFIRMED_REMOTE_COMPUTE and row.expires_at is not None \
+            and as_aware(row.expires_at) <= now:
+        row.status = "expired"
+        row.updated_at = now
+        return True
+    return False
 
 
 class RemoteCompute(Base):
@@ -53,6 +64,7 @@ class RemoteCompute(Base):
     request_digest: Mapped[str | None] = mapped_column(String(71), default=None)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),
                                                        default=None)
+    cleaned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
                                                  onupdate=utcnow)

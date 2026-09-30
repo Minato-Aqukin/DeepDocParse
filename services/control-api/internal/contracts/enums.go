@@ -67,6 +67,9 @@ const (
 	DegradedCitationPersistFailed Degraded = "citation_persist_failed"
 	// 原文自动核对没得出结论
 	DegradedVerificationUnavailable Degraded = "verification_unavailable"
+	// 远端计算的固定版本编译完成但没有可交付的冻结证据；交付 Bundle 只含原件与版面。
+	// 与 no_hits 不同：这里不是检索没命中，而是证据本身不存在。
+	DegradedEvidenceUnavailable Degraded = "evidence_unavailable"
 	// 模型输出不符合约定结构。抽取平面：按 EXTRACT_MAX_RETRIES 重试仍失败；
 	// 问答平面：回答未满足逐条证据绑定协议（非法 JSON、缺失/越界 evidence_id、
 	// 截断），不重试，已校验的完整断言作为显式失败的部分回答保留。
@@ -102,6 +105,7 @@ var DegradedValues = []Degraded{
 	DegradedGateRejectedAll,
 	DegradedCitationPersistFailed,
 	DegradedVerificationUnavailable,
+	DegradedEvidenceUnavailable,
 	DegradedSchemaViolation,
 	DegradedRerankUnavailable,
 	DegradedNoInstructModel,
@@ -127,6 +131,7 @@ var DegradedMeta = map[Degraded]EnumMeta{
 	DegradedGateRejectedAll:             {Value: "gate_rejected_all", Label: "检索候选均未通过逐篇质量门控", Severity: SeverityWarn},
 	DegradedCitationPersistFailed:       {Value: "citation_persist_failed", Label: "出处保存失败，相关结论已标为无证据支持", Severity: SeverityError},
 	DegradedVerificationUnavailable:     {Value: "verification_unavailable", Label: "原文自动核对未得出结论，请人工复核", Severity: SeverityWarn},
+	DegradedEvidenceUnavailable:         {Value: "evidence_unavailable", Label: "交付结果不含冻结证据（原件与版面仍可用）", Severity: SeverityWarn},
 	DegradedSchemaViolation:             {Value: "schema_violation", Label: "模型输出不符合约定格式", Severity: SeverityError},
 	DegradedRerankUnavailable:           {Value: "rerank_unavailable", Label: "未做精排（重排序服务不可用）", Severity: SeverityNeutral},
 	DegradedNoInstructModel:             {Value: "no_instruct_model", Label: "未抽取（后端没有可用的指令模型）", Severity: SeverityError},

@@ -109,46 +109,80 @@ async def parse_callback(body: ParseCallback, request: Request,
 
 
 async def _record_remote_outcome(session, storage, job, *, ok: bool, error: str | None = None):
-    """Pin or fail the file-compute delivery manifest for jobs bound to a compute."""
-    from ddp_corpus.remote_compute_models import RemoteCompute
+    """Publish the canonical fixed-version snapshot, never a placeholder receipt."""
+    import hashlib
+
+    from ddp_core.bundle import BundleError, build_bundle
+    from ddp_corpus.remote_compute_ingest import record_parse_outcome
+    from ddp_corpus.remote_compute_models import RemoteCompute, expire_if_due
+    from ddp_corpus.routers.bundles import _snapshot
+    from ddp_corpus.routers.remote_compute import cleanup_compute
+
     row = await session.scalar(select(RemoteCompute).where(
-        RemoteCompute.parse_job_id == job.id).limit(1))
+        RemoteCompute.parse_job_id == job.id).limit(1).with_for_update()
+        .execution_options(populate_existing=True))
     if row is None:
         return
-    if ok:
-        from ddp_corpus.remote_compute_ingest import record_parse_outcome
-        from ddp_corpus.storage import job_result_prefix
-        prefix = job.result_prefix or job_result_prefix(job.id)
-        layout_key = prefix + "layout.json"
-        try:
-            layout = await storage.get(layout_key)
-        except Exception:
-            layout = b"{}"
-        import hashlib
-        from ddp_core.bundle import build_bundle, json_bytes
-        source = {"origin_node_id": "local", "authority_node_id": "local",
-                  "resource_id": job.resource_id or "", "source_version_id": "",
-                  "source_digest": "sha256:" + (job.id or ""),
-                  "parse_revision": job.id, "filename": "result",
-                  "mime": "application/pdf", "original": "missing",
-                  "missing_reason": "remote_compute_layout_only",
-                  "uploader_ref": job.initiated_by or "",
-                  "policy_revision": "temporary"}
-        bundle = build_bundle(source, {"layout.json": layout,
-                                       "evidence.json": json_bytes([]),
-                                       "provenance.json": json_bytes([])})
-        bundle_key = f"bundles/remote-compute/{row.id}/out.zip"
-        await storage.put(bundle_key, bundle, "application/zip")
+    if expire_if_due(row):
+        await session.commit()
+        await cleanup_compute(session, storage, row)
+        return
+    if row.status not in ("content_verified", "running"):
+        await cleanup_compute(session, storage, row)
+        return
+    if not ok:
         await record_parse_outcome(session, compute_id=row.id,
-                                   organization_id=row.organization_id,
-                                   parse_job_id=job.id, ok=True,
-                                   bundle_key=bundle_key,
-                                   output_sha256=hashlib.sha256(bundle).hexdigest())
-    else:
-        from ddp_corpus.remote_compute_ingest import record_parse_outcome
+            organization_id=row.organization_id, parse_job_id=job.id, ok=False, error=error)
+        await cleanup_compute(session, storage, row)
+        return
+    # The archive callback precedes indexing. Let durable reconciliation wait for
+    # compilation instead of freezing a permanently empty evidence set.
+    if job.status != "succeeded" or job.index_status not in ("ready", "failed"):
+        return
+    fixed = row.manifest_json or {}
+    resource = await session.get(Resource, fixed.get("source_resource_id")) \
+        if fixed.get("source_resource_id") else None
+    version = await session.get(ResourceVersion, fixed.get("source_version_id")) \
+        if fixed.get("source_version_id") else None
+    if (resource is None or version is None or resource.deleted_at is not None
+            or version.deleted_at is not None or version.resource_id != resource.id
+            or resource.id != job.resource_id or resource.owner_id != row.actor_id
+            or resource.organization_id != row.organization_id
+            or version.document_id != job.document_id or version.parse_job_id != job.id
+            or version.source_digest != row.input_sha256 or version.size_bytes != row.input_size):
         await record_parse_outcome(session, compute_id=row.id,
-                                   organization_id=row.organization_id,
-                                   parse_job_id=job.id, ok=False, error=error)
+            organization_id=row.organization_id, parse_job_id=job.id, ok=False,
+            error="fixed_source_unavailable")
+        await cleanup_compute(session, storage, row)
+        return
+    try:
+        snapshot = await _snapshot(session, storage, resource, version)
+        if snapshot.source["original"] != "present" or snapshot.layout["state"] != "present":
+            raise BundleError("fixed_source_unavailable", "original or fixed layout is unavailable")
+        bundle = build_bundle(snapshot.source, snapshot.files)
+    except BundleError as exc:
+        await record_parse_outcome(session, compute_id=row.id,
+            organization_id=row.organization_id, parse_job_id=job.id, ok=False, error=exc.code)
+        await cleanup_compute(session, storage, row)
+        return
+    output_sha256 = hashlib.sha256(bundle).hexdigest()
+    # Competing callback/reconciler attempts cannot overwrite the winning bytes.
+    bundle_key = f"tmp-remote-compute/{row.organization_id}/{row.id}/output-{output_sha256}.zip"
+    await storage.put(bundle_key, bundle, "application/zip")
+    # Compile degradations stay verbatim in their own list enum; delivery gaps use
+    # the `degraded` enum so every consumer renders them from the same contract.
+    degraded = []
+    if job.index_status == "failed":
+        degraded.append("resource_index_unavailable")
+    if not snapshot.evidence:
+        degraded.append("evidence_unavailable")
+    await record_parse_outcome(session, compute_id=row.id,
+        organization_id=row.organization_id, parse_job_id=job.id, ok=True,
+        bundle_key=bundle_key, output_sha256=output_sha256,
+        output_meta={"compile_status": job.compile_status, "index_status": job.index_status,
+                     "compile_degraded": sorted(set(job.compile_degraded or [])),
+                     "degraded": degraded})
+    await cleanup_compute(session, storage, row)
 
 
 class InboundEvent(BaseModel):

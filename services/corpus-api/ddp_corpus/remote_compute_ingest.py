@@ -29,8 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ddp_corpus import ingest as ingest_mod
 from ddp_corpus.control_client import ControlClient
 from ddp_corpus.errors import APIError
-from ddp_corpus.models import new_id, utcnow
-from ddp_corpus.remote_compute_models import RemoteCompute
+from ddp_corpus.models import ResourceVersion, utcnow
+from ddp_corpus.remote_compute_models import RemoteCompute, expire_if_due
 from ddp_corpus.service_client import ServiceClient
 from ddp_corpus.storage import Storage
 
@@ -41,13 +41,17 @@ async def bind_verified_upload(session: AsyncSession, storage: Storage,
                                upload_id: str, object_key: str, filename: str,
                                mime: str, size_bytes: int, sha256: str,
                                remote_compute_id: str):
-    row = await session.get(RemoteCompute, remote_compute_id)
+    row = await session.scalar(select(RemoteCompute).where(
+        RemoteCompute.id == remote_compute_id).with_for_update()
+        .execution_options(populate_existing=True))
     if row is None or row.organization_id != organization_id \
             or row.actor_id != actor_id:
         # Cross-actor or unknown binding: same shape as missing. No existence
         # oracle, no second asset, no task.
         raise APIError(404, "remote compute not found",
                        "invalid_request_error", "remote_compute_not_found")
+    if expire_if_due(row):
+        await session.commit()
     if row.status != "waiting_input":
         # Complete/unknown replay: re-read the persisted binding, never mint a
         # second asset/task. The idempotent return is the stored manifest.
@@ -87,24 +91,41 @@ async def bind_verified_upload(session: AsyncSession, storage: Storage,
         upload_key=f"remote-compute:{row.id}",
         receipt_key=f"remote-compute:{row.id}",
     )
-    row.status = "content_verified"
-    row.updated_at = utcnow()
-    await session.flush()
-    # Parse is now really queued through the existing gateway path inside
-    # ingest.submit_parse: no GPU was pre-reserved before verification.
-    if job is not None:
-        row.status = "running"
-        row.parse_job_id = job.id
-        row.updated_at = utcnow()
-        await session.flush()
+    # ingest_document commits before submitting the real parse. Cancellation or
+    # expiry during that HTTP await must not be overwritten by this old instance.
+    row = await session.scalar(select(RemoteCompute).where(
+        RemoteCompute.id == remote_compute_id).with_for_update()
+        .execution_options(populate_existing=True))
+    expire_if_due(row)
+    if job is None:
+        raise APIError(500, "verified input has no durable parse job",
+                       "server_error", "internal_error")
+    version = await session.scalar(select(ResourceVersion).where(
+        ResourceVersion.resource_id == job.resource_id,
+        ResourceVersion.document_id == document.id,
+        ResourceVersion.parse_job_id == job.id,
+        ResourceVersion.source_digest == sha256).order_by(
+            ResourceVersion.created_at, ResourceVersion.id).limit(1))
+    if version is None:
+        raise APIError(500, "verified input has no fixed source version",
+                       "server_error", "internal_error")
+    row.parse_job_id = job.id
     row.manifest_json = {"source_document_id": document.id,
+                         "source_resource_id": version.resource_id,
+                         "source_version_id": version.id,
                          "source_object_key": object_key,
                          "input_sha256": sha256, "input_size": size_bytes,
                          "plan_digest": row.plan_digest,
-                         "parse_job_id": job.id if job is not None else None}
+                         "parse_job_id": job.id}
+    if row.status == "content_verifying":
+        row.status = "running"
+        row.updated_at = utcnow()
     await session.flush()
     await session.commit()
     await session.refresh(row)
+    if row.status != "running":
+        from ddp_corpus.routers.remote_compute import cleanup_compute
+        await cleanup_compute(session, storage, row)
     return row, job
 
 
@@ -112,7 +133,7 @@ async def record_parse_outcome(session: AsyncSession, *, compute_id: str,
                                organization_id: str, parse_job_id: str | None,
                                ok: bool, bundle_key: str | None = None,
                                output_sha256: str | None = None,
-                               error: str | None = None):
+                               error: str | None = None, output_meta: dict | None = None):
     """Fix the delivery manifest from the real parse outcome.
 
     Called by the parse-callback/reconcile path when the ParseJob bound to a
@@ -120,16 +141,25 @@ async def record_parse_outcome(session: AsyncSession, *, compute_id: str,
     hash so `result_manifest_digest` is `sha256:` of the actual ZIP bytes.
     Failure/cancel/TTL moves the record terminal without publishing anything.
     """
-    row = await session.get(RemoteCompute, compute_id)
+    row = await session.scalar(select(RemoteCompute).where(
+        RemoteCompute.id == compute_id).with_for_update()
+        .execution_options(populate_existing=True))
     if row is None or row.organization_id != organization_id:
         raise APIError(404, "remote compute not found",
                        "invalid_request_error", "remote_compute_not_found")
+    if expire_if_due(row):
+        await session.commit()
+    if row.status not in ("content_verified", "running"):
+        return row
+    if row.parse_job_id != parse_job_id:
+        raise APIError(409, "parse job differs from the fixed input binding",
+                       "invalid_request_error", "input_changed")
     if ok:
         if not bundle_key or not output_sha256:
             raise APIError(500, "fixed manifest requires bundle key and output hash",
                            "server_error", "internal_error")
         row.status = "succeeded"
-        row.manifest_json = {**(row.manifest_json or {}),
+        row.manifest_json = {**(row.manifest_json or {}), **(output_meta or {}),
                              "bundle_key": bundle_key,
                              "output_sha256": output_sha256,
                              "parse_job_id": parse_job_id,
@@ -138,7 +168,7 @@ async def record_parse_outcome(session: AsyncSession, *, compute_id: str,
         row.updated_at = utcnow()
     else:
         row.status = "failed"
-        row.manifest_json = {"parse_job_id": parse_job_id,
+        row.manifest_json = {**(row.manifest_json or {}), "parse_job_id": parse_job_id,
                              "error": error or "parse_failed",
                              "source_object_key": row.input_object_key,
                              "plan_digest": row.plan_digest}

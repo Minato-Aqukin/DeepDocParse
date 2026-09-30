@@ -25,6 +25,8 @@ class Storage(Protocol):
     async def put(self, key: str, data: bytes, content_type: str) -> None: ...
     async def get(self, key: str) -> bytes: ...
     async def get_limited(self, key: str, max_bytes: int) -> bytes: ...
+    async def stat_size(self, key: str) -> int: ...
+    async def get_range(self, key: str, offset: int, length: int) -> bytes: ...
     async def exists(self, key: str) -> bool: ...
     async def delete(self, key: str) -> None: ...
     async def list_prefix(self, prefix: str) -> list[str]: ...
@@ -105,6 +107,31 @@ class MinioStorage:
                 resp.release_conn()
         return await asyncio.to_thread(_get)
 
+    async def stat_size(self, key: str) -> int:
+        """HEAD 取对象字节数；缺失即抛，调用方按存储不一致处理。"""
+        def _stat() -> int:
+            return self._client.stat_object(self._bucket, key).size
+
+        return await asyncio.to_thread(_stat)
+
+    async def get_range(self, key: str, offset: int, length: int) -> bytes:
+        """按 S3 Range 读一段；短读即抛，不返回看似成功的截断。"""
+        if offset < 0 or length <= 0:
+            raise ValueError("range must have non-negative offset and positive length")
+
+        def _get() -> bytes:
+            resp = self._client.get_object(self._bucket, key, offset=offset, length=length)
+            try:
+                content = resp.read()
+                if len(content) != length:
+                    raise ValueError("short range read")
+                return content
+            finally:
+                resp.close()
+                resp.release_conn()
+
+        return await asyncio.to_thread(_get)
+
     async def delete(self, key: str) -> None:
         await asyncio.to_thread(self._client.remove_object, self._bucket, key)
 
@@ -163,6 +190,20 @@ class MemoryStorage:
         if len(content) > max_bytes:
             raise ValueError("object exceeds byte limit")
         return content
+
+    async def stat_size(self, key: str) -> int:
+        if key not in self.objects:
+            raise KeyError(key)
+        return len(self.objects[key][0])
+
+    async def get_range(self, key: str, offset: int, length: int) -> bytes:
+        """内存等价：越界/短读即抛，不返回看似成功的截断。"""
+        if offset < 0 or length <= 0:
+            raise ValueError("range must have non-negative offset and positive length")
+        content = await self.get(key)
+        if offset + length > len(content):
+            raise ValueError("range beyond object end")
+        return content[offset:offset + length]
 
     async def delete(self, key: str) -> None:
         self.objects.pop(key, None)

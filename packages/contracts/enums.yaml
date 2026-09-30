@@ -111,6 +111,12 @@ enums:
         summary: 原文自动核对没得出结论
         label: 原文自动核对未得出结论，请人工复核
         severity: warn
+      - value: evidence_unavailable
+        summary: |
+          远端计算的固定版本编译完成但没有可交付的冻结证据；交付 Bundle 只含原件与版面。
+          与 no_hits 不同：这里不是检索没命中，而是证据本身不存在。
+        label: 交付结果不含冻结证据（原件与版面仍可用）
+        severity: warn
       - value: schema_violation
         summary: |
           模型输出不符合约定结构。抽取平面：按 EXTRACT_MAX_RETRIES 重试仍失败；

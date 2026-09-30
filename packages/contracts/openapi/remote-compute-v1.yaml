@@ -7,11 +7,14 @@ info:
 
     - 本任务外部能力采用 `corpus.parse` 的获批输入计划；不经过仅支持 retrieve/answer 的现有联邦根任务入口。
     - 复用控制面 `/api/uploads` 的 multipart+reconcile+finalize 数据通道，新增明确 `temporary_compute` 用途和任务绑定；默认现有永久上传行为保持（purpose 缺省 permanent）。
-    - 持久计算协调记录由 corpus 写，端点 `/api/v1/remote-compute`（幂等创建等待输入）、`/{id}`（状态/固定输入输出 manifest）、`/{id}/cancel`、`/{id}/ack`；已认证同一 actor/org，input 摘要/plan 摘要/source 身份固定，不得默认发布或永久存语料。
+    - 持久计算协调记录由 corpus 写，端点 `/api/v1/remote-compute`（幂等创建等待输入）、`/{id}`（状态/固定输入输出 manifest）、`/{id}/cancel`、`/{id}/ack`、`/{id}/bundle`（固定输出字节/断点续传）；已认证同一 actor/org，input 摘要/plan 摘要/source 身份固定，不得默认发布或永久存语料。
     - 上传等待阶段不排计算，完整摘要验证后复用已有真实解析队列（中心 borndigital 真实解析）。元数据预检不冒充 content_verified，不把临时资料加入永久公开检索。
     - 输出通过既有 Bundle/存储通道，校验后本地原子提交再 ack，TTL/取消/失败/确认状态可见，持久临时区清理复用引用安全 GC。
+    - succeeded 的输出使用真实固定来源版本、原件、版面与已落定的冻结证据；编译未结束时不提前固定空证据交付。编译降级原样保留在 manifest.compile_degraded；索引／证据缺失以 manifest.degraded 的 resource_index_unavailable／evidence_unavailable 显式保留。回调丢失由持久对账补齐，不重复提交解析。
+    - 未确认的 succeeded 到 expires_at 后转 expired，不再接受下载或 ACK；到期前不因关闭后的清理宽限期提前丢失输出。尚未 ACK 的 succeeded 可取消；晚到结果不能复活 cancelled/expired/failed/acked。
+    - 关闭时撤销该计算独占的临时资源，宽限期后回收专属交付文件。原件与派生文件复用持久、引用安全 GC；其他资源、人工保存的证据引用和仍在执行的解析必须保留。清理完成记录不改动固定交付 manifest。
 
-    本文件为新增 `remote-compute-v1.yaml`；控制面入口形状同时落在 `control-v1.yaml`（RemoteCompute/UploadPurpose/四个端点），以单入口代理语义为准。
+    本文件为新增 `remote-compute-v1.yaml`；控制面入口形状同时落在 `control-v1.yaml`（RemoteCompute/UploadPurpose/五个端点），以单入口代理语义为准。
 tags:
   - name: remote-compute
   - name: uploads
@@ -41,7 +44,7 @@ components:
         source_identity: { type: object }
         target_identity: { type: object }
         retention: { type: string, enum: [temporary, task_pinned] }
-        expires_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, description: '未确认输入与输出的可用期限，包含 succeeded 等待交付阶段' }
         upload_id: { type: string, nullable: true }
         manifest: { type: object, nullable: true }
 paths:
@@ -84,6 +87,7 @@ paths:
     post:
       tags: [remote-compute]
       summary: 幂等取消持久计算
+      description: '包括尚未确认的 succeeded；关闭后先撤销独占临时资源，再按宽限期与引用安全 GC 清理。已 ACK 的记录不可取消。'
       security: [{ session: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -113,3 +117,46 @@ paths:
         "200": { description: 已确认, content: { application/json: { schema: { $ref: '#/components/schemas/RemoteCompute' } } } }
         "404": { description: 不存在或非同一 actor/org }
         "409": { description: 输出 hash 不符或状态不可确认 }
+  /api/v1/remote-compute/{id}/bundle:
+    get:
+      tags: [remote-compute]
+      summary: 固定输出字节与断点续传
+      description: |
+        固定 manifest 的输出 ZIP 字节（`application/zip`）。无 `Range` 时返回
+        200 完整字节（有界 `MAX_ARCHIVE`，附带完整摘要校验）；单段
+        `Range: bytes=start-end`（闭区间，`start=0` 允许，`end` 在 EOF 截断）
+        返回 206 且带 `Content-Range: bytes start-end/total`。
+        客户端每次携带 `If-Match: "<裸 64hex output_sha256>"`；摘要不符返回 412。
+        非法/不可满足/多段 Range 返回 416（带 `Content-Range: bytes */total`）。
+        206 的 `ETag`/`X-Output-SHA256` 声明固定 manifest 摘要，最终整包摘要
+        以客户端重组后重算为准；损坏的分片字节永不导入/确认。
+      security: [{ session: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: Range, in: header, required: false, schema: { type: string, pattern: '^bytes=[0-9]+-[0-9]+$' }, description: '单段闭区间，如 bytes=4-8' }
+        - { name: If-Match, in: header, required: false, schema: { type: string, pattern: '^"[a-fA-F0-9]{64}"$' }, description: '固定输出摘要，如 "ab12...64hex"' }
+      responses:
+        "200":
+          description: 完整输出字节
+          headers:
+            Accept-Ranges: { schema: { type: string, enum: [bytes] } }
+            ETag: { schema: { type: string, pattern: '^"[a-f0-9]{64}"$' } }
+            X-Output-SHA256: { schema: { type: string, pattern: '^[a-f0-9]{64}$' } }
+            Cache-Control: { schema: { type: string, enum: [no-store] } }
+          content:
+            application/zip: { schema: { type: string, format: binary } }
+        "206":
+          description: 请求的分片字节
+          headers:
+            Content-Range: { schema: { type: string, pattern: '^bytes [0-9]+-[0-9]+/[0-9]+$' } }
+            Content-Length: { schema: { type: integer, minimum: 1 } }
+            Accept-Ranges: { schema: { type: string, enum: [bytes] } }
+            ETag: { schema: { type: string, pattern: '^"[a-f0-9]{64}"$' } }
+            X-Output-SHA256: { schema: { type: string, pattern: '^[a-f0-9]{64}$' } }
+            Cache-Control: { schema: { type: string, enum: [no-store] } }
+          content:
+            application/zip: { schema: { type: string, format: binary } }
+        "404": { description: 不存在、非同一 actor/org、或输出尚不可用 }
+        "412": { description: If-Match 与固定 manifest 摘要不符 }
+        "416": { description: Range 非法/不可满足/多段 }
+        "502": { description: 固定输出存储不可读、超出 MAX_ARCHIVE、读取不足或完整摘要不符（bundle_storage_mismatch）；绝不当作成功返回字节 }

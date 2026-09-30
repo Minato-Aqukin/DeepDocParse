@@ -245,6 +245,15 @@ components:
     RemoteCompute:
       type: object
       required: [id, status, input_sha256, input_size, plan_digest, source_identity, target_identity, retention]
+      description: |
+        succeeded 表示固定来源版本的真实 Bundle 已形成，包含原件、版面及已完成编译的冻结证据；
+        等待编译时不提前固定空证据交付。编译或索引虽已结束但证据为空、索引失败时仍可交付，
+        缺口以 manifest.degraded（resource_index_unavailable／evidence_unavailable）显式标出，
+        编译降级原样保留在 manifest.compile_degraded。未确认的 succeeded 仍受 expires_at 约束：
+        到期后状态变 expired，不再下载或确认；到期前不得因终态清理宽限期而提前丢失输出。
+        取消也适用于尚未 ack 的 succeeded。晚到的解析回调不得复活取消、过期、失败或已确认的记录，
+        丢回调由持久对账补齐。关闭后的临时资源先撤销，再按宽限期与引用安全 GC 回收；
+        其他资源、历史证据引用、尚在执行的解析仍保护其原件与派生数据。
       properties:
         id: { type: string }
         status: { $ref: '#/components/schemas/RemoteComputeStatus' }
@@ -254,9 +263,9 @@ components:
         source_identity: { type: object, description: '发起方固定身份（actor/org 摘要），跨 actor 任务绑定拒绝' }
         target_identity: { type: object, description: '目标中心/执行方固定身份' }
         retention: { type: string, enum: [temporary, task_pinned], description: '临时保留策略；ack/TTL/取消/失败后清理输入与派生数据但保留其他引用' }
-        expires_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, description: '未确认输入与输出的可用期限；succeeded 也在到期后转 expired' }
         upload_id: { type: string, nullable: true }
-        manifest: { type: object, nullable: true, description: '交付 manifest：固定源/版本/输出 hash；输出经 Bundle/存储通道校验后本地原子提交再 ack' }
+        manifest: { type: object, nullable: true, description: '交付 manifest：固定源/版本/输出 hash；compile_degraded 为编译降级列表（compile_degraded 枚举），degraded 为交付缺口列表（degraded 枚举：resource_index_unavailable、evidence_unavailable）；输出经 Bundle/存储通道校验后本地原子提交再 ack' }
     UploadSession:
       type: object
       required: [id, status, object_key]
@@ -794,12 +803,46 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RemoteCompute' } } } }
         "404": { description: 不存在或非同一 actor/org }
+  /api/v1/remote-compute/{id}/bundle:
+    get:
+      tags: [remote-compute]
+      summary: 固定输出 ZIP 的有界下载与断点续传
+      description: |
+        先验证同一 actor/org，再按固定输出 manifest 提供 ZIP；读取不是确认。
+        单段 Range 使用 bytes=start-end（含两端，末端按文件长度截断），
+        If-Match 使用带双引号的 output_sha256；完整 ZIP 上限 64 MiB。
+        分段头声明固定 manifest 摘要，不代表分段已证明完整输出摘要：
+        本机必须校验拼接后全部字节，原子导入并持久化后才能 ACK。
+        完整协议见 remote-compute-v1.yaml 的同一路径；控制面流式透传范围与条件头。
+      security: [{ session: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: Range, in: header, schema: { type: string }, description: 单段字节范围 }
+        - { name: If-Match, in: header, schema: { type: string }, description: 带双引号的固定 output_sha256 }
+      responses:
+        "200": { description: 完整且通过固定摘要检查的 ZIP }
+        "206":
+          description: 指定范围，完整摘要须由本机验证
+          headers:
+            Content-Range: { schema: { type: string } }
+            Content-Length: { schema: { type: integer } }
+            Accept-Ranges: { schema: { type: string, const: bytes } }
+            ETag: { schema: { type: string } }
+            X-Output-SHA256: { schema: { type: string } }
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        "404": { description: 不存在、非同一主体或输出不可用 }
+        "412": { description: 固定输出摘要前提不满足 }
+        "416": { description: 范围无效、越界或请求多个范围 }
+        "502": { description: 输出存储不可读、超限或与声明不符 }
   /api/v1/remote-compute/{id}/cancel:
     post:
       tags: [remote-compute]
       summary: 幂等取消持久计算
       description: |
-        显式幂等取消；取消后清理输入与派生数据但保留其他引用（引用安全 GC）。已 ack 的记录不可再取消。
+        显式幂等取消，包括尚未确认的 succeeded；取消后撤销该计算的临时资源，
+        按宽限期清理输入与派生数据但保留其他引用（引用安全 GC）。已 ack 的记录不可再取消。
       security: [{ session: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }

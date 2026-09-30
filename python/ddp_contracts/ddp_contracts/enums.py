@@ -19,7 +19,7 @@ class EnumMeta(TypedDict, total=False):
 #
 # **一次只报一个**（最先命中的那个）。需要同时报多个的场合请用
 # `compile_degraded` 那种列表形状，不要往这里塞逗号分隔串。
-Degraded = Literal["no_hits", "parse_mismatch", "resource_index_unavailable", "embedding_unavailable", "vision_unavailable", "crop_unsupported", "crop_failed", "client_aborted", "upstream_error", "upstream_interrupted", "index_changed_during_answer", "decision_unavailable", "no_evidence_in_turn", "inherited_evidence_incomplete", "gate_rejected_all", "citation_persist_failed", "verification_unavailable", "schema_violation", "rerank_unavailable", "no_instruct_model", "empty_query", "answer_unavailable"]
+Degraded = Literal["no_hits", "parse_mismatch", "resource_index_unavailable", "embedding_unavailable", "vision_unavailable", "crop_unsupported", "crop_failed", "client_aborted", "upstream_error", "upstream_interrupted", "index_changed_during_answer", "decision_unavailable", "no_evidence_in_turn", "inherited_evidence_incomplete", "gate_rejected_all", "citation_persist_failed", "verification_unavailable", "evidence_unavailable", "schema_violation", "rerank_unavailable", "no_instruct_model", "empty_query", "answer_unavailable"]
 
 DEGRADED_VALUES: Final[tuple[str, ...]] = (
     "no_hits",
@@ -39,6 +39,7 @@ DEGRADED_VALUES: Final[tuple[str, ...]] = (
     "gate_rejected_all",
     "citation_persist_failed",
     "verification_unavailable",
+    "evidence_unavailable",
     "schema_violation",
     "rerank_unavailable",
     "no_instruct_model",
@@ -84,6 +85,9 @@ DEGRADED_META: Final[dict[str, EnumMeta]] = {
     "citation_persist_failed": {"value": "citation_persist_failed", "label": "出处保存失败，相关结论已标为无证据支持", "severity": "error"},
     # 原文自动核对没得出结论
     "verification_unavailable": {"value": "verification_unavailable", "label": "原文自动核对未得出结论，请人工复核", "severity": "warn"},
+    # 远端计算的固定版本编译完成但没有可交付的冻结证据；交付 Bundle 只含原件与版面。
+    # 与 no_hits 不同：这里不是检索没命中，而是证据本身不存在。
+    "evidence_unavailable": {"value": "evidence_unavailable", "label": "交付结果不含冻结证据（原件与版面仍可用）", "severity": "warn"},
     # 模型输出不符合约定结构。抽取平面：按 EXTRACT_MAX_RETRIES 重试仍失败；
     # 问答平面：回答未满足逐条证据绑定协议（非法 JSON、缺失/越界 evidence_id、
     # 截断），不重试，已校验的完整断言作为显式失败的部分回答保留。

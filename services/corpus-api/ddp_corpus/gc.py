@@ -30,9 +30,8 @@ from ddp_corpus.storage import Storage, job_result_prefix, prefix_of
 ACTIVE_TASKS = ("queued", "claimed", "running")
 ACTIVE_PARSES = ("pending", "running", "archiving")
 
-#: Remote file-compute tmp input space (agreed with the 0035 owner). Only keys
-#: under `tmp-remote-compute/{org}/{compute_id}/` may be collected by the
-#: compute sweep, never by the generic document sweep below.
+# Temporary compute originals use the same durable, reference-safe collector;
+# the compute owner only reclaims otherwise unreferenced delivery artifacts.
 REMOTE_COMPUTE_TMP_PREFIX = "tmp-remote-compute/"
 
 
@@ -60,22 +59,19 @@ def _references(value, identities: set[str]) -> bool:
 
 async def _remote_compute_protected(session, document) -> bool:
     """Temporary inputs stay while their compute is active or in grace window."""
-    try:
-        from ddp_corpus.remote_compute_models import (
-            ACTIVE_REMOTE_COMPUTE, TERMINAL_REMOTE_COMPUTE, RemoteCompute,
-        )
-        from ddp_corpus.routers.remote_compute import TERMINAL_GRACE_SECONDS
-    except Exception:
-        return False
+    from ddp_corpus.remote_compute_models import (
+        CLOSED_REMOTE_COMPUTE, UNCONFIRMED_REMOTE_COMPUTE, RemoteCompute,
+    )
+    from ddp_corpus.routers.remote_compute import TERMINAL_GRACE_SECONDS
     rows = (await session.execute(select(RemoteCompute).where(
         RemoteCompute.input_object_key == document.object_key))).scalars().all()
     if not rows:
         return False
     now = utcnow()
     for row in rows:
-        if row.status in ACTIVE_REMOTE_COMPUTE:
+        if row.status in UNCONFIRMED_REMOTE_COMPUTE:
             return True
-        if row.status in TERMINAL_REMOTE_COMPUTE and row.updated_at is not None:
+        if row.status in CLOSED_REMOTE_COMPUTE and row.cleaned_at is None and row.updated_at is not None:
             if (now - as_aware(row.updated_at)).total_seconds() < TERMINAL_GRACE_SECONDS:
                 return True
     return False
@@ -85,8 +81,8 @@ async def _protected(session, document, versions, jobs) -> bool:
     if await session.scalar(select(_live_versions(document.id))):
         return True
     if document.object_key and document.object_key.startswith(REMOTE_COMPUTE_TMP_PREFIX):
-        # Tmp inputs are owned by the compute sweep, never by generic GC: an
-        # active (or grace-window terminal) compute protects its input key.
+        # The compute's execution, unacknowledged delivery, and grace period
+        # protect its source even after its own resource has been tombstoned.
         if await _remote_compute_protected(session, document):
             return True
     if any(job.status in ACTIVE_PARSES for job in jobs):
@@ -242,9 +238,6 @@ async def _collect_keys(session, storage, document, versions, jobs):
         ).scalars()
     )
     keys = set(document.gc_pending_keys)
-    # Tmp compute inputs never enter the generic prefix sweep: even outside
-    # the grace window they are collected only by the compute-scoped sweep.
-    tmp_owned = bool(document.object_key and document.object_key.startswith(REMOTE_COMPUTE_TMP_PREFIX))
     for prefix in prefixes - shared_prefixes:
         if any(key.startswith(prefix) for key in other_keys):
             continue
@@ -256,14 +249,13 @@ async def _collect_keys(session, storage, document, versions, jobs):
         ):
             continue
         keys.update(key for key in await storage.list_prefix(prefix) if key.startswith(prefix))
-    if document.object_key and document.object_key not in other_keys and not tmp_owned:
+    if document.object_key and document.object_key not in other_keys:
         keys.add(document.object_key)
     # Recheck old pending keys too: another document may now reference a formerly unique key.
     return sorted(
         key
         for key in keys
         if key not in other_keys and not any(key.startswith(prefix) for prefix in shared_prefixes)
-        and not key.startswith(REMOTE_COMPUTE_TMP_PREFIX)
     )
 
 
