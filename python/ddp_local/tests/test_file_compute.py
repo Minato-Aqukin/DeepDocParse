@@ -484,3 +484,53 @@ async def test_expired_output_never_shows_saved_and_cleans_only_partial(runtime,
     with __import__("pytest").raises(ApplicationError) as exc:
         await module.confirm_delivery(runtime, plan_id, "rc-1", manifest_digest, cfg)
     assert exc.value.code == "plan_changed"
+
+
+async def _ranged_plan(runtime, center, key):
+    import sys
+    sys.path.insert(0, "tests")
+    from ddp_bundle_fixture import sample_bundle
+    payload = sample_bundle()
+    manifest_digest = content_digest(payload)
+    plan_id, _ = await _propose(runtime)
+    await module.dispatch_plan(runtime, plan_id, config(), phase="exploration", operation_key=key)
+    _succeeded_record(center, manifest_digest)
+    center.payload, center.digest_hex = payload, manifest_digest.removeprefix("sha256:")
+    center.tamper_next, center.fail_next, center.requests_ranges = 0, [], []
+    center.handler = RangeCenter.handler.__get__(center, RangeCenter)
+    return plan_id, payload, manifest_digest
+
+
+async def test_exact_chunk_multiple_completes_without_probing_past_the_end(runtime, center, monkeypatch):
+    plan_id, payload, manifest_digest = await _ranged_plan(runtime, center, "explore-multiple")
+    assert len(payload) % 2 == 0
+    monkeypatch.setattr(filemod, "DOWNLOAD_CHUNK_BYTES", len(payload) // 2)
+    ranged, sent = center.handler, []
+
+    def counting(request):
+        if request.url.path.endswith("/bundle"):
+            sent.append(request.headers["Range"])
+        return ranged(request)
+    center.handler = counting
+    out = await module.fetch_delivery(runtime, plan_id, config())
+    assert out["delivery"]["verified"] is True
+    assert out["delivery"]["result_manifest_digest"] == manifest_digest
+    half = len(payload) // 2
+    # Exactly two Ranges: no start==total probe after the last full chunk.
+    assert sent == [f"bytes=0-{half - 1}", f"bytes={half}-{2 * half - 1}"]
+
+
+async def test_complete_partial_left_by_a_crash_verifies_without_refetching(runtime, center):
+    plan_id, payload, manifest_digest = await _ranged_plan(runtime, center, "explore-complete")
+    target = filemod.partial_path(runtime, filemod.partial_identity(plan_id, manifest_digest))
+    try:
+        filemod.append_complete_chunk(target, payload, expected_offset=0,
+                                      manifest_digest=manifest_digest)
+    finally:
+        import os
+        os.close(target)
+    out = await module.fetch_delivery(runtime, plan_id, config())
+    assert out["delivery"]["verified"] is True
+    assert "import_result" in out["delivery"]
+    # Only the start==total probe was sent; no byte was downloaded again.
+    assert center.requests_ranges == []

@@ -1127,15 +1127,24 @@ async def _fetch_file_delivery(runtime, plan_id, config, identity, state, *, act
                     total = None
                     try:
                         while True:
-                            chunk, total = await client.download_range(
-                                compute_id, start=offset,
-                                end=offset + DOWNLOAD_CHUNK_BYTES - 1,
-                                output_sha256=digest.removeprefix("sha256:"),
-                                total=total)
+                            try:
+                                chunk, total = await client.download_range(
+                                    compute_id, start=offset,
+                                    end=offset + DOWNLOAD_CHUNK_BYTES - 1,
+                                    output_sha256=digest.removeprefix("sha256:"),
+                                    total=total)
+                            except CenterFault as exc:
+                                # A durable partial may already hold every byte (crash
+                                # after the last chunk, before import). The server
+                                # answers start==total with 416; the full-digest check
+                                # below is the authority on whether the prefix is whole.
+                                if exc.code == "range_not_satisfiable" and offset > 0:
+                                    break
+                                raise
                             offset = append_complete_chunk(
                                 target, chunk, expected_offset=offset,
                                 manifest_digest=digest)
-                            if len(chunk) < DOWNLOAD_CHUNK_BYTES:
+                            if len(chunk) < DOWNLOAD_CHUNK_BYTES or offset >= total:
                                 break
                     except CenterFault as exc:
                         if exc.code in ("result_unavailable", "delivery_expired", "not_found",
