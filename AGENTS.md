@@ -15,7 +15,7 @@
 
 | 你要做什么 | 看哪份 |
 |---|---|
-| **知道重构做到哪、还欠什么** | `docs/refactor/STATUS.md` |
+| **知道当前范围、做到哪、还欠什么** | 工作区 `../plan.md`（§0 成果／缺口，§17 剩余队列）；逐项证据 `docs/refactor/ACCEPTANCE-MATRIX-v3.md`，合仓历史 `docs/refactor/STATUS.md` |
 | 改契约 | `packages/contracts/`（**先改契约再改实现**，不变式 4） |
 | 理解服务边界与谁能写哪张表 | `docs/refactor/DATA-OWNERSHIP.md` |
 | 理解任务队列 | `docs/refactor/TASK-QUEUE.md` |

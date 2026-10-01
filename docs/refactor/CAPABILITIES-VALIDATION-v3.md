@@ -3,7 +3,7 @@
 当前状态：`GET /v1/capabilities`（model-gateway）与 `GET /internal/capabilities`
 （corpus-api）两个生产者的**语义修复 + 负向回归**自验通过。**这不是 P4/P5 完成，
 也不是 commit 前的独立验收**，更**不代表任何真实模型跑过**。执行权威是工作区上级
-`DeepDocParse_桌面与可验证联邦路由升级计划_v3.md`（§5.2 / §5.5 / §6.4）；
+[plan.md](../../../plan.md)（原 v3 的 §5.2 / §5.5 / §6.4，编号不变）；
 消费侧契约见 `packages/contracts/ddp/discovery-control-format.md` 与
 `packages/contracts/schemas/ddp-discovery/v1.json`。
 

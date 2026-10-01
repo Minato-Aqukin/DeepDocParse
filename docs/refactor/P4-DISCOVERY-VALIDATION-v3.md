@@ -1,6 +1,6 @@
 # P4 discovery control 自验记录（2026-09-12）
 
-当前状态：控制域直接成员目录切片自验通过，**不是 P4 完成，也不是 commit 前的独立验收**。执行权威是工作区上级 `DeepDocParse_桌面与可验证联邦路由升级计划_v3.md`；控制契约见 `packages/contracts/ddp/discovery-control-format.md`。
+当前状态：控制域直接成员目录切片自验通过，**不是 P4 完成，也不是 commit 前的独立验收**。执行权威是工作区 [plan.md](../../../plan.md)（原 v3，编号不变）；控制契约见 `packages/contracts/ddp/discovery-control-format.md`。
 
 ## 本次收尾
 

@@ -595,3 +595,27 @@ async def test_compute_closed_without_ack_drops_the_stale_pending_delivery(runti
     assert cancelled["delivery"]["import_result"] == out["delivery"]["import_result"]
     again = await module.reconcile(runtime, plan_id, config())
     assert "state" not in again["delivery"]
+
+
+async def test_lost_ack_reply_stays_pending_and_reconfirms_with_a_new_key(runtime, center):
+    """T29: the center applied the ack but its reply was lost. The delivery stays pending with a
+    visible unknown outcome, never fabricated as confirmed; a new-key confirmation re-sends the ack
+    and settles on the center's idempotent replay (the real replay rule is pinned in corpus-api)."""
+    plan_id, payload, manifest_digest = await _ranged_plan(runtime, center, "explore-lost-ack")
+    await module.fetch_delivery(runtime, plan_id, config())
+    ranged, lost = center.handler, {"pending": True}
+
+    def drop_first_ack_reply(request):
+        response = ranged(request)
+        if request.url.path.endswith("/ack") and lost.pop("pending", False):
+            raise httpx.ReadError("reply lost after the center applied it", request=request)
+        return response
+    center.handler = drop_first_ack_reply
+    with pytest.raises(CenterFault) as unknown:
+        await module.confirm_delivery(runtime, plan_id, "rc-1", manifest_digest, config(), operation_key="confirm-0001")
+    assert unknown.value.code == "outcome_unknown"
+    assert module.load_federation_state(runtime, plan_id)["delivery"]["state"] == "pending"
+    assert center.records["rc-1"]["status"] == "acked"
+    confirmed = await module.confirm_delivery(runtime, plan_id, "rc-1", manifest_digest, config(), operation_key="confirm-0002")
+    assert confirmed["delivery"]["state"] == "confirmed"
+    assert len([r for r in center.requests if r["path"].endswith("/ack")]) == 2

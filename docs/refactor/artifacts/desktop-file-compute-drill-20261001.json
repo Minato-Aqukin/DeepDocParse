@@ -1,0 +1,51 @@
+{
+  "id": "desktop-file-compute-drill-20261001",
+  "date": "2026-09-30/2026-10-01",
+  "scope": "plan.md §17 桌面可靠双执行（本机部分）：真实 App→中心→本地文件计算整链、中断续传、丢回执、取消与临时数据保留／回收对账。不代表多主机、安装包或人工批准验收。",
+  "environment": {
+    "app": "真实 Electron 桌面应用（apps/desktop 未打包源码，内嵌 Node v24.20.0），Playwright _electron 启动，仅额外信任测试 CA；本机运行时 ddp_local 为其子进程",
+    "center": "B 栈：control-api（本工作树编译）、corpus-api、corpus-worker（borndigital 真解析）、model-gateway、PostgreSQL 16 + pgvector、Redis、MinIO",
+    "transport": "测试 CA 的 TLS 中继：中心 https://127.0.0.1:45174→control 43430，对象存储 https://127.0.0.1:49002→MinIO 49000；故障注入为『上游已完成后销毁 TLS 连接』，即回执真实丢失",
+    "account": "通过 /api/auth/register 新建的 contributor",
+    "input": {"file": "resume-fixture.pdf", "bytes": 2360100, "sha256": "d00be0bbd2885873e6498fba2671e85e5a7f68cb004bf32102d5a0655bb725cc"},
+    "raw_evidence": ".dev-logs/quality-20261001/drill-evidence/（本机，不进 git，已确认无凭据）：relay-events.json、host-fetch.log、remote_computes.tsv、upload_sessions.tsv、local-plans.jsonl、electron-segv.txt、minio-crash.txt；2026-10-01T04:28:01Z 补采 object-listing.txt、remote_computes-after-grace.tsv、cleanup-check-at.txt、plan-4f0b-after-expiry.json；dedup-bindings.tsv 为各计算解析绑定的文档与对象键；compute-resource-tombstones.tsv 为各计算资源的墓碑化时间；cancel-with-bytes-before.tsv 为上传后取消的中心行与前缀列举"
+  },
+  "plans": {
+    "plan-211194f7263d4bdc99cbf7c434e63ad3": "首次执行：暴露 authorize 缺口；对象存储崩溃下的分配未知；取消与终态落库",
+    "plan-4f0b36c3cbfb4011a12597eb27359793": "分片丢回执续传、Range 丢回执续传、宿主重算与导入；确认前批准过期",
+    "plan-8307955a25dd43199e744c0c955bcb6b": "修复后整链：丢 ack 回执两次后确认，中心只确认一次",
+    "plan-4fb60d70ed374f6180a19acde4ddfbcf": "上传后立即取消（原件与前几次同字节，按内容去重）"
+  },
+  "results": [
+    {"step": "执行授权", "observed": "派发与读源 200 后，本机账本从未收到 transfer/authorize；宿主把 Connection.query 的 protocol_incompatible 记成 transfer_unknown", "outcome": "缺陷，已修（065f115）：query 白名单加入 plan.file.authorize；账本拒绝保留原码"},
+    {"step": "对象存储故障下的创建", "observed": "MinIO 于 2026-09-30T17:32:05Z 因 Go 运行时 fatal error（sweep increased allocation count）退出；创建返回 202、allocation_state=unknown；客户端 transfer_unknown，未伪造进度", "outcome": "符合契约；显式复核沿用原上传编号（GET /api/uploads/7418…），中心仅一条会话，无第二次分配"},
+    {"step": "取消", "observed": "取消中心计算 → 中心 cancelled，cleaned_at 2026-09-30T18:54:53Z；该计算在对象存储崩溃中从未收到字节（中继无对象 PUT，上传会话停在 created/unknown），所以临时前缀为空不证明字节回收", "outcome": "取消与终态落库通过；取消后的字节回收未被本演练证明"},
+    {"step": "分片丢回执", "observed": "第 1 片已写入 MinIO（上游 200）后连接被断；本地日志 uploadedBytes=0、phase=unknown；显式继续：读会话见该片已存，未重传，直接 finalize 202；中心核验 sha256 与源一致、2360100 字节；真实解析 succeeded", "outcome": "通过"},
+    {"step": "交付 Range 丢回执", "observed": "bytes=0-1048575 206；bytes=1048576-2097151 上游已发后断开 → transport_error，持久 partial 恰 1048576 字节（0600）；显式重取从 1048576 续传，余 1315421 字节；全量 2363997 字节摘要 = 清单 d2d49bc4…，原子导入，partial 删除", "outcome": "通过；transport_error 原无文案，已补契约值（065f115）"},
+    {"step": "宿主独立重算", "observed": "/delivery/result 对文件交付返回 404，宿主重算恒失败", "outcome": "缺陷，已修（065f115）：返回导入版本的内容寻址 Bundle，重算 = 中心声明摘要"},
+    {"step": "确认按钮", "observed": "文件交付没有 delivery.id/state，确认永不可用", "outcome": "缺陷，已修（065f115）：id=远端计算号；succeeded→pending、acked→confirmed、expired→expired，cancelled/failed（含取消回执）去掉过期的 pending"},
+    {"step": "ack", "observed": "运行时发送带 sha256: 前缀的摘要，中心 400 bad_digest", "outcome": "缺陷，已修（065f115）：按 remote-compute-v1 发 64 位十六进制"},
+    {"step": "ack 丢回执", "observed": "中心已 acked、回执两次被断：本地保持 pending、outcome_unknown，页面提示『交付尚未确认…（outcome_unknown）』；再次确认 → 同摘要重放 200 → 本地 confirmed、计划 delivered；中心 acked 一次，output_sha256 5299edcb…", "outcome": "通过；提示原被刷新清掉，已修（065f115）"},
+    {"step": "确认后清理与未确认保留", "observed": "确认（ack 03:21:56Z）时该计算资源墓碑化（compute-resource-tombstones.tsv：deleted_at 03:21:56Z、withdrawn）；TERMINAL_GRACE_SECONDS=3600 期满由清扫回收：cleaned_at 2026-10-01T04:21:57Z，04:28:01Z 列举该计算临时前缀对象 0。它的上传副本确曾写入前缀（中继 PUT …/b3648093…/source.bin 200），但 finalize 时按内容去重由 cleanup_duplicate_upload 删除，解析绑定已有文档 31caa2ff…（对象键在 3c1a… 前缀下，dedup-bindings.tsv），所以宽限期清扫回收的是它独占的输出包；共享原件仍被引用而保留。对照：未确认的 3c1a… 在 TTL（2026-10-01T17:56Z）内仍保留 source.bin 2360100 字节与输出包 2363997 字节", "outcome": "通过：确认前不清理、确认后宽限期满回收本计算独占的对象、被引用的共享原件不删（object-listing.txt、remote_computes-after-grace.tsv、dedup-bindings.tsv）"},
+    {"step": "宿主崩溃", "observed": "2026-09-30T18:04:03Z Electron 主进程 SIGSEGV（node TLSWrap 写完成回调 → v8::Object::Get，core dump 已存），运行时子进程随之退出；重启后计划账本、上传日志与已导入版本完好", "outcome": "平台风险（Electron 内嵌 Node 的原生崩溃，非本项目 JS）；持久状态未受损"},
+    {"step": "批准过期", "observed": "计划有效期 2 小时（valid_until 2026-09-30T19:55:47Z），闲置后显式重取交付被拒（POST …/delivery/fetch → 400 consent_expired），计划 planning_state=invalidated（plan-4f0b-after-expiry.json）；该计划修复前没有交付 id/state，确认入口从未出现，不是一次 ack 被拒。本机已导入的副本保留，中心按 24 小时 TTL 处理未确认输出", "outcome": "失败关闭，符合设计"},
+    {"step": "上传后取消", "observed": "plan-4fb60d70…：上传完成（中心校验 2360100 字节、sha256 d00be0bb…）并绑定解析后立即取消中心计算 → 7ae2ff7c… cancelled（04:33:41Z），解析绑定的资源同刻墓碑化（compute-resource-tombstones.tsv）；原件按内容去重并入共享文档 31caa2ff…，本计算前缀无对象（cancel-with-bytes-before.tsv、dedup-bindings.tsv）", "outcome": "终态与墓碑化通过；共享原件因仍被引用而保留；独占字节回收未被证明"}
+  ],
+  "open_items": [
+    "文件计划的版本选择列出两条同名同大小的『resume-fixture.pdf · v1』（本地原件与交付导入副本），无法区分；选到导入副本时 policy_denied（来源策略不允许外发）",
+    "新建联邦任务页出现『任务草稿保存失败』且一直显示，原因未查",
+    "Electron 主进程原生 SIGSEGV 一次，未复现",
+    "独占原件（未与其他资源去重）在取消／确认后的字节回收未演练：本演练三次带字节的上传是同一文件，后两次都按内容去重并入第一次的共享文档"
+  ],
+  "verification": {
+    "commit": "065f115",
+    "tests": "client-runtime 49、desktop 88（W3 两项在无 WSL 包的工作树跳过）、web vitest 169、ddp_local 168、架构守卫 270；每条新增回归均在修前代码上确认失败",
+    "independent_acceptance": "DesktopSliceAccept 三轮：首轮无阻塞，P2（取消后残留 pending）与三项 P3 已修并复核通过"
+  },
+  "limits": [
+    "单机回环与测试 CA；网络故障由中继模拟，不是真实分区",
+    "原生批准对话框由测试启动器自动应答，不是人工点击",
+    "未打包的开发版 Electron；未测休眠恢复、离线审计、安装包",
+    "解析为 borndigital 文本层；不涉及模型质量"
+  ]
+}

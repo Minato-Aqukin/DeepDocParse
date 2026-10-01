@@ -1,7 +1,7 @@
 # P6 递归目录展开与对等目录读自验（2026-09-13）
 
 当前状态：**A→P→B/C 的目录展开、预算/环路/去重与对等目录读切片自验通过**。
-执行权威是工作区 `DeepDocParse_桌面与可验证联邦路由升级计划_v3.md` §5.3/§5.4 与 P6；
+执行权威是工作区 [plan.md](../../../plan.md) §5.3/§5.4 与 P6（原 v3，编号不变）；
 契约形状见 `discovery-control-format.md`、`scope-control-format.md` 与三份
 OpenAPI（`discovery-v1.yaml` peer 成员读、`collections-v1.yaml` peer 目录读、
 `scope-v1.yaml` 展开预算）。**这不是 commit 前的独立验收，也不代表 P6 全部出口。**

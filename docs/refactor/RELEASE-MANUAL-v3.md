@@ -5,6 +5,8 @@
 > 日志或产物路径。
 >
 > 容量数字在 `CAPACITY-LOCAL-v3.md`，那是本地 CPU 环境，不是生产能力承诺。
+>
+> **2026-09-27 状态校正**：本手册按轮次保留历史。09-23 已有[隔离安装根的真 pacman 安装／升级、SQLite 备份与 Wayland 重启](artifacts/pacman-install-upgrade-20260923.json)；09-26 桌面 AppShell 另有真窗口走查。两者不能拼成当前最终包已验收。当前范围与发行缺口见 [总计划](../../../plan.md) §0／§17，逐项见 T20／T23／T88；原“包管理器升级未做”不再适用。
 
 ## 0. 一页结论
 
@@ -267,7 +269,7 @@ docker exec -i ddp-postgres-1 sh -c \
 | GPU | Radeon 780M（核显，Chromium 软件/VAAPI 路径） | NVIDIA/Intel 独显、容器内 GPU 直通 |
 | 凭证 | `basic_text` → 仅会话内存 | GNOME Keyring/KWallet 持久化 |
 | Python | 系统 3.14（`cpython-314`） | 3.13/3.15、非 x86_64 ABI |
-| 更新 | 目录根上的真实 0.1.0⇄0.1.1 + 签名/篡改/降级负例 | 已安装 pacman 包的热更新、AUR 渠道 |
+| 更新 | 目录根真实 0.1.0⇄0.1.1 + 签名负例；隔离 pacman 安装／升级与 SQLite 备份后重启 | 当前 AppShell 最终包、当前迁移／活跃任务下的失败恢复；正式发布信任链 |
 | 数据 | dev 库 `pg_dump` 命令可跑 | 生产快照迁移、RPO/RTO 演练 |
 
 ## 8. 正式发布还欠什么
@@ -276,13 +278,12 @@ docker exec -i ddp-postgres-1 sh -c \
    目前只用临时密钥在本地证明了验证路径。
 2. **AUR/仓库发布**：`pkgrel`、`.SRCINFO`、维护者、校验源 URL；
    当前 PKGBUILD 是本地配方（`pkgname=deepdocparse-desktop-spike`）。
-3. **其他平台**：X11/其他桌面会话、aarch64、macOS/Windows 均未构建。
+3. **声明支持范围**：Linux 首发外的平台按需逐项验；Windows 已有 Tier A CI 产物（§9），但真实安装向导／卸载／WSL2 本地未验。X11、其他会话与架构未验，不列支持；不是 Linux 首发的额外强制门。
 4. **GPU 容量**：`CAPACITY-LOCAL-v3.md` 只有 CPU 数字；mineru/TEI/VQA
    的真实并发与容量要 GPU 机器。
 5. **服务端生产迁移**：生产快照演练、回滚演练、旧账号表删除
    （`docs/refactor/STATUS.md` 已列）。
-6. **更新分发**：目前需要手动把 `tar.gz + release.json(+sig)` 放到目标机；
-   没有更新服务器/CDN，也没有"检查更新"的 UI（刻意不做：先保证通道可信）。
+6. **更新分发**：目录包通道仍需部署与正式信任链；桌面 AppShell 已有“更新”页，说明 Linux 软件包更新并给出检查命令。页面存在不等于自动更新服务或当前包升级整体验收完成。
 
 ## 9. Windows 桌面（Tier A 远程 + Tier C WSL2 本地，v1）
 
