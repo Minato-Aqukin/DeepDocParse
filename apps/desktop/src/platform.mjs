@@ -21,11 +21,11 @@ export function platformName(platform = process.platform) {
  * points and non-directories; callers and hostStatus report backend `ntfs_acl`
  * instead of claiming a mode we cannot enforce.
  *
- * `code` is the caller's HostError code (`unsafe_credential_directory`, ...).
+ * `code` must be supplied by the caller so security failures are never unnamed.
  * `fileSystem` exists so tests can observe the exact filesystem sequence.
  */
 export async function secureDirectory(directory,
-  { create = true, platform = process.platform, code = 'unsafe_directory', fileSystem = FILESYSTEM } = {}) {
+  { create = true, platform = process.platform, code, fileSystem = FILESYSTEM }) {
   const windows = platform === 'win32'
   let created = false
   if (create) {
@@ -47,11 +47,11 @@ export async function secureDirectory(directory,
  * most `maxBytes`, and on POSIX owner-only mode and uid. A missing path stays a
  * raw ENOENT so callers can keep treating absence separately from an unsafe file.
  *
- * `code` is the caller's HostError code (`unsafe_runtime_token`, ...).
+ * `code` must be supplied by the caller so security failures are never unnamed.
  * `fileSystem` exists so tests can observe the exact filesystem sequence.
  */
 export async function secureFile(file,
-  { platform = process.platform, maxBytes = 8192, code = 'unsafe_file', fileSystem = FILESYSTEM } = {}) {
+  { platform = process.platform, maxBytes = 8192, code, fileSystem = FILESYSTEM }) {
   if (platform === 'win32') {
     const stat = await fileSystem.lstat(file)
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes) throw new HostError(code)

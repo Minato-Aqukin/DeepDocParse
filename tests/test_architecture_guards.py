@@ -607,3 +607,99 @@ def test_mcp_mount_path_matches_what_the_entry_strips():
     assert isinstance(returned.right, ast.Constant) and returned.right.value == "/mcp/"
     default_url = re.search(r'env.get\("CONTROL_BASE_URL",\s*"([^"]+)"\)', e2e)
     assert default_url and default_url.group(1) == "http://127.0.0.1:8080"
+
+
+def test_desktop_host_errors_have_user_visible_contract_labels():
+    """宿主错误必须有中文契约文案，不能在界面退化成未知英文取值。"""
+    import re
+    import yaml
+
+    def argument_end(text, start):
+        """Find the matching call ')' without counting JS literal contents."""
+        depth, index, previous = 1, start, "("
+        while index < len(text):
+            char = text[index]
+            if char.isspace():
+                index += 1
+                continue
+            if text.startswith("//", index):
+                index = text.find("\n", index + 2)
+                if index < 0:
+                    return None
+                continue
+            if text.startswith("/*", index):
+                end = text.find("*/", index + 2)
+                if end < 0:
+                    return None
+                index = end + 2
+                continue
+            # A slash after an expression-start/operator is a regex, not division.
+            regex = char == "/" and previous in "(=:[!,?&|{;+-*%^~"
+            if char in "'\"`" or regex:
+                delimiter, in_class = char, False
+                index += 1
+                while index < len(text):
+                    current = text[index]
+                    if current == "\\":
+                        index += 2
+                        continue
+                    if regex and current == "[":
+                        in_class = True
+                    elif regex and current == "]":
+                        in_class = False
+                    elif current == delimiter and not in_class:
+                        index += 1
+                        break
+                    index += 1
+                else:
+                    return None
+                previous = "v"
+                continue
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return index
+            previous = char
+            index += 1
+        return None
+
+    spec = yaml.safe_load(
+        (ROOT / "packages/contracts/enums.yaml").read_text(encoding="utf-8"))
+    labeled = {
+        item["value"]
+        for group in ("desktop_error", "source_error")
+        for item in spec["enums"][group]["values"]
+        if str(item.get("label", "")).strip()
+    }
+    # Direct string/template literals and literal ternary results are contract codes;
+    # literals in the condition (e.g. runtimeKind === 'wsl') are not.
+    pattern = re.compile(r"(?:\bnew\s+HostError|\bfail)\s*\(")
+    literal = re.compile(r"(?:^\s*|[?:]\s*)(['\"`])([a-z][a-z0-9_]*)\1")
+    option = re.compile(r"\bcode\s*:\s*(['\"`])([a-z][a-z0-9_]*)\1")
+    offenders = []
+    for path in sorted((ROOT / "apps/desktop/src").rglob("*")):
+        if path.suffix not in {".mjs", ".cjs", ".js"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        codes = [(match.group(2), match.start(2)) for match in option.finditer(text)]
+        for match in pattern.finditer(text):
+            start = match.end()
+            end = argument_end(text, start)
+            if end is None:
+                line = text.count("\n", 0, match.start()) + 1
+                offenders.append(f"{path.relative_to(ROOT)}:{line}: "
+                                 "cannot extract balanced error-call arguments")
+                continue
+            codes.extend((value.group(2), start + value.start(2))
+                         for value in literal.finditer(text[start:end]))
+        for code, offset in codes:
+            if (code.startswith(("smoke_", "development_"))
+                    or code == "invalid_development_url" or "smoke" in code):
+                continue
+            if code not in labeled:
+                line = text.count("\n", 0, offset) + 1
+                offenders.append(f"{path.relative_to(ROOT)}:{line}: {code}")
+    assert not offenders, (
+        "宿主错误缺少 desktop_error/source_error 用户文案：\n" + "\n".join(offenders))

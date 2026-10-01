@@ -1684,9 +1684,61 @@ export function sourceErrorLabelOf(value: string | null | undefined): string | n
 // 桌面端渲染进程的本机错误码（旧工作台 `platform/desktop.ts` 的 `reasons` 表搬入）。
 // 命名对齐项目既有约定（snake_case）。这些码来自宿主具名方法与本地账本，
 // 不是中心契约：含义只在"本机工作区 + 已配对中心"这套桌面链路下成立。
-export type DesktopError = 'connection_failed' | 'authentication_required' | 'identity_mismatch' | 'profile_mismatch' | 'protocol_incompatible' | 'cache_failure' | 'model_unavailable' | 'unsupported_operation' | 'approved_plan_required' | 'outcome_unknown' | 'receipt_required' | 'disposed' | 'draft_conflict' | 'revision_conflict' | 'input_too_large' | 'not_found' | 'source_unavailable' | 'source_digest_mismatch' | 'wiki_response_too_large' | 'wiki_source_unavailable' | 'wiki_generation_invalid' | 'unsupported_generation' | 'wiki_relation_unsupported' | 'out_of_memory' | 'cursor_expired' | 'approval_cancelled' | 'plan_changed' | 'approval_unavailable' | 'consent_required' | 'consent_revoked' | 'consent_expired' | 'budget_exceeded' | 'policy_denied' | 'input_changed' | 'local_only' | 'center_not_paired' | 'center_not_current' | 'center_identity_changed' | 'center_binding_required' | 'center_unavailable' | 'delivery_unverified' | 'dispatch_already_reserved' | 'connection_not_current' | 'unreachable' | 'transport_error' | 'delivery_expired' | 'delivery_not_found' | 'delivery_id_missing' | 'result_manifest_mismatch' | 'result_unavailable' | 'ack_not_confirmed' | 'transfer_unknown' | 'resume_unknown' | 'transfer_in_progress' | 'upload_expired' | 'upload_failed' | 'upload_incomplete' | 'storage_origin_not_approved' | 'delivery_too_large' | 'gpu_device_unsupported' | 'gpu_offload_unverified' | 'model_backend_incompatible' | 'model_process_busy' | 'egress_denied' | 'invalid_response' | 'invalid_arguments' | 'host_operation_failed'
+// 宿主 HostError、文件安全检查 code 选项与 fail 调用的用户文案由架构守卫检查，
+// 包含直接字面量与条件分支返回码；含 smoke 的码、development_* 与
+// invalid_development_url 仅用于内部诊断，不提供用户标签。
+export type DesktopError = 'unsafe_runtime_directory' | 'unsafe_credential_directory' | 'unsafe_client_directory' | 'client_configuration_invalid' | 'connection_limit' | 'credential_required' | 'credential_unavailable' | 'export_target_changed' | 'file_changed' | 'file_operation_failed' | 'file_too_large' | 'host_closing' | 'invalid_bundle' | 'invalid_credential' | 'invalid_endpoint' | 'invalid_identity' | 'invalid_pdf' | 'invalid_runtime_session' | 'invalid_workspace' | 'invalid_wsl_distro' | 'runtime_exited' | 'runtime_incompatible' | 'runtime_start_failed' | 'runtime_stopped' | 'runtime_stopping' | 'runtime_unavailable' | 'subscription_limit' | 'unknown_connection' | 'unknown_operation' | 'unknown_runtime_backend' | 'unknown_workspace' | 'unsafe_export_target' | 'unsafe_runtime_token' | 'untrusted_sender' | 'workspace_alias_conflict' | 'workspace_changed' | 'workspace_unavailable' | 'wsl_backend_unavailable' | 'wsl_missing' | 'wsl_pid_record_failed' | 'wsl_runtime_abi_mismatch' | 'wsl_runtime_archive_mismatch' | 'wsl_runtime_manifest_invalid' | 'wsl_runtime_not_installed' | 'wsl_runtime_provision_failed' | 'wsl_unavailable' | 'wsl1_unsupported' | 'wsl_distro_not_found' | 'local_runtime_unavailable' | 'connection_failed' | 'authentication_required' | 'identity_mismatch' | 'profile_mismatch' | 'protocol_incompatible' | 'cache_failure' | 'model_unavailable' | 'unsupported_operation' | 'approved_plan_required' | 'outcome_unknown' | 'receipt_required' | 'disposed' | 'draft_conflict' | 'revision_conflict' | 'input_too_large' | 'not_found' | 'source_unavailable' | 'source_digest_mismatch' | 'wiki_response_too_large' | 'wiki_source_unavailable' | 'wiki_generation_invalid' | 'unsupported_generation' | 'wiki_relation_unsupported' | 'out_of_memory' | 'cursor_expired' | 'approval_cancelled' | 'plan_changed' | 'approval_unavailable' | 'consent_required' | 'consent_revoked' | 'consent_expired' | 'budget_exceeded' | 'policy_denied' | 'input_changed' | 'local_only' | 'center_not_paired' | 'center_not_current' | 'center_identity_changed' | 'center_binding_required' | 'center_unavailable' | 'delivery_unverified' | 'dispatch_already_reserved' | 'connection_not_current' | 'unreachable' | 'transport_error' | 'delivery_expired' | 'delivery_not_found' | 'delivery_id_missing' | 'result_manifest_mismatch' | 'result_unavailable' | 'ack_not_confirmed' | 'transfer_unknown' | 'resume_unknown' | 'transfer_in_progress' | 'upload_expired' | 'upload_failed' | 'upload_incomplete' | 'storage_origin_not_approved' | 'delivery_too_large' | 'gpu_device_unsupported' | 'gpu_offload_unverified' | 'model_backend_incompatible' | 'model_process_busy' | 'egress_denied' | 'invalid_response' | 'invalid_arguments' | 'host_operation_failed'
 
 export const DESKTOP_ERROR_VALUES: readonly DesktopError[] = [
+  'unsafe_runtime_directory',
+  'unsafe_credential_directory',
+  'unsafe_client_directory',
+  'client_configuration_invalid',
+  'connection_limit',
+  'credential_required',
+  'credential_unavailable',
+  'export_target_changed',
+  'file_changed',
+  'file_operation_failed',
+  'file_too_large',
+  'host_closing',
+  'invalid_bundle',
+  'invalid_credential',
+  'invalid_endpoint',
+  'invalid_identity',
+  'invalid_pdf',
+  'invalid_runtime_session',
+  'invalid_workspace',
+  'invalid_wsl_distro',
+  'runtime_exited',
+  'runtime_incompatible',
+  'runtime_start_failed',
+  'runtime_stopped',
+  'runtime_stopping',
+  'runtime_unavailable',
+  'subscription_limit',
+  'unknown_connection',
+  'unknown_operation',
+  'unknown_runtime_backend',
+  'unknown_workspace',
+  'unsafe_export_target',
+  'unsafe_runtime_token',
+  'untrusted_sender',
+  'workspace_alias_conflict',
+  'workspace_changed',
+  'workspace_unavailable',
+  'wsl_backend_unavailable',
+  'wsl_missing',
+  'wsl_pid_record_failed',
+  'wsl_runtime_abi_mismatch',
+  'wsl_runtime_archive_mismatch',
+  'wsl_runtime_manifest_invalid',
+  'wsl_runtime_not_installed',
+  'wsl_runtime_provision_failed',
+  'wsl_unavailable',
+  'wsl1_unsupported',
+  'wsl_distro_not_found',
+  'local_runtime_unavailable',
   'connection_failed',
   'authentication_required',
   'identity_mismatch',
@@ -1757,6 +1809,104 @@ export const DESKTOP_ERROR_VALUES: readonly DesktopError[] = [
 ] as const
 
 export const DESKTOP_ERROR_META: Record<DesktopError, EnumMeta> = {
+  // 本机运行时私有目录不是普通目录、是符号链接或 POSIX 权限与所有者不安全
+  "unsafe_runtime_directory": { value: 'unsafe_runtime_directory', label: "本机运行时目录未通过安全检查，无法启动，请联系维护者检查目录类型、权限和所有者。", severity: 'error' },
+  // 凭证私有目录不是普通目录、是符号链接或 POSIX 权限与所有者不安全
+  "unsafe_credential_directory": { value: 'unsafe_credential_directory', label: "凭证目录未通过安全检查，无法保存或读取凭证，请联系维护者检查目录类型、权限和所有者。", severity: 'error' },
+  // 客户端私有目录不是普通目录、是符号链接或 POSIX 权限与所有者不安全
+  "unsafe_client_directory": { value: 'unsafe_client_directory', label: "桌面客户端目录未通过安全检查，无法启动客户端，请联系维护者检查目录类型、权限和所有者。", severity: 'error' },
+  // 客户端连接配置文件不安全、无法读取或内容无效，宿主初始化客户端层失败
+  "client_configuration_invalid": { value: 'client_configuration_invalid', label: "桌面客户端配置无法读取或不安全，无法启动客户端，请联系维护者检查配置文件。", severity: 'error' },
+  // 注册新连接时已保存的连接数达到 64 个上限
+  "connection_limit": { value: 'connection_limit', label: "已保存的数据源连接达到上限，请移除不再使用的数据源后再连接。", severity: 'warn' },
+  // 宿主执行需要凭证的操作时未找到当前环境与身份的凭证
+  "credential_required": { value: 'credential_required', label: "当前身份没有可用凭证，无法执行此操作，请重新认证。", severity: 'warn' },
+  // 凭证读取、安全检查或解密失败，或操作期间凭证会话已失效
+  "credential_unavailable": { value: 'credential_unavailable', label: "当前凭证无法安全读取或会话已失效，请重新认证后再操作。", severity: 'error' },
+  // 导出写入前目标文件的类型、设备、inode、大小或修改时间与选择时不一致
+  "export_target_changed": { value: 'export_target_changed', label: "导出目标文件已变化，已阻止覆盖，请重新选择保存位置。", severity: 'warn' },
+  // 导入读取未完成或读取前后文件大小、修改时间、状态变更时间不一致
+  "file_changed": { value: 'file_changed', label: "导入文件在读取期间发生变化，请停止修改文件后重新选择导入。", severity: 'warn' },
+  // 文件请求返回未单独分类的失败状态或没有响应体
+  "file_operation_failed": { value: 'file_operation_failed', label: "文件请求失败，无法取得有效响应，请检查数据源状态后再操作。", severity: 'error' },
+  // 文件响应超过 32 MiB，或导入对象不是非空普通文件或超过 32 MiB
+  "file_too_large": { value: 'file_too_large', label: "文件不符合读取限制，请选择非空普通文件并确保大小不超过 32 MiB。", severity: 'error' },
+  // 宿主正在关闭或已关闭，不再受理连接、工作区或运行时操作
+  "host_closing": { value: 'host_closing', label: "桌面宿主正在关闭，无法受理此操作，请重新打开应用后再操作。", severity: 'neutral' },
+  // Bundle 类型、大小或验证结果无效，或运行时无法完成 Bundle 验证
+  "invalid_bundle": { value: 'invalid_bundle', label: "Bundle 格式不符合要求或验证未完成，请检查文件及本机运行时状态。", severity: 'error' },
+  // 设置凭证时密钥为空、过长、含控制字符或持久化参数不是布尔值
+  "invalid_credential": { value: 'invalid_credential', label: "中心返回的登录凭证无法由桌面端保存，请联系中心管理员检查凭证格式。", severity: 'error' },
+  // 中心地址或存储源地址无法解析，含禁止字段或不满足 HTTPS 与源地址格式要求
+  "invalid_endpoint": { value: 'invalid_endpoint', label: "中心或存储地址不符合安全要求，请使用 HTTPS 并移除嵌入凭证、查询参数和片段，且对象存储源地址只能包含协议、主机及可选端口，不能包含路径。", severity: 'error' },
+  // 凭证操作的环境或身份标识符格式无效
+  "invalid_identity": { value: 'invalid_identity', label: "环境或身份标识不符合要求，无法处理凭证，请重新连接数据源后再操作。", severity: 'error' },
+  // 导入或读取的原件缺少 PDF 文件头，或响应类型不是 application/pdf
+  "invalid_pdf": { value: 'invalid_pdf', label: "文件或原件响应不是有效的 PDF，无法继续处理，请检查所选文件或数据源原件。", severity: 'error' },
+  // WSL 运行时启动时未提供非空宿主会话目录
+  "invalid_runtime_session": { value: 'invalid_runtime_session', label: "本机运行时缺少有效会话目录，无法启动，请联系维护者检查宿主配置。", severity: 'error' },
+  // 工作区标识、原生目录类型或 WSL 工作区路径不符合宿主校验要求
+  "invalid_workspace": { value: 'invalid_workspace', label: "工作区标识或目录不符合要求，无法打开，请重新选择有效的工作区。", severity: 'error' },
+  // 选择的 WSL 分发名称不符合安全字符格式
+  "invalid_wsl_distro": { value: 'invalid_wsl_distro', label: "WSL 分发名称不符合要求，无法使用本机工作区，请检查分发配置并重新启动 DeepDocParse。", severity: 'error' },
+  // 已拥有的运行时子进程意外退出，或 WSL 子进程在就绪前关闭
+  "runtime_exited": { value: 'runtime_exited', label: "本机运行时意外退出，请检查运行环境后重新打开工作区。", severity: 'error' },
+  // 本机运行时握手响应不是有效 JSON、协议版本不匹配或缺少环境与工作区身份
+  "runtime_incompatible": { value: 'runtime_incompatible', label: "本机运行时握手不符合桌面协议，无法建立连接，请检查运行时与应用版本。", severity: 'error' },
+  // 本机运行时未在期限内就绪、进程启动失败或启动期间发生未分类错误
+  "runtime_start_failed": { value: 'runtime_start_failed', label: "本机运行时启动失败，请检查运行环境后重新打开工作区。", severity: 'error' },
+  // 本机运行时启动在会话准备或等待就绪期间被停止请求取消
+  "runtime_stopped": { value: 'runtime_stopped', label: "本机运行时启动已被停止，如需继续使用请重新打开工作区。", severity: 'neutral' },
+  // 运行时尚处于停止中，拒绝新的启动请求
+  "runtime_stopping": { value: 'runtime_stopping', label: "本机运行时仍在停止，暂时无法启动，请等待停止完成后再打开工作区。", severity: 'warn' },
+  // 本机运行时连接未就绪，或握手超时、返回非成功状态或响应过大
+  "runtime_unavailable": { value: 'runtime_unavailable', label: "本机运行时连接尚不可用，请检查运行时状态后重新打开工作区。", severity: 'error' },
+  // 新建连接状态订阅时已达到 128 个订阅上限
+  "subscription_limit": { value: 'subscription_limit', label: "连接状态订阅达到上限，无法添加订阅，请重新打开应用后再操作。", severity: 'warn' },
+  // 宿主连接表中不存在请求指定的连接
+  "unknown_connection": { value: 'unknown_connection', label: "指定的数据源连接已不存在，请重新选择或连接数据源。", severity: 'error' },
+  // 旧宿主桥或数据源桥收到未定义的方法名
+  "unknown_operation": { value: 'unknown_operation', label: "桌面宿主不识别此操作，请检查应用与宿主版本是否一致。", severity: 'error' },
+  // 运行时后端类型既不是 native 也不是 wsl
+  "unknown_runtime_backend": { value: 'unknown_runtime_backend', label: "本机运行时后端配置无法识别，请联系维护者检查宿主配置。", severity: 'error' },
+  // 宿主工作区注册表中不存在请求指定的工作区
+  "unknown_workspace": { value: 'unknown_workspace', label: "指定的工作区已不存在，请重新选择工作区。", severity: 'error' },
+  // 选择的既有导出目标不是普通文件或是符号链接
+  "unsafe_export_target": { value: 'unsafe_export_target', label: "导出目标不是安全的普通文件，已阻止写入，请重新选择保存位置。", severity: 'error' },
+  // 运行时连接文件的类型、大小、权限、所有者或 PID、地址、令牌内容不安全
+  "unsafe_runtime_token": { value: 'unsafe_runtime_token', label: "本机运行时连接信息未通过安全检查，已拒绝连接，请联系维护者检查运行时文件和权限。", severity: 'error' },
+  // IPC 请求的发送窗口、主框架或页面地址不是受信任的桌面界面
+  "untrusted_sender": { value: 'untrusted_sender', label: "请求并非来自受信任的桌面界面，已拒绝操作，请从正式桌面窗口操作。", severity: 'error' },
+  // 同一环境与身份连接已绑定不同目录或不同工作区后端类型
+  "workspace_alias_conflict": { value: 'workspace_alias_conflict', label: "此身份已绑定另一工作区目录或后端，无法重复绑定，请核对并选择原工作区。", severity: 'error' },
+  // 原生工作区目录类型或设备、inode、规范路径身份与选择时不一致
+  "workspace_changed": { value: 'workspace_changed', label: "工作区目录已变化，已拒绝继续使用，请重新选择工作区并核对内容。", severity: 'error' },
+  // 本机数据源没有有效工作区句柄，或宿主不能显示工作区选择入口
+  "workspace_unavailable": { value: 'workspace_unavailable', label: "本机工作区当前不可用，请重新选择工作区或检查桌面宿主状态。", severity: 'error' },
+  // WSL 后端模块加载、构建、配置校验或初始化失败
+  "wsl_backend_unavailable": { value: 'wsl_backend_unavailable', label: "WSL 运行时后端无法初始化，请联系维护者检查应用安装及后端配置。", severity: 'error' },
+  // WSL 检测或 Bundle 验证时无法启动 wsl.exe
+  "wsl_missing": { value: 'wsl_missing', label: "未找到可用的 WSL，无法使用本机工作区，请安装并启用 WSL 2 后重新启动 DeepDocParse。", severity: 'error' },
+  // WSL 运行时就绪后无法把 Linux PID 写入宿主会话文件
+  "wsl_pid_record_failed": { value: 'wsl_pid_record_failed', label: "WSL 运行时进程记录保存失败，无法完成启动，请检查宿主存储空间和写入权限。", severity: 'error' },
+  // WSL 解压后的 Python 运行失败或版本、缓存标签、SOABI、机器架构与清单不一致
+  "wsl_runtime_abi_mismatch": { value: 'wsl_runtime_abi_mismatch', label: "WSL 运行时无法执行或与安装清单不兼容，请联系维护者检查运行时安装包。", severity: 'error' },
+  // WSL 运行时归档不可读或大小、SHA-256 与安装清单不一致
+  "wsl_runtime_archive_mismatch": { value: 'wsl_runtime_archive_mismatch', label: "WSL 运行时安装包未通过完整性检查，请联系维护者检查安装包。", severity: 'error' },
+  // WSL 运行时清单无法读取、不是 JSON 或不满足版本、归档、Python ABI 格式要求
+  "wsl_runtime_manifest_invalid": { value: 'wsl_runtime_manifest_invalid', label: "WSL 运行时安装清单无效或无法读取，请联系维护者检查应用安装。", severity: 'error' },
+  // WSL Bundle 验证时运行时目录缺少 runtime-files.py
+  "wsl_runtime_not_installed": { value: 'wsl_runtime_not_installed', label: "WSL 运行时尚未完整安装，无法验证 Bundle，请先打开本机工作区完成运行时准备。", severity: 'error' },
+  // WSL 运行时归档解压部署或安装标记写入失败或超时
+  "wsl_runtime_provision_failed": { value: 'wsl_runtime_provision_failed', label: "WSL 运行时部署失败，请检查 WSL 的存储空间和写入权限后重新打开工作区。", severity: 'error' },
+  // WSL 分发检测失败，或宿主无法读取遗留会话目录与 PID 记录进行清理
+  "wsl_unavailable": { value: 'wsl_unavailable', label: "WSL 检测或遗留进程清理不可用，请检查 WSL 状态后重新启动 DeepDocParse。", severity: 'error' },
+  // 检测到选择的分发运行在 WSL 1，而不是受支持的 WSL 2
+  "wsl1_unsupported": { value: 'wsl1_unsupported', label: "当前分发使用 WSL 1，无法运行本机工作区，请将分发转换为 WSL 2 后重新启动 DeepDocParse。", severity: 'error' },
+  // WSL 分发列表中不存在配置指定的分发
+  "wsl_distro_not_found": { value: 'wsl_distro_not_found', label: "未找到配置的 WSL 分发，请安装该分发或修正分发配置后重新启动 DeepDocParse。", severity: 'error' },
+  // 原生运行时后端初始化出现未分类错误，宿主保留错误并拒绝本机连接
+  "local_runtime_unavailable": { value: 'local_runtime_unavailable', label: "本机运行时后端无法初始化，请联系维护者检查应用安装和运行环境。", severity: 'error' },
   // 本机连接暂不可用，写操作未发出，草稿已保留
   "connection_failed": { value: 'connection_failed', label: "连接暂不可用，已保留草稿。", severity: 'error' },
   // 当前身份需要重新认证后才能操作

@@ -2196,9 +2196,110 @@ func (s SourceError) Valid() bool {
 // 桌面端渲染进程的本机错误码（旧工作台 `platform/desktop.ts` 的 `reasons` 表搬入）。
 // 命名对齐项目既有约定（snake_case）。这些码来自宿主具名方法与本地账本，
 // 不是中心契约：含义只在"本机工作区 + 已配对中心"这套桌面链路下成立。
+// 宿主 HostError、文件安全检查 code 选项与 fail 调用的用户文案由架构守卫检查，
+// 包含直接字面量与条件分支返回码；含 smoke 的码、development_* 与
+// invalid_development_url 仅用于内部诊断，不提供用户标签。
 type DesktopError string
 
 const (
+	// 本机运行时私有目录不是普通目录、是符号链接或 POSIX 权限与所有者不安全
+	DesktopErrorUnsafeRuntimeDirectory DesktopError = "unsafe_runtime_directory"
+	// 凭证私有目录不是普通目录、是符号链接或 POSIX 权限与所有者不安全
+	DesktopErrorUnsafeCredentialDirectory DesktopError = "unsafe_credential_directory"
+	// 客户端私有目录不是普通目录、是符号链接或 POSIX 权限与所有者不安全
+	DesktopErrorUnsafeClientDirectory DesktopError = "unsafe_client_directory"
+	// 客户端连接配置文件不安全、无法读取或内容无效，宿主初始化客户端层失败
+	DesktopErrorClientConfigurationInvalid DesktopError = "client_configuration_invalid"
+	// 注册新连接时已保存的连接数达到 64 个上限
+	DesktopErrorConnectionLimit DesktopError = "connection_limit"
+	// 宿主执行需要凭证的操作时未找到当前环境与身份的凭证
+	DesktopErrorCredentialRequired DesktopError = "credential_required"
+	// 凭证读取、安全检查或解密失败，或操作期间凭证会话已失效
+	DesktopErrorCredentialUnavailable DesktopError = "credential_unavailable"
+	// 导出写入前目标文件的类型、设备、inode、大小或修改时间与选择时不一致
+	DesktopErrorExportTargetChanged DesktopError = "export_target_changed"
+	// 导入读取未完成或读取前后文件大小、修改时间、状态变更时间不一致
+	DesktopErrorFileChanged DesktopError = "file_changed"
+	// 文件请求返回未单独分类的失败状态或没有响应体
+	DesktopErrorFileOperationFailed DesktopError = "file_operation_failed"
+	// 文件响应超过 32 MiB，或导入对象不是非空普通文件或超过 32 MiB
+	DesktopErrorFileTooLarge DesktopError = "file_too_large"
+	// 宿主正在关闭或已关闭，不再受理连接、工作区或运行时操作
+	DesktopErrorHostClosing DesktopError = "host_closing"
+	// Bundle 类型、大小或验证结果无效，或运行时无法完成 Bundle 验证
+	DesktopErrorInvalidBundle DesktopError = "invalid_bundle"
+	// 设置凭证时密钥为空、过长、含控制字符或持久化参数不是布尔值
+	DesktopErrorInvalidCredential DesktopError = "invalid_credential"
+	// 中心地址或存储源地址无法解析，含禁止字段或不满足 HTTPS 与源地址格式要求
+	DesktopErrorInvalidEndpoint DesktopError = "invalid_endpoint"
+	// 凭证操作的环境或身份标识符格式无效
+	DesktopErrorInvalidIdentity DesktopError = "invalid_identity"
+	// 导入或读取的原件缺少 PDF 文件头，或响应类型不是 application/pdf
+	DesktopErrorInvalidPdf DesktopError = "invalid_pdf"
+	// WSL 运行时启动时未提供非空宿主会话目录
+	DesktopErrorInvalidRuntimeSession DesktopError = "invalid_runtime_session"
+	// 工作区标识、原生目录类型或 WSL 工作区路径不符合宿主校验要求
+	DesktopErrorInvalidWorkspace DesktopError = "invalid_workspace"
+	// 选择的 WSL 分发名称不符合安全字符格式
+	DesktopErrorInvalidWslDistro DesktopError = "invalid_wsl_distro"
+	// 已拥有的运行时子进程意外退出，或 WSL 子进程在就绪前关闭
+	DesktopErrorRuntimeExited DesktopError = "runtime_exited"
+	// 本机运行时握手响应不是有效 JSON、协议版本不匹配或缺少环境与工作区身份
+	DesktopErrorRuntimeIncompatible DesktopError = "runtime_incompatible"
+	// 本机运行时未在期限内就绪、进程启动失败或启动期间发生未分类错误
+	DesktopErrorRuntimeStartFailed DesktopError = "runtime_start_failed"
+	// 本机运行时启动在会话准备或等待就绪期间被停止请求取消
+	DesktopErrorRuntimeStopped DesktopError = "runtime_stopped"
+	// 运行时尚处于停止中，拒绝新的启动请求
+	DesktopErrorRuntimeStopping DesktopError = "runtime_stopping"
+	// 本机运行时连接未就绪，或握手超时、返回非成功状态或响应过大
+	DesktopErrorRuntimeUnavailable DesktopError = "runtime_unavailable"
+	// 新建连接状态订阅时已达到 128 个订阅上限
+	DesktopErrorSubscriptionLimit DesktopError = "subscription_limit"
+	// 宿主连接表中不存在请求指定的连接
+	DesktopErrorUnknownConnection DesktopError = "unknown_connection"
+	// 旧宿主桥或数据源桥收到未定义的方法名
+	DesktopErrorUnknownOperation DesktopError = "unknown_operation"
+	// 运行时后端类型既不是 native 也不是 wsl
+	DesktopErrorUnknownRuntimeBackend DesktopError = "unknown_runtime_backend"
+	// 宿主工作区注册表中不存在请求指定的工作区
+	DesktopErrorUnknownWorkspace DesktopError = "unknown_workspace"
+	// 选择的既有导出目标不是普通文件或是符号链接
+	DesktopErrorUnsafeExportTarget DesktopError = "unsafe_export_target"
+	// 运行时连接文件的类型、大小、权限、所有者或 PID、地址、令牌内容不安全
+	DesktopErrorUnsafeRuntimeToken DesktopError = "unsafe_runtime_token"
+	// IPC 请求的发送窗口、主框架或页面地址不是受信任的桌面界面
+	DesktopErrorUntrustedSender DesktopError = "untrusted_sender"
+	// 同一环境与身份连接已绑定不同目录或不同工作区后端类型
+	DesktopErrorWorkspaceAliasConflict DesktopError = "workspace_alias_conflict"
+	// 原生工作区目录类型或设备、inode、规范路径身份与选择时不一致
+	DesktopErrorWorkspaceChanged DesktopError = "workspace_changed"
+	// 本机数据源没有有效工作区句柄，或宿主不能显示工作区选择入口
+	DesktopErrorWorkspaceUnavailable DesktopError = "workspace_unavailable"
+	// WSL 后端模块加载、构建、配置校验或初始化失败
+	DesktopErrorWslBackendUnavailable DesktopError = "wsl_backend_unavailable"
+	// WSL 检测或 Bundle 验证时无法启动 wsl.exe
+	DesktopErrorWslMissing DesktopError = "wsl_missing"
+	// WSL 运行时就绪后无法把 Linux PID 写入宿主会话文件
+	DesktopErrorWslPidRecordFailed DesktopError = "wsl_pid_record_failed"
+	// WSL 解压后的 Python 运行失败或版本、缓存标签、SOABI、机器架构与清单不一致
+	DesktopErrorWslRuntimeAbiMismatch DesktopError = "wsl_runtime_abi_mismatch"
+	// WSL 运行时归档不可读或大小、SHA-256 与安装清单不一致
+	DesktopErrorWslRuntimeArchiveMismatch DesktopError = "wsl_runtime_archive_mismatch"
+	// WSL 运行时清单无法读取、不是 JSON 或不满足版本、归档、Python ABI 格式要求
+	DesktopErrorWslRuntimeManifestInvalid DesktopError = "wsl_runtime_manifest_invalid"
+	// WSL Bundle 验证时运行时目录缺少 runtime-files.py
+	DesktopErrorWslRuntimeNotInstalled DesktopError = "wsl_runtime_not_installed"
+	// WSL 运行时归档解压部署或安装标记写入失败或超时
+	DesktopErrorWslRuntimeProvisionFailed DesktopError = "wsl_runtime_provision_failed"
+	// WSL 分发检测失败，或宿主无法读取遗留会话目录与 PID 记录进行清理
+	DesktopErrorWslUnavailable DesktopError = "wsl_unavailable"
+	// 检测到选择的分发运行在 WSL 1，而不是受支持的 WSL 2
+	DesktopErrorWsl1Unsupported DesktopError = "wsl1_unsupported"
+	// WSL 分发列表中不存在配置指定的分发
+	DesktopErrorWslDistroNotFound DesktopError = "wsl_distro_not_found"
+	// 原生运行时后端初始化出现未分类错误，宿主保留错误并拒绝本机连接
+	DesktopErrorLocalRuntimeUnavailable DesktopError = "local_runtime_unavailable"
 	// 本机连接暂不可用，写操作未发出，草稿已保留
 	DesktopErrorConnectionFailed DesktopError = "connection_failed"
 	// 当前身份需要重新认证后才能操作
@@ -2337,6 +2438,55 @@ const (
 
 // DesktopErrorValues 保持 enums.yaml 里的声明顺序。
 var DesktopErrorValues = []DesktopError{
+	DesktopErrorUnsafeRuntimeDirectory,
+	DesktopErrorUnsafeCredentialDirectory,
+	DesktopErrorUnsafeClientDirectory,
+	DesktopErrorClientConfigurationInvalid,
+	DesktopErrorConnectionLimit,
+	DesktopErrorCredentialRequired,
+	DesktopErrorCredentialUnavailable,
+	DesktopErrorExportTargetChanged,
+	DesktopErrorFileChanged,
+	DesktopErrorFileOperationFailed,
+	DesktopErrorFileTooLarge,
+	DesktopErrorHostClosing,
+	DesktopErrorInvalidBundle,
+	DesktopErrorInvalidCredential,
+	DesktopErrorInvalidEndpoint,
+	DesktopErrorInvalidIdentity,
+	DesktopErrorInvalidPdf,
+	DesktopErrorInvalidRuntimeSession,
+	DesktopErrorInvalidWorkspace,
+	DesktopErrorInvalidWslDistro,
+	DesktopErrorRuntimeExited,
+	DesktopErrorRuntimeIncompatible,
+	DesktopErrorRuntimeStartFailed,
+	DesktopErrorRuntimeStopped,
+	DesktopErrorRuntimeStopping,
+	DesktopErrorRuntimeUnavailable,
+	DesktopErrorSubscriptionLimit,
+	DesktopErrorUnknownConnection,
+	DesktopErrorUnknownOperation,
+	DesktopErrorUnknownRuntimeBackend,
+	DesktopErrorUnknownWorkspace,
+	DesktopErrorUnsafeExportTarget,
+	DesktopErrorUnsafeRuntimeToken,
+	DesktopErrorUntrustedSender,
+	DesktopErrorWorkspaceAliasConflict,
+	DesktopErrorWorkspaceChanged,
+	DesktopErrorWorkspaceUnavailable,
+	DesktopErrorWslBackendUnavailable,
+	DesktopErrorWslMissing,
+	DesktopErrorWslPidRecordFailed,
+	DesktopErrorWslRuntimeAbiMismatch,
+	DesktopErrorWslRuntimeArchiveMismatch,
+	DesktopErrorWslRuntimeManifestInvalid,
+	DesktopErrorWslRuntimeNotInstalled,
+	DesktopErrorWslRuntimeProvisionFailed,
+	DesktopErrorWslUnavailable,
+	DesktopErrorWsl1Unsupported,
+	DesktopErrorWslDistroNotFound,
+	DesktopErrorLocalRuntimeUnavailable,
 	DesktopErrorConnectionFailed,
 	DesktopErrorAuthenticationRequired,
 	DesktopErrorIdentityMismatch,
@@ -2407,73 +2557,122 @@ var DesktopErrorValues = []DesktopError{
 }
 
 var DesktopErrorMeta = map[DesktopError]EnumMeta{
-	DesktopErrorConnectionFailed:         {Value: "connection_failed", Label: "连接暂不可用，已保留草稿。", Severity: SeverityError},
-	DesktopErrorAuthenticationRequired:   {Value: "authentication_required", Label: "此身份需要重新认证。", Severity: SeverityError},
-	DesktopErrorIdentityMismatch:         {Value: "identity_mismatch", Label: "环境身份与已配对记录不一致。", Severity: SeverityError},
-	DesktopErrorProfileMismatch:          {Value: "profile_mismatch", Label: "登录身份与已配对记录不一致。", Severity: SeverityError},
-	DesktopErrorProtocolIncompatible:     {Value: "protocol_incompatible", Label: "此环境未提供所需的工作台协议。", Severity: SeverityError},
-	DesktopErrorCacheFailure:             {Value: "cache_failure", Label: "本地缓存无法写入，请检查可用空间。", Severity: SeverityError},
-	DesktopErrorModelUnavailable:         {Value: "model_unavailable", Label: "生成模型尚不可用，可以继续检索和查看原文。", Severity: SeverityWarn},
-	DesktopErrorUnsupportedOperation:     {Value: "unsupported_operation", Label: "此环境暂不支持这项操作。", Severity: SeverityError},
-	DesktopErrorApprovedPlanRequired:     {Value: "approved_plan_required", Label: "此操作需要先确认远端执行与外发许可。", Severity: SeverityError},
-	DesktopErrorOutcomeUnknown:           {Value: "outcome_unknown", Label: "提交结果未确认，请查询回执后再处理。", Severity: SeverityWarn},
-	DesktopErrorReceiptRequired:          {Value: "receipt_required", Label: "请查询已保存操作的回执。", Severity: SeverityWarn},
-	DesktopErrorDisposed:                 {Value: "disposed", Label: "连接已切换，请在当前工作区重新操作。", Severity: SeverityError},
-	DesktopErrorDraftConflict:            {Value: "draft_conflict", Label: "草稿已被另一窗口更新，请重新打开后合并。", Severity: SeverityWarn},
-	DesktopErrorRevisionConflict:         {Value: "revision_conflict", Label: "草稿已被另一窗口更新，请重新打开后合并。", Severity: SeverityWarn},
-	DesktopErrorInputTooLarge:            {Value: "input_too_large", Label: "文件超过当前操作的大小限制。", Severity: SeverityError},
-	DesktopErrorNotFound:                 {Value: "not_found", Label: "该资料不存在或当前身份无权访问。", Severity: SeverityError},
-	DesktopErrorSourceUnavailable:        {Value: "source_unavailable", Label: "此来源的访问许可已撤销或过期，不能继续读取快照。", Severity: SeverityError},
-	DesktopErrorSourceDigestMismatch:     {Value: "source_digest_mismatch", Label: "收到的原文与固定版本摘要不一致，已阻止显示。", Severity: SeverityError},
-	DesktopErrorWikiResponseTooLarge:     {Value: "wiki_response_too_large", Label: "Wiki 修订超过当前读取大小限制。", Severity: SeverityError},
-	DesktopErrorWikiSourceUnavailable:    {Value: "wiki_source_unavailable", Label: "Wiki 的固定来源已经不可用，请重新选择来源。", Severity: SeverityError},
-	DesktopErrorWikiGenerationInvalid:    {Value: "wiki_generation_invalid", Label: "模型输出未通过 Wiki 格式或引用检查，此次没有发布修订。", Severity: SeverityError},
-	DesktopErrorUnsupportedGeneration:    {Value: "unsupported_generation", Label: "生成内容缺少有效的原始出处，此次没有发布。", Severity: SeverityError},
-	DesktopErrorWikiRelationUnsupported:  {Value: "wiki_relation_unsupported", Label: "模型选择了不存在或缺少原文支撑的关系，此次没有发布 Wiki 修订。请缩小主题或调整模型后重试。", Severity: SeverityError},
-	DesktopErrorOutOfMemory:              {Value: "out_of_memory", Label: "本机内存不足，模型已经停止；可以查看任务后重新启动。", Severity: SeverityError},
-	DesktopErrorCursorExpired:            {Value: "cursor_expired", Label: "目录已更新或快照已失效，请重新读取首页。", Severity: SeverityWarn},
-	DesktopErrorApprovalCancelled:        {Value: "approval_cancelled", Label: "已取消批准，没有授予任何外发许可。", Severity: SeverityNeutral},
-	DesktopErrorPlanChanged:              {Value: "plan_changed", Label: "执行计划已变更，需重新批准。", Severity: SeverityWarn},
-	DesktopErrorApprovalUnavailable:      {Value: "approval_unavailable", Label: "当前宿主无法显示系统确认框，不能批准外发。", Severity: SeverityError},
-	DesktopErrorConsentRequired:          {Value: "consent_required", Label: "该阶段尚未批准，未发送任何内容。", Severity: SeverityWarn},
-	DesktopErrorConsentRevoked:           {Value: "consent_revoked", Label: "批准已撤销；需要准备并批准新计划。", Severity: SeverityWarn},
-	DesktopErrorConsentExpired:           {Value: "consent_expired", Label: "计划或批准已过期；需要准备新计划。", Severity: SeverityWarn},
-	DesktopErrorBudgetExceeded:           {Value: "budget_exceeded", Label: "超出已批准的请求或外发字节预算，未发送。", Severity: SeverityWarn},
-	DesktopErrorPolicyDenied:             {Value: "policy_denied", Label: "接收方、地址或数据边超出已批准范围，未发送。", Severity: SeverityError},
-	DesktopErrorInputChanged:             {Value: "input_changed", Label: "本地输入与锁定摘要不一致，未发送。", Severity: SeverityError},
-	DesktopErrorLocalOnly:                {Value: "local_only", Label: "工作区处于仅本地模式，禁止外发。", Severity: SeverityError},
-	DesktopErrorCenterNotPaired:          {Value: "center_not_paired", Label: "尚未配对计划中的中心。", Severity: SeverityError},
-	DesktopErrorCenterNotCurrent:         {Value: "center_not_current", Label: "中心连接未就绪；重新连接并核对节点身份后再操作。", Severity: SeverityError},
-	DesktopErrorCenterIdentityChanged:    {Value: "center_identity_changed", Label: "中心地址或身份与已审阅计划不一致，已拒绝发送。", Severity: SeverityError},
-	DesktopErrorCenterBindingRequired:    {Value: "center_binding_required", Label: "计划没有唯一的已审阅接收方，不能派发。", Severity: SeverityError},
-	DesktopErrorCenterUnavailable:        {Value: "center_unavailable", Label: "当前连接无法取得中心凭证。", Severity: SeverityError},
-	DesktopErrorDeliveryUnverified:       {Value: "delivery_unverified", Label: "交付结果没有通过本地摘要重算，不能确认。", Severity: SeverityError},
-	DesktopErrorDispatchAlreadyReserved:  {Value: "dispatch_already_reserved", Label: "这次发送已经占用预算，请先对账再重试。", Severity: SeverityWarn},
-	DesktopErrorConnectionNotCurrent:     {Value: "connection_not_current", Label: "本机工作区连接未就绪，已保留草稿。", Severity: SeverityWarn},
-	DesktopErrorUnreachable:              {Value: "unreachable", Label: "中心暂时无法连接，未确认任何结果。", Severity: SeverityError},
-	DesktopErrorTransportError:           {Value: "transport_error", Label: "读取中心时连接中断，没有确认任何结果；可以再次读取，不会重复任何写入。", Severity: SeverityWarn},
-	DesktopErrorDeliveryExpired:          {Value: "delivery_expired", Label: "交付已过期，结果没有保存到本机。", Severity: SeverityError},
-	DesktopErrorDeliveryNotFound:         {Value: "delivery_not_found", Label: "中心暂时没有这份交付，可以稍后再取。", Severity: SeverityWarn},
-	DesktopErrorDeliveryIdMissing:        {Value: "delivery_id_missing", Label: "中心尚未给出交付编号。", Severity: SeverityWarn},
-	DesktopErrorResultManifestMismatch:   {Value: "result_manifest_mismatch", Label: "取回的结果与中心声明的摘要不一致，没有保存。", Severity: SeverityError},
-	DesktopErrorResultUnavailable:        {Value: "result_unavailable", Label: "中心没有返回可校验的结果。", Severity: SeverityError},
-	DesktopErrorAckNotConfirmed:          {Value: "ack_not_confirmed", Label: "中心没有确认这次交付，可以再次确认。", Severity: SeverityWarn},
-	DesktopErrorTransferUnknown:          {Value: "transfer_unknown", Label: "传输结果未确认。保留原创建编号，先查询回执，再显式对账或继续缺片；不会自动重传。", Severity: SeverityWarn},
-	DesktopErrorResumeUnknown:            {Value: "resume_unknown", Label: "继续请求的结果未确认，请查询回执后再处理；不会自动批准或派发。", Severity: SeverityWarn},
-	DesktopErrorTransferInProgress:       {Value: "transfer_in_progress", Label: "此计划已有主机传输在执行，可查看进度或停止传输。", Severity: SeverityNeutral},
-	DesktopErrorUploadExpired:            {Value: "upload_expired", Label: "临时上传已过期，需要重新准备并批准计划。", Severity: SeverityWarn},
-	DesktopErrorUploadFailed:             {Value: "upload_failed", Label: "服务端拒绝了这份输入，未提交解析任务。", Severity: SeverityError},
-	DesktopErrorUploadIncomplete:         {Value: "upload_incomplete", Label: "中心返回的分片清单不完整，没有继续发送。", Severity: SeverityError},
-	DesktopErrorStorageOriginNotApproved: {Value: "storage_origin_not_approved", Label: "对象存储地址不在已审阅的传输范围内，原件未发送。", Severity: SeverityError},
-	DesktopErrorDeliveryTooLarge:         {Value: "delivery_too_large", Label: "交付超过本机 64 MiB 校验上限，尚未确认或清理。", Severity: SeverityError},
-	DesktopErrorGpuDeviceUnsupported:     {Value: "gpu_device_unsupported", Label: "所选 Vulkan 设备是软件渲染器，未启动，也未自动退回 CPU。", Severity: SeverityError},
-	DesktopErrorGpuOffloadUnverified:     {Value: "gpu_offload_unverified", Label: "没有观测到物理 GPU 上的模型层卸载，已停止该进程。需要 CPU 时请明确选择 CPU 运行包。", Severity: SeverityError},
-	DesktopErrorModelBackendIncompatible: {Value: "model_backend_incompatible", Label: "所选模型与运行包不兼容。", Severity: SeverityError},
-	DesktopErrorModelProcessBusy:         {Value: "model_process_busy", Label: "请先停止当前受管模型，再切换模型或后端。", Severity: SeverityWarn},
-	DesktopErrorEgressDenied:             {Value: "egress_denied", Label: "中心拒绝了这次外发许可。", Severity: SeverityError},
-	DesktopErrorInvalidResponse:          {Value: "invalid_response", Label: "中心返回的内容无法识别。", Severity: SeverityError},
-	DesktopErrorInvalidArguments:         {Value: "invalid_arguments", Label: "请求参数不正确，宿主拒绝执行。", Severity: SeverityError},
-	DesktopErrorHostOperationFailed:      {Value: "host_operation_failed", Label: "宿主操作结果未知，请查询回执后再处理。", Severity: SeverityWarn},
+	DesktopErrorUnsafeRuntimeDirectory:     {Value: "unsafe_runtime_directory", Label: "本机运行时目录未通过安全检查，无法启动，请联系维护者检查目录类型、权限和所有者。", Severity: SeverityError},
+	DesktopErrorUnsafeCredentialDirectory:  {Value: "unsafe_credential_directory", Label: "凭证目录未通过安全检查，无法保存或读取凭证，请联系维护者检查目录类型、权限和所有者。", Severity: SeverityError},
+	DesktopErrorUnsafeClientDirectory:      {Value: "unsafe_client_directory", Label: "桌面客户端目录未通过安全检查，无法启动客户端，请联系维护者检查目录类型、权限和所有者。", Severity: SeverityError},
+	DesktopErrorClientConfigurationInvalid: {Value: "client_configuration_invalid", Label: "桌面客户端配置无法读取或不安全，无法启动客户端，请联系维护者检查配置文件。", Severity: SeverityError},
+	DesktopErrorConnectionLimit:            {Value: "connection_limit", Label: "已保存的数据源连接达到上限，请移除不再使用的数据源后再连接。", Severity: SeverityWarn},
+	DesktopErrorCredentialRequired:         {Value: "credential_required", Label: "当前身份没有可用凭证，无法执行此操作，请重新认证。", Severity: SeverityWarn},
+	DesktopErrorCredentialUnavailable:      {Value: "credential_unavailable", Label: "当前凭证无法安全读取或会话已失效，请重新认证后再操作。", Severity: SeverityError},
+	DesktopErrorExportTargetChanged:        {Value: "export_target_changed", Label: "导出目标文件已变化，已阻止覆盖，请重新选择保存位置。", Severity: SeverityWarn},
+	DesktopErrorFileChanged:                {Value: "file_changed", Label: "导入文件在读取期间发生变化，请停止修改文件后重新选择导入。", Severity: SeverityWarn},
+	DesktopErrorFileOperationFailed:        {Value: "file_operation_failed", Label: "文件请求失败，无法取得有效响应，请检查数据源状态后再操作。", Severity: SeverityError},
+	DesktopErrorFileTooLarge:               {Value: "file_too_large", Label: "文件不符合读取限制，请选择非空普通文件并确保大小不超过 32 MiB。", Severity: SeverityError},
+	DesktopErrorHostClosing:                {Value: "host_closing", Label: "桌面宿主正在关闭，无法受理此操作，请重新打开应用后再操作。", Severity: SeverityNeutral},
+	DesktopErrorInvalidBundle:              {Value: "invalid_bundle", Label: "Bundle 格式不符合要求或验证未完成，请检查文件及本机运行时状态。", Severity: SeverityError},
+	DesktopErrorInvalidCredential:          {Value: "invalid_credential", Label: "中心返回的登录凭证无法由桌面端保存，请联系中心管理员检查凭证格式。", Severity: SeverityError},
+	DesktopErrorInvalidEndpoint:            {Value: "invalid_endpoint", Label: "中心或存储地址不符合安全要求，请使用 HTTPS 并移除嵌入凭证、查询参数和片段，且对象存储源地址只能包含协议、主机及可选端口，不能包含路径。", Severity: SeverityError},
+	DesktopErrorInvalidIdentity:            {Value: "invalid_identity", Label: "环境或身份标识不符合要求，无法处理凭证，请重新连接数据源后再操作。", Severity: SeverityError},
+	DesktopErrorInvalidPdf:                 {Value: "invalid_pdf", Label: "文件或原件响应不是有效的 PDF，无法继续处理，请检查所选文件或数据源原件。", Severity: SeverityError},
+	DesktopErrorInvalidRuntimeSession:      {Value: "invalid_runtime_session", Label: "本机运行时缺少有效会话目录，无法启动，请联系维护者检查宿主配置。", Severity: SeverityError},
+	DesktopErrorInvalidWorkspace:           {Value: "invalid_workspace", Label: "工作区标识或目录不符合要求，无法打开，请重新选择有效的工作区。", Severity: SeverityError},
+	DesktopErrorInvalidWslDistro:           {Value: "invalid_wsl_distro", Label: "WSL 分发名称不符合要求，无法使用本机工作区，请检查分发配置并重新启动 DeepDocParse。", Severity: SeverityError},
+	DesktopErrorRuntimeExited:              {Value: "runtime_exited", Label: "本机运行时意外退出，请检查运行环境后重新打开工作区。", Severity: SeverityError},
+	DesktopErrorRuntimeIncompatible:        {Value: "runtime_incompatible", Label: "本机运行时握手不符合桌面协议，无法建立连接，请检查运行时与应用版本。", Severity: SeverityError},
+	DesktopErrorRuntimeStartFailed:         {Value: "runtime_start_failed", Label: "本机运行时启动失败，请检查运行环境后重新打开工作区。", Severity: SeverityError},
+	DesktopErrorRuntimeStopped:             {Value: "runtime_stopped", Label: "本机运行时启动已被停止，如需继续使用请重新打开工作区。", Severity: SeverityNeutral},
+	DesktopErrorRuntimeStopping:            {Value: "runtime_stopping", Label: "本机运行时仍在停止，暂时无法启动，请等待停止完成后再打开工作区。", Severity: SeverityWarn},
+	DesktopErrorRuntimeUnavailable:         {Value: "runtime_unavailable", Label: "本机运行时连接尚不可用，请检查运行时状态后重新打开工作区。", Severity: SeverityError},
+	DesktopErrorSubscriptionLimit:          {Value: "subscription_limit", Label: "连接状态订阅达到上限，无法添加订阅，请重新打开应用后再操作。", Severity: SeverityWarn},
+	DesktopErrorUnknownConnection:          {Value: "unknown_connection", Label: "指定的数据源连接已不存在，请重新选择或连接数据源。", Severity: SeverityError},
+	DesktopErrorUnknownOperation:           {Value: "unknown_operation", Label: "桌面宿主不识别此操作，请检查应用与宿主版本是否一致。", Severity: SeverityError},
+	DesktopErrorUnknownRuntimeBackend:      {Value: "unknown_runtime_backend", Label: "本机运行时后端配置无法识别，请联系维护者检查宿主配置。", Severity: SeverityError},
+	DesktopErrorUnknownWorkspace:           {Value: "unknown_workspace", Label: "指定的工作区已不存在，请重新选择工作区。", Severity: SeverityError},
+	DesktopErrorUnsafeExportTarget:         {Value: "unsafe_export_target", Label: "导出目标不是安全的普通文件，已阻止写入，请重新选择保存位置。", Severity: SeverityError},
+	DesktopErrorUnsafeRuntimeToken:         {Value: "unsafe_runtime_token", Label: "本机运行时连接信息未通过安全检查，已拒绝连接，请联系维护者检查运行时文件和权限。", Severity: SeverityError},
+	DesktopErrorUntrustedSender:            {Value: "untrusted_sender", Label: "请求并非来自受信任的桌面界面，已拒绝操作，请从正式桌面窗口操作。", Severity: SeverityError},
+	DesktopErrorWorkspaceAliasConflict:     {Value: "workspace_alias_conflict", Label: "此身份已绑定另一工作区目录或后端，无法重复绑定，请核对并选择原工作区。", Severity: SeverityError},
+	DesktopErrorWorkspaceChanged:           {Value: "workspace_changed", Label: "工作区目录已变化，已拒绝继续使用，请重新选择工作区并核对内容。", Severity: SeverityError},
+	DesktopErrorWorkspaceUnavailable:       {Value: "workspace_unavailable", Label: "本机工作区当前不可用，请重新选择工作区或检查桌面宿主状态。", Severity: SeverityError},
+	DesktopErrorWslBackendUnavailable:      {Value: "wsl_backend_unavailable", Label: "WSL 运行时后端无法初始化，请联系维护者检查应用安装及后端配置。", Severity: SeverityError},
+	DesktopErrorWslMissing:                 {Value: "wsl_missing", Label: "未找到可用的 WSL，无法使用本机工作区，请安装并启用 WSL 2 后重新启动 DeepDocParse。", Severity: SeverityError},
+	DesktopErrorWslPidRecordFailed:         {Value: "wsl_pid_record_failed", Label: "WSL 运行时进程记录保存失败，无法完成启动，请检查宿主存储空间和写入权限。", Severity: SeverityError},
+	DesktopErrorWslRuntimeAbiMismatch:      {Value: "wsl_runtime_abi_mismatch", Label: "WSL 运行时无法执行或与安装清单不兼容，请联系维护者检查运行时安装包。", Severity: SeverityError},
+	DesktopErrorWslRuntimeArchiveMismatch:  {Value: "wsl_runtime_archive_mismatch", Label: "WSL 运行时安装包未通过完整性检查，请联系维护者检查安装包。", Severity: SeverityError},
+	DesktopErrorWslRuntimeManifestInvalid:  {Value: "wsl_runtime_manifest_invalid", Label: "WSL 运行时安装清单无效或无法读取，请联系维护者检查应用安装。", Severity: SeverityError},
+	DesktopErrorWslRuntimeNotInstalled:     {Value: "wsl_runtime_not_installed", Label: "WSL 运行时尚未完整安装，无法验证 Bundle，请先打开本机工作区完成运行时准备。", Severity: SeverityError},
+	DesktopErrorWslRuntimeProvisionFailed:  {Value: "wsl_runtime_provision_failed", Label: "WSL 运行时部署失败，请检查 WSL 的存储空间和写入权限后重新打开工作区。", Severity: SeverityError},
+	DesktopErrorWslUnavailable:             {Value: "wsl_unavailable", Label: "WSL 检测或遗留进程清理不可用，请检查 WSL 状态后重新启动 DeepDocParse。", Severity: SeverityError},
+	DesktopErrorWsl1Unsupported:            {Value: "wsl1_unsupported", Label: "当前分发使用 WSL 1，无法运行本机工作区，请将分发转换为 WSL 2 后重新启动 DeepDocParse。", Severity: SeverityError},
+	DesktopErrorWslDistroNotFound:          {Value: "wsl_distro_not_found", Label: "未找到配置的 WSL 分发，请安装该分发或修正分发配置后重新启动 DeepDocParse。", Severity: SeverityError},
+	DesktopErrorLocalRuntimeUnavailable:    {Value: "local_runtime_unavailable", Label: "本机运行时后端无法初始化，请联系维护者检查应用安装和运行环境。", Severity: SeverityError},
+	DesktopErrorConnectionFailed:           {Value: "connection_failed", Label: "连接暂不可用，已保留草稿。", Severity: SeverityError},
+	DesktopErrorAuthenticationRequired:     {Value: "authentication_required", Label: "此身份需要重新认证。", Severity: SeverityError},
+	DesktopErrorIdentityMismatch:           {Value: "identity_mismatch", Label: "环境身份与已配对记录不一致。", Severity: SeverityError},
+	DesktopErrorProfileMismatch:            {Value: "profile_mismatch", Label: "登录身份与已配对记录不一致。", Severity: SeverityError},
+	DesktopErrorProtocolIncompatible:       {Value: "protocol_incompatible", Label: "此环境未提供所需的工作台协议。", Severity: SeverityError},
+	DesktopErrorCacheFailure:               {Value: "cache_failure", Label: "本地缓存无法写入，请检查可用空间。", Severity: SeverityError},
+	DesktopErrorModelUnavailable:           {Value: "model_unavailable", Label: "生成模型尚不可用，可以继续检索和查看原文。", Severity: SeverityWarn},
+	DesktopErrorUnsupportedOperation:       {Value: "unsupported_operation", Label: "此环境暂不支持这项操作。", Severity: SeverityError},
+	DesktopErrorApprovedPlanRequired:       {Value: "approved_plan_required", Label: "此操作需要先确认远端执行与外发许可。", Severity: SeverityError},
+	DesktopErrorOutcomeUnknown:             {Value: "outcome_unknown", Label: "提交结果未确认，请查询回执后再处理。", Severity: SeverityWarn},
+	DesktopErrorReceiptRequired:            {Value: "receipt_required", Label: "请查询已保存操作的回执。", Severity: SeverityWarn},
+	DesktopErrorDisposed:                   {Value: "disposed", Label: "连接已切换，请在当前工作区重新操作。", Severity: SeverityError},
+	DesktopErrorDraftConflict:              {Value: "draft_conflict", Label: "草稿已被另一窗口更新，请重新打开后合并。", Severity: SeverityWarn},
+	DesktopErrorRevisionConflict:           {Value: "revision_conflict", Label: "草稿已被另一窗口更新，请重新打开后合并。", Severity: SeverityWarn},
+	DesktopErrorInputTooLarge:              {Value: "input_too_large", Label: "文件超过当前操作的大小限制。", Severity: SeverityError},
+	DesktopErrorNotFound:                   {Value: "not_found", Label: "该资料不存在或当前身份无权访问。", Severity: SeverityError},
+	DesktopErrorSourceUnavailable:          {Value: "source_unavailable", Label: "此来源的访问许可已撤销或过期，不能继续读取快照。", Severity: SeverityError},
+	DesktopErrorSourceDigestMismatch:       {Value: "source_digest_mismatch", Label: "收到的原文与固定版本摘要不一致，已阻止显示。", Severity: SeverityError},
+	DesktopErrorWikiResponseTooLarge:       {Value: "wiki_response_too_large", Label: "Wiki 修订超过当前读取大小限制。", Severity: SeverityError},
+	DesktopErrorWikiSourceUnavailable:      {Value: "wiki_source_unavailable", Label: "Wiki 的固定来源已经不可用，请重新选择来源。", Severity: SeverityError},
+	DesktopErrorWikiGenerationInvalid:      {Value: "wiki_generation_invalid", Label: "模型输出未通过 Wiki 格式或引用检查，此次没有发布修订。", Severity: SeverityError},
+	DesktopErrorUnsupportedGeneration:      {Value: "unsupported_generation", Label: "生成内容缺少有效的原始出处，此次没有发布。", Severity: SeverityError},
+	DesktopErrorWikiRelationUnsupported:    {Value: "wiki_relation_unsupported", Label: "模型选择了不存在或缺少原文支撑的关系，此次没有发布 Wiki 修订。请缩小主题或调整模型后重试。", Severity: SeverityError},
+	DesktopErrorOutOfMemory:                {Value: "out_of_memory", Label: "本机内存不足，模型已经停止；可以查看任务后重新启动。", Severity: SeverityError},
+	DesktopErrorCursorExpired:              {Value: "cursor_expired", Label: "目录已更新或快照已失效，请重新读取首页。", Severity: SeverityWarn},
+	DesktopErrorApprovalCancelled:          {Value: "approval_cancelled", Label: "已取消批准，没有授予任何外发许可。", Severity: SeverityNeutral},
+	DesktopErrorPlanChanged:                {Value: "plan_changed", Label: "执行计划已变更，需重新批准。", Severity: SeverityWarn},
+	DesktopErrorApprovalUnavailable:        {Value: "approval_unavailable", Label: "当前宿主无法显示系统确认框，不能批准外发。", Severity: SeverityError},
+	DesktopErrorConsentRequired:            {Value: "consent_required", Label: "该阶段尚未批准，未发送任何内容。", Severity: SeverityWarn},
+	DesktopErrorConsentRevoked:             {Value: "consent_revoked", Label: "批准已撤销；需要准备并批准新计划。", Severity: SeverityWarn},
+	DesktopErrorConsentExpired:             {Value: "consent_expired", Label: "计划或批准已过期；需要准备新计划。", Severity: SeverityWarn},
+	DesktopErrorBudgetExceeded:             {Value: "budget_exceeded", Label: "超出已批准的请求或外发字节预算，未发送。", Severity: SeverityWarn},
+	DesktopErrorPolicyDenied:               {Value: "policy_denied", Label: "接收方、地址或数据边超出已批准范围，未发送。", Severity: SeverityError},
+	DesktopErrorInputChanged:               {Value: "input_changed", Label: "本地输入与锁定摘要不一致，未发送。", Severity: SeverityError},
+	DesktopErrorLocalOnly:                  {Value: "local_only", Label: "工作区处于仅本地模式，禁止外发。", Severity: SeverityError},
+	DesktopErrorCenterNotPaired:            {Value: "center_not_paired", Label: "尚未配对计划中的中心。", Severity: SeverityError},
+	DesktopErrorCenterNotCurrent:           {Value: "center_not_current", Label: "中心连接未就绪；重新连接并核对节点身份后再操作。", Severity: SeverityError},
+	DesktopErrorCenterIdentityChanged:      {Value: "center_identity_changed", Label: "中心地址或身份与已审阅计划不一致，已拒绝发送。", Severity: SeverityError},
+	DesktopErrorCenterBindingRequired:      {Value: "center_binding_required", Label: "计划没有唯一的已审阅接收方，不能派发。", Severity: SeverityError},
+	DesktopErrorCenterUnavailable:          {Value: "center_unavailable", Label: "当前连接无法取得中心凭证。", Severity: SeverityError},
+	DesktopErrorDeliveryUnverified:         {Value: "delivery_unverified", Label: "交付结果没有通过本地摘要重算，不能确认。", Severity: SeverityError},
+	DesktopErrorDispatchAlreadyReserved:    {Value: "dispatch_already_reserved", Label: "这次发送已经占用预算，请先对账再重试。", Severity: SeverityWarn},
+	DesktopErrorConnectionNotCurrent:       {Value: "connection_not_current", Label: "本机工作区连接未就绪，已保留草稿。", Severity: SeverityWarn},
+	DesktopErrorUnreachable:                {Value: "unreachable", Label: "中心暂时无法连接，未确认任何结果。", Severity: SeverityError},
+	DesktopErrorTransportError:             {Value: "transport_error", Label: "读取中心时连接中断，没有确认任何结果；可以再次读取，不会重复任何写入。", Severity: SeverityWarn},
+	DesktopErrorDeliveryExpired:            {Value: "delivery_expired", Label: "交付已过期，结果没有保存到本机。", Severity: SeverityError},
+	DesktopErrorDeliveryNotFound:           {Value: "delivery_not_found", Label: "中心暂时没有这份交付，可以稍后再取。", Severity: SeverityWarn},
+	DesktopErrorDeliveryIdMissing:          {Value: "delivery_id_missing", Label: "中心尚未给出交付编号。", Severity: SeverityWarn},
+	DesktopErrorResultManifestMismatch:     {Value: "result_manifest_mismatch", Label: "取回的结果与中心声明的摘要不一致，没有保存。", Severity: SeverityError},
+	DesktopErrorResultUnavailable:          {Value: "result_unavailable", Label: "中心没有返回可校验的结果。", Severity: SeverityError},
+	DesktopErrorAckNotConfirmed:            {Value: "ack_not_confirmed", Label: "中心没有确认这次交付，可以再次确认。", Severity: SeverityWarn},
+	DesktopErrorTransferUnknown:            {Value: "transfer_unknown", Label: "传输结果未确认。保留原创建编号，先查询回执，再显式对账或继续缺片；不会自动重传。", Severity: SeverityWarn},
+	DesktopErrorResumeUnknown:              {Value: "resume_unknown", Label: "继续请求的结果未确认，请查询回执后再处理；不会自动批准或派发。", Severity: SeverityWarn},
+	DesktopErrorTransferInProgress:         {Value: "transfer_in_progress", Label: "此计划已有主机传输在执行，可查看进度或停止传输。", Severity: SeverityNeutral},
+	DesktopErrorUploadExpired:              {Value: "upload_expired", Label: "临时上传已过期，需要重新准备并批准计划。", Severity: SeverityWarn},
+	DesktopErrorUploadFailed:               {Value: "upload_failed", Label: "服务端拒绝了这份输入，未提交解析任务。", Severity: SeverityError},
+	DesktopErrorUploadIncomplete:           {Value: "upload_incomplete", Label: "中心返回的分片清单不完整，没有继续发送。", Severity: SeverityError},
+	DesktopErrorStorageOriginNotApproved:   {Value: "storage_origin_not_approved", Label: "对象存储地址不在已审阅的传输范围内，原件未发送。", Severity: SeverityError},
+	DesktopErrorDeliveryTooLarge:           {Value: "delivery_too_large", Label: "交付超过本机 64 MiB 校验上限，尚未确认或清理。", Severity: SeverityError},
+	DesktopErrorGpuDeviceUnsupported:       {Value: "gpu_device_unsupported", Label: "所选 Vulkan 设备是软件渲染器，未启动，也未自动退回 CPU。", Severity: SeverityError},
+	DesktopErrorGpuOffloadUnverified:       {Value: "gpu_offload_unverified", Label: "没有观测到物理 GPU 上的模型层卸载，已停止该进程。需要 CPU 时请明确选择 CPU 运行包。", Severity: SeverityError},
+	DesktopErrorModelBackendIncompatible:   {Value: "model_backend_incompatible", Label: "所选模型与运行包不兼容。", Severity: SeverityError},
+	DesktopErrorModelProcessBusy:           {Value: "model_process_busy", Label: "请先停止当前受管模型，再切换模型或后端。", Severity: SeverityWarn},
+	DesktopErrorEgressDenied:               {Value: "egress_denied", Label: "中心拒绝了这次外发许可。", Severity: SeverityError},
+	DesktopErrorInvalidResponse:            {Value: "invalid_response", Label: "中心返回的内容无法识别。", Severity: SeverityError},
+	DesktopErrorInvalidArguments:           {Value: "invalid_arguments", Label: "请求参数不正确，宿主拒绝执行。", Severity: SeverityError},
+	DesktopErrorHostOperationFailed:        {Value: "host_operation_failed", Label: "宿主操作结果未知，请查询回执后再处理。", Severity: SeverityWarn},
 }
 
 // Valid 报告 s 是不是一个已知的 desktop_error 取值。

@@ -82,7 +82,7 @@ test('POSIX file gate keeps mode/size checks and lets ENOENT stay distinguishabl
   await assert.rejects(secureFile(file, { platform: 'linux', maxBytes: 8, code: 'unsafe_runtime_token' }),
     /unsafe_runtime_token/)
   await assert.rejects(secureFile(root, { platform: 'linux', code: 'unsafe_runtime_token' }), /unsafe_runtime_token/)
-  await assert.rejects(secureFile(path.join(root, 'absent'), { platform: 'linux' }), error => error.code === 'ENOENT')
+  await assert.rejects(secureFile(path.join(root, 'absent'), { platform: 'linux', code: 'unsafe_runtime_token' }), error => error.code === 'ENOENT')
   const link = path.join(root, 'token-link')
   if (await symlinkOrSkip(t, file, link)) {
     await assert.rejects(secureFile(link, { platform: 'linux', code: 'unsafe_runtime_token' }), /unsafe_runtime_token/)
@@ -97,7 +97,7 @@ test('win32 file gate rejects reparse/symlink and oversize but not POSIX modes',
   await assert.rejects(secureFile(file, { platform: 'win32', maxBytes: 8, code: 'unsafe_runtime_token' }),
     /unsafe_runtime_token/)
   await assert.rejects(secureFile(root, { platform: 'win32', code: 'unsafe_runtime_token' }), /unsafe_runtime_token/)
-  await assert.rejects(secureFile(path.join(root, 'absent'), { platform: 'win32' }), error => error.code === 'ENOENT')
+  await assert.rejects(secureFile(path.join(root, 'absent'), { platform: 'win32', code: 'unsafe_runtime_token' }), error => error.code === 'ENOENT')
   const link = path.join(root, 'token-link')
   if (await symlinkOrSkip(t, file, link)) {
     await assert.rejects(secureFile(link, { platform: 'win32', code: 'unsafe_runtime_token' }),
