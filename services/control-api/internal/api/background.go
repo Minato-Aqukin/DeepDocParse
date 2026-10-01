@@ -17,14 +17,13 @@ import (
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/store"
 )
 
-// RunBackground 起三个后台循环，随 ctx 一起结束。
-//
-// 它们都做成**可重入、可被任意副本执行**的：不选主、不假设单实例。
-// 领取用 `FOR UPDATE SKIP LOCKED`，所以多副本并行只会更快，不会重复。
+// RunBackground starts independent loops that stop with ctx. Durable database
+// claims arbitrate concurrent replicas; descriptor renewal never changes approval.
 func (s *Server) RunBackground(ctx context.Context) {
 	go s.deliverOutbox(ctx)
 	go s.verifyUploads(ctx)
 	go s.housekeeping(ctx)
+	go s.renewDiscoveryLeases(ctx)
 }
 
 // deliverOutbox 把 control 侧的事件投给 corpus-api。

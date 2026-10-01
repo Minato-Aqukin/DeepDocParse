@@ -1,5 +1,5 @@
 // Package discovery defines the control-owned, approved direct-member directory.
-// It never connects to registered endpoints or turns node trust into resource permission.
+// Approved leases may be pulled from their pinned endpoint; trust is never resource permission.
 package discovery
 
 import (
@@ -53,6 +53,14 @@ func (d NodeDescriptor) Validate(publicKey, localID string, now time.Time) error
 	}
 	if d.Schema != "ddp-discovery/1#NodeDescriptor" || d.Revision < 1 || !d.ValidUntil.After(now) {
 		return errors.New("invalid or expired descriptor")
+	}
+	if d.PublisherSignature != "" {
+		if _, err := publisherSignatureBytes(d.PublisherSignature); err != nil {
+			return err
+		}
+		if d.ValidUntil.Nanosecond() != 0 || !asciiDescriptorStrings(d) {
+			return errors.New("signed descriptor requires whole-second time and ASCII strings")
+		}
 	}
 	if !slices.Contains(d.ProtocolVersions, "ddp-discovery/1") {
 		return errors.New("unsupported discovery protocol")

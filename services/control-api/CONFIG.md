@@ -11,13 +11,14 @@ Go 这边由容器/systemd 注入环境变量）。
 user_id 伪造一个有效会话，且运行时不报任何错。一次性容器 / CI 可用
 `ALLOW_INSECURE_DEFAULTS=true` 显式跳过 —— 逃生口必须显式且留痕。
 
-共 **44** 项。
+共 **45** 项。
 
 ## 通用
 
 | 环境变量 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `NODE_IDENTITY_DIR` | `string` | `"./state/control-node"` | 持久 Ed25519 节点 seed 目录（0700，文件0600）。必须与数据库一致备份；丢失或不匹配拒绝启动 |
+| `DISCOVERY_RENEWAL_INTERVAL_SECONDS` | `int` | `60` | 已批准目录成员的自动pull续期间隔（秒，1..120，默认60；描述TTL300秒）。 四并发、每peer两秒，失败持久指数退避至120秒，不延长失败成员的租约。（单位：秒） |
 
 ## 监听
 

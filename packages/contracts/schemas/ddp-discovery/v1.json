@@ -98,8 +98,9 @@
           "$ref": "#/$defs/instant"
         },
         "publisher_signature": {
-          "description": "可选。**只证明发布者，不证明描述准确**（§5.2）。",
-          "type": "string"
+          "description": "Optional for manual registration; required for automatic directory-pull renewal. Strict standard-base64 Ed25519 signature (64 decoded bytes) over ddp-node-descriptor/1 newline plus UTF8 JSON array [schema,node_id,protocol_versions,controlled_endpoints as [purpose,url] pairs,auth_methods,enumerate_members,catalog_events,revision,valid_until]. Signed string fields are ASCII-only; JSON has no whitespace, HTML escaping or slash escaping. valid_until is whole-second UTC RFC3339 (YYYY-MM-DDTHH:MM:SSZ). Renewal rejects expiry more than ten minutes ahead. Proves publisher, not readiness.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{85}[AQgw]==$"
         }
       },
       "required": [

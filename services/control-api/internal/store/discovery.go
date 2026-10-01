@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"reflect"
 	"slices"
 	"time"
 
@@ -113,10 +112,9 @@ func (s *Store) RegisterNode(ctx context.Context, org string, in discovery.Regis
 				return err
 			}
 			oldExpiry := oldDescriptor.ValidUntil
-			oldDescriptor.ValidUntil = in.Descriptor.ValidUntil
 			if !in.Descriptor.ValidUntil.After(oldExpiry) || oldKey != in.PublicKey ||
 				oldVisible != in.VisibleToOrg || !slices.Equal(oldSubjects, in.AllowedSubjects) ||
-				!reflect.DeepEqual(oldDescriptor, in.Descriptor) {
+				!discovery.SameDescriptorConfiguration(oldDescriptor, in.Descriptor) {
 				return ErrDiscoveryConflict
 			}
 			result.State = oldState

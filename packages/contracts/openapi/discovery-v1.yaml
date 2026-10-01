@@ -8,6 +8,19 @@ info:
     organization-visible direct directory (single-use signed node credentials); recursive
     expansion, budgets and loop detection live in the scope collector, not here.
     No scanning, address probing or user-credential forwarding is provided.
+    Approved direct members are renewed by directory pull, not peer push: every
+    60 seconds by default (configurable 1..120), at most four concurrent two-second
+    reads of the public node endpoint derived only from the approved federation
+    endpoint, with no redirects or environment proxy. The signed descriptor must
+    match the approved identity, public key, revision and configuration. Pending
+    and revoked members are never renewed. Failed attempts use persistent capped
+    exponential backoff and never extend valid_until; expired leases stay expired.
+    Existing snapshots retain their frozen expiry. Renewal outcomes are persisted
+    on the member row and logged; descriptor freshness is not admission readiness.
+    A short poll (at most one second) is independent of the per-member interval;
+    full batches are drained immediately before sleeping. Renewed leases must be
+    whole-second UTC instants no later than ten minutes from the observation
+    (five-minute publisher TTL plus a bounded clock-skew allowance).
 security: [{session: []}, {userKey: []}]
 paths:
   /api/v1/federation/generation-candidates:
@@ -82,6 +95,10 @@ paths:
           in: query
           schema: {type: string, pattern: '^[A-Za-z0-9_-]{32,64}$'}
           description: Canonical raw base64url nonce; optional, requested proof binds configured public base URL.
+      description: |
+        Publishes a publisher_signature over the complete descriptor (see
+        discovery-control-format.md). Directories verify it against the approved
+        public key before renewing an unchanged lease.
       responses:
         '200': {description: Public identity, no workspace or user; challenge returns 60-second key-possession proof, content: {application/json: {schema: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/NodeHandshake'}}}}
         '400': {description: Invalid or duplicate challenge}

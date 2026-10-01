@@ -136,3 +136,24 @@ func TestObjectPublicSecureCanDifferFromObjectSecure(t *testing.T) {
 		t.Fatalf("两侧 scheme 应当能分开：internal=%v public=%v", c.ObjectSecure, c.ObjectPublicSecure)
 	}
 }
+
+func TestDiscoveryRenewalIntervalBounds(t *testing.T) {
+	for _, seconds := range []string{"0", "-1", "121"} {
+		t.Run(seconds, func(t *testing.T) {
+			good(t)
+			t.Setenv("DISCOVERY_RENEWAL_INTERVAL_SECONDS", seconds)
+			if _, err := config.Load(); err == nil {
+				t.Fatalf("unsafe renewal interval %s accepted", seconds)
+			}
+		})
+	}
+	for _, seconds := range []string{"1", "120"} {
+		t.Run(seconds, func(t *testing.T) {
+			good(t)
+			t.Setenv("DISCOVERY_RENEWAL_INTERVAL_SECONDS", seconds)
+			if _, err := config.Load(); err != nil {
+				t.Fatalf("supported renewal interval %s refused: %v", seconds, err)
+			}
+		})
+	}
+}

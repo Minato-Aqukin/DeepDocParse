@@ -17,6 +17,9 @@ import (
 type Config struct {
 	// 持久 Ed25519 节点 seed 目录（0700，文件0600）。必须与数据库一致备份；丢失或不匹配拒绝启动
 	NodeIdentityDir string
+	// 已批准目录成员的自动pull续期间隔（秒，1..120，默认60；描述TTL300秒）。
+	// 四并发、每peer两秒，失败持久指数退避至120秒，不延长失败成员的租约。
+	DiscoveryRenewalInterval time.Duration
 
 	// ---- 监听 ----
 	// 监听地址。容器里通常保持 :8080，对外端口由编排层映射
@@ -167,50 +170,51 @@ const placeholder = "change-me"
 
 func Load() (*Config, error) {
 	c := &Config{
-		NodeIdentityDir:         env("NODE_IDENTITY_DIR", "./state/control-node"),
-		Addr:                    env("CONTROL_ADDR", ":8080"),
-		DatabaseURL:             env("CONTROL_DATABASE_URL", "postgres://ddp_control:ddp@127.0.0.1:15432/deepdocparse"),
-		DBMaxConns:              int32(envInt("CONTROL_DB_MAX_CONNS", 20)),
-		DBMinConns:              int32(envInt("CONTROL_DB_MIN_CONNS", 2)),
-		JWTSecret:               env("JWT_SECRET", placeholder),
-		JWTTTL:                  time.Duration(envInt("JWT_TTL_MINUTES", 60*24*7)) * time.Minute,
-		BcryptCost:              envInt("BCRYPT_COST", 12),
-		RegistrationMode:        env("REGISTRATION_MODE", "open"),
-		DefaultRole:             env("DEFAULT_MEMBER_ROLE", "contributor"),
-		OIDCIssuer:              env("OIDC_ISSUER", ""),
-		OIDCClientID:            env("OIDC_CLIENT_ID", ""),
-		OIDCClientSecret:        env("OIDC_CLIENT_SECRET", ""),
-		OIDCRedirectURL:         env("OIDC_REDIRECT_URL", ""),
-		CorpusURL:               env("CORPUS_URL", "http://127.0.0.1:8081"),
-		GatewayURL:              env("GATEWAY_URL", "http://127.0.0.1:9000"),
-		MCPURL:                  env("MCP_URL", "http://127.0.0.1:9100"),
-		ServiceToken:            env("SERVICE_TOKEN", placeholder),
-		FederationPeers:         env("FEDERATION_PEERS", ""),
-		FederationAllowLoopback: envBool("FEDERATION_ALLOW_LOOPBACK", false),
-		ObjectEndpoint:          env("OBJECT_ENDPOINT", "127.0.0.1:19000"),
-		ObjectPublicHost:        env("OBJECT_PUBLIC_ENDPOINT", "127.0.0.1:19000"),
-		ObjectAccessKey:         env("OBJECT_ACCESS_KEY", "minioadmin"),
-		ObjectSecretKey:         env("OBJECT_SECRET_KEY", "minioadmin"),
-		ObjectBucket:            env("OBJECT_BUCKET", "deepdocparse"),
-		ObjectSecure:            envBool("OBJECT_SECURE", false),
-		ObjectPublicSecure:      envBool("OBJECT_PUBLIC_SECURE", envBool("OBJECT_SECURE", false)),
-		ObjectRegion:            env("OBJECT_REGION", "us-east-1"),
-		PresignTTL:              time.Duration(envInt("PRESIGN_TTL_SECONDS", 900)) * time.Second,
-		MaxUploadBytes:          int64(envInt("MAX_UPLOAD_BYTES", 200*1024*1024)),
-		UploadPartSize:          int64(envInt("UPLOAD_PART_SIZE", 16*1024*1024)),
-		UploadTTL:               time.Duration(envInt("UPLOAD_TTL_SECONDS", 24*3600)) * time.Second,
-		AllowedMIME:             envList("ALLOWED_UPLOAD_MIME", "application/pdf"),
-		RedisURL:                env("REDIS_URL", ""),
-		DefaultRatePerMin:       envInt("DEFAULT_RATE_LIMIT_PER_MIN", 60),
-		LoginRatePerMin:         envInt("LOGIN_RATE_LIMIT_PER_MIN", 10),
-		QARatePerMin:            envInt("QA_RATE_PER_MIN", 20),
-		KnowledgeRatePerMin:     envInt("KNOWLEDGE_RATE_PER_MIN", 2),
-		ExtractRatePerMin:       envInt("EXTRACT_RATE_PER_MIN", 6),
-		CORSOrigins:             envList("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
-		PublicBaseURL:           env("PUBLIC_BASE_URL", "http://127.0.0.1:8080"),
-		InternalBaseURL:         env("INTERNAL_BASE_URL", env("PUBLIC_BASE_URL", "http://127.0.0.1:8080")),
-		AllowInsecureDefaults:   envBool("ALLOW_INSECURE_DEFAULTS", false),
-		OutboxInterval:          time.Duration(envInt("OUTBOX_INTERVAL_SECONDS", 2)) * time.Second,
+		NodeIdentityDir:          env("NODE_IDENTITY_DIR", "./state/control-node"),
+		DiscoveryRenewalInterval: time.Duration(envInt("DISCOVERY_RENEWAL_INTERVAL_SECONDS", 60)) * time.Second,
+		Addr:                     env("CONTROL_ADDR", ":8080"),
+		DatabaseURL:              env("CONTROL_DATABASE_URL", "postgres://ddp_control:ddp@127.0.0.1:15432/deepdocparse"),
+		DBMaxConns:               int32(envInt("CONTROL_DB_MAX_CONNS", 20)),
+		DBMinConns:               int32(envInt("CONTROL_DB_MIN_CONNS", 2)),
+		JWTSecret:                env("JWT_SECRET", placeholder),
+		JWTTTL:                   time.Duration(envInt("JWT_TTL_MINUTES", 60*24*7)) * time.Minute,
+		BcryptCost:               envInt("BCRYPT_COST", 12),
+		RegistrationMode:         env("REGISTRATION_MODE", "open"),
+		DefaultRole:              env("DEFAULT_MEMBER_ROLE", "contributor"),
+		OIDCIssuer:               env("OIDC_ISSUER", ""),
+		OIDCClientID:             env("OIDC_CLIENT_ID", ""),
+		OIDCClientSecret:         env("OIDC_CLIENT_SECRET", ""),
+		OIDCRedirectURL:          env("OIDC_REDIRECT_URL", ""),
+		CorpusURL:                env("CORPUS_URL", "http://127.0.0.1:8081"),
+		GatewayURL:               env("GATEWAY_URL", "http://127.0.0.1:9000"),
+		MCPURL:                   env("MCP_URL", "http://127.0.0.1:9100"),
+		ServiceToken:             env("SERVICE_TOKEN", placeholder),
+		FederationPeers:          env("FEDERATION_PEERS", ""),
+		FederationAllowLoopback:  envBool("FEDERATION_ALLOW_LOOPBACK", false),
+		ObjectEndpoint:           env("OBJECT_ENDPOINT", "127.0.0.1:19000"),
+		ObjectPublicHost:         env("OBJECT_PUBLIC_ENDPOINT", "127.0.0.1:19000"),
+		ObjectAccessKey:          env("OBJECT_ACCESS_KEY", "minioadmin"),
+		ObjectSecretKey:          env("OBJECT_SECRET_KEY", "minioadmin"),
+		ObjectBucket:             env("OBJECT_BUCKET", "deepdocparse"),
+		ObjectSecure:             envBool("OBJECT_SECURE", false),
+		ObjectPublicSecure:       envBool("OBJECT_PUBLIC_SECURE", envBool("OBJECT_SECURE", false)),
+		ObjectRegion:             env("OBJECT_REGION", "us-east-1"),
+		PresignTTL:               time.Duration(envInt("PRESIGN_TTL_SECONDS", 900)) * time.Second,
+		MaxUploadBytes:           int64(envInt("MAX_UPLOAD_BYTES", 200*1024*1024)),
+		UploadPartSize:           int64(envInt("UPLOAD_PART_SIZE", 16*1024*1024)),
+		UploadTTL:                time.Duration(envInt("UPLOAD_TTL_SECONDS", 24*3600)) * time.Second,
+		AllowedMIME:              envList("ALLOWED_UPLOAD_MIME", "application/pdf"),
+		RedisURL:                 env("REDIS_URL", ""),
+		DefaultRatePerMin:        envInt("DEFAULT_RATE_LIMIT_PER_MIN", 60),
+		LoginRatePerMin:          envInt("LOGIN_RATE_LIMIT_PER_MIN", 10),
+		QARatePerMin:             envInt("QA_RATE_PER_MIN", 20),
+		KnowledgeRatePerMin:      envInt("KNOWLEDGE_RATE_PER_MIN", 2),
+		ExtractRatePerMin:        envInt("EXTRACT_RATE_PER_MIN", 6),
+		CORSOrigins:              envList("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
+		PublicBaseURL:            env("PUBLIC_BASE_URL", "http://127.0.0.1:8080"),
+		InternalBaseURL:          env("INTERNAL_BASE_URL", env("PUBLIC_BASE_URL", "http://127.0.0.1:8080")),
+		AllowInsecureDefaults:    envBool("ALLOW_INSECURE_DEFAULTS", false),
+		OutboxInterval:           time.Duration(envInt("OUTBOX_INTERVAL_SECONDS", 2)) * time.Second,
 	}
 	if err := c.validate(); err != nil {
 		return nil, err
@@ -220,6 +224,9 @@ func Load() (*Config, error) {
 
 func (c *Config) validate() error {
 	var problems []string
+	if c.DiscoveryRenewalInterval < time.Second || c.DiscoveryRenewalInterval > 120*time.Second {
+		problems = append(problems, "DISCOVERY_RENEWAL_INTERVAL_SECONDS 必须在 1..120 之间（低于描述TTL）")
+	}
 
 	// 占位密钥。CI / 一次性容器可以用 ALLOW_INSECURE_DEFAULTS 显式跳过 ——
 	// 逃生口必须显式且留痕，不能靠"本地就先这样吧"

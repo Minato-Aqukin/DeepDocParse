@@ -55,6 +55,9 @@ func (s *Server) handleFederationNode(w http.ResponseWriter, r *http.Request) er
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	d := discovery.NodeDescriptor{Schema: "ddp-discovery/1#NodeDescriptor", NodeID: s.nodeIdentity.NodeID(), ProtocolVersions: []string{"ddp-discovery/1", "ddp-client/1"}, ControlledEndpoints: []discovery.Endpoint{{Purpose: "federation", URL: strings.TrimRight(s.cfg.PublicBaseURL, "/") + "/api/v1/federation"}}, AuthMethods: []string{"session", "user_api_key"}, DiscoveryCapabilities: discovery.DiscoveryCapabilities{EnumerateMembers: true, CatalogEvents: false}, Revision: s.nodeRevision, ValidUntil: time.Now().UTC().Add(5 * time.Minute)}
+	if err := s.nodeIdentity.SignDescriptor(&d); err != nil {
+		return err
+	}
 	body := map[string]any{"authority_node_id": s.nodeIdentity.NodeID(), "public_key": s.nodeIdentity.PublicKey(), "key_fingerprint": s.nodeIdentity.Fingerprint(), "descriptor": d}
 	if nonces, ok := r.URL.Query()["challenge"]; ok {
 		if len(nonces) != 1 || !discovery.ValidChallenge(nonces[0]) {

@@ -1,6 +1,6 @@
 # DDP discovery control v1
 
-控制域拥有持久节点身份、管理员批准的直接成员目录、成员快照与 [ScopeManifest](scope-control-format.md)。它不拥有资源 ACL、集合内容或跨节点执行任务。节点被批准不授予任何资源权限。本阶段不派发节点凭据、不扫描地址、不调用登记的远端 URL。
+控制域拥有持久节点身份、管理员批准的直接成员目录、成员快照与 [ScopeManifest](scope-control-format.md)。它不拥有资源 ACL、集合内容或跨节点执行任务。节点被批准不授予任何资源权限；不扫描地址。已批准成员的租约由目录自动 pull 续期，不允许同伴 push 修改管理员目录（写端点仅接受管理员会话）。
 
 ## 身份与认证握手
 
@@ -14,9 +14,9 @@
 
 ## 管理员目录
 
-仅管理员会话可以 `POST /api/v1/federation/nodes`，body 为 `{descriptor,public_key,visible_to_org?,allowed_subjects?}`。public_key 必须匹配 node_id；descriptor 的 revision 和 valid_until 必须有效，协议包含 ddp-discovery/1，端点只接受不含凭据/query/fragment 的 HTTP(S) URL。登记为 pending，不发出任何请求。`visible_to_org` 默认 false；allowed_subjects 是本组织真实成员 ID。每次重新登记必须更高 descriptor revision；已撤销 ID 不可重用（需另行密钥轮换协议）。本阶段只允许本中心到成员的直接无环路径，不接受客户端指定 next-hop/path。
+仅管理员会话可以 `POST /api/v1/federation/nodes`，body 为 `{descriptor,public_key,visible_to_org?,allowed_subjects?}`。public_key 必须匹配 node_id；descriptor 的 revision 和 valid_until 必须有效，协议包含 ddp-discovery/1，端点只接受不含凭据/query/fragment 的 HTTP(S) URL。登记为 pending，不发出任何请求。`visible_to_org` 默认 false；allowed_subjects 是本组织真实成员 ID。配置变更必须更高 descriptor revision；同 revision 仅允许配置/公钥/共享范围不变且 valid_until 严格增加的租约刷新，保留原审批。已撤销 ID 不可重用（需另行密钥轮换协议）。仅允许本中心到成员的直接无环路径，不接受客户端指定 next-hop/path。
 
-`POST .../nodes/{node_id}/approve` 将 pending 变成 approved。`POST .../nodes/{node_id}/revoke` 从 pending/approved 变成 revoked（幂等）。`GET .../nodes` 仅管理员列出配置。NodeDescriptor、派生 RouteRecord、审批状态分开返回。`configured=true` 只表示批准的配置；`health=unknown`、`accepting_admissions=false`，没有生产者时不得假称可达。管理员批准并不证明远端持有私钥，node credential/trust handshake 尚未完成，跨节点操作保持关闭。
+`POST .../nodes/{node_id}/approve` 将 pending 变成 approved。`POST .../nodes/{node_id}/revoke` 从 pending/approved 变成 revoked（幂等）。`GET .../nodes` 仅管理员列出配置。NodeDescriptor、派生 RouteRecord、审批状态分开返回。`configured=true` 只表示批准的配置；`health=unknown`、`accepting_admissions=false`，续期成功不等于可接单。管理员批准并不证明远端持有私钥；后续请求仍须使用限定节点凭据。
 
 ## 持久成员快照
 
@@ -35,3 +35,15 @@
 公开 `GET /api/v1/federation/node?challenge=<nonce>` 支持单个32..64字符、无padding且规范编码的base64url nonce。除公共描述外返回 `proof: {schema: ddp-node-proof/1,nonce,node_id,endpoint,issued_at,expires_at,signature}`。endpoint只来自 `PublicBaseURL`（去末尾 `/`），不读取 Host、Forwarded 或客户端指定地址。部署使用规范ASCII HTTP(S) URL；国际域名先转换为punycode。
 
 签名消息是UTF8 `JSON.stringify([schema,nonce,node_id,endpoint,issued_at,expires_at])`；Go关闭HTML转义以与JS一致。时间是UTC RFC3339整秒，有效60秒；signature是Ed25519签名的raw URL base64。public_key仍是标准带padding的base64。Provider在读取用户secret前验证公钥摘要派生node_id、保存的节点、当前随机nonce、配置endpoint、时间窗和签名；仅返回可复制的公钥或node_id不能通过配对。证明不授予资源访问权限，也不能代替后续已认证profile与workspace核对。
+
+## 自动租约续期（directory pull）
+
+目录每 `DISCOVERY_RENEWAL_INTERVAL_SECONDS`（默认60，范围1..120，低于公开描述300秒TTL）调度已批准直接成员。使用独立的短轮询（最多1秒，不超过续期间隔的四分之一）领取到期行，成功后的下一次到期是成功时间加配置间隔，不因错过同频ticker而翻倍。最多四个并发请求，每个两秒超时；单次领取最多32个到期成员，满批立即继续领取，直到非满批或ctx取消再等待轮询。多副本使用数据库行锁领取。pending / revoked 不领取；请求与回写之间若管理员改动或撤销，旧观测不得回写。
+
+目标只由**已批准登记**的唯一 federation 端点去末尾 `/` 后加 `/node` 得到；不读取拉回描述里的地址作下一跳，不跟重定向、不读代理环境变量。响应 authority_node_id / public_key 与批准值逐字一致，描述身份、公钥、协议和有效期验证通过，revision与配置不变，`publisher_signature` 必须由批准的 Ed25519 公钥验过；只有 valid_until 严格增加且不超过当前观测时间加10分钟（5分钟发布TTL加有界时钟偏移余量）才刷新。拉取及事务回写均检查此上限，防止任意远未来租约在失败后长期假新鲜。配置变更仍需人工更高修订登记和批准。
+
+`publisher_signature` 使用标准带padding base64，非空值必须为严格规范base64、解码恰好64字节（拒绝换行和非零padding bits）。签名消息为 `ddp-node-descriptor/1\n` 加 UTF8 无空白、无HTML转义JSON数组：
+`[schema,node_id,protocol_versions,controlled_endpoints.map(e=>[e.purpose,e.url]),auth_methods,enumerate_members,catalog_events,revision,valid_until]`。
+签名描述的所有字符串字段限定ASCII（码点0..127）；端点URL仍须满足既有HTTP(S)无凭据/query/fragment限制。这样Go、JavaScript与Python不会在U+2028/U+2029或非ASCII转义上产生歧义。时间规范为UTC RFC3339**整秒** `YYYY-MM-DDTHH:MM:SSZ`，发布时去除小数秒，验签不接受小数秒；数组顺序与配置一致，不包括签名本身。ASCII控制字符按JSON标准使用短转义或小写 `\\u00xx`，引号/反斜杠正常转义，`/ < > &` 不转义。Python等价为 `json.dumps(array, ensure_ascii=False, separators=(",", ":"))`，JavaScript为 `JSON.stringify(array)`。该签名绑定完整描述和租约，不证明资源权限、健康或接单意愿。
+
+失败持久保留 `renewal_attempts,renewal_last_attempt_at,renewal_next_attempt_at,renewal_last_error,renewal_last_success_at`，按间隔指数退避，上限120秒；日志 `discovery renewal` 含 node_id / outcome / error（不含凭据）。失败不改 descriptor.valid_until，过期仍由 API 的 descriptor / route.valid_until 与范围展开显示为过期，不能靠最近一次成功假称新鲜。成功清除连续失败计数/原因。旧分页快照的冻结描述/有效期不被延长；重新创建快照才看到新租约。可通过成员行的成功时间与 valid_until 增长、失败原因/计数以及上述日志验证运行。
