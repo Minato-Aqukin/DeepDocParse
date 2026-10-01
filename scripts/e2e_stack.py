@@ -365,12 +365,12 @@ async def main() -> int:
                      "index_status=failed + index_error，问答会返回 "
                      "degraded=embedding_unavailable —— 那是**可见降级**，不是静默失败。"
                      "有 GPU 的机器上加 --with-embeddings 再跑")
-            # **要等它落终态。** `indexing` 只是"还在跑"，直接判会得到一个
-            # 取决于时序的结论 —— 而那种断言迟早会变成"偶尔红一下"，
-            # 然后被人当成 flaky 关掉
+            # **要等它落终态。** `pending`（归档后、worker 认领前）与 `indexing`
+            # 都只是"还没完"，直接判会得到一个取决于时序的结论 —— 2026-10 CI 就
+            # 因为谓词漏了 `pending`，在 worker 认领前立刻返回而偶尔红
             settled = await _poll(
                 http, f"/api/documents/{document['id']}",
-                lambda d: d.get("index_status") not in ("indexing", "queued"),
+                lambda d: d.get("index_status") in ("failed", "ready"),
                 timeout=args.timeout)
             status = (settled or {}).get("index_status")
             if status == "failed":
