@@ -2530,7 +2530,8 @@ def _wiki_failure(reason: str) -> dict:
     head = str(reason or "").partition(":")[0]
     if reason not in FEDERATED_ANSWER_REASON_VALUES and head not in (
             "peer_unavailable", "delegated_admission_not_accepted",
-            "delegated_execution_failed", "receipt_binding_mismatch"):
+            "delegated_execution_failed", "receipt_binding_mismatch",
+            "delegated_answer_rejected"):
         # 未声明代码不伪装成契约原因：这类只能是内部 bug，进 upstream_error。
         reason = "upstream_error"
     return {**federation.unavailable_answer(reason), "validation_state": "failed"}
@@ -2686,8 +2687,11 @@ async def _delegated_wiki_draft(row: FederationRequest, *, plan: dict, step: dic
             return _wiki_failure(f"delegated_execution_failed:"
                                  f"{_reason_detail(status.get('error') or status.get('state'))}")
         draft = status.get("wiki_draft")
-        if not isinstance(draft, dict) or draft.get("validation_state") != "passed":
+        if not isinstance(draft, dict) or draft.get("validation_state") not in ("passed", "failed"):
             return _wiki_failure("delegated_answer_missing")
+        if draft["validation_state"] == "failed":
+            return _wiki_failure(
+                f"delegated_answer_rejected:{_reason_detail(draft.get('error'))}")
         # C 原始 kernel 草稿不静默丢关系/审计字段：pages/relations/provider/
         # limits/protocol/decoder/semantic_review/source_type 全量带回 A，
         # 提交前再按本次证据编号域校验（`_validate_remote_wiki_draft`）。
@@ -3434,6 +3438,8 @@ async def cancel(session: AsyncSession, actor: Actor, root_task_id: str, *,
         ledger_row.evidence_sufficiency = ledger["evidence_sufficiency"]
         ledger_row.counts_json = ledger["counts"]
         ledger_row.updated_at = now
+    row.retrieval_completeness = ledger["retrieval_completeness"]
+    row.evidence_sufficiency = ledger["evidence_sufficiency"]
     row.status = "cancelled"
     row.error = "cancelled"
     row.updated_at = now

@@ -115,6 +115,13 @@ class ModelEntry(BaseModel):
     adapter: str | None = None
 
 
+def chat_request_defaults(options: dict) -> dict:
+    """Select declared chat extensions only; engine metadata is not a chat payload."""
+    if "chat_template_kwargs" in options:
+        return {"chat_template_kwargs": options["chat_template_kwargs"]}
+    return {}
+
+
 # 段名 -> 该段条目缺省具备的能力。**只是缺省值**：条目自己写了 capabilities 就以它为准
 SECTION_CAPABILITIES = {
     "vqa_models": ["vision"],

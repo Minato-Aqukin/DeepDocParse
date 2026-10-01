@@ -20,7 +20,7 @@ import json
 
 import httpx
 
-from ddp_gateway.config import settings
+from ddp_gateway.config import chat_request_defaults, settings
 from ddp_core import extract_format as fmt
 from ddp_core import crops
 from ddp_core.extract_format import CoerceError, FieldSpec, SchemaSpec, coerce_value
@@ -181,7 +181,8 @@ async def _chat(ctx: ExtractContext, messages: list[dict], *,
         ctx.usage["chat_calls"] += 1
         resp = await ctx.http.post(
             f"{entry.endpoint}/v1/chat/completions",
-            json={"model": entry.adapter or name, "messages": messages, "stream": False},
+            json={**chat_request_defaults(entry.options),
+                  "model": entry.adapter or name, "messages": messages, "stream": False},
         )
         if resp.status_code != 200:
             return None

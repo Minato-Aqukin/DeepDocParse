@@ -62,7 +62,7 @@ DeepDocParse/
 │       ├── config.py       # 配置 + 注册表加载
 │       ├── auth.py         # service token 校验
 │       ├── routers/        # parse / chat / health
-│       ├── services/       # mineru_client / vqa_client / task_store
+│       ├── services/       # mineru_client / task_store
 │       └── worker/         # ARQ 任务：结果归档链（v2 追加向量化步骤）
 ├── mcp_server/             # FastMCP：直读 PG/MinIO 的五个语料工具 + deprecated ask_document
 ├── docker/

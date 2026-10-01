@@ -7,6 +7,17 @@
 环境变量名 = 字段名大写（pydantic-settings 默认规则，未设前缀）。
 配置来源优先级：环境变量 > 服务自己的 `.env` > 下表默认值。
 
+模型请求扩展由 `MODELS_CONFIG` 指向的注册表声明，不按模型名字猜测。
+在 `vqa_models` 条目的 `options.chat_template_kwargs` 中写
+`{enable_thinking: false}`，网关会把它作为 `/v1/chat/completions` 的模板默认值
+发送给运行时（请求显式提供的 `chat_template_kwargs` 优先）。抽取及视觉出处核对
+使用所选 `vqa_models` 条目；VLM OCR 使用对应 `parse_engines` 条目的同名选项。
+各路径复用同一声明边界，未声明的模型不添加该参数；`transcribe_prompt`、凭据等
+其他 options 不会被当成 chat 参数发送。JSON 和 SSE 正文仍原样透传，不清洗
+`</think>`。仅对确认支持该扩展的运行时声明。
+语料 API 的 `CHAT_URL` 留空、`CHAT_MODEL` 选对应注册表条目时，问答和联邦 Wiki
+共享此网关边界；显式直连 `CHAT_URL` 绕过注册表，模板策略须由所接运行时配置。
+
 共 **21** 项。
 
 ## 通用

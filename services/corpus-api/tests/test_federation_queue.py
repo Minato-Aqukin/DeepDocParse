@@ -16,8 +16,10 @@
 受信任的同组织远端节点（`PeerCaller` 现签）；协调者本地接口（`/api/v1/tasks`
 等）仍是本地用户身份，不走凭证。
 """
+import json
 from datetime import timedelta
 
+import httpx
 import pytest
 from sqlalchemy import func, select, update
 
@@ -27,6 +29,7 @@ from ddp_corpus import federation, federation_tasks, reconcile
 from ddp_corpus.config import settings
 from ddp_corpus.deps import Actor
 from ddp_corpus.errors import APIError
+from ddp_corpus.federation_peers import PeerDirectory, parse_peers
 from ddp_corpus.federation_models import (
     CoverageEntry,
     CoverageLedger,
@@ -36,8 +39,9 @@ from ddp_corpus.federation_models import (
 )
 from ddp_corpus.main import app
 from ddp_corpus.models import Task, new_id, utcnow
-from ddp_corpus.queue import is_terminal
-from node_credentials_fixture import caller, install
+from ddp_corpus.queue import claim, is_terminal
+from node_credentials_fixture import LocalControlSigner, caller, install
+from test_federation_answer_delegation import peer_with_excerpt, ready_document
 from test_federation_admissions import admission_body, exec_constraints, post_admission
 from test_federation_probes import (
     NODE,
@@ -46,11 +50,15 @@ from test_federation_probes import (
     publish_collection,
 )
 from test_federation_tasks import (
+    PEER_NODE,
+    StubPeer,
     approve_task,
     crash_before_ledger,
     create_intent,
     exploration,
+    member,
     plan_task,
+    scope_manifest,
     task_spec,
 )
 
@@ -343,6 +351,9 @@ async def test_cancel_before_worker_runs_marks_coordinator_cancelled(
     coverage = (await actor_client.get(f"/api/v1/tasks/{run['root']}/coverage")).json()
     assert coverage["counts"]["total_targets"] == 1
     assert {entry["state"] for entry in coverage["entries"]} == {"not_attempted"}
+    assert status["retrieval_completeness"] == coverage["retrieval_completeness"] == "partial"
+    assert status["evidence_sufficiency"] == coverage["evidence_sufficiency"] == "insufficient"
+    assert cancelled.json()["retrieval_completeness"] == "partial"
     # 取消在"还没跑过"时现建覆盖账本行：counts 必须跟逐目标记录一致，
     # 不许留一份空的 `{}`。
     ledger = await session.get(CoverageLedger, run["root"], populate_existing=True)
@@ -697,6 +708,98 @@ async def test_dead_queue_task_fails_execution_and_resume_reruns_it(
     assert execution.generation > stale_generation, "补做必须前进代次"
     assert await session.scalar(select(func.count()).select_from(
         FederationAdmission)) == 1, "补做复用同一条受理，不得新造"
+
+
+@pytest.mark.parametrize("compute_admitted", [False, True])
+async def test_worker_reclaim_reconciles_durable_data_and_compute_admissions(
+        actor_client, session, app_state, monkeypatch, compute_admitted):
+    """Reclaim reuses durable admissions, while a genuinely new C attempt is charged."""
+    from ddp_corpus.db import get_sessionmaker
+    from ddp_worker.handlers import federation_plan
+    from ddp_worker.runner import WorkerState
+
+    compute_node = "node-compute-c"
+    data_peer = peer_with_excerpt()
+    compute_peer = StubPeer(can_generate=True, answer_document=ready_document())
+    data_transport, compute_transport = data_peer.transport(), compute_peer.transport()
+    peers = parse_peers(json.dumps({
+        PEER_NODE: {"endpoint": "https://peer.example"},
+        compute_node: {"endpoint": "https://compute.example"},
+    }))
+
+    def handler(request):
+        if request.url.host != "compute.example":
+            return data_transport.handle_request(request)
+        response = compute_transport.handle_request(request)
+        body = response.json()
+        for field in ("target_node_id", "executor_node_id"):
+            if field in body:
+                body[field] = compute_node
+        return httpx.Response(response.status_code, json=body)
+
+    def factory(actor, delegation=None):
+        return PeerDirectory(
+            peers, actor=actor, delegation=delegation,
+            signer=LocalControlSigner(issuer_node_id=NODE),
+            transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(federation_tasks, "peer_directory", factory)
+    intent = await create_intent(
+        actor_client,
+        spec=task_spec(scope="federation_public", scope_ref="scope-1",
+                       mode="exhaustive_scope"),
+        consent=exploration(recipients=(PEER_NODE, compute_node)),
+        manifest=scope_manifest([member("peer-collection-1", PEER_NODE)],
+                                revisions=[(NODE, 1), (PEER_NODE, 1), (compute_node, 1)]))
+    root = intent["root_task_id"]
+    plan = await plan_task(actor_client, root)
+    assert next(step for step in plan["steps"] if step["operation"] == "answer")[
+        "executor_node_id"] == compute_node
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE, compute_node))
+    submitted = await actor_client.post(
+        "/api/v1/tasks", headers={"Idempotency-Key": "crash-durable-b-c"},
+        json={"root_task_id": root, "plan_digest": plan["plan_digest"]})
+    assert submitted.status_code == 202, submitted.text
+    async with get_sessionmaker()() as worker_session:
+        task = (await claim(worker_session, ["federation_plan"]))[0]
+    state = WorkerState(http=app_state.http, storage=app_state.storage,
+                        search_index=app_state.search_index)
+    real_answer = federation_tasks._answer_result
+
+    async def crash_before_coverage(*args, **kwargs):
+        if compute_admitted:
+            result = await real_answer(*args, **kwargs)
+            assert result["validation_state"] == "passed", result
+        raise RuntimeError("worker died after durable admissions, before coverage commit")
+
+    with monkeypatch.context() as crash:
+        crash.setattr(federation_tasks, "_answer_result", crash_before_coverage)
+        with pytest.raises(RuntimeError, match="worker died after durable admissions"):
+            await federation_plan(task, state)
+    assert len(data_peer.accepted) == 1
+    assert len(compute_peer.accepted) == int(compute_admitted)
+    assert await session.scalar(select(func.count()).select_from(CoverageEntry).where(
+        CoverageEntry.root_task_id == root)) == 0
+    before = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert before["status"] == "running"
+    assert before["used_budget"]["hops"] == (3 if compute_admitted else 2)
+    assert before["used_budget"]["generation_tokens"] == (
+        plan["budget"]["max_generation_tokens"] if compute_admitted else 0)
+    await session.execute(update(Task).where(Task.id == task.id).values(
+        lease_until=utcnow() - timedelta(seconds=1)))
+    await session.commit()
+
+    await drain_tasks(app_state)
+    final = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert final["status"] == "succeeded", final
+    assert final["result"]["answer"] == "peer cited answer [1]"
+    assert final["result"]["validation_state"] == "passed"
+    assert final["result"]["counts"]["succeeded"] == 1
+    assert final["used_budget"]["hops"] == 3
+    assert final["used_budget"]["generation_tokens"] == plan["budget"]["max_generation_tokens"]
+    assert final["used_budget"]["requests"] > before["used_budget"]["requests"]
+    assert len(data_peer.admissions) == len(compute_peer.admissions) == 1
+    assert any(path.endswith("/admissions/lookup") for _, path, _ in data_peer.calls)
 
 
 async def test_resume_reconciles_target_admitted_before_the_crash(

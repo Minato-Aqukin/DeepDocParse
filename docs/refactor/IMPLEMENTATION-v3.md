@@ -119,6 +119,10 @@ t3code参考HEAD：`b1e223e2b0d87124883b1410ab52dd6a1338e40d`（2026-09-12读取
   写出前检查代码已声明、细节只给允许的五个代码；守卫改为按取值放行后缀、认关键字参数、
   f-string 前缀拼错也红。② 构造游标里的孤立代理字符（SQLite）与 NUL（PG）会 500 —— 游标里的
   id 限定为 `[A-Za-z0-9_-]{1,64}`，base64 严格解码。列表查询改为只加载列表项需要的列。
+- **委托 Wiki 拒绝原因（ABC 演练修复）**：远端执行 `succeeded` 不代表草稿校验通过。
+  `wiki_draft.validation_state=failed` 写出 `delegated_answer_rejected:<error>`，细节复用
+  字符集清洗与 64 字符上限（例如 `wiki_generation_invalid`）；只有缺失或未成形的草稿
+  才是 `delegated_answer_missing`。不发布失败草稿，也不改变答案协议。
 - **记下的后续项（本次不做）**：列表的复合索引 `(organization_id, actor_id, created_at, root_task_id)`
   （当前按组织索引扫描再过滤排序，大组织会退化）；`GET /api/v1/tasks/%00` 与
   `POST /api/v1/task-plans {"root_task_id": "\u0000"}` 在 PG 上 500（既有问题，路径与请求体的

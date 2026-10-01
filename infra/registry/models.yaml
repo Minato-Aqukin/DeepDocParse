@@ -42,9 +42,13 @@ vqa_models:
     # 视觉核对那条路仍然走 OCR-2。没有 no_instruct 就是这里的关键：
     # 抽取平面挑模型时只会挑中它。
     capabilities: [instruct]
+    options:
+      chat_template_kwargs:
+        enable_thinking: false
   # 扩展示例（去注释 + compose 加容器即可）：
   # qwen3-vl:
   #   endpoint: "http://vqa-qwen:8000"
+  #   options: {chat_template_kwargs: {enable_thinking: false}}
   # paddleocr-vl:                       # deepseek-ocr.rs 多后端本身支持
   #   endpoint: "http://vqa-paddle:8000"
 

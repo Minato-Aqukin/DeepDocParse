@@ -58,7 +58,6 @@ evidence/citation 的唯一实现继续留在 Python。
 | `routers/rerank.py` | 67 | 保留 | |
 | `errors.py` | 52 | 保留 | OpenAI 风格错误体 |
 | `routers/embeddings.py` | 48 | 保留 | |
-| `services/vqa_client.py` | 33 | 保留 | |
 | `auth.py` | 20 | 保留并重构 | service token 校验；生产改短期服务 token / mTLS（§14） |
 
 ## 3. `DeepDocParse-Web/backend/app/` —— 一分为二

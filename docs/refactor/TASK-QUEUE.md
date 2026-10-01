@@ -48,6 +48,13 @@ queued → claimed(generation, lease_until) → running → succeeded / failed
 外层任务被取消时同样等待两个子协程回收，保留未完成任务供租约过期后接管。
 成功路径也先停止心跳，避免落终态时仍有续租事务并行写入。
 
+联邦协调任务的队列接管（`tasks.attempts > 1`）必须先按 `(root, step)` 业务键
+对账，即使 A 尚未写任何 coverage 行，B/C 也可能已经持久受理或完成执行。
+lookup、状态轮询和证据读取仍消耗 request/bytes；只有 lookup 确认尚未受理时
+才重新发送 admission 并消耗 hops、外发字节与生成 token。根预算既不重置也不退款。
+显式取消则把未完成目标保留为 `not_attempted`，并在同一事务中把任务的
+`retrieval_completeness` / `evidence_sufficiency` 同步为覆盖账本重算后的值。
+
 ## 两层 claim 不是重复
 
 索引任务上有两层：

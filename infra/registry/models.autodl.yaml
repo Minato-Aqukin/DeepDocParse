@@ -51,6 +51,9 @@ vqa_models:
     # 视觉核对那条路仍然走 OCR-2。没有 no_instruct 就是这里的关键：
     # 抽取平面挑模型时只会挑中它。
     capabilities: [instruct]
+    options:
+      chat_template_kwargs:
+        enable_thinking: false
 
 parse_engines:
   # ---- 「基于大语言模型的文字识别」这条线的落点 ----

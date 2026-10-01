@@ -18,6 +18,8 @@ from ddp_core.verification import TRANSCRIBE_PROMPT
 from ddp_gateway.services import extraction
 from ddp_gateway.services.task_store import TaskStore
 from ddp_gateway.worker.tasks import run_extraction
+from ddp_gateway.config import ModelEntry, Registry
+from test_layout import _one_line_pdf
 
 # 抽值走的是**指令模型**的端点（见 models.yaml 的 qwen3-4b-instruct）。
 # OCR 专用模型标了 no_instruct，抽值路径会跳过它 —— 拿它硬抽只会
@@ -203,6 +205,46 @@ async def test_extraction_end_to_end(app_state, worker_ctx):
     # 文档里没有的字段：not_found，**不是 error，也不是编一个值**
     assert result["fields"]["penalty"]["status"] == "not_found"
     assert result["fields"]["penalty"]["value"] is None
+
+
+@respx.mock
+async def test_extraction_declared_template_preserves_citation_verification(app_state, monkeypatch):
+    """A leaked closing-think marker must not masquerade as a bad source transcript."""
+    monkeypatch.setattr(extraction.settings, "extract_mismatch_threshold", 0.95)
+    app_state.registry = Registry(vqa_models={
+        "hybrid": ModelEntry(
+            endpoint=CHAT, capabilities=["instruct", "vision"],
+            options={"chat_template_kwargs": {"enable_thinking": False},
+                     "transcribe_prompt": "Transcribe the source exactly."})})
+    pdf_url = "https://files.example.com/template-source.pdf"
+    respx.get(pdf_url).mock(return_value=Response(
+        200, content=_one_line_pdf(0, lines=(("VERSION V5 RELEASE", 60, 730),))))
+
+    def provider(request):
+        body = json.loads(request.content)
+        if set(body) - {"model", "messages", "stream", "chat_template_kwargs"}:
+            return Response(400, json={"error": "unknown provider parameter"})
+        content = body["messages"][-1]["content"]
+        answer = ("VERSION V5 RELEASE" if isinstance(content, list) else
+                  json.dumps({"found": True, "value": "V5", "source": 1}))
+        if body.get("chat_template_kwargs", {}).get("enable_thinking") is not False:
+            answer = "</think>" + answer
+        return Response(200, json={"choices": [{"message": {"content": answer}}]})
+
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=provider)
+    ctx = extraction.ExtractContext(
+        store=app_state.task_store, http=app_state.http, registry=app_state.registry,
+        doc_hash="f" * 64, file_url=pdf_url, verify=True,
+        corpus=[{"text": "VERSION V5 RELEASE", "page_idx": 0, "bbox": [50, 40, 250, 80],
+                 "page_size": [612, 792], "block_type": "text"}])
+    result = await extraction.run(ctx, fmt.parse_schema({
+        "type": "object", "properties": {
+            "version": {"type": "string", "description": "V5"}}}))
+    field = result["fields"]["version"]
+    assert field["status"] == "found"
+    assert field["value"] == "V5"
+    assert field["verified"] is True
+    assert field["citations"][0]["doc_hash"] == "f" * 64
 
 
 @respx.mock

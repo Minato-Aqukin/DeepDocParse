@@ -120,7 +120,11 @@ async def federation_plan(task: Task, state: WorkerState) -> str | None:
     try:
         async with sessionmaker() as session:
             await federation_tasks.run_queued(
-                session, actor, root_task_id, retry_only=bool(payload.get("retry_only")),
+                session, actor, root_task_id,
+                # A reclaimed queue task may have committed executor admissions
+                # before coverage was persisted. Reconcile business keys first;
+                # only genuinely new admissions consume hop/token allowance.
+                retry_only=bool(payload.get("retry_only")) or task.attempts > 1,
                 now=utcnow(), http=state.http, index=state.search_index)
     finally:
         stop.set()

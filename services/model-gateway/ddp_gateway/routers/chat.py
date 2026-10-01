@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
 from ddp_gateway.auth import require_service_token
+from ddp_gateway.config import chat_request_defaults
 from ddp_gateway.errors import APIError
 
 router = APIRouter(tags=["vqa"], dependencies=[Depends(require_service_token)])
@@ -47,6 +48,8 @@ async def chat_completions(request: Request):
     entry = registry.vqa_models.get(model)
     if entry is None:
         raise APIError(404, f"model not found: {model}", "invalid_request_error", "model_not_found")
+
+    body = {**chat_request_defaults(entry.options), **body}
 
     # 并发上限：满载快速失败（挡洪峰；真正的推理排队在运行时自己的 batch 里）
     sem: asyncio.Semaphore = state.vqa_semaphore

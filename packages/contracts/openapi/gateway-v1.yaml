@@ -126,6 +126,11 @@ paths:
         完全遵循 OpenAI 协议：messages 支持 image_url content part。
         model 字段路由到 models.yaml vqa_models；缺省用 default 模型。
         gateway 透传到对应运行时（deepseek-ocr.rs / vLLM）。
+        注册表 options.chat_template_kwargs 若显式声明，作为请求的 chat_template_kwargs
+        默认值透传（请求方显式提供的值优先）；未声明时不添加该运行时扩展参数。
+        例如混合推理模型的非推理生成可声明 {enable_thinking: false}，
+        避免模板的 </think> 标记进入正文。其他注册表选项不作为 chat 参数发送；
+        JSON/SSE 响应仍原样透传，不清洗生成内容。
       operationId: chatCompletions
       responses:
         "200": { description: OpenAI 兼容响应（含 SSE 流式） }

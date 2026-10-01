@@ -118,6 +118,28 @@ borndigital），起了模型线之后再换。
 `DEFAULT_PARSE_ENGINE` 决定。有文字层的 PDF 用 borndigital（零模型零显存），
 需要扫描件 / 表格 / 公式时再点名 `engine=vlm-ocr`。
 
+混合推理模型的非推理生成还需关闭**聊天模板**，仅设置 reasoning budget 为 0
+并不保证正文里没有 `</think>`。在支持该参数的运行时对应条目中声明：
+
+```yaml
+vqa_models:
+  qwen3-4b-instruct:
+    endpoint: "http://chat-instruct:8000"
+    capabilities: [instruct]
+    options:
+      chat_template_kwargs:
+        enable_thinking: false
+```
+
+随仓库的 `models.yaml`、`models.autodl.yaml` 已为该 Qwen3 条目声明。
+网关将模板选项作为请求默认值发送（请求方显式值优先），不按模型名特殊处理，
+也不向未声明的 provider 添加未知参数；返回的 JSON/SSE 正文不做标记剥离。
+抽取与视觉出处核对也沿用所选 `vqa_models` 条目的模板声明；VLM OCR 则读取
+`parse_engines` 对应条目的 `options.chat_template_kwargs`，而非另一个模型条目。
+corpus-api 的 `CHAT_URL` 留空并设置对应 `CHAT_MODEL`，普通问答及联邦生成会走
+这个注册表边界；显式直连 `CHAT_URL` 时由目标运行时配置模板策略。
+关闭模板只修复 JSON 前缀泄漏，不能保证引用正确、页面预算或多来源覆盖通过验收。
+
 ### 公网暴露：Cloudflare Tunnel
 
 ```bash

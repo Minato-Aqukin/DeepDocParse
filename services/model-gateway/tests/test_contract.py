@@ -348,6 +348,98 @@ async def test_chat_completions_openai_compat(client, app_state):
     assert [m["id"] for m in resp.json()["data"]] == ["deepseek-ocr-2", "qwen3-4b-instruct"]
 
 
+
+@pytest.mark.parametrize("stream", [False, True])
+@respx.mock
+async def test_chat_registry_disables_thinking_template_before_generation(
+        client, app_state, stream):
+    """llama.cpp's template prefix must never reach JSON consumers or SSE content."""
+    from ddp_gateway.config import ModelEntry, Registry
+
+    app_state.registry = Registry(vqa_models={
+        "hybrid": ModelEntry(endpoint="http://hybrid:8000", default=True,
+                             options={"chat_template_kwargs": {"enable_thinking": False}}),
+    })
+    plan = '{"pages":[{"title":"GPIO","references":[1]}]}'
+
+    def provider(request):
+        payload = json.loads(request.content)
+        disabled = payload.get("chat_template_kwargs", {}).get("enable_thinking") is False
+        content = plan if disabled else "</think>\n" + plan
+        if payload.get("stream"):
+            event = {"choices": [{"delta": {"content": content}}]}
+            return Response(200, content=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+                            headers={"content-type": "text/event-stream"})
+        return Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    respx.post("http://hybrid:8000/v1/chat/completions").mock(side_effect=provider)
+    response = await client.post("/v1/chat/completions", json={
+        "messages": [{"role": "user", "content": "Plan a GPIO page as JSON."}],
+        "stream": stream,
+    })
+    assert response.status_code == 200
+    if stream:
+        event = json.loads(response.text.splitlines()[0].removeprefix("data: "))
+        content = event["choices"][0]["delta"]["content"]
+    else:
+        content = response.json()["choices"][0]["message"]["content"]
+    assert content == plan
+    assert json.loads(content) == {"pages": [{"title": "GPIO", "references": [1]}]}
+
+
+@respx.mock
+async def test_chat_provider_without_template_declaration_receives_no_extensions(
+        client, app_state):
+    from ddp_gateway.config import ModelEntry, Registry
+
+    app_state.registry = Registry(vqa_models={
+        "strict": ModelEntry(endpoint="http://strict:8000", options={
+            "transcribe_prompt": "Free OCR.", "token": "registry-private-token",
+        }),
+    })
+
+    def strict_provider(request):
+        payload = json.loads(request.content)
+        unknown = set(payload) - {"model", "messages", "stream"}
+        if unknown:
+            return Response(400, json={"error": "unknown parameters"})
+        return Response(200, json={"choices": [{"message": {"content": "GPIO is input-only."}}]})
+
+    respx.post("http://strict:8000/v1/chat/completions").mock(side_effect=strict_provider)
+    response = await client.post("/v1/chat/completions", json={
+        "model": "strict", "messages": [{"role": "user", "content": "Explain GPIO."}],
+        "stream": False,
+    })
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "GPIO is input-only."
+
+
+@respx.mock
+async def test_chat_explicit_template_override_and_generated_content_are_preserved(
+        client, app_state):
+    from ddp_gateway.config import ModelEntry, Registry
+
+    app_state.registry = Registry(vqa_models={
+        "hybrid": ModelEntry(endpoint="http://hybrid:8000",
+                             options={"chat_template_kwargs": {"enable_thinking": False}}),
+    })
+
+    def thinking_provider(request):
+        payload = json.loads(request.content)
+        thinking = payload.get("chat_template_kwargs", {}).get("enable_thinking") is True
+        output = "</think>\nExplicit reasoning answer." if thinking else "Reasoning disabled."
+        return Response(200, json={"choices": [{"message": {"content": output}}]})
+
+    respx.post("http://hybrid:8000/v1/chat/completions").mock(side_effect=thinking_provider)
+    response = await client.post("/v1/chat/completions", json={
+        "model": "hybrid", "messages": [{"role": "user", "content": "Enable reasoning."}],
+        "chat_template_kwargs": {"enable_thinking": True},
+    })
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == (
+        "</think>\nExplicit reasoning answer.")
+
+
 @respx.mock
 async def test_chat_stream_error_releases_semaphore(client, app_state):
     """回归（M2 验收发现的泄漏）：上游流中途断开必须归还并发 permit + 关闭连接，

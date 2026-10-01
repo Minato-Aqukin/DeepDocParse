@@ -47,6 +47,7 @@ import re
 
 import httpx
 
+from ddp_gateway.config import chat_request_defaults
 from ddp_gateway.services import dsocr2, layout
 from ddp_core import crops
 
@@ -305,6 +306,7 @@ async def recognize(http: httpx.AsyncClient, *, endpoint: str, model: str,
 
     dialect = dialect_of(options)
     prompt, extra = _request_shape(dialect, options)
+    extra = {**chat_request_defaults(options), **extra}
     semaphore = asyncio.Semaphore(max(concurrency, 1))
 
     async def one(page_idx: int, size: tuple[float, float]) -> tuple[dict, bool]:

@@ -2600,6 +2600,58 @@ async def test_compute_only_wiki_plan_requires_both_directed_data_edges(
     await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
 
 
+@pytest.mark.parametrize(("draft", "reason"), [
+    ({"validation_state": "failed", "error": "wiki_generation_invalid"},
+     "delegated_answer_rejected:wiki_generation_invalid"),
+    ({"validation_state": "failed", "error": "<script>\n:" + "x" * 100},
+     "delegated_answer_rejected:_script___" + "x" * 54),
+    (None, "delegated_answer_missing"),
+    ("not a draft", "delegated_answer_missing"),
+    ({}, "delegated_answer_missing"),
+])
+async def test_delegated_wiki_rejection_is_visible_at_task_api(
+        actor_client, session, monkeypatch, draft, reason):
+    class WikiPeer(StubPeer):
+        def transport(self):
+            inner = super().transport()
+
+            def handler(request):
+                path = request.url.path
+                if path.endswith("/probes"):
+                    body = json.loads(request.content)
+                    if body.get("operation") == "wiki.pages":
+                        return httpx.Response(201, json=peer_capability_probe(
+                            operation="wiki.pages", readiness="ready", can_generate=False))
+                response = inner.handle_request(request)
+                if "/tasks/" in path:
+                    status = response.json()
+                    if self.executions.get(path.rsplit("/", 1)[1]) == "wiki-pages-1":
+                        status["wiki_draft"] = draft
+                        return httpx.Response(200, json=status)
+                return response
+
+            return httpx.MockTransport(handler)
+
+    peer = WikiPeer()
+    install_peer(monkeypatch, peer)
+    _, version, _, _, _ = await indexed_source(session)
+    collection = await publish_collection(actor_client, version)
+    manifest = scope_manifest([member(collection["collection_id"])],
+                              revisions=[(NODE, 1), (PEER_NODE, 1)])
+    spec = task_spec(scope="federation_public", scope_ref="scope-1", operation="wiki.pages")
+    spec["requirements"] = {"wiki": {"title": "Verified source notes", "max_pages": 2}}
+    intent = await create_intent(actor_client, spec=spec, consent=exploration(), manifest=manifest)
+    root = intent["root_task_id"]
+    plan = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
+    response = await submit_task(actor_client, root, plan["plan_digest"], "wiki-rejection")
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["answer_reason"] == reason
+    assert result["validation_state"] == "failed"
+    assert result["answer"] is None
+
+
 @pytest.mark.parametrize(("operation", "step_operation", "return_payload"), [
     ("rag.answer.cited", "answer", None),
     ("wiki.pages", "wiki_pages", "wiki_draft"),
