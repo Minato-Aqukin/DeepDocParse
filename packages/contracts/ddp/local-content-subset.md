@@ -52,6 +52,16 @@
 
 - 单一属主：无登录、无组织、无成员，`auth/me` 永远是 owner。
 - 无公开/组织：`site_public` 为空；发布类操作不支持（上节）。
+- 资源来源：bundle 导入的资源以 `copied_from = remote:<authority_node_id>:<resource_id>`
+  保留存量 bundle 的来源身份（与 resource-policy-format 的占位来源语义一致），
+  本机原件为 null。每个固定版本返回 `federation_input_allowed`：
+  存量 `source_json.authority_node_id` 不等于本机环境时为 false，否则为 true。
+  这是现有本机许可解析器的能力投影，不改变来源策略，不把导入副本伪装成本机属主原件；
+  false 版本不得作为任何联邦计划的锁定输入，包括只锁摘要的问答/Wiki 计划。
+  两类选择器都须显示禁用原因；中心可省略此字段，批准与派发仍以服务端实时来源策略为准。
+  草稿中仅明确返回 false 的已就绪输入可随策略提示移除；没有出现在已就绪列表中的引用
+  （例如重建索引中或未落在当前分页窗口）仍须保留在草稿里，不得伪报为策略拒绝。
+  生成计划时仍只锁定当前返回的已就绪版本。
 - 问答不伪装流式：本地模型一次产出答案，`ask` 以**一个 `delta`** 发出全文
   （事件序列仍是 meta → delta → citations → assertions → done），前端照常拼接显示。
 - 生成 stays `execution_policy=local_only, allow_remote=false`：本机问答绝不外发。

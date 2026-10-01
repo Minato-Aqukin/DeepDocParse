@@ -1980,7 +1980,7 @@ export const DESKTOP_ERROR_META: Record<DesktopError, EnumMeta> = {
   // 计划中的中心尚未配对
   "center_not_paired": { value: 'center_not_paired', label: "尚未配对计划中的中心。", severity: 'error' },
   // 中心连接未就绪，需重连并核对节点身份
-  "center_not_current": { value: 'center_not_current', label: "中心连接未就绪；重新连接并核对节点身份后再操作。", severity: 'error' },
+  "center_not_current": { value: 'center_not_current', label: "中心连接未就绪；请在“数据源”页重新连接中心并核对节点身份后再操作。", severity: 'error' },
   // 中心地址或身份与已审阅计划不一致，已拒绝发送
   "center_identity_changed": { value: 'center_identity_changed', label: "中心地址或身份与已审阅计划不一致，已拒绝发送。", severity: 'error' },
   // 计划没有唯一的已审阅接收方，不能派发
@@ -2170,8 +2170,8 @@ export const LOCAL_TRANSFER_STATE_META: Record<LocalTransferState, EnumMeta> = {
   "creating": { value: 'creating', label: "准备临时上传", severity: 'progress', active: true },
   // 正在上传缺片
   "uploading": { value: 'uploading', label: "正在上传缺片", severity: 'progress', active: true },
-  // 已上传，服务端全量校验中
-  "verifying": { value: 'verifying', label: "已上传，服务端全量校验中", severity: 'progress', active: true },
+  // 已上传，等待确认服务端全量校验结果
+  "verifying": { value: 'verifying', label: "已上传，等待确认服务端全量校验结果", severity: 'progress', active: true },
   // 输入已通过服务端校验
   "verified": { value: 'verified', label: "输入已通过服务端校验", severity: 'ok' },
   // 上次传输中断，需先对账再继续

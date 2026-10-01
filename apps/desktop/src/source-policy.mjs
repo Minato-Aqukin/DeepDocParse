@@ -4,6 +4,7 @@ import { HostError, object } from './policy.mjs'
 export const SOURCE_CHANNELS = Object.freeze({
   sourceList: 'ddp:source-list',
   sourceActivate: 'ddp:source-activate',
+  sourceReconnect: 'ddp:source-reconnect',
   sourceRemove: 'ddp:source-remove',
   workspaceOpen: 'ddp:workspace-open',
   centerConnect: 'ddp:center-connect',
@@ -23,7 +24,7 @@ export function sourceArguments(method, input, options = {}) {
     if (input !== undefined && input !== null) throw new HostError('invalid_arguments')
     return undefined
   }
-  if (method === 'sourceActivate' || method === 'sourceRemove') {
+  if (method === 'sourceActivate' || method === 'sourceReconnect' || method === 'sourceRemove') {
     object(input, ['sourceId'])
     id(input.sourceId)
     return { sourceId: input.sourceId }

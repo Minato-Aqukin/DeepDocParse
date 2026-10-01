@@ -19,6 +19,38 @@ export function unwrap<T>(result: Result<T>): T {
   if (!result.ok) throw new Error(result.error.code)
   return result.value
 }
+
+/** Drafts are JSON snapshots; never pass renderer reactive proxies across IPC. */
+export async function saveDesktopDraft(
+  bridge: DesktopClientBridge, input: Parameters<DesktopClientBridge['clientSaveDraft']>[0],
+): Promise<Result<{ revision: number }>> {
+  let plain: typeof input
+  try {
+    plain = JSON.parse(JSON.stringify(input, function (key, value: unknown) {
+      const original: unknown = (this as Record<string, unknown>)[key]
+      if (original !== null && typeof original === 'object'
+        && !Array.isArray(original) && Object.getPrototypeOf(original) !== Object.prototype) {
+        throw new Error('invalid_arguments')
+      }
+      if (typeof value === 'undefined' || typeof value === 'function' || typeof value === 'symbol'
+        || typeof value === 'bigint' || (typeof value === 'number' && !Number.isFinite(value))) {
+        throw new Error('invalid_arguments')
+      }
+      return value
+    })) as typeof input
+  } catch {
+    throw new Error('invalid_arguments')
+  }
+  try {
+    return await bridge.clientSaveDraft(plain)
+  } catch (cause) {
+    // Electron may discard DOMException.name while crossing the isolated bridge.
+    if (cause instanceof Error && cause.message === 'An object could not be cloned.') {
+      throw new DOMException(cause.message, 'DataCloneError')
+    }
+    throw cause
+  }
+}
 // ---------------------------------------------------------------------------
 // 桌面数据源（DESKTOP-APPSHELL-PLAN wave 1）。
 //
@@ -51,6 +83,7 @@ export interface CenterConnectInput {
 export interface SourceBridge {
   sourceList(): Promise<Result<SourceSummary[]>>
   sourceActivate(input: { sourceId: string }): Promise<Result<SourceSummary>>
+  sourceReconnect(input: { sourceId: string }): Promise<Result<SourceSummary>>
   sourceRemove(input: { sourceId: string }): Promise<Result<null>>
   workspaceOpen(): Promise<Result<SourceSummary | null>>
   centerConnect(input: CenterConnectInput): Promise<Result<SourceSummary>>

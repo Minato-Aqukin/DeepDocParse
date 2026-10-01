@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('ddpDesktop', Object.freeze({
   clientPlanConfirmDelivery: input => ipcRenderer.invoke('ddp:clientPlanConfirmDelivery', input),
   sourceList: () => ipcRenderer.invoke('ddp:source-list'),
   sourceActivate: input => ipcRenderer.invoke('ddp:source-activate', input),
+  sourceReconnect: input => ipcRenderer.invoke('ddp:source-reconnect', input),
   sourceRemove: input => ipcRenderer.invoke('ddp:source-remove', input),
   workspaceOpen: () => ipcRenderer.invoke('ddp:workspace-open'),
   centerConnect: input => ipcRenderer.invoke('ddp:center-connect', input),

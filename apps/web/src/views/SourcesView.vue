@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 
-import { sourceErrorLabel, sourceStateLabel } from '@/platform/desktop'
+import { refreshDesktopSource, sourceErrorLabel, sourceStateLabel } from '@/platform/desktop'
 import type { SourceSummary } from '@/platform/desktop'
 
 /**
@@ -15,11 +15,13 @@ import type { SourceSummary } from '@/platform/desktop'
  * 每次成功激活/打开/连接后整页重载（切换即清空页面状态，不跨源串会话）。
  */
 const route = useRoute()
+const router = useRouter()
 
 const sources = ref<SourceSummary[]>([])
 const loading = ref(true)
 const error = ref('')
 const busy = ref('')
+const reconnecting = ref('')
 
 const activeSource = computed(() => sources.value.find((s) => s.active) ?? null)
 const reasonCode = computed(() => typeof route.query.reason === 'string' ? route.query.reason : '')
@@ -40,6 +42,7 @@ const centerError = ref('')
 function host(): {
   sourceList?: () => Promise<{ ok: boolean; value?: SourceSummary[]; error?: { code?: string } }>
   sourceActivate?: (input: { sourceId: string }) => Promise<{ ok: boolean; value?: SourceSummary; error?: { code?: string } }>
+  sourceReconnect?: (input: { sourceId: string }) => Promise<{ ok: boolean; value?: SourceSummary; error?: { code?: string } }>
   sourceRemove?: (input: { sourceId: string }) => Promise<{ ok: boolean; error?: { code?: string } }>
   workspaceOpen?: () => Promise<{ ok: boolean; value?: SourceSummary | null; error?: { code?: string } }>
   centerConnect?: (input: Record<string, unknown>) => Promise<{ ok: boolean; value?: SourceSummary; error?: { code?: string } }>
@@ -95,6 +98,39 @@ async function activate(sourceId: string) {
     reloadAfterSwitch()
   } finally {
     busy.value = ''
+  }
+}
+
+async function reconnect(sourceId: string) {
+  reconnecting.value = sourceId
+  error.value = ''
+  try {
+    const result = await host()?.sourceReconnect?.({ sourceId })
+    if (!result) {
+      error.value = '宿主暂未提供数据源接口'
+      return
+    }
+    if (!result.ok) {
+      error.value = problem(result.error?.code, '重新连接失败')
+      return
+    }
+    const reconnected = result.value
+    if (reconnected) {
+      sources.value = sources.value.map(source => source.sourceId === sourceId ? reconnected : source)
+      if (reconnected.state !== 'ready') {
+        error.value = problem(reconnected.reason ?? undefined,
+          reconnected.reason ? '重新连接失败' : `重新连接后数据源仍${sourceStateLabel(reconnected.state)}，请核对中心服务与节点身份后重试`)
+      } else if (reconnected.active) {
+        // 同一源重连不换会话，但必须刷新启动源，恢复守卫与鉴权的就绪状态。
+        sources.value = await refreshDesktopSource()
+        const { reason: _reason, ...query } = route.query
+        await router.replace({ query })
+      }
+    }
+  } catch {
+    error.value = problem('host_operation_failed', '重新连接失败')
+  } finally {
+    reconnecting.value = ''
   }
 }
 
@@ -263,9 +299,14 @@ onMounted(() => {
           </p>
         </div>
         <div class="row-actions">
-          <el-button v-if="!s.active || s.state !== 'ready'" size="small" :loading="busy === s.sourceId"
+          <el-button v-if="s.kind === 'center' && s.state !== 'ready'" size="small"
+                     :loading="reconnecting === s.sourceId" :disabled="!!busy || !!reconnecting"
+                     @click="reconnect(s.sourceId)">重新连接</el-button>
+          <el-button v-if="!s.active || (s.kind === 'local' && s.state !== 'ready')" size="small"
+                     :loading="busy === s.sourceId" :disabled="!!busy || !!reconnecting"
                      @click="activate(s.sourceId)">{{ s.active ? '重新连接' : '切换' }}</el-button>
-          <el-button size="small" type="danger" plain :loading="busy === s.sourceId" @click="remove(s)">移除</el-button>
+          <el-button size="small" type="danger" plain :loading="busy === s.sourceId"
+                     :disabled="!!busy || !!reconnecting" @click="remove(s)">移除</el-button>
         </div>
       </article>
       <p class="muted">移除只断开连接并清除保存的登录：本机工作区的资料保留在原目录，可重新打开。</p>

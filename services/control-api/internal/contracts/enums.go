@@ -2642,7 +2642,7 @@ var DesktopErrorMeta = map[DesktopError]EnumMeta{
 	DesktopErrorInputChanged:               {Value: "input_changed", Label: "本地输入与锁定摘要不一致，未发送。", Severity: SeverityError},
 	DesktopErrorLocalOnly:                  {Value: "local_only", Label: "工作区处于仅本地模式，禁止外发。", Severity: SeverityError},
 	DesktopErrorCenterNotPaired:            {Value: "center_not_paired", Label: "尚未配对计划中的中心。", Severity: SeverityError},
-	DesktopErrorCenterNotCurrent:           {Value: "center_not_current", Label: "中心连接未就绪；重新连接并核对节点身份后再操作。", Severity: SeverityError},
+	DesktopErrorCenterNotCurrent:           {Value: "center_not_current", Label: "中心连接未就绪；请在“数据源”页重新连接中心并核对节点身份后再操作。", Severity: SeverityError},
 	DesktopErrorCenterIdentityChanged:      {Value: "center_identity_changed", Label: "中心地址或身份与已审阅计划不一致，已拒绝发送。", Severity: SeverityError},
 	DesktopErrorCenterBindingRequired:      {Value: "center_binding_required", Label: "计划没有唯一的已审阅接收方，不能派发。", Severity: SeverityError},
 	DesktopErrorCenterUnavailable:          {Value: "center_unavailable", Label: "当前连接无法取得中心凭证。", Severity: SeverityError},
@@ -2827,7 +2827,7 @@ const (
 	LocalTransferStateCreating LocalTransferState = "creating"
 	// 正在上传缺片
 	LocalTransferStateUploading LocalTransferState = "uploading"
-	// 已上传，服务端全量校验中
+	// 已上传，等待确认服务端全量校验结果
 	LocalTransferStateVerifying LocalTransferState = "verifying"
 	// 输入已通过服务端校验
 	LocalTransferStateVerified LocalTransferState = "verified"
@@ -2849,7 +2849,7 @@ var LocalTransferStateMeta = map[LocalTransferState]EnumMeta{
 	LocalTransferStatePrepared:  {Value: "prepared", Label: "待发送", Severity: SeverityNeutral},
 	LocalTransferStateCreating:  {Value: "creating", Label: "准备临时上传", Severity: SeverityProgress, Active: true},
 	LocalTransferStateUploading: {Value: "uploading", Label: "正在上传缺片", Severity: SeverityProgress, Active: true},
-	LocalTransferStateVerifying: {Value: "verifying", Label: "已上传，服务端全量校验中", Severity: SeverityProgress, Active: true},
+	LocalTransferStateVerifying: {Value: "verifying", Label: "已上传，等待确认服务端全量校验结果", Severity: SeverityProgress, Active: true},
 	LocalTransferStateVerified:  {Value: "verified", Label: "输入已通过服务端校验", Severity: SeverityOk},
 	LocalTransferStateUnknown:   {Value: "unknown", Label: "上次传输中断，需对账", Severity: SeverityWarn},
 }

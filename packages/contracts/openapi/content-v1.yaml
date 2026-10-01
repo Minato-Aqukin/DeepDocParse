@@ -92,6 +92,9 @@ components:
         index_status:
           type: string
           description: 取值与文案的唯一来源是 enums.yaml 的 `index_status`。
+        federation_input_allowed:
+          type: boolean
+          description: 本机固定版本作为联邦任务锁定输入的来源权限投影；仅本机源提供。false 表示来源策略拒绝该版本参与联邦任务（包括只锁摘要的问答/Wiki 与外发原件的文件计划）。不是远端授权凭证；批准与派发时仍须重新校验。中心可不提供此字段。
 
     Resource:
       type: object
@@ -105,6 +108,7 @@ components:
         publication:
           type: string
           description: 取值见 enums.yaml 的 `publishing_state`。
+        copied_from: { type: string, nullable: true }
         versions:
           type: array
           items: { $ref: '#/components/schemas/ResourceVersion' }

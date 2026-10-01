@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
+import { setTimeout as delay, setImmediate as nextTurn } from 'node:timers/promises'
 import { CHANNELS, HostError, validate, uiLocation, authorizeSender, isUI, smokeLocalRuntimeFailure,
   allowRequest, contentSecurityPolicy, safeFailure } from './policy.mjs'
 import { platformName, secureDirectory } from './platform.mjs'
@@ -89,6 +89,9 @@ async function requestQuit() {
       smokeResult.report.stopped = runtime.status(smokeResult.workspaceId)
       await writeFile(path.join(smokeResult.directory, 'report.json'), JSON.stringify(smokeResult.report, null, 2))
     }
+    // Promise continuations can run before Electron's native close callback
+    // unwinds. Re-entering quit there closes the window but cancels app shutdown.
+    await nextTurn()
     quitting = true
     app.quit()
   } finally { quitInProgress = false }
@@ -227,6 +230,7 @@ app.whenReady().then(async () => {
   const sourceOperations = {
     sourceList: () => clients.sourceList(),
     sourceActivate: input => clients.sourceActivate(input),
+    sourceReconnect: input => clients.sourceReconnect(input),
     sourceRemove: input => clients.sourceRemove(input),
     workspaceOpen: async () => {
       clients.selectWorkspace = chooseWorkspace

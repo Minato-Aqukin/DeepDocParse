@@ -249,18 +249,12 @@ export class ClientHost {
   }
   clearSourceListeners() { this.#sourceListeners.clear() }
   activeSourceId() { return this.#activeSourceId }
-  async sourceActivate({ sourceId }) {
-    await this.#loadActiveSource()
-    const entry = this.#entry(sourceId)
+  async #reconnectSource(entry) {
+    const sourceId = entry.connectionId
     this.#sourceConnecting.add(sourceId)
     this.#emitSources()
     try {
-      if (entry.kind === 'local') {
-        if (!entry.workspaceId) throw new HostError('workspace_unavailable')
-        await this.connectLocal({ workspaceId: entry.workspaceId })
-      } else {
-        await this.wake({ connectionId: sourceId })
-      }
+      await this.wake({ connectionId: sourceId })
       // wake/attach only restart the connection loop; stay `connecting` until the
       // snapshot is current or the loop gives up, so the renderer never reads a
       // transient `unavailable` as a failed switch. Bounded: a hung center ends as
@@ -271,7 +265,21 @@ export class ClientHost {
           && !['blocked', 'backoff'].includes(current.view.transport)) {
         await new Promise(resolve => setTimeout(resolve, 50))
       }
-    } finally { this.#sourceConnecting.delete(sourceId) }
+    } finally {
+      this.#sourceConnecting.delete(sourceId)
+      this.#emitSources()
+    }
+  }
+  async sourceReconnect({ sourceId }) {
+    await this.#loadActiveSource()
+    const entry = this.#entry(sourceId)
+    if (entry.kind !== 'remote') throw new HostError('invalid_arguments')
+    await this.#reconnectSource(entry)
+    return this.#sourceSummary(this.#entry(sourceId))
+  }
+  async sourceActivate({ sourceId }) {
+    await this.#loadActiveSource()
+    await this.#reconnectSource(this.#entry(sourceId))
     this.#activeSourceId = sourceId
     await this.#saveActiveSource()
     this.#emitSources()
@@ -886,7 +894,16 @@ export class ClientHost {
     const { phase, uploadedBytes, totalBytes } = saved.value
     if (!Number.isSafeInteger(uploadedBytes) || !Number.isSafeInteger(totalBytes) ||
         uploadedBytes < 0 || uploadedBytes > totalBytes || totalBytes < 1) throw new HostError('cache_failure')
-    return { ...detail, transfer: { state: phase, uploadedBytes, totalBytes } }
+    const record = detail.federation?.remote_compute
+    const input = detail.plan?.scope?.input_manifest?.[0]
+    // Finalize often returns before verification finishes. The local runtime
+    // persists later authoritative compute receipts; prefer that evidence over
+    // the host's last upload checkpoint, without racing the journal writer.
+    const inputVerified = record && input && detail.plan.scope_digest === saved.value.scopeDigest &&
+      record.id === saved.value.remoteComputeId && record.upload_id === saved.value.uploadId &&
+      record.input_sha256 === input.digest?.replace(/^sha256:/, '') && record.input_size === input.size_bytes &&
+      ['content_verified', 'running', 'succeeded', 'acked'].includes(record.status)
+    return { ...detail, transfer: { state: inputVerified ? 'verified' : phase, uploadedBytes, totalBytes } }
   }
   async planApprove({ connectionId, planId, phase, scopeDigest, userConfirmed, idempotencyKey }) {
     const entry = this.#entry(connectionId), connection = this.#planConnection(connectionId)

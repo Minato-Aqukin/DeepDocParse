@@ -137,6 +137,49 @@ async def test_local_content_resources_list_detail_delete(client):
     assert gone.status_code == 404, "删除后明细应 404"
 
 
+async def test_resource_import_lineage_and_egress_permission_survive_listing(client, tmp_path):
+    import io
+
+    handle, runtime = client
+    local_version, local_resource = await _ready_version(handle, runtime)
+    remote = LocalRuntime(tmp_path / "remote-workspace")
+    try:
+        original = remote.upload_stream(io.BytesIO((FIXTURES / "sample.pdf").read_bytes()),
+                                        filename="sample.pdf", operation_key="remote-file")
+        await remote.work_once()
+        imported = runtime.import_bundle(io.BytesIO(remote.export_bundle(original["version_id"])),
+                                         operation_key="remote-delivery")
+        rows = (await handle.get("/api/resources", params={"scope": "mine"})).json()["items"]
+        local = next(row for row in rows if row["id"] == local_resource)
+        copy_resource = runtime.store.version(imported["version_id"])["resource_id"]
+        original_resource = remote.store.version(original["version_id"])["resource_id"]
+        copy = next(row for row in rows if row["id"] == copy_resource)
+        assert local["copied_from"] is None
+        assert copy["copied_from"] == f"remote:{remote.store.environment_id}:{original_resource}"
+        assert local["versions"][0]["federation_input_allowed"] is True
+        assert copy["versions"][0]["federation_input_allowed"] is False
+        assert local["versions"][0]["filename"] == copy["versions"][0]["filename"]
+        assert local_version != imported["version_id"]
+        version = copy["versions"][0]
+        body = {"center": {
+            "recipient_node_id": "node-center", "environment_id": "node-center", "workspace_id": "org",
+            "profile_id": "profile-owner", "issuer": "node-center", "subject": "owner",
+            "endpoint": "https://center.example",
+        }, "inputs": [{"ref": version["id"], "digest": "sha256:" + version["source_digest"],
+                      "size_bytes": version["size_bytes"]}],
+            "retention": "temporary", "valid_seconds": 3600}
+        query = await handle.post("/api/v1/plans/propose", json={**body, "query": "资料可用吗？"},
+                                  headers={"Idempotency-Key": "lock-imported-query"})
+        assert query.status_code == 400
+        assert query.json()["error"]["code"] == "policy_denied"
+        file = await handle.post("/api/v1/plans/propose-file", json={**body, "filename": version["filename"]},
+                                 headers={"Idempotency-Key": "send-imported-file"})
+        assert file.status_code == 400
+        assert file.json()["error"]["code"] == "policy_denied"
+    finally:
+        remote.close()
+
+
 async def test_local_content_documents_full_chain(client):
     handle, runtime = client
     version_id, resource_id = await _ready_version(handle, runtime)

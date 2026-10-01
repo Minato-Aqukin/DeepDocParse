@@ -52,6 +52,10 @@ class LocalRuntime:
                 "version_not_ready", "withdrawn sources cannot authorize new transfers")
         return self.blobs.read(version["blob_key"], MAX_INPUT)
 
+    def federation_input_allowed(self, version):
+        source = version.get("source_json")
+        return not source or source.get("authority_node_id") == self.store.environment_id
+
     def _consent_source_policies(self, scope):
         # Possessing an imported bundle is not authority to re-export its source.
         # The local adapter has no remote grant resolver, so inherited remote

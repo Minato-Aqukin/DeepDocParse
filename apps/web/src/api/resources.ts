@@ -17,6 +17,8 @@ export interface ResourceVersion {
   parse_status?: ParseStatus | null
   /** 该固定版本解析任务的索引状态投影；检索需要 ready。缺席/null = 尚无解析任务 */
   index_status?: IndexStatus | null
+  /** 本机来源策略是否允许此版本作为联邦任务输入；中心可省略。 */
+  federation_input_allowed?: boolean
 }
 export interface Resource {
   id: string
@@ -25,6 +27,7 @@ export interface Resource {
   uploader_ref: { issuer: string; subject: string }
   display_name: string
   publication: 'private' | 'draft' | 'published' | 'withdrawn'
+  copied_from?: string | null
   versions: ResourceVersion[]
 }
 export interface BundleEvidenceItem {

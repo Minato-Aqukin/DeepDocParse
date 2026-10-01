@@ -22,6 +22,13 @@ The shared client-runtime/provider connects through the typed domain operations 
 `bridge.d.ts`; the renderer does not receive these privileged ports. Local business
 queries, projections, drafts, receipts and native files are integrated below.
 
+Renderer draft saves use `saveDesktopDraft` in `apps/web/src/platform/desktop.ts`:
+the JSON content is copied to a plain snapshot before `clientSaveDraft` crosses IPC.
+This includes Vue-reactive selection arrays; edits must not send their proxies.
+Non-JSON values are rejected before IPC as `invalid_arguments`, not a disk/cache error.
+If Electron still reports a structured-clone failure, the preparation page displays
+an explicit draft-serialization failure and does not treat the message as an enum code.
+
 A single-instance lock keeps one host per application data directory.
 Closing the last window exits this first host and interrupts its owned local runtimes.
 There is no detached background mode. Before close/quit, a native dialog explains the
@@ -88,6 +95,7 @@ CSP `connect-src` allows `ddp://app` (packaged and dev). `bridge.d.ts`
 | --- | --- | --- |
 | `sourceList` | none | All registered sources (local + centers) with state/features/active |
 | `sourceActivate` | `{sourceId}` | Reconnects/wakes that source and stays `connecting` until its snapshot is current or the connection gives up (20 s cap), then records it active (persisted) |
+| `sourceReconnect` | `{sourceId}` | Explicitly wakes a registered center with the same bounded readiness wait as activation (20 s cap), emits source updates and returns its summary without changing/persisting the active source; local sources reject with `invalid_arguments` |
 | `sourceRemove` | `{sourceId}` | Disconnects, deletes the registration, clears a stored center JWT; never deletes local workspace data (T65) |
 | `workspaceOpen` | none | Native directory dialog → start runtime → connect → activate; `null` = cancelled |
 | `centerConnect` | `{endpoint, username, password, persist, storageOrigin?}` | Node challenge proof → login → handshake → register → store JWT → activate |
@@ -96,6 +104,12 @@ CSP `connect-src` allows `ddp://app` (packaged and dev). `bridge.d.ts`
 After a successful `sourceActivate`/`workspaceOpen`/`centerConnect` the
 RENDERER calls `location.reload()`; the host only records the active source
 (persisted in userData as `active-source.json`, restored on restart).
+`sourceReconnect` never reloads the renderer or switches its active source. The
+数据源 page offers “重新连接” for both active and non-active centers that are not
+ready; unsuccessful readiness is shown without extending the bounded retry budget.
+When reconnecting the active center succeeds, the renderer refreshes its
+boot-source state and clears the stale source-page reason so navigation and
+authentication become ready again without switching sources or reloading.
 `hostStatus()` additionally returns `version: app.getVersion()`.
 
 Proxy rules: no active source → `503 no_active_source`. Local source: those

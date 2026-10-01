@@ -69,12 +69,17 @@ def _resource_out(runtime, resource_id):
     resource = runtime.store.resource(resource_id)
     versions = runtime.store.resource_versions(resource_id)
     items = []
+    copied_from = None
     for number, version in enumerate(sorted(versions, key=lambda v: v["created_at"]), start=1):
+        source = version.get("source_json")
+        if copied_from is None and source:
+            copied_from = f"remote:{source['authority_node_id']}:{source['resource_id']}"
         items.append({
             "id": version["id"], "resource_id": version["resource_id"],
             "version_no": number, "document_id": version["id"],
             "source_digest": version["source_digest"],
             "source_digest_verified": True,
+            "federation_input_allowed": runtime.federation_input_allowed(version),
             "filename": version["filename"], "size_bytes": version["size_bytes"],
             "parse_job_id": version["parse_revision"],
             "parse_status": _version_state_to_parse(version),
@@ -87,7 +92,7 @@ def _resource_out(runtime, resource_id):
             "uploader_ref": {"issuer": runtime.store.environment_id,
                              "subject": "workspace:" + runtime.store.workspace_id},
             "display_name": resource["title"], "publication": "private",
-            "copied_from": None, "created_at": _iso(resource["created_at"]),
+            "copied_from": copied_from, "created_at": _iso(resource["created_at"]),
             "updated_at": _iso(resource["created_at"]), "versions": items}
 
 

@@ -163,6 +163,52 @@ describe('/tasks/new 的 query 预填', () => {
   })
 })
 
+describe('准备页草稿的 IPC 边界', () => {
+  it('响应式表单草稿包含选择数组时，宿主收到可 structuredClone 的快照并保存成功', async () => {
+    let captured: unknown
+    const bridge = stubBridge({
+      clientSaveDraft: vi.fn(async (input: { expectedRevision: number }) => {
+        captured = input
+        structuredClone(input)
+        return { ok: true, value: { revision: input.expectedRevision + 1 } }
+      }),
+    })
+    setDesktop(bridge)
+    bootSource.value = localSource()
+    const router = makeRouter('/tasks/new')
+    await router.isReady()
+    const wrapper = mount(LocalTaskPrepare, { global: plugins(router) })
+    await flushPromises()
+    await wrapper.find('#task-query').setValue('重启后的资料是否可用？')
+    await flushPromises()
+    expect(() => structuredClone(captured)).not.toThrow()
+    expect(captured).toMatchObject({ value: {
+      query: '重启后的资料是否可用？', participantConnectionIds: [], inputs: [],
+    } })
+    expect(wrapper.text()).toContain('任务草稿已保存在此工作区')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it.each([
+    new DOMException('An object could not be cloned.', 'DataCloneError'),
+    new Error('An object could not be cloned.'),
+  ])('宿主仍拒绝克隆时显示草稿序列化失败，而不是未知枚举值（%s）', async (failure) => {
+    setDesktop(stubBridge({
+      clientSaveDraft: vi.fn(async () => { throw failure }),
+    }))
+    bootSource.value = localSource()
+    const router = makeRouter('/tasks/new')
+    await router.isReady()
+    const wrapper = mount(LocalTaskPrepare, { global: plugins(router) })
+    await flushPromises()
+    await wrapper.find('#task-query').setValue('一个问题')
+    await flushPromises()
+    expect(wrapper.find('[role="alert"]').text()).toBe('任务草稿保存失败：无法序列化草稿，请重新打开准备页后重试。')
+    wrapper.unmount()
+  })
+})
+
 describe('批准走原生对话框', () => {
   const detailOf = (plan: Record<string, unknown>, federation: Record<string, unknown> | null = null) => ({
     plan, federation,
@@ -431,6 +477,97 @@ describe('文件任务走 clientPlanProposeFile', () => {
     await flushPromises()
     expect((wrapper.find('button[type="submit"]').element as HTMLButtonElement).disabled).toBe(true)
     expect(bridge.clientPlanProposeFile).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
+describe('同名原件与导入副本', () => {
+  function sameNameResources() {
+    return { data: { has_more: false, items: [
+      { id: 'local-resource', display_name: 'restart-t27.pdf', copied_from: null, versions: [{
+        id: 'local-version', version_no: 1, filename: 'restart-t27.pdf', source_digest: 'a'.repeat(64),
+        size_bytes: 802, parse_status: 'succeeded', index_status: 'ready', federation_input_allowed: true,
+      }] },
+      { id: 'copy-resource', display_name: 'restart-t27.pdf', copied_from: 'remote:center-a:remote-resource', versions: [{
+        id: 'copy-version', version_no: 1, filename: 'restart-t27.pdf', source_digest: 'a'.repeat(64),
+        size_bytes: 802, parse_status: 'succeeded', index_status: 'ready', federation_input_allowed: false,
+      }] },
+    ] } }
+  }
+
+  async function mountPrepare(draft: unknown = null) {
+    vi.spyOn(resourcesApi, 'list').mockResolvedValue(sameNameResources() as never)
+    const bridge = stubBridge({
+      sourceList: vi.fn(async () => ({ ok: true, value: [
+        { sourceId: 'center-0', kind: 'center', state: 'ready', label: '研究中心' },
+      ] })),
+      clientReadDraft: vi.fn(async () => ({ ok: true, value: draft })),
+    })
+    setDesktop(bridge)
+    bootSource.value = localSource()
+    const router = makeRouter('/tasks/new')
+    await router.isReady()
+    const wrapper = mount(LocalTaskPrepare, { global: plugins(router) })
+    await flushPromises()
+    return { wrapper, bridge }
+  }
+
+  it('暂未返回已就绪列表的草稿输入仍保留，不伪报来源策略拒绝，提交只锁定当前就绪版本', async () => {
+    const { wrapper, bridge } = await mountPrepare({ revision: 0, value: {
+      inputs: ['temporarily-not-ready', 'local-version'],
+    } })
+    expect(wrapper.text()).not.toContain('已移除来源策略不允许用于联邦任务的锁定输入')
+    await wrapper.find('#task-query').setValue('重新索引后是否可用？')
+    await wrapper.find('#task-center').setValue('center-0')
+    await flushPromises()
+    expect(bridge.clientSaveDraft).toHaveBeenLastCalledWith(expect.objectContaining({
+      value: expect.objectContaining({ inputs: ['temporarily-not-ready', 'local-version'] }),
+    }))
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(bridge.clientPlanPropose).toHaveBeenCalledWith(expect.objectContaining({
+      inputs: [{ ref: 'local-version', digest: 'sha256:' + 'a'.repeat(64), sizeBytes: 802 }],
+    }))
+    wrapper.unmount()
+  })
+
+  it('问答列表区分导入副本并禁选，旧草稿不能夹带被来源策略拒绝的锁定输入', async () => {
+    const { wrapper, bridge } = await mountPrepare({ revision: 0, value: { inputs: ['copy-version', 'local-version'] } })
+    const copy = wrapper.find('input[value="copy-version"]')
+    expect(copy.element.closest('label')?.textContent).toContain('导入副本')
+    expect(wrapper.find('input[value="local-version"]').element.closest('label')?.textContent).toContain('本机原件')
+    expect((copy.element as HTMLInputElement).disabled).toBe(true)
+    expect((copy.element as HTMLInputElement).checked).toBe(false)
+    expect(copy.element.closest('label')?.textContent).toContain('来源策略不允许用于联邦任务')
+    expect(wrapper.text()).toContain('已移除来源策略不允许用于联邦任务的锁定输入')
+    await wrapper.find('#task-query').setValue('文档说了什么？')
+    await wrapper.find('#task-center').setValue('center-0')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(bridge.clientPlanPropose).toHaveBeenCalledWith(expect.objectContaining({
+      inputs: [{ ref: 'local-version', digest: 'sha256:' + 'a'.repeat(64), sizeBytes: 802 }],
+    }))
+    wrapper.unmount()
+  })
+
+  it('文件列表保留可辨认的副本但禁选，并阻止旧草稿选中的禁止外发版本提交', async () => {
+    const { wrapper, bridge } = await mountPrepare({ revision: 0, value: {
+      operation: 'file', fileRef: 'copy-version', centerId: 'center-0',
+    } })
+    const copy = wrapper.find('#task-file option[value="copy-version"]')
+    expect((copy.element as HTMLOptionElement).disabled).toBe(true)
+    expect(copy.text()).toContain('导入副本')
+    expect(copy.text()).toContain('来源策略不允许用于联邦任务')
+    expect((wrapper.find('#task-file option[value="local-version"]').element as HTMLOptionElement).disabled).toBe(false)
+    expect((wrapper.find('button[type="submit"]').element as HTMLButtonElement).disabled).toBe(true)
+    await wrapper.find('form').trigger('submit')
+    expect(bridge.clientPlanProposeFile).not.toHaveBeenCalled()
+    await wrapper.find('#task-file').setValue('local-version')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(bridge.clientPlanProposeFile).toHaveBeenCalledWith(expect.objectContaining({
+      inputs: [{ ref: 'local-version', digest: 'sha256:' + 'a'.repeat(64), sizeBytes: 802 }],
+    }))
     wrapper.unmount()
   })
 })

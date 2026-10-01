@@ -3,10 +3,11 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vu
 import { useRoute, useRouter } from 'vue-router'
 
 import { resourcesApi } from '@/api/resources'
-import { getActiveSource, takeTaskPrefill, unwrap, workspaceError, type DesktopBridge, type Json } from '@/platform/desktop'
+import { getActiveSource, saveDesktopDraft, takeTaskPrefill, unwrap, workspaceError, type DesktopBridge, type Json } from '@/platform/desktop'
 import { DraftWriter } from '@/platform/draft-writer'
 
 type Row = Record<string, Json>
+type ReadyInput = { ref: string; filename: string; label: string; digest: string; sizeBytes: number; federationAllowed: boolean }
 
 const rowOf = (value: unknown): Row =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Row) : {}
@@ -40,7 +41,7 @@ const inputs = ref<string[]>([])
 const retention = ref<'temporary' | 'task_pinned'>('temporary')
 const validMinutes = ref(120)
 const centers = shallowRef<{ sourceId: string; label: string }[]>([])
-const readyInputs = shallowRef<{ ref: string; filename: string; label: string; digest: string; sizeBytes: number }[]>([])
+const readyInputs = shallowRef<ReadyInput[]>([])
 const error = ref('')
 const notice = ref('')
 const busy = ref(false)
@@ -54,7 +55,8 @@ const wikiParamsValid = computed(() => purpose.value === 'answer'
     && Number.isInteger(wikiMaxPages.value) && wikiMaxPages.value >= 1 && wikiMaxPages.value <= 12))
 const fileEntry = computed(() => readyInputs.value.find((item) => item.ref === fileRef.value) ?? null)
 const fileEntryValid = computed(() => operation.value === 'query'
-  || (!!fileEntry.value && fileEntry.value.filename.length > 0 && fileEntry.value.filename.length <= 255))
+  || (!!fileEntry.value && fileEntry.value.federationAllowed
+    && fileEntry.value.filename.length > 0 && fileEntry.value.filename.length <= 255))
 const canSubmit = computed(() => !!bridge && !!sourceId.value && !busy.value
   && !!centerId.value && fileEntryValid.value
   && (operation.value === 'file' || (!!query.value.trim() && wikiParamsValid.value)))
@@ -96,7 +98,7 @@ async function loadCenters() {
 async function loadReadyInputs() {
   if (!sourceId.value) return
   try {
-    const ready: { ref: string; filename: string; label: string; digest: string; sizeBytes: number }[] = []
+    const ready: ReadyInput[] = []
     for (let offset = 0; ; offset += 50) {
       const { data } = await resourcesApi.list('mine', offset)
       for (const resource of data.items) {
@@ -104,16 +106,24 @@ async function loadReadyInputs() {
           if (version.parse_status === 'succeeded' && version.index_status === 'ready'
             && /^[0-9a-f]{64}$/.test(version.source_digest)
             && version.size_bytes > 0 && version.size_bytes <= 32 * 1024 * 1024) {
-            // Two resources may hold files with the same name: label by resource + version.
+            const origin = resource.copied_from ? `导入副本（${resource.copied_from}）` : '本机原件'
             ready.push({ ref: version.id, filename: version.filename,
-              label: `${resource.display_name} · v${version.version_no} · ${version.filename}`,
-              digest: `sha256:${version.source_digest}`, sizeBytes: version.size_bytes })
+              label: `${resource.display_name} · v${version.version_no} · ${version.filename} · ${origin}`,
+              digest: `sha256:${version.source_digest}`, sizeBytes: version.size_bytes,
+              federationAllowed: version.federation_input_allowed ?? !resource.copied_from })
           }
         }
       }
       if (!data.has_more || offset >= 1000) break
     }
-    if (alive) readyInputs.value = ready
+    if (alive) {
+      readyInputs.value = ready
+      const permitted = inputs.value.filter((ref) => !ready.some((item) => item.ref === ref && !item.federationAllowed))
+      if (permitted.length !== inputs.value.length) {
+        inputs.value = permitted
+        notice.value = '已移除来源策略不允许用于联邦任务的锁定输入，请重新审阅选择。'
+      }
+    }
   } catch {
     // 没有已就绪输入不挡准备：计划可以不锁定输入。
     readyInputs.value = []
@@ -174,11 +184,14 @@ onMounted(async () => {
     const data = rowOf(value?.value)
     const id = sourceId.value
     writer = new DraftWriter(value?.revision ?? 0, async (expectedRevision, next) =>
-      unwrap(await bridge.clientSaveDraft({ connectionId: id,
+      unwrap(await saveDesktopDraft(bridge, { connectionId: id,
         key: 'federation-plan', expectedRevision, value: next })).revision, (state) => {
       if (!alive) return
       saved.value = state.error ? '任务草稿保存失败' : state.pending ? '任务草稿保存中' : '任务草稿已保存在此工作区'
-      if (state.error) error.value = workspaceError(state.error)
+      if (state.error) error.value = state.error && typeof state.error === 'object'
+        && 'name' in state.error && state.error.name === 'DataCloneError'
+        ? '任务草稿保存失败：无法序列化草稿，请重新打开准备页后重试。'
+        : `任务草稿保存失败：${workspaceError(state.error)}`
     })
     // 预填优先级：切源暂存（sessionStorage，按目标源）> URL query 参数 > 存量草稿。
     // 切源即整页重载：URL 是另一源的，暂存才是切源入口带过来的那一份。
@@ -254,11 +267,12 @@ onBeforeUnmount(() => {
         <label for="task-file">本地文件（锁定一个已就绪版本，文件名必须与存量一致）</label>
         <select id="task-file" v-model="fileRef" required>
           <option value="" disabled>选择已就绪版本</option>
-          <option v-for="item in readyInputs" :key="item.ref" :value="item.ref">
-            {{ item.label }} · {{ item.sizeBytes }} 字节
+          <option v-for="item in readyInputs" :key="item.ref" :value="item.ref" :disabled="!item.federationAllowed">
+            {{ item.label }} · {{ item.sizeBytes }} 字节{{ item.federationAllowed ? '' : ' · 来源策略不允许用于联邦任务' }}
           </option>
         </select>
         <p v-if="!readyInputs.length" class="muted">此工作区没有已就绪的固定版本；先上传并等待解析完成。</p>
+        <p v-else-if="fileEntry && !fileEntry.federationAllowed" role="alert" class="error">来源策略不允许此版本用于联邦任务，请选择本机原件。</p>
         <p v-else-if="operation === 'file' && !fileEntry" role="alert" class="error">请选择一个已就绪版本：文件任务一次只锁定一个输入。</p>
       </template>
       <template v-else>
@@ -304,8 +318,8 @@ onBeforeUnmount(() => {
       <fieldset v-if="operation === 'query'" class="inputs">
         <legend>锁定的本地输入（只锁定摘要，不上传原件）</legend>
         <label v-for="item in readyInputs" :key="item.ref" class="check">
-          <input v-model="inputs" type="checkbox" :value="item.ref" />
-          <span>{{ item.label }}</span><span class="ddp-num">{{ item.sizeBytes }} 字节</span>
+          <input v-model="inputs" type="checkbox" :value="item.ref" :disabled="!item.federationAllowed" />
+          <span>{{ item.label }}{{ item.federationAllowed ? '' : ' · 来源策略不允许用于联邦任务' }}</span><span class="ddp-num">{{ item.sizeBytes }} 字节</span>
         </label>
         <p v-if="!readyInputs.length" class="muted">此工作区没有已就绪的固定版本；计划可以不锁定输入。</p>
       </fieldset>

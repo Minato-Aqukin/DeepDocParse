@@ -88,6 +88,7 @@ export interface SourceSummary {
 export interface DesktopSourceBridge {
   sourceList(): Promise<Result<SourceSummary[]>>
   sourceActivate(input: { sourceId: string }): Promise<Result<SourceSummary>>
+  sourceReconnect(input: { sourceId: string }): Promise<Result<SourceSummary>> // centers only; active source unchanged
   sourceRemove(input: { sourceId: string }): Promise<Result<null>>          // never deletes local workspace data (T65)
   workspaceOpen(): Promise<Result<SourceSummary | null>>                     // native directory dialog → start runtime → connect → activate; null = cancelled
   centerConnect(input: { endpoint: string; username: string; password: string; persist: boolean; storageOrigin?: string }): Promise<Result<SourceSummary>>

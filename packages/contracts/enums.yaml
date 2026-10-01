@@ -1449,7 +1449,7 @@ enums:
         severity: error
       - value: center_not_current
         summary: 中心连接未就绪，需重连并核对节点身份
-        label: 中心连接未就绪；重新连接并核对节点身份后再操作。
+        label: 中心连接未就绪；请在“数据源”页重新连接中心并核对节点身份后再操作。
         severity: error
       - value: center_identity_changed
         summary: 中心地址或身份与已审阅计划不一致，已拒绝发送
@@ -1621,6 +1621,6 @@ enums:
       - {value: prepared,  summary: 传输尚未开始,                         label: 待发送,                       severity: neutral}
       - {value: creating,  summary: 正在准备临时上传,                     label: 准备临时上传,                 severity: progress, active: true}
       - {value: uploading, summary: 正在上传缺片,                         label: 正在上传缺片,                 severity: progress, active: true}
-      - {value: verifying, summary: 已上传，服务端全量校验中,             label: 已上传，服务端全量校验中,     severity: progress, active: true}
+      - {value: verifying, summary: 已上传，等待确认服务端全量校验结果,   label: 已上传，等待确认服务端全量校验结果, severity: progress, active: true}
       - {value: verified,  summary: 输入已通过服务端校验,                 label: 输入已通过服务端校验,         severity: ok}
       - {value: unknown,   summary: 上次传输中断，需先对账再继续,         label: 上次传输中断，需对账,         severity: warn}

@@ -420,3 +420,56 @@ test('an accepted remote task survives a host restart: the unknown write stays u
   assert.equal((await restarted.clients.receipt({ connectionId: restarted.local, idempotencyKey: 'dispatch-0001' })).state, 'planned')
   assert.equal(runtime.dispatches.length, 1)
 })
+
+test('file input verification learned by reconciliation replaces the stale upload receipt and survives later reads', async t => {
+  const { clients, local, center, runtime } = await setup(t)
+  const plan = await propose(clients, local, center)
+  plan.scope.task_spec.operation = 'corpus.parse'
+  runtime.plans.set(plan.plan_id, plan)
+  const metadata = clients.list().find(item => item.connectionId === local)
+  const scope = JSON.stringify([metadata.environment.environmentId, metadata.profile.profileId])
+  const key = '@file-transfer:' + plan.plan_id
+  const journal = { scopeDigest: plan.scope_digest, uploadId: 'upload-1', remoteComputeId: 'compute-1',
+    phase: 'verifying', uploadedBytes: 1024, totalBytes: 1024 }
+  await clients.store.saveDraft(scope, key, 0, journal)
+  const record = { id: 'compute-1', upload_id: 'upload-1', input_sha256: '1'.repeat(64), input_size: 1024,
+    status: 'content_verifying' }
+  runtime.federation.set(plan.plan_id, { state: 'content_verifying', remote_compute_id: record.id, remote_compute: record })
+  assert.equal((await clients.planGet({ connectionId: local, planId: plan.plan_id })).transfer.state, 'verifying')
+  for (const status of ['content_verified', 'running', 'succeeded', 'acked']) {
+    record.status = status
+    const detail = await clients.planReconcile({ connectionId: local, planId: plan.plan_id })
+    assert.equal(detail.transfer.state, 'verified', status + ' proves the center verified the input')
+    assert.equal((await clients.planGet({ connectionId: local, planId: plan.plan_id })).transfer.state, 'verified',
+      'the persisted center record is used on ordinary reads too')
+  }
+})
+
+test('mismatched input receipts and closed-without-proof compute states never claim verified upload', async t => {
+  const { clients, local, center, runtime } = await setup(t)
+  const plan = await propose(clients, local, center)
+  plan.scope.task_spec.operation = 'corpus.parse'
+  runtime.plans.set(plan.plan_id, plan)
+  const metadata = clients.list().find(item => item.connectionId === local)
+  const scope = JSON.stringify([metadata.environment.environmentId, metadata.profile.profileId])
+  const journal = { scopeDigest: plan.scope_digest, uploadId: 'upload-1', remoteComputeId: 'compute-1',
+    phase: 'verifying', uploadedBytes: 1024, totalBytes: 1024 }
+  await clients.store.saveDraft(scope, '@file-transfer:' + plan.plan_id, 0, journal)
+  const verified = { id: 'compute-1', upload_id: 'upload-1', input_sha256: '1'.repeat(64), input_size: 1024,
+    status: 'content_verified' }
+  const cases = [
+    ['compute id', { id: 'other-compute' }],
+    ['upload id', { upload_id: 'other-upload' }],
+    ['input digest', { input_sha256: '2'.repeat(64) }],
+    ['input size', { input_size: 802 }],
+    ['scope', {}],
+    ...['failed', 'cancelled', 'expired'].map(status => [status, { status }]),
+  ]
+  for (const [name, changes] of cases) {
+    plan.scope_digest = name === 'scope' ? 'sha256:' + 'f'.repeat(64) : journal.scopeDigest
+    runtime.federation.set(plan.plan_id, { state: 'content_verifying', remote_compute_id: journal.remoteComputeId,
+      remote_compute: { ...verified, ...changes } })
+    const detail = await clients.planReconcile({ connectionId: local, planId: plan.plan_id })
+    assert.equal(detail.transfer.state, 'verifying', name + ' does not prove this upload was verified')
+  }
+})

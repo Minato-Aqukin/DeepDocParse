@@ -46,6 +46,12 @@ There is no `--no-sandbox` fallback. No display means the test fails explicitly.
 The script stores a screenshot and a non-secret report in ignored `artifacts/`;
 raw Electron diagnostics remain in its private temporary directory.
 
+For the close-only regression on niri/Wayland, run
+`node scripts/close-window-smoke.mjs` with the actual `WAYLAND_DISPLAY` and
+`NIRI_SOCKET`. It launches an independent fresh profile, closes its only window
+through the compositor, and requires the Electron main process to exit with code
+0 within five seconds. Renderer/window disappearance alone is not a pass.
+
 ## Lifecycle and secrets
 
 Closing the window quits this first host. If owned local workspaces are running,

@@ -8,7 +8,7 @@ import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { WorkspaceHandles } from '../src/workspaces.mjs'
 import { ClientHost } from '../src/client-host.mjs'
-import { sourceArguments, normalizeEndpoint, normalizeOrigin } from '../src/source-policy.mjs'
+import { SOURCE_CHANNELS, sourceArguments, normalizeEndpoint, normalizeOrigin } from '../src/source-policy.mjs'
 import { staticUI } from '../src/static-ui.mjs'
 import { contentSecurityPolicy, uiLocation } from '../src/policy.mjs'
 
@@ -28,7 +28,7 @@ const NODE = 'node-' + createHash('sha256').update(keyBytes).digest('hex').slice
 const CENTER = 'https://center.test/team'
 
 function centerDouble(t, { loginStatus = 200, handshakeStatus = 200, endpoint = CENTER } = {}) {
-  const seen = { posts: 0, gets: 0, logins: 0, handshakes: 0, paths: [] }
+  const seen = { posts: 0, gets: 0, logins: 0, handshakes: 0, paths: [], offline: false }
   const realFetch = globalThis.fetch
   const origin = new URL(endpoint).origin, prefix = new URL(endpoint).pathname.replace(/\/$/, '')
   globalThis.fetch = async (input, init = {}) => {
@@ -37,6 +37,7 @@ function centerDouble(t, { loginStatus = 200, handshakeStatus = 200, endpoint = 
     const json = (body, status = 200) => new Response(JSON.stringify(body),
       { status, headers: { 'Content-Type': 'application/json' } })
     const route = url.pathname.startsWith(prefix + '/') ? url.pathname.slice(prefix.length) : url.pathname
+    if (seen.offline) return json({ error: { code: 'unavailable' } }, 503)
     if (route === '/api/auth/login') {
       seen.logins++
       if (loginStatus !== 200) return json({ error: { code: 'invalid_credentials' } }, loginStatus)
@@ -311,6 +312,47 @@ test('centerConnect derives identity from the handshake and never persists the p
   assert.equal(connected.state, 'ready')
 })
 
+test('sourceReconnect wakes a retry-exhausted non-active center without switching the workspace', async t => {
+  const { clients, options } = await hosts(t)
+  const seen = centerDouble(t)
+  const center = await clients.centerConnect({ endpoint: CENTER,
+    username: 'alice', password: 's3cret', persist: false }, { packaged: false })
+  const local = await connectLocalSource(t, clients, options)
+  seen.offline = true
+  const deadline = Date.now() + 25000
+  while (clients.list().find(item => item.connectionId === center.sourceId)?.view.transport !== 'blocked') {
+    assert.ok(Date.now() < deadline, 'center did not exhaust its bounded retry budget')
+    await delay(25)
+  }
+  assert.equal((await clients.sourceList()).find(item => item.sourceId === center.sourceId).state, 'unavailable')
+  seen.offline = false
+  const updates = []
+  const unsubscribe = clients.onSourceChange(sources => updates.push(sources))
+  const reconnected = await clients.sourceReconnect({ sourceId: center.sourceId })
+  unsubscribe()
+  assert.equal(reconnected.state, 'ready')
+  assert.equal(reconnected.active, false)
+  assert.equal(clients.activeSourceId(), local.sourceId)
+  assert.equal(updates[0].find(item => item.sourceId === center.sourceId).state, 'connecting')
+  assert.equal(updates.at(-1).find(item => item.sourceId === center.sourceId).state, 'ready')
+  assert.ok(updates.every(sources => sources.find(item => item.sourceId === local.sourceId).active))
+  const proxied = await clients.apiProxy({ method: 'GET', path: '/api/resources', headers: {} })
+  assert.equal(proxied.headers['X-DDP-Source'], local.sourceId)
+  assert.deepEqual(JSON.parse(await new Response(proxied.body).text()), { items: [{ id: 'r1' }], total: 1 })
+})
+
+test('sourceReconnect rejects a local source before runtime work and leaves the active source unchanged', async t => {
+  const { clients, options, runtime } = await hosts(t)
+  const local = await connectLocalSource(t, clients, options)
+  const before = await clients.sourceList()
+  const starts = []
+  runtime.object.start = async workspaceId => { starts.push(workspaceId); return { state: 'ready' } }
+  await assert.rejects(clients.sourceReconnect({ sourceId: local.sourceId }), { code: 'invalid_arguments' })
+  assert.deepEqual(starts, [], 'remote-only reconnect must not start a local runtime')
+  assert.equal(clients.activeSourceId(), local.sourceId)
+  assert.deepEqual(await clients.sourceList(), before)
+})
+
 test('a dev loopback http center becomes ready only when the host allows loopback centers', async t => {
   // Unpackaged builds accept http://127.0.0.1 centers (source policy); the shared
   // provider must then accept the same endpoint, or the source is stuck unavailable.
@@ -336,6 +378,15 @@ test('workspaceOpen cancel → null; sourceRemove never deletes workspace data',
   assert.equal(await clients.sourceRemove({ sourceId: opened.sourceId }), null)
   assert.equal((await import('node:fs/promises').then(fs => fs.stat(workspaceDir))).isDirectory(), true)
   assert.equal((await clients.sourceList()).length, 0)
+})
+
+test('sourceReconnect is a fixed schema-validated source operation', () => {
+  assert.equal(SOURCE_CHANNELS.sourceReconnect, 'ddp:source-reconnect')
+  assert.deepEqual(sourceArguments('sourceReconnect', { sourceId: 'connection-1' }), { sourceId: 'connection-1' })
+  for (const input of [undefined, {}, { sourceId: '../x' }, { sourceId: '' }, { sourceId: 1 },
+    { sourceId: 'connection-1', endpoint: CENTER }, { sourceId: 'connection-1', shell: 'id' }]) {
+    assert.throws(() => sourceArguments('sourceReconnect', input), { code: 'invalid_arguments' })
+  }
 })
 
 test('source policy rejects unknown fields, loopback in packaged builds, and bad input', () => {

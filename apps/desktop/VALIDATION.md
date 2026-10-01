@@ -1,3 +1,40 @@
+# Native close regression validation — 2026-10-01
+
+Electron 44.3.0, ordinary user, niri/Wayland; the existing web build was used
+without rebuilding it. All profiles were independent of the running drill app.
+
+| Check | Actual result |
+| --- | --- |
+| Red repro | Fresh profile + `niri msg action close-window`: window/renderer gone, Electron main still alive after five seconds; runner failed and killed only its own instance |
+| Quit-path trace | `ClientHost.close`, runtime shutdown and session clearing all completed; `app.quit` and `before-quit` ran, followed by `window-all-closed`, but neither `will-quit` nor `quit` ran |
+| Fixed fresh close | Same compositor close exited with code **0**; the final trace reached `will-quit` and `quit` |
+| Workspace, no tasks | Opened a real local workspace; current client projection had no tasks. Answered the real native confirmation 「停止本机任务并退出」 using physical keyboard injection; process exited **0** |
+| Cancel then close again | Answered the real native dialog 「继续使用」; main window remained, resource-library navigation and a fresh `/api/resources?scope=mine` read worked, source remained ready. A later compositor close and native quit confirmation exited **0** |
+| Retained regression smoke | `node scripts/close-window-smoke.mjs`: **passed**, fresh-profile compositor close → main-process exit **0** |
+| Desktop host suite | `node --test test/*.test.mjs`: **91 passed**, **0 failed**, **0 skipped** |
+
+The root cause was native close re-entry, not a blocked cleanup await. Promise
+continuations called `app.quit()` before the prevented native close callback had
+unwound. Electron's
+[native close dispatcher](https://github.com/electron/electron/blob/v44.3.0/shell/browser/native_window.cc)
+reports cancellation after notifying the close observers, and its
+[browser lifecycle](https://github.com/electron/electron/blob/v44.3.0/shell/browser/browser.cc)
+clears its native `is_quitting_` flag on that cancellation. The host's own
+`quitting` flag was already true, so its `window-all-closed` fallback did nothing.
+Deferring the final quit to the next event-loop turn avoids that cancellation;
+confirmation and resource cleanup behavior are unchanged.
+
+This state lives in Electron's native close/quit dispatcher, not in the plain
+Node host modules; a mocked Node-only test would not exercise it. The attempted
+`--ozone-platform=headless` native probe crashed before window creation in this
+environment, so the retained regression is the real compositor smoke rather
+than a misleading unit test. Local red/green traces, workspace/cancel runner,
+native-dialog screenshots and post-cancel UI screenshot are under
+`.dev-logs/close-hang-20261001/` (ignored). Workspace selection alone used a
+trusted development fixture; exit confirmation remained the real native dialog.
+
+---
+
 # Desktop AppShell validation — 2026-09-26
 
 Author self-validation; independent acceptance of the commit diff is separate.
