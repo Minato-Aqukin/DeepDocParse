@@ -6,7 +6,9 @@ const environment = { environmentId:'env', workspaceId:'ws', authorityNodeId:'no
 const profile = { profileId:'profile', issuer:'issuer', subject:'subject' }
 const projection = (sequence, state = { value: sequence }) => ({ sequence, cursor: `cursor-${sequence}`, state })
 const tick = () => new Promise(resolve => setImmediate(resolve))
-async function until(condition) { for (let i=0; i<200; i++) { if(condition()) return; await tick() } assert.fail('condition did not settle') }
+// Wall-clock bound, not a turn count: execute() hashes with crypto.subtle, which settles on the
+// thread pool, so a loaded runner can need more than a fixed number of event-loop turns.
+async function until(condition, ms = 2000) { const end = Date.now() + ms; while (Date.now() < end) { if(condition()) return; await tick() } if(condition()) return; assert.fail('condition did not settle') }
 function deferred() { let resolve, reject; const promise = new Promise((yes,no)=>{resolve=yes;reject=no}); return {promise,resolve,reject} }
 function fixture(overrides={}) {
   const calls = { inspect:0, credential:0, authenticate:0, snapshot:0, events:0, command:0, close:0 }
