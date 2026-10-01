@@ -7,7 +7,7 @@ discovery-control-format.md`），再注入权威 `node_id` 并做 schema 校验
 `accepting_admissions` 必须**真话**：它是 P5 执行者是否接单的声明，而不是
 一句恒假的口号。判据有四条（见 `_accepting_admissions`）：开关开着、检索库
 真的可查、该 operation 自身就绪，而且该 operation 就是执行者受理的那一条
-（当前是 `corpus.retrieve` 与 `rag.answer.cited`）。任何一条不成立都报 false
+（`corpus.retrieve`、`rag.answer.cited` 与 `wiki.pages`）。任何一条不成立都报 false
 —— 把"我会接单"写在能力上、实际 admission 却 401/拒绝，是另一种静默失败。
 
 **`rag.answer.cited` 的接单是有代价的**：执行者只有生成真的就绪
@@ -73,8 +73,8 @@ CLOCK_SKEW_SECONDS = 5
 
 #: 执行者的 admission 真正受理的 operation profile（`federation` 的步骤
 #: operation 名与 profile 名不同：`retrieve`↔`corpus.retrieve`、
-#: `answer`↔`rag.answer.cited`）。`_accepting_admissions` 只对这些报 true。
-ADMISSIBLE_OPERATION_PROFILES = {"corpus.retrieve", "rag.answer.cited"}
+#: `answer`↔`rag.answer.cited`、`wiki_pages`↔`wiki.pages`）。只对这些报 true。
+ADMISSIBLE_OPERATION_PROFILES = {"corpus.retrieve", "rag.answer.cited", "wiki.pages"}
 
 #: readiness 合并顺序（差 -> 好）。最差者胜。
 #:
@@ -109,11 +109,10 @@ def _accepting_admissions(operation: str, readiness: str, store: str) -> bool:
        （ready 但排空/配额满时不接单是常态），但**报 healthy 之外的
        状态却接单**是直接的谎：任务收进来也执行不了；
     4. **该 operation 就是执行者真正受理的那一条**。P5 的 admission
-       执行器受理 `corpus.retrieve` 与 `rag.answer.cited`
-       （`federation.SUPPORTED_OPERATIONS`），后者还要求生成通道真的就绪；
-       其它 profile（编译 / 抽取 / Wiki / 解析）由本层同步执行、从不经
-       admission —— 给它们标 true 是让对账方按一个不存在的接单口去派活，
-       而端点必然拒绝。
+       执行器受理 `corpus.retrieve`、`rag.answer.cited` 与 `wiki.pages`；
+       回答和 Wiki 还要求各自的生成通道真的就绪。
+       其它 profile（编译 / 抽取 / 解析）由本层同步执行、不经 admission；
+       给它们标 true 是让对账方按一个不存在的接单口去派活，而端点必然拒绝。
 
     留空一份"恒 false"的写法正是这轮要修的：能力声明说了接单，端点却
     因为别的原因拒绝，对账方只能靠试错发现。

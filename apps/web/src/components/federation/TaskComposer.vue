@@ -1,15 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 
 import { resourcesApi, type Resource } from '@/api/resources'
 import { tasksApi } from '@/api/tasks'
 import ScopeTargets from '@/components/federation/ScopeTargets.vue'
-import { PROBE_PAYLOAD_LABEL } from '@/constants/federation'
+import { usePolling } from '@/composables/usePolling'
+import { CAPABILITY_READINESS, PROBE_PAYLOAD_LABEL, metaOf } from '@/constants/federation'
 import {
   buildIntent,
   exhaustiveAllowed,
+  generationRecipients,
+  generationObservationCurrent,
+  GENERATION_CLOCK_SKEW_MS,
+  generationRecipientReady,
   remoteNodesOf,
   type ProbePayload,
+  type GenerationCandidate,
   type ScopeEnvelope,
   type ScopeKind,
   type TaskDraft,
@@ -32,22 +38,24 @@ watch(() => props.initialQuery, (q) => {
 })
 const operation = ref<TaskOperation>('rag.answer.cited')
 const scopeKind = ref<ScopeKind>('site_public')
-/**
- * wiki.pages 需求输入（`TaskSpec.requirements.wiki` 形状：`{wiki_id?,base_revision_id?,title?,max_pages?}`）。
- * 协调者分支落地前提交入口保持禁用（见 submit 守卫 + 模板 disabled），不发请求；
- * 启用条件由 CoordinatorClosure 的共享契约确认后在此一处打开。
- */
 const wikiTitle = ref('')
 const wikiMaxPages = ref(4)
 const wikiId = ref('')
 const wikiBaseRevision = ref('')
-const wikiUnavailable = '中心暂不支持构建 Wiki 草稿（wiki.pages），等协调者规划/执行分支落地后再启用。'
 const mode = ref<'fast' | 'exhaustive_scope'>('fast')
 const resourceRefs = ref<string[]>([])
 const payload = ref<ProbePayload[]>(['query_text'])
 const maxProbeRequests = ref(8)
 const maxEgressBytes = ref(1 << 20)
 const scope = shallowRef<ScopeEnvelope | null>(null)
+const recipients = ref<string[]>([])
+const candidates = shallowRef<GenerationCandidate[]>([])
+const discovering = ref(false)
+const discovered = ref(false)
+const discoveryError = ref('')
+const clock = ref(Date.now())
+const clockPolling = usePolling(() => { clock.value = Date.now() }, () => true, 1000)
+let discoveryRequest = 0
 const resources = shallowRef<Resource[]>([])
 /** 签许可要用的三样，全部来自已认证的握手 —— 拿不到就不让提交，不拿空串去凑。 */
 const localNodeId = ref('')
@@ -64,6 +72,29 @@ const remoteNodes = computed(() => (scopeKind.value === 'federation_public'
 const canExhaustive = computed(() => exhaustiveAllowed({
   scopeKind: scopeKind.value, scope: scope.value ?? undefined,
 }))
+const generationNodes = computed(() => generationRecipients(
+  candidates.value, scopeKind.value === 'federation_public' ? scope.value ?? undefined : undefined,
+  operation.value, localNodeId.value, clock.value,
+))
+const computeNodes = computed(() => generationNodes.value.filter((item) => !remoteNodes.value.includes(item.node_id)))
+const possibleRecipients = computed(() => [...remoteNodes.value, ...computeNodes.value.map((item) => item.node_id)])
+
+watch(operation, () => {
+  // 切换用途不会把上一种能力观测当作本次许可；数据接收方的选择保留。
+  recipients.value = recipients.value.filter((node) => remoteNodes.value.includes(node))
+  candidates.value = []
+  void loadGenerationCandidates()
+})
+watch(scopeKind, () => {
+  recipients.value = []
+  candidates.value = []
+  scope.value = null
+  mode.value = 'fast'
+  discovered.value = false
+  discovering.value = false
+  discoveryError.value = ''
+  discoveryRequest++
+})
 
 const PAYLOAD_CHOICES = Object.entries(PROBE_PAYLOAD_LABEL) as [ProbePayload, string][]
 
@@ -86,12 +117,50 @@ async function loadContext() {
   }
 }
 
+async function loadGenerationCandidates() {
+  const current = ++discoveryRequest
+  const purpose = operation.value
+  candidates.value = []
+  discovered.value = false
+  discoveryError.value = ''
+  discovering.value = false
+  if (purpose === 'corpus.retrieve' || scopeKind.value !== 'federation_public' || !scope.value) return
+  discovering.value = true
+  try {
+    const { data } = await tasksApi.generationCandidates(purpose)
+    if (current !== discoveryRequest) return
+    candidates.value = data.items
+    discovered.value = true
+    clock.value = Date.now()
+    const ready = generationNodes.value.filter((item) => generationRecipientReady(item, clock.value)).map((item) => item.node_id)
+    recipients.value = recipients.value.filter((node) => remoteNodes.value.includes(node) || ready.includes(node))
+  } catch (cause) {
+    if (current === discoveryRequest) {
+      recipients.value = recipients.value.filter((node) => remoteNodes.value.includes(node))
+      discoveryError.value = problem(cause, '生成能力目录读取失败（仅算力节点不可选，相关选择已清除）')
+    }
+  } finally {
+    if (current === discoveryRequest) discovering.value = false
+  }
+}
+
+function readiness(candidate: GenerationCandidate) {
+  if (!generationObservationCurrent(candidate, clock.value)) {
+    return candidate.observed_at && Date.parse(candidate.observed_at) > clock.value + GENERATION_CLOCK_SKEW_MS
+      ? '未知（观测时间超前，无法确认就绪）' : '未知（观测已过期或缺失）'
+  }
+  const label = metaOf(CAPABILITY_READINESS, candidate.readiness).label
+  return candidate.accepting_admissions ? label : `${label} · 不接单`
+}
+
 async function buildScope() {
   scoping.value = true
   error.value = ''
   try {
     const { data } = await tasksApi.createScope('corpus.retrieve')
     scope.value = data
+    recipients.value = []
+    await loadGenerationCandidates()
     // 枚举没封存就没有可信分母，穷查在协调者那边也会被拒 —— 当场降回快速检索。
     if (data.effective_enumeration_state !== 'sealed') mode.value = 'fast'
   } catch (cause) {
@@ -106,6 +175,7 @@ function draft(): TaskDraft {
     query: query.value, operation: operation.value, scopeKind: scopeKind.value,
     scope: scope.value ?? undefined, resourceRefs: resourceRefs.value, mode: mode.value,
     payload: payload.value,
+    recipients: recipients.value, generationCandidates: candidates.value,
     maxProbeRequests: maxProbeRequests.value, maxEgressBytes: maxEgressBytes.value,
     wiki: operation.value === 'wiki.pages' ? {
       ...(wikiId.value.trim() ? { wiki_id: wikiId.value.trim() } : {}),
@@ -118,7 +188,6 @@ function draft(): TaskDraft {
 
 async function submit() {
   error.value = ''
-  if (operation.value === 'wiki.pages') { error.value = wikiUnavailable; return }
   let body
   try {
     attemptKey ||= `intent-${crypto.randomUUID()}`
@@ -147,7 +216,11 @@ async function submit() {
   }
 }
 
-onMounted(loadContext)
+onMounted(() => {
+  void loadContext()
+  clockPolling.start()
+})
+onBeforeUnmount(() => { discoveryRequest++ })
 </script>
 
 <template>
@@ -162,12 +235,11 @@ onMounted(loadContext)
       <el-radio-group v-model="operation">
         <el-radio value="rag.answer.cited">带出处的回答</el-radio>
         <el-radio value="corpus.retrieve">只取证据</el-radio>
-        <el-radio value="wiki.pages" disabled>构建 Wiki 草稿（中心暂不支持）</el-radio>
+        <el-radio value="wiki.pages">构建 Wiki 草稿</el-radio>
       </el-radio-group>
-      <p v-if="operation === 'wiki.pages'" class="hint" role="status">{{ wikiUnavailable }}</p>
       <div v-if="operation === 'wiki.pages'" class="scope">
-        <label class="field"><span>Wiki 标题（requirements.wiki.title）</span>
-          <el-input v-model="wikiTitle" placeholder="用固定证据解释什么？" maxlength="255" />
+        <label class="field"><span>Wiki 标题（新建与更新都必填，requirements.wiki.title）</span>
+          <el-input v-model="wikiTitle" placeholder="用固定证据解释什么？" maxlength="255" required />
         </label>
         <label class="field"><span>页数上限（1–12，requirements.wiki.max_pages）</span>
           <el-input-number v-model="wikiMaxPages" :min="1" :max="12" />
@@ -203,6 +275,27 @@ onMounted(loadContext)
         <p v-else class="hint">穷查要先把范围枚举并封存下来，否则“查全了”没有分母。</p>
         <ScopeTargets v-if="scope" :scope-id="scope.manifest.scope_id" />
       </div>
+      <div v-if="scopeKind === 'federation_public' && scope" class="scope">
+        <p class="hint">接收方要逐项勾选；范围清单不是外发许可。仅算力节点不提供资料，只能接收固定证据用于生成。实际生成位置与每条数据边会在执行前的计划里再次确认。</p>
+        <div v-if="remoteNodes.length" class="scope">
+          <span>资料节点</span>
+          <el-checkbox-group v-model="recipients">
+            <el-checkbox v-for="node in remoteNodes" :key="node" :value="node">{{ node }}</el-checkbox>
+          </el-checkbox-group>
+        </div>
+        <div v-if="operation !== 'corpus.retrieve'" class="scope">
+          <span>仅算力节点</span>
+          <el-button :loading="discovering" @click="loadGenerationCandidates">刷新生成能力</el-button>
+          <el-checkbox-group v-model="recipients">
+            <el-checkbox v-for="item in computeNodes" :key="item.node_id" :value="item.node_id"
+              :disabled="!generationRecipientReady(item, clock)">
+              {{ item.node_id }} · {{ readiness(item) }}
+            </el-checkbox>
+          </el-checkbox-group>
+          <p v-if="discovered && !computeNodes.length && !discovering" class="hint">本次范围内没有描述新鲜的已批准仅算力候选；不会自动加入其他节点。</p>
+          <p v-if="discoveryError" class="error" role="alert">{{ discoveryError }}</p>
+        </div>
+      </div>
     </fieldset>
 
     <fieldset class="field">
@@ -213,10 +306,10 @@ onMounted(loadContext)
       </el-radio-group>
     </fieldset>
 
-    <fieldset v-if="remoteNodes.length" class="field egress">
+    <fieldset v-if="possibleRecipients.length" class="field egress">
       <legend>外发许可</legend>
       <p class="hint">
-        勾中的内容会发给：{{ remoteNodes.join('、') }}。<strong>问题本身也是一种外发</strong> ——
+        勾中的内容只允许发给已选接收方：{{ recipients.length ? recipients.join('、') : '无（尚未选择）' }}。<strong>问题本身也是一种外发</strong> ——
         不勾就不发，对应的远端目标会如实记成“被拒绝”，而不是假装查过。
       </p>
       <el-checkbox-group v-model="payload">
@@ -227,7 +320,7 @@ onMounted(loadContext)
         <label>外发字节上限 <el-input-number v-model="maxEgressBytes" :min="0" :step="65536" /></label>
       </div>
     </fieldset>
-    <p v-else class="hint">没有远端目标：本次不会向任何其他节点发出一个字节。</p>
+    <p v-else class="hint">没有已选远端接收方：本次不会向其他节点发送任务内容。</p>
 
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <div class="actions">

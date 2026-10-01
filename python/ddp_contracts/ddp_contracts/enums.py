@@ -1701,7 +1701,7 @@ def federation_error_label(value: str | None) -> str | None:
 # 一张节点凭证授权的**唯一**操作（DDP-NODE-CREDENTIAL）。每个节点对节点
 # 端点恰好对应一个值；凭证只签一个操作，拿读执行状态的凭证去受理任务是
 # `credential_operation_denied`。
-NodeCredentialOperation = Literal["probe_create", "probe_read", "admission_create", "admission_lookup", "execution_read", "execution_cancel", "evidence_set_read", "resource_locate", "result_resolve", "catalog_read", "directory_members_read", "directory_collections_read"]
+NodeCredentialOperation = Literal["probe_create", "probe_read", "admission_create", "admission_lookup", "execution_read", "execution_cancel", "evidence_set_read", "resource_locate", "result_resolve", "catalog_read", "directory_members_read", "directory_collections_read", "directory_capabilities_read"]
 
 NODE_CREDENTIAL_OPERATION_VALUES: Final[tuple[str, ...]] = (
     "probe_create",
@@ -1716,6 +1716,7 @@ NODE_CREDENTIAL_OPERATION_VALUES: Final[tuple[str, ...]] = (
     "catalog_read",
     "directory_members_read",
     "directory_collections_read",
+    "directory_capabilities_read",
 )
 
 NODE_CREDENTIAL_OPERATION_META: Final[dict[str, EnumMeta]] = {
@@ -1743,6 +1744,8 @@ NODE_CREDENTIAL_OPERATION_META: Final[dict[str, EnumMeta]] = {
     "directory_members_read": {"value": "directory_members_read", "label": "读取目录成员", "severity": "neutral"},
     # GET /api/v1/federation/collections
     "directory_collections_read": {"value": "directory_collections_read", "label": "读取目录集合", "severity": "neutral"},
+    # GET /api/v1/federation/generation-descriptor
+    "directory_capabilities_read": {"value": "directory_capabilities_read", "label": "读取生成能力", "severity": "neutral"},
 }
 
 

@@ -2509,7 +2509,8 @@
                       "evidence_set_read",
                       "catalog_read",
                       "directory_members_read",
-                      "directory_collections_read"
+                      "directory_collections_read",
+                      "directory_capabilities_read"
                     ]
                   }
                 },
@@ -2557,7 +2558,8 @@
                   "operation": {
                     "enum": [
                       "directory_members_read",
-                      "directory_collections_read"
+                      "directory_collections_read",
+                      "directory_capabilities_read"
                     ]
                   }
                 },
@@ -2650,7 +2652,8 @@
                 "result_resolve",
                 "catalog_read",
                 "directory_members_read",
-                "directory_collections_read"
+                "directory_collections_read",
+                "directory_capabilities_read"
               ],
               "type": "string",
               "x-ddp-enum": "node_credential_operation"
@@ -2825,7 +2828,8 @@
                 "result_resolve",
                 "catalog_read",
                 "directory_members_read",
-                "directory_collections_read"
+                "directory_collections_read",
+                "directory_capabilities_read"
               ],
               "type": "string",
               "x-ddp-enum": "node_credential_operation"

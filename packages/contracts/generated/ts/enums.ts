@@ -1508,7 +1508,7 @@ export function federationErrorLabelOf(value: string | null | undefined): string
 // 一张节点凭证授权的**唯一**操作（DDP-NODE-CREDENTIAL）。每个节点对节点
 // 端点恰好对应一个值；凭证只签一个操作，拿读执行状态的凭证去受理任务是
 // `credential_operation_denied`。
-export type NodeCredentialOperation = 'probe_create' | 'probe_read' | 'admission_create' | 'admission_lookup' | 'execution_read' | 'execution_cancel' | 'evidence_set_read' | 'resource_locate' | 'result_resolve' | 'catalog_read' | 'directory_members_read' | 'directory_collections_read'
+export type NodeCredentialOperation = 'probe_create' | 'probe_read' | 'admission_create' | 'admission_lookup' | 'execution_read' | 'execution_cancel' | 'evidence_set_read' | 'resource_locate' | 'result_resolve' | 'catalog_read' | 'directory_members_read' | 'directory_collections_read' | 'directory_capabilities_read'
 
 export const NODE_CREDENTIAL_OPERATION_VALUES: readonly NodeCredentialOperation[] = [
   'probe_create',
@@ -1523,6 +1523,7 @@ export const NODE_CREDENTIAL_OPERATION_VALUES: readonly NodeCredentialOperation[
   'catalog_read',
   'directory_members_read',
   'directory_collections_read',
+  'directory_capabilities_read',
 ] as const
 
 export const NODE_CREDENTIAL_OPERATION_META: Record<NodeCredentialOperation, EnumMeta> = {
@@ -1550,6 +1551,8 @@ export const NODE_CREDENTIAL_OPERATION_META: Record<NodeCredentialOperation, Enu
   "directory_members_read": { value: 'directory_members_read', label: "读取目录成员", severity: 'neutral' },
   // GET /api/v1/federation/collections
   "directory_collections_read": { value: 'directory_collections_read', label: "读取目录集合", severity: 'neutral' },
+  // GET /api/v1/federation/generation-descriptor
+  "directory_capabilities_read": { value: 'directory_capabilities_read', label: "读取生成能力", severity: 'neutral' },
 }
 
 export function nodeCredentialOperationLabelOf(value: string | null | undefined): string | null {
@@ -2182,3 +2185,5 @@ export function localTransferStateLabelOf(value: string | null | undefined): str
   if (!value) return null
   return LOCAL_TRANSFER_STATE_META[value as LocalTransferState]?.label ?? `未知取值（${value}）`
 }
+
+export type { GenerationOperation, GenerationCandidate, GenerationCandidates } from './generation-candidates'

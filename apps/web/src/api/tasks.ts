@@ -2,6 +2,7 @@
  * 联邦任务 API：`packages/contracts/openapi/federation-tasks-v1.yaml` 的协调者端点，
  * 经 control-api 会话鉴权转发到 corpus-api。
  */
+import type { GenerationCandidates, GenerationOperation } from '@deepdocparse/contracts'
 import type {
   CoverageLedger, EventPage, ExecutionConsent, IntentBody, ScopeEnvelope,
   TaskIntent, TaskListPage, TaskPlan, TaskStatus,
@@ -89,6 +90,11 @@ export const tasksApi = {
   /** 封存一份调用方范围清单（`createScopeManifest`）—— 穷查的分母只能来自它。 */
   createScope: (operation: string) =>
     http.post<ScopeEnvelope>('/api/v1/federation/scopes', { operation }, inline),
+
+  /** 仅已批准且描述新鲜的可见成员；健康未知不等于可生成。 */
+  generationCandidates: (operation: GenerationOperation) =>
+    http.get<GenerationCandidates>('/api/v1/federation/generation-candidates',
+      { params: { operation }, ...inline }),
 
   /** 读已封存范围的目标分页与实时撤销覆盖（`getScopeTargets`）。 */
   scopeTargets: (scopeId: string, cursor?: string) =>

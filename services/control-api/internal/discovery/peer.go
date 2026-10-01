@@ -232,3 +232,27 @@ func (d *PeerDirectory) CollectionsPage(ctx context.Context, cfg PeerConfig, sna
 	}
 	return &page, ""
 }
+
+// GenerationProfiles observes only a registered peer's payload-free descriptor.
+// Identity is checked before the existing producer schema/freshness projection.
+func (d *PeerDirectory) GenerationProfiles(ctx context.Context, cfg PeerConfig) ([]CapabilityProfile, string) {
+	body, _, reason := d.peerGet(ctx, cfg, "/api/v1/federation/generation-descriptor", nil)
+	if reason != "" {
+		return []CapabilityProfile{}, "unknown"
+	}
+	var envelope struct {
+		NodeID   string `json:"node_id"`
+		Profiles []struct {
+			NodeID string `json:"node_id"`
+		} `json:"profiles"`
+	}
+	if json.Unmarshal(body, &envelope) != nil || envelope.NodeID != cfg.NodeID {
+		return []CapabilityProfile{}, "unknown"
+	}
+	for _, profile := range envelope.Profiles {
+		if profile.NodeID != cfg.NodeID {
+			return []CapabilityProfile{}, "unknown"
+		}
+	}
+	return ProjectProfiles(body, cfg.NodeID, time.Now().UTC())
+}

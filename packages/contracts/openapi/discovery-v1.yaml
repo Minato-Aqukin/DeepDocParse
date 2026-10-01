@@ -10,6 +10,45 @@ info:
     No scanning, address probing or user-credential forwarding is provided.
 security: [{session: []}, {userKey: []}]
 paths:
+  /api/v1/federation/generation-candidates:
+    get:
+      operationId: listGenerationCandidates
+      description: |
+        Ordinary authenticated users may read approved, unexpired direct members visible
+        to their organization or subject. No task, query, resource identifiers or user
+        credentials are sent to peers. Only administrator-configured endpoints are
+        contacted, using single-use signed node credentials. Missing, unreachable,
+        invalid or expired observations remain unknown and never accept admissions.
+        Members whose fresh complete observation lacks the requested operation are omitted.
+        Observations use at most four concurrent peers with a two-second per-peer timeout
+        inside a five-second overall window; an unobserved peer remains unknown.
+        This is discovery only, not a reservation or executor selection.
+      parameters:
+        - name: operation
+          in: query
+          required: true
+          schema: {$ref: '#/components/schemas/GenerationOperation'}
+      responses:
+        '200': {description: Fresh visible candidates with per-operation observations, content: {application/json: {schema: {$ref: '#/components/schemas/GenerationCandidates'}}}}
+        '400': {description: Missing, duplicate or unsupported operation; other query parameters rejected}
+        '401': {description: Authentication required}
+        '403': {description: Read scope required}
+  /api/v1/federation/generation-descriptor:
+    get:
+      operationId: readPeerGenerationDescriptor
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: directory_capabilities_read
+      description: |
+        Payload-free capability observation from the configured local corpus producer.
+        Authenticated approved peers only; issuer, receiver, route and empty query are
+        covered by the single-use signature. Contains no user or task identity.
+      responses:
+        '200': {description: Current local generation observations or honest unknown, content: {application/json: {schema: {$ref: '#/components/schemas/GenerationDescriptor'}}}}
+        '400': {description: invalid_generation_descriptor — query parameters are not accepted}
+        '401': {description: Invalid, expired or replayed node credential}
+        '403': {description: Unapproved issuer or credential scope mismatch}
+        '409': {description: wrong_target — receiver identity differs from the authenticated target}
+        '503': {description: node_identity_unavailable or credential_store_unavailable}
   /api/v1/federation/members:
     get:
       operationId: readPeerDirectoryMembers
@@ -199,6 +238,36 @@ components:
   parameters:
     NodeId: {name: node_id, in: path, required: true, schema: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/node_id'}}
   schemas:
+    GenerationOperation:
+      type: string
+      enum: [rag.answer.cited, wiki.pages]
+    GenerationCandidate:
+      type: object
+      additionalProperties: false
+      required: [node_id, state, descriptor_valid_until, operation, readiness, accepting_admissions]
+      properties:
+        node_id: {type: string}
+        state: {type: string, const: approved}
+        descriptor_valid_until: {type: string, format: date-time}
+        operation: {$ref: '#/components/schemas/GenerationOperation'}
+        readiness: {type: string, x-ddp-enum: capability_readiness}
+        accepting_admissions: {type: boolean, description: True only for a fresh ready producer observation explicitly accepting this operation}
+        observed_at: {type: string, format: date-time}
+        valid_until: {type: string, format: date-time}
+    GenerationCandidates:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/GenerationCandidate'}}
+    GenerationDescriptor:
+      type: object
+      additionalProperties: false
+      required: [node_id, profiles, capability_status]
+      properties:
+        node_id: {type: string}
+        profiles: {type: array, items: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/CapabilityProfile'}}
+        capability_status: {type: string, enum: [observed, unknown]}
     PeerMemberPage:
       type: object
       additionalProperties: false

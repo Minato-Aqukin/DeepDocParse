@@ -9,6 +9,8 @@ import {
   citationIndex,
   collectEvents,
   exhaustiveAllowed,
+  generationRecipients,
+  generationRecipientReady,
   isSettled,
   recipientsOf,
   retentionOf,
@@ -142,6 +144,42 @@ const OPTIONS = {
   nonce: 'abc123', now: NOW,
 }
 
+describe('generationRecipients', () => {
+  const candidate = {
+    node_id: 'node-c', state: 'approved' as const, descriptor_valid_until: '2026-09-16T10:00:00Z',
+    operation: 'rag.answer.cited' as const, readiness: 'ready' as const,
+    accepting_admissions: true, observed_at: '2026-09-16T08:59:00Z', valid_until: '2026-09-16T09:05:00Z',
+  }
+  const scope = envelope(['node-b'])
+  scope.manifest.registry_revision_vector = [
+    { node_id: 'node-c', registry_revision: 1, fetched_at: '2026-09-16T08:59:00Z' },
+  ] as never
+
+  it('仅提供已批准、描述未过期且在封存清单内的生成接收方', () => {
+    expect(generationRecipients([
+      candidate,
+      { ...candidate, node_id: 'node-hidden' },
+      { ...candidate, state: 'pending' as never },
+      { ...candidate, descriptor_valid_until: '2026-09-16T08:00:00Z' },
+    ], scope, 'rag.answer.cited', 'node-a', NOW).map((item) => item.node_id)).toEqual(['node-c'])
+  })
+
+  it('不就绪、未知、不接单和过期健康观测都不可选，不把旧成功当成就绪', () => {
+    expect(generationRecipientReady(candidate, NOW)).toBe(true)
+    for (const item of [
+      { ...candidate, readiness: 'unknown' as const },
+      { ...candidate, readiness: 'unhealthy' as const },
+      { ...candidate, accepting_admissions: false },
+      { ...candidate, valid_until: '2026-09-16T08:00:00Z' },
+    ]) expect(generationRecipientReady(item, NOW)).toBe(false)
+  })
+
+  it('生成健康观测允许 5 秒时钟偏移，超过界限仍不可选', () => {
+    expect(generationRecipientReady({ ...candidate, observed_at: '2026-09-16T09:00:05Z' }, NOW)).toBe(true)
+    expect(generationRecipientReady({ ...candidate, observed_at: '2026-09-16T09:00:05.001Z' }, NOW)).toBe(false)
+  })
+})
+
 describe('buildIntent', () => {
   it('没有远端接收方：外发许可必须是 local_only，载荷、接收方、预算全空', () => {
     const body = buildIntent(makeDraft(), OPTIONS)
@@ -168,10 +206,21 @@ describe('buildIntent', () => {
     expect(body.exploration_consent.allowed_recipients).toEqual([])
   })
 
-  it('有远端成员：接收方就是清单里的远端节点，去重排序，本节点不在其中', () => {
+  it('范围清单不是外发许可：用户未选接收方时不自动批准 B 或仅算力 C', () => {
+    const scope = envelope(['node-a', 'node-b'])
+    scope.manifest.registry_revision_vector = [
+      { node_id: 'node-c', registry_revision: 1, fetched_at: '2026-09-16T08:59:00Z' },
+    ] as never
+    const body = buildIntent(makeDraft({ scopeKind: 'federation_public', scope }), OPTIONS)
+    expect(body.exploration_consent.allowed_recipients).toEqual([])
+    expect(body.exploration_consent.egress_mode).toBe('local_only')
+  })
+
+  it('用户明确勾选的远端接收方去重排序，本节点不在其中', () => {
     const body = buildIntent(makeDraft({
       scopeKind: 'federation_public', scope: envelope(['node-c', 'node-a', 'node-b', 'node-c']),
       payload: ['entity_names', 'query_text', 'query_text'],
+      recipients: ['node-c', 'node-b', 'node-c'],
     }), OPTIONS)
     expect(body.exploration_consent.egress_mode).toBe('listed_nodes')
     expect(body.exploration_consent.allowed_recipients).toEqual(['node-b', 'node-c'])
@@ -185,6 +234,7 @@ describe('buildIntent', () => {
   it('用户不勾任何载荷也照样生成：界面不替他补上外发项', () => {
     const body = buildIntent(makeDraft({
       scopeKind: 'federation_public', scope: envelope(['node-b']), payload: [],
+      recipients: ['node-b'],
     }), OPTIONS)
     expect(body.exploration_consent.egress_mode).toBe('listed_nodes')
     expect(body.exploration_consent.allowed_payload).toEqual([])
@@ -214,6 +264,17 @@ describe('buildIntent', () => {
     expect(buildIntent(makeDraft({ operation: 'corpus.retrieve' }), OPTIONS)
       .task_spec.requirements?.citations).toBe('not_required')
     expect(buildIntent(makeDraft(), OPTIONS).task_spec.requirements?.citations).toBe('required')
+  })
+
+  it('Wiki 更新必须同时填写标题和基于修订，避免规划成功后生成失败', () => {
+    const updating = makeDraft({ operation: 'wiki.pages', wiki: { wiki_id: 'wiki-1', base_revision_id: 'rev-1', max_pages: 2 } })
+    expect(() => buildIntent(updating, OPTIONS)).toThrow('Wiki 新建或更新都需要填写标题')
+    updating.wiki!.title = '更新标题'
+    expect(buildIntent(updating, OPTIONS).task_spec.requirements?.wiki)
+      .toEqual({ wiki_id: 'wiki-1', base_revision_id: 'rev-1', title: '更新标题', max_pages: 2 })
+    expect(() => buildIntent(makeDraft({
+      operation: 'wiki.pages', wiki: { wiki_id: 'wiki-1', title: '更新' },
+    }), OPTIONS)).toThrow('更新 Wiki 必须填写基于修订')
   })
 
   it.each([

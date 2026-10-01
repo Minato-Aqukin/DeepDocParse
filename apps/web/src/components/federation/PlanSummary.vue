@@ -12,6 +12,9 @@ import type { TaskPlan } from '@/federation/task-model'
 const props = defineProps<{ plan: TaskPlan }>()
 const node = (id: string) => (id === props.plan.root_coordinator_node_id ? `本节点（${id}）` : `远端 ${id}`)
 const budget = computed(() => props.plan.budget)
+const generators = computed(() => props.plan.steps.filter((step) => step.operation === 'answer' || step.operation === 'wiki_pages'))
+const hasRemoteAnswer = computed(() => generators.value.some((step) => step.operation === 'answer'
+  && step.executor_node_id !== props.plan.root_coordinator_node_id))
 </script>
 
 <template>
@@ -24,6 +27,13 @@ const budget = computed(() => props.plan.budget)
     </p>
     <p class="summary">根协调者 <span class="ddp-mono">{{ plan.root_coordinator_node_id }}</span> ·
       最终结果写入方 <span class="ddp-mono">{{ plan.final_result_writer }}</span></p>
+    <p v-if="generators.length" class="summary">
+      生成执行者：
+      <span v-for="step in generators" :key="step.step_id">{{ step.operation === 'wiki_pages' ? 'Wiki 草稿' : '带出处的回答' }} — {{ node(step.executor_node_id) }}</span>
+      · 只批准你认可的生成位置与下方数据边。
+    </p>
+    <p v-else class="muted">这份计划没有生成步骤；执行不会凭空生成回答或 Wiki。</p>
+    <p v-if="hasRemoteAnswer" class="muted">远端回答通过执行者状态返回协调者；现有计划不单列 answer_text 返回边。下方显示计划实际要求批准的全部有向数据边。</p>
     <div class="scroll">
       <table>
         <thead><tr><th>步骤</th><th>操作</th><th>执行者</th><th>依赖</th></tr></thead>

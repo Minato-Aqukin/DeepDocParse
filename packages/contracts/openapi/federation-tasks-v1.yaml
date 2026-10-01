@@ -214,9 +214,12 @@ paths:
         提供 budget 但省略 max_generation_tokens 等同于 0，不授权生成。
 
         只受理 `federation_task_operation` 这个**闭集**里的 operation
-        （`corpus.retrieve` 只取证据，`rag.answer.cited` 取证据并生成带出处的回答）；
+        （`corpus.retrieve` 只取证据，`rag.answer.cited` 生成带出处的回答，
+        `wiki.pages` 按类型化 `requirements.wiki` 生成并由协调者提交版本化 Wiki）；
         别的 operation 一律 400 `capability_unsupported`，不落库。规划按它决定要不要
         配生成步骤 —— 不闭集的后果不是报错，是"只取证据"的任务被顺手生成一个答案。
+        外发接收方由用户逐项选择，生成执行位置由计划决定，不由范围枚举或能力目录授权。
+        执行前必须审阅并批准计划中的每条有向数据边，包含生成器接收的证据摘录与返回结果。
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TaskIntentInput'}}}}
       responses:

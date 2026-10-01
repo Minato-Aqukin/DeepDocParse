@@ -88,7 +88,7 @@
       "additionalProperties": false,
       "allOf": [
         {
-          "if": {"properties": {"operation": {"enum": ["probe_read", "execution_read", "evidence_set_read", "catalog_read", "directory_members_read", "directory_collections_read"]}}, "required": ["operation"]},
+          "if": {"properties": {"operation": {"enum": ["probe_read", "execution_read", "evidence_set_read", "catalog_read", "directory_members_read", "directory_collections_read", "directory_capabilities_read"]}}, "required": ["operation"]},
           "then": {"properties": {"request": {"properties": {"method": {"const": "GET"}}}}},
           "else": {"properties": {"request": {"properties": {"method": {"const": "POST"}}}}}
         },
@@ -97,7 +97,7 @@
           "then": {"properties": {"constraints": {"required": ["root_task_id", "step_id"]}}}
         },
         {
-          "if": {"properties": {"operation": {"enum": ["directory_members_read", "directory_collections_read"]}}, "required": ["operation"]},
+          "if": {"properties": {"operation": {"enum": ["directory_members_read", "directory_collections_read", "directory_capabilities_read"]}}, "required": ["operation"]},
           "then": {"properties": {"constraints": {"required": ["root_task_id", "scope_ref"], "properties": {"scope_ref": {"$ref": "#/$defs/digest"}}}}}
         },
         {

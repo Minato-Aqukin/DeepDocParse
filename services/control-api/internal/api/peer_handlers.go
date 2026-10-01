@@ -25,6 +25,7 @@ import (
 func (s *Server) mountPeer(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/federation/members", s.requirePeerCredentials(httpx.Wrap(s.handlePeerMembers)))
 	mux.Handle("GET /api/v1/federation/collections", s.requirePeerCredentials(httpx.Wrap(s.handlePeerCollections)))
+	mux.Handle("GET /api/v1/federation/generation-descriptor", s.requirePeerCredentials(httpx.Wrap(s.handlePeerGenerationDescriptor)))
 }
 
 func (s *Server) requirePeerCredentials(next http.Handler) http.Handler {
@@ -47,6 +48,8 @@ func peerReadOperation(path string) (string, error) {
 		return string(contracts.NodeCredentialOperationDirectoryMembersRead), nil
 	case "/api/v1/federation/collections":
 		return string(contracts.NodeCredentialOperationDirectoryCollectionsRead), nil
+	case "/api/v1/federation/generation-descriptor":
+		return string(contracts.NodeCredentialOperationDirectoryCapabilitiesRead), nil
 	default:
 		return "", discovery.ErrCredentialInvalid
 	}

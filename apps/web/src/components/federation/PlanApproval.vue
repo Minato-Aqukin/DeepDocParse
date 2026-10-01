@@ -36,6 +36,7 @@ const retention = computed(() => {
   catch (cause) { return { label: cause instanceof Error ? cause.message : String(cause), ok: false } }
 })
 const payloads = computed(() => [...new Set(props.plan.data_edges.map((edge) => edge.payload_kind))])
+const generators = computed(() => props.plan.steps.filter((step) => step.operation === 'answer' || step.operation === 'wiki_pages'))
 
 function problem(cause: unknown, fallback: string): string {
   const detail = (cause as { response?: { data?: { error?: { code?: string; message?: string } } } })
@@ -107,6 +108,22 @@ onMounted(async () => {
         <dd class="ddp-mono">{{ plan.valid_until }}</dd>
       </div>
     </dl>
+    <div v-if="generators.length" class="what" aria-label="本次批准的生成步骤">
+      <strong>生成执行者</strong>
+      <p v-for="step in generators" :key="step.step_id" class="lead">
+        {{ step.operation === 'wiki_pages' ? 'Wiki 草稿' : '带出处的回答' }}
+        · <span class="ddp-mono">{{ step.operation }} → {{ step.executor_node_id }}</span>
+        {{ step.executor_node_id === plan.root_coordinator_node_id ? '（本节点）' : '（远端）' }}
+      </p>
+    </div>
+    <ul v-if="plan.data_edges.length" class="edges" aria-label="本次批准的有向数据边">
+      <li v-for="edge in plan.data_edges" :key="edge.edge_id">
+        <span class="ddp-mono">{{ edge.from_node_id }} → {{ edge.to_node_id }}</span>
+        · {{ payloadKindLabel(edge.payload_kind) }}
+        · {{ retentionLabel(edge.retention) }}
+        <span v-if="edge.relay_via?.length"> · 中继 {{ edge.relay_via.join(' → ') }}</span>
+      </li>
+    </ul>
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <div class="actions">
       <el-button type="primary" :loading="!!busy" :disabled="!retention.ok || !grantedBy" @click="run">
@@ -125,6 +142,7 @@ onMounted(async () => {
 dt { color: var(--ddp-ink-3); font-size: 12.5px; min-width: 5em; }
 dd { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
 dd.bad { color: var(--ddp-danger); }
+.edges { margin: 0; padding-left: 20px; color: var(--ddp-ink-2); font-size: 13px; line-height: 1.8; }
 .error { border-left: 2px solid var(--ddp-danger); padding-left: 12px; color: var(--ddp-danger); margin: 0; }
 .actions { display: flex; justify-content: flex-end; }
 </style>

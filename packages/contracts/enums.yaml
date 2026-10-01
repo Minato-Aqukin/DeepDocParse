@@ -1029,6 +1029,7 @@ enums:
       - {value: catalog_read,      summary: 'GET /api/v1/federation/published-collections',          label: 读取发布目录,   severity: neutral}
       - {value: directory_members_read, summary: 'GET /api/v1/federation/members',                  label: 读取目录成员,   severity: neutral}
       - {value: directory_collections_read, summary: 'GET /api/v1/federation/collections',          label: 读取目录集合,   severity: neutral}
+      - {value: directory_capabilities_read, summary: 'GET /api/v1/federation/generation-descriptor', label: 读取生成能力, severity: neutral}
 
   peer_auth_mode:
     description: |

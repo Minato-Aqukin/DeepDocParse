@@ -650,16 +650,16 @@ async def test_accepting_admissions_is_truthful(client, service_client_headers,
     """接单声明必须是真话：开关、检索库、该 operation、受理范围四者缺一即 false。
 
     恒 false 的写法让能力声明与 admission 端点的实际行为分离；恒 true 更糟
-    （收单再失败）。**执行器受理 `corpus.retrieve` 与 `rag.answer.cited`**
-    （P5 的 answer 委托）—— 其它 operation 报 true 等于让对账方按一个不存在
+    （P5 的 answer / Wiki 委托）—— 其它 operation 报 true 等于让对账方按一个不存在
     的接单口去派活。
     """
     mock_gateway(channels=[CHAT_INSTRUCT, EMBED])
     by_op = await by_operation(client, service_client_headers)
     assert by_op["corpus.retrieve"]["accepting_admissions"] is True
     assert by_op["rag.answer.cited"]["accepting_admissions"] is True
+    assert by_op["wiki.pages"]["accepting_admissions"] is True
     assert {name for name, profile in by_op.items()
-            if profile["accepting_admissions"]} == {"corpus.retrieve", "rag.answer.cited"}, \
+            if profile["accepting_admissions"]} == {"corpus.retrieve", "rag.answer.cited", "wiki.pages"}, \
         "只有 admission 执行器真正受理的 operation 才能报接单"
 
     # 生成不通（OCR 专用模型不听指令）时 rag.answer.cited 必须收回接单声明，
@@ -668,6 +668,7 @@ async def test_accepting_admissions_is_truthful(client, service_client_headers,
     by_op = await by_operation(client, service_client_headers)
     assert by_op["corpus.retrieve"]["accepting_admissions"] is True
     assert by_op["rag.answer.cited"]["accepting_admissions"] is False
+    assert by_op["wiki.pages"]["accepting_admissions"] is False
 
     monkeypatch.setattr(settings, "federation_admissions_enabled", False)
     body = await fetch(client, service_client_headers)

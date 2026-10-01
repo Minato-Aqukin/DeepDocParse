@@ -2598,3 +2598,69 @@ async def test_compute_only_wiki_plan_requires_both_directed_data_edges(
         assert denied.status_code == 403, denied.text
         assert not peer.accepted
     await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
+
+
+@pytest.mark.parametrize(("operation", "step_operation", "return_payload"), [
+    ("rag.answer.cited", "answer", None),
+    ("wiki.pages", "wiki_pages", "wiki_draft"),
+])
+async def test_data_peer_and_compute_only_peer_have_separate_consented_edges(
+        actor_client, monkeypatch, operation, step_operation, return_payload):
+    """B supplies data; collection-less C generates only after explicit recipient consent."""
+    compute_node = "node-compute-c"
+    data_peer = StubPeer()
+    data_transport = data_peer.transport()
+    peers = parse_peers(json.dumps({
+        PEER_NODE: {"endpoint": "https://peer.example"},
+        compute_node: {"endpoint": "https://compute.example"},
+    }))
+    signer = LocalControlSigner(issuer_node_id=NODE)
+
+    def handler(request):
+        if request.url.host == "compute.example":
+            body = json.loads(request.content)
+            assert body["probe_kind"] == "capability_input"
+            result = peer_capability_probe(
+                operation=operation, readiness="ready",
+                can_generate=operation == "rag.answer.cited", probe_id="probe-compute")
+            result["target_node_id"] = compute_node
+            return httpx.Response(201, json=result)
+        return data_transport.handle_request(request)
+
+    def factory(actor, delegation=None):
+        return PeerDirectory(peers, actor=actor, transport=httpx.MockTransport(handler),
+                             signer=signer, delegation=delegation)
+
+    monkeypatch.setattr(federation_tasks, "peer_directory", factory)
+    manifest = scope_manifest(
+        [member("peer-col", PEER_NODE)],
+        revisions=[(NODE, 1), (PEER_NODE, 1), (compute_node, 1)])
+    spec = task_spec(scope="federation_public", scope_ref="scope-1", operation=operation)
+    if operation == "wiki.pages":
+        spec["requirements"] = {"wiki": {"title": "Approved B data", "max_pages": 2}}
+    intent = await create_intent(actor_client, spec=spec,
+                                consent=exploration(recipients=(PEER_NODE, compute_node),
+                                                    payload=("query_text", "evidence_excerpts")),
+                                manifest=manifest)
+    plan = await plan_task(actor_client, intent["root_task_id"])
+    assert next(step for step in plan["steps"] if step["operation"] == step_operation)[
+        "executor_node_id"] == compute_node
+    directed = {(edge["from_node_id"], edge["to_node_id"], edge["payload_kind"])
+                for edge in plan["data_edges"]}
+    assert directed >= {
+        (NODE, PEER_NODE, "query_text"),
+        (PEER_NODE, NODE, "evidence_excerpts"),
+        (NODE, compute_node, "evidence_excerpts"),
+    }
+    if return_payload is not None:
+        assert (compute_node, NODE, return_payload) in directed
+    incomplete = execution_consent(
+        plan["plan_digest"], recipients=(NODE, PEER_NODE, compute_node),
+        edges=[edge["edge_id"] for edge in plan["data_edges"]
+               if (edge["from_node_id"], edge["to_node_id"]) != (NODE, compute_node)])
+    rejected = await actor_client.post(
+        f"/api/v1/task-plans/{intent['root_task_id']}/approve",
+        json={"plan_digest": plan["plan_digest"], "execution_consent": incomplete})
+    assert rejected.status_code == 403, rejected.text
+    await approve_task(actor_client, intent["root_task_id"], plan,
+                       recipients=(NODE, PEER_NODE, compute_node))

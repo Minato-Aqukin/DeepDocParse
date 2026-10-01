@@ -7,6 +7,7 @@
  */
 import { TASK_STATUS_META } from '@deepdocparse/contracts'
 import type {
+  GenerationCandidate,
   FederationTaskOperation,
   CoverageTargetState,
   DeliveryState,
@@ -20,6 +21,7 @@ import type {
   TaskStatus as TaskStatusValue,
   ValidationState,
 } from '@deepdocparse/contracts'
+export type { GenerationCandidate } from '@deepdocparse/contracts'
 
 export type ScopeKind = 'site_public' | 'federation_public' | 'fixed_resources'
 /** 协调者受理的 operation 闭集，取值来自契约生成物，不在前端另写一份。 */
@@ -28,17 +30,13 @@ export type ProbePayload = 'query_text' | 'subquery_text' | 'entity_names' | 're
   | 'collection_filters' | 'evidence_excerpts' | 'source_files'
 
 /**
- * wiki.pages 任务的 Wiki 需求（`TaskSpec.requirements.wiki`）。
- *
- * 后端（CoordinatorClosure 落地中）尚未受理 wiki.pages 提交：前端按此形状备好
- * 需求输入（`TaskSpec.requirements.wiki={wiki_id?,base_revision_id?,title?,max_pages?}`），
- * 提交入口保持禁用并明确提示“中心暂不支持”，待协调者规划/执行分支落地后再启用。
- * 不提前编造别的字段。
+ * wiki.pages 的类型化需求由协调者在持久化之前校验；新建需要标题，
+ * 更新需要 wiki_id 与 base_revision_id 做 CAS。
  */
 export interface WikiTaskRequirements {
   /** 首次创建可省略；更新必须带上要基于的 Wiki。 */
   wiki_id?: string
-  base_revision_id?: string | null
+  base_revision_id?: string
   title?: string
   max_pages?: number
 }
@@ -372,7 +370,10 @@ export interface TaskDraft {
   payload: ProbePayload[]
   maxProbeRequests: number
   maxEgressBytes: number
-  /** wiki.pages 的 Wiki 需求输入（`TaskSpec.requirements.wiki` 形状）。提交前保持禁用。 */
+  /** 用户明确勾选的远端接收方；范围枚举本身从不授予外发许可。 */
+  recipients?: string[]
+  generationCandidates?: GenerationCandidate[]
+  /** wiki.pages 的类型化需求。 */
   wiki?: WikiTaskRequirements
 }
 
@@ -388,6 +389,33 @@ export function remoteNodesOf(scope: ScopeEnvelope | undefined, localNodeId: str
   const nodes = new Set(scope.manifest.expanded_members.map((member) => member.origin_node_id))
   nodes.delete(localNodeId)
   return [...nodes].sort()
+}
+
+/** 与能力生产者的观测时间判据一致；租约到期不延长。 */
+export const GENERATION_CLOCK_SKEW_MS = 5000
+
+export function generationObservationCurrent(candidate: GenerationCandidate, now: number): boolean {
+  return !!candidate.observed_at && Date.parse(candidate.observed_at) <= now + GENERATION_CLOCK_SKEW_MS
+    && !!candidate.valid_until && Date.parse(candidate.valid_until) > now
+}
+export function generationRecipientReady(candidate: GenerationCandidate, now: number): boolean {
+  return candidate.state === 'approved' && candidate.readiness === 'ready'
+    && candidate.accepting_admissions
+    && Date.parse(candidate.descriptor_valid_until) > now
+    && generationObservationCurrent(candidate, now)
+}
+
+/** 不给冻结范围补节点；只从已批准且描述新鲜的目录中展示清单内的生成候选。 */
+export function generationRecipients(
+  candidates: GenerationCandidate[], scope: ScopeEnvelope | undefined,
+  operation: TaskOperation, localNodeId: string, now: number,
+): GenerationCandidate[] {
+  if (!scope || scope.expired || Date.parse(scope.manifest.valid_until) <= now) return []
+  const nodes = new Set(scope.manifest.registry_revision_vector.map((item) => item.node_id))
+  return candidates.filter((item) => item.state === 'approved'
+    && item.node_id !== localNodeId && nodes.has(item.node_id)
+    && item.operation === operation && Date.parse(item.descriptor_valid_until) > now)
+    .sort((a, b) => a.node_id.localeCompare(b.node_id))
 }
 
 /** 穷查必须绑定一个已封存的范围引用（TaskSpec allOf）：只有联邦范围清单能给出分母。 */
@@ -438,14 +466,38 @@ export function buildIntent(draft: TaskDraft, options: {
     throw new Error('穷查只能绑定已生成的联邦范围清单')
   }
   if (draft.operation === 'wiki.pages') {
-    if (!draft.wiki || !draft.wiki.title?.trim()) throw new Error('Wiki 草稿需要填写标题')
+    if (!draft.wiki?.title?.trim()) {
+      throw new Error('Wiki 新建或更新都需要填写标题')
+    }
+    if (draft.wiki.wiki_id && !draft.wiki.base_revision_id) throw new Error('更新 Wiki 必须填写基于修订')
+    if ((draft.wiki.wiki_id && draft.wiki.wiki_id.length > 32)
+      || (draft.wiki.base_revision_id && draft.wiki.base_revision_id.length > 32)) {
+      throw new Error('Wiki 和修订编号最多 32 个字符')
+    }
+    if (draft.wiki.title !== undefined && (!draft.wiki.title.trim() || draft.wiki.title.length > 255)) {
+      throw new Error('Wiki 标题为 1–255 个字符')
+    }
     if (draft.wiki.max_pages !== undefined
       && (!Number.isInteger(draft.wiki.max_pages) || draft.wiki.max_pages < 1 || draft.wiki.max_pages > 12)) {
       throw new Error('Wiki 页数上限为 1–12')
     }
   }
   const federated = draft.scopeKind === 'federation_public'
-  const remote = federated ? remoteNodesOf(draft.scope, options.localNodeId) : []
+  const remote = federated ? [...new Set(draft.recipients ?? [])].sort() : []
+  const knownNodes = new Set([
+    ...remoteNodesOf(draft.scope, options.localNodeId),
+    ...(draft.scope?.manifest.registry_revision_vector.map((item) => item.node_id) ?? []),
+  ])
+  if (remote.some((node) => node === options.localNodeId || !knownNodes.has(node))) {
+    throw new Error('外发接收方必须属于本次范围清单中的远端节点')
+  }
+  const dataNodes = remoteNodesOf(draft.scope, options.localNodeId)
+  const readyGeneration = generationRecipients(
+    draft.generationCandidates ?? [], draft.scope, draft.operation, options.localNodeId, options.now,
+  ).filter((item) => generationRecipientReady(item, options.now)).map((item) => item.node_id)
+  if (remote.some((node) => !dataNodes.includes(node) && !readyGeneration.includes(node))) {
+    throw new Error('仅算力接收方未就绪或观测已过期，请刷新生成能力')
+  }
   const explorationId = `explore-${options.nonce}`
   const resourceScope: TaskSpec['resource_scope'] = { kind: draft.scopeKind }
   if (federated && draft.scope) resourceScope.scope_ref = draft.scope.manifest.scope_id

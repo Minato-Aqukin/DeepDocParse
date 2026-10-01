@@ -1989,6 +1989,8 @@ const (
 	NodeCredentialOperationDirectoryMembersRead NodeCredentialOperation = "directory_members_read"
 	// GET /api/v1/federation/collections
 	NodeCredentialOperationDirectoryCollectionsRead NodeCredentialOperation = "directory_collections_read"
+	// GET /api/v1/federation/generation-descriptor
+	NodeCredentialOperationDirectoryCapabilitiesRead NodeCredentialOperation = "directory_capabilities_read"
 )
 
 // NodeCredentialOperationValues 保持 enums.yaml 里的声明顺序。
@@ -2005,21 +2007,23 @@ var NodeCredentialOperationValues = []NodeCredentialOperation{
 	NodeCredentialOperationCatalogRead,
 	NodeCredentialOperationDirectoryMembersRead,
 	NodeCredentialOperationDirectoryCollectionsRead,
+	NodeCredentialOperationDirectoryCapabilitiesRead,
 }
 
 var NodeCredentialOperationMeta = map[NodeCredentialOperation]EnumMeta{
-	NodeCredentialOperationProbeCreate:              {Value: "probe_create", Label: "发起探测", Severity: SeverityNeutral},
-	NodeCredentialOperationProbeRead:                {Value: "probe_read", Label: "读取探测回执", Severity: SeverityNeutral},
-	NodeCredentialOperationAdmissionCreate:          {Value: "admission_create", Label: "提交接单", Severity: SeverityNeutral},
-	NodeCredentialOperationAdmissionLookup:          {Value: "admission_lookup", Label: "对账接单", Severity: SeverityNeutral},
-	NodeCredentialOperationExecutionRead:            {Value: "execution_read", Label: "读取执行状态", Severity: SeverityNeutral},
-	NodeCredentialOperationExecutionCancel:          {Value: "execution_cancel", Label: "取消执行", Severity: SeverityNeutral},
-	NodeCredentialOperationEvidenceSetRead:          {Value: "evidence_set_read", Label: "读取证据集", Severity: SeverityNeutral},
-	NodeCredentialOperationResourceLocate:           {Value: "resource_locate", Label: "定位资源版本", Severity: SeverityNeutral},
-	NodeCredentialOperationResultResolve:            {Value: "result_resolve", Label: "解析证据引用", Severity: SeverityNeutral},
-	NodeCredentialOperationCatalogRead:              {Value: "catalog_read", Label: "读取发布目录", Severity: SeverityNeutral},
-	NodeCredentialOperationDirectoryMembersRead:     {Value: "directory_members_read", Label: "读取目录成员", Severity: SeverityNeutral},
-	NodeCredentialOperationDirectoryCollectionsRead: {Value: "directory_collections_read", Label: "读取目录集合", Severity: SeverityNeutral},
+	NodeCredentialOperationProbeCreate:               {Value: "probe_create", Label: "发起探测", Severity: SeverityNeutral},
+	NodeCredentialOperationProbeRead:                 {Value: "probe_read", Label: "读取探测回执", Severity: SeverityNeutral},
+	NodeCredentialOperationAdmissionCreate:           {Value: "admission_create", Label: "提交接单", Severity: SeverityNeutral},
+	NodeCredentialOperationAdmissionLookup:           {Value: "admission_lookup", Label: "对账接单", Severity: SeverityNeutral},
+	NodeCredentialOperationExecutionRead:             {Value: "execution_read", Label: "读取执行状态", Severity: SeverityNeutral},
+	NodeCredentialOperationExecutionCancel:           {Value: "execution_cancel", Label: "取消执行", Severity: SeverityNeutral},
+	NodeCredentialOperationEvidenceSetRead:           {Value: "evidence_set_read", Label: "读取证据集", Severity: SeverityNeutral},
+	NodeCredentialOperationResourceLocate:            {Value: "resource_locate", Label: "定位资源版本", Severity: SeverityNeutral},
+	NodeCredentialOperationResultResolve:             {Value: "result_resolve", Label: "解析证据引用", Severity: SeverityNeutral},
+	NodeCredentialOperationCatalogRead:               {Value: "catalog_read", Label: "读取发布目录", Severity: SeverityNeutral},
+	NodeCredentialOperationDirectoryMembersRead:      {Value: "directory_members_read", Label: "读取目录成员", Severity: SeverityNeutral},
+	NodeCredentialOperationDirectoryCollectionsRead:  {Value: "directory_collections_read", Label: "读取目录集合", Severity: SeverityNeutral},
+	NodeCredentialOperationDirectoryCapabilitiesRead: {Value: "directory_capabilities_read", Label: "读取生成能力", Severity: SeverityNeutral},
 }
 
 // Valid 报告 s 是不是一个已知的 node_credential_operation 取值。

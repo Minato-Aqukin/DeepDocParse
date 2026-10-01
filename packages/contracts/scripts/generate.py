@@ -162,6 +162,8 @@ def render_ts(spec: dict) -> str:
                 "  if (!value) return null",
                 f"  return {name.upper()}_META[value as {T}]?.label"
                 f" ?? `未知取值（${{value}}）`", "}", ""]
+    out += ["export type { GenerationOperation, GenerationCandidate, GenerationCandidates } "
+            "from './generation-candidates'", ""]
     return "\n".join(out)
 
 
@@ -285,11 +287,48 @@ def render_go_formatted(spec: dict) -> str:
 
 # ---------------------------------------------------------------------- 主流程
 
+def render_generation_candidates_ts(spec: dict) -> str:
+    """Generate the authenticated discovery response directly from its OpenAPI schema."""
+    api = contract_yaml.load(CONTRACTS / "openapi" / "discovery-v1.yaml")
+    schemas = api["components"]["schemas"]
+
+    def ts_type(schema: dict) -> str:
+        if "$ref" in schema:
+            return schema["$ref"].rsplit("/", 1)[-1]
+        if "const" in schema:
+            return json.dumps(schema["const"])
+        if "x-ddp-enum" in schema:
+            return pascal(schema["x-ddp-enum"])
+        if "enum" in schema:
+            return " | ".join(json.dumps(value) for value in schema["enum"])
+        kind = schema["type"]
+        if kind == "array":
+            return f"Array<{ts_type(schema['items'])}>"
+        return {"string": "string", "boolean": "boolean", "integer": "number"}[kind]
+
+    out = ["// Generated from openapi/discovery-v1.yaml; do not edit.",
+           "import type { CapabilityReadiness } from './enums'", ""]
+    for name in ("GenerationOperation", "GenerationCandidate", "GenerationCandidates"):
+        schema = schemas[name]
+        if schema["type"] != "object":
+            out.extend([f"export type {name} = {ts_type(schema)}", ""])
+            continue
+        out.append(f"export interface {name} {{")
+        required = set(schema["required"])
+        for key, field in schema["properties"].items():
+            optional = "" if key in required else "?"
+            out.append(f"  {key}{optional}: {ts_type(field)}")
+        out.extend(["}", ""])
+    return "\n".join(out)
+
+
 TARGETS = {
     "ts": (CONTRACTS / "generated" / "ts" / "enums.ts", render_ts),
     "go": (ROOT / "services" / "control-api" / "internal" / "contracts" / "enums.go",
            render_go_formatted),
     "py": (ROOT / "python" / "ddp_contracts" / "ddp_contracts" / "enums.py", render_py),
+    "generation_candidates_ts": (CONTRACTS / "generated" / "ts" / "generation-candidates.ts",
+                                 render_generation_candidates_ts),
 }
 
 

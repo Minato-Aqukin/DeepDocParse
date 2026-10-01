@@ -116,7 +116,8 @@ actor 头的做法已删除：生产源与测试里都不再存在共享 actor �
 
 - 首发单组织：控制面只在默认组织的成员目录里查信任记录；同一节点被多个组织批准时的
   audience 组织选择没有定义。
-- 控制面自己的目录对等读（`/api/v1/federation/members`、`/collections`）与 Go 出站
-  目录展开同样只认单次节点签名凭证（`directory_members_read` /
-  `directory_collections_read`），不存在共享口令路径。
+- 控制面自己的目录对等读（`/api/v1/federation/members`、`/collections`、
+  `/generation-descriptor`）与 Go 出站目录展开、生成能力观测同样只认单次节点签名凭证
+  （`directory_members_read` / `directory_collections_read` /
+  `directory_capabilities_read`），不存在共享口令路径。
 - 密钥轮换：node_id 由公钥派生，换钥即换身份；没有轮换协议。
