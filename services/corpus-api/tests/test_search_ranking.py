@@ -90,3 +90,107 @@ async def test_cross_document_facts_survive_repeated_document_names(session):
     hits = await search(session, None, "Compare SRAM capacities of Pico and ESP32",
                         authorized_document_ids=[pico.id, esp32.id, paper.id])
     assert {hit["chunk_id"] for hit in hits[:2]} == {"pico-fact", "esp-fact"}
+
+
+async def test_compound_query_preserves_each_requested_facet_with_keyword_fallback(session):
+    from ddp_core.search import search_query
+
+    document = await add_document(session, {
+        "power-a": "supply voltage regulated supply voltage",
+        "power-b": "supply voltage low noise",
+        "radio": "wireless protocol 802.11n",
+        **{f"radio-noise-{i}": "wireless background" for i in range(8)},
+        **{f"protocol-noise-{i}": "protocol background" for i in range(8)},
+    })
+    private = await add_document(session, {"private": "supply voltage wireless protocol"})
+
+    async def unavailable(_texts):
+        raise ConnectionError("embedding offline")
+
+    hits, degraded = await search_query(
+        session, MemoryIndex(), embed=unavailable,
+        query=("What supply voltage does the device use "
+               "and which wireless protocol does it support?"),
+        document_id=None, authorized_document_ids=[document.id],
+        limit=2, candidates=4, min_similarity=0.4)
+
+    assert {hit["chunk_id"] for hit in hits} == {"power-a", "radio"}
+    assert degraded == "embedding_unavailable"
+    assert all(hit["document_id"] != private.id for hit in hits)
+
+
+async def test_compound_query_deduplicates_shared_evidence_without_losing_other_facts(session):
+    from ddp_core.search import search_query
+
+    document = await add_document(session, {
+        "shared": "supply voltage wireless protocol",
+        "power": "supply voltage 3.3 V",
+        "radio": "wireless protocol 802.11n",
+    })
+
+    async def unavailable(_texts):
+        raise ConnectionError("embedding offline")
+
+    hits, _ = await search_query(
+        session, MemoryIndex(), embed=unavailable,
+        query=("What supply voltage does the device use "
+               "and which wireless protocol does it support?"),
+        document_id=document.id, limit=3, candidates=4, min_similarity=0.4)
+
+    assert {hit["chunk_id"] for hit in hits} == {"shared", "power", "radio"}
+    assert len(hits) == 3
+
+
+async def test_four_facets_each_keep_a_unique_hit_at_limit_four(session):
+    from ddp_core.search import search_query
+
+    question = ("What is the flash size and what is the SRAM size "
+                "and what is the CPU clock and what is the supply voltage?")
+    routes = {
+        question: "overview",
+        "is the flash size": "flash",
+        "is the SRAM size": "sram",
+        "is the CPU clock": "cpu",
+        "is the supply voltage": "voltage",
+    }
+
+    class FacetIndex:
+        async def search(self, _session, *, query, **_kwargs):
+            return [{"chunk_id": routes[query], "score": 0.03, "similarity": 0.8}]
+
+    async def embed(texts):
+        return [[1.0] for _ in texts]
+
+    hits, degraded = await search_query(
+        session, FacetIndex(), embed=embed, query=question, document_id=None,
+        limit=4, candidates=4, min_similarity=0.4)
+
+    assert [hit["chunk_id"] for hit in hits] == ["flash", "sram", "cpu", "voltage"]
+    assert degraded is None
+
+
+async def test_two_facets_keep_the_original_questions_second_hit_at_limit_four(session):
+    """Fewer facets than slots: the original question still leads each round (real-PG
+    regression: Pico 'core and frequency' needs the original question's second hit)."""
+    from ddp_core.search import search_query
+
+    question = "What is the processor core and what is the maximum clock frequency?"
+    routes = {
+        question: ["overview", "core-and-clock"],
+        "is the processor core": ["core"],
+        "is the maximum clock frequency": ["clock"],
+    }
+
+    class FacetIndex:
+        async def search(self, _session, *, query, **_kwargs):
+            return [{"chunk_id": cid, "score": 0.03, "similarity": 0.8} for cid in routes[query]]
+
+    async def embed(texts):
+        return [[1.0] for _ in texts]
+
+    hits, degraded = await search_query(
+        session, FacetIndex(), embed=embed, query=question, document_id=None,
+        limit=4, candidates=4, min_similarity=0.4)
+
+    assert [hit["chunk_id"] for hit in hits] == ["overview", "core", "clock", "core-and-clock"]
+    assert degraded is None

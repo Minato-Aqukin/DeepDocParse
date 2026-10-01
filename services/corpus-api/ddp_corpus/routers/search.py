@@ -2,6 +2,7 @@
 
 与问答共用同一套混合检索（`ddp_core/search.py`），区别只是不限定 document_id。
 """
+from ddp_core.search import search_query
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,11 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ddp_corpus.config import settings
 from ddp_corpus.db import get_session
 from ddp_corpus.deps import Actor, current_actor
-from ddp_corpus.errors import APIError
 from ddp_corpus.document_context import search_contexts
-from ddp_corpus.policy import authorized_document_ids, require_document, visible_document_condition
 from ddp_corpus.models import Document
-from ddp_corpus.upstream import embed_one
+from ddp_corpus.policy import authorized_document_ids, require_document, visible_document_condition
+from ddp_corpus.upstream import embed_batched
 
 router = APIRouter()
 
@@ -36,18 +36,11 @@ async def search(request: Request, q: str = "", doc: str = "", limit: int = 20,
         return {"query": q, "degraded": "resource_index_unavailable", "groups": []}
     http = request.app.state.http
     index = request.app.state.search_index
-    degraded: str | None = None
-    try:
-        vector = await embed_one(http, q)
-    except Exception:
-        # 只走关键词路，并如实告诉调用方——不许拿零向量假装语义检索还在工作
-        vector, degraded = None, "embedding_unavailable"
-
-    hits = await index.search(session, vector=vector, query=q, document_id=doc or None,
-                              limit=min(limit, 50),
-                              candidates=max(limit, settings.qa_candidates),
-                              min_similarity=settings.qa_min_similarity,
-                              authorized_document_ids=permitted_ids, authorized_parse_job_ids=list(contexts))
+    hits, degraded = await search_query(
+        session, index, embed=lambda texts: embed_batched(http, texts),
+        query=q, document_id=doc or None, limit=min(limit, 50),
+        candidates=max(limit, settings.qa_candidates), min_similarity=settings.qa_min_similarity,
+        authorized_document_ids=permitted_ids, authorized_parse_job_ids=list(contexts))
     if not hits:
         return {"query": q, "degraded": degraded, "groups": []}
 

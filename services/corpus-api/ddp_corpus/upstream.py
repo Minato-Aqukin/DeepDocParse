@@ -1,10 +1,9 @@
-"""OpenAI 兼容上游（embedding 与 chat）。
+"""模型上游：embedding／回答走 OpenAI 兼容接口，视觉核对走网关能力契约。
 
-与 service_client.py 的区别是**耦合程度**：
-- service_client 走 DeepDocParse 的解析契约（openapi.yaml），那是本层不可替代的依赖
-- 这里只要求"OpenAI 兼容"，缺省指向 service，但可以直连 TEI / vLLM / 任何兼容服务（ADR #17）
-
-因此本层不绑定 DeepDocParse 的部署形态：只想用解析能力的人不必被迫接受它的 VQA 模型。
+embedding 与回答可通过各自配置直连 TEI／vLLM／其他兼容服务。
+视觉核对独立访问网关 `/v1/models`，按 `vision` 与专用抄写提示选模，
+再请求网关 `/v1/chat/completions`；不能拿回答模型的默认路由代替视觉能力。
+解析任务仍由 service_client 使用解析契约处理。
 """
 import httpx
 
@@ -41,6 +40,15 @@ async def embed_texts(http: httpx.AsyncClient, texts: list[str]) -> list[list[fl
     return [d["embedding"] for d in data]
 
 
+async def embed_batched(http: httpx.AsyncClient, texts: list[str]) -> list[list[float]]:
+    """按运行时单请求上限分批，按原查询顺序拼接向量。"""
+    vectors = []
+    size = settings.embedding_batch_size
+    for start in range(0, len(texts), size):
+        vectors.extend(await embed_texts(http, texts[start:start + size]))
+    return vectors
+
+
 async def embed_one(http: httpx.AsyncClient, text: str) -> list[float]:
     return (await embed_texts(http, [text]))[0]
 
@@ -65,3 +73,34 @@ def chat_request(http: httpx.AsyncClient, messages: list[dict], *, stream: bool,
     return http.build_request("POST", settings.chat_endpoint, json=payload,
                               headers=_headers(settings.chat_token),
                               timeout=httpx.Timeout(30.0, read=settings.chat_read_timeout))
+
+
+async def select_transcription_model(http: httpx.AsyncClient, *,
+                                     timeout: float | None = None) -> dict:
+    """按网关清单的 vision 能力选核对模型，不借用回答通道的能力声明。"""
+    headers = _headers(settings.service_token)
+    response = await http.get(f"{settings.service_url}/v1/models", headers=headers,
+                              timeout=httpx.USE_CLIENT_DEFAULT if timeout is None else timeout)
+    response.raise_for_status()
+    models = [item for item in response.json()["data"]
+              if "vision" in item.get("capabilities", [])]
+    if not models:
+        raise UpstreamError(503, "no vision model registered")
+    return next((item for item in models if item.get("default")), models[0])
+
+
+async def transcribe_image(http: httpx.AsyncClient, image_uri: str) -> str:
+    """使用独立视觉模型及其注册表抄写提示核对裁图。"""
+    model = await select_transcription_model(http)
+    prompt = model["transcribe_prompt"]
+    headers = _headers(settings.service_token)
+    response = await http.post(
+        f"{settings.service_url}/v1/chat/completions", headers=headers,
+        json={"model": model["id"], "stream": False, "temperature": 0,
+              "messages": [{"role": "user", "content": [
+                  {"type": "image_url", "image_url": {"url": image_uri}},
+                  {"type": "text", "text": prompt},
+              ]}]},
+        timeout=httpx.Timeout(30.0, read=settings.chat_read_timeout))
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"] or ""

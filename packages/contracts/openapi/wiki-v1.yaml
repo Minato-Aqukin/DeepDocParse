@@ -12,7 +12,8 @@ paths:
       operationId: createVersionedWiki
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Build'}}}}
-      responses: {'201': {description: Fixed draft revision}, '409': {description: Idempotency conflict}}
+      description: 同名规划页合并有效引用及章节。跨篇规划或结论缺少选定来源引用时拒绝；来源覆盖不代表语义支持度已通过。
+      responses: {'201': {description: Fixed draft revision}, '409': {description: Idempotency or budget conflict}, '502': {description: Invalid or source-incomplete model output}}
   /api/wikis/{wiki_id}:
     parameters: [{$ref: '#/components/parameters/WikiId'}]
     get:
@@ -24,7 +25,8 @@ paths:
       operationId: rebuildVersionedWiki
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Rebuild'}}}}
-      responses: {'201': {description: New immutable draft preserving human paragraphs}, '409': {description: Revision or idempotency conflict}}
+      description: 生成规则同新建；失败不更新旧修订、不消耗幂等键。
+      responses: {'201': {description: New immutable draft preserving human paragraphs}, '409': {description: Revision or idempotency conflict}, '502': {description: Invalid or source-incomplete model output}}
   /api/wikis/{wiki_id}/revisions/{revision_id}:
     parameters:
       - {$ref: '#/components/parameters/WikiId'}

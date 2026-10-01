@@ -696,12 +696,15 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
             verify_verdict = await _verdict(verify_task)
             if verify_verdict is True:
                 verified = True
+                # Answering and transcription may use different runtimes. A text-only
+                # answer fallback is not evidence that the independent OCR check failed.
+                if degraded == "vision_unavailable":
+                    degraded = retrieval.degraded
             elif verify_verdict is False:
                 # 图上的字和 chunk 文本对不上 -> 解析很可能错了。此时既不能说"已验证"，
                 # 也不能装作没事：这正是七种降级留下的唯一的洞（A4）。
-                # 这里会覆盖已有的 degraded，但唯一可能被覆盖的 vision_unavailable
-                # 实际不会发生 —— 视觉运行时挂了的话核对也打不通，_verdict 返回 None。
-                # 而 embedding_unavailable + 解析出错是真实组合，此时"出处存疑"更该说出口
+                # 独立视觉核对可以在回答退回纯文本后仍得出不一致；
+                # embedding_unavailable + 解析出错时，出处存疑优先报告。
                 degraded, verified = "parse_mismatch", False
             elif degraded is None:
                 degraded = "verification_unavailable"

@@ -1680,3 +1680,127 @@ async def test_crop_is_cached_immutably_and_revalidates_for_free(actor_client, s
     assert again.status_code == 304, "复访应当是 304，不该重传字节"
     assert again.headers["cache-control"] == cache, \
         "304 上也要带缓存头 —— 漏了的话浏览器下一次又当成没缓存过"
+
+
+@respx.mock
+async def test_verification_uses_vision_model_not_default_text_model():
+    from ddp_corpus.qa import verify_parse_consistency
+    from tests.conftest import SERVICE
+
+    expected = "The controller reset delay is seventeen milliseconds."
+    respx.get(f"{SERVICE}/v1/models").mock(return_value=httpx.Response(200, json={
+        "data": [
+            {"id": "text-only", "default": True, "capabilities": ["instruct"]},
+            {"id": "ocr", "default": False, "capabilities": ["vision", "no_instruct"],
+             "transcribe_prompt": "Free OCR."},
+        ],
+    }))
+
+    def model(request):
+        body = json.loads(request.content)
+        parts = body["messages"][0]["content"]
+        transcript = expected if (body.get("model") == "ocr" and any(
+            part.get("text") == "Free OCR." for part in parts)) else "Cannot inspect pictures."
+        return httpx.Response(200, json={"choices": [{"message": {"content": transcript}}]})
+
+    respx.post(CHAT).mock(side_effect=model)
+    async with httpx.AsyncClient(trust_env=False) as http:
+        assert await verify_parse_consistency(http, "data:image/png;base64,aW1hZ2U=", expected) is True
+
+
+@respx.mock
+async def test_verification_without_vision_never_sends_image_to_text_model():
+    from ddp_corpus.qa import verify_parse_consistency
+    from tests.conftest import SERVICE
+
+    respx.get(f"{SERVICE}/v1/models").mock(return_value=httpx.Response(200, json={
+        "data": [{"id": "text-only", "default": True, "capabilities": ["instruct"]}],
+    }))
+    text_model = respx.post(CHAT).mock(return_value=httpx.Response(200, json={
+        "choices": [{"message": {"content": "Cannot inspect pictures."}}],
+    }))
+    async with httpx.AsyncClient(trust_env=False) as http:
+        verdict = await verify_parse_consistency(
+            http, "data:image/png;base64,aW1hZ2U=", "The actual source passage is readable.")
+    assert verdict is None
+    assert not text_model.called
+
+
+@respx.mock
+async def test_independent_ocr_success_clears_text_answer_image_fallback(actor_client, session):
+    from tests.conftest import SERVICE
+
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+    respx.get(f"{SERVICE}/v1/models").mock(return_value=httpx.Response(200, json={
+        "data": [
+            {"id": "text-only", "default": True, "capabilities": ["instruct"]},
+            {"id": "ocr", "capabilities": ["vision", "no_instruct"],
+             "transcribe_prompt": "Free OCR."},
+        ],
+    }))
+
+    def model(request):
+        body = json.loads(request.content)
+        if body.get("model") == "ocr":
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "第二页的表格数据第二页的表格数据"}}],
+            })
+        if any(part.get("type") == "image_url" for message in body["messages"]
+               if isinstance(message.get("content"), list) for part in message["content"]):
+            return httpx.Response(400, json={"error": "text model does not accept images"})
+        return _grounded_response(_grounded_doc(("第二页有表格数据。", [1])), request)
+
+    respx.post(CHAT).mock(side_effect=model)
+    done = dict(await _ask(actor_client, cid))["done"]
+    assert done["verified"] is True
+    assert done["degraded"] is None
+    message = (await session.execute(
+        select(Message).where(Message.role == "assistant"))).scalars().one()
+    assert message.verified is True and message.degraded is None
+
+
+@pytest.mark.parametrize("surface", ["qa", "search"])
+@respx.mock
+async def test_compound_query_keeps_vector_retrieval_with_embedding_batch_size_one(
+        actor_client, session, app_state, monkeypatch, surface):
+    """运行时拒绝超限批次时，两条检索入口都不能把复合问题降成关键词路。"""
+    from ddp_corpus.config import settings
+    from ddp_corpus.qa import retrieve
+
+    document = await _ready_document(actor_client)
+    row = await session.get(Document, document["id"])
+    chunks = (await session.execute(
+        select(Chunk).where(Chunk.document_id == row.id))).scalars().all()
+    for chunk in chunks:
+        # 没有查询词面交集：只有向量路成功时才能返回这些证据。
+        chunk.text = chunk.search_text = chunk.text_tokenized = "unrelated source evidence"
+        chunk.embedding = [1.0, 0.0]
+    await session.commit()
+    monkeypatch.setattr(settings, "embedding_batch_size", 1)
+    monkeypatch.setattr(settings, "rerank_enabled", False)
+
+    def limited_runtime(request):
+        texts = json.loads(request.content)["input"]
+        if len(texts) > 1:
+            return httpx.Response(413, text="embedding batch limit is 1")
+        return httpx.Response(200, json={
+            "data": [{"index": 0, "embedding": [1.0, 0.0]}]})
+
+    respx.post(EMBEDDINGS).mock(side_effect=limited_runtime)
+    question = ("What is the flash size and what is the SRAM size "
+                "and what is the CPU clock and what is the supply voltage?")
+    if surface == "qa":
+        result = await retrieve(
+            session, app_state.search_index, app_state.http, question=question, document=row)
+        hits, degraded = result.hits, result.degraded
+    else:
+        response = await actor_client.get("/api/search", params={"q": question, "limit": 4})
+        assert response.status_code == 200
+        body = response.json()
+        hits = [hit for group in body["groups"] for hit in group["hits"]]
+        degraded = body["degraded"]
+
+    assert {hit["chunk_id"] for hit in hits} == {chunk.id for chunk in chunks}
+    assert all(hit["similarity"] == pytest.approx(1.0) for hit in hits)
+    assert degraded is None

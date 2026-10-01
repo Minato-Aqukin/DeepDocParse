@@ -49,11 +49,23 @@ supplied evidence with its `evidence_id` and the 1-based `reference` number the
 planner also uses; a claim may cite either, and the reference is resolved to that
 evidence's ID. Anything else is dropped. Bindings link claim IDs
 to stable original evidence IDs and excerpt digests; they do not imply that a
-semantic verifier proved the claim correct. A planner output that plans more
-than `max_pages` fails `409 wiki_budget_exceeded`; any other planner output
-rejected by plan validation fails `502 wiki_generation_failed` whose message
-states the planner's actual fault (for example a repeated page), not a generic
-binding error.
+semantic verifier proved the claim correct. A planner output with more raw entries
+than `max_pages` fails `409 wiki_budget_exceeded`. Within that bound, entries with
+the same stable `page_key` merge into one writing plan: first title retained,
+valid reference numbers and section headings unioned in encounter order. Invalid
+references still fail; conflicting literal source anchors become null, never a
+fabricated relationship anchor. More than 40 merged headings exceeds the budget.
+Other rejected planner outputs fail `502 wiki_generation_failed` with the actual fault.
+
+For a multi-source Wiki, both the plan and the generated claims must cite at least
+one original from **every selected source binding** (origin, resource, fixed version).
+The model receives these source identities with its evidence. Missing source
+coverage fails `502 wiki_generation_failed`, before a new draft/revision or
+idempotency receipt is committed; a failed rebuild leaves the previous revision
+unchanged. Relations, retained human paragraphs, and the dependency manifest do not
+substitute for generated claim coverage. Single-source unsupported drafts retain
+their existing review/publication rules. Coverage is a structural check, not proof
+that every requested fact was stated or that cited text supports its claim.
 
 `relations` contains source-grounded statements connecting two planned pages.
 Endpoints are page keys; each relation retains its original evidence IDs and

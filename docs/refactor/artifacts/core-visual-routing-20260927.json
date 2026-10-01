@@ -1,0 +1,78 @@
+{
+  "id": "core-visual-routing-20260927",
+  "date": "2026-09-27",
+  "scope": "plan.md §17 工作包 1：视觉核对选路与标定方法；不包含真实 OCR/GPU 质量验收",
+  "code_sha256": {
+    "python/ddp_core/ddp_core/verification.py": "d6731183961c26026dd8481540b2403f11ea2377645f183a668c0ea787d40113",
+    "services/corpus-api/ddp_corpus/upstream.py": "0d38ca624e79e107b05cbc24a7d01d0321ca0f41940e6c7780174ee49d266f38",
+    "services/corpus-api/ddp_corpus/qa.py": "5133e6cefd10474965fb79a4dc46923befe495dd0f1f818a17ed49324288d638",
+    "services/corpus-api/ddp_corpus/routers/conversations.py": "54c66322d7ccde9472cba1067d8337f4247e17861506cd607ef238a877f08582",
+    "services/model-gateway/ddp_gateway/routers/chat.py": "a14ce15e541a1c7fa98ca29708735877ad58de1aa22e14918e33627095ca4eff",
+    "services/model-gateway/ddp_gateway/services/extraction.py": "df69cce0e74f8d3990979d5707dc466201c4560452b9be2f4cb9de9327754878",
+    "scripts/calibrate_verify_threshold.py": "d347a25185bcfbe3024903dfd37bc122a4d15858f74a5234b8381af2150093cb",
+    "packages/contracts/openapi/gateway-v1.yaml": "d06015d2e10a14e5406eaf15328691ed87bfafb01937ea6e6e60e2bc712d8c73",
+    "packages/contracts/openapi/content-v1.yaml": "1959ae33d2ac995c05a8a2ae031b6ce1b47a1bb12c793743d7f823c89a88e89a"
+  },
+  "post_capture_code_changes": {
+    "recorded_hashes_preserved": true,
+    "http_proof_rerun": false,
+    "note": "code_sha256 与 http_smoke 保留捕获时原值；以下捕获后的代码和契约修改未重跑该 HTTP 证明，不能把历史结果视为当前工作树的测量。",
+    "files": {
+      "services/corpus-api/ddp_corpus/upstream.py": "捕获后抄写选路实现继续修改；本次抽出共用视觉选模 helper，并新增受 EMBEDDING_BATCH_SIZE 约束的查询批处理 helper。",
+      "services/corpus-api/ddp_corpus/capabilities.py": "核对 profile 改为消费与 transcribe_image 相同的独立 vision 选路，而非 CHAT_MODEL 的 vision+instruct；所选模型还须在网关 chat 通道上 readiness=ready 且 supports.vision，/v1/models 读取限 5 秒，任何失败都降为 unverified。",
+      "services/corpus-api/ddp_corpus/qa.py": "复合问题向量化改用共用批处理 helper。",
+      "services/corpus-api/ddp_corpus/routers/search.py": "复合问题向量化改用共用批处理 helper。",
+      "python/ddp_core/ddp_core/search.py": "名额分配：子问题数小于 limit 时原问题每轮先占一位，达到或超过 limit 时子问题先占位；真实 PG 复测见 core-compound-retrieval-20261001.json。",
+      "services/model-gateway/ddp_gateway/routers/chat.py": "模型清单的 vision 默认标记与 extraction 的子集默认选路一致。",
+      "packages/contracts/openapi/gateway-v1.yaml": "说明 vision 子集默认项与全局纯文本默认项可以同时标记。",
+      "packages/contracts/openapi/content-v1.yaml": "后续质量切片更新接口说明；本次补充子问题结果名额边界与向量批处理说明。"
+    }
+  },
+  "before": {
+    "routing_regressions": "2 failed：有非默认 OCR 却调用文本模型，返回 False 而非 True；仅有文本模型返回 False 而非 None",
+    "integrated_status_regression": "1 failed：独立 OCR 已核对通过但 SSE 同时 verified=true/degraded=vision_unavailable"
+  },
+  "decisions": [
+    "通过既有 /v1/models 的 capabilities/default/transcribe_prompt 选模型；先筛 vision，再取该集合中的默认或第一个；无视觉能力不向文本模型发送核对图片",
+    "抄写使用所选模型注册表提示；corpus 不导入 gateway 内部模块，不复用 CHAT_MODEL/chat_url",
+    "QA、抽取与标定共用 ddp_core.verification 的归一化、最短抄写与相似度实现；旧复制常量/函数删除",
+    "独立核对通过后不保留回答模型不收图引发的错误 vision_unavailable；保留 embedding/rerank 等真实降级",
+    "负例排除归一化后同文异块；保留不同数字等高相似难例；自配对仅候选正例，需人工核对文字层",
+    "标定 CLI 要求 --models-config 或显式 --prompt；注册表按 --model 而非全局默认选提示；现行阈值 0.55 不变"
+  ],
+  "http_smoke": {
+    "surface": "real loopback HTTP: corpus verification -> production gateway model discovery/chat proxy -> controlled transcript runtime",
+    "matched": true,
+    "mismatch": false,
+    "runtime_unavailable": null,
+    "no_vision": null,
+    "runtime_models": [
+      "ocr",
+      "ocr",
+      "ocr"
+    ],
+    "no_vision_sent_image": false,
+    "limit": "routing/protocol smoke only; not real OCR or threshold calibration"
+  },
+  "calibration_smoke": {
+    "self_pairs": 4,
+    "different_text_pairs": 10,
+    "same_text_pairs_excluded": 2,
+    "self_min": 1.0,
+    "hard_negative_max": 0.9411764705882353,
+    "unchanged_production_threshold": 0.55
+  },
+  "regressions": {
+    "corpus_api": "119 passed：QA、检索、资源权限与版本",
+    "model_gateway": "188 passed, 6 skipped：完整包，包括三条标定边界测试",
+    "ruff": "按 scripts/check.sh 的 F/B 规则，修改视觉代码与用例通过",
+    "configuration": "gen_config_docs.py --only corpus-api 已生成 88 项"
+  },
+  "limits": [
+    "HTTP 上游是显式受控抄写夹具，不是真 OCR；只证明选路/透传/比对/故障三态，不能宣称旧 GPU 21/21 降级已在真机消失",
+    "标定回放是人工构造的四段文本；没有用新方法重跑 Pico/ESP32/Attention OCR，没有调整阈值",
+    "真实 GPU 核对与复杂文档分域重标须另经授权；人工语义支持度仍 pending",
+    "未改变回答模型本身；它不收图时仍按原协议退回文本回答，独立核对成功才清除不实的“未核对”标志"
+  ],
+  "human_review_status": "pending"
+}

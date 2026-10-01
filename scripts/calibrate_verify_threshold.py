@@ -2,7 +2,7 @@
 
     python scripts/calibrate_verify_threshold.py \
         --pdf tests/fixtures/contract.pdf \
-        --endpoint http://127.0.0.1:18001 --model deepseek-ocr-2
+        --endpoint http://127.0.0.1:18001 --model deepseek-ocr-2 --prompt 'Free OCR.'
 
 ## 这个阈值是干什么的
 
@@ -20,11 +20,10 @@
 
 关键是要同时拿到**该判一致**和**该判不一致**两组样本：
 
-- 一致组：block[i] 的图 vs block[i] 的文本。用 **borndigital** 引擎取版面 ——
-  它的 bbox 是从 PDF 文字层直接算出来的**真坐标**，裁出来的图必然就是那块内容。
-  于是这一组的比值只反映"模型抄写的保真度"，没有别的变量混进来。
-- 不一致组：block[i] 的图 vs block[j] 的文本（j≠i）。这模拟"解析把内容搞错了"
-  的情形 —— 正是这个阈值该抓住的那种错。
+- 自配对组：block[i] 的图 vs block[i] 的文字层；它只是候选正例，
+  不等于人工真值（旋转文字、公式等可能是文字层自己错了），必须另做人工核查。
+- 异文配对组：block[i] 的图 vs block[j] 的文本（j≠i），排除归一化后同文的
+  配对。重复页眉／页脚不是负例；高相似但不同的文字仍保留，不按分数删难例。
 
 好的阈值应当落在两组分布之间。脚本会打印两组的分位数并给出建议值：
 取「一致组的 5% 分位」与「不一致组的 95% 分位」的中点，
@@ -35,46 +34,47 @@
 import argparse
 import asyncio
 import base64
-import difflib
 import statistics
-import sys
 from pathlib import Path
 
 import httpx
 
 from ddp_core import crops
+from ddp_core.verification import (
+    MIN_TRANSCRIPT_CHARS, TRANSCRIBE_PROMPT, comparable, similarity,
+)
 from ddp_gateway.services import borndigital, extraction, layout
 
-# **直接从 extraction 里取，不复制一份。**
-# 标定的全部意义在于"复现线上那条路径"：prompt 换个说法、下限差两个字，
-# 标出来的分布就不适用于线上了。抄一份放在这里迟早会漂移，
-# 而漂移之后这个脚本会安静地给出一个错的建议值。
-MIN_CHARS = extraction._MIN_TRANSCRIPT_CHARS
-comparable = extraction._comparable
 
-
-def transcribe_prompt_for(models_config: str | None) -> str:
-    """该用哪句话去问模型"把字抄出来" —— **从注册表读，与线上一致**。
-
-    OCR 专用模型只认自己的官方 prompt；拿缺省那句中文指令去问 DeepSeek-OCR-2，
-    它会回应那句指令而不是抄写（真机实测），标出来的分布就毫无意义。
-    注册表里用 `options.transcribe_prompt` 声明，这里照读。
-    """
-    if not models_config:
-        return extraction._TRANSCRIBE_PROMPT
+def transcribe_prompt_for(models_config: str, model: str) -> str:
+    """Use the requested visual model's prompt, never another model's default."""
     from ddp_gateway.config import load_registry
+
     registry = load_registry(Path(models_config))
-    if not registry.vqa_models:
-        return extraction._TRANSCRIBE_PROMPT
-    _, entry = registry.default_of(registry.vqa_models)
-    return str((entry.options or {}).get("transcribe_prompt")
-               or extraction._TRANSCRIBE_PROMPT)
+    entry = registry.vqa_models.get(model)
+    if entry is None or "vision" not in (entry.capabilities or []):
+        raise ValueError(f"{model!r} is not a registered vision model")
+    return str((entry.options or {}).get("transcribe_prompt") or TRANSCRIBE_PROMPT)
 
 
-def ratio(left: str, right: str) -> float:
-    # autojunk=False：默认启发式会把中文高频字当垃圾忽略，一致度被压低
-    return difflib.SequenceMatcher(None, comparable(left), comparable(right),
-                                   autojunk=False).ratio()
+def score_pairs(texts: list[str], transcripts: list[str | None]
+                ) -> tuple[list[float], list[float], int]:
+    """Return self/cross pairing scores and the number of excluded same-text pairs."""
+    normalized = [comparable(text) for text in texts]
+    matched, mismatched = [], []
+    excluded = 0
+    for i, (text, got) in enumerate(zip(texts, transcripts, strict=True)):
+        if got is None or len(comparable(got)) < MIN_TRANSCRIPT_CHARS:
+            continue
+        matched.append(similarity(got, text))
+        for j, other in enumerate(texts):
+            if j == i or len(normalized[j]) < MIN_TRANSCRIPT_CHARS:
+                continue
+            if normalized[i] == normalized[j]:
+                excluded += 1
+                continue
+            mismatched.append(similarity(got, other))
+    return matched, mismatched, excluded
 
 
 async def transcribe(http: httpx.AsyncClient, endpoint: str, model: str,
@@ -123,11 +123,12 @@ async def main() -> int:
     ap.add_argument("--endpoint", default="http://127.0.0.1:18001")
     ap.add_argument("--model", default="deepseek-ocr-2")
     ap.add_argument("--max-blocks", type=int, default=20, help="最多测几个块（省 GPU 时间）")
-    ap.add_argument("--models-config", default=None,
-                    help="注册表路径。给了就按它取 transcribe_prompt（与线上一致）")
+    prompt_args = ap.add_mutually_exclusive_group(required=True)
+    prompt_args.add_argument("--models-config", help="注册表路径；按 --model 选择视觉模型的提示")
+    prompt_args.add_argument("--prompt", help="直连运行时的显式抄写提示，不猜测模型专用提示")
     args = ap.parse_args()
 
-    prompt = transcribe_prompt_for(args.models_config)
+    prompt = args.prompt or transcribe_prompt_for(args.models_config, args.model)
     print(f"抄写用的 prompt: {prompt!r}\n")
 
     pdf_bytes = Path(args.pdf).read_bytes()
@@ -142,7 +143,7 @@ async def main() -> int:
     for page in built["pdf_info"]:
         for block in page["para_blocks"]:
             text = layout.block_text(block)
-            if block.get("bbox") and len(comparable(text)) >= MIN_CHARS:
+            if block.get("bbox") and len(comparable(text)) >= MIN_TRANSCRIPT_CHARS:
                 items.append((page["page_idx"], block["bbox"], page["page_size"], text))
     items = items[:args.max_blocks]
     print(f"取到 {len(items)} 个可用块（有 bbox、文字够长）\n")
@@ -163,20 +164,12 @@ async def main() -> int:
             head = (got or "").strip().replace("\n", " ")[:50]
             print(f"  [{i}] p{page_idx} 原文={text[:28]!r} 抄写={head!r}")
 
-    matched: list[float] = []
-    mismatched: list[float] = []
-    for i, got in enumerate(transcripts):
-        if got is None or len(comparable(got)) < MIN_CHARS:
-            continue
-        matched.append(ratio(got, items[i][3]))
-        # 不一致组：拿同一张图去和**别的块**的文本比
-        for j, other in enumerate(items):
-            if j != i and len(comparable(other[3])) >= MIN_CHARS:
-                mismatched.append(ratio(got, other[3]))
+    matched, mismatched, excluded = score_pairs([item[3] for item in items], transcripts)
+    print(f"\n排除同文异块配对 {excluded} 对；自配对正例仍需人工核查文字层质量。")
 
     print("\n" + "=" * 68)
-    print("一致组   （块图 vs 自己的文本，应当高）:", percentiles(matched))
-    print("不一致组 （块图 vs 别人的文本，应当低）:", percentiles(mismatched))
+    print("自配对组（候选正例，不替代人工真值）:", percentiles(matched))
+    print("异文配对组（排除同文块）:", percentiles(mismatched))
     print("=" * 68)
 
     if not matched or not mismatched:

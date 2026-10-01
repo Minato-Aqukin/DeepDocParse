@@ -110,3 +110,37 @@ async def test_pages_without_relation_candidates_do_not_require_another_model_de
         record_attempt=lambda *args: lambda **updates: None)
     assert [page['title'] for page in result['pages']] == topics
     assert result['relations'] == []
+
+
+def test_same_page_identity_merges_valid_references_and_sections(evidence):
+    second = copy.deepcopy(evidence[0])
+    second.update(id="original-2", excerpt="Validator checks each batch.")
+    second["evidence"]["source_version_id"] = "fixed-2"
+    evidence.append(second)
+    plan = normalize_plan({"pages": [
+        {"title": "Pipeline", "sections": ["Collection"], "references": [1], "source_term": "Collector"},
+        {"title": " pipeline ", "sections": ["Validation", "Collection"], "references": [2, 1],
+         "source_term": "Validator"}]}, evidence, limits_for({}))
+    assert [(p["title"], p["references"], p["sections"], p["source_term"]) for p in plan] == [
+        ("Pipeline", [1, 2], ["Collection", "Validation"], None)]
+    with pytest.raises(ApplicationError) as invalid:
+        normalize_plan({"pages": [{"title": "Pipeline", "references": [1]},
+                                  {"title": "Pipeline", "references": [99]}]},
+                       evidence, limits_for({}))
+    assert invalid.value.code == "unsupported_generation"
+
+
+@pytest.mark.parametrize("stage", ["plan", "write"])
+def test_multisource_coverage_distinguishes_origins_with_equal_version_ids(evidence, stage):
+    evidence[0]["evidence"].update(origin_node_id="node-a", resource_id="manual")
+    second = copy.deepcopy(evidence[0])
+    second["id"] = "original-2"
+    second["evidence"]["origin_node_id"] = "node-b"
+    evidence.append(second)
+    planned = {"pages": [{"title": "Comparison", "references": [1] if stage == "plan" else [1, 2]}]}
+    with pytest.raises(ApplicationError) as omitted:
+        plan = normalize_plan(planned, evidence, limits_for({}))
+        normalize_pages({"pages": [{"page": 1, "sections": [{"heading": "Facts",
+            "sentences": [{"text": "Collector forwards batches.", "references": [1]}]}]}]},
+            plan, evidence, {})
+    assert omitted.value.code == "wiki_generation_invalid"

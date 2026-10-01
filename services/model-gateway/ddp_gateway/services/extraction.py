@@ -16,9 +16,7 @@
 """
 import asyncio
 import base64
-import difflib
 import json
-import re
 
 import httpx
 
@@ -26,6 +24,7 @@ from ddp_gateway.config import settings
 from ddp_core import extract_format as fmt
 from ddp_core import crops
 from ddp_core.extract_format import CoerceError, FieldSpec, SchemaSpec, coerce_value
+from ddp_core.verification import TRANSCRIBE_PROMPT, transcript_agrees
 from ddp_gateway.services.retrieval import retrieve
 
 _SYSTEM = (
@@ -63,13 +62,6 @@ _RECORDS_PROMPT = """【记录字段】
 - 某条记录缺某个字段 -> 该字段填 null，不要跳过整条记录
 - **不要编造记录，也不要把表头当成一条记录。**"""
 
-_TRANSCRIBE_PROMPT = (
-    "把这张图里的文字**原样**抄写出来，保持原有顺序。"
-    "不要翻译、不要总结、不要解释，只输出文字本身。"
-)
-# 抄写短于此长度视为"没抄出来"，判 unknown 而不是 mismatch。
-# 误报会把好出处打成存疑，比不报更伤信任（沿用 Web 层 A4 的取向）
-_MIN_TRANSCRIPT_CHARS = 10
 
 
 class ExtractContext:
@@ -157,8 +149,8 @@ def instruct_available(ctx: ExtractContext) -> bool:
 def _transcribe_prompt(ctx: ExtractContext) -> str:
     """让模型"把这块图上的字抄出来"，**用它听得懂的话问**。
 
-    2026-08-25 在真机上标定阈值时抓到的：拿 `_TRANSCRIBE_PROMPT`（一句中文指令）
-    去问 DeepSeek-OCR-2，它不抄写，而是**回应那句指令**——
+    2026-08-25 在真机上标定阈值时抓到的：拿通用中文抄写指令去问 DeepSeek-OCR-2，
+    它不抄写，而是**回应那句指令**——
 
         原文 "PURCHASE AGREEMENT" -> 抄写 "例如，如果问题涉及"购买协议"，则写"购买协议"。"
 
@@ -173,9 +165,9 @@ def _transcribe_prompt(ctx: ExtractContext) -> str:
     """
     picked = _pick_chat(ctx, instruct=False)
     if picked is None:
-        return _TRANSCRIBE_PROMPT
+        return TRANSCRIBE_PROMPT
     _, entry = picked
-    return str((entry.options or {}).get("transcribe_prompt") or _TRANSCRIBE_PROMPT)
+    return str((entry.options or {}).get("transcribe_prompt") or TRANSCRIBE_PROMPT)
 
 
 async def _chat(ctx: ExtractContext, messages: list[dict], *,
@@ -271,11 +263,6 @@ async def _load_pdf(ctx: ExtractContext) -> bytes | None:
     return ctx._pdf
 
 
-def _comparable(text: str) -> str:
-    """比对前只留文字本身：标点空格在两边几乎不可能一致，留着是把噪声算成分歧。"""
-    return re.sub(r"[\s\W_]+", "", text or "", flags=re.UNICODE)
-
-
 async def _verify_citation(ctx: ExtractContext, hit: dict) -> tuple[str | None, bool | None]:
     """裁区域图 + 让视觉模型原样抄一遍，与块文本比对。
 
@@ -300,13 +287,8 @@ async def _verify_citation(ctx: ExtractContext, hit: dict) -> tuple[str | None, 
     ]}], instruct=False)
     if transcript is None:
         return uri, None
-    left, right = _comparable(transcript), _comparable(hit.get("text", ""))
-    if len(left) < _MIN_TRANSCRIPT_CHARS or not right:
-        return uri, None
-    # autojunk=False：默认启发式会把中文里"的""是"这类高频字当垃圾忽略，
-    # 一致度被压低、判定偏向误报 mismatch，与"宁可漏报不要误报"正好相反
-    ratio = difflib.SequenceMatcher(None, left, right, autojunk=False).ratio()
-    return uri, ratio >= settings.extract_mismatch_threshold
+    return uri, transcript_agrees(
+        transcript, hit.get("text", ""), threshold=settings.extract_mismatch_threshold)
 
 
 # ---------- 单字段抽取 ----------

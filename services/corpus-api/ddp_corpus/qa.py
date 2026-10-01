@@ -14,24 +14,24 @@
 """
 import asyncio
 import base64
-import difflib
 import json
 import re
 from dataclasses import dataclass, field
 
 import httpx
+from ddp_core.agent import CandidateDecision, QueryDecision, gate_candidates
+from ddp_core.rerank import rerank_hits
+from ddp_core.search import Hit, SearchIndex, search_query
+from ddp_core.tokenize import backend as tokenize_backend
+from ddp_core.verification import transcript_agrees
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_corpus.config import rerank_config, settings
 from ddp_corpus.crops import get_or_create_crop
 from ddp_corpus.models import Chunk, Document, Evidence, ParseJob
-from ddp_core.agent import CandidateDecision, QueryDecision, gate_candidates
-from ddp_core.rerank import rerank_hits
-from ddp_core.search import Hit, SearchIndex
 from ddp_corpus.storage import Storage
-from ddp_core.tokenize import backend as tokenize_backend
-from ddp_corpus.upstream import chat_request, embed_one
+from ddp_corpus.upstream import chat_request, embed_batched, transcribe_image
 
 SYSTEM_PROMPT = (
     "Answer the question from the supplied original source excerpts. Include only facts "
@@ -161,9 +161,9 @@ async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncC
     """混合检索 + 出处裁剪。任何一步不可用都降级——但降级要**说出来**。"""
     allowed_jobs = None
     if actor is not None:
-        from ddp_corpus.policy import require_document
         from ddp_corpus.document_context import document_context
         from ddp_corpus.errors import APIError
+        from ddp_corpus.policy import require_document
         await require_document(session, actor, document.id)
         context = await document_context(session, actor, document)
         allowed_jobs = [context.parse_job_id] if context.parse_job_id else []
@@ -172,15 +172,6 @@ async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncC
                                       Chunk.parse_job_id.in_(allowed_jobs)).limit(1))):
             raise APIError(409, "fixed resource version has no searchable index",
                            "invalid_request_error", "resource_index_unavailable")
-    degraded: str | None = None
-    try:
-        vector = await embed_one(http, question)
-    except Exception:
-        # 向量化挂了就只走关键词路，并如实打标。
-        # 绝不能拿零向量顶上：那样检索照跑、结果照返，用户以为是语义命中，
-        # 实际是一堆噪声——正是铁律 3 要杜绝的静默降级
-        vector, degraded = None, "embedding_unavailable"
-
     # 开了精排就多要候选：rerank 的价值全在"从更大的候选池里挑"，
     # 候选 == top_k 时它只是把已经选定的几条重新排了个序（config 有启动期校验）
     if settings.rerank_enabled:
@@ -188,19 +179,18 @@ async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncC
     else:
         limit, candidates = settings.qa_top_k, settings.qa_candidates
 
-    raw_hits = await index.search(session, vector=vector, query=question,
-                              document_id=document.id,
-                              authorized_parse_job_ids=allowed_jobs,
-                              limit=limit, candidates=candidates,
-                              # 先保留候选，再由逐篇门控作决定；在 SearchIndex 里提前
-                              # 丢掉就无法报告门控前精确率，也看不见“为什么没引”。
-                              min_similarity=-1.01)
+    raw_hits, degraded = await search_query(
+        session, index, embed=lambda texts: embed_batched(http, texts),
+        query=question, document_id=document.id, authorized_parse_job_ids=allowed_jobs,
+        limit=limit, candidates=candidates,
+        # Keep candidates until the per-document gate can explain rejected evidence.
+        min_similarity=-1.01)
     if not raw_hits:
         return Retrieval(degraded=degraded or "no_hits")
 
     hits, decisions = gate_candidates(
         raw_hits, min_similarity=settings.qa_min_similarity,
-        vector_available=vector is not None)
+        vector_available=degraded != "embedding_unavailable")
     if not hits:
         return Retrieval(candidates=decisions, degraded=degraded or "gate_rejected_all")
 
@@ -304,24 +294,6 @@ async def attach_crops(retrieval: Retrieval, storage: Storage, document: Documen
     return crops
 
 
-TRANSCRIBE_PROMPT = (
-    "把这张图里的文字**原样**抄写出来，保持原有顺序。"
-    "不要翻译、不要总结、不要解释，只输出文字本身。"
-)
-# 抄写结果短于这个长度就认为"没抄出来"（模型拒答、图糊、纯图表区域），
-# 判 unknown 而不是 mismatch —— 误报会把好出处打成存疑，比不报更伤信任
-_MIN_TRANSCRIPT_CHARS = 10
-
-
-def _comparable(text: str) -> str:
-    """比对前的归一化：去掉空白与标点，只留下文字本身。
-
-    视觉模型抄出来的标点、空格与解析器给的几乎不可能一致，
-    留着它们会把噪声算成分歧。中日文没有词边界，所以按字符比而不是按词。
-    """
-    return re.sub(r"[\s\W_]+", "", text, flags=re.UNICODE)
-
-
 async def verify_parse_consistency(http: httpx.AsyncClient, image_uri: str,
                                    chunk_text: str) -> bool | None:
     """图上的字和 chunk 文本是不是同一段？
@@ -335,26 +307,13 @@ async def verify_parse_consistency(http: httpx.AsyncClient, image_uri: str,
     产出"带着已做视觉验证标记的假出处"。这也正是视觉检索路线（ColPali 系）
     对文本管线的核心攻击点。
     """
-    messages = [{"role": "user", "content": [
-        {"type": "image_url", "image_url": {"url": image_uri}},
-        {"type": "text", "text": TRANSCRIBE_PROMPT},
-    ]}]
     try:
-        response = await http.send(chat_request(http, messages, stream=False))
-        if response.status_code != 200:
-            return None
-        transcript = response.json()["choices"][0]["message"]["content"] or ""
+        transcript = await transcribe_image(http, image_uri)
     except Exception:
         return None                 # 视觉模型不可用 —— 那由 vision_unavailable 去标
 
-    left, right = _comparable(transcript), _comparable(chunk_text)
-    if len(left) < _MIN_TRANSCRIPT_CHARS or not right:
-        return None
-    # autojunk=False：默认启发式会把长串里出现频繁的字符当"垃圾"忽略，
-    # 中文正文里"的""是"这类字首当其冲 —— 一致度被压低，判定偏向误报 mismatch，
-    # 与"宁可漏报不要误报"的取向正好相反
-    ratio = difflib.SequenceMatcher(None, left, right, autojunk=False).ratio()
-    return ratio >= settings.qa_parse_mismatch_threshold
+    return transcript_agrees(
+        transcript, chunk_text, threshold=settings.qa_parse_mismatch_threshold)
 
 
 def build_messages(question: str, retrieval: Retrieval, history: list[dict],

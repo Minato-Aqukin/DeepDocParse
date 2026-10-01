@@ -40,7 +40,7 @@ T85 那一族事故 —— 收下看不懂的东西再"尽力执行"，最后表
 | 许可 | `ddp-task-probe/1#ExplorationConsent`、`ddp-plan-admission/1#ExecutionConsent` | 同上 / `ddp-plan-admission/v1.json` | 未知字段 → `egress_denied` / `protocol_incompatible` |
 | 接单 | `ddp-plan-admission/1#AdmissionReceipt` | `ddp-plan-admission/v1.json` | 未知字段或旧 schema → `protocol_incompatible` |
 | 覆盖 | `ddp-scope-coverage/1#ScopeManifest` / `CoverageLedger` | `ddp-scope-coverage/v1.json` | 摘要/枚举校验失败 → `plan_changed` / `scope_expired` |
-| Wiki 生成协议 | `ddp-wiki-generation/5`（内部） | `ddp_core/application/wiki.py` | 旧生成协议不落库（attempt 记录原协议） |
+| Wiki 生成协议 / 解码器 | `ddp-wiki-generation/6` / `wiki-json/3-merged-pages-source-coverage`（内部） | `ddp_core/application/wiki.py` | 旧生成协议不落库（attempt 记录原协议）；合并页面后校验来源覆盖 |
 | 索引 | `index_revision`（不透明字符串）+ `EMBEDDING_DIM=1024` | `corpus-api/CONFIG.md` | 修订不一致 → 探测不可复用（重新探测） |
 | DB | corpus alembic head `0030`；control 迁移 `0010` | `database/` | 版本不匹配由迁移单写者拒绝 |
 

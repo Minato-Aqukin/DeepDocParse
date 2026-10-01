@@ -36,9 +36,9 @@ answer 步骤会在收款后被 `capability_unsupported` 拒掉。
 
 ## 只消费网关的 HTTP 契约
 
-模型能力来自 `services/model-gateway` 的 `GET /v1/capabilities`。本模块
-**只按 HTTP 契约消费，绝不 import 网关的注册表代码** —— 网关注册表是它的
-内部实现，跨服务 import 会让两侧的类型与过滤规则悄悄分叉。
+生成通道能力来自 `services/model-gateway` 的 `GET /v1/capabilities`；
+独立视觉核对按 `GET /v1/models` 的 vision/default/transcribe_prompt 选路。
+本模块只按 HTTP 契约消费，绝不 import 网关注册表代码，以免跨服务规则分叉。
 
 ## 观测不到、过期、不认识的取值，一律不许透传成 ready
 
@@ -62,6 +62,7 @@ from ddp_contracts.enums import CAPABILITY_READINESS_VALUES
 from ddp_corpus.config import settings
 from ddp_corpus.db import get_sessionmaker
 from ddp_corpus.models import Chunk
+from ddp_corpus.upstream import UpstreamError, select_transcription_model
 
 #: 一次观测的有效期。**短**：它是"现在"的证据，不是一个长期结论。
 OBSERVATION_TTL_SECONDS = 60
@@ -444,11 +445,20 @@ async def collect_capability_profiles(
     # 这件事"，与"做得了但现在不可用"必须分开（control 侧的
     # capability_unsupported vs capability_unknown 就是这条分界）。
     if chat.configured:
+        visual_model = None
+        if settings.qa_verify_parse or settings.extract_verify:
+            try:
+                selected = await select_transcription_model(http, timeout=5.0)
+            except Exception:
+                # 可选核对观测失败（传输、状态码、形状）只降 profile：不冒充已具备
+                # 核对能力，也不把能力查询（握手 / 探测）变成 500。
+                selected = None
+            visual_model = _ready_vision(selected, channels)
         instruct = _worst(chat.supporting("instruct"), store)
         for operation in ("rag.answer.cited", "extract.fields", "wiki.pages"):
             profiles.append(profile(
                 operation, instruct,
-                name=_verification_variant(operation, chat),
+                name=_verification_variant(operation, visual_model),
                 versions=_sane_versions({"chat_model": chat.model}),
                 limits=chat.limits))
 
@@ -467,13 +477,29 @@ async def collect_capability_profiles(
     return profiles, "observed"
 
 
-def _verification_variant(operation: str, chat: _Channel) -> str:
+def _ready_vision(selected: dict | None, channels: list | None) -> dict | None:
+    """`/v1/models` 只说注册了谁；核对模型还必须在网关 chat 通道上被观测为 ready 且能看图。"""
+    if not isinstance(selected, dict) or not channels:
+        return None
+    name = selected.get("id")
+    for channel in channels:
+        # `/v1/models` 的 id 是注册名，只对应通道的 profile；按 model 匹配会让别名条目替它作证。
+        if (isinstance(channel, dict) and channel.get("channel") == "chat"
+                and channel.get("profile") == name):
+            supports = channel.get("supports")
+            if (channel.get("readiness") == "ready" and isinstance(supports, dict)
+                    and supports.get("vision") is True):
+                return selected
+    return None
+
+
+def _verification_variant(operation: str, visual_model: dict | None) -> str:
     """出处视觉核对开着且真能做时才叫 `verified`。
 
-    核对要把裁图上的字抄出来再比对（`qa.py::verify_parse_consistency`），
-    用的是一句中文指令，所以同样要 vision + instruct。做不了时核对结果是
-    `None`（"没测出来"），而**不是**"一致" —— 把不能核对说成 verified
-    就是发一张假的验证章。
+    核对通过 `upstream.transcribe_image` 独立访问网关 `/v1/models`，先筛
+    vision，再优先默认条目，并使用该模型的 `transcribe_prompt`；OCR
+    专用模型不需要 instruct，CHAT_MODEL 的能力也不能替它作证。
+    做不了时核对结果是 None，而不是“一致”；必须如实标为 unverified。
 
     Wiki 生成没有这道核对（`knowledge.py` 只打文本 chat），所以它没有变体，
     返回空串 = 不写 `profile` 字段，而不是随便给个名字。
@@ -484,4 +510,4 @@ def _verification_variant(operation: str, chat: _Channel) -> str:
         return ""
     if not enabled[operation]:
         return "unverified"
-    return "verified" if chat.supporting("vision", "instruct") == "ready" else "unverified"
+    return "verified" if visual_model is not None else "unverified"

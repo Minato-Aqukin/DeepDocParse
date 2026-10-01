@@ -84,8 +84,17 @@ def gateway_body(*, profiles=(), channels=(), status: str = "observed") -> dict:
             "model_channels": list(channels)}
 
 
-def mock_gateway(**kwargs) -> None:
+def mock_gateway(*, models=None, **kwargs) -> None:
     respx.get(GATEWAY_CAP).mock(return_value=httpx.Response(200, json=gateway_body(**kwargs)))
+    if models is None:
+        models = [
+            {"id": channel["model"], "capabilities": ["vision"],
+             "default": channel["default"], "transcribe_prompt": "Free OCR."}
+            for channel in kwargs.get("channels", ())
+            if channel["channel"] == "chat" and channel["supports"].get("vision")
+        ]
+    respx.get(f"{SERVICE}/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": models}))
 
 
 async def fetch(client, headers) -> dict:
@@ -279,22 +288,70 @@ async def test_unflagged_default_channel_is_unknown_not_ready(
 
 
 @respx.mock
-async def test_verification_variant_needs_a_vision_instruct_model(
+async def test_verification_variant_uses_registered_ocr_not_text_chat(
         client, service_client_headers, monkeypatch):
-    """出处视觉核对做不了时不许叫 `verified`（那是一张假的验证章）。"""
+    """纯文本回答与 OCR 核对独立选路；核对不要求模型遵循抽取指令。"""
     monkeypatch.setattr(settings, "qa_verify_parse", True)
-    mock_gateway(channels=[CHAT_INSTRUCT])       # 看不见图 -> 核对不了
+    monkeypatch.setattr(settings, "extract_verify", True)
+    monkeypatch.setattr(settings, "chat_model", CHAT_INSTRUCT["model"])
+    mock_gateway(channels=[CHAT_INSTRUCT, CHAT_OCR], models=[
+        {"id": "deepseek-ocr-2", "capabilities": ["vision", "no_instruct"],
+         "default": True, "transcribe_prompt": "Free OCR."},
+    ])
     by_op = await by_operation(client, service_client_headers)
-    assert by_op["rag.answer.cited"]["profile"] == "unverified"
-
-    mock_gateway(channels=[CHAT_VISION_INSTRUCT])
-    by_op = await by_operation(client, service_client_headers)
-    assert by_op["rag.answer.cited"]["profile"] == "verified"
+    for operation in ("rag.answer.cited", "extract.fields"):
+        assert by_op[operation]["profile"] == "verified"
+        assert by_op[operation]["readiness"] == "ready"
 
     monkeypatch.setattr(settings, "qa_verify_parse", False)
-    mock_gateway(channels=[CHAT_VISION_INSTRUCT])
+    monkeypatch.setattr(settings, "extract_verify", False)
     by_op = await by_operation(client, service_client_headers)
-    assert by_op["rag.answer.cited"]["profile"] == "unverified", "开关关着就不是已核对"
+    for operation in ("rag.answer.cited", "extract.fields"):
+        assert by_op[operation]["profile"] == "unverified"
+
+
+@pytest.mark.parametrize("chat", [CHAT_INSTRUCT, CHAT_VISION_INSTRUCT])
+@respx.mock
+async def test_verification_variant_without_registered_vision_is_unverified(
+        client, service_client_headers, monkeypatch, chat):
+    """CHAT_MODEL 自称能看图也不能替代核对实际消费的 /v1/models 清单。"""
+    monkeypatch.setattr(settings, "qa_verify_parse", True)
+    monkeypatch.setattr(settings, "extract_verify", True)
+    mock_gateway(channels=[chat], models=[
+        {"id": "text-only", "capabilities": ["instruct"], "default": True},
+    ])
+    by_op = await by_operation(client, service_client_headers)
+    for operation in ("rag.answer.cited", "extract.fields"):
+        assert by_op[operation]["profile"] == "unverified"
+
+
+@respx.mock
+async def test_registered_but_unhealthy_ocr_is_unverified(client, service_client_headers, monkeypatch):
+    """注册不代表健康：网关观测到核对模型不可用时，回答照常 ready，但不能宣称 verified。"""
+    monkeypatch.setattr(settings, "qa_verify_parse", True)
+    monkeypatch.setattr(settings, "extract_verify", True)
+    down = gw_channel("chat", "deepseek-ocr-2", readiness="unhealthy", default=False,
+                      instruct=False, vision=True)
+    mock_gateway(channels=[CHAT_INSTRUCT, down], models=[
+        {"id": "deepseek-ocr-2", "capabilities": ["vision", "no_instruct"],
+         "default": True, "transcribe_prompt": "Free OCR."},
+    ])
+    by_op = await by_operation(client, service_client_headers)
+    for operation in ("rag.answer.cited", "extract.fields"):
+        assert by_op[operation]["profile"] == "unverified"
+        assert by_op[operation]["readiness"] == "ready"
+
+
+@respx.mock
+async def test_malformed_model_list_degrades_to_unverified_not_500(client, service_client_headers, monkeypatch):
+    """`/v1/models` 形状不对（data 不是列表）只把核对降成 unverified，能力查询本身照常 200。"""
+    monkeypatch.setattr(settings, "qa_verify_parse", True)
+    monkeypatch.setattr(settings, "extract_verify", True)
+    mock_gateway(channels=[CHAT_INSTRUCT, CHAT_OCR], models={"deepseek-ocr-2": {"capabilities": ["vision"]}})
+    by_op = await by_operation(client, service_client_headers)
+    for operation in ("rag.answer.cited", "extract.fields"):
+        assert by_op[operation]["profile"] == "unverified"
+        assert by_op[operation]["readiness"] == "ready"
 
 
 # ------------------------------------------------- 独立端点：观测不到就 unknown
@@ -463,6 +520,8 @@ async def test_missing_channel_list_is_unknown_not_absent(client, service_client
     respx.get(GATEWAY_CAP).mock(return_value=httpx.Response(
         200, json={"capability_status": "observed",
                    "profiles": [gw_profile("doc.parse")]}))
+    respx.get(f"{SERVICE}/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": []}))
     by_op = await by_operation(client, service_client_headers)
     assert by_op["rag.answer.cited"]["readiness"] == "unknown"
     assert by_op["doc.compile"]["profile"] == "text_only"
@@ -547,6 +606,8 @@ async def test_malformed_channel_entries_do_not_break_the_endpoint(
     respx.get(GATEWAY_CAP).mock(return_value=httpx.Response(200, json={
         "capability_status": "observed", "profiles": [],
         "model_channels": ["chat", None, 7, {"channel": "chat"}, CHAT_INSTRUCT]}))
+    respx.get(f"{SERVICE}/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": []}))
     by_op = await by_operation(client, service_client_headers)
     assert by_op["rag.answer.cited"]["readiness"] == "ready"
 

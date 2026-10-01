@@ -14,6 +14,7 @@ import respx
 from httpx import Response
 
 from ddp_core import extract_format as fmt
+from ddp_core.verification import TRANSCRIBE_PROMPT
 from ddp_gateway.services import extraction
 from ddp_gateway.services.task_store import TaskStore
 from ddp_gateway.worker.tasks import run_extraction
@@ -419,9 +420,9 @@ async def test_transcribe_prompt_follows_the_registry(app_state):
     # 注册表里 OCR-2 声明了自己的原生 prompt
     assert extraction._transcribe_prompt(ctx) == "Free OCR."
 
-    # 没声明的模型走缺省那句中文指令（通用视觉模型能听懂）
+    # 没声明的模型走共享的缺省抄写指令（通用视觉模型能听懂）
     app_state.registry.vqa_models["deepseek-ocr-2"].options = {}
-    assert extraction._transcribe_prompt(ctx) == extraction._TRANSCRIBE_PROMPT
+    assert extraction._transcribe_prompt(ctx) == TRANSCRIBE_PROMPT
 
 
 async def test_transcribe_prompt_survives_an_empty_registry(app_state):
@@ -430,7 +431,8 @@ async def test_transcribe_prompt_survives_an_empty_registry(app_state):
     ctx = extraction.ExtractContext(
         store=None, http=None, registry=app_state.registry,
         doc_hash="x" * 64, corpus=[])
-    assert extraction._transcribe_prompt(ctx) == extraction._TRANSCRIBE_PROMPT
+    assert extraction._transcribe_prompt(ctx) == TRANSCRIBE_PROMPT
+
 
 
 async def test_visual_verification_skips_a_text_only_model(app_state):

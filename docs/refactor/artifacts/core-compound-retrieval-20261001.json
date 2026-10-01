@@ -1,0 +1,1408 @@
+{
+  "id": "core-compound-retrieval-20261001",
+  "date": "2026-10-01",
+  "scope": "plan.md §17 工作包 1：单中心复合查询召回；不代表单中心质量整项验收",
+  "supersedes": "core-compound-retrieval-20260927.json",
+  "input": "core-workflow-input-20260923.json",
+  "input_sha256": "048b8048ffba2eadc5b7b5376cc9851a796cee9f2b04e43a2c8da885df43e5a4",
+  "code_sha256": {
+    "python/ddp_core/ddp_core/search.py": "cb59dacfa333c76719a76ec18c1929d87443dd929ee1ee1ae100839371eafcc0",
+    "services/corpus-api/ddp_corpus/qa.py": "f47ccd65a821b47330eea1d1699e4220ebe6564cd87429952166a9f79e2fe4f9",
+    "services/corpus-api/ddp_corpus/routers/search.py": "4905f6bdaf19fc4889a3746a74d5ffcdce01528ace59c7f58cfed16d41770356",
+    "services/corpus-api/ddp_corpus/upstream.py": "769b4f4a5a5ce41278e907954e79fd217b9ed24460a02abe84deb0f3e9e0ec61",
+    "services/corpus-api/tests/test_search_ranking.py": "d335036a7a745dca9e51b47d23d427a5a051adf4910fb7a62979a8c2b90ec896",
+    "packages/contracts/openapi/content-v1.yaml": "75bb9d4ae2ff2fcb511d9bcf572322410cc7dddcff8833ba51dad84ca771531d"
+  },
+  "environment": {
+    "storage": "Live ddp-b-pg PostgreSQL 16.15 (Debian 16.15-1.pgdg12+2) + pgvector 0.8.6, 127.0.0.1:45432/deepdocparse",
+    "database_role": "ddp_corpus",
+    "transaction_read_only": "on",
+    "embedding": "Live llama.cpp bge-m3 Q8_0 at http://127.0.0.1:48181/v1/embeddings; model alias bge-m3",
+    "embedding_batch_size": 1,
+    "scope": "Only frozen Pico, ESP32, Attention versions; no index rebuild, question edits or source replacement",
+    "sources": {
+      "pico": {
+        "resource_id": "0341f9d5fc404cf8bb8b04d391a3c9de",
+        "version_id": "77c1392bb1ad42c5aff771ee836b92b3",
+        "version_no": 1,
+        "document_id": "4ec760d4a5384f9fb021beabad8dc458",
+        "parse_job_id": "66e776e7d4e54d9c8cfd3822e6ef21af",
+        "source_digest": "757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+        "chunk_count": 123,
+        "ordered_chunk_text_sha256": "1b66614c7379ecdc52c87c980a076a266f2abe165ab0d54b1cab9d4d8be3d1e7",
+        "index_status": "ready"
+      },
+      "esp32": {
+        "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+        "version_id": "a823c98f0ae048a0afec21a751d06da8",
+        "version_no": 1,
+        "document_id": "121c42f16ca84325a00d298c7cedbfcf",
+        "parse_job_id": "4585afdaa46c49bca67375b860c074f8",
+        "source_digest": "a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+        "chunk_count": 2120,
+        "ordered_chunk_text_sha256": "0a82c8dba549bd0226dee53377905b7c69f51d2f756cd71fee510c888e138720",
+        "index_status": "ready"
+      },
+      "attention": {
+        "resource_id": "98ebcc11f63e4e95981e56d87ad89a57",
+        "version_id": "d8750769f3fb4722b8ef3482ea8a3826",
+        "version_no": 1,
+        "document_id": "d2fb6877db694b14bfb0e30182518432",
+        "parse_job_id": "aa2b0fa0dfd64bba817cbb7141616240",
+        "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "chunk_count": 347,
+        "ordered_chunk_text_sha256": "dfb2c0de9102de5fbcf514ef472f892022e38b134c505cc057118cedd2553d9a",
+        "index_status": "ready"
+      }
+    },
+    "qa": {
+      "limit": 4,
+      "candidates": 8,
+      "raw_min_similarity": -1.01,
+      "gate_min_similarity": 0.45,
+      "rerank_enabled": false
+    },
+    "search_all": {
+      "limit": 20,
+      "candidates": 20,
+      "min_similarity": 0.45
+    },
+    "embedding_requests": {
+      "attempted": 39,
+      "successful": 26,
+      "max_input_count": 1,
+      "records": [
+        {
+          "case": "pico-core-frequency",
+          "mode": "qa",
+          "source": "pico",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "pico-core-frequency",
+          "mode": "qa",
+          "source": "pico",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "pico-core-frequency",
+          "mode": "qa",
+          "source": "pico",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "pico-core-frequency",
+          "mode": "qa",
+          "source": "pico",
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "pico-core-frequency",
+          "mode": "search_all",
+          "source": null,
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "pico-core-frequency",
+          "mode": "search_all",
+          "source": null,
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "pico-core-frequency",
+          "mode": "search_all",
+          "source": null,
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "pico-core-frequency",
+          "mode": "search_all",
+          "source": null,
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "pico-esp32-sram-compare",
+          "mode": "qa",
+          "source": "esp32",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "pico-esp32-sram-compare",
+          "mode": "qa",
+          "source": "esp32",
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "pico-esp32-sram-compare",
+          "mode": "qa",
+          "source": "pico",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "pico-esp32-sram-compare",
+          "mode": "qa",
+          "source": "pico",
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "pico-esp32-sram-compare",
+          "mode": "search_all",
+          "source": null,
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "pico-esp32-sram-compare",
+          "mode": "search_all",
+          "source": null,
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "esp32-radio",
+          "mode": "qa",
+          "source": "esp32",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "esp32-radio",
+          "mode": "qa",
+          "source": "esp32",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "esp32-radio",
+          "mode": "qa",
+          "source": "esp32",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "esp32-radio",
+          "mode": "qa",
+          "source": "esp32",
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "esp32-radio",
+          "mode": "search_all",
+          "source": null,
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "esp32-radio",
+          "mode": "search_all",
+          "source": null,
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "esp32-radio",
+          "mode": "search_all",
+          "source": null,
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "esp32-radio",
+          "mode": "search_all",
+          "source": null,
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "esp32-cpu",
+          "mode": "qa",
+          "source": "esp32",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "esp32-cpu",
+          "mode": "qa",
+          "source": "esp32",
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "esp32-cpu",
+          "mode": "search_all",
+          "source": null,
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "esp32-cpu",
+          "mode": "search_all",
+          "source": null,
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "attention-en-de-bleu",
+          "mode": "qa",
+          "source": "attention",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "attention-en-de-bleu",
+          "mode": "qa",
+          "source": "attention",
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "attention-en-de-bleu",
+          "mode": "search_all",
+          "source": null,
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "attention-en-de-bleu",
+          "mode": "search_all",
+          "source": null,
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "attention-multi-head",
+          "mode": "qa",
+          "source": "attention",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "attention-multi-head",
+          "mode": "qa",
+          "source": "attention",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "attention-multi-head",
+          "mode": "qa",
+          "source": "attention",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "attention-multi-head",
+          "mode": "qa",
+          "source": "attention",
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "attention-multi-head",
+          "mode": "search_all",
+          "source": null,
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "attention-multi-head",
+          "mode": "search_all",
+          "source": null,
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "attention-multi-head",
+          "mode": "search_all",
+          "source": null,
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        },
+        {
+          "case": "attention-multi-head",
+          "mode": "search_all",
+          "source": null,
+          "route": "keyword",
+          "count": 1,
+          "model": "bge-m3",
+          "status": null
+        },
+        {
+          "case": "esp32-radio",
+          "mode": "baseline",
+          "source": "esp32",
+          "route": "hybrid",
+          "count": 1,
+          "model": "bge-m3",
+          "status": 200
+        }
+      ]
+    },
+    "measured_utc": "2026-10-01T03:49:55.800075+00:00"
+  },
+  "baseline": {
+    "surface": "PgVectorIndex.search，原冻结 esp32-radio，QA limit=4/candidates=8",
+    "necessary_evidence_ranks": [
+      1,
+      1,
+      null
+    ],
+    "failure": "Compound question omitted necessary evidence: [1, 1, None]"
+  },
+  "decision": "Current working-tree bounded compound search: retain original question plus explicit English facets; original-question ranking leads each round unless facet count is at least the final limit, in which case facets lead to prevent starving the last facet; deduplicate without expanding final limit; QA and search use upstream.embed_batched, tested with EMBEDDING_BATCH_SIZE=1 against live bge-m3; ACL, fixed parse bindings and similarity gates retained.",
+  "results": {
+    "qa/hybrid": {
+      "found": 13,
+      "expected": 13
+    },
+    "qa/keyword": {
+      "found": 9,
+      "expected": 13
+    },
+    "search_all/hybrid": {
+      "found": 13,
+      "expected": 13
+    },
+    "search_all/keyword": {
+      "found": 12,
+      "expected": 13
+    }
+  },
+  "runs": [
+    {
+      "case": "pico-core-frequency",
+      "mode": "qa",
+      "source": "pico",
+      "route": "hybrid",
+      "ranks": [
+        4
+      ],
+      "expected": 1,
+      "found": 1,
+      "degraded": null,
+      "hit_count": 4,
+      "raw_ranks": [
+        4
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "2d9e0f5a023b45848314eeefbf8423ec",
+        "8b46c26e855e452f9c74b7a5c648dbe3",
+        "cf9861bb9af544b88d802610b839e6b4",
+        "f1a23cd731f449bfb8197d4c1c7a7502"
+      ]
+    },
+    {
+      "case": "pico-core-frequency",
+      "mode": "qa",
+      "source": "pico",
+      "route": "keyword",
+      "ranks": [
+        1
+      ],
+      "expected": 1,
+      "found": 1,
+      "degraded": "embedding_unavailable",
+      "hit_count": 4,
+      "raw_ranks": [
+        1
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "f1a23cd731f449bfb8197d4c1c7a7502",
+        "2d9e0f5a023b45848314eeefbf8423ec",
+        "cf9861bb9af544b88d802610b839e6b4",
+        "6c85c69e98064e3ea35e808d09cc6b82"
+      ]
+    },
+    {
+      "case": "pico-core-frequency",
+      "mode": "search_all",
+      "source": null,
+      "route": "hybrid",
+      "ranks": [
+        1
+      ],
+      "expected": 1,
+      "found": 1,
+      "degraded": null,
+      "hit_count": 20,
+      "raw_ranks": [
+        1
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "f1a23cd731f449bfb8197d4c1c7a7502",
+        "3dcf773e721e41128c49d8c2fc9134e0",
+        "cf9861bb9af544b88d802610b839e6b4",
+        "2d9e0f5a023b45848314eeefbf8423ec",
+        "90eda675b9604727b3aaffe92d80e1f4",
+        "d63604eab9b145b2979b8c8d558fa786",
+        "da2ef04148024b9facd5c5d3f873e986",
+        "a585a00f4a4d45d1ab2b6afa0b00ea19",
+        "801d4416dfb64e0bbe9eaeff9cb20012",
+        "2befdbdba3374b81a0fab32437a439b1",
+        "6f30f1cd9b8d4e6e85195cc4a87d7067",
+        "737e5ce915d14909b1ce27f7c4d9fa4b",
+        "7586b23b74ab4d7582379745f87aabd6",
+        "6e7d902a090a4fd99799150533b260bd",
+        "a12d4b8a131049b18023d5369515d311",
+        "1c5eed41ee95475f97946b9e3cd69aab",
+        "17893185086f415bbc7fdf61f9e61de0",
+        "ada0d41beaa843878bad09d3524dda00",
+        "6c85c69e98064e3ea35e808d09cc6b82",
+        "999a7a2811aa46268abd3f0d3db108e5"
+      ]
+    },
+    {
+      "case": "pico-core-frequency",
+      "mode": "search_all",
+      "source": null,
+      "route": "keyword",
+      "ranks": [
+        2
+      ],
+      "expected": 1,
+      "found": 1,
+      "degraded": "embedding_unavailable",
+      "hit_count": 20,
+      "raw_ranks": [
+        2
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "da2ef04148024b9facd5c5d3f873e986",
+        "f1a23cd731f449bfb8197d4c1c7a7502",
+        "3dcf773e721e41128c49d8c2fc9134e0",
+        "1e9cb4f9f0c9484a896ec63c9e2a1d35",
+        "7586b23b74ab4d7582379745f87aabd6",
+        "3d3b966a9708402992c679e7a69a46b9",
+        "7f9a3c0453054491810eb1b4357e077e",
+        "c98c54e1d36245dcba2b5c62e0af8b0a",
+        "f7c563c15e7e4140ae808cfa688494d1",
+        "686bb2e1e69449eb9b4584641680063d",
+        "b57788d200304de598fac729dbbd0fa8",
+        "c537cb69fa6147b680d33b2d19e9ceef",
+        "cf9861bb9af544b88d802610b839e6b4",
+        "6e7d902a090a4fd99799150533b260bd",
+        "971fa817133f4c67be9288f308aa7b1b",
+        "2d9e0f5a023b45848314eeefbf8423ec",
+        "737e5ce915d14909b1ce27f7c4d9fa4b",
+        "153d249fde24417284cc8c1e6b1085bf",
+        "d63604eab9b145b2979b8c8d558fa786",
+        "e905182130524c4f84437b844e99dd91"
+      ]
+    },
+    {
+      "case": "pico-esp32-sram-compare",
+      "mode": "qa",
+      "source": "esp32",
+      "route": "hybrid",
+      "ranks": [
+        2,
+        1
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null,
+      "hit_count": 4,
+      "raw_ranks": [
+        2,
+        1
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "14978b8d896c47948be0ff7b30d196b6",
+        "3dcf773e721e41128c49d8c2fc9134e0",
+        "68b54687516d49adb2710742b153b832",
+        "f7c563c15e7e4140ae808cfa688494d1"
+      ]
+    },
+    {
+      "case": "pico-esp32-sram-compare",
+      "mode": "qa",
+      "source": "esp32",
+      "route": "keyword",
+      "ranks": [
+        4,
+        null
+      ],
+      "expected": 2,
+      "found": 1,
+      "degraded": "embedding_unavailable",
+      "hit_count": 4,
+      "raw_ranks": [
+        4,
+        null
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "f7c563c15e7e4140ae808cfa688494d1",
+        "3d3b966a9708402992c679e7a69a46b9",
+        "c98c54e1d36245dcba2b5c62e0af8b0a",
+        "3dcf773e721e41128c49d8c2fc9134e0"
+      ]
+    },
+    {
+      "case": "pico-esp32-sram-compare",
+      "mode": "qa",
+      "source": "pico",
+      "route": "hybrid",
+      "ranks": [
+        4
+      ],
+      "expected": 1,
+      "found": 1,
+      "degraded": null,
+      "hit_count": 4,
+      "raw_ranks": [
+        4
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "892668e11c8542939b077d2e2e461bbb",
+        "99b0f53102804a4abb743b7f8a7df856",
+        "2d9e0f5a023b45848314eeefbf8423ec",
+        "f1a23cd731f449bfb8197d4c1c7a7502"
+      ]
+    },
+    {
+      "case": "pico-esp32-sram-compare",
+      "mode": "qa",
+      "source": "pico",
+      "route": "keyword",
+      "ranks": [
+        1
+      ],
+      "expected": 1,
+      "found": 1,
+      "degraded": "embedding_unavailable",
+      "hit_count": 4,
+      "raw_ranks": [
+        1
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "f1a23cd731f449bfb8197d4c1c7a7502",
+        "073c644c3e3347f9b658218106dbfcaf",
+        "99b0f53102804a4abb743b7f8a7df856",
+        "cca50a5a428a4a04a3382b19f0317b69"
+      ]
+    },
+    {
+      "case": "pico-esp32-sram-compare",
+      "mode": "search_all",
+      "source": null,
+      "route": "hybrid",
+      "ranks": [
+        6,
+        3,
+        1
+      ],
+      "expected": 3,
+      "found": 3,
+      "degraded": null,
+      "hit_count": 20,
+      "raw_ranks": [
+        6,
+        3,
+        1
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "14978b8d896c47948be0ff7b30d196b6",
+        "892668e11c8542939b077d2e2e461bbb",
+        "3dcf773e721e41128c49d8c2fc9134e0",
+        "68b54687516d49adb2710742b153b832",
+        "99b0f53102804a4abb743b7f8a7df856",
+        "f1a23cd731f449bfb8197d4c1c7a7502",
+        "01340eb79a564cc4b6fd095ef50ac2ab",
+        "0f4248d8944d4df18935458a6ad4546e",
+        "17893185086f415bbc7fdf61f9e61de0",
+        "cca50a5a428a4a04a3382b19f0317b69",
+        "2d9e0f5a023b45848314eeefbf8423ec",
+        "aa1c124d0fee4d189b618a48a1d3a880",
+        "5c6bc77673d7451f98c0b31aaee4d939",
+        "e79589cfc02446a38f25b6a449953b33",
+        "6c85c69e98064e3ea35e808d09cc6b82",
+        "a59cdbdfb0784fb2857637d7e7ee70eb",
+        "f7c563c15e7e4140ae808cfa688494d1",
+        "2fdaa0a019e24d71a192e7c7afaad695",
+        "a2ec985a74324823967745f8bdebc0b8",
+        "fef52d1dcc694b6696326cc17b187174"
+      ]
+    },
+    {
+      "case": "pico-esp32-sram-compare",
+      "mode": "search_all",
+      "source": null,
+      "route": "keyword",
+      "ranks": [
+        14,
+        16,
+        18
+      ],
+      "expected": 3,
+      "found": 3,
+      "degraded": "embedding_unavailable",
+      "hit_count": 20,
+      "raw_ranks": [
+        14,
+        16,
+        18
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "1e9cb4f9f0c9484a896ec63c9e2a1d35",
+        "073c644c3e3347f9b658218106dbfcaf",
+        "cca50a5a428a4a04a3382b19f0317b69",
+        "aa1c124d0fee4d189b618a48a1d3a880",
+        "892668e11c8542939b077d2e2e461bbb",
+        "e79589cfc02446a38f25b6a449953b33",
+        "13f89d4566614c43bcc446ed7cf5e257",
+        "6c85c69e98064e3ea35e808d09cc6b82",
+        "f7c563c15e7e4140ae808cfa688494d1",
+        "3d3b966a9708402992c679e7a69a46b9",
+        "68c80b74d72d4c24aacd0e4b58c06875",
+        "7f9a3c0453054491810eb1b4357e077e",
+        "c98c54e1d36245dcba2b5c62e0af8b0a",
+        "f1a23cd731f449bfb8197d4c1c7a7502",
+        "99b0f53102804a4abb743b7f8a7df856",
+        "3dcf773e721e41128c49d8c2fc9134e0",
+        "fef52d1dcc694b6696326cc17b187174",
+        "14978b8d896c47948be0ff7b30d196b6",
+        "17893185086f415bbc7fdf61f9e61de0",
+        "b9d6eaa3b2264f73b646992c58eca880"
+      ]
+    },
+    {
+      "case": "esp32-radio",
+      "mode": "qa",
+      "source": "esp32",
+      "route": "hybrid",
+      "ranks": [
+        1,
+        1,
+        4
+      ],
+      "expected": 3,
+      "found": 3,
+      "degraded": null,
+      "hit_count": 4,
+      "raw_ranks": [
+        1,
+        1,
+        4
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "75886a87b4ad470da1bb7bce0c126257",
+        "3fcb006d4b6849ab8caa992b6d19988d",
+        "fb9e6d70ce0549468e8715a520fc45ca",
+        "153d249fde24417284cc8c1e6b1085bf"
+      ]
+    },
+    {
+      "case": "esp32-radio",
+      "mode": "qa",
+      "source": "esp32",
+      "route": "keyword",
+      "ranks": [
+        1,
+        4,
+        null
+      ],
+      "expected": 3,
+      "found": 2,
+      "degraded": "embedding_unavailable",
+      "hit_count": 4,
+      "raw_ranks": [
+        1,
+        4,
+        null
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "fb9e6d70ce0549468e8715a520fc45ca",
+        "34406ba079574fa181b92b6ad1d1e793",
+        "2b27e9a150234d43a9f764ac8d604deb",
+        "75886a87b4ad470da1bb7bce0c126257"
+      ]
+    },
+    {
+      "case": "esp32-radio",
+      "mode": "search_all",
+      "source": null,
+      "route": "hybrid",
+      "ranks": [
+        1,
+        2,
+        6
+      ],
+      "expected": 3,
+      "found": 3,
+      "degraded": null,
+      "hit_count": 20,
+      "raw_ranks": [
+        1,
+        2,
+        6
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "fb9e6d70ce0549468e8715a520fc45ca",
+        "75886a87b4ad470da1bb7bce0c126257",
+        "3fcb006d4b6849ab8caa992b6d19988d",
+        "3908dd2e0ac84211b028c4e39f8b9483",
+        "34406ba079574fa181b92b6ad1d1e793",
+        "153d249fde24417284cc8c1e6b1085bf",
+        "844dc5a9cdff43b6bbacba27558b27bc",
+        "26012e3b642c4555a65b15b71ab4bdf9",
+        "ccacc12269ca49bf87e5785a2faa1829",
+        "db5fd33c270747af9ecf678af4beb7d9",
+        "4b01023c65964339b9f5de618a7814b6",
+        "a0d037f1c8a74da98bc205771f2bf701",
+        "e3adbc88ca374771a7360aa90f56b458",
+        "c3d8a3433cf44a1fa9f0de3f82a7b83d",
+        "20f75bf19dcb43c3954439381305d1e7",
+        "5b78b0f54e4f455987fadda71ab15c18",
+        "1ce07413ed2f4b0885504ff7edfa3332",
+        "9d365b4cb75f4b8f92e5811bf76d9fec",
+        "2fab5ac7952d4430b8ed02f2c0b06c20",
+        "2b27e9a150234d43a9f764ac8d604deb"
+      ]
+    },
+    {
+      "case": "esp32-radio",
+      "mode": "search_all",
+      "source": null,
+      "route": "keyword",
+      "ranks": [
+        1,
+        6,
+        null
+      ],
+      "expected": 3,
+      "found": 2,
+      "degraded": "embedding_unavailable",
+      "hit_count": 20,
+      "raw_ranks": [
+        1,
+        6,
+        null
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "fb9e6d70ce0549468e8715a520fc45ca",
+        "34406ba079574fa181b92b6ad1d1e793",
+        "2b27e9a150234d43a9f764ac8d604deb",
+        "5449e13f7f8b41a29ca7791f2099f342",
+        "3fcb006d4b6849ab8caa992b6d19988d",
+        "75886a87b4ad470da1bb7bce0c126257",
+        "03e321816a524527982acbfdc4a31a35",
+        "14fc9c7b0d2e433a8ca595495e017177",
+        "5987d10bd0e7474fbc1790fa58c00c1d",
+        "43e6a4e7a52c436caeed67faa7dafacd",
+        "db5fd33c270747af9ecf678af4beb7d9",
+        "55f7cdffd7ff4b42a6a2101251b0c311",
+        "fef52d1dcc694b6696326cc17b187174",
+        "5ddcb1a7103a4c2f8378e9f4feb6a55d",
+        "7f9a3c0453054491810eb1b4357e077e",
+        "844dc5a9cdff43b6bbacba27558b27bc",
+        "63b4f38d7f884d02ad6e58cc438abcdd",
+        "c100d8dd0e434f5b860749814068f82c",
+        "7b642f8880b241e8b834ad548ade3dae",
+        "3d3b966a9708402992c679e7a69a46b9"
+      ]
+    },
+    {
+      "case": "esp32-cpu",
+      "mode": "qa",
+      "source": "esp32",
+      "route": "hybrid",
+      "ranks": [
+        3,
+        3
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null,
+      "hit_count": 4,
+      "raw_ranks": [
+        3,
+        3
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "9d365b4cb75f4b8f92e5811bf76d9fec",
+        "c98c54e1d36245dcba2b5c62e0af8b0a",
+        "686bb2e1e69449eb9b4584641680063d",
+        "7586b23b74ab4d7582379745f87aabd6"
+      ]
+    },
+    {
+      "case": "esp32-cpu",
+      "mode": "qa",
+      "source": "esp32",
+      "route": "keyword",
+      "ranks": [
+        null,
+        null
+      ],
+      "expected": 2,
+      "found": 0,
+      "degraded": "embedding_unavailable",
+      "hit_count": 4,
+      "raw_ranks": [
+        null,
+        null
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "c98c54e1d36245dcba2b5c62e0af8b0a",
+        "7586b23b74ab4d7582379745f87aabd6",
+        "3dcf773e721e41128c49d8c2fc9134e0",
+        "da2ef04148024b9facd5c5d3f873e986"
+      ]
+    },
+    {
+      "case": "esp32-cpu",
+      "mode": "search_all",
+      "source": null,
+      "route": "hybrid",
+      "ranks": [
+        1,
+        1
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null,
+      "hit_count": 20,
+      "raw_ranks": [
+        1,
+        1
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "686bb2e1e69449eb9b4584641680063d",
+        "1093b476c1124d808680b3a3dcc3565d",
+        "9d365b4cb75f4b8f92e5811bf76d9fec",
+        "6f30f1cd9b8d4e6e85195cc4a87d7067",
+        "afaaff7ec77d42c9b2dc24c94a1f4658",
+        "e905182130524c4f84437b844e99dd91",
+        "7586b23b74ab4d7582379745f87aabd6",
+        "3dcf773e721e41128c49d8c2fc9134e0",
+        "da2ef04148024b9facd5c5d3f873e986",
+        "27ffc53db3ba43c9915103806823c207",
+        "f01367f8c227460ead0ad58e001fa354",
+        "f7c563c15e7e4140ae808cfa688494d1",
+        "030156dc133e47b8ab907dcfcd7b5e79",
+        "448dc017181748ceb1993337abcc01bf",
+        "7b642f8880b241e8b834ad548ade3dae",
+        "85cb2f16b18a4ae4b7af3ecd0423918e",
+        "2fab5ac7952d4430b8ed02f2c0b06c20",
+        "9b215a97d06e496dadfdd2421d4351b0",
+        "405e9b90939b4e7bbcc39de681046da6",
+        "ccacc12269ca49bf87e5785a2faa1829"
+      ]
+    },
+    {
+      "case": "esp32-cpu",
+      "mode": "search_all",
+      "source": null,
+      "route": "keyword",
+      "ranks": [
+        17,
+        17
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": "embedding_unavailable",
+      "hit_count": 20,
+      "raw_ranks": [
+        17,
+        17
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "7586b23b74ab4d7582379745f87aabd6",
+        "3dcf773e721e41128c49d8c2fc9134e0",
+        "da2ef04148024b9facd5c5d3f873e986",
+        "c98c54e1d36245dcba2b5c62e0af8b0a",
+        "27ffc53db3ba43c9915103806823c207",
+        "1e9cb4f9f0c9484a896ec63c9e2a1d35",
+        "3d3b966a9708402992c679e7a69a46b9",
+        "7f9a3c0453054491810eb1b4357e077e",
+        "f7c563c15e7e4140ae808cfa688494d1",
+        "030156dc133e47b8ab907dcfcd7b5e79",
+        "69343036ff2f4bc0a90bc1940827a87a",
+        "7b642f8880b241e8b834ad548ade3dae",
+        "2fab5ac7952d4430b8ed02f2c0b06c20",
+        "405e9b90939b4e7bbcc39de681046da6",
+        "432a5daa684d4ad6a38ce35090765197",
+        "1093b476c1124d808680b3a3dcc3565d",
+        "686bb2e1e69449eb9b4584641680063d",
+        "5b78b0f54e4f455987fadda71ab15c18",
+        "6f30f1cd9b8d4e6e85195cc4a87d7067",
+        "9d365b4cb75f4b8f92e5811bf76d9fec"
+      ]
+    },
+    {
+      "case": "attention-en-de-bleu",
+      "mode": "qa",
+      "source": "attention",
+      "route": "hybrid",
+      "ranks": [
+        2,
+        2
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null,
+      "hit_count": 4,
+      "raw_ranks": [
+        2,
+        2
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "a99ca3878efc430fa4122b2aa8a3c900",
+        "f8428521699b48139cf6fa1f9deef1d5",
+        "6785131c6c514354852e1837d4abec69",
+        "9dc84a46de3d4e168054eec6b0417055"
+      ]
+    },
+    {
+      "case": "attention-en-de-bleu",
+      "mode": "qa",
+      "source": "attention",
+      "route": "keyword",
+      "ranks": [
+        1,
+        1
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": "embedding_unavailable",
+      "hit_count": 4,
+      "raw_ranks": [
+        1,
+        1
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "f8428521699b48139cf6fa1f9deef1d5",
+        "6785131c6c514354852e1837d4abec69",
+        "a99ca3878efc430fa4122b2aa8a3c900",
+        "13f89d4566614c43bcc446ed7cf5e257"
+      ]
+    },
+    {
+      "case": "attention-en-de-bleu",
+      "mode": "search_all",
+      "source": null,
+      "route": "hybrid",
+      "ranks": [
+        2,
+        2
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null,
+      "hit_count": 20,
+      "raw_ranks": [
+        2,
+        2
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "a99ca3878efc430fa4122b2aa8a3c900",
+        "f8428521699b48139cf6fa1f9deef1d5",
+        "6785131c6c514354852e1837d4abec69",
+        "896ecd715da04efd9d66b68f40f5334e",
+        "9dc84a46de3d4e168054eec6b0417055",
+        "f85f566356b04eb195383687461698de",
+        "6271cb2eb4534867b131a4513e4f600b",
+        "1e9cb4f9f0c9484a896ec63c9e2a1d35",
+        "54aa1be5429842d0ad7f7efd303f4cde",
+        "0a4159a2d6bf49e3b0359ea3c80755b0",
+        "c23af0a98db341e3ab48da8103fe21d0",
+        "93eb0c88312b4575ba228607ed79e65c",
+        "3d3c7dcf64684d49ba1d0fea8a6a95e6",
+        "153d249fde24417284cc8c1e6b1085bf",
+        "85276bea18bd47a7b60fc16896251663",
+        "51ec2b9ffaf04475bd176c93be43eb1f",
+        "7c74c7a68fd34ef68cf70a978878f872",
+        "cdd7ec1ee26b44f297ce5020f7adbb06",
+        "c92b2e13d3c14f48afb410ab4ddda420",
+        "456989e0be9b4750a9e4e3b0a79c6cc7"
+      ]
+    },
+    {
+      "case": "attention-en-de-bleu",
+      "mode": "search_all",
+      "source": null,
+      "route": "keyword",
+      "ranks": [
+        1,
+        1
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": "embedding_unavailable",
+      "hit_count": 20,
+      "raw_ranks": [
+        1,
+        1
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "f8428521699b48139cf6fa1f9deef1d5",
+        "6785131c6c514354852e1837d4abec69",
+        "a99ca3878efc430fa4122b2aa8a3c900",
+        "9d365b4cb75f4b8f92e5811bf76d9fec",
+        "54aa1be5429842d0ad7f7efd303f4cde",
+        "9dc84a46de3d4e168054eec6b0417055",
+        "f85f566356b04eb195383687461698de",
+        "1e6f6f8e5bb4438f840fb2734a635e9a",
+        "4331fe4a4a4c405e8fb17f46216679f0",
+        "896ecd715da04efd9d66b68f40f5334e",
+        "4a537cf81eb046f9936017619e40c150",
+        "8a035b1fbce149b392e3a3940c969efd",
+        "1e9cb4f9f0c9484a896ec63c9e2a1d35",
+        "6271cb2eb4534867b131a4513e4f600b",
+        "c23af0a98db341e3ab48da8103fe21d0",
+        "2c000783c841420e8e2dfb9b2231b3de",
+        "68c80b74d72d4c24aacd0e4b58c06875",
+        "93eb0c88312b4575ba228607ed79e65c",
+        "7ad48caffa4149f4b402631f4f251fb4",
+        "0a4159a2d6bf49e3b0359ea3c80755b0"
+      ]
+    },
+    {
+      "case": "attention-multi-head",
+      "mode": "qa",
+      "source": "attention",
+      "route": "hybrid",
+      "ranks": [
+        1,
+        1
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null,
+      "hit_count": 4,
+      "raw_ranks": [
+        1,
+        1
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "39ed1faa93d342168a3f1e658811bc22",
+        "2c000783c841420e8e2dfb9b2231b3de",
+        "f3dc27bb369f423b9cf883523ff8b156",
+        "55ef1b8d097144288864c3684bf4f243"
+      ]
+    },
+    {
+      "case": "attention-multi-head",
+      "mode": "qa",
+      "source": "attention",
+      "route": "keyword",
+      "ranks": [
+        2,
+        2
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": "embedding_unavailable",
+      "hit_count": 4,
+      "raw_ranks": [
+        2,
+        2
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "2c000783c841420e8e2dfb9b2231b3de",
+        "39ed1faa93d342168a3f1e658811bc22",
+        "9c6390b2a3304e48a2c917112a03a59a",
+        "137417d19ef644839c5f8536995e8e30"
+      ]
+    },
+    {
+      "case": "attention-multi-head",
+      "mode": "search_all",
+      "source": null,
+      "route": "hybrid",
+      "ranks": [
+        1,
+        1
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null,
+      "hit_count": 20,
+      "raw_ranks": [
+        1,
+        1
+      ],
+      "raw_degraded": null,
+      "hit_chunk_ids": [
+        "39ed1faa93d342168a3f1e658811bc22",
+        "f3dc27bb369f423b9cf883523ff8b156",
+        "55ef1b8d097144288864c3684bf4f243",
+        "2c000783c841420e8e2dfb9b2231b3de",
+        "35726bcfdcb84e53960ac69396605283",
+        "d800130003314b80a445bae65968d077",
+        "43e6a4e7a52c436caeed67faa7dafacd",
+        "c80fba0790054a4587c007687a5f25de",
+        "79e388e2326a4cc287ab43f8e7e555d3",
+        "137417d19ef644839c5f8536995e8e30",
+        "9a5b0716f1f64f6c83aed0d5c7e60b09",
+        "0b756f7489c644ccb79b107437972504",
+        "7662d95f0b1e4afaa6c5976f9bf4d637",
+        "3d3c7dcf64684d49ba1d0fea8a6a95e6",
+        "9c6390b2a3304e48a2c917112a03a59a",
+        "6785131c6c514354852e1837d4abec69",
+        "cd503b25ddf04c74a390a294b8191aa1",
+        "1e9cb4f9f0c9484a896ec63c9e2a1d35",
+        "01ca1754be1b42609fae59a49d5ee9a6",
+        "0176ba3030a84b81a7ea344e3601f86b"
+      ]
+    },
+    {
+      "case": "attention-multi-head",
+      "mode": "search_all",
+      "source": null,
+      "route": "keyword",
+      "ranks": [
+        2,
+        2
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": "embedding_unavailable",
+      "hit_count": 20,
+      "raw_ranks": [
+        2,
+        2
+      ],
+      "raw_degraded": "embedding_unavailable",
+      "hit_chunk_ids": [
+        "2c000783c841420e8e2dfb9b2231b3de",
+        "39ed1faa93d342168a3f1e658811bc22",
+        "9c6390b2a3304e48a2c917112a03a59a",
+        "01ca1754be1b42609fae59a49d5ee9a6",
+        "943100af48444cee8691b151a8d9e23a",
+        "0b756f7489c644ccb79b107437972504",
+        "137417d19ef644839c5f8536995e8e30",
+        "79e388e2326a4cc287ab43f8e7e555d3",
+        "7f9a3c0453054491810eb1b4357e077e",
+        "55ef1b8d097144288864c3684bf4f243",
+        "0176ba3030a84b81a7ea344e3601f86b",
+        "9a5b0716f1f64f6c83aed0d5c7e60b09",
+        "f3dc27bb369f423b9cf883523ff8b156",
+        "c80fba0790054a4587c007687a5f25de",
+        "7c85f96b55aa4f84bfbd386e16a56f88",
+        "cd503b25ddf04c74a390a294b8191aa1",
+        "2d9e0f5a023b45848314eeefbf8423ec",
+        "bd90212f5d5a4b659c41e896915283b6",
+        "d800130003314b80a445bae65968d077",
+        "43e6a4e7a52c436caeed67faa7dafacd"
+      ]
+    }
+  ],
+  "production_qa_smoke": {
+    "surface": "qa.retrieve with real PG and bge-m3; real ACL and fixed resource/version actor",
+    "necessary_evidence_ranks": [
+      1,
+      1,
+      4
+    ],
+    "degraded": null,
+    "candidate_count": 4,
+    "raw_hit_count": 4,
+    "accepted_hit_count": 4
+  },
+  "regressions": {
+    "lost_necessary_evidence_vs_20260927": [],
+    "hybrid_degraded_runs": [],
+    "validation": "26 real retrieval runs, real router grouping/identity checks, production QA smoke and original single-query baseline; no test suite, formatter or linter run"
+  },
+  "diff_vs_20260927": {
+    "results_before": {
+      "qa/hybrid": {
+        "found": 13,
+        "expected": 13
+      },
+      "qa/keyword": {
+        "found": 9,
+        "expected": 13
+      },
+      "search_all/hybrid": {
+        "found": 13,
+        "expected": 13
+      },
+      "search_all/keyword": {
+        "found": 12,
+        "expected": 13
+      }
+    },
+    "results_after": {
+      "qa/hybrid": {
+        "found": 13,
+        "expected": 13
+      },
+      "qa/keyword": {
+        "found": 9,
+        "expected": 13
+      },
+      "search_all/hybrid": {
+        "found": 13,
+        "expected": 13
+      },
+      "search_all/keyword": {
+        "found": 12,
+        "expected": 13
+      }
+    },
+    "changed_runs": [],
+    "changed_run_count": 0,
+    "lost_necessary_evidence": []
+  },
+  "superseded_measurement": {
+    "status": "rejected",
+    "search_py_sha256": "183949c0efbad3c6355840e5b9dbea11b76336c30d581a8d6401c9aff9493d6f",
+    "ordering": "Intermediate unconditional facet-first slot allocation",
+    "results": {
+      "qa/hybrid": {
+        "found": 12,
+        "expected": 13
+      },
+      "qa/keyword": {
+        "found": 8,
+        "expected": 13
+      }
+    },
+    "lost_necessary_evidence_vs_20260927": [
+      {
+        "case": "pico-core-frequency",
+        "mode": "qa",
+        "source": "pico",
+        "route": "hybrid",
+        "excerpt": "Dual-core cortex M0+ at up to 133 MHz",
+        "old_rank": 4,
+        "intermediate_rank": null
+      },
+      {
+        "case": "esp32-radio",
+        "mode": "qa",
+        "source": "esp32",
+        "route": "keyword",
+        "excerpt": "802.11n (2.4 GHz), up to 150 Mbps",
+        "old_rank": 4,
+        "intermediate_rank": null
+      }
+    ],
+    "note": "The intermediate live measurement was rejected for lost necessary evidence; the results and code hashes above are from the subsequent rerun after restoring original-question precedence except when facet count reaches the limit."
+  },
+  "limits": [
+    "Evidence recall only: normalized excerpt substring in returned original chunk text with the fixed source identity; not answer quality, entailment, page/bbox correctness or general semantic recall.",
+    "Positive cases and reference order are unchanged from the six frozen cases / 26 prior runs; the negative answering case is outside this artifact's original scope.",
+    "QA measurements call real qa.retrieve (including real ACL/fixed-version selection, similarity gate and disabled rerank); raw retrieval ranks are recorded separately. No generator/chat/vision requests are made.",
+    "Cross-document measurements call the real router function in-process, with its real authorized-document predicate and search_contexts constrained to the three frozen version IDs; global pre-grouping rank matches the old measurement convention. No HTTP gateway/browser/auth transport is exercised.",
+    "Keyword-only embedding failure is intentionally injected in the runner's HTTP request hook; production fallback and degraded propagation run unchanged. This does not prove natural endpoint outage recovery.",
+    "EMBEDDING_BATCH_SIZE=1 is process-local to exercise actual batched embedding across compound facets; no running service configuration is changed. Rerank is disabled, matching the original recall configuration.",
+    "QA keyword recall 9/13; search_all keyword recall 12/13; any missing reference and degraded flag remains visible in per-run results.",
+    "No services, containers, volumes or source/index data modified; DB transaction is read-only and repeatable-read. Existing frozen source digests and ordered chunk-text fingerprints recorded, not rebuilt.",
+    "No project tests/lints/contracts generation, real answer model, visual check, browser chain, paid GPU, publication or human semantic review performed by this remeasurement."
+  ],
+  "human_review_status": "pending"
+}

@@ -45,6 +45,11 @@ RESULT = {
 def _mock_service(status: str = "running", result: dict | None = None,
                   embed: httpx.Response | None = None) -> dict:
     routes = {
+        "models": respx.get(f"{SERVICE}/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{
+                "id": "test-vision", "default": True, "capabilities": ["vision"],
+                "transcribe_prompt": "把图里的文字原样抄写出来",
+            }]})),
         "submit": respx.post(f"{SERVICE}/v1/parse").mock(
             return_value=httpx.Response(202, json={"task_id": "s-1"})),
         "status": respx.get(f"{SERVICE}/v1/parse/s-1").mock(

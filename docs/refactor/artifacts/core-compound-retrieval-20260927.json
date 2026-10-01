@@ -1,0 +1,413 @@
+{
+  "id": "core-compound-retrieval-20260927",
+  "date": "2026-09-27",
+  "scope": "plan.md §17 工作包 1：单中心复合查询召回；不代表单中心质量整项验收",
+  "input": "core-workflow-input-20260923.json",
+  "input_sha256": "048b8048ffba2eadc5b7b5376cc9851a796cee9f2b04e43a2c8da885df43e5a4",
+  "code_sha256": {
+    "python/ddp_core/ddp_core/search.py": "ab049e7a264672595da03b5388d72cc7f5f1f6bbc8d476bb5a9097746bce5b3e",
+    "services/corpus-api/ddp_corpus/qa.py": "d1d243c8450315a22e4b05ad04019be17ba205ab7416fa41939578ac3e10ddbe",
+    "services/corpus-api/ddp_corpus/routers/search.py": "99c5a6db8766fdef992117584351b0bab4720c32f79128514e524d60fd731fad",
+    "services/corpus-api/tests/test_search_ranking.py": "0e53bbc8a83bec417760cb15100c940929c4e5b5893f817867653818619ad6c2",
+    "packages/contracts/openapi/content-v1.yaml": "4cf54ee30f35e2f46c25451ea4eab2d9ac5838c3bb280b602c87b637e34ed48c"
+  },
+  "environment": {
+    "storage": "真实原 B 栈 PostgreSQL 16.15 + pgvector 数据卷；原 ddp-b-pg 停止，临时宿主网络进程仅监听 127.0.0.1:45432",
+    "embedding": "本机 llama.cpp bge-m3 Q8_0，127.0.0.1:48181",
+    "scope": "固定的 Pico、ESP32、Attention 三个来源版本；没有重建索引、改问题或替换原文",
+    "network_issue": "原容器桥接因 veth operation not supported 无法启动，未修改主机网络或删除数据"
+  },
+  "baseline": {
+    "surface": "PgVectorIndex.search，原冻结 esp32-radio，QA limit=4/candidates=8",
+    "necessary_evidence_ranks": [
+      1,
+      1,
+      null
+    ],
+    "failure": "Compound question omitted necessary evidence: [1, 1, None]"
+  },
+  "decision": "仅为显式 and + 疑问词的 2–4 个子问题增加有界查询；原问题一路保留；一次批量向量化至多 5 条；每路候选两倍；按原问题/子问题轮转去重，原 limit、ACL、固定解析与相似度门控不变。普通问题不变。",
+  "results": {
+    "qa/hybrid": {
+      "found": 13,
+      "expected": 13
+    },
+    "qa/keyword": {
+      "found": 9,
+      "expected": 13
+    },
+    "search_all/hybrid": {
+      "found": 13,
+      "expected": 13
+    },
+    "search_all/keyword": {
+      "found": 12,
+      "expected": 13
+    }
+  },
+  "runs": [
+    {
+      "case": "pico-core-frequency",
+      "mode": "qa",
+      "source": "pico",
+      "route": "hybrid",
+      "ranks": [
+        4
+      ],
+      "expected": 1,
+      "found": 1,
+      "degraded": null
+    },
+    {
+      "case": "pico-core-frequency",
+      "mode": "qa",
+      "source": "pico",
+      "route": "keyword",
+      "ranks": [
+        1
+      ],
+      "expected": 1,
+      "found": 1,
+      "degraded": "embedding_unavailable"
+    },
+    {
+      "case": "pico-core-frequency",
+      "mode": "search_all",
+      "source": null,
+      "route": "hybrid",
+      "ranks": [
+        1
+      ],
+      "expected": 1,
+      "found": 1,
+      "degraded": null
+    },
+    {
+      "case": "pico-core-frequency",
+      "mode": "search_all",
+      "source": null,
+      "route": "keyword",
+      "ranks": [
+        2
+      ],
+      "expected": 1,
+      "found": 1,
+      "degraded": "embedding_unavailable"
+    },
+    {
+      "case": "pico-esp32-sram-compare",
+      "mode": "qa",
+      "source": "esp32",
+      "route": "hybrid",
+      "ranks": [
+        2,
+        1
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null
+    },
+    {
+      "case": "pico-esp32-sram-compare",
+      "mode": "qa",
+      "source": "esp32",
+      "route": "keyword",
+      "ranks": [
+        4,
+        null
+      ],
+      "expected": 2,
+      "found": 1,
+      "degraded": "embedding_unavailable"
+    },
+    {
+      "case": "pico-esp32-sram-compare",
+      "mode": "qa",
+      "source": "pico",
+      "route": "hybrid",
+      "ranks": [
+        4
+      ],
+      "expected": 1,
+      "found": 1,
+      "degraded": null
+    },
+    {
+      "case": "pico-esp32-sram-compare",
+      "mode": "qa",
+      "source": "pico",
+      "route": "keyword",
+      "ranks": [
+        1
+      ],
+      "expected": 1,
+      "found": 1,
+      "degraded": "embedding_unavailable"
+    },
+    {
+      "case": "pico-esp32-sram-compare",
+      "mode": "search_all",
+      "source": null,
+      "route": "hybrid",
+      "ranks": [
+        6,
+        3,
+        1
+      ],
+      "expected": 3,
+      "found": 3,
+      "degraded": null
+    },
+    {
+      "case": "pico-esp32-sram-compare",
+      "mode": "search_all",
+      "source": null,
+      "route": "keyword",
+      "ranks": [
+        14,
+        16,
+        18
+      ],
+      "expected": 3,
+      "found": 3,
+      "degraded": "embedding_unavailable"
+    },
+    {
+      "case": "esp32-radio",
+      "mode": "qa",
+      "source": "esp32",
+      "route": "hybrid",
+      "ranks": [
+        1,
+        1,
+        4
+      ],
+      "expected": 3,
+      "found": 3,
+      "degraded": null
+    },
+    {
+      "case": "esp32-radio",
+      "mode": "qa",
+      "source": "esp32",
+      "route": "keyword",
+      "ranks": [
+        1,
+        4,
+        null
+      ],
+      "expected": 3,
+      "found": 2,
+      "degraded": "embedding_unavailable"
+    },
+    {
+      "case": "esp32-radio",
+      "mode": "search_all",
+      "source": null,
+      "route": "hybrid",
+      "ranks": [
+        1,
+        2,
+        6
+      ],
+      "expected": 3,
+      "found": 3,
+      "degraded": null
+    },
+    {
+      "case": "esp32-radio",
+      "mode": "search_all",
+      "source": null,
+      "route": "keyword",
+      "ranks": [
+        1,
+        6,
+        null
+      ],
+      "expected": 3,
+      "found": 2,
+      "degraded": "embedding_unavailable"
+    },
+    {
+      "case": "esp32-cpu",
+      "mode": "qa",
+      "source": "esp32",
+      "route": "hybrid",
+      "ranks": [
+        3,
+        3
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null
+    },
+    {
+      "case": "esp32-cpu",
+      "mode": "qa",
+      "source": "esp32",
+      "route": "keyword",
+      "ranks": [
+        null,
+        null
+      ],
+      "expected": 2,
+      "found": 0,
+      "degraded": "embedding_unavailable"
+    },
+    {
+      "case": "esp32-cpu",
+      "mode": "search_all",
+      "source": null,
+      "route": "hybrid",
+      "ranks": [
+        1,
+        1
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null
+    },
+    {
+      "case": "esp32-cpu",
+      "mode": "search_all",
+      "source": null,
+      "route": "keyword",
+      "ranks": [
+        17,
+        17
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": "embedding_unavailable"
+    },
+    {
+      "case": "attention-en-de-bleu",
+      "mode": "qa",
+      "source": "attention",
+      "route": "hybrid",
+      "ranks": [
+        2,
+        2
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null
+    },
+    {
+      "case": "attention-en-de-bleu",
+      "mode": "qa",
+      "source": "attention",
+      "route": "keyword",
+      "ranks": [
+        1,
+        1
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": "embedding_unavailable"
+    },
+    {
+      "case": "attention-en-de-bleu",
+      "mode": "search_all",
+      "source": null,
+      "route": "hybrid",
+      "ranks": [
+        2,
+        2
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null
+    },
+    {
+      "case": "attention-en-de-bleu",
+      "mode": "search_all",
+      "source": null,
+      "route": "keyword",
+      "ranks": [
+        1,
+        1
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": "embedding_unavailable"
+    },
+    {
+      "case": "attention-multi-head",
+      "mode": "qa",
+      "source": "attention",
+      "route": "hybrid",
+      "ranks": [
+        1,
+        1
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null
+    },
+    {
+      "case": "attention-multi-head",
+      "mode": "qa",
+      "source": "attention",
+      "route": "keyword",
+      "ranks": [
+        2,
+        2
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": "embedding_unavailable"
+    },
+    {
+      "case": "attention-multi-head",
+      "mode": "search_all",
+      "source": null,
+      "route": "hybrid",
+      "ranks": [
+        1,
+        1
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": null
+    },
+    {
+      "case": "attention-multi-head",
+      "mode": "search_all",
+      "source": null,
+      "route": "keyword",
+      "ranks": [
+        2,
+        2
+      ],
+      "expected": 2,
+      "found": 2,
+      "degraded": "embedding_unavailable"
+    }
+  ],
+  "production_qa_smoke": {
+    "surface": "qa.retrieve with real PG and bge-m3",
+    "necessary_evidence_ranks": [
+      1,
+      1,
+      4
+    ],
+    "degraded": null,
+    "candidate_count": 4
+  },
+  "regressions": {
+    "corpus_api": "116 passed: test_search_ranking.py / test_qa.py / test_resource_acl.py / test_resource_layer.py",
+    "ddp_core": "268 passed",
+    "mutation": "禁用子问题，新增覆盖测试失败：返回 power-a/power-b，缺 radio；变异仅在一次性进程内",
+    "ruff": "四个修改 Python 文件通过",
+    "contracts": "generate.py --check：49 组 / 377 个枚举最新"
+  },
+  "limits": [
+    "只改 Web 检索与单文档问答的检索编排；Wiki/MCP/抽取/联邦继续调用原单查询 SearchIndex，不宣称完成它们的复合查询支持",
+    "当前确定性切分只覆盖契约声明的显式英文并列疑问句，不宣称一般多语言语义规划",
+    "关键词降级仍未找回蓝牙版本；QA 关键词 9/13、检索页关键词 12/13，降级如实返回",
+    "未运行真实生成模型、视觉核对或浏览器整链；证据召回通过不代表回答语义已通过",
+    "未开付费 GPU、未发布、未提交；人工支持度评审仍 pending"
+  ],
+  "human_review_status": "pending"
+}

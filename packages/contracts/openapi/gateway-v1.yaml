@@ -133,6 +133,19 @@ paths:
   /v1/models:
     get:
       summary: 列出可用模型（OpenAI 协议），来源 models.yaml
+      description: |
+        保留 OpenAI 的 object/data/id/owned_by；每个条目额外给出注册表
+        `capabilities`（字符串数组）、`default`（布尔）。
+        vision 条目的 default 标记是在 vision 子集内按 registry.default_of
+        选出的唯一默认项（优先注册表 default，否则取该子集首项），与抽取视觉核对一致。
+        非 vision 条目的 default 则表示它是否为整个 vqa_models 段的默认项。
+        因而纯文本全局默认项与视觉子集默认项可以同时为 true；此标记不代表全局唯一，
+        也不改变 /v1/chat/completions 省略 model 时按整个段选路的行为。
+        声明 vision 的条目提供解析后的 `transcribe_prompt`，取其注册表
+        options.transcribe_prompt，缺省为通用逐字抄写指令；不暴露 endpoint 或密钥。
+        注册不代表健康，实际请求失败仍必须显式降级。视觉核对消费者先按 vision
+        筛选，再优先选其中标为 default 的条目，否则按注册顺序选第一个；
+        不得因纯文本条目是默认模型而把图片发送给它。
       operationId: listModels
       responses:
         "200": { description: OpenAI 兼容模型列表 }

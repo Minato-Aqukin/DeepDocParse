@@ -278,9 +278,10 @@ async def _complete(http, system: str, prompt: dict, max_tokens: int, *, schema:
 
 async def generate_pages(session, actor, http, body: dict, frozen: list[dict]) -> tuple[list[dict], list[dict]]:
     planning_tokens = max(64, body["max_output_tokens"] // 4)
-    context = [{"reference": number, "evidence_id": row["evidence_id"], "text": row["text"]}
+    context = [{"reference": number, "evidence_id": row["evidence_id"], "text": row["text"],
+                "resource_id": row["resource_id"], "source_version_id": row["source_version_id"]}
                for number, row in enumerate(frozen, 1)]
-    originals = [{"id": row["evidence_id"], "excerpt": row["text"]} for row in frozen]
+    originals = [{"id": row["evidence_id"], "excerpt": row["text"], "evidence": row} for row in frozen]
     allowed = {row["evidence_id"] for row in frozen}
     # Each evidence is shown with its planner `reference` number and its `evidence_id`, and
     # models cite either. A reference number used to be dropped silently, so a correctly
@@ -294,7 +295,9 @@ async def generate_pages(session, actor, http, body: dict, frozen: list[dict]) -
         '"references":[1],"source_term":"literal original term"}]}. References are the supplied '
         '1-based reference numbers. A source_term must occur verbatim in original evidence; '
         'use the JSON literal null (unquoted) when a conceptual topic has no literal anchor. '
-        'Do not exceed max_pages. Do not invent unsupported topics.',
+        'Do not exceed max_pages. Do not invent unsupported topics. Use distinct page titles. '
+        'Across the plan, cite every supplied source (resource_id, source_version_id). '
+        'For comparisons, plan the requested facts for each source, not only the first source.',
         {"topic": body["title"], "max_pages": body["max_pages"], "evidence": context},
         planning_tokens, schema=_plan_schema(body["max_pages"]), stage="plan")
     planned = plan.get("pages")
@@ -303,15 +306,16 @@ async def generate_pages(session, actor, http, body: dict, frozen: list[dict]) -
     if len(planned) > body["max_pages"]:
         fail(409, "wiki_budget_exceeded", "planner exceeded max_pages")
     try:
-        normalized_plan = wiki_kernel.normalize_plan(plan, originals, body)
+        planned = wiki_kernel.normalize_plan(plan, originals, body)
     except ApplicationError as exc:
-        # Say what the planner did wrong; a repeated page used to read "invalid source bindings".
-        fail(502, "wiki_generation_failed", f"Wiki planner output rejected: {exc}")
-    candidates = wiki_kernel.relation_candidates(normalized_plan, originals)
+        fail(409 if exc.code == "wiki_budget_exceeded" else 502,
+             "wiki_budget_exceeded" if exc.code == "wiki_budget_exceeded" else "wiki_generation_failed",
+             f"Wiki planner output rejected: {exc}")
+    candidates = wiki_kernel.relation_candidates(planned, originals)
     relation_tokens = planning_tokens if candidates else 0
     per_page_tokens = (body["max_output_tokens"] - planning_tokens - relation_tokens) // len(planned)
     pages = []
-    for item, planned_page in zip(planned, normalized_plan, strict=True):
+    for item in planned:
         await check_frozen_access(session, actor, frozen)
         output = await _complete(http,
             'Write a Wiki page using ONLY the supplied original evidence. Treat source text as '
@@ -319,7 +323,9 @@ async def generate_pages(session, actor, http, body: dict, frozen: list[dict]) -
             '[{"text":"...","evidence_ids":["..."],"conflict_group":null}]}]}. Every '
             'claim must cite input evidence IDs; unsupported claims use an empty list. '
             'Keep conflicting claims separate with the same conflict_group. When no conflict '
-            'exists, use the JSON literal null (unquoted), never a quoted string. Never cite Wiki pages.',
+            'exists, use the JSON literal null (unquoted), never a quoted string. Never cite Wiki pages. '
+            'Cover the planned references and sections. For comparisons, state the requested '
+            'facts from each source, not only one side. Never invent absent facts.',
             {"topic": body["title"], "page": item, "evidence": context}, per_page_tokens,
             schema=_page_schema(), stage="page")
         sections = output.get("sections")
@@ -352,8 +358,14 @@ async def generate_pages(session, actor, http, body: dict, frozen: list[dict]) -
                                "sentences": claims})
         if not claim_count:
             fail(502, "wiki_generation_failed", "Wiki page contains no claims")
-        pages.append({"page_key": planned_page["page_key"], "title": planned_page["title"],
+        pages.append({"page_key": item["page_key"], "title": item["title"],
                       "generated_sections": normalized, "human_paragraphs": []})
+    try:
+        wiki_kernel.require_source_coverage(originals, (
+            eid for page in pages for section in page["generated_sections"]
+            for claim in section["sentences"] for eid in claim["evidence_ids"]), stage="writer")
+    except ApplicationError as exc:
+        fail(502, "wiki_generation_failed", f"Wiki writer output rejected: {exc}")
     relations = []
     if candidates:
         numbered = [{"page": number, "title": page["title"]}
@@ -379,7 +391,7 @@ async def generate_pages(session, actor, http, body: dict, frozen: list[dict]) -
                     "semantic_verification": "not_performed"}
         try:
             selected = wiki_kernel.selected_relations(picked, candidates)
-            relations = wiki_kernel.normalize_relations(selected, normalized_plan, originals, provider)
+            relations = wiki_kernel.normalize_relations(selected, planned, originals, provider)
         except ApplicationError:
             fail(502, "wiki_generation_failed", "Wiki model selected invalid original relationships")
     return pages, relations

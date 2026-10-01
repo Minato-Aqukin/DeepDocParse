@@ -1,0 +1,216 @@
+{
+  "date": "2026-09-27",
+  "scope": "Single-center Wiki duplicate plans and cross-source structural coverage; not LLM quality acceptance",
+  "user_decisions": {
+    "duplicate_titles": "merge valid references and sections",
+    "multi_source_omissions": "reject incomplete result",
+    "paid_gpu": "not authorized this round"
+  },
+  "source_sha256": {
+    "python/ddp_core/ddp_core/application/wiki.py": "631d0646b3b922c77c6b8addb7bcda7129ec376896dd5996bfca62caf5305bed",
+    "services/corpus-api/ddp_corpus/wiki.py": "b4154623ec3d3cb67bdf9e35d089c0db4bc57bb1711084e1b5ada5a67286e65a",
+    "packages/contracts/ddp/wiki-format.md": "e9971e19528fdcab99b1cf4ce5e5f79c6c79137a18cb8f5fb8888df6d38a901e"
+  },
+  "before": {
+    "shared_core_regressions": 3,
+    "api_regressions": 3,
+    "failures": [
+      "same-title plans rejected",
+      "planner missing one source accepted",
+      "writer missing one source accepted"
+    ]
+  },
+  "http_smoke": [
+    {
+      "relation_smoke": {
+        "wiki_id": "a4737d97ed504d5a8f0df247296c7036",
+        "pages": 2,
+        "predicate": "Reset timing and watchdog timeout are separate settings.",
+        "evidence_ids": [
+          "513fcbc726854f8ea6a442f0a566374b"
+        ]
+      }
+    },
+    {
+      "environment": "real PostgreSQL + bge-m3 + HTTP corpus; controlled model replay",
+      "wiki_id": "97e167ac2bfa4e3185bbe3c3af1fe5f6",
+      "created_revision": "d018f1e4206b476bb4d55e6a7dca2276",
+      "rebuilt_revision": "ced8db14502246fd8c39e4408c862ff2",
+      "merged_pages": 1,
+      "facts_264_and_520_present": true,
+      "human_note_preserved": true,
+      "history_immutable": true,
+      "rejections": {
+        "plan": {
+          "status": 502,
+          "old_revision_preserved": true,
+          "same_key_retry": 201
+        },
+        "write": {
+          "status": 502,
+          "old_revision_preserved": true,
+          "same_key_retry": 201
+        }
+      },
+      "ranking_degraded": null,
+      "model_calls": [
+        {
+          "stage": "plan",
+          "sources": [
+            "77c1392bb1ad42c5aff771ee836b92b3",
+            "a823c98f0ae048a0afec21a751d06da8"
+          ],
+          "fact_references": [
+            4,
+            11
+          ],
+          "allowance": 1024
+        },
+        {
+          "stage": "write",
+          "sources": [
+            "77c1392bb1ad42c5aff771ee836b92b3",
+            "a823c98f0ae048a0afec21a751d06da8"
+          ],
+          "fact_references": [
+            4,
+            11
+          ],
+          "allowance": 3072
+        },
+        {
+          "stage": "plan",
+          "sources": [
+            "77c1392bb1ad42c5aff771ee836b92b3",
+            "a823c98f0ae048a0afec21a751d06da8"
+          ],
+          "fact_references": [
+            4,
+            11
+          ],
+          "allowance": 1024
+        },
+        {
+          "stage": "write",
+          "sources": [
+            "77c1392bb1ad42c5aff771ee836b92b3",
+            "a823c98f0ae048a0afec21a751d06da8"
+          ],
+          "fact_references": [
+            4,
+            11
+          ],
+          "allowance": 3072
+        },
+        {
+          "stage": "plan",
+          "sources": [
+            "77c1392bb1ad42c5aff771ee836b92b3",
+            "a823c98f0ae048a0afec21a751d06da8"
+          ],
+          "fact_references": [
+            4,
+            11
+          ],
+          "allowance": 1024
+        },
+        {
+          "stage": "plan",
+          "sources": [
+            "77c1392bb1ad42c5aff771ee836b92b3",
+            "a823c98f0ae048a0afec21a751d06da8"
+          ],
+          "fact_references": [
+            4,
+            11
+          ],
+          "allowance": 1024
+        },
+        {
+          "stage": "write",
+          "sources": [
+            "77c1392bb1ad42c5aff771ee836b92b3",
+            "a823c98f0ae048a0afec21a751d06da8"
+          ],
+          "fact_references": [
+            4,
+            11
+          ],
+          "allowance": 3072
+        },
+        {
+          "stage": "plan",
+          "sources": [
+            "77c1392bb1ad42c5aff771ee836b92b3",
+            "a823c98f0ae048a0afec21a751d06da8"
+          ],
+          "fact_references": [
+            4,
+            11
+          ],
+          "allowance": 1024
+        },
+        {
+          "stage": "write",
+          "sources": [
+            "77c1392bb1ad42c5aff771ee836b92b3",
+            "a823c98f0ae048a0afec21a751d06da8"
+          ],
+          "fact_references": [
+            4,
+            11
+          ],
+          "allowance": 3072
+        },
+        {
+          "stage": "plan",
+          "sources": [
+            "77c1392bb1ad42c5aff771ee836b92b3",
+            "a823c98f0ae048a0afec21a751d06da8"
+          ],
+          "fact_references": [
+            4,
+            11
+          ],
+          "allowance": 1024
+        },
+        {
+          "stage": "write",
+          "sources": [
+            "77c1392bb1ad42c5aff771ee836b92b3",
+            "a823c98f0ae048a0afec21a751d06da8"
+          ],
+          "fact_references": [
+            4,
+            11
+          ],
+          "allowance": 3072
+        }
+      ]
+    }
+  ],
+  "verified_runs": {
+    "corpus_api_all": {
+      "passed": 928,
+      "skipped": 23
+    },
+    "ddp_core_all": {
+      "passed": 271
+    },
+    "ddp_local_wiki": {
+      "passed": 10
+    }
+  },
+  "regressions": [
+    "test_same_page_identity_merges_valid_references_and_sections",
+    "test_multisource_coverage_distinguishes_origins_with_equal_version_ids",
+    "test_same_title_plans_merge_without_losing_sources_or_human_edits",
+    "test_cross_source_omission_rejects_rebuild_without_consuming_key"
+  ],
+  "limits": [
+    "HTTP model endpoint returned explicitly controlled source-backed output; no real LLM/OCR or paid GPU was started",
+    "Citing every selected source is not proof of semantic support or complete necessary facts",
+    "Single-source unsupported drafts retain existing review/publication semantics",
+    "No T01–T88 acceptance status promoted; live multi-center scope remains paused"
+  ]
+}

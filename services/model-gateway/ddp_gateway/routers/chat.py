@@ -5,9 +5,9 @@ gateway 在这里只做三件事：验 token、按 model 字段查注册表、�
 协议本身不解析（除了取 model 字段），保证与 OpenAI 生态（LiteLLM/one-api）兼容。
 """
 import asyncio
-import json
 
 import httpx
+from ddp_core.verification import TRANSCRIBE_PROMPT
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
@@ -102,10 +102,19 @@ async def chat_completions(request: Request):
 async def list_models(request: Request):
     """OpenAI 兼容模型列表，来源 models.yaml。"""
     registry = request.app.state.registry
+    default = registry.default_of(registry.vqa_models)[0] if registry.vqa_models else None
+    vision_models = {name: entry for name, entry in registry.vqa_models.items()
+                     if "vision" in (entry.capabilities or [])}
+    vision_default = registry.default_of(vision_models)[0] if vision_models else None
     return {
         "object": "list",
         "data": [
-            {"id": name, "object": "model", "owned_by": "DeepDocParse"}
-            for name in registry.vqa_models
+            {"id": name, "object": "model", "owned_by": "DeepDocParse",
+             "capabilities": entry.capabilities or [],
+             "default": name == (vision_default if name in vision_models else default),
+             **({"transcribe_prompt": str((entry.options or {}).get("transcribe_prompt")
+                                         or TRANSCRIBE_PROMPT)}
+                if "vision" in (entry.capabilities or []) else {})}
+            for name, entry in registry.vqa_models.items()
         ],
     }

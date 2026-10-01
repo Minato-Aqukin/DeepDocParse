@@ -198,17 +198,10 @@ class Settings(BaseSettings):
     # 是最容易的一类；扫描件/中文上抄写保真度会掉。仍然**宁可漏报不要误报**：
     # 误报会把好出处打成"存疑"，比不报更伤信任。
     #
-    # **这个数字的来源与本层的实际用法并不完全对得上，用之前先读这段。**
-    # 标定跑的是 service 侧：DeepSeek-OCR-2 + 它的原生 prompt `Free OCR.`。
-    # 而本层 qa.TRANSCRIBE_PROMPT 写死的是一句**中文指令**，模型由 CHAT_MODEL 决定
-    # （quickstart 缺省引导用户填一个通用文本/视觉模型）—— service 侧那套
-    # "按注册表 options.transcribe_prompt 换成模型听得懂的话"**没有移植到本层**。
-    # 也就是说：把阈值从 0.35 提到 0.55 在本层是朝着**误报**方向动的，
-    # 而上面刚说过本层的既定取向是宁可漏报。之所以仍然跟着提，是因为两处同源、
-    # 分叉会更难解释；但**本层至今没有自己的标定数据**。
-    # 拿到 GPU 机器后要做的是：用本层真实的 CHAT_MODEL + 中文 prompt 重跑一次
-    # calibrate_verify_threshold.py，按那个分布定本层自己的值
-    # （或者把 transcribe_prompt 那套移植过来，让两层真的同源）。
+    # 核对通过 gateway /v1/models 的显式 vision 能力独立选路，不复用 CHAT_MODEL。
+    # 抄写提示来自该模型注册表的 transcribe_prompt；与抽取、标定共用 ddp_core.verification。
+    # 09-25 多栏/公式/页眉样本暴露标定负例污染（相同文字不能算不一致）。
+    # 先排除同文配对、人工确认自配对的文字层质量，再分域重标；本次不改 0.55。
     qa_parse_mismatch_threshold: float = 0.55
     # 等核对结果的上限（秒）。核对与回答并发跑，正常情况下回答先结束、这里几乎不等；
     # 但视觉模型在 CPU 上抄一段文字可能要几分钟（read 超时是 900s），

@@ -212,14 +212,23 @@ FLOOR = "qa_min_similarity"
 
 
 def _search_calls() -> list[tuple[pathlib.Path, ast.Call]]:
-    """`ddp_corpus/` 下所有 `<...>index.search(...)` 调用。"""
+    """`ddp_corpus/` 下所有检索调用：`<...>index.search(...)` 与共享的 `search_query(...)`。
+
+    `search_query` 把 min_similarity 原样传给每一路 `index.search`，所以下限
+    必须在它的调用处出现 —— 只扫 `index.search` 会让问答与跨文档检索两条路
+    从守卫里消失（改成 search_query 之后正是如此）。
+    """
     out: list[tuple[pathlib.Path, ast.Call]] = []
     for path in sorted(APP.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "search"
-                    and ast.unparse(node.func.value).endswith("index")):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if (isinstance(func, ast.Attribute) and func.attr == "search"
+                    and ast.unparse(func.value).endswith("index")):
+                out.append((path, node))
+            elif ast.unparse(func).split(".")[-1] == "search_query":
                 out.append((path, node))
     return out
 
@@ -254,6 +263,16 @@ def test_every_retrieval_passes_the_similarity_floor():
         + "\n  ".join(violations))
 
 
+def test_the_search_scan_actually_finds_the_call_sites():
+    """防止上面那条因为匹配不到调用而恒真（改个函数名就能让它静默失效）。"""
+    calls = _search_calls()
+    files = {p.relative_to(SERVICE).as_posix() for p, _ in calls}
+    # 三条检索路各一处：问答、抽取、跨文档检索。少了任何一条都说明扫漏了
+    assert files >= {"ddp_corpus/qa.py", "ddp_corpus/extraction.py",
+                     "ddp_corpus/routers/search.py"}, \
+        f"三条检索路没扫全，实际扫到 {sorted(files)}"
+
+
 def test_qa_deferred_gate_uses_the_configured_floor():
     """问答取全候选后必须用同一配置门控；否则假出处会从后门进入回答。"""
     path = APP / "qa.py"
@@ -265,17 +284,6 @@ def test_qa_deferred_gate_uses_the_configured_floor():
     assert kw is not None
     assert isinstance(kw.value, ast.Attribute) and kw.value.attr == FLOOR, \
         f"问答门控阈值不是 settings.{FLOOR}: {ast.unparse(kw.value)}"
-
-
-def test_the_search_scan_actually_finds_the_call_sites():
-    """防止上面那条因为匹配不到调用而恒真（改个变量名就能让它静默失效）。"""
-    calls = _search_calls()
-    files = {p.relative_to(SERVICE).as_posix() for p, _ in calls}
-    assert len(calls) >= 3, f"只扫到 {len(calls)} 处 index.search，匹配逻辑可能坏了"
-    # 三条检索路各一处：问答、抽取、跨文档检索。少了任何一条都说明扫漏了
-    assert files >= {"ddp_corpus/qa.py", "ddp_corpus/extraction.py",
-                     "ddp_corpus/routers/search.py"}, \
-        f"三条检索路没扫全，实际扫到 {sorted(files)}"
 
 
 # ---------------------------------------------------------------------------

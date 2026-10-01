@@ -23,6 +23,8 @@ v1.1 两处改动：
 import math
 import re
 from collections import Counter
+from collections.abc import Awaitable, Callable
+from itertools import zip_longest
 from typing import Protocol
 
 from sqlalchemy import bindparam, text
@@ -125,6 +127,79 @@ class SearchIndex(Protocol):
                      document_id: str | None, limit: int, candidates: int,
                      min_similarity: float, authorized_document_ids: list[str] | None = None,
                      authorized_parse_job_ids: list[str] | None = None) -> list[Hit]: ...
+
+
+def _query_facets(query: str) -> list[str]:
+    """Only split explicit coordinated questions; never invent missing subjects/facts."""
+    parts = re.split(r"\band\s+(?=(?:which|what|how\s+(?:many|much))\b)",
+                     query, flags=re.IGNORECASE)
+    if not 2 <= len(parts) <= 4:
+        return [query]
+    focused = []
+    for part in parts:
+        part = re.sub(r"^\s*(?:which|what|how\s+(?:many|much))\s+", "", part,
+                      flags=re.IGNORECASE)
+        # The source scope already carries document identity. Retaining the trailing
+        # subject ("does X support, according to ...") swamps the requested attribute.
+        part = re.split(r"\b(?:does|do|did)\b", part, maxsplit=1,
+                        flags=re.IGNORECASE)[0].strip(" ,;?")
+        if len(_deduped_terms(part)) < 2:
+            return [query]
+        focused.append(part)
+    return list(dict.fromkeys(focused))
+
+
+async def search_query(
+    session: AsyncSession, index: SearchIndex, *,
+    embed: Callable[[list[str]], Awaitable[list[list[float]]]],
+    query: str, document_id: str | None, limit: int, candidates: int,
+    min_similarity: float, authorized_document_ids: list[str] | None = None,
+    authorized_parse_job_ids: list[str] | None = None,
+) -> tuple[list[Hit], str | None]:
+    """Bounded facet retrieval shared by search and QA, with one visible fallback."""
+    facets = _query_facets(query)
+    queries = [query, *facets] if len(facets) > 1 else [query]
+    try:
+        vectors = await embed(queries)
+        if len(vectors) != len(queries):
+            raise ValueError("embedding count does not match query count")
+        degraded = None
+    except Exception:
+        vectors = [None] * len(queries)
+        degraded = "embedding_unavailable"
+    ranked = []
+    for part, vector in zip(queries, vectors, strict=True):
+        ranked.append(await index.search(
+            session, vector=vector, query=part, document_id=document_id,
+            limit=limit, candidates=candidates * (2 if len(queries) > 1 else 1),
+            min_similarity=min_similarity, authorized_document_ids=authorized_document_ids,
+            authorized_parse_job_ids=authorized_parse_job_ids))
+    if len(ranked) == 1:
+        return ranked[0], degraded
+    best: dict[str, Hit] = {}
+    for hits in ranked:
+        for hit in hits:
+            cid = hit["chunk_id"]
+            if cid not in best or (hit.get("similarity") is not None and (
+                    best[cid].get("similarity") is None
+                    or hit["similarity"] > best[cid]["similarity"])):
+                best[cid] = hit
+    selected = []
+    seen = set()
+    # 原问题每轮先占一位：它的第二条命中常是各子问题共同依赖的那条（真实 PG 复测里
+    # 「核数与主频」靠它进前 4）。子问题数已到 limit 时改为子问题先占位，否则原问题会
+    # 挤掉最后一个子问题。
+    if len(ranked) - 1 >= limit:
+        ranked = [*ranked[1:], ranked[0]]
+    for row in zip_longest(*ranked):
+        for hit in row:
+            if hit is None or hit["chunk_id"] in seen:
+                continue
+            seen.add(hit["chunk_id"])
+            selected.append(best[hit["chunk_id"]])
+            if len(selected) >= limit:
+                return selected, degraded
+    return selected, degraded
 
 
 def _rrf(ranked_lists: list[list[str]]) -> dict[str, float]:
@@ -248,7 +323,7 @@ class PgVectorIndex:
         try:
             kw_ids = []
             keyword_rows = (await session.execute(kw_sql, params)).all()
-            for cid, dist, block_type, source_text in keyword_rows:
+            for cid, dist, _block_type, _source_text in keyword_rows:
                 kw_ids.append(cid)
                 if dist is not None:
                     similarity.setdefault(cid, 1.0 - float(dist))
@@ -387,7 +462,7 @@ class MemoryIndex:
 def _cosine(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     return dot / (na * nb) if na and nb else 0.0

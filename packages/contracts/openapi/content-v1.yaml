@@ -935,6 +935,18 @@ paths:
       tags: [search]
       operationId: search
       summary: 跨文档检索
+      description: |
+        与单文档问答共用授权范围内的混合检索。显式以 and + 疑问词连接的
+        2–4 个英文子问题可分别检索；同时保留原问题一路，不猜测隐含子问题，
+        不新增来源或扩大授权范围。至多五条查询按 EMBEDDING_BATCH_SIZE 分批向量化，
+        每路候选最多为单问题配置的两倍；按原问题、各子问题的顺序轮转去重，最终 limit 不变，
+        因此子问题数小于 limit 时原问题与每个子问题都先各得一个名额。
+        子问题数达到或超过 limit 时改为子问题先轮转，原问题只填充剩余名额：
+        limit 等于子问题数时每个子问题各得一个名额（原问题自身的命中不再保证出现）；
+        limit 小于子问题数时只为顺序靠前的 limit 个子问题预留名额，不能保证其余子问题进入结果。
+        score 是查询内的 RRF 分，不承诺全局按 score 排序；
+        similarity 取命中子问题中的最高余弦相似度。普通问题保持原有单路编排。
+        向量化失败时所有子问题均走关键词路并返回 embedding_unavailable。
       security: [{ session: [] }]
       parameters:
         - { name: q, in: query, schema: { type: string, default: '' } }
@@ -1029,6 +1041,18 @@ paths:
         结构化答案规则：claims 只绑定本轮供给的 evidence；证据不足时拒绝脱离文档作答，
         不凭常识补答（REFUSAL_NO_EVIDENCE / REFUSAL_INCOMPLETE_EVIDENCE /
         REFUSAL_INSUFFICIENT_EVIDENCE）。
+
+        新事实检索与 /api/search 采用同一有界子问题策略，并按 EMBEDDING_BATCH_SIZE
+        分批向量化；逐篇相似度门控、固定来源版本与最终上下文条数不变。
+        名额分配与 /api/search 相同：子问题数小于检索 limit 时原问题先占一位，达到或
+        超过 limit 时子问题先占位；limit 小于子问题数时只为顺序靠前的 limit 个子问题
+        预留名额，不能保证其余子问题进入结果。
+        子问题命中不代表已经答全，回答仍须逐条由实际上下文支持。
+
+        原文自动核对通过网关模型清单的 vision 能力独立选路，并使用该模型的
+        transcribe_prompt。回答模型退回纯文本不代表核对模型不可用：
+        核对通过时 verified=true，不再保留“未做视觉核对”的 vision_unavailable；
+        embedding/rerank 等其他真实降级仍保留。核对不可用不得冒充 parse_mismatch。
       parameters:
         - { name: conversation_id, in: path, required: true, schema: { type: string } }
       requestBody:
@@ -1098,6 +1122,7 @@ paths:
       tags: [wiki]
       operationId: createWiki
       summary: 新建版本化 Wiki（写操作，本机源可用，中心源经宿主拒绝）
+      description: 同名规划页合并有效引用及章节。跨篇规划和生成结论均须引用全部选定来源，否则拒绝；这不是语义核验。
       security: [{ session: [] }]
       parameters:
         - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
@@ -1126,6 +1151,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/WikiRevisionDocument' }
+        '502': { description: 模型输出无效或缺少选定来源引用；不落部分草稿 }
 
   /api/wikis/{wiki_id}:
     parameters:
@@ -1148,6 +1174,7 @@ paths:
       tags: [wiki]
       operationId: rebuildWiki
       summary: 用当前资源生成新修订（写操作）
+      description: 同新建的同名页合并与跨篇出处覆盖规则；生成失败不更新旧修订、不消耗幂等键。
       security: [{ session: [] }]
       parameters:
         - { name: wiki_id, in: path, required: true, schema: { type: string } }
