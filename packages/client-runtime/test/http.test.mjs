@@ -233,7 +233,7 @@ function planRuntime(){
   const digest='sha256:'+createHash('sha256').update(bytes).digest('hex')
   const s={plan:{plan_id:'plan-1',scope_digest:'sha256:'+'a'.repeat(64),planning_state:'ready',revoked:false,consents:{},
     scope:{transport_bindings:[{transport_ref:'center',...center}],payload_bindings:[]}},
-    federation:null,dispatches:[],acks:[],reconciles:0,loseDispatch:false,keys:new Set(),stored:bytes,digest}
+    federation:null,dispatches:[],acks:[],authorizations:[],reconciles:0,loseDispatch:false,keys:new Set(),stored:bytes,digest}
   const json=(res,status,body)=>{res.statusCode=status;res.setHeader('Content-Type','application/json');res.end(JSON.stringify(body));return true}
   s.handler=async(req,res)=>{
     const url=new URL(req.url,'http://local'),chunks=[];for await(const chunk of req)chunks.push(chunk)
@@ -252,6 +252,10 @@ function planRuntime(){
       return s.keys.has(key)?json(res,200,s.federation):json(res,404,{error:{code:'not_found'}})
     }
     if(url.pathname==='/api/v1/plans/plan-1/reconcile'){s.reconciles++;s.lastCenter=body.center;return json(res,200,s.federation)}
+    if(url.pathname==='/api/v1/plans/plan-1/transfer/authorize'){
+      s.authorizations.push({body,key:req.headers['idempotency-key']})
+      return json(res,200,{plan_id:'plan-1',action:body.action,remote_compute_id:'compute-1'})
+    }
     if(url.pathname==='/api/v1/plans/plan-1/delivery/result'){
       if(!s.federation?.delivery?.verified)return json(res,404,{error:{code:'not_found'}})
       res.setHeader('Content-Type','application/json');res.end(s.stored);return true
@@ -305,6 +309,22 @@ test('a center substituted for the reviewed endpoint never receives an approved 
   assert.equal(lookups.length,1);assert.deepEqual(runtime.dispatches,[])
   await assert.rejects(c.execute('plan.dispatch',{plan_id:'../plan-1',phase:'exploration'},'moved-center-2'),{code:'unsupported_operation'})
   await assert.rejects(c.execute('plan.dispatch',{plan_id:'plan-1',phase:'exploration',endpoint:'https://x'},'moved-center-3'),{code:'unsupported_operation'})
+})
+
+test('file transfer permission is a fresh local ledger check per attempt, open only after execution approval',async t=>{
+  const runtime=planRuntime(),f=await server(t,runtime.handler),lookups=[]
+  const c=planConnection(t,f.environment,lookups);c.start();await until(()=>c.state.transport==='ready')
+  const ask=key=>c.query('plan.file.authorize',{plan_id:'plan-1',action:'create',operation_key:key,upload_id:null,offset:null,length:null})
+  runtime.plan={...runtime.plan,consents:{exploration:{consent_id:'c-1'}},planning_state:'exploring'}
+  await assert.rejects(ask('authorize-0001'),{code:'approved_plan_required'})
+  assert.deepEqual(lookups,[]);assert.deepEqual(runtime.authorizations,[])
+  runtime.plan={...runtime.plan,consents:{exploration:{consent_id:'c-1'},execution:{consent_id:'c-2'}},planning_state:'approved'}
+  assert.equal((await ask('authorize-0002')).remote_compute_id,'compute-1')
+  await ask('authorize-0003')
+  // Each attempt reaches the ledger under its own key; no cached permission is replayed.
+  assert.deepEqual(runtime.authorizations.map(item=>item.key),['authorize-0002','authorize-0003'])
+  assert.deepEqual(runtime.authorizations[0].body,{center:{endpoint:center.endpoint,credential:centerSecret},
+    action:'create',upload_id:null,offset:null,length:null})
 })
 
 test('a lost plan dispatch reply survives reconnect as unknown and is repaired by receipt, never resent',async t=>{

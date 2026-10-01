@@ -391,9 +391,12 @@ def plan_router(runtime):
 
     @router.get("/{plan_id}/delivery/result")
     async def delivery_result(plan_id: str):
-        # Exact canonical bytes: the caller rehashes these against
-        # result_manifest_digest instead of trusting the stored `verified` flag.
-        return Response(delivery_result_bytes(runtime, plan_id), media_type="application/json")
+        # Exact locally verified bytes: canonical JSON for an answer delivery, the
+        # imported version's stored Bundle (application/zip) for a file delivery.
+        # The caller rehashes them against result_manifest_digest instead of
+        # trusting the stored `verified` flag; 404 once the local copy is gone.
+        content, media_type = delivery_result_bytes(runtime, plan_id)
+        return Response(content, media_type=media_type)
 
     @router.get("/{plan_id}/federation")
     async def federation(plan_id: str):

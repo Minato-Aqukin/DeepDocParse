@@ -15,7 +15,7 @@ import {
   retentionLabel,
 } from '@/constants/federation'
 import type { TaskPlan } from '@/federation/task-model'
-import { getActiveSource, unwrap, workspaceError, type DesktopBridge, type Json, type PlanDetail } from '@/platform/desktop'
+import { getActiveSource, unwrap, workspaceError, workspaceFailure, type DesktopBridge, type Json, type PlanDetail } from '@/platform/desktop'
 
 type Row = Record<string, Json>
 
@@ -218,7 +218,12 @@ async function keyed(action: string, run: (key: string) => Promise<unknown>) {
     // 失败文案优先：重读只在成功后刷新镜像，失败时不再用一次成功的 open
     // 把刚写进去的错误说明清空（旧面板的 keyed 在 finally 里无条件 list+open，
     // 失败提示只在测试里被下一次成功覆盖；这里失败不清错）。
-    if (!error.value) await open(planId.value)
+    // 中心拒绝/结果未知以 200 + error 落账返回，说明写在 notice：刷新替换镜像，不替换这句说明。
+    if (!error.value) {
+      const explained = notice.value
+      await open(planId.value)
+      if (alive && !error.value && explained) notice.value = explained
+    }
   }
 }
 
@@ -271,7 +276,7 @@ const dispatch = (phase: 'exploration' | 'execution') => keyed(`dispatch-${phase
     { connectionId: sourceId.value, planId: planId.value, phase, idempotencyKey: key })))
   // 中心拒绝或结果未知会持久化并原样返回，不抛错：在这里说明，不自动重发。
   const failure = textOf(rowOf(state.error).code)
-  if (failure) notice.value = `中心未确认此次派发：${workspaceError(new Error(failure))}（${failure}）`
+  if (failure) notice.value = `中心未确认此次派发：${workspaceFailure(failure)}`
 })
 
 const resume = () => keyed('resume', async (key) => {
@@ -280,7 +285,7 @@ const resume = () => keyed('resume', async (key) => {
     { connectionId: sourceId.value, planId: planId.value, idempotencyKey: key })))
   const failure = textOf(rowOf(state.error).code)
   notice.value = failure
-    ? `中心未确认此次继续请求：${workspaceError(new Error(failure))}（${failure}）`
+    ? `中心未确认此次继续请求：${workspaceFailure(failure)}`
     : '中心已给出新的待审阅修订；旧批准不会沿用。请重新审阅步骤、数据边与总预算后再批准。'
 })
 
@@ -291,7 +296,7 @@ const confirm = () => keyed('confirm', async (key) => {
     resultManifestDigest: textOf(delivery.value.result_manifest_digest), idempotencyKey: key })))
   const failure = textOf(rowOf(state.error).code)
     || (rowOf(state.delivery).state !== 'confirmed' ? textOf(rowOf(state.delivery).reason) : '')
-  if (failure) notice.value = `交付尚未确认：${workspaceError(new Error(failure))}（${failure}）。可以再次确认，不会重复发布。`
+  if (failure) notice.value = `交付尚未确认：${workspaceFailure(failure)}。可以再次确认，不会重复发布。`
 })
 
 async function read(kind: 'reconcile' | 'fetch') {
@@ -307,7 +312,7 @@ async function read(kind: 'reconcile' | 'fetch') {
     if (!alive || mine !== generation) return
     detail.value = value
     const failure = textOf(rowOf(rowOf(value.federation).error).code)
-    if (failure) notice.value = `中心暂未给出结果：${workspaceError(new Error(failure))}（${failure}）`
+    if (failure) notice.value = `中心暂未给出结果：${workspaceFailure(failure)}`
   } catch (cause) {
     if (alive && mine === generation) error.value = workspaceError(cause)
   } finally {

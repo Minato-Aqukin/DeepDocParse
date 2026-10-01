@@ -38,7 +38,7 @@ The desktop host must not let a renderer compose a TaskSpec, TaskPlan, node set,
 |---|---|
 | `POST /api/v1/plans/propose` | Build and persist one reviewable `center_query` scope from a typed request; never approves or sends |
 | `GET /api/v1/plans?limit=` | Newest-first summaries of this workspace owner's plans plus the persisted federation mirror (`limit` 1–50) |
-| `GET /api/v1/plans/{plan_id}/delivery/result` | The locally verified delivery result as its exact canonical JSON bytes, so a caller can recompute `result_manifest_digest` itself; 404 until the local copy verified |
+| `GET /api/v1/plans/{plan_id}/delivery/result` | The locally verified delivery bytes so a caller can recompute `result_manifest_digest` itself: an answer delivery as its exact canonical JSON (`application/json`), a file delivery as the imported version's stored Bundle (`application/zip`); 404 until the local copy verified, and again once that imported copy is deleted |
 | `GET /api/v1/client/receipts/{key}` | Also resolves a plan command key: prepare/propose/approve/revoke return the current plan view; dispatch/delivery-ack return the persisted federation state |
 
 `propose` requires one `Idempotency-Key` and accepts exactly `{center, query, inputs, retention, valid_seconds}`:

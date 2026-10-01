@@ -74,6 +74,7 @@ class FileCenter:
         self.requests = []
         self.records = {}
         self.cancelled = []
+        self.acked_output = None
 
     def handler(self, request):
         path = request.url.path
@@ -102,6 +103,21 @@ class FileCenter:
             self.cancelled.append(body)
             self.records["rc-1"]["status"] = "cancelled"
             return httpx.Response(200, json=self.records["rc-1"])
+        if path == "/api/v1/remote-compute/rc-1/ack" and request.method == "POST":
+            # Same refusals as corpus-api ack_compute: bare 64-hex only; an acked record
+            # replays its own digest and conflicts on another; otherwise the fixed manifest
+            # must match. The acked digest stays server-side, like the real `_out()`.
+            record, output = self.records["rc-1"], (body or {}).get("output_sha256")
+            if not isinstance(output, str) or len(output) != 64 or any(c not in "0123456789abcdef" for c in output):
+                return httpx.Response(400, json={"error": {"code": "bad_digest"}})
+            if record["status"] == "acked":
+                if self.acked_output != output:
+                    return httpx.Response(409, json={"error": {"code": "idempotency_conflict"}})
+                return httpx.Response(200, json=record)
+            if record["status"] != "succeeded" or (record.get("manifest") or {}).get("output_sha256") != output:
+                return httpx.Response(409, json={"error": {"code": "input_not_verified"}})
+            record["status"], self.acked_output = "acked", output
+            return httpx.Response(200, json=record)
         return httpx.Response(404, json={"error": {"code": "not_found"}})
 
 
@@ -534,3 +550,48 @@ async def test_complete_partial_left_by_a_crash_verifies_without_refetching(runt
     assert "import_result" in out["delivery"]
     # Only the start==total probe was sent; no byte was downloaded again.
     assert center.requests_ranges == []
+
+
+async def test_verified_file_delivery_result_route_serves_the_imported_bundle(runtime, center):
+    """The host rehashes /delivery/result before any ack: a verified file delivery serves
+    the stored Bundle bytes, and a deleted local copy leaves nothing to pass."""
+    plan_id, payload, manifest_digest = await _ranged_plan(runtime, center, "explore-result")
+    out = await module.fetch_delivery(runtime, plan_id, config())
+    assert out["delivery"]["bytes_verified"] is True
+    app = create_app(runtime, session_token=SESSION, allowed_hosts={"127.0.0.1:8123"}, start_worker=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8123",
+                                 headers={"Authorization": "Bearer " + SESSION}) as client:
+        served = await client.get(f"/api/v1/plans/{plan_id}/delivery/result")
+        assert served.status_code == 200, served.text
+        assert served.headers["content-type"] == "application/zip"
+        assert content_digest(served.content) == manifest_digest
+        runtime.delete_version(out["delivery"]["import_result"]["version_id"])
+        gone = await client.get(f"/api/v1/plans/{plan_id}/delivery/result")
+        assert gone.status_code == 404, gone.text
+
+
+async def test_verified_file_delivery_is_confirmable_by_its_compute_id(runtime, center):
+    """A file delivery sits on the shared delivery axis: the UI confirms `delivery.id`
+    while `state == pending`; the ack lands once and a later read never downgrades it."""
+    plan_id, payload, manifest_digest = await _ranged_plan(runtime, center, "explore-confirm")
+    out = await module.fetch_delivery(runtime, plan_id, config())
+    assert (out["delivery"]["id"], out["delivery"]["state"]) == ("rc-1", "pending")
+    confirmed = await module.confirm_delivery(runtime, plan_id, out["delivery"]["id"], manifest_digest, config())
+    assert confirmed["delivery"]["state"] == "confirmed"
+    assert [r["path"] for r in center.requests if r["path"].endswith("/ack")] == ["/api/v1/remote-compute/rc-1/ack"]
+    center.records["rc-1"]["status"] = "succeeded"  # a stale center read must not undo the local confirmation
+    again = await module.reconcile(runtime, plan_id, config())
+    assert again["delivery"]["state"] == "confirmed"
+
+
+async def test_compute_closed_without_ack_drops_the_stale_pending_delivery(runtime, center):
+    """Cancelling after local verification closes the delivery axis at once: the UI must not
+    keep offering a confirmation the center will refuse, and a later read keeps it closed."""
+    plan_id, payload, manifest_digest = await _ranged_plan(runtime, center, "explore-cancelled")
+    out = await module.fetch_delivery(runtime, plan_id, config())
+    assert out["delivery"]["state"] == "pending" and out["delivery"]["verified"] is True
+    cancelled = await module.cancel_remote_compute(runtime, plan_id, config())
+    assert cancelled["state"] == "cancelled" and "state" not in cancelled["delivery"]
+    assert cancelled["delivery"]["import_result"] == out["delivery"]["import_result"]
+    again = await module.reconcile(runtime, plan_id, config())
+    assert "state" not in again["delivery"]

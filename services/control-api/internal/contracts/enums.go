@@ -2287,6 +2287,8 @@ const (
 	DesktopErrorConnectionNotCurrent DesktopError = "connection_not_current"
 	// 中心暂时无法连接，未确认任何结果
 	DesktopErrorUnreachable DesktopError = "unreachable"
+	// 读取中心时连接中断（只读请求，写请求丢响应另记为结果未知），没有确认任何结果
+	DesktopErrorTransportError DesktopError = "transport_error"
 	// 交付已过期，结果没有保存到本机
 	DesktopErrorDeliveryExpired DesktopError = "delivery_expired"
 	// 中心暂时没有这份交付，可稍后再取
@@ -2379,6 +2381,7 @@ var DesktopErrorValues = []DesktopError{
 	DesktopErrorDispatchAlreadyReserved,
 	DesktopErrorConnectionNotCurrent,
 	DesktopErrorUnreachable,
+	DesktopErrorTransportError,
 	DesktopErrorDeliveryExpired,
 	DesktopErrorDeliveryNotFound,
 	DesktopErrorDeliveryIdMissing,
@@ -2448,6 +2451,7 @@ var DesktopErrorMeta = map[DesktopError]EnumMeta{
 	DesktopErrorDispatchAlreadyReserved:  {Value: "dispatch_already_reserved", Label: "这次发送已经占用预算，请先对账再重试。", Severity: SeverityWarn},
 	DesktopErrorConnectionNotCurrent:     {Value: "connection_not_current", Label: "本机工作区连接未就绪，已保留草稿。", Severity: SeverityWarn},
 	DesktopErrorUnreachable:              {Value: "unreachable", Label: "中心暂时无法连接，未确认任何结果。", Severity: SeverityError},
+	DesktopErrorTransportError:           {Value: "transport_error", Label: "读取中心时连接中断，没有确认任何结果；可以再次读取，不会重复任何写入。", Severity: SeverityWarn},
 	DesktopErrorDeliveryExpired:          {Value: "delivery_expired", Label: "交付已过期，结果没有保存到本机。", Severity: SeverityError},
 	DesktopErrorDeliveryNotFound:         {Value: "delivery_not_found", Label: "中心暂时没有这份交付，可以稍后再取。", Severity: SeverityWarn},
 	DesktopErrorDeliveryIdMissing:        {Value: "delivery_id_missing", Label: "中心尚未给出交付编号。", Severity: SeverityWarn},

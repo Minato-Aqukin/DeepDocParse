@@ -1907,7 +1907,7 @@ def source_error_label(value: str | None) -> str | None:
 # 桌面端渲染进程的本机错误码（旧工作台 `platform/desktop.ts` 的 `reasons` 表搬入）。
 # 命名对齐项目既有约定（snake_case）。这些码来自宿主具名方法与本地账本，
 # 不是中心契约：含义只在"本机工作区 + 已配对中心"这套桌面链路下成立。
-DesktopError = Literal["connection_failed", "authentication_required", "identity_mismatch", "profile_mismatch", "protocol_incompatible", "cache_failure", "model_unavailable", "unsupported_operation", "approved_plan_required", "outcome_unknown", "receipt_required", "disposed", "draft_conflict", "revision_conflict", "input_too_large", "not_found", "source_unavailable", "source_digest_mismatch", "wiki_response_too_large", "wiki_source_unavailable", "wiki_generation_invalid", "unsupported_generation", "wiki_relation_unsupported", "out_of_memory", "cursor_expired", "approval_cancelled", "plan_changed", "approval_unavailable", "consent_required", "consent_revoked", "consent_expired", "budget_exceeded", "policy_denied", "input_changed", "local_only", "center_not_paired", "center_not_current", "center_identity_changed", "center_binding_required", "center_unavailable", "delivery_unverified", "dispatch_already_reserved", "connection_not_current", "unreachable", "delivery_expired", "delivery_not_found", "delivery_id_missing", "result_manifest_mismatch", "result_unavailable", "ack_not_confirmed", "transfer_unknown", "resume_unknown", "transfer_in_progress", "upload_expired", "upload_failed", "upload_incomplete", "storage_origin_not_approved", "delivery_too_large", "gpu_device_unsupported", "gpu_offload_unverified", "model_backend_incompatible", "model_process_busy", "egress_denied", "invalid_response", "invalid_arguments", "host_operation_failed"]
+DesktopError = Literal["connection_failed", "authentication_required", "identity_mismatch", "profile_mismatch", "protocol_incompatible", "cache_failure", "model_unavailable", "unsupported_operation", "approved_plan_required", "outcome_unknown", "receipt_required", "disposed", "draft_conflict", "revision_conflict", "input_too_large", "not_found", "source_unavailable", "source_digest_mismatch", "wiki_response_too_large", "wiki_source_unavailable", "wiki_generation_invalid", "unsupported_generation", "wiki_relation_unsupported", "out_of_memory", "cursor_expired", "approval_cancelled", "plan_changed", "approval_unavailable", "consent_required", "consent_revoked", "consent_expired", "budget_exceeded", "policy_denied", "input_changed", "local_only", "center_not_paired", "center_not_current", "center_identity_changed", "center_binding_required", "center_unavailable", "delivery_unverified", "dispatch_already_reserved", "connection_not_current", "unreachable", "transport_error", "delivery_expired", "delivery_not_found", "delivery_id_missing", "result_manifest_mismatch", "result_unavailable", "ack_not_confirmed", "transfer_unknown", "resume_unknown", "transfer_in_progress", "upload_expired", "upload_failed", "upload_incomplete", "storage_origin_not_approved", "delivery_too_large", "gpu_device_unsupported", "gpu_offload_unverified", "model_backend_incompatible", "model_process_busy", "egress_denied", "invalid_response", "invalid_arguments", "host_operation_failed"]
 
 DESKTOP_ERROR_VALUES: Final[tuple[str, ...]] = (
     "connection_failed",
@@ -1954,6 +1954,7 @@ DESKTOP_ERROR_VALUES: Final[tuple[str, ...]] = (
     "dispatch_already_reserved",
     "connection_not_current",
     "unreachable",
+    "transport_error",
     "delivery_expired",
     "delivery_not_found",
     "delivery_id_missing",
@@ -2067,6 +2068,8 @@ DESKTOP_ERROR_META: Final[dict[str, EnumMeta]] = {
     "connection_not_current": {"value": "connection_not_current", "label": "本机工作区连接未就绪，已保留草稿。", "severity": "warn"},
     # 中心暂时无法连接，未确认任何结果
     "unreachable": {"value": "unreachable", "label": "中心暂时无法连接，未确认任何结果。", "severity": "error"},
+    # 读取中心时连接中断（只读请求，写请求丢响应另记为结果未知），没有确认任何结果
+    "transport_error": {"value": "transport_error", "label": "读取中心时连接中断，没有确认任何结果；可以再次读取，不会重复任何写入。", "severity": "warn"},
     # 交付已过期，结果没有保存到本机
     "delivery_expired": {"value": "delivery_expired", "label": "交付已过期，结果没有保存到本机。", "severity": "error"},
     # 中心暂时没有这份交付，可稍后再取

@@ -291,6 +291,28 @@ describe('确认交付只认本地校验', () => {
     expect((confirm.element as HTMLButtonElement).disabled).toBe(false)
     wrapper.unmount()
   })
+
+  it('中心未确认这次确认（结果未知）：说明在随后的镜像刷新后仍然可见', async () => {
+    const pending = detailOf('passed')
+    const bridge = stubBridge({
+      clientPlanGet: vi.fn(async () => ({ ok: true, value: pending })),
+      clientPlanConfirmDelivery: vi.fn(async () => ({ ok: true,
+        value: { ...pending.federation, error: { code: 'outcome_unknown', status: 0 } } })),
+    })
+    setDesktop(bridge)
+    bootSource.value = localSource()
+    useAuthStore().profile = admin
+    const router = makeRouter('/tasks/local/plan-1')
+    await router.isReady()
+    const wrapper = mount(LocalTaskDetail, { global: plugins(router) })
+    await flushPromises()
+    await wrapper.findAll('button').find((b) => b.text() === '确认交付')!.trigger('click')
+    await flushPromises()
+    expect(bridge.clientPlanGet).toHaveBeenCalledTimes(2)
+    expect(wrapper.findAll('p.ddp-degraded').map((p) => p.text())).toContain(
+      '交付尚未确认：提交结果未确认，请查询回执后再处理。（outcome_unknown）。可以再次确认，不会重复发布。')
+    wrapper.unmount()
+  })
 })
 
 describe('中心源只读', () => {

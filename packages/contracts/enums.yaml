@@ -1280,6 +1280,10 @@ enums:
         summary: 中心暂时无法连接，未确认任何结果
         label: 中心暂时无法连接，未确认任何结果。
         severity: error
+      - value: transport_error
+        summary: 读取中心时连接中断（只读请求，写请求丢响应另记为结果未知），没有确认任何结果
+        label: 读取中心时连接中断，没有确认任何结果；可以再次读取，不会重复任何写入。
+        severity: warn
       - value: delivery_expired
         summary: 交付已过期，结果没有保存到本机
         label: 交付已过期，结果没有保存到本机。

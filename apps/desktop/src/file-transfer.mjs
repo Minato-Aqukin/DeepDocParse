@@ -53,7 +53,15 @@ export async function uploadRemoteCompute({ plan, journal, checkpoint, authorize
   const save = async change => { state = { ...state, ...change }; await checkpoint(state) }
   const permit = async (action, offset = null, length = null) => {
     signal.throwIfAborted()
-    const ticket = await authorize(action, state.uploadId ?? null, offset, length)
+    let ticket
+    try { ticket = await authorize(action, state.uploadId ?? null, offset, length) }
+    catch (error) {
+      // The ledger check precedes this action's center request: a refusal is a known
+      // outcome with its own code (revoked, budget, protocol), never a lost receipt.
+      const code = error?.code
+      if (error instanceof HostError || typeof code !== 'string' || !/^[a-z][a-z0-9_]{0,95}$/.test(code)) throw error
+      throw new HostError(code)
+    }
     const description = Buffer.from(`${ticket.filename}\n${input.digest}\n${input.size_bytes}\n`)
     if (ticket.plan_id !== plan.plan_id || !ID.test(ticket.remote_compute_id) || ticket.input_ref !== input.ref ||
         ticket.input_sha256 !== input.digest.slice(7) || ticket.input_size !== input.size_bytes ||

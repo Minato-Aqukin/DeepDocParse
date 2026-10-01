@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { uploadRemoteCompute } from '../src/file-transfer.mjs'
 import { HostError } from '../src/policy.mjs'
+import { OperationFault } from '../src/shared-client.mjs'
 
 const FILE = Buffer.from('%PDF-1.7\n' + 'bounded original bytes'.repeat(4))
 const HASH = createHash('sha256').update(FILE).digest('hex')
@@ -85,7 +86,8 @@ async function fixture(t, flags = {}) {
     readSource: async () => flags.changed ? Buffer.from('different bytes') : FILE,
     center: async () => ({ endpoint: 'https://center.test', uploadOrigin: 'https://objects.test', credential: TOKEN }),
     authorize: async (action, uploadId, offset, length) => {
-      if (revoked) throw new HostError('consent_revoked')
+      // The real host authorizer is Connection.query: ledger refusals arrive as OperationFault.
+      if (revoked) throw new OperationFault('consent_revoked')
       permits.push({ action, uploadId, offset, length })
       return { plan_id: PLAN.plan_id, remote_compute_id: 'compute-1', input_ref: 'version-1', filename: 'manual.pdf',
         input_sha256: HASH, input_size: FILE.length, recipient_node_id: 'node-center', retention: 'temporary',

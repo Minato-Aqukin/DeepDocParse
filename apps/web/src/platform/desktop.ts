@@ -289,3 +289,8 @@ export function workspaceError(error: unknown): string {
   const code = error instanceof Error ? error.message : ''
   return desktopErrorLabelOf(code) ?? '操作未完成，请查看连接和任务状态。'
 }
+
+/** 已落账的失败码：有契约文案时写「文案（码）」便于对账；未知码的兜底文案本身已带码，不再重复。 */
+export function workspaceFailure(code: string): string {
+  return Object.hasOwn(DESKTOP_ERROR_META, code) ? `${desktopErrorLabelOf(code)}（${code}）` : workspaceError(new Error(code))
+}

@@ -21,6 +21,7 @@ import uuid
 from pathlib import Path
 from ddp_core.application.plans import canonical_bytes, content_digest, digest, reject
 from ddp_core.application.ports import ApplicationError
+from ddp_core.bundle import MAX_ARCHIVE
 
 from ddp_local.federation_client import (
     CenterConfig,
@@ -129,12 +130,24 @@ def federation_summary(runtime, plan_id):
 
 
 def delivery_result_bytes(runtime, plan_id):
-    """Exact canonical bytes of the locally verified result, for independent rehashing."""
+    """Exact bytes of the locally verified result and their media type, for independent rehashing.
+
+    Answer deliveries return the canonical JSON result. File deliveries return the
+    imported version's stored Bundle: blobs are content-addressed and re-hashed on
+    read, so these are the bytes that were verified and imported, not a flag.
+    """
     state = load_federation_state(runtime, plan_id)
     delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
-    if delivery.get("verified") is not True or not isinstance(delivery.get("result"), dict):
-        reject("not_found", "plan has no locally verified delivery result")
-    return canonical_bytes(delivery["result"])
+    if delivery.get("verified") is True and isinstance(delivery.get("result"), dict):
+        return canonical_bytes(delivery["result"]), "application/json"
+    imported = delivery.get("import_result")
+    if (delivery.get("verified") is True and delivery.get("bytes_verified") is True
+            and isinstance(imported, dict) and isinstance(imported.get("version_id"), str)):
+        # A deleted local copy has nothing left to prove: not_found, never a pass.
+        version = runtime.store.version(imported["version_id"])
+        if version["bundle_key"]:
+            return runtime.blobs.read(version["bundle_key"], MAX_ARCHIVE), "application/zip"
+    reject("not_found", "plan has no locally verified delivery result")
 
 
 def file_delivery_manifest(runtime, plan_id):
@@ -947,7 +960,7 @@ async def _reconcile_file(runtime, plan_id, config, identity, state, *, actor_he
         if isinstance(manifest, dict):
             delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
             delivery["manifest"] = manifest
-            state["delivery"] = delivery
+            state["delivery"] = _project_file_delivery(delivery, compute_id, status)
         state["reconcile"] = {"at": time.time(), "result": "ok"}
         _record(state, "reconcile", "ok")
         return _save(runtime, identity, plan_id, state)
@@ -958,6 +971,29 @@ async def _reconcile_file(runtime, plan_id, config, identity, state, *, actor_he
         raise
     finally:
         await client.aclose()
+
+
+_FILE_DELIVERY_STATE = {"succeeded": "pending", "acked": "confirmed", "expired": "expired"}
+#: Closed without an ack: the center will refuse every confirmation, so no delivery state applies.
+_FILE_DELIVERY_CLOSED = ("cancelled", "failed")
+
+
+def _project_file_delivery(delivery, compute_id, status):
+    """Put a file delivery on the same `delivery_state` axis as answer deliveries.
+
+    Its id is the remote compute id (what the ack names); its state mirrors the
+    center record, and a compute closed without an ack drops a stale `pending`.
+    A local confirmation is never downgraded by a later read.
+    """
+    delivery["id"] = compute_id
+    if delivery.get("state") == "confirmed":
+        return delivery
+    mapped = _FILE_DELIVERY_STATE.get(status)
+    if mapped:
+        delivery["state"] = mapped
+    elif status in _FILE_DELIVERY_CLOSED:
+        delivery.pop("state", None)
+    return delivery
 
 
 async def _merge_task_status(state, status, client, root):
@@ -1083,7 +1119,6 @@ async def _fetch_file_delivery(runtime, plan_id, config, identity, state, *, act
     Only this transfer's partial is cleaned on expiry/cancel/mismatch; already
     imported versions are never deleted.
     """
-    from ddp_core.bundle import MAX_ARCHIVE
     from ddp_local.remote_compute import (
         DOWNLOAD_CHUNK_BYTES, append_complete_chunk, discard_partial,
         import_verified_bundle, partial_identity, partial_path,
@@ -1099,7 +1134,9 @@ async def _fetch_file_delivery(runtime, plan_id, config, identity, state, *, act
             raise CenterFault("invalid_response", 0, False)
         state["remote_compute"] = record
         manifest = record.get("manifest")
-        delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
+        delivery = _project_file_delivery(
+            state.get("delivery") if isinstance(state.get("delivery"), dict) else {},
+            compute_id, record.get("status"))
         digest = record.get("result_manifest_digest")
         if isinstance(manifest, dict) and isinstance(manifest.get("output_sha256"), str):
             digest = "sha256:" + manifest["output_sha256"]
@@ -1377,7 +1414,8 @@ async def _confirm_file_delivery(runtime, plan_id, delivery_id, result_manifest_
         state = _save(runtime, identity, plan_id, state, command_key=operation_key)
     client = _center_client(runtime, identity, plan_id, config, actor_headers)
     try:
-        receipt = await client.ack_remote_compute(delivery_id, result_manifest_digest)
+        # The center's ack names the fixed manifest output hash as bare 64-hex.
+        receipt = await client.ack_remote_compute(delivery_id, result_manifest_digest.removeprefix("sha256:"))
     except CenterFault as exc:
         _record(state, "ack_delivery",
                 "unknown" if isinstance(exc, CenterOutcomeUnknown) else "rejected", exc.code, exc.status)
@@ -1455,6 +1493,9 @@ async def cancel_remote_compute(runtime, plan_id, config, *,
         _save(runtime, identity, plan_id, state)
         raise CenterFault("invalid_response", 0, False)
     state["remote_compute"] = record
+    if isinstance(state.get("delivery"), dict):
+        # The cancel reply is authoritative: a verified-but-unacked delivery stops offering confirm now.
+        state["delivery"] = _project_file_delivery(state["delivery"], compute_id, record.get("status"))
     if record.get("status") == "cancelled":
         state["state"] = "cancelled"
         _record(state, "cancel_remote_compute", "ok")

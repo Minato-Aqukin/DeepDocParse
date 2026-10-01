@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { apiUrl, bootSource, checkSourceResponse, egressStatus, initDesktopSource, isDesktop, sourceErrorLabel } from '@/platform/desktop'
+import { apiUrl, bootSource, checkSourceResponse, egressStatus, initDesktopSource, isDesktop, sourceErrorLabel, workspaceFailure } from '@/platform/desktop'
 
 function setDesktop(bridge: unknown) {
   Object.defineProperty(window, 'ddpDesktop', { value: bridge, configurable: true, writable: true })
@@ -111,6 +111,11 @@ describe('数据源错误文案', () => {
     expect(sourceErrorLabel('authentication_required')).toBe('此身份需要重新认证。')
     expect(sourceErrorLabel('approved_plan_required')).toBe('中心在桌面里只读；写操作请作为联邦任务发起并批准')
     expect(sourceErrorLabel('made_up')).toBe('未知取值（made_up）')
+  })
+
+  it('落账的失败码只出现一次：有文案写「文案（码）」，未知码的兜底已带码不再重复', () => {
+    expect(workspaceFailure('transport_error')).toBe('读取中心时连接中断，没有确认任何结果；可以再次读取，不会重复任何写入。（transport_error）')
+    expect(workspaceFailure('made_up')).toBe('未知取值（made_up）')
   })
 })
 

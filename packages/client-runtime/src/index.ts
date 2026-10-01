@@ -253,8 +253,10 @@ export class Connection {
   async query(name: string, payload: Json): Promise<Json> {
     // plan.reconcile / plan.delivery.fetch only read the center and refresh the local
     // mirror; repeating them never repeats a center write, so they are not ledger commands.
+    // plan.file.authorize is the local ledger's fresh per-attempt transfer permission; it
+    // writes nothing to the center and is never served from a cached receipt.
     if (!['corpus.search', 'evidence.get', 'models.list', 'resource.page', 'task.page', 'wiki.list', 'wiki.get', 'wiki.revisions',
-      'plan.list', 'plan.get', 'plan.reconcile', 'plan.delivery.fetch'].includes(name))
+      'plan.list', 'plan.get', 'plan.reconcile', 'plan.delivery.fetch', 'plan.file.authorize'].includes(name))
       throw new ConnectionFault('protocol_incompatible')
     canonical(payload)
     const session = this.session, controller = this.controller
