@@ -12,7 +12,7 @@ info:
     - 输出通过既有 Bundle/存储通道，校验后本地原子提交再 ack，TTL/取消/失败/确认状态可见，持久临时区清理复用引用安全 GC。
     - succeeded 的输出使用真实固定来源版本、原件、版面与已落定的冻结证据；编译未结束时不提前固定空证据交付。编译降级原样保留在 manifest.compile_degraded；索引／证据缺失以 manifest.degraded 的 resource_index_unavailable／evidence_unavailable 显式保留。回调丢失由持久对账补齐，不重复提交解析。
     - 未确认的 succeeded 到 expires_at 后转 expired，不再接受下载或 ACK；到期前不因关闭后的清理宽限期提前丢失输出。尚未 ACK 的 succeeded 可取消；晚到结果不能复活 cancelled/expired/failed/acked。
-    - 关闭时撤销该计算独占的临时资源，宽限期后回收专属交付文件。原件与派生文件复用持久、引用安全 GC；其他资源、人工保存的证据引用和仍在执行的解析必须保留。清理完成记录不改动固定交付 manifest。
+    - 关闭时撤销该计算独占的临时资源，宽限期后回收专属交付文件。原件与派生文件复用持久、引用安全 GC；完成原件回收时同时删除该文档的 chunks（全文、搜索文本、派生文本与向量），普通清扫也补删历史已回收文档的遗留 chunks。其他资源、人工保存的证据引用和仍在执行的解析必须保留；evidence/citations 不随回收删除，保留为审计轨迹。清理完成记录不改动固定交付 manifest。
 
     本文件为新增 `remote-compute-v1.yaml`；控制面入口形状同时落在 `control-v1.yaml`（RemoteCompute/UploadPurpose/五个端点），以单入口代理语义为准。
 tags:

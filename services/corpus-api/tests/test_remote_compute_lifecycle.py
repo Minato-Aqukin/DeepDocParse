@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from ddp_core.bundle import json_bytes, read_bundle
 from ddp_corpus.config import settings
-from ddp_corpus.models import Document, Evidence, ParseJob, Resource, ResourceVersion, new_id, utcnow
+from ddp_corpus.models import Chunk, Document, Evidence, ParseJob, Resource, ResourceVersion, new_id, utcnow
 from ddp_corpus.remote_compute_ingest import record_parse_outcome
 from ddp_corpus.remote_compute_models import RemoteCompute
 from ddp_corpus.routers.internal import _record_remote_outcome
@@ -202,6 +202,11 @@ async def test_reference_safe_gc_reclaims_closed_compute_original_and_derived_by
 
     row, job, _, _, original = await _parsed(actor_client, session, app_state, monkeypatch)
     document = await session.get(Document, job.document_id)
+    chunk = Chunk(document_id=document.id, parse_job_id=job.id, seq=0,
+                  text="Launch code 8712.", search_text="Launch code 8712.",
+                  text_tokenized="launch code 8712", derived_text="derived secret",
+                  embedding=[0.5] * 1024)
+    session.add(chunk)
     original_key, layout_key = document.object_key, job.result_prefix + "layout.json"
     row.status = "cancelled"
     row.updated_at = utcnow() - timedelta(hours=2)
@@ -217,11 +222,49 @@ async def test_reference_safe_gc_reclaims_closed_compute_original_and_derived_by
     await collect_deleted_objects(db.get_sessionmaker(), app_state.storage)
     assert await app_state.storage.get(original_key) == original
     assert await app_state.storage.exists(layout_key)
+    assert await session.scalar(select(Chunk.id).where(Chunk.document_id == document.id)) == chunk.id
     await session.delete(citation)
     await session.commit()
     await collect_deleted_objects(db.get_sessionmaker(), app_state.storage)
     assert not await app_state.storage.exists(original_key)
     assert not await app_state.storage.exists(layout_key)
+    assert await session.scalar(select(Chunk.id).where(Chunk.document_id == document.id)) is None
+    assert await session.get(Evidence, evidence.id, populate_existing=True) is not None
+
+
+async def test_gc_purges_historical_reclaimed_chunks_without_touching_live_document(
+    session, app_state, monkeypatch
+):
+    from ddp_corpus import db
+    from ddp_corpus.gc import collect_deleted_objects
+
+    reclaimed = [
+        Document(id=new_id(), doc_id=new_id(), filename="reclaimed.pdf", uploaded_by=ACTOR,
+                 organization_id=ORG, object_key="", deleted_at=utcnow() - timedelta(hours=2))
+        for _ in range(2)
+    ]
+    live = Document(id=new_id(), doc_id=new_id(), filename="live.pdf", uploaded_by=ACTOR,
+                    organization_id=ORG, object_key="live.pdf")
+    session.add_all([*reclaimed, live])
+    await session.flush()
+    for document in [*reclaimed, live]:
+        job = ParseJob(id=new_id(), document_id=document.id, engine="borndigital",
+                       status="succeeded", options_hash="historical")
+        session.add(job)
+        await session.flush()
+        session.add(Chunk(document_id=document.id, parse_job_id=job.id, text="retained secret", seq=0))
+    await session.commit()
+    await app_state.storage.put(live.object_key, b"live original", "application/pdf")
+    monkeypatch.setattr(settings, "gc_grace_seconds", 0)
+
+    assert await collect_deleted_objects(db.get_sessionmaker(), app_state.storage, limit=1) == 1
+    remaining = set((await session.execute(select(Chunk.document_id))).scalars())
+    assert live.id in remaining
+    assert len(remaining.intersection(document.id for document in reclaimed)) == 1
+    assert await collect_deleted_objects(db.get_sessionmaker(), app_state.storage, limit=1) == 1
+    assert set((await session.execute(select(Chunk.document_id))).scalars()) == {live.id}
+    assert await collect_deleted_objects(db.get_sessionmaker(), app_state.storage, limit=1) == 0
+    assert await app_state.storage.get(live.object_key) == b"live original"
 
 
 @pytest.mark.parametrize("outcome", ["failed", "expired"])

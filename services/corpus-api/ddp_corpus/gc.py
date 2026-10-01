@@ -7,12 +7,13 @@ object deletion. A failed or interrupted sweep never loses its remaining keys.
 
 from datetime import timedelta
 
-from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ddp_corpus.config import settings
 from ddp_corpus.bundle_models import BundleReplica, BundleReplicaRevokeKey, replica_is_live
 from ddp_corpus.models import (
+    Chunk,
     Citation,
     ClaimEvidenceBinding,
     DependencyManifest,
@@ -266,6 +267,12 @@ async def collect_deleted_objects(
     cutoff = utcnow() - timedelta(seconds=settings.gc_grace_seconds)
     async with sessionmaker() as session:
         pending = func.json_array_length(Document.gc_pending_keys) > 0
+        reclaimed_chunks = (
+            Document.deleted_at.is_not(None)
+            & (Document.object_key == "")
+            & ~pending
+            & exists(select(Chunk.id).where(Chunk.document_id == Document.id))
+        )
         tombstoned = exists(
             select(ResourceVersion.id)
             .join(Resource)
@@ -279,7 +286,7 @@ async def collect_deleted_objects(
                 await session.execute(
                     select(Document.id)
                     .where(
-                        or_(Document.object_key != "", pending),
+                        or_(Document.object_key != "", pending, reclaimed_chunks),
                         or_(Document.deleted_at.is_not(None), tombstoned, pending),
                         ~_live_versions(Document.id),
                     )
@@ -334,6 +341,9 @@ async def collect_deleted_objects(
                 remaining.remove(key)
             document.gc_pending_keys = remaining
             if not remaining:
+                # Cache text and vectors have no rebuildable source now. Audit
+                # evidence and citations deliberately remain untouched.
+                await session.execute(delete(Chunk).where(Chunk.document_id == document.id))
                 document.gc_error = None
                 cleaned += 1
             await session.commit()

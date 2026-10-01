@@ -10,7 +10,7 @@ from ddp_core.bundle import build_bundle, digest, json_bytes, read_bundle
 from ddp_corpus import db
 from ddp_corpus.config import settings
 from ddp_corpus.gc import collect_deleted_objects
-from ddp_corpus.models import Document, Resource, ResourceVersion, utcnow
+from ddp_corpus.models import Chunk, Document, Resource, ResourceVersion, utcnow
 from ddp_corpus.versions import next_document_version
 from sqlalchemy import func, select
 from tests.conftest import actor_headers, drain_tasks
@@ -378,7 +378,14 @@ async def test_gc_partial_failure_keeps_durable_remaining_keys_and_retries(
     resource.deleted_at = version.deleted_at = utcnow() - timedelta(
         seconds=settings.gc_grace_seconds + 10
     )
+    session.add(Chunk(document_id=result["document_id"], parse_job_id=version.parse_job_id,
+                      seq=0, text="derived source secret", search_text="source secret",
+                      derived_text="derived secret", text_tokenized="source secret"))
     await session.commit()
+    chunks_before = set((await session.execute(
+        select(Chunk.id).where(Chunk.document_id == result["document_id"])
+    )).scalars())
+    assert chunks_before
     original_delete = app_state.storage.delete
     attempts = 0
 
@@ -396,10 +403,16 @@ async def test_gc_partial_failure_keeps_durable_remaining_keys_and_retries(
     assert document.gc_error == "delete_failed:OSError"
     assert document.gc_pending_keys
     assert set(document.gc_pending_keys) == set(app_state.storage.objects)
+    assert set((await session.execute(
+        select(Chunk.id).where(Chunk.document_id == result["document_id"])
+    )).scalars()) == chunks_before
     assert await collect_deleted_objects(db.get_sessionmaker(), app_state.storage) == 1
     await session.refresh(document)
     assert document.gc_pending_keys == [] and document.gc_error is None
     assert not app_state.storage.objects
+    assert await session.scalar(
+        select(Chunk.id).where(Chunk.document_id == result["document_id"])
+    ) is None
 
 
 @pytest.mark.parametrize("reference_kind", ["dependency", "claim_binding"])

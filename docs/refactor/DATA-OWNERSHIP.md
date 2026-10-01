@@ -86,8 +86,8 @@ GRANT SELECT ON control.organizations, control.users TO ddp_corpus;
 |---|---|
 | `documents` / `document_uploads` | `uploaded_by` → `actor_id`（**无 FK**，跨 schema 不设约束） |
 | `parse_jobs` | |
-| `chunks` | 向量索引，可重建缓存 |
-| `evidence` / `citations` | **唯一实现留在 Python**（风险台账：Go 重写证据规则 → 假出处） |
+| `chunks` | 向量索引及全文／搜索／派生文本，可重建缓存；引用安全 GC 完成原件回收时删除，普通清扫补删历史已回收文档的遗留缓存 |
+| `evidence` / `citations` | **唯一实现留在 Python**（风险台账：Go 重写证据规则 → 假出处）；不随原件 GC 删除，已回收文档的证据保留为审计轨迹 |
 | `agent_turns` / `assertions` / `retrieval_candidates` / `evidence_verifications` | |
 | `knowledge_entities` / `graph_edges` / `wiki_entries` / `wiki_sections` / `wiki_sentences` / `knowledge_reviews` | |
 | `conversations` / `messages` | 从旧 web 层迁入 corpus（它们绑 Document，属于语料） |
