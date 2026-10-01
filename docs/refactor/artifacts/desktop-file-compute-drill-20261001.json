@@ -29,23 +29,37 @@
     {"step": "确认后清理与未确认保留", "observed": "确认（ack 03:21:56Z）时该计算资源墓碑化（compute-resource-tombstones.tsv：deleted_at 03:21:56Z、withdrawn）；TERMINAL_GRACE_SECONDS=3600 期满由清扫回收：cleaned_at 2026-10-01T04:21:57Z，04:28:01Z 列举该计算临时前缀对象 0。它的上传副本确曾写入前缀（中继 PUT …/b3648093…/source.bin 200），但 finalize 时按内容去重由 cleanup_duplicate_upload 删除，解析绑定已有文档 31caa2ff…（对象键在 3c1a… 前缀下，dedup-bindings.tsv），所以宽限期清扫回收的是它独占的输出包；共享原件仍被引用而保留。对照：未确认的 3c1a… 在 TTL（2026-10-01T17:56Z）内仍保留 source.bin 2360100 字节与输出包 2363997 字节", "outcome": "通过：确认前不清理、确认后宽限期满回收本计算独占的对象、被引用的共享原件不删（object-listing.txt、remote_computes-after-grace.tsv、dedup-bindings.tsv）"},
     {"step": "宿主崩溃", "observed": "2026-09-30T18:04:03Z Electron 主进程 SIGSEGV（node TLSWrap 写完成回调 → v8::Object::Get，core dump 已存），运行时子进程随之退出；重启后计划账本、上传日志与已导入版本完好", "outcome": "平台风险（Electron 内嵌 Node 的原生崩溃，非本项目 JS）；持久状态未受损"},
     {"step": "批准过期", "observed": "计划有效期 2 小时（valid_until 2026-09-30T19:55:47Z），闲置后显式重取交付被拒（POST …/delivery/fetch → 400 consent_expired），计划 planning_state=invalidated（plan-4f0b-after-expiry.json）；该计划修复前没有交付 id/state，确认入口从未出现，不是一次 ack 被拒。本机已导入的副本保留，中心按 24 小时 TTL 处理未确认输出", "outcome": "失败关闭，符合设计"},
-    {"step": "上传后取消", "observed": "plan-4fb60d70…：上传完成（中心校验 2360100 字节、sha256 d00be0bb…）并绑定解析后立即取消中心计算 → 7ae2ff7c… cancelled（04:33:41Z），解析绑定的资源同刻墓碑化（compute-resource-tombstones.tsv）；原件按内容去重并入共享文档 31caa2ff…，本计算前缀无对象（cancel-with-bytes-before.tsv、dedup-bindings.tsv）", "outcome": "终态与墓碑化通过；共享原件因仍被引用而保留；独占字节回收未被证明"}
+    {"step": "上传后取消", "observed": "plan-4fb60d70…：上传完成（中心校验 2360100 字节、sha256 d00be0bb…）并绑定解析后立即取消中心计算 → 7ae2ff7c… cancelled（04:33:41Z），解析绑定的资源同刻墓碑化（compute-resource-tombstones.tsv）；原件按内容去重并入共享文档 31caa2ff…，本计算前缀无对象（cancel-with-bytes-before.tsv、dedup-bindings.tsv）", "outcome": "终态与墓碑化通过；共享原件因仍被引用而保留（独占原件见下一步）"},
+    {"step": "独占原件确认／取消后回收", "observed": "两份互不相同、也不与任何已有文档重复的原件 unique-ack.pdf（sha256 0aae4933…）与 unique-cancel.pdf（f0dd5f8d…）各走一次真实文件计算：73f2c24c… 确认（ack 04:45:11Z）、734644fc… 中心完成后取消（04:47:07Z），两者 own_original=t。宽限期前两个前缀都有输出包与 source.bin（exclusive-before*.tsv/txt）。TERMINAL_GRACE_SECONDS=3600 期满：cleaned_at 05:45:58Z／05:47:58Z；两个 tmp-remote-compute/<id>/ 前缀与 results/<parse_job>/ 前缀对象均为 0；文档 object_key 清空、deleted_at 保留、index_status=none、gc_pending_keys=[]（exclusive-after*.tsv、exclusive-after-objects.txt）。当时（c86b62a 之前）该文档的 1 条 chunk（含向量）与 1 条 evidence 仍在、无引用（exclusive-after-db-derivatives.tsv）；检索经 visible_document_condition（policy.py:60-72，要求 Document.deleted_at IS NULL），不会再被检出", "outcome": "通过：独占原件、交付包与解析产物在确认或取消后的宽限期满被引用安全 GC 回收；当时数据库派生行（chunk 文本／向量、evidence）仍保留，chunk 的回收见 open_items（c86b62a）"},
+    {"step": "中心入口重启：已完成未领取／已领取未确认", "observed": "restart-t27.pdf（802 字节，sha256 90ba477f…）→ c8225f99… succeeded 后，停 control-api 与 corpus-api：任务页重新核对、取回、确认均显示「中心连接未就绪；重新连接并核对节点身份后再操作。」，交付状态保持「待领取」，本机校验结果保留；两服务以同一脚本重启后连接已用尽有限重试（5 次约 19 秒）停在 blocked，界面没有自动恢复，只能在数据源页「切换」到中心再切回工作区以重新核对节点身份；之后核对 → 取回（Range 206，5135 字节，本地重算摘要 be55bba7… 与中心声明一致）→ 第二次重启 control/corpus（已领取未确认）→ 停机中确认被拒且保持待确认 → 恢复后确认 → 已交付。中心：该计划一条计算、一个解析任务、source.bin PUT 1 次、bundle GET 1 次、ack POST 1 次（t27-b-*.tsv、t27-relay-events.json）", "outcome": "通过：重启前后同一计算可查询、取回与确认，未重复受理或重复确认；恢复入口不直观（只能借「切换」唤醒），另行修复"},
+    {"step": "中心入口重启：执行中", "observed": "restart-t27a.pdf（786 字节，sha256 425da26d…）派发前停 gateway worker 使解析停在 pending：f1b00dc1… running（06:02:33Z）。同时停 control-api、corpus-api、corpus-worker；停机中核对显示连接未就绪、状态保持「中心执行中」；三者重启并唤醒后核对仍为「中心执行中」，没有重新派发；恢复 gateway worker 后完成 → 取回（本地重算 bc7677c6… 一致）→ 确认 → 已交付。中心：一条计算、一个解析任务、一个上传会话、source.bin PUT 1 次、bundle GET 1 次、ack POST 1 次（t27-a-*.tsv、t27a-relay-events.json）", "outcome": "通过：执行中的已受理计算在中心入口与 worker 重启后仍被同一任务对账、完成并只交付一次"},
+    {"step": "关闭网页（渲染进程重载）", "observed": "演练中重载渲染进程（宿主与运行时不重启）后，联邦任务、上传日志、交付校验结果与中心连接登记全部从宿主恢复；重载前因 apps/web/dist 在 App 运行中被重建，路由懒加载块 404 使「数据源」导航静默不生效（router.push 抛 Failed to fetch dynamically imported module，界面无任何提示）", "outcome": "任务状态不随网页关闭丢失；懒加载失败无提示另行修复"}
   ],
   "open_items": [
-    "文件计划的版本选择列出两条同名同大小的『resume-fixture.pdf · v1』（本地原件与交付导入副本），无法区分；选到导入副本时 policy_denied（来源策略不允许外发）",
-    "新建联邦任务页出现『任务草稿保存失败』且一直显示，原因未查",
+    "文件计划的版本选择与锁定输入列出同名同大小的两条（本地原件与交付导入副本），选到导入副本时 policy_denied。已修：本机 /api/resources 按契约给出 copied_from（remote:<节点>:<资源>）与 federation_input_allowed，两处列表标“导入副本（…）”并禁选、本机原件标“本机原件”；来源策略本身未放宽（仅问题外发的计划锁定导入副本同样被拒，属现行策略）",
+    "新建联邦任务页草稿保存失败：Vue 响应式数组直接进 IPC 导致结构化克隆失败。已修：桥接层先取纯 JSON 快照，非 JSON 在 IPC 前以 invalid_arguments 拒绝；真机草稿显示“任务草稿已保存在此工作区”",
     "Electron 主进程原生 SIGSEGV 一次，未复现",
-    "独占原件（未与其他资源去重）在取消／确认后的字节回收未演练：本演练三次带字节的上传是同一文件，后两次都按内容去重并入第一次的共享文档"
+    "中心停机超出有限重试后连接停在 blocked，只能借“切换”唤醒。已修：数据源页对未就绪中心给出“重新连接”（固定 IPC sourceReconnect，不改当前源），center_not_current 文案指向数据源页；真机中心停 35 秒后重启，非当前中心一键由“不可用”恢复“可用”，工作区保持当前",
+    "上传状态在中心完成乃至确认后仍显示“服务端全量校验中”。已修：宿主按对账得到的远端计算记录投影为已校验；真机两条已交付任务显示“输入已通过服务端校验。上传不是解析完成。”",
+    "懒加载页面文件缺失时导航静默失效。已修：路由错误显示常驻提示与“重新加载窗口”按钮；真机移走更新页文件后导航，显示提示、停在原页，复原后按钮重载并可进入",
+    "关窗后 Electron 主进程不退出（安装包实测）。已修：prevented close 的续延里同步重入 app.quit 会被 Electron 的取消回调清掉退出标记，改为下一轮事件循环再退出；修复期间新 profile 与工作区 profile 关窗均在 5 秒内以 0 退出（.dev-logs/close-hang-20261001/green-*.json），复测中经 niri 关闭演练 App 窗口后第一次 1 秒轮询即已退出（fix-smoke-close.txt）；修复后的安装包未重测",
+    "已删除文档的数据库派生行：chunk（文本与向量）原本不随原件回收。已修（c86b62a）：之后一次 GC（c86b62a 代码，提交前的工作树）首轮 reconcile 报 gc=5（gc-reconcile-log.txt），5 份已回收文档 chunk 1→0、evidence 保留 1（gc-chunks-before/after.tsv）；之后 18 份在用且可问答的文档全部仍有 chunk（只有清扫后的计数，无清扫前基线）；evidence 原子按设计保留，期限未定（T30）",
+    "B 栈 MinIO（RELEASE.2025-04-22，go1.24.2）两次以 Go 运行时 fatal error: sweep increased allocation count 退出（容器日志第 33 与 7190 行，minio-crash-fatal-lines.txt；第二次退出码 2、06:11:44Z），非本项目代码；重启后数据完好"
   ],
   "verification": {
     "commit": "065f115",
     "tests": "client-runtime 49、desktop 88（W3 两项在无 WSL 包的工作树跳过）、web vitest 169、ddp_local 168、架构守卫 270；每条新增回归均在修前代码上确认失败",
-    "independent_acceptance": "DesktopSliceAccept 三轮：首轮无阻塞，P2（取消后残留 pending）与三项 P3 已修并复核通过"
+    "independent_acceptance": "DesktopSliceAccept 三轮：首轮无阻塞，P2（取消后残留 pending）与三项 P3 已修并复核通过",
+    "followup_commits": {
+      "47bf174": "49 个宿主错误码契约文案与扫描守卫（LabelsSliceAccept 三轮通过）",
+      "c86b62a": "已回收文档的 chunk 缓存随原件回收（GcSliceAccept 通过）",
+      "072e860": "重连入口、懒加载失败提示、上传状态投影、草稿 JSON 快照、导入副本区分、关窗退出（DesktopHostAccept／DesktopRendererAccept 两轮通过）；desktop 93、web vitest 188、ddp_local 170、架构守卫 271，CI 六项全绿"
+    }
   },
   "limits": [
     "单机回环与测试 CA；网络故障由中继模拟，不是真实分区",
     "原生批准对话框由测试启动器自动应答，不是人工点击",
-    "未打包的开发版 Electron；未测休眠恢复、离线审计、安装包",
+    "未打包的开发版 Electron，经 Playwright 启动（附加 --no-sandbox --inspect=0）；离线审计见 desktop-offline-audit-20261001.json；当前包安装升级见 pacman-install-upgrade-20261001.json；未测真实系统休眠",
     "解析为 borndigital 文本层；不涉及模型质量"
   ]
 }

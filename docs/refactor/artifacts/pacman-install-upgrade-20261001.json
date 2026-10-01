@@ -1,0 +1,529 @@
+{
+  "schema": "ddp-native-package-verification/1",
+  "date": "2026-10-01",
+  "source_revision": "901754a71c0d577cc69f8ebe3e316b3e1868c4f4",
+  "platform": {
+    "os": "Linux-7.2.8-1-cachyos-x86_64-with-glibc2.44",
+    "session": "Wayland",
+    "architecture": "x86_64"
+  },
+  "scope": "Current AppShell package: actual pacman fresh installation in a new isolated root, 0.1.1 to 0.1.2 upgrade in the historical isolated root/database, then ordinary-user execution on the real host Wayland session. Restored copy of a historical populated SQLite workspace was opened by the upgraded application. Not a system-global install, clean-OS VM, release publication or production migration drill.",
+  "host_package_database_modified": false,
+  "host_package_database_evidence": ".dev-logs/pkg-20261001/host-db-final.log",
+  "package_signature_policy": "Required DatabaseOptional; LocalFileSigLevel Optional, matching historical offline config. No repository/network access in pacman installation. Local packages are unsigned, not release-trust evidence.",
+  "versions": [
+    "0.1.1-1",
+    "0.1.2-1"
+  ],
+  "packages": {
+    "0.1.1": "fc0bc5b62247e79e69e0ebe6479e78cc5838ef5d4fe4096bb1c711824b996032",
+    "0.1.2": "e2b4458bc0a2a743c661b933b61351fa7fd95dbc08527e4062693e3fb0b9243f"
+  },
+  "directory_package": {
+    "version": "0.1.2",
+    "archive": ".dev-logs/pkg-20261001/release/deepdocparse-0.1.2-linux-x64.tar.gz",
+    "sha256": "112cff3d4f4a253a0785563e94aaf13e85565015a10caa1c3e49f9293cfbf3ea",
+    "build_log": ".dev-logs/pkg-20261001/directory-build.log",
+    "verify_log": ".dev-logs/pkg-20261001/directory-verify.log"
+  },
+  "arch_build": {
+    "package": ".dev-logs/pkg-20261001/upgrade-recipe/deepdocparse-desktop-spike-0.1.2-1-x86_64.pkg.tar.zst",
+    "documented_command_log": ".dev-logs/pkg-20261001/arch-build-documented.log",
+    "upgrade_build_log": ".dev-logs/pkg-20261001/upgrade-build.log",
+    "source_verification_log": ".dev-logs/pkg-20261001/upgrade-verifysource.log",
+    "recipe_log": ".dev-logs/pkg-20261001/recipe-preparation.log",
+    "note": "Documented scripts/build_desktop_arch.sh --build is hardcoded to 0.1.0; ran it unchanged successfully. Next-version 0.1.2 recipe was generated from the current tracked PKGBUILD using the historical upgrade-recipe method, under this drill log directory. umask 022; SOURCE_DATE_EPOCH=1789257600; PATH=/tmp/nodeshim:$PATH. No tracked packaging scripts were changed."
+  },
+  "install_transaction": {
+    "root": ".dev-logs/pkg-20261001/fresh-install/pacman-root",
+    "dbpath": ".dev-logs/pkg-20261001/fresh-install/pacman-db",
+    "from": null,
+    "to": "0.1.2-1",
+    "exit_code": 0,
+    "log": ".dev-logs/pkg-20261001/pacman-install-transactions.log",
+    "output": ".dev-logs/pkg-20261001/pacman-install-output.log",
+    "method": ".dev-logs/pkg-20261001/isolated-method.log"
+  },
+  "upgrade_transaction": {
+    "root": ".dev-logs/v3-finish-20260923/pacman-root",
+    "dbpath": ".dev-logs/v3-finish-20260923/pacman-db",
+    "from": "0.1.1-1",
+    "to": "0.1.2-1",
+    "exit_code": 0,
+    "log": ".dev-logs/pkg-20261001/pacman-upgrade-transactions.log",
+    "output": ".dev-logs/pkg-20261001/pacman-upgrade-output.log"
+  },
+  "installed_0_1_2": {
+    "renderer": {
+      "url": "ddp://app/index.html#/sources",
+      "title": "数据源 · DeepDocParse",
+      "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) DeepDocParse/0.1.2 Chrome/152.0.7977.78 Electron/44.3.0 Safari/537.36",
+      "app_shell": true,
+      "sources": true,
+      "navigation": [
+        "数据源",
+        "本地模型",
+        "设置",
+        "更新",
+        "数据源",
+        "设置"
+      ],
+      "host": {
+        "ok": true,
+        "value": {
+          "platform": "linux",
+          "electron": "44.3.0",
+          "version": "0.1.2",
+          "secrets": {
+            "backend": "basic_text",
+            "persistentAvailable": false,
+            "reason": "session_only_secret_service_required"
+          },
+          "credentialStorage": {
+            "backend": "basic_text",
+            "persistentAvailable": false,
+            "reason": "session_only_secret_service_required"
+          },
+          "runtimeBackend": "native",
+          "runtimeAvailable": true,
+          "runtimeReason": null,
+          "orphanCleanup": null,
+          "isolation": "posix_mode",
+          "lifecycle": "close_stops_owned_local_tasks",
+          "connectionIntegration": "shared_client_runtime"
+        }
+      },
+      "sources_list": {
+        "ok": true,
+        "value": []
+      },
+      "visible_text": "DeepDocParse\n本机\n数据源\n本地模型\n设置\n更新\n数据源\n选择数据源\n未选择数据源\n未选择数据源\n数据源\n\n同一时刻只有一个当前数据源。切换后页面整体重载，另一源的会话、草稿与引用不会串过来。\n\n刷新\n本机工作区\n\n打开一个本机目录作为工作区：解析、索引、问答都在本机执行，原件不外发。\n\n打开本机工作区…\n连接中心\n\n中心在桌面里是只读镜像：浏览、检索、看原文与引用；写操作须作为联邦任务发起并经批准派发。\n\n中心地址\n账号\n密码\n保存登录\n\n当前环境没有可用的持久密钥库，登录只保留在本次会话。\n\n对象存储源站（高级，可空）\n连接\n已登记的数据源\n\n还没有数据源：先打开本机工作区，或连接一个中心。\n\n移除只断开连接并清除保存的登录：本机工作区的资料保留在原目录，可重新打开。\n\n文档解析由\nMinerU\n提供支持"
+    },
+    "ordinary_user_uid": 1000,
+    "launch_log": ".dev-logs/pkg-20261001/fresh-ordinary-launch.log",
+    "renderer_log": ".dev-logs/pkg-20261001/fresh-ordinary-appshell-observations.log",
+    "close": {
+      "pid": 118286,
+      "close_path": "niri msg action close-window --id 25",
+      "visible_windows_after_close": [],
+      "remaining_cdp_targets": [],
+      "window_all_closed": "No lifecycle event instrumentation was enabled, so emission is not observed; all visible compositor windows and CDP page targets are absent.",
+      "exit_dialog": "No exit dialog appeared in niri window inventory after fresh close; the fresh profile had no sources and no runtime was started.",
+      "wait_seconds": 15,
+      "process_exit_after_wait": null,
+      "finding": "Electron process remains alive with no visible windows after niri close-window; cause unconfirmed at drill time, no fix applied in this drill. Later root-caused and fixed in 072e860 (app.quit deferred one event-loop turn); the fixed installed package has not been re-tested."
+    },
+    "cleanup": {
+      "termination": "SIGTERM sent only to drill-owned fresh Electron after evidence capture",
+      "pid": 118286,
+      "exit_code": 0,
+      "remaining_owned_pids": []
+    }
+  },
+  "upgraded_0_1_2": {
+    "initial_renderer": {
+      "url": "ddp://app/index.html#/sources",
+      "title": "数据源 · DeepDocParse",
+      "visible_text": "DeepDocParse\n本机\n数据源\n本地模型\n设置\n更新\n数据源\n选择数据源\n未选择数据源\n未选择数据源\n数据源\n\n同一时刻只有一个当前数据源。切换后页面整体重载，另一源的会话、草稿与引用不会串过来。\n\n刷新\n本机工作区\n\n打开一个本机目录作为工作区：解析、索引、问答都在本机执行，原件不外发。\n\n打开本机工作区…\n连接中心\n\n中心在桌面里是只读镜像：浏览、检索、看原文与引用；写操作须作为联邦任务发起并经批准派发。\n\n中心地址\n账号\n密码\n保存登录\n\n当前环境没有可用的持久密钥库，登录只保留在本次会话。\n\n对象存储源站（高级，可空）\n连接\n已登记的数据源\n\n还没有数据源：先打开本机工作区，或连接一个中心。\n\n移除只断开连接并清除保存的登录：本机工作区的资料保留在原目录，可重新打开。\n\n文档解析由\nMinerU\n提供支持",
+      "sources": true,
+      "host": {
+        "ok": true,
+        "value": {
+          "platform": "linux",
+          "electron": "44.3.0",
+          "version": "0.1.2",
+          "secrets": {
+            "backend": "basic_text",
+            "persistentAvailable": false,
+            "reason": "session_only_secret_service_required"
+          },
+          "credentialStorage": {
+            "backend": "basic_text",
+            "persistentAvailable": false,
+            "reason": "session_only_secret_service_required"
+          },
+          "runtimeBackend": "native",
+          "runtimeAvailable": true,
+          "runtimeReason": null,
+          "orphanCleanup": null,
+          "isolation": "posix_mode",
+          "lifecycle": "close_stops_owned_local_tasks",
+          "connectionIntegration": "shared_client_runtime"
+        }
+      },
+      "sources_list": {
+        "ok": true,
+        "value": []
+      },
+      "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) DeepDocParse/0.1.2 Chrome/152.0.7977.78 Electron/44.3.0 Safari/537.36"
+    },
+    "renderer": {
+      "url": "ddp://app/index.html#/resources",
+      "title": "资源库 · DeepDocParse",
+      "visible_text": "DeepDocParse\n内容\n资源库\n文档库\n全文检索\n联邦任务\n知识 Wiki\n本机\n数据源\n本地模型\n设置\n更新\n资源库\nrestored-workspace\n本机执行 · 原件不外发\nowner\n资源库\n\n每份资源保留自己的归属、固定版本和原始出处。\n\n上传资料\n我的资源\n本站公开\n刷新\npico-datasheet.pdf\n● 私有\n\n资源 91af0570e43d4f9093cc1277ceff5b1a · 来源 local-c89c8ea13c3f43e5b95641f0e63b9f74 / workspace:6156815299a24879bc24b9490980878f\n\nv1\npico-datasheet.pdf\n解析 已完成 · 索引 可问答\n757ff485227493b9\n导出 Bundle\n证据信封\n追加版本\n删除资源\n上一页\n1\n下一页\n文档解析由\nMinerU\n提供支持",
+      "host": {
+        "ok": true,
+        "value": {
+          "platform": "linux",
+          "electron": "44.3.0",
+          "version": "0.1.2",
+          "secrets": {
+            "backend": "basic_text",
+            "persistentAvailable": false,
+            "reason": "session_only_secret_service_required"
+          },
+          "credentialStorage": {
+            "backend": "basic_text",
+            "persistentAvailable": false,
+            "reason": "session_only_secret_service_required"
+          },
+          "runtimeBackend": "native",
+          "runtimeAvailable": true,
+          "runtimeReason": null,
+          "orphanCleanup": null,
+          "isolation": "posix_mode",
+          "lifecycle": "close_stops_owned_local_tasks",
+          "connectionIntegration": "shared_client_runtime"
+        }
+      },
+      "sources": {
+        "ok": true,
+        "value": [
+          {
+            "sourceId": "connection-6f76dbae4e6482fe5d548092de6ad1c28701c3b6",
+            "kind": "local",
+            "label": "restored-workspace",
+            "state": "ready",
+            "readOnly": false,
+            "features": [
+              "resources",
+              "documents",
+              "search",
+              "wiki",
+              "federation_tasks"
+            ],
+            "active": true,
+            "reason": null,
+            "environment": {
+              "environmentId": "local-c89c8ea13c3f43e5b95641f0e63b9f74",
+              "workspaceId": "6156815299a24879bc24b9490980878f",
+              "authorityNodeId": "local-c89c8ea13c3f43e5b95641f0e63b9f74"
+            },
+            "profile": {
+              "profileId": "profile-a8970a429b4c101cbc6978d1e5661722d7e04ba0",
+              "issuer": "local-c89c8ea13c3f43e5b95641f0e63b9f74",
+              "subject": "workspace:6156815299a24879bc24b9490980878f"
+            }
+          }
+        ]
+      }
+    },
+    "connected_sources": {
+      "url": "ddp://app/index.html#/sources",
+      "title": "数据源 · DeepDocParse",
+      "visible_text": "DeepDocParse\n内容\n资源库\n文档库\n全文检索\n联邦任务\n知识 Wiki\n本机\n数据源\n本地模型\n设置\n更新\n数据源\nrestored-workspace\n本机执行 · 原件不外发\nowner\n数据源\n\n同一时刻只有一个当前数据源。切换后页面整体重载，另一源的会话、草稿与引用不会串过来。\n\n刷新\n本机工作区\n\n打开一个本机目录作为工作区：解析、索引、问答都在本机执行，原件不外发。\n\n打开本机工作区…\n连接中心\n\n中心在桌面里是只读镜像：浏览、检索、看原文与引用；写操作须作为联邦任务发起并经批准派发。\n\n中心地址\n账号\n密码\n保存登录\n\n当前环境没有可用的持久密钥库，登录只保留在本次会话。\n\n对象存储源站（高级，可空）\n连接\n已登记的数据源\nrestored-workspace（当前）\n\n本机工作区 · 可用\n\n移除\n\n移除只断开连接并清除保存的登录：本机工作区的资料保留在原目录，可重新打开。\n\n文档解析由\nMinerU\n提供支持",
+      "sources": {
+        "ok": true,
+        "value": [
+          {
+            "sourceId": "connection-6f76dbae4e6482fe5d548092de6ad1c28701c3b6",
+            "kind": "local",
+            "label": "restored-workspace",
+            "state": "ready",
+            "readOnly": false,
+            "features": [
+              "resources",
+              "documents",
+              "search",
+              "wiki",
+              "federation_tasks"
+            ],
+            "active": true,
+            "reason": null,
+            "environment": {
+              "environmentId": "local-c89c8ea13c3f43e5b95641f0e63b9f74",
+              "workspaceId": "6156815299a24879bc24b9490980878f",
+              "authorityNodeId": "local-c89c8ea13c3f43e5b95641f0e63b9f74"
+            },
+            "profile": {
+              "profileId": "profile-a8970a429b4c101cbc6978d1e5661722d7e04ba0",
+              "issuer": "local-c89c8ea13c3f43e5b95641f0e63b9f74",
+              "subject": "workspace:6156815299a24879bc24b9490980878f"
+            }
+          }
+        ]
+      }
+    },
+    "localRuntime": {
+      "state": "ready",
+      "reason": null,
+      "python": "/usr/bin/python3",
+      "api_statuses": {
+        "/api/v1/capabilities": 200,
+        "/api/documents": 200
+      },
+      "restored_resource": "pico-datasheet.pdf",
+      "evidence_rows": 77,
+      "process_log": ".dev-logs/pkg-20261001/ordinary-owned-processes.log",
+      "api_log": ".dev-logs/pkg-20261001/ordinary-runtime-api.log"
+    },
+    "ordinary_user_uid": 1000,
+    "launch_log": ".dev-logs/pkg-20261001/ordinary-launch.log",
+    "renderer_logs": [
+      ".dev-logs/pkg-20261001/ordinary-sources-observations.log",
+      ".dev-logs/pkg-20261001/ordinary-runtime-observations.log",
+      ".dev-logs/pkg-20261001/ordinary-connected-sources-observations.log"
+    ],
+    "shutdown": {
+      "exit_code": 0,
+      "runtime_stop": "explicit SIGTERM to own runtime after native confirmation automation limitation",
+      "owned_processes_remaining": []
+    }
+  },
+  "sqlite_online_backup_and_upgrade": {
+    "workspace.sqlite3": {
+      "backup_integrity": "ok",
+      "installed_integrity": "ok",
+      "original_unchanged": true,
+      "tables": {
+        "metadata": {
+          "backup_rows": 3,
+          "installed_rows": 3,
+          "backup_sha256": "c64870314af7753093ea0971ae52fa194b4e66993076a00091a7e599b28708b8",
+          "installed_sha256": "c64870314af7753093ea0971ae52fa194b4e66993076a00091a7e599b28708b8",
+          "unchanged": true,
+          "original_unchanged": true
+        },
+        "resources": {
+          "backup_rows": 1,
+          "installed_rows": 1,
+          "backup_sha256": "d41a5ac1be9413c9c0fd912d0dff2f59a3214359d967befc8a341f53f4dbc314",
+          "installed_sha256": "d41a5ac1be9413c9c0fd912d0dff2f59a3214359d967befc8a341f53f4dbc314",
+          "unchanged": true,
+          "original_unchanged": true
+        },
+        "versions": {
+          "backup_rows": 1,
+          "installed_rows": 1,
+          "backup_sha256": "dbb76dd08e5089aec8deb92e59146d9c93a3558d7a0ca998f69674d4669df9e6",
+          "installed_sha256": "dbb76dd08e5089aec8deb92e59146d9c93a3558d7a0ca998f69674d4669df9e6",
+          "unchanged": true,
+          "original_unchanged": true
+        },
+        "evidence": {
+          "backup_rows": 77,
+          "installed_rows": 77,
+          "backup_sha256": "6ef57623796e1f30a7493e3a584443f64c678dbd9f5f11d11d4c6d4676bb02fb",
+          "installed_sha256": "6ef57623796e1f30a7493e3a584443f64c678dbd9f5f11d11d4c6d4676bb02fb",
+          "unchanged": true,
+          "original_unchanged": true
+        }
+      },
+      "new_tables_on_current_runtime": {
+        "assertions": 0,
+        "citations": 0,
+        "conversations": 0,
+        "messages": 0,
+        "upload_sessions": 0,
+        "wiki_claim_bindings": 0
+      }
+    },
+    "consents.sqlite3": {
+      "backup_integrity": "ok",
+      "installed_integrity": "ok",
+      "original_unchanged": true,
+      "tables": {
+        "plans": {
+          "backup_rows": 0,
+          "installed_rows": 0,
+          "backup_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "installed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "unchanged": true,
+          "original_unchanged": true
+        },
+        "commands": {
+          "backup_rows": 0,
+          "installed_rows": 0,
+          "backup_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "installed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "unchanged": true,
+          "original_unchanged": true
+        },
+        "dispatches": {
+          "backup_rows": 0,
+          "installed_rows": 0,
+          "backup_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "installed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "unchanged": true,
+          "original_unchanged": true
+        },
+        "cost_ledger": {
+          "backup_rows": 0,
+          "installed_rows": 0,
+          "backup_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "installed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "unchanged": true,
+          "original_unchanged": true
+        },
+        "budget_allocations": {
+          "backup_rows": 0,
+          "installed_rows": 0,
+          "backup_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "installed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "unchanged": true,
+          "original_unchanged": true
+        },
+        "workspace_policy": {
+          "backup_rows": 1,
+          "installed_rows": 1,
+          "backup_sha256": "9e2dc8c0aac27cc252c7585430a690eb4b949be32cbedd7cfe666dee803d91d4",
+          "installed_sha256": "9e2dc8c0aac27cc252c7585430a690eb4b949be32cbedd7cfe666dee803d91d4",
+          "unchanged": true,
+          "original_unchanged": true
+        }
+      },
+      "new_tables_on_current_runtime": {}
+    }
+  },
+  "sqlite_backup_method": {
+    "source": ".dev-logs/v3-finish-20260923/pacman-native-workspace",
+    "backup": ".dev-logs/pkg-20261001/package-upgrade-backup",
+    "restored_copy": ".dev-logs/pkg-20261001/restored-workspace",
+    "method": "SQLite online Connection.backup from mode=ro source; restore with the same API, copy blobs separately. Open only the restored copy on current runtime. Compare integrity, row counts, and complete canonical row SHA256 for core tables; historical source data unchanged.",
+    "logs": [
+      ".dev-logs/pkg-20261001/sqlite-online-backup-before.log",
+      ".dev-logs/pkg-20261001/sqlite-online-backup-after-upgrade.log",
+      ".dev-logs/pkg-20261001/sqlite-online-backup-after-launch.log",
+      ".dev-logs/pkg-20261001/sqlite-online-backup-final.log"
+    ]
+  },
+  "installed_manifest_verification": {
+    "files": 981,
+    "distributions": 18,
+    "electron": "44.3.0",
+    "version": "0.1.2",
+    "logs": [
+      ".dev-logs/pkg-20261001/installed-upgraded-manifest.log",
+      ".dev-logs/pkg-20261001/installed-fresh-manifest.log"
+    ]
+  },
+  "pacman_file_verification": {
+    "files": 1106,
+    "changed": 0,
+    "namespace": "unshare --user --map-root-user; mapped namespace root, not host root",
+    "logs": [
+      ".dev-logs/pkg-20261001/pacman-upgrade-namespace-file-check.log",
+      ".dev-logs/pkg-20261001/pacman-install-namespace-file-check.log"
+    ]
+  },
+  "screenshots": [
+    ".dev-logs/pkg-20261001/ordinary-sources.png",
+    ".dev-logs/pkg-20261001/ordinary-restored-resources.png",
+    ".dev-logs/pkg-20261001/ordinary-connected-sources.png",
+    ".dev-logs/pkg-20261001/fresh-ordinary-appshell.png",
+    ".dev-logs/pkg-20261001/ordinary-exit-dialog.png"
+  ],
+  "human_review_status": "not_claimed",
+  "commands_log": ".dev-logs/pkg-20261001/commands.json",
+  "failures": [
+    {
+      "step": "pacman -Qkk outside installation namespace",
+      "root_cause": "Package metadata stores UID/GID 0; namespace maps them to host UID/GID 1000. Host-side checks report ownership differences, not changed payload. Same check in the installation user namespace reports 1106 files, 0 changed, exit 0 for both roots.",
+      "resolved": true,
+      "logs": [
+        ".dev-logs/pkg-20261001/pacman-upgrade-file-check.log",
+        ".dev-logs/pkg-20261001/pacman-install-file-check.log",
+        ".dev-logs/pkg-20261001/pacman-upgrade-namespace-file-check.log",
+        ".dev-logs/pkg-20261001/pacman-install-namespace-file-check.log"
+      ]
+    },
+    {
+      "step": "first native keyboard attempts",
+      "root_cause": "The helper inherited no WAYLAND_DISPLAY. Both attempts exited 1 with Wayland connection failed. Setting WAYLAND_DISPLAY=wayland-1 lets text entry connect and succeed.",
+      "resolved": true,
+      "logs": [
+        ".dev-logs/pkg-20261001/native-workspace-select-path.log",
+        ".dev-logs/pkg-20261001/native-workspace-select-confirm.log",
+        ".dev-logs/pkg-20261001/native-workspace-select-path-wayland.log"
+      ]
+    },
+    {
+      "step": "first niri window query",
+      "root_cause": "NIRI_SOCKET was missing in this session. Set it to the existing /run/user/1000/niri.wayland-1.1558.sock for later compositor commands.",
+      "resolved": true,
+      "logs": [
+        ".dev-logs/pkg-20261001/niri-window-inspection-failure.log",
+        ".dev-logs/pkg-20261001/native-dialog-screenshot.log"
+      ]
+    },
+    {
+      "step": "keyboard helper usage probes",
+      "root_cause": "The installed helper has no --help mode and requires an input argument; --help and empty argv each exit 1. These were interface probes, not package failures.",
+      "resolved": true,
+      "logs": [
+        ".dev-logs/pkg-20261001/wtype-help.log",
+        ".dev-logs/pkg-20261001/wtype-usage.log"
+      ]
+    },
+    {
+      "step": "native chooser and quit key confirmation",
+      "root_cause": "wtype delivered text but Return/Tab/Alt+O did not activate these native buttons. Exact protocol/key handling cause is unconfirmed. The GTK chooser exposed an AT-SPI button and was successfully confirmed through that real button. Electron quit dialog did not expose an AT-SPI application; only the drill-owned runtime was SIGTERM-stopped, then its Electron closed with exit 0. No other app/process was touched.",
+      "resolved": false,
+      "logs": [
+        ".dev-logs/pkg-20261001/native-chooser-accessibility.log",
+        ".dev-logs/pkg-20261001/native-chooser-accessibility-confirm.log",
+        ".dev-logs/pkg-20261001/ordinary-delayed-key-shutdown.log",
+        ".dev-logs/pkg-20261001/native-shutdown-accessibility-apps.log",
+        ".dev-logs/pkg-20261001/ordinary-runtime-stop.log",
+        ".dev-logs/pkg-20261001/ordinary-controlled-shutdown.log"
+      ]
+    },
+    {
+      "step": "fresh-installed app window close",
+      "root_cause": "OPEN FINDING: after niri msg action close-window --id 25 removed its only visible window, Electron remained sleeping with 36 threads beyond a 15-second wait; CDP page targets were empty. No source/runtime or exit dialog existed. Window-all-closed event emission was not instrumented, so cause is unconfirmed; no fix applied. Captured process tree, /proc state, host log tail, and close path before SIGTERM cleanup of only this drill app.",
+      "resolved": false,
+      "logs": [
+        ".dev-logs/pkg-20261001/fresh-close-path.log",
+        ".dev-logs/pkg-20261001/fresh-lingering-process-tree.log",
+        ".dev-logs/pkg-20261001/fresh-lingering-process-tree-full-wchan.log",
+        ".dev-logs/pkg-20261001/fresh-lingering-status.log",
+        ".dev-logs/pkg-20261001/fresh-host-log-tail.log",
+        ".dev-logs/pkg-20261001/fresh-cleanup.log"
+      ]
+    },
+    {
+      "step": "initial renderer selector probe",
+      "root_cause": "Probe incorrectly looked for .app-shell; actual AppShell root uses .shell. Fresh installed-package DOM probe confirms .shell and .sources; upgraded shell is confirmed by screenshots.",
+      "resolved": true,
+      "logs": [
+        ".dev-logs/pkg-20261001/appshell-selector-correction.log",
+        ".dev-logs/pkg-20261001/fresh-ordinary-appshell-observations.log"
+      ]
+    }
+  ],
+  "runtime_warnings": [
+    {
+      "message": "Fontconfig cache format warning",
+      "cause": "Host cache version 0x2012003 is newer than bundled consumer 0x2012001; cache was not modified. Renderer still displayed the complete AppShell.",
+      "log": ".dev-logs/pkg-20261001/ordinary-launch.log"
+    },
+    {
+      "message": "lsfg-vk Failed to initialize global info: Unknown key in configuration: game",
+      "cause": "External host Vulkan layer reports an unsupported configuration key; no layer/system config was modified. No package launch failure observed.",
+      "log": ".dev-logs/pkg-20261001/fresh-host-log-tail.log"
+    },
+    {
+      "message": "pacman missing repository database warnings on initial query",
+      "cause": "Initial read-only -Q used default config against the isolated DB, which has only local dependency metadata and no synchronized repositories. Offline config used for transactions avoids repository access.",
+      "log": ".dev-logs/pkg-20261001/installed-version-before.log"
+    }
+  ],
+  "limitations": [
+    "Isolated dependency metadata was copied, not dependency installation on a clean OS; host libraries/service session satisfy runtime dependencies.",
+    "Normal execution directly invokes the installed /opt/deepdocparse/deepdocparse under the isolated path: /usr/bin launcher intentionally references real /opt and cannot be used without host installation.",
+    "No model cache, active task failure recovery, production migration, RPO/RTO, release-signing trust, rollback or publishing claim.",
+    "No --no-sandbox or setuid fallback was added; Electron app.enableSandbox remains active. User-namespace root was used only for pacman, never GUI launch.",
+    "Fresh-install window-close lingering-process finding remains open, and native quit confirmation key automation did not prove the stop-and-exit path.",
+    "The SQLite restore is a copied historical real workspace, not live writes into or modification of previously running apps/workspaces."
+  ]
+}
