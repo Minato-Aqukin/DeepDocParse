@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?worker&url'
 
 import type { Highlight } from '@/types/workbench'
 
@@ -32,43 +33,64 @@ const pdf = shallowRef<import('pdfjs-dist').PDFDocumentProxy>()
 // 释放要走 loadingTask（它才管着 worker 与网络请求），不是 document 本身
 let loadingTask: import('pdfjs-dist').PDFDocumentLoadingTask | null = null
 let renderTask: { cancel: () => void } | null = null
+let documentGeneration = 0
+let renderGeneration = 0
+let disposed = false
 
 async function loadPdfjs() {
   const pdfjs = await import('pdfjs-dist')
-  if (!pdfjs.GlobalWorkerOptions.workerPort) {
-    // ?worker 让 Vite 把 worker 打进产物，不依赖 CDN（离线自部署必须）
-    const Worker = (await import('pdfjs-dist/build/pdf.worker.min.mjs?worker')).default
-    pdfjs.GlobalWorkerOptions.workerPort = new Worker()
-  }
+  // 只共享离线 worker 地址，不共享 workerPort：每个 loadingTask 拥有自己的
+  // worker，旧视图销毁中的任务不会挡住新视图打开同一份原件。
+  pdfjs.GlobalWorkerOptions.workerSrc = workerSrc
   return pdfjs
 }
 
 async function openDocument() {
+  const current = ++documentGeneration
+  const src = props.src
+  const previous = loadingTask
+  loadingTask = null
+  renderTask?.cancel()
+  renderTask = null
+  renderGeneration++
+  pdf.value = undefined
   failed.value = ''
-  if (!props.src) return
-  loading.value = true
+  loading.value = !!src
   try {
+    await previous?.destroy()
+    if (!src || disposed || current !== documentGeneration) return
     const pdfjs = await loadPdfjs()
-    await loadingTask?.destroy()
-    loadingTask = pdfjs.getDocument({ url: props.src, withCredentials: false })
-    pdf.value = await loadingTask.promise
-    emit('loaded', pdf.value.numPages)
+    if (disposed || current !== documentGeneration) return
+    const task = pdfjs.getDocument({ url: src, withCredentials: false })
+    loadingTask = task
+    const document = await task.promise
+    if (disposed || current !== documentGeneration) {
+      await task.destroy()
+      return
+    }
+    pdf.value = document
+    emit('loaded', document.numPages)
     await renderPage()
   } catch (error) {
-    failed.value = `无法渲染原件：${(error as Error).message}`
+    if (!disposed && current === documentGeneration) {
+      failed.value = `无法渲染原件：${error instanceof Error ? error.message : String(error)}`
+    }
   } finally {
-    loading.value = false
+    if (!disposed && current === documentGeneration) loading.value = false
   }
 }
 
 async function renderPage() {
   const doc = pdf.value
   const el = canvas.value
-  if (!doc || !el) return
+  if (!doc || !el || disposed) return
   const pageNumber = Math.min(Math.max(props.pageIdx + 1, 1), doc.numPages)
 
   renderTask?.cancel()
+  renderTask = null
+  const current = ++renderGeneration
   const page = await doc.getPage(pageNumber)
+  if (disposed || current !== renderGeneration || doc !== pdf.value) return
   const width = wrapper.value?.clientWidth || 800
   const base = page.getViewport({ scale: 1 })
   // 按容器宽度自适应，再乘 devicePixelRatio 保证高分屏不糊
@@ -104,8 +126,13 @@ function boxStyle(highlight: Highlight) {
 watch(() => props.src, openDocument, { immediate: true })
 watch(() => props.pageIdx, renderPage)
 onBeforeUnmount(() => {
+  disposed = true
+  documentGeneration++
+  renderGeneration++
+  pdf.value = undefined
   renderTask?.cancel()
   void loadingTask?.destroy()
+  loadingTask = null
 })
 
 defineExpose({ rerender: renderPage })

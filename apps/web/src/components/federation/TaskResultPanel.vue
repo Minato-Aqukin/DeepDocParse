@@ -106,8 +106,16 @@ function locator(item: FederatedEvidence) {
       </ul>
     </div>
 
-    <h2>回答</h2>
-    <div v-if="result.answer" class="answer">
+    <h2>{{ result.operation === 'wiki.pages' ? 'Wiki 生成' : '回答' }}</h2>
+    <template v-if="result.operation === 'wiki.pages'">
+      <p class="muted" aria-label="Wiki 生成说明">
+        这是 Wiki 生成任务；已提交的内容请查看下方的“Wiki 修订”。
+      </p>
+      <p v-if="reason" class="ddp-degraded" :class="{ 'is-danger': reason.type === 'danger' }" role="status">
+        没有生成 Wiki：{{ reason.label }}
+      </p>
+    </template>
+    <div v-else-if="result.answer" class="answer">
       <p v-for="(line, i) in segments" :key="i">
         <template v-for="(part, j) in line" :key="j">
           <button v-if="part.cite && part.cite <= result.evidence.length" type="button" class="cite"
@@ -125,7 +133,8 @@ function locator(item: FederatedEvidence) {
     <p v-else-if="reason" class="ddp-degraded" :class="{ 'is-danger': reason.type === 'danger' }" role="status">
       没有生成回答：{{ reason.label }}
     </p>
-    <p v-else class="muted">这个任务只取证据，不生成回答。</p>
+    <p v-else-if="result.operation === 'corpus.retrieve'" class="muted">这个任务只取证据，不生成回答。</p>
+    <p v-else class="muted">没有可显示的回答。</p>
 
     <template v-if="result.claim_evidence_bindings.length">
       <h2>主张与证据</h2>

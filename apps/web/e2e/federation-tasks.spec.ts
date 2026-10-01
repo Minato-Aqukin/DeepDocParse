@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { expect, test, type Page, type Route } from '@playwright/test'
+import type { IntentBody } from '../src/federation/task-model'
 
 import { realErrors, watchErrors } from './console-guard'
 import { fakeLogin, stubApi } from './stub-api'
@@ -231,13 +232,17 @@ function stillValid<T extends { valid_until: string; budget?: { deadline: string
 
 test('创建任务：不勾问题原文就真的不外发，而且没有远端目标时许可必须是 local_only', async ({ page }) => {
   const errors = watchErrors(page)
-  const intents: Record<string, unknown>[] = []
+  const intents: IntentBody[] = []
   await api(page, (url) => ['/api/v1/tasks', '/api/v1/capabilities', '/api/v1/federation/scopes',
     '/api/v1/task-intents', '/api/v1/task-plans', `/api/v1/task-plans/${ROOT2}`].includes(url.pathname)
     || url.pathname.startsWith(`/api/v1/tasks/${ROOT2}`), async (url, route) => {
     if (url.pathname === '/api/v1/tasks' && route.request().method() === 'GET') return route.fulfill({ json: fixture('task-list-last-page.json') })
     if (url.pathname === '/api/v1/capabilities') return route.fulfill({ json: HANDSHAKE })
-    if (url.pathname === '/api/v1/federation/scopes') return route.fulfill({ status: 201, json: fixture('scope-sealed.json') })
+    if (url.pathname === '/api/v1/federation/scopes') {
+      const scope = fixture('scope-sealed.json')
+      scope.manifest = stillValid(scope.manifest)
+      return route.fulfill({ status: 201, json: scope })
+    }
     if (url.pathname === '/api/v1/task-intents') {
       intents.push(route.request().postDataJSON())
       return route.fulfill({ status: 201, json: { root_task_id: ROOT2, planning_state: 'draft', status: 'queued' } })
@@ -253,14 +258,29 @@ test('创建任务：不勾问题原文就真的不外发，而且没有远端�
   const composer = page.getByRole('form', { name: '新建联邦任务' })
   await composer.getByRole('textbox').fill('额定电压是多少？')
 
-  // 先确认没有远端目标时界面就说了"不会发出一个字节"，且根本不显示外发许可那一块
-  await expect(composer.getByText('没有远端目标：本次不会向任何其他节点发出一个字节。')).toBeVisible()
+  // 没有远端候选时，不显示外发许可；实际提交也必须是零外发、零远端预算。
   await expect(composer.getByRole('group', { name: '外发许可' })).toHaveCount(0)
+  await composer.getByRole('button', { name: '创建任务并规划' }).click()
+  await expect(page).toHaveURL(new RegExp(`#/tasks/${ROOT2}$`))
+  expect(intents).toHaveLength(1)
+  const localIntent = intents[0]!
+  const localConsent = localIntent.exploration_consent
+  expect(localConsent.egress_mode).toBe('local_only')
+  expect(localConsent.allowed_recipients).toEqual([])
+  expect(localConsent.allowed_payload).toEqual([])
+  expect(localConsent.budget).toEqual({ max_probe_requests: 0, max_egress_bytes: 0 })
+  expect(localIntent.task_spec.execution_policy).toEqual({ mode: 'local_only' })
 
-  // 切到联邦范围并生成清单：清单里有一个远端节点，外发许可这才出现
+  await page.goto('/#/tasks')
+  await page.getByRole('button', { name: '新建任务' }).click()
+  await composer.getByRole('textbox').fill('额定电压是多少？')
+  // 清单不是外发许可：远端 B 必须保持未选中，直到用户明确勾选。
   await composer.getByText('联邦公开范围', { exact: true }).click()
   await composer.getByRole('button', { name: '生成范围清单' }).click()
-  await expect(composer.getByText('远端节点 node-peer-b')).toBeVisible()
+  const recipient = composer.getByRole('checkbox', { name: 'node-peer-b', exact: true })
+  await expect(recipient).not.toBeChecked()
+  await composer.getByText('node-peer-b', { exact: true }).click()
+  await expect(recipient).toBeChecked()
   const egress = composer.getByRole('group', { name: '外发许可' })
   await expect(egress).toBeVisible()
 
@@ -271,15 +291,16 @@ test('创建任务：不勾问题原文就真的不外发，而且没有远端�
   await composer.getByRole('button', { name: '创建任务并规划' }).click()
   await expect(page).toHaveURL(new RegExp(`#/tasks/${ROOT2}$`))
 
-  expect(intents).toHaveLength(1)
-  const consent = (intents[0] as { exploration_consent: Record<string, unknown> }).exploration_consent
+  expect(intents).toHaveLength(2)
+  const remoteIntent = intents[1]!
+  const consent = remoteIntent.exploration_consent
   expect(consent.egress_mode).toBe('listed_nodes')
   expect(consent.allowed_recipients).toEqual(['node-peer-b'])
   // 这条就是本用例的全部意义：勾掉了就一个字节都不发
   expect(consent.allowed_payload).toEqual([])
-  const spec = (intents[0] as { task_spec: Record<string, unknown> }).task_spec
+  const spec = remoteIntent.task_spec
   expect(spec.execution_policy).toEqual({ mode: 'trusted_federation', coordinator_ref: 'node-center-a' })
-  expect((spec.consent_refs as { exploration: string }).exploration).toBe(consent.consent_id)
+  expect(spec.consent_refs.exploration).toBe(consent.consent_id)
   expect(realErrors(errors)).toEqual([])
 })
 
@@ -315,7 +336,11 @@ test('批准计划：许可覆盖到中继节点，受理用的是界面上显�
   await expect(approvalPanel).toBeVisible()
   // 中继也是接收方 —— 用户批准之前必须看得见它
   await expect(approvalPanel.getByText('node-peer-b、node-relay-c')).toBeVisible()
-  await expect(approvalPanel.getByText('问题原文')).toBeVisible()
+  const edges = approvalPanel.getByRole('list', { name: '本次批准的有向数据边' })
+  await expect(edges.getByRole('listitem')).toContainText('node-center-a → node-peer-b')
+  await expect(edges.getByRole('listitem')).toContainText('问题原文')
+  await expect(edges.getByRole('listitem')).toContainText('中继 node-relay-c')
+  await expect(page.getByRole('region', { name: '执行计划' }).getByText(plan.plan_digest, { exact: true })).toBeVisible()
 
   await approvalPanel.getByRole('button', { name: '批准并执行' }).click()
   await expect(page.getByRole('region', { name: '计划审阅' })).toHaveCount(0)

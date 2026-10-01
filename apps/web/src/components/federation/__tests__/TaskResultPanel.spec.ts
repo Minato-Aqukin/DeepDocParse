@@ -78,6 +78,30 @@ describe('TaskResultPanel', () => {
     expect(text).toContain('没有生成回答：远端生成步骤未完成（peer_execution_timeout）')
   })
 
+  it('Wiki 结果指向已提交修订，不冒充只取证据的任务', () => {
+    const wrapper = mount(TaskResultPanel, { props: {
+      result: result({ operation: 'wiki.pages', answer: null, answer_reason: null }),
+      coordinatorNodeId: 'node-a',
+    } })
+    expect(wrapper.find('[aria-label="Wiki 生成说明"]').text()).toContain('Wiki 修订')
+    expect(wrapper.text()).not.toContain('只取证据')
+    expect(wrapper.findAll('h2').map(heading => heading.text())).toContain('Wiki 生成')
+  })
+
+  it.each(['delegated_answer_rejected:invalid_citations', 'budget_exhausted:polls=3'])(
+    'Wiki 失败保留现有原因与细节标签：%s', (failure) => {
+      const wrapper = mount(TaskResultPanel, { props: {
+        result: result({ operation: 'wiki.pages', answer: null, answer_reason: failure }),
+        coordinatorNodeId: 'node-a',
+      } })
+      const status = wrapper.find('[role="status"]').text()
+      expect(status).toContain('Wiki')
+      expect(status).toContain(failure.split(':')[1])
+      expect(status).not.toContain('没有生成回答')
+      expect(wrapper.text()).not.toContain('只取证据')
+    },
+  )
+
   it('证据标出本节点与远端；读不到计划时不假装知道来源在哪', () => {
     const known = mount(TaskResultPanel, { props: { result: result(), coordinatorNodeId: 'node-a' } })
     const items = known.findAll('ol.evidence > li')

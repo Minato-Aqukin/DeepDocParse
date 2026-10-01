@@ -197,6 +197,19 @@ test('检索命中打开实际第二页并高亮原文区域，过期命中不�
   await expect(page.locator('.pdf-canvas .box.selected')).toBeVisible()
 
   await page.goto(page.url().replace('chunk=goods-2', 'chunk=missing'))
-  await expect(page.getByRole('alert')).toBeVisible()
+  await expect(page.locator('.workbench').getByRole('alert').filter({
+    hasText: '无法定位所选的原文区域',
+  })).toBeVisible()
+  // 失效的是命中定位，不是 PDF：重开后原件仍须渲染，而非出现 worker 生命周期错误。
+  await expect(page.locator('.pane.source canvas')).toBeVisible()
+  await expect.poll(() => page.locator('.pane.source canvas').evaluate(
+    canvas => {
+      if (!(canvas instanceof HTMLCanvasElement)) throw new Error('原件未渲染到 canvas')
+      return canvas.width * canvas.height
+    },
+  )).not.toBe(300 * 150)
+  await expect(page.locator('.pdf-canvas .el-loading-mask')).toBeHidden()
+  await expect(page.locator('.pane.source').getByRole('alert')).toHaveCount(0)
+  await expect(page.locator('.el-pager .is-active')).toHaveText('2')
   await expect(page.locator('.pdf-canvas .box.selected')).toHaveCount(0)
 })

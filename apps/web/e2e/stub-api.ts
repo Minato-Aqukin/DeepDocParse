@@ -45,6 +45,7 @@ export async function stubApi(page: Page): Promise<void> {
       if (path === '/api/reviews') return route.fulfill({ json: { items: [] } })
       // 形状必须是 TaskListPage（federation-tasks-v1.yaml）：落到 `[]` 兜底会让列表页报"格式不兼容"
       if (path === '/api/v1/tasks') return route.fulfill({ json: { items: [], next_cursor: null } })
+      if (path === '/api/v1/federation/generation-candidates') return route.fulfill({ json: { items: [] } })
       if (path === '/api/resources') return route.fulfill({ json: { items: [], has_more: false } })
       // **形状必须是 SearchResult，不能落到下面那个 `[]` 兜底。** 落下去的话
       // `data.groups` 是 undefined，模板里 `!groups.length` 当场抛，
