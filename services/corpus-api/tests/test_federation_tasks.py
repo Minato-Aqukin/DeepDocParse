@@ -2556,8 +2556,9 @@ async def test_wiki_intent_requires_typed_requirements_before_persistence(actor_
     assert accepted.json()["task_spec"]["requirements"]["wiki"]["title"] == "Fixed source notes"
 
 
+@pytest.mark.parametrize("generation_cap", [None, 1024, 4095, 4096])
 async def test_compute_only_wiki_plan_requires_both_directed_data_edges(
-        actor_client, session, monkeypatch):
+        actor_client, session, monkeypatch, generation_cap):
     class WikiPeer(StubPeer):
         def transport(self):
             inner = super().transport()
@@ -2580,11 +2581,24 @@ async def test_compute_only_wiki_plan_requires_both_directed_data_edges(
                               revisions=[(NODE, 1), (PEER_NODE, 1)])
     spec = task_spec(scope="federation_public", scope_ref="scope-1", operation="wiki.pages")
     spec["requirements"] = {"wiki": {"title": "Verified source notes", "max_pages": 2}}
-    intent = await create_intent(actor_client, spec=spec, consent=exploration(), manifest=manifest)
-    root = intent["root_task_id"]
-    plan = await plan_task(actor_client, root)
+    body = {"task_spec": spec, "exploration_consent": exploration(),
+            "scope_manifest": manifest}
+    if generation_cap is not None:
+        body["budget"] = {"max_requests": 144, "max_bytes": 2 << 20, "max_hops": 4,
+                          "deadline": EXPIRY, "max_generation_tokens": generation_cap}
+    intent = await actor_client.post("/api/v1/task-intents", json=body,
+        headers={"Idempotency-Key": f"wiki-budget-{generation_cap}"})
+    assert intent.status_code == 201, intent.text
+    root = intent.json()["root_task_id"]
+    planned = await actor_client.post("/api/v1/task-plans", json={"root_task_id": root})
+    assert planned.status_code == 200, planned.text
+    plan = planned.json()
     assert next(step for step in plan["steps"] if step["operation"] == "wiki_pages")[
         "executor_node_id"] == PEER_NODE
+    # Shared Wiki generation defaults reserve 1024 planner tokens, not the
+    # 256-token planner slice inherited from the unrelated cited-answer cap.
+    assert plan["budget"]["max_generation_tokens"] == (
+        4096 if generation_cap is None else generation_cap)
     assert {(edge["from_node_id"], edge["to_node_id"], edge["payload_kind"])
             for edge in plan["data_edges"]} >= {
                 (NODE, PEER_NODE, "evidence_excerpts"), (PEER_NODE, NODE, "wiki_draft")}
@@ -2601,6 +2615,8 @@ async def test_compute_only_wiki_plan_requires_both_directed_data_edges(
 
 
 @pytest.mark.parametrize(("draft", "reason"), [
+    ({"validation_state": "failed", "error": "wiki_budget_exceeded"},
+     "delegated_answer_rejected:wiki_budget_exceeded"),
     ({"validation_state": "failed", "error": "wiki_generation_invalid"},
      "delegated_answer_rejected:wiki_generation_invalid"),
     ({"validation_state": "failed", "error": "<script>\n:" + "x" * 100},

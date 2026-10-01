@@ -15,6 +15,7 @@
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import httpx
 import pytest
@@ -365,7 +366,8 @@ async def test_not_ready_node_never_gets_an_answer_step(actor_client, monkeypatc
 
 # ------------------------------------------------------- 执行者：证据校验与生成
 
-def executor_answer_body(*, key, evidence=None, budget=64, step_inputs=None):
+def executor_answer_body(*, key, evidence=None, budget=64, step_inputs=None,
+                         query="retrieval target"):
     # 注册工作流里 answer 必须有类型化前驱（retrieve/fuse/rerank），不能凭空出现。
     steps = [
         {"step_id": "retrieve-1", "operation": "retrieve", "executor_node_id": NODE,
@@ -373,7 +375,8 @@ def executor_answer_body(*, key, evidence=None, budget=64, step_inputs=None):
         {"step_id": "answer-1", "operation": "answer", "executor_node_id": NODE,
          "depends_on": ["retrieve-1"], "fixed_inputs": ["query"]},
     ]
-    body = admission_body(key=key, operation="answer", step_id="answer-1", steps=steps)
+    body = admission_body(key=key, operation="answer", step_id="answer-1", steps=steps,
+                          query=query)
     body["plan"]["budget"]["max_generation_tokens"] = budget
     # 入站凭证要求"计划写着谁在协调，签名证明的就是谁在发"：执行者侧的协调者是
     # 远端签发节点（PEER_NODE_ID），不是本节点 NODE。步骤的执行者仍是本节点。
@@ -418,7 +421,10 @@ def evidence_item(evidence_id="ev-1", excerpt="retrieval target text"):
 async def test_executor_verifies_evidence_before_accepting_answer(
         client, session, app_state, _peer_auth):
     mock_gateway(channels=[gateway_channel()])
-    chat = mock_chat(chat_answer("verified answer [1]"))
+    chat = mock_chat(chat_answer(json.dumps({
+        "status": "answered",
+        "claims": [{"text": "verified answer", "evidence_ids": ["ev-1"]}],
+    })))
     body = executor_answer_body(key="exec-answer", evidence=[evidence_item()])
     response = await post_executor_answer(client, body)
     assert response.status_code == 201, response.text
@@ -441,6 +447,10 @@ async def test_executor_verifies_evidence_before_accepting_answer(
     assert document["validation_state"] == "passed"
     assert document["claim_evidence_bindings"][0]["evidence_refs"] == ["ev-1"]
     assert document["claim_evidence_bindings"][0]["semantic_review"] == "needs_review"
+    validated = federation_tasks._validated_delegated_answer(document, evidence_ids=["ev-1"])
+    assert validated["answer"] == "verified answer [1]"
+    assert validated["validation_state"] == "passed"
+    assert validated["claim_evidence_bindings"][0]["evidence_refs"] == ["ev-1"]
     assert "retrieval target text" in chat.calls[0].request.content.decode()
 
 
@@ -674,7 +684,7 @@ async def test_running_peer_past_the_approved_deadline_is_a_declared_timeout():
     status = await federation_tasks._poll_execution(
         Running(), "exec-1", deadline_ts=federation_tasks._ts(federation_tasks.utcnow()) - 1)
     assert status == {"state": "unreachable", "error": "peer_execution_timeout"}
-    assert polled == ["exec-1"]
+    assert polled == []
 
 
 @respx.mock
@@ -754,3 +764,158 @@ def test_guard_and_coordinator_agree_on_which_reasons_carry_detail():
     assert guard.SUFFIXED_VALUES["federated_answer_reason"] == set(federation.ANSWER_REASONS_WITH_DETAIL)
     assert federation.ANSWER_REASONS_WITH_DETAIL <= set(FEDERATED_ANSWER_REASON_VALUES)
 
+
+
+@pytest.fixture
+def captured_esp32_answer():
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "federation_answer_esp32.json")
+                         .read_text(encoding="utf-8"))
+    request = fixture["federation_capture"]["request"]
+    return {**fixture, **json.loads(request["messages"][1]["content"])}
+
+
+@respx.mock
+async def test_captured_schema_answer_survives_executor_and_coordinator_validation(
+        client, app_state, _peer_auth, captured_esp32_answer):
+    fixture = captured_esp32_answer
+    mock_gateway(channels=[gateway_channel()])
+    mock_chat(chat_answer(
+        fixture["federation_capture"]["response"]["choices"][0]["message"]["content"]))
+    evidence = [evidence_item(item["evidence_id"], item["text"])
+                for item in fixture["evidence"]]
+    body = executor_answer_body(key="captured-schema", evidence=evidence, budget=4096,
+                                query=fixture["question"])
+    response = await post_executor_answer(client, body)
+    assert response.status_code == 201, response.text
+    await drain_tasks(app_state)
+    detail = (await get_executor_task(client, response.json()["executor_task_id"],
+                                     root_task_id=body["root_task_id"])).json()
+    assert detail["state"] == "succeeded"
+    document = detail["answer"]
+    assert document["validation_state"] == "passed", document
+    claims = document["claim_evidence_bindings"]
+    assert [claim["claim_text"] for claim in claims] == [
+        "GPIO pins 34 to 39 are input-only and lack output drivers and internal "
+        "pull-up/pull-down circuitry. These pins are: SENSOR_VP (GPIO36), "
+        "SENSOR_CAPP (GPIO37), CAPN (GPIO38), SENSOR_VN (GPIO39), VDET_1 (GPIO34), "
+        "and VDET_2 (GPIO35).",
+        "The input-only GPIO pins do not have output drivers or internal pull-up/pull-down "
+        "resistors, which limits their functionality as outputs or for level-setting in "
+        "input configurations.",
+    ]
+    assert [claim["evidence_refs"] for claim in claims] == [
+        ["dc2e8108f469480d929dbf3fa48b21e8"],
+        ["dc2e8108f469480d929dbf3fa48b21e8", "2f83f46c9d74433683ad6fda6c09d24f"],
+    ]
+    validated = federation_tasks._validated_delegated_answer(
+        document, evidence_ids=[item["evidence_id"] for item in evidence])
+    assert validated["validation_state"] == "passed"
+    assert validated["answer"] == document["answer"]
+    assert validated["conflicts"] == []
+    assert all(claim["semantic_review"] == "needs_review"
+               for claim in validated["claim_evidence_bindings"])
+
+
+@pytest.mark.parametrize("model", ["qwen3_4b", "qwen3_1_7b"])
+@respx.mock
+async def test_captured_free_prose_stays_rejected(
+        client, app_state, _peer_auth, captured_esp32_answer, model):
+    fixture = captured_esp32_answer
+    mock_gateway(channels=[gateway_channel()])
+    mock_chat(chat_answer(fixture["prose_outputs"][model]))
+    evidence = [evidence_item(item["evidence_id"], item["text"])
+                for item in fixture["evidence"]]
+    body = executor_answer_body(key=f"captured-{model}", evidence=evidence, budget=4096)
+    response = await post_executor_answer(client, body)
+    assert response.status_code == 201, response.text
+    await drain_tasks(app_state)
+    document = (await get_executor_task(
+        client, response.json()["executor_task_id"],
+        root_task_id=body["root_task_id"])).json()["answer"]
+    assert document["answer_reason"] == "unsupported_generation"
+    assert document["validation_state"] == "failed"
+    assert document["answer"] is None
+    assert document["claim_evidence_bindings"] == [] and document["conflicts"] == []
+
+
+@pytest.mark.parametrize("output", [
+    '{"status":"answered","claims":[{"text":"valid","evidence_ids":["ev-1"]},'
+    '{"text":"forged","evidence_ids":["foreign"]}]}',
+    '{"status":"answered","claims":[{"text":"unsent","evidence_ids":["ev-2"]}]}',
+    '{"status":"answered","claims":[{"text":"valid","evidence_ids":["ev-1"]}]',
+    '{"status":"answered","claims":[]}',
+    '{"status":"answered","claims":[{"text":"uncited fact","evidence_ids":[]}]}',
+    '{"status":"answered","claims":[{"text":"valid","evidence_ids":["ev-1"]}],'
+    '"conflicts":[{"evidence_ids":["ev-1","foreign"]}]}',
+    '{"status":"answered","claims":[{"text":"valid","evidence_ids":["ev-1"]}],'
+    '"conflicts":[{"evidence_ids":["ev-1","ev-1"]}]}',
+    '{"status":"answered","claims":[{"text":"valid","evidence_ids":["ev-1"]}],'
+    '"conflicts":[{"evidence_ids":["ev-1","ev-2"],"text":"None found"}]}',
+])
+@respx.mock
+async def test_executor_schema_violations_reject_every_claim(
+        client, app_state, _peer_auth, output):
+    mock_gateway(channels=[gateway_channel()])
+    mock_chat(chat_answer(output))
+    body = executor_answer_body(key="schema-violation", evidence=[evidence_item()], budget=4096)
+    response = await post_executor_answer(client, body)
+    assert response.status_code == 201, response.text
+    await drain_tasks(app_state)
+    document = (await get_executor_task(
+        client, response.json()["executor_task_id"],
+        root_task_id=body["root_task_id"])).json()["answer"]
+    assert document["answer_reason"] == "unsupported_generation"
+    assert document["validation_state"] == "failed"
+    assert document["answer"] is None
+    assert document["claim_evidence_bindings"] == [] and document["conflicts"] == []
+
+
+@respx.mock
+async def test_executor_conflicts_survive_coordinator_validation(
+        client, app_state, _peer_auth):
+    mock_gateway(channels=[gateway_channel()])
+    mock_chat(chat_answer(json.dumps({
+        "status": "answered",
+        "claims": [
+            {"text": "One source rates PM-2 at 240 V.", "evidence_ids": ["ev-1"]},
+            {"text": "Another rates PM-2 at 120 V.", "evidence_ids": ["ev-2"]},
+        ],
+        "conflicts": [{"evidence_ids": ["ev-1", "ev-2"]}],
+    })))
+    evidence = [evidence_item("ev-1", "PM-2 is rated 240 V."),
+                evidence_item("ev-2", "PM-2 is rated 120 V.")]
+    body = executor_answer_body(key="schema-conflict", evidence=evidence, budget=4096)
+    response = await post_executor_answer(client, body)
+    assert response.status_code == 201, response.text
+    await drain_tasks(app_state)
+    document = (await get_executor_task(
+        client, response.json()["executor_task_id"],
+        root_task_id=body["root_task_id"])).json()["answer"]
+    validated = federation_tasks._validated_delegated_answer(
+        document, evidence_ids=["ev-1", "ev-2"])
+    assert validated["answer"] == (
+        "One source rates PM-2 at 240 V. [1] Another rates PM-2 at 120 V. [2]")
+    assert validated["validation_state"] == "passed"
+    assert [claim["evidence_refs"] for claim in validated["claim_evidence_bindings"]] == [
+        ["ev-1"], ["ev-2"],
+    ]
+    assert validated["conflicts"] == [{
+        "basis": "generation_reported", "evidence_refs": ["ev-1", "ev-2"],
+        "semantic_review": "needs_review",
+    }]
+
+
+@respx.mock
+async def test_executor_schema_refusal_is_visible_without_claims(client, app_state, _peer_auth):
+    mock_gateway(channels=[gateway_channel()])
+    mock_chat(chat_answer('{"status":"insufficient_evidence"}'))
+    body = executor_answer_body(key="schema-refusal", evidence=[evidence_item()])
+    response = await post_executor_answer(client, body)
+    assert response.status_code == 201, response.text
+    await drain_tasks(app_state)
+    document = (await get_executor_task(
+        client, response.json()["executor_task_id"],
+        root_task_id=body["root_task_id"])).json()["answer"]
+    assert document["answer_reason"] == "insufficient_evidence"
+    assert document["answer"] is None
+    assert document["claim_evidence_bindings"] == [] and document["conflicts"] == []

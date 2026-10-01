@@ -212,6 +212,10 @@ paths:
         可选 budget 是调用方从自己的总预算预留的、不重叠的中心份额。中心与服务器
         上限取交集后冻结；规划修订、恢复、重试与重启不得重置。省略则沿用服务器预算；
         提供 budget 但省略 max_generation_tokens 等同于 0，不授权生成。
+        wiki.pages 的服务器生成额度取共享 Wiki kernel 的默认 max_output_tokens，
+        不复用 cited-answer 的较小额度。显式调用方额度仍取交集并冻结，不补写、
+        不抬高；生成额度在审批的 TaskPlan.budget 中可见。模型实际耗尽输出额度时，
+        草稿必须携带 wiki_budget_exceeded，协调者公开 delegated_answer_rejected。
 
         只受理 `federation_task_operation` 这个**闭集**里的 operation
         （`corpus.retrieve` 只取证据，`rag.answer.cited` 生成带出处的回答，
@@ -242,6 +246,8 @@ paths:
         egress_denied），没有就保持诚实的无答案结果。
         并发重放由每 root 的排他锁串行化：计划修订落定后的重放直接返回已存计划，
         不再重探测、不再外发。
+        远端执行等待按 1/2/4/8 秒后封顶 15 秒退避，每次状态读仍预扣一个 request，
+        不跨过已批准 deadline。真实请求预算耗尽时失败细节包含已付费轮询次数。
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlanningRequest'}}}}
       responses:
         '200': {description: 计划已生成（planning_state=ready/awaiting_approval）, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/TaskPlan'}}}}
@@ -505,7 +511,7 @@ components:
         root_task_id: {type: string, minLength: 1}
         step_id: {type: string, minLength: 1}
         operation: {description: 类型化步骤 operation（本切片通常为 retrieve / answer）, type: string, minLength: 1}
-        state: {description: '见 enums.yaml 的 task_status：queued/claimed/running/succeeded/failed/cancelled。accepted ≠ 算力预留，unknown ≠ 未执行；cancelled 是显式取消的终态，迟到结果不许覆盖。', type: string, x-ddp-enum: task_status}
+        state: {description: '见 enums.yaml 的 task_status：queued/claimed/running/succeeded/failed/cancelled。succeeded/failed/cancelled 均为终态，协调者直接消费该响应，不等待非空 result_ref 或更高 generation；succeeded 的草稿仍可能 validation_state=failed。accepted ≠ 算力预留，unknown ≠ 未执行；cancelled 是显式取消的终态，迟到结果不许覆盖。', type: string, x-ddp-enum: task_status}
         generation: {description: 防旧结果提交的代次围栏, type: integer, minimum: 1}
         lease_until: {type: [string, 'null'], format: date-time}
         result_ref: {type: [string, 'null']}
@@ -525,7 +531,11 @@ components:
             不采信 —— 协调者一律重写成 `generation_reported` / `needs_review`，
             它只能把覆盖账本的"充分"压成"矛盾"（见 ddp-scope-coverage 的 allOf）。
           type: [object, 'null']
-        updated_at: {type: string, format: date-time}
+        wiki_draft:
+          description: 'wiki_pages 执行的原始草稿；succeeded 且 validation_state=failed 必须返回 error，由协调者公开 delegated_answer_rejected:<error>，不是继续轮询。'
+          type: [object, 'null']
+          additionalProperties: true
+        updated_at: {description: '当前状态实际写入时间；终态使用生成/检索结束后的时钟，不沿用领取时间。', type: string, format: date-time}
     AdmissionEvidence:
       type: object
       additionalProperties: false

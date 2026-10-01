@@ -15,6 +15,7 @@ coordinator 缺省就是签发节点。
 """
 import json
 from pathlib import Path
+from datetime import datetime, timedelta
 
 import pytest
 import yaml
@@ -162,6 +163,65 @@ async def test_admission_accepted_only_with_verified_inputs_and_runs_retrieve(
     assert row.result_json["result"]["collection_id"] == collection["collection_id"]
     assert row.result_json["evidence"][0]["evidence_id"] == evidence_rows[0].id
     assert row.result_json["evidence"][0]["_excerpt"] == "retrieval target text"
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_terminal_execution_time_records_completion_not_claim(
+        client, actor_client, session, app_state, _peer_auth, monkeypatch, fails):
+    _, version, _, _, _ = await indexed_source(session)
+    collection = await publish_collection(actor_client, version)
+    p = peer(client)
+    body = admission_body(key=f"completion-time-{fails}",
+                          collection_id=collection["collection_id"])
+    receipt = (await post_admission(p, body)).json()
+    started = utcnow()
+    completed = started + timedelta(minutes=5)
+    real_retrieve = federation._run_retrieve
+
+    async def slow_retrieve(*args, **kwargs):
+        result = await real_retrieve(*args, **kwargs)
+        monkeypatch.setattr(federation, "utcnow", lambda: completed)
+        if fails:
+            raise RuntimeError("executor failed after waiting")
+        return result
+
+    monkeypatch.setattr(federation, "utcnow", lambda: started)
+    monkeypatch.setattr(federation, "_run_retrieve", slow_retrieve)
+    await drain_tasks(app_state)
+    response = await p.get(f"{BASE}/tasks/{receipt['executor_task_id']}",
+                           constraints=exec_constraints(body))
+    status = response.json()
+    assert status["state"] == ("failed" if fails else "succeeded")
+    assert datetime.fromisoformat(status["updated_at"]) == completed
+
+
+async def test_inline_execution_timeout_records_timeout_time_not_admission(
+        client, actor_client, session, _peer_auth, monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(settings, "federation_execution_inline", True)
+    monkeypatch.setattr(federation, "EXECUTION_BUDGET_SECONDS", 0.02)
+    _, version, _, _, _ = await indexed_source(session)
+    collection = await publish_collection(actor_client, version)
+    p = peer(client)
+    body = admission_body(key="inline-timeout-timestamp",
+                          collection_id=collection["collection_id"])
+    completed = utcnow() + timedelta(minutes=5)
+
+    async def stalled_retrieve(*args, **kwargs):
+        monkeypatch.setattr(federation, "utcnow", lambda: completed)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(federation, "_run_retrieve", stalled_retrieve)
+    accepted = await post_admission(p, body)
+    assert accepted.status_code == 201, accepted.text
+    receipt = accepted.json()
+    response = await p.get(f"{BASE}/tasks/{receipt['executor_task_id']}",
+                           constraints=exec_constraints(body))
+    status = response.json()
+    assert status["state"] == "failed"
+    assert status["error"] == "execution_timeout"
+    assert datetime.fromisoformat(status["updated_at"]) == completed
 
 
 async def test_admission_waiting_input_when_content_cannot_be_verified(

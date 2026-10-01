@@ -46,6 +46,7 @@ from sqlalchemy.orm import load_only
 
 from ddp_core.application import coverage as coverage_kernel
 from ddp_core.application import plans, routing
+from ddp_core.application import wiki as wiki_kernel
 from ddp_core.application.ports import ApplicationError
 from ddp_contracts.enums import (
     FEDERATED_ANSWER_REASON_VALUES,
@@ -83,14 +84,13 @@ CACHED_PROBE_PROFILE = "cached_probe_receipt"
 SCOPE_TTL_SECONDS = 900
 #: 交付暂存期。TTL 到期未确认 -> expired，不得再显示"已保存本地"。
 DELIVERY_TTL_SECONDS = 86400
-#: 远端执行的轮询间隔。轮询以已批准计划的 deadline 为上限；超时记
-#: `unreachable/peer_execution_timeout` 并**保留**对端执行（与本地
-#: `local_execution_timeout` 同一语义），本轮不再等；resume 按业务键对账到同一条
-#: 执行接着等。超时就取消会让这个"可重做"的目标永远重做不了：对账拿回的是已取消的
-#: 执行，换代次重新受理又是同键异体 409。
-#: 间隔 ≥1s：真实 CPU 生成一次常为数十秒，50ms 预扣会在结果返回前机械耗尽
-#: 正常请求预算；每次轮询仍是真实 HTTP，必须计 1 request（单调预扣，不免费）。
+#: Every remote execution uses bounded exponential status polling. The approved
+#: deadline wins over the next delay; timeout preserves the peer's execution so
+#: resume reconciles the same business key instead of replaying an uncertain write.
+#: Polls remain prepaid HTTP requests, but minutes-long CPU generation must not
+#: consume the root allowance through one-second busy waiting.
 PEER_POLL_INTERVAL_SECONDS = 1.0
+PEER_POLL_MAX_INTERVAL_SECONDS = 15.0
 #: 本地执行的等待上限。本地目标现在也排在持久队列里（`federation_execute`），
 #: 协调者在拿到回执后等它落终态；超时记 `local_execution_timeout` 并保留
 #: 覆盖缺口，绝不挂住协调者任务。本地轮询是本库读，不占根预算；间隔同样 ≥1s
@@ -1263,11 +1263,16 @@ def _intent_budget(task_spec, manifest, consent, *, now):
     deadline = min(plans.instant(consent["valid_until"]), _ts(now) + SCOPE_TTL_SECONDS)
     if manifest is not None:
         deadline = min(deadline, plans.instant(manifest["valid_until"]))
-    return _root_budget(
+    budget = _root_budget(
         consent, target_count=len(targets),
         remote_count=sum(target["origin_node_id"] != node for target in targets),
         deadline=plans.utc_instant(deadline),
         generation_ready=task_spec["operation"] in GENERATION_OPERATIONS)
+    if task_spec["operation"] == WIKI_OPERATION:
+        # Wiki's planner/writer/optional relations share this kernel allowance.
+        # Cited answers have a different output profile; never lend their cap to Wiki.
+        budget["max_generation_tokens"] = wiki_kernel.DEFAULT_LIMITS["max_output_tokens"]
+    return budget
 
 
 def _drop_answer_steps(steps: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -1484,8 +1489,8 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
     generation_ready = False
     # Pre-0037 intents acquire their ledger in a separate committed transaction.
     # Never update/lock a live ledger in the coordinator's business transaction.
-    # 意图账本的生成额度恒为 0（意图落定时能力未知）：这里只借它的上限形状，
-    # 计划预算按真实就绪重算（本地就绪或远端委托就绪才给 1024）。
+    # Intent-time operation-specific generation limits are frozen before capability
+    # readiness is known. Planning may omit generation, but never raises that root cap.
     from ddp_corpus.db import get_sessionmaker
     async with get_sessionmaker()() as ledger_session:
         ledger = await federation_budget.ensure_ledger(
@@ -1575,8 +1580,6 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
         if generator is not None:
             steps, edges = _append_wiki_steps(
                 steps, edges, coordinator=node, generator=generator)
-            budget["max_generation_tokens"] = min(
-                budget["max_generation_tokens"], GENERATION_TOKEN_BUDGET)
             generates = True
     elif wants_answer and generation_ready:
         steps = _append_local_answer_step(steps, coordinator=node)
@@ -1976,15 +1979,26 @@ async def _poll_execution(client, executor_task_id: str, *, deadline_ts: float,
     """Poll within the approved deadline; every physical attempt is prepaid."""
     remaining = max(0.0, deadline_ts - _ts(utcnow()))
     deadline = time.monotonic() + remaining
+    interval = PEER_POLL_INTERVAL_SECONDS
+    polls = 0
     while True:
+        if time.monotonic() >= deadline:
+            return {"state": "unreachable", "error": "peer_execution_timeout"}
         try:
             if spend is not None:
                 await spend(kind="request", amount=1)
             elif budget is not None:
                 budget.reserve("request")
-        except ApplicationError:
-            return {"state": "unreachable", "error": "budget_exhausted"}
-        status = await client.execution(executor_task_id)
+        except ApplicationError as exc:
+            if exc.code != "budget_exhausted":
+                raise
+            return {"state": "unreachable", "error": f"budget_exhausted:polls={polls}"}
+        polls += 1
+        try:
+            async with asyncio.timeout(max(0.0, deadline - time.monotonic())):
+                status = await client.execution(executor_task_id)
+        except TimeoutError:
+            return {"state": "unreachable", "error": "peer_execution_timeout"}
         if status.get("state") in ("succeeded", "failed", "cancelled"):
             return status
         lease = status.get("lease_until")
@@ -1997,7 +2011,8 @@ async def _poll_execution(client, executor_task_id: str, *, deadline_ts: float,
         wait = deadline - time.monotonic()
         if wait <= 0:
             return {"state": "unreachable", "error": "peer_execution_timeout"}
-        await asyncio.sleep(min(PEER_POLL_INTERVAL_SECONDS, wait))
+        await asyncio.sleep(min(interval, wait))
+        interval = min(interval * 2, PEER_POLL_MAX_INTERVAL_SECONDS)
         if time.monotonic() >= deadline:
             return {"state": "unreachable", "error": "peer_execution_timeout"}
 

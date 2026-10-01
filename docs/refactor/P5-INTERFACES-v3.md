@@ -222,11 +222,14 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
 - **answer 步骤**：规划时按能力清单生产者
   （`capabilities.collect_capability_profiles`）判断 `rag.answer.cited` 的实际就绪状态。
   可以使用协调者本地模型，或选择已探测、可接单的生成节点；全部 evidence 数据边及
-  answer 返回边必须纳入执行许可。执行时用融合证据的编号上下文调用 OpenAI 兼容上游
-  （`upstream.chat_request`），并以 `ddp_core.agent.assertions_from_text` 做结构
-  校验：无断言、有断言无支撑、或引用不在本次融合证据集合内，一律拒绝
-  （`answer=null`、`validation_state=failed`、`unsupported_generation`），
-  **不修补引用**。成功时结果带 `answer`、`claim_evidence_bindings`（每条
+  answer 返回边必须纳入执行许可。执行时把实际提供的融合证据 ID 与正文交给 OpenAI
+  兼容上游（`upstream.chat_request`），使用共享 `ddp_core.answer` grounded-claims
+  schema/decoder 与 `temperature=0`。仅在整份 JSON 完整通过后采用主张：缺失或越界
+  ID、空 claims/引用、截断或非法矛盾组均整份拒收（`answer=null`、
+  `validation_state=failed`、`unsupported_generation`），**不修补引用**。
+  `insufficient_evidence` 是正常显式拒答，不产生答案或绑定。联邦显式启用的矛盾组
+  每个 ID 还必须被至少一条主张引用。成功时由解码主张投影既有 `answer` 文本及
+  `claim_evidence_bindings`（每条
   `structural_validation=passed`、`semantic_review=needs_review`）、`provider`、
   `disclosure`、内核判定的 `evidence_sufficiency` 与 `validation_state`。
   未就绪或生成失败时只写明确的 `answer_reason`（`local_model_missing`、

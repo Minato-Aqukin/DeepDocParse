@@ -35,6 +35,7 @@ from ddp_corpus.federation_models import FederationAdmission, FederationProbe
 from ddp_corpus.main import app as corpus_app
 from federation_two_node import (
     A_KEY,
+    ModelClaim,
     NODE_A,
     NODE_B,
     NODE_C,
@@ -56,10 +57,10 @@ async def two_node(tmp_path, request, monkeypatch):
     # 这里量的是真实回环 HTTP 上的拓扑/幂等/取消/续跑行为，凭证密码学本身
     # 由进程内 PeerCaller 用例与 test_federation_peer_client.py 另行钉死。
     # 默认 B 没有模型运行时（诚实的不就绪形态）。`parametrize(..., indirect=True)`
-    # 传入一个字符串时，B 会挂上真实的 loopback 模型桩（能力探测与生成都走 HTTP）。
-    answer = getattr(request, "param", None)
+    # 传入显式结论与证据正文绑定时，B 挂上真实 loopback 模型桩（均走 HTTP）。
+    claims = getattr(request, "param", None)
     fixture = await TwoNodeFixture.create(tmp_path, b_texts=(B_TEXT,),
-                                          b_generate_answer=answer)
+                                          b_generate_claims=claims)
     try:
         yield fixture
     finally:
@@ -672,7 +673,8 @@ async def test_cancel_after_success_and_resume_after_peer_failure(
 B_ANSWER = "beta federation keyword fact [1]"
 
 
-@pytest.mark.parametrize("two_node", [B_ANSWER], indirect=True)
+@pytest.mark.parametrize(
+    "two_node", [(ModelClaim(B_TEXT, (B_TEXT,)),)], indirect=True)
 async def test_remote_answer_delegation_over_real_http(actor_client, two_node):
     """A 没有生成能力：B 经真实 HTTP 接单，用跨节点送去的正文生成带引用答案。
 

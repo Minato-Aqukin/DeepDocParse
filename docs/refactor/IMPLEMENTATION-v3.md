@@ -76,8 +76,8 @@ t3code参考HEAD：`b1e223e2b0d87124883b1410ab52dd6a1338e40d`（2026-09-12读取
 - **冲突轴**（计划 §7.6，路由评测发现 1）：契约先行，`ddp-scope-coverage` 的
   `CoverageLedger` 新增可选 `conflicts`（`EvidenceConflict`：依据 / ≥2 条证据引用 /
   人工复核态）与双向 allOf，`enums.yaml` 新增 `evidence_conflict_basis`。内核
-  `coverage.version_conflicts`（规则）与 `agent.conflicts_from_text`（生成标注，
-  引用不成立整份拒收）；协调者、远端委托校验、覆盖读取与取消都带上矛盾记录。
+  `coverage.version_conflicts`（规则）与共享 grounded-claims 解码器的矛盾组（2026-10-02
+  取代自由文本标注；引用不成立整份拒收）；协调者、远端委托校验、覆盖读取与取消都带上矛盾记录。
 - **验收台账** `ACCEPTANCE-MATRIX-v3.md`：88 条逐项登记状态、证据与缺口
   （✅ 38 / 🟡 46 / 🔴 4），新门禁 `scripts/check_acceptance_matrix.py` 校对
   条目完整、汇总计数、每个 ✅ 行的**证据栏**都有可校验的测试引用、引用的文件与用例

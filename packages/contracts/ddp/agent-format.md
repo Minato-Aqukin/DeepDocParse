@@ -55,8 +55,8 @@ DDP-Agent 是语料问答六段链路的内部契约。它把“是否检索、�
 }
 ```
 
-回答的规范形态是 `Assertion[]`，不再以整段字符串作为语义真相。Web 问答模型使用
-受约束的 JSON 输出，二选一：
+回答的规范形态是 `Assertion[]`，不再以整段字符串作为语义真相。Web 与联邦问答模型
+共用 `ddp_core.answer` 的受约束 JSON 输出，二选一：
 
 ```json
 {"status":"answered","claims":[{"text":"设备的额定电压是 220 V。","evidence_ids":["evidence-id"]}]}
@@ -72,6 +72,14 @@ DDP-Agent 是语料问答六段链路的内部契约。它把“是否检索、�
 - 非法 JSON、缺失或越界 ID、空引用、截断输出是 `schema_violation`，不能冒充
   “文档中没有”。已输出的完整断言可作为显式标记失败的部分回答保留。
 - 历史自由文本断言与其引用保持不变；新生成不再兼容自由文本模型输出。
+- 联邦调用者显式启用矛盾能力时，`answered` 可带
+  `conflicts: [{"evidence_ids": ["id-a", "id-b"]}]`；每组至少两条不同且本次提供的证据
+  ID，每个 ID 必须被至少一条回答 claim 引用。矛盾的双方必须作为普通 claims 各自说明，
+  不选择一方；内容是否确实说明双方仍需人审。元数据不产生额外主张。
+  `insufficient_evidence` 不得带矛盾。单中心 schema 与解码默认不启用此能力。
+- 联邦执行者必须完整解码后才采用答案：任一违规整份拒收为 `unsupported_generation`。
+  C→A 的 `FederatedAnswer` 形状不变：以已解码 claims 投影带编号引用的 answer 文本、
+  `claim_evidence_bindings` 与 `generation_reported` conflicts；所有语义核对仍需人审。
 - 展示用 `Message.content` 是 Assertion.text 的有序投影，只为兼容旧客户端。
 - Citation 的 `source_kind` 为 `assertion`，`source_id` 指向断言主键。
 

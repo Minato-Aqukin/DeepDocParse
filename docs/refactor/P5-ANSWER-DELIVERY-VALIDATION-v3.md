@@ -24,11 +24,31 @@
   `/tmp/opencode/check-final2.log`；对照基线 27/27 —— 多出的两项是并行工作流
   新增的门禁）。
 
+### 2026-10-02：联邦生成协议切换
+
+联邦执行者不再生成或解析自由散文 / `CONFLICT:` 行。请求使用 Web 同一份
+grounded-claims schema 与 decoder、`temperature=0`；提供过的 evidence ID 是
+唯一允许的引用域。完整 JSON 解码后才投影 answer 文本与绑定：外国 / 未发送 ID、
+截断、空 claims、无引用事实或非法矛盾组均整份拒收，保持 `unsupported_generation`。
+`insufficient_evidence` 正常拒答不带绑定。
+
+联邦调用显式启用可选 `conflicts: [{"evidence_ids": ["id-a", "id-b"]}]`，
+每组至少两条不同的已发送证据，且每个 ID 都必须被某条回答主张引用；
+单中心默认 schema/decoder 与 prompt 不变。
+既有 C→A `FederatedAnswer`（answer 文本、绑定、conflicts）契约未改，
+所有语义核对继续 `needs_review`。`tests/fixtures/federation_answer_esp32.json`
+冻结了 `diagnosis/schema-smoke` 的真实联邦请求/响应（八段 ESP32 摘录），另保留明确
+标为单中心的 4B 对照输出及真实 1.7B / 4B 旧散文输出。散文仍拒收；真实联邦响应
+通过执行者与协调者结构校验：第一条 GPIO34–39/引脚名/输出及上下拉电路主张只引用
+`dc2e8108…`，第二条电路限制主张同时引用该段与已发送的一般 GPIO 限制段
+`2f83f46c…`。第二条中的解释仍需语义人审，不能把结构通过当作语义已验收。
+
+
 ## 2. 交付物
 
 | 层 | 位置 | 内容 |
 |---|---|---|
-| 共享生成 | `ddp_corpus/federation.py`（`ANSWER_SYSTEM_PROMPT` / `answer_skeleton` / `unavailable_answer` / `excerpt_reason` / `grounded_answer`） | 提示词 + 结构验收的**唯一实现**，协调者本地与远端执行者共用；`federation_tasks` 只保留薄包装 |
+| 共享生成 | `ddp_core/answer.py`（`SYSTEM_PROMPT` / `grounded_answer_schema` / `GroundedAnswerStream`）、`ddp_corpus/federation.py`（`answer_skeleton` / `unavailable_answer` / `excerpt_reason` / `grounded_answer`） | Web 与联邦复用 grounded-claims 协议；协调者本地与远端执行者共用联邦编排；`federation_tasks` 只保留薄包装 |
 | 执行者 | `federation.py`（`_verify_evidence`、`_run_answer`、`capability_input.operation`、`execution_status.answer`）、`capabilities.py`（`answer_generation_ready`、`ADMISSIBLE_OPERATION_PROFILES`） | 证据摘要重算/边界、answer 受理与执行、按 operation 的就绪度与接单声明 |
 | 协调者 | `federation_tasks.py`（`_probe_answer_candidates`、`_append_delegated_answer_step`、`_delegated_answer`、`_validated_delegated_answer`、`read_delivery`、`_bounded_delivery_document`） | 能力探测、委托计划与数据边、绑定子集校验、交付文档持久化与 TTL 读取 |
 | 契约 | `packages/contracts/openapi/federation-tasks-v1.yaml` | `ProbeRequest.operation`、`AdmissionRequest.evidence`/`AdmissionEvidence`、`ExecutionStatus.answer`、`GET /api/v1/deliveries/{delivery_id}` + `DeliveryRead` |

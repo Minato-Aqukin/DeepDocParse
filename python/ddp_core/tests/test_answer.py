@@ -351,3 +351,78 @@ def test_schema_has_no_string_length_bounds_the_llama_cpp_grammar_cannot_compile
             for value in node:
                 walk(value)
     walk(grounded_answer_schema(["a", "b"]))
+
+
+def test_conflicts_survive_fragmentation_and_are_not_claims():
+    doc = json.dumps({
+        "conflicts": [{"evidence_ids": ["ev-2", "ev-1", "ev-2"]}],
+        "claims": [{"text": "The sources disagree on voltage.", "evidence_ids": IDS}],
+        "status": "answered",
+    })
+    stream = GroundedAnswerStream(IDS, allow_conflicts=True)
+    claims = []
+    for fragment in doc:
+        claims.extend(stream.feed(fragment))
+    claims.extend(stream.finish())
+    assert [claim["text"] for claim in claims] == ["The sources disagree on voltage."]
+    assert stream.conflicts == [["ev-2", "ev-1"]]
+
+
+@pytest.mark.parametrize("conflicts", [
+    [{"evidence_ids": ["ev-1", "foreign"]}],
+    [{"evidence_ids": ["ev-1", "ev-1"]}],
+    [{"evidence_ids": []}],
+    [{"evidence_ids": ["ev-1", "ev-2"], "text": "None found"}],
+    [{"evidence_ids": "ev-1"}],
+    [None],
+    {},
+])
+def test_malformed_conflicts_invalidate_the_complete_document(conflicts):
+    doc = json.dumps({
+        "status": "answered", "claims": [{"text": "A fact.", "evidence_ids": ["ev-1"]}],
+        "conflicts": conflicts,
+    })
+    stream = GroundedAnswerStream(IDS, allow_conflicts=True)
+    with pytest.raises(AnswerFormatError):
+        stream.feed(doc)
+        stream.finish()
+    assert stream.conflicts == []
+
+
+def test_single_center_decoder_does_not_accept_unrequested_conflicts():
+    stream = GroundedAnswerStream(IDS)
+    with pytest.raises(AnswerFormatError):
+        stream.feed(json.dumps({
+            "status": "answered",
+            "claims": [{"text": "The sources disagree.", "evidence_ids": IDS}],
+            "conflicts": [{"evidence_ids": IDS}],
+        }))
+        stream.finish()
+
+
+@pytest.mark.parametrize("order", ["status_first", "conflicts_first"])
+@pytest.mark.parametrize("conflicts", [[], [{"evidence_ids": IDS}]])
+def test_insufficient_evidence_never_carries_conflicts(order, conflicts):
+    items = [
+        ("status", "insufficient_evidence"), ("conflicts", conflicts),
+    ]
+    if order == "conflicts_first":
+        items.reverse()
+    stream = GroundedAnswerStream(IDS, allow_conflicts=True)
+    with pytest.raises(AnswerFormatError):
+        stream.feed(json.dumps(dict(items)))
+        stream.finish()
+
+
+@pytest.mark.parametrize("conflicts_first", [False, True])
+def test_conflict_sources_must_be_cited_by_answer_claims(conflicts_first):
+    claims = [{"text": "One source rates PM-2 at 240 V.", "evidence_ids": ["ev-1"]}]
+    conflicts = [{"evidence_ids": IDS}]
+    pairs = [("status", "answered"), ("claims", claims), ("conflicts", conflicts)]
+    if conflicts_first:
+        pairs.reverse()
+    stream = GroundedAnswerStream(IDS, allow_conflicts=True)
+    with pytest.raises(AnswerFormatError):
+        stream.feed(json.dumps(dict(pairs)))
+        stream.finish()
+    assert stream.conflicts == []

@@ -160,19 +160,43 @@ async def seed_sqlite(path: Path, *, texts, collection_name: str) -> NodeSeed:
         evidence_id=evidence_rows[0].id, text=texts[0])
 
 
+@dataclass(frozen=True)
+class ModelClaim:
+    """A supported claim with explicit bindings to supplied excerpt text."""
+
+    text: str
+    evidence_texts: tuple[str, ...]
+
+
 class ModelStub:
     """A tiny OpenAI-compatible model endpoint for node B's generation plane.
 
     Real HTTP over loopback (threaded `http.server`): `GET /v1/capabilities`
     reports an observed instruct chat channel, `POST /v1/chat/completions`
-    returns the canned cited answer. This is the only non-federation piece of
-    the delegation acceptance test; the A -> B path stays real HTTP.
+    returns grounded claims using the supplied excerpts' real evidence IDs.
+    This is the only non-federation piece of the delegation acceptance test;
+    the A -> B path stays real HTTP.
     """
 
-    def __init__(self, answer: str):
-        self.answer = answer
+    def __init__(self, claims: tuple[ModelClaim, ...]):
+        self.claims = claims
         self.requests: list[dict] = []
         self._server: ThreadingHTTPServer | None = None
+
+    def grounded_response(self, payload: dict) -> str:
+        supplied = json.loads(payload["messages"][1]["content"])
+        claims = []
+        for claim in self.claims:
+            evidence_ids = [
+                excerpt["evidence_id"] for excerpt in supplied["evidence"]
+                if excerpt["text"] in claim.evidence_texts
+            ]
+            if evidence_ids:
+                claims.append({"text": claim.text, "evidence_ids": evidence_ids})
+        return json.dumps({
+            "status": "answered" if claims else "insufficient_evidence",
+            "claims": claims,
+        })
 
     def start(self) -> str:
         outer = self
@@ -214,7 +238,7 @@ class ModelStub:
                 if self.path == "/v1/chat/completions":
                     return self._json(200, {
                         "choices": [{"message": {"role": "assistant",
-                                                 "content": outer.answer}}],
+                                                 "content": outer.grounded_response(payload)}}],
                         "model": "stub-instruct"})
                 return self._json(404, {"error": "not found"})
 
@@ -357,7 +381,7 @@ class TwoNodeFixture:
     @classmethod
     async def create(cls, tmpdir, *, b_texts=NODE_B_TEXTS,
                      b_name: str = "Node B federation collection",
-                     b_generate_answer: str | None = None,
+                     b_generate_claims: tuple[ModelClaim, ...] | None = None,
                      b_trust: dict | None = None) -> TwoNodeFixture:
         """Spawn B with an explicit approved-member trust file.
 
@@ -388,8 +412,8 @@ class TwoNodeFixture:
         # must be exercised over HTTP too, not by monkeypatching B's process.
         model_stub = None
         service_url = ""
-        if b_generate_answer is not None:
-            model_stub = ModelStub(b_generate_answer)
+        if b_generate_claims is not None:
+            model_stub = ModelStub(b_generate_claims)
             service_url = model_stub.start()
 
         if b_trust is None:

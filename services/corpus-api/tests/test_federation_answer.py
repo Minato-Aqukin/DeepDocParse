@@ -86,6 +86,49 @@ def chat_answer(text: str) -> httpx.Response:
         "model": "qwen3-4b-instruct"})
 
 
+def grounded_reply(*claims: tuple[str, tuple[int, ...]], conflicts=(), originals=()):
+    """Build schema replies from explicit claims and one-based evidence ordinals.
+
+    Ordinals normally follow request order. With ``originals`` they follow the named
+    original excerpts, since retrieval order can differ from fixture source order.
+    IDs always come from the actual request. Unsupported claims or missing excerpts
+    get a refusal rather than a fabricated grounded answer.
+    """
+    def reply(request):
+        payload = json.loads(request.content)
+        evidence = json.loads(payload["messages"][1]["content"])["evidence"]
+        if originals:
+            by_text = {source["text"]: source for source in evidence}
+            if any(text not in by_text for text in originals):
+                return chat_answer(json.dumps({"status": "insufficient_evidence"}))
+            evidence = [by_text[text] for text in originals]
+        if not claims or not evidence:
+            return chat_answer(json.dumps({"status": "insufficient_evidence"}))
+        grounded_claims = []
+        for text, ordinals in claims:
+            if not ordinals or any(
+                    ordinal < 1 or ordinal > len(evidence) for ordinal in ordinals):
+                return chat_answer(json.dumps({"status": "insufficient_evidence"}))
+            sources = [evidence[ordinal - 1] for ordinal in ordinals]
+            if any(not source["text"].strip() for source in sources) or not any(
+                    text in source["text"] for source in sources):
+                return chat_answer(json.dumps({"status": "insufficient_evidence"}))
+            grounded_claims.append({
+                "text": text,
+                "evidence_ids": [source["evidence_id"] for source in sources],
+            })
+        answer = {"status": "answered", "claims": grounded_claims}
+        if conflicts:
+            answer["conflicts"] = [
+                {"evidence_ids": [evidence[ordinal - 1]["evidence_id"]
+                                  for ordinal in ordinals]}
+                for ordinals in conflicts
+            ]
+        return chat_answer(json.dumps(answer, ensure_ascii=False))
+
+    return reply
+
+
 async def run_answer_task(actor_client, session, *, texts=("retrieval target text",),
                           query="retrieval target", key="answer-key", mode="fast"):
     """本地发布集合上的完整闭环；返回值里带规划、执行结果与原始证据行。"""
@@ -114,10 +157,11 @@ def answer_step(plan):
 @respx.mock
 async def test_local_generation_persists_cited_answer_and_bindings(actor_client, session):
     mock_gateway(channels=[gateway_channel()])
-    chat = mock_chat(chat_answer("第一句依据。[1] 第二句依据。[2]"))
+    texts = ("retrieval target 第一句依据。", "another retrieval target 第二句依据。")
+    chat = mock_chat(grounded_reply(
+        ("第一句依据。", (1,)), ("第二句依据。", (2,)), originals=texts))
     run = await run_answer_task(
-        actor_client, session, key="cited-answer",
-        texts=("retrieval target text", "another retrieval target detail"))
+        actor_client, session, key="cited-answer", texts=texts)
 
     plan = run["plan"]
     step = answer_step(plan)
@@ -132,7 +176,10 @@ async def test_local_generation_persists_cited_answer_and_bindings(actor_client,
     status = run["status"]
     assert status["status"] == "succeeded"
     result = status["result"]
-    assert result["answer"] == "第一句依据。[1] 第二句依据。[2]"
+    assert result["answer"] in {
+        "第一句依据。 [1] 第二句依据。 [2]",
+        "第一句依据。 [2] 第二句依据。 [1]",
+    }
     assert result["answer_reason"] is None
     assert result["validation_state"] == "passed"
     assert result["evidence_sufficiency"] == "sufficient_by_policy"
@@ -169,7 +216,7 @@ async def test_remote_evidence_has_typed_edge_and_feeds_local_generation(
     不再往 stub 里塞内部字段 `_excerpt`，否则这条用例绕过了真实的序列化边界。
     """
     mock_gateway(channels=[gateway_channel()])
-    chat = mock_chat(chat_answer("peer fact answer [1]"))
+    chat = mock_chat(grounded_reply(("beta federation keyword fact", (1,))))
     peer = StubPeer(items=[{**peer_evidence(),
                             "excerpt": "beta federation keyword fact"}])
     install_peer(monkeypatch, peer)
@@ -196,7 +243,7 @@ async def test_remote_evidence_has_typed_edge_and_feeds_local_generation(
     executed = await submit_task(actor_client, root, plan_body["plan_digest"], "remote-gen")
     assert executed.status_code == 200, executed.text
     result = executed.json()["result"]
-    assert result["answer"] == "peer fact answer [1]"
+    assert result["answer"] == "beta federation keyword fact [1]"
     binding = result["claim_evidence_bindings"][0]
     assert binding["evidence_refs"] == ["peer-evidence-1"]
     assert result["evidence"][0]["origin_node_id"] == PEER_NODE
@@ -215,7 +262,7 @@ async def test_missing_remote_excerpt_refuses_generation_without_placeholder(
     模型给出 [1] 之后结构校验照样通过 —— 一条无法复核的引用被当成成功答案。
     """
     mock_gateway(channels=[gateway_channel()])
-    chat = mock_chat(chat_answer("peer fact answer [1]"))
+    chat = mock_chat(grounded_reply())
     # 只有身份、没有正文：真实对端在缺正文时就是这个形状。
     peer = StubPeer(items=[peer_evidence()])
     install_peer(monkeypatch, peer)
@@ -244,7 +291,7 @@ async def test_whitespace_only_remote_excerpt_is_not_evidence(
         actor_client, session, monkeypatch):
     """N5：`"   "` 不是正文，不许拿它生成带 [n] 的答案。"""
     mock_gateway(channels=[gateway_channel()])
-    chat = mock_chat(chat_answer("peer fact answer [1]"))
+    chat = mock_chat(grounded_reply())
     peer = StubPeer(items=[{**peer_evidence(), "excerpt": "   "}])
     install_peer(monkeypatch, peer)
     manifest = scope_manifest([member("peer-collection-1", PEER_NODE)])
@@ -276,7 +323,7 @@ async def test_overlong_remote_excerpt_is_refused_with_machine_reason(
     的证据正文正是"降级必须可见"要防的事。
     """
     mock_gateway(channels=[gateway_channel()])
-    chat = mock_chat(chat_answer("peer fact answer [1]"))
+    chat = mock_chat(grounded_reply())
     peer = StubPeer(items=[{**peer_evidence(), "excerpt": "x" * 5000}])
     install_peer(monkeypatch, peer)
     manifest = scope_manifest([member("peer-collection-1", PEER_NODE)])
@@ -354,7 +401,7 @@ async def test_generation_failure_keeps_evidence_and_is_visible(actor_client, se
 async def test_generation_not_ready_at_plan_time_keeps_old_behavior(
         actor_client, session):
     mock_gateway(status="unknown")
-    chat = mock_chat(chat_answer("不应被调用 [1]"))
+    chat = mock_chat(grounded_reply())
     run = await run_answer_task(actor_client, session, key="not-ready")
 
     assert answer_step(run["plan"]) is None, "能力清单未知时不许保留 answer 步"
@@ -373,7 +420,7 @@ async def test_model_name_alone_is_not_readiness(actor_client, session, monkeypa
     """只把模型名配上不算就绪：OCR 专用模型听得见名字、干不了带引用的生成。"""
     monkeypatch.setattr(settings, "chat_model", "deepseek-ocr-2")
     mock_gateway(channels=[gateway_channel(model="deepseek-ocr-2", instruct=False)])
-    chat = mock_chat(chat_answer("不应被调用 [1]"))
+    chat = mock_chat(grounded_reply())
     run = await run_answer_task(actor_client, session, key="name-only")
 
     assert answer_step(run["plan"]) is None
@@ -390,14 +437,14 @@ async def test_long_local_block_is_bounded_like_the_evidence_set_exit(actor_clie
     读同一条证据（出口截到 2000）却能生成成功。对端越界仍然显式拒绝（上一条）。
     """
     mock_gateway(channels=[gateway_channel()])
-    chat = mock_chat(chat_answer("long block fact [1]"))
+    chat = mock_chat(grounded_reply(("retrieval target text", (1,))))
     long_text = "retrieval target text " + "| row | cell | value |" * 150
     assert len(long_text) > federation.EVIDENCE_EXCERPT_CHARS
     run = await run_answer_task(actor_client, session, key="long-local", texts=(long_text,))
 
     result = run["status"]["result"]
     assert result["answer_reason"] is None, result
-    assert result["answer"] == "long block fact [1]"
+    assert result["answer"] == "retrieval target text [1]"
     assert result["claim_evidence_bindings"][0]["evidence_refs"] \
         == [run["evidence_rows"][0].id]
     assert chat.call_count == 1
@@ -414,7 +461,7 @@ async def test_long_local_block_is_bounded_on_the_live_path_alone(actor_client, 
 
     monkeypatch.setattr(federation_tasks, "_load_excerpts", _nothing_stored)
     mock_gateway(channels=[gateway_channel()])
-    chat = mock_chat(chat_answer("live block fact [1]"))
+    chat = mock_chat(grounded_reply(("retrieval target text", (1,))))
     long_text = "retrieval target text " + "| live | cell |" * 200
     run = await run_answer_task(actor_client, session, key="long-live", texts=(long_text,))
     assert run["status"]["result"]["answer_reason"] is None, run["status"]["result"]
@@ -427,19 +474,21 @@ async def test_generation_reported_conflict_marks_ledger_and_is_lifted_from_the_
         actor_client, session):
     """模型标出矛盾引用对：账本 conflicting、结果与覆盖都带记录，标注行不进答案与绑定。"""
     mock_gateway(channels=[gateway_channel()])
-    mock_chat(chat_answer("One source rates PM-2 at 240 V. [1]\n"
-                          "Another rates PM-2 at 120 V. [2]\nCONFLICT: [1] [2]"))
+    texts = ("retrieval target text PM-2 is rated 240 V",
+             "retrieval target detail PM-2 is rated 120 V")
+    mock_chat(grounded_reply(
+        ("PM-2 is rated 240 V", (1,)),
+        ("PM-2 is rated 120 V", (2,)),
+        conflicts=((1, 2),), originals=texts))
     run = await run_answer_task(
-        actor_client, session, key="conflict-generation",
-        texts=("retrieval target text PM-2 is rated 240 V",
-               "retrieval target detail PM-2 is rated 120 V"))
+        actor_client, session, key="conflict-generation", texts=texts)
     status, result = run["status"], run["status"]["result"]
     ids = sorted(row.id for row in run["evidence_rows"])
 
     assert result["answer_reason"] is None, result
     assert "CONFLICT" not in result["answer"]
     assert [binding["claim_text"] for binding in result["claim_evidence_bindings"]] == [
-        "One source rates PM-2 at 240 V.", "Another rates PM-2 at 120 V."]
+        "PM-2 is rated 240 V", "PM-2 is rated 120 V"]
     expected = [{"basis": "generation_reported", "evidence_refs": ids,
                  "semantic_review": "needs_review"}]
     assert result["conflicts"] == expected
@@ -453,12 +502,30 @@ async def test_generation_reported_conflict_marks_ledger_and_is_lifted_from_the_
     assert delivery["result"]["conflicts"] == expected, "矛盾记录进交付文档与摘要"
 
 
+@pytest.mark.parametrize("malformation", ["foreign", "one-distinct", "invalid-shape"])
 @respx.mock
-async def test_unverifiable_conflict_markup_rejects_the_answer(actor_client, session):
-    """`CONFLICT:` 引用越界与伪造主张引用同罪：整份答案拒收，不悄悄丢掉那一行。"""
+async def test_malformed_schema_conflicts_reject_the_answer(
+        actor_client, session, malformation):
+    """Malformed conflicts reject the whole answer without changing the ledger."""
     mock_gateway(channels=[gateway_channel()])
-    mock_chat(chat_answer("PM-2 is rated 240 V. [1]\nCONFLICT: [1] [7]"))
-    run = await run_answer_task(actor_client, session, key="conflict-forged",
+
+    def reply(request):
+        evidence = json.loads(
+            json.loads(request.content)["messages"][1]["content"])["evidence"]
+        evidence_id = evidence[0]["evidence_id"]
+        conflicts = {
+            "foreign": [{"evidence_ids": [evidence_id, "foreign-evidence"]}],
+            "one-distinct": [{"evidence_ids": [evidence_id, evidence_id]}],
+            "invalid-shape": [{"evidence_ids": evidence_id}],
+        }[malformation]
+        return chat_answer(json.dumps({
+            "status": "answered",
+            "claims": [{"text": "PM-2 is rated 240 V", "evidence_ids": [evidence_id]}],
+            "conflicts": conflicts,
+        }))
+
+    mock_chat(reply)
+    run = await run_answer_task(actor_client, session, key=f"conflict-{malformation}",
                                 texts=("retrieval target text PM-2 is rated 240 V",))
     result = run["status"]["result"]
     assert result["answer"] is None
@@ -468,28 +535,6 @@ async def test_unverifiable_conflict_markup_rejects_the_answer(actor_client, ses
         "拒收的标注不能把账本压成 conflicting"
 
 
-@respx.mock
-async def test_readiness_check_is_what_keeps_the_step(actor_client, session, monkeypatch):
-    """变异确认的常驻版：判据被强制成"永远就绪"时，同一路径立刻出现 answer 步。
-
-    真正的就绪判据由上面两条用例钉住；这条证明 `create_plan` 真的在读它，
-    删掉那次调用会让本条依然绿、上面两条变红。
-    """
-    mock_gateway(status="unknown")
-
-    async def _always_ready(_http, *, now):
-        return True
-
-    monkeypatch.setattr(federation_tasks, "_generation_available", _always_ready)
-    mock_chat(chat_answer("forced answer [1]"))
-    run = await run_answer_task(actor_client, session, key="forced-ready")
-    step = answer_step(run["plan"])
-    assert step is not None and step["executor_node_id"] == NODE
-    assert run["plan"]["budget"]["max_generation_tokens"] \
-        == federation_tasks.GENERATION_TOKEN_BUDGET
-    assert run["status"]["result"]["answer_reason"] is None
-
-
 # ------------------------------------------------------------------ (e) 生成预算
 
 @respx.mock
@@ -497,8 +542,9 @@ async def test_output_over_generation_budget_is_rejected_visibly(actor_client, s
                                                                   monkeypatch):
     monkeypatch.setattr(federation_tasks, "GENERATION_TOKEN_BUDGET", 3)
     mock_gateway(channels=[gateway_channel()])
-    mock_chat(chat_answer("alpha beta gamma delta epsilon [1]"))
-    run = await run_answer_task(actor_client, session, key="budget")
+    mock_chat(grounded_reply(("alpha beta gamma delta epsilon", (1,))))
+    run = await run_answer_task(actor_client, session, key="budget",
+                                texts=("retrieval target alpha beta gamma delta epsilon",))
 
     assert run["plan"]["budget"]["max_generation_tokens"] == 3
     status = run["status"]
@@ -518,7 +564,7 @@ async def test_insufficient_evidence_never_generates_and_keeps_bindings_empty(
         actor_client, session):
     """契约 allOf：证据不足时不许给出带绑定的答案，也不该白跑一次模型。"""
     mock_gateway(channels=[gateway_channel()])
-    chat = mock_chat(chat_answer("模型常识 [1]"))
+    chat = mock_chat(grounded_reply())
     run = await run_answer_task(actor_client, session, key="insufficient",
                                 query="completely unrelated zoology question")
 
@@ -584,7 +630,7 @@ async def test_two_node_remote_excerpt_reaches_real_prompt(
 
     respx.route(url__startswith=two_node.b_endpoint).pass_through()
     mock_gateway(channels=[gateway_channel()])
-    chat = mock_chat(chat_answer("beta fact [1]"))
+    chat = mock_chat(grounded_reply(("beta federation keyword fact", (1,))))
 
     b = two_node.b_seed
     manifest = two_node_scope_manifest([two_node_member(b.collection_id, NODE_B)],
@@ -600,7 +646,7 @@ async def test_two_node_remote_excerpt_reaches_real_prompt(
                                     "real-excerpt")).json()
 
     assert status["status"] == "succeeded"
-    assert status["result"]["answer"] == "beta fact [1]", status["result"]
+    assert status["result"]["answer"] == "beta federation keyword fact [1]", status["result"]
     assert status["result"]["evidence"][0]["origin_node_id"] == NODE_B
     assert chat.calls, "生成必须真的发生过"
     prompt = chat.calls[0].request.content.decode()

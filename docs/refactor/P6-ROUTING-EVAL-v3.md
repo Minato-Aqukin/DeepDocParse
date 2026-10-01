@@ -221,8 +221,9 @@ Ruff（门禁口径 `F,B` + 既有 ignore）全绿。
    **2026-09-15 已接入**：契约 `CoverageLedger.conflicts` 与两条 allOf（有记录就不许报
    `sufficient_by_policy`；报 `conflicting` 必须有记录）；协调者两路取矛盾 —— 规则一路
    （同一来源不同版本在同一定位上正文不同，`version_divergence`，只收自报来源 = 返回
-   目标节点的条目）与生成标注一路（`CONFLICT: [n] [m]`，引用须落在本次证据域，
-   `generation_reported`），都只能把"充分"压成"矛盾"、全部 `needs_review`。
+   目标节点的条目）与生成标注一路（2026-10-02 起为共享 grounded-claims JSON 的
+   `conflicts` 组，引用须落在本次证据域、至少两条不同 ID；`generation_reported`），
+   都只能把"充分"压成"矛盾"、全部 `needs_review`。
    **`insufficient` / `unknown` 优先于 `conflicting`**：矛盾不能把"不足"改写成"矛盾"
    （那会藏掉不足信号、绕过生成闸 —— 提交前第五次验收复现），此时矛盾记录照样保留。
    本夹具的矛盾对是**不同集合的语义矛盾**，规则一路测不出；评测执行器不调模型，
