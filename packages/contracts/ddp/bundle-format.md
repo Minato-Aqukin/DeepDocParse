@@ -26,6 +26,28 @@ Bundle 验证代表传输和结构完整，不代表远端声明的作者身份�
 }
 ```
 
+`source.licence_valid_until` 可省略或为 null（无期限），否则必须为带时区的
+RFC 3339 时间。原始来源导出方可通过导出参数 `licence_valid_until` 指定期限；
+导入后复制到授权副本的 `valid_until`，持有方只能撤销，不能设置、延长或移除期限。
+再导出保留来源期限；对导入快照传入期限覆盖参数返回 400。
+期限属于验证后的 source manifest，读取原件时必须与副本记录绑定一致。
+
+授权副本目录 `GET .../bundle/replicas` 返回 `{replicas:[{replica_id,
+resource_id,source_version_id,source_digest,origin_node_id,authority_node_id,
+policy_revision,valid_until,revoked_at,availability}]}`，availability 的封闭集合为
+`bundle_replica_availability`（enums.yaml）：`licensed_copy` 表示仍有效的许可离线副本，
+`unavailable` 表示已撤销或已到期；不表示来源节点在线。
+`GET .../bundle/licensed-source` 原件响应携带 `X-DDP-Source-Digest`、
+`X-DDP-Source-Availability: offline_snapshot`，有期限时另携带
+`X-DDP-Source-Licence-Valid-Until`。撤销端点为
+`POST .../bundle/replicas/{replica_id}/revoke`，空正文且必须 Idempotency-Key；
+同键同副本重放幂等，冲突 409，非空正文 400。
+
+已撤销或已到期副本的原件读取、client source、文档原件下载/source-url，以及
+从原件产生的裁图均返回 410 `source_unavailable`，不能通过旧下载路径绕过。
+Bundle 再导出含原件时也受同一有效许可约束；已验证 Bundle 信封中的存储文字
+excerpt 仍可通过 evidence 端点读取，不意味着仍许可原文或允许原件预览。
+
 `layout.json` 为 `{schema:"ddp-bundle-layout/1", state:"present"|"missing",
 layout:<DDP-Layout object>|null, reason:string|null}`。`parse_revision=null` 必须
 声明 layout missing，不能从可变的 current_job 随意取一个修订。布局 present

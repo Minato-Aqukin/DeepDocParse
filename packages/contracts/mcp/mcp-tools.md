@@ -88,6 +88,7 @@ unsupported / citations`。不得退回无类型的整段字符串。
 | `null` | 没有降级：要么图已随响应返回，要么这条证据本就没有 `crop_key` |
 | `crop_store_unavailable` | 有 `crop_key`，但对象存储没配/依赖没装，拿不到像素 |
 | `crop_read_failed` | 有 `crop_key`，对象存储可达但这一次读取失败 |
+| `source_unavailable` | 这条证据来自已撤销或已过期的许可快照：裁图出自原件，不再给像素；证据原文摘录照常返回（与 `bundle-format.md` 的规则一致） |
 
 **取不到图不许静默退化成"没有图"** —— 外部 agent 会据此以为这条证据无法核对。
 

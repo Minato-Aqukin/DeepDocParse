@@ -30,12 +30,19 @@ paths:
       - {in: path, name: version_id, required: true, schema: {type: string}}
     get:
       operationId: exportBundle
+      parameters:
+        - in: query
+          name: licence_valid_until
+          description: 来源导出方指定带时区 RFC3339 原件许可期限；导入快照不能覆盖期限。
+          schema: {type: string, format: date-time}
       responses:
         '200':
           description: 固定资源版本快照
           content:
             application/zip:
               schema: {type: string, format: binary}
+        '400': {description: 无时区或无效期限，或持有方尝试覆盖来源期限}
+        '410': {description: 授权副本已撤销或过期，source_unavailable}
         '404': {description: 资源不存在或无权访问}
         '503': {description: 本节点持久身份未配置}
   /api/resources/{resource_id}/versions/{version_id}/bundle/evidence:

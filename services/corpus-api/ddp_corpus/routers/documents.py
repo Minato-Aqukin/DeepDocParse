@@ -37,6 +37,7 @@ from ddp_corpus.queue import enqueue
 from ddp_corpus.db import get_session
 from ddp_corpus.deps import Actor, current_actor, get_service_client, get_storage
 from ddp_corpus.errors import APIError
+from ddp_corpus.bundle_source import document_source_key
 from ddp_corpus.policy import document_resource_id, require_document, require_resource, resource_condition, visible_document_condition
 from ddp_corpus.resources import tombstone_resource
 from ddp_corpus.models import (
@@ -681,7 +682,8 @@ async def get_layout(document_id: str, job: str = "", actor: Actor = Depends(cur
 @router.get("/{document_id}/source-url")
 async def source_url(document_id: str, request: Request,
                      actor: Actor = Depends(current_actor),
-                     session: AsyncSession = Depends(get_session)):
+                     session: AsyncSession = Depends(get_session),
+                     storage: Storage = Depends(get_storage)):
     """原件的**稳定** URL。
 
     凭证住在 control schema（`file_grants`，Go 拥有），所以这里问 control-api 要。
@@ -690,14 +692,16 @@ async def source_url(document_id: str, request: Request,
     （control-api 的 `/api/documents/{id}/download-url`），两者刻意分开。
     """
     document = await _visible(document_id, session, actor)
-    if not document.object_key:
+    object_key = await document_source_key(session, actor, document, storage)
+    if not object_key:
         raise APIError(404, "no active file link for this document", "invalid_request_error",
                        "file_token_missing")
     context = await document_context(session, actor, document)
     url = await ControlClient(request.app.state.http).stable_file_url(
         organization_id=actor.organization_id, document_id=document.id,
-        object_key=document.object_key, mime=document.mime,
+        object_key=object_key, mime=document.mime,
         filename=context.filename, subject_id=actor.principal_id, resource_id=context.resource_id)
+    await document_source_key(session, actor, document, storage)
     return {"url": url, "path": url[url.find("/files/"):] if "/files/" in url else url,
             "mime": document.mime}
 
@@ -729,6 +733,7 @@ async def download(document_id: str, format: str = "md", job: str = "",
     stem = (await document_context(session, actor, document)).filename.rsplit(".", 1)[0]
 
     if format == "source":
+        object_key = await document_source_key(session, actor, document, storage)
         # **不变式 6**：原件不整份进应用进程内存，也不由应用进程中转下载流量。
         # 这里只做鉴权与存在性判断（exists 是一次 HEAD，不取字节），
         # 然后 302 到一条短期直读 URL —— 字节从对象存储直接到客户端。
@@ -737,14 +742,15 @@ async def download(document_id: str, format: str = "md", job: str = "",
         # （模型网关的 doc_hash 幂等靠它，ADR #11/#12），这条每次都换。
         # 前端不要用 XHR 跟这个跳转（Authorization 头会跟到对象存储去），
         # 走 `/api/documents/{id}/download-url` 拿地址再直接导航。
-        exists = await storage.exists(document.object_key) if document.object_key else False
+        exists = await storage.exists(object_key) if object_key else False
         if not exists:
             # 原件可能已被 GC 回收（软删除后重新可见的窗口、或对象存储侧被清理）
             raise APIError(404, "original file is no longer available",
                            "invalid_request_error", "source_missing")
         url = await storage.presigned_get(
-            document.object_key, expires_seconds=settings.source_url_ttl_seconds,
+            object_key, expires_seconds=settings.source_url_ttl_seconds,
             filename=(await document_context(session, actor, document)).filename, content_type=document.mime)
+        await document_source_key(session, actor, document, storage)
         return RedirectResponse(url, status_code=302)
 
     parse_job = await _archived_job(session, document, job or None, actor)

@@ -70,6 +70,12 @@
           "minLength": 1,
           "maxLength": 512
         },
+        "licence_valid_until": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$",
+          "description": "Source-exporter-set licence expiry; holders preserve this term and may only revoke."
+        },
         "policy_revision": {
           "type": "string",
           "minLength": 1,

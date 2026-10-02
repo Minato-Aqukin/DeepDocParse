@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -81,5 +82,30 @@ func TestFileAuthorizationRejectsWrongVersionContext(t *testing.T) {
 	var api *apierr.Error
 	if !errors.As(err, &api) || api.Code != "authorization_invalid" {
 		t.Fatalf("mismatched identity accepted: %v", err)
+	}
+}
+
+func TestFileAuthorizationReturnsSourceUnavailable(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusGone)
+		_, _ = fmt.Fprint(w, `{"error":{"code":"source_unavailable","type":"invalid_request_error","message":"fixed original is unavailable"}}`)
+	}))
+	defer target.Close()
+	up, _ := proxy.New("corpus", target.URL, "secret")
+	s := &Server{cfg: &config.Config{CorpusURL: target.URL, ServiceToken: "secret"}, corpus: up}
+	actor := &identity.Actor{ID: "u", UserID: "u", Kind: identity.KindUser}
+	recorder := httptest.NewRecorder()
+	httpx.Wrap(func(_ http.ResponseWriter, r *http.Request) error {
+		_, err := s.documentAccess(r.Context(), actor, "doc1", "asset1")
+		return err
+	}).ServeHTTP(recorder, httptest.NewRequest("GET", "/api/documents/doc1/download-url", nil))
+	var response struct {
+		Error apierr.Error `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusGone || response.Error.Code != "source_unavailable" || response.Error.Type != apierr.TypeInvalidRequest {
+		t.Fatalf("lost source refusal: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }

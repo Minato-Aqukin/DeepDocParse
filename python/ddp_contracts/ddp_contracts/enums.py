@@ -2430,3 +2430,28 @@ def local_transfer_state_label(value: str | None) -> str | None:
         return None
     meta = LOCAL_TRANSFER_STATE_META.get(value)
     return meta["label"] if meta else f"未知取值（{value}）"
+
+
+# 固定版本授权副本的可读状态，不代表来源节点在线。
+BundleReplicaAvailability = Literal["licensed_copy", "unavailable"]
+
+BUNDLE_REPLICA_AVAILABILITY_VALUES: Final[tuple[str, ...]] = (
+    "licensed_copy",
+    "unavailable",
+)
+
+BUNDLE_REPLICA_AVAILABILITY_META: Final[dict[str, EnumMeta]] = {
+    # 未撤销且未过期的许可离线快照
+    "licensed_copy": {"value": "licensed_copy", "label": "离线快照（不是源节点在线，也不是重新授权）", "severity": "warn"},
+    # 授权副本已撤销或过期，禁止读取原件
+    "unavailable": {"value": "unavailable", "label": "来源已撤销或过期（410），停止新授权，不显示在线。", "severity": "error"},
+}
+
+
+def bundle_replica_availability_label(value: str | None) -> str | None:
+    """bundle_replica_availability 的用户文案。未知取值也要给出可读文字，
+    不能把原始枚举丢给用户。"""
+    if not value:
+        return None
+    meta = BUNDLE_REPLICA_AVAILABILITY_META.get(value)
+    return meta["label"] if meta else f"未知取值（{value}）"

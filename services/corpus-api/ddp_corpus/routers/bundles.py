@@ -15,6 +15,7 @@ from ddp_core.bundle import (
     VerifiedBundle,
     build_bundle,
     digest,
+    licence_valid_until as parse_licence_valid_until,
     json_bytes,
     parse_json,
     read_bundle,
@@ -520,11 +521,26 @@ async def export_bundle(
     storage=Depends(get_storage),
     include_wiki: bool = False,
     include_vectors: bool = False,
+    licence_valid_until: str | None = None,
 ):
     resource, version = await _version(session, actor, resource_id, version_id)
+    if version.bundle_prefix and licence_valid_until is not None:
+        raise APIError(400, "only the source exporter may set the licence term",
+                       "invalid_request_error", "bundle_licence_term_invalid")
+    try:
+        term = parse_licence_valid_until(licence_valid_until)
+    except BundleError as exc:
+        raise APIError(400, str(exc), "invalid_request_error", "bundle_licence_term_invalid") from exc
+    if version.bundle_prefix:
+        from ddp_corpus.bundle_source import licensed_source_binding
+
+        await licensed_source_binding(session, storage, resource, version)
     try:
         bundle = await _snapshot(session, storage, resource, version)
         files = dict(bundle.files)
+        source = dict(bundle.source)
+        if term is not None:
+            source["licence_valid_until"] = term.isoformat()
         features: list[str] = []
         if include_wiki:
             # Opt-in wiki stays off by default so private Wiki never leaks into
@@ -567,13 +583,15 @@ async def export_bundle(
             files["vectors.json"] = json_bytes(vectors)
             features.append("vectors")
         data = await asyncio.to_thread(
-            build_bundle, bundle.source, files, required_features=features
+            build_bundle, source, files, required_features=features
         )
     except BundleError as exc:
         raise _bundle_error(exc) from exc
     # Recheck after storage reads. Permission changes during an export must not bypass ACL.
     await session.refresh(resource)
     await _version(session, actor, resource_id, version_id)
+    if version.bundle_prefix:
+        await licensed_source_binding(session, storage, resource, version)
     return Response(
         data,
         media_type="application/zip",
@@ -1039,6 +1057,7 @@ async def import_bundle(
                 authority_node_id=verified.source["authority_node_id"],
                 source_digest=verified.source["source_digest"][7:],
                 policy_revision=verified.source["policy_revision"],
+                valid_until=parse_licence_valid_until(verified.source.get("licence_valid_until")),
             )
         )
         await session.flush()

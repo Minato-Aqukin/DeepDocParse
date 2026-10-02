@@ -12,6 +12,7 @@ import re
 import stat
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import BinaryIO
 
@@ -175,6 +176,21 @@ class VerifiedBundle:
         return self.manifest["source"]
 
 
+def licence_valid_until(value: str | None) -> datetime | None:
+    """Parse the source-issued finite term, never a holder-supplied extension."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+        r"(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})", value
+    ):
+        fail("licence expiry must be a timezone-aware RFC3339 timestamp")
+    try:
+        return datetime.fromisoformat(value).astimezone(timezone.utc)
+    except ValueError as exc:
+        raise BundleError("bundle_invalid", "invalid licence expiry") from exc
+
+
 def _validate_source(source):
     _object(
         source,
@@ -187,6 +203,7 @@ def _validate_source(source):
             "uploader_ref",
             "policy_revision",
         ),
+        ("licence_valid_until",),
     )
     for key in ("origin_node_id", "authority_node_id"):
         if not isinstance(source[key], str) or not NODE_ID.fullmatch(source[key]):
@@ -208,6 +225,7 @@ def _validate_source(source):
         fail("missing original requires a reason")
     if source["original"] == "present" and source["missing_reason"] is not None:
         fail("present original cannot have missing reason")
+    licence_valid_until(source.get("licence_valid_until"))
 
 def _source_identity(value):
     _object(

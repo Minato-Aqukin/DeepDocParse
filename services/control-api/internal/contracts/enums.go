@@ -2867,3 +2867,30 @@ func (s LocalTransferState) Valid() bool {
 	_, ok := LocalTransferStateMeta[s]
 	return ok
 }
+
+// 固定版本授权副本的可读状态，不代表来源节点在线。
+type BundleReplicaAvailability string
+
+const (
+	// 未撤销且未过期的许可离线快照
+	BundleReplicaAvailabilityLicensedCopy BundleReplicaAvailability = "licensed_copy"
+	// 授权副本已撤销或过期，禁止读取原件
+	BundleReplicaAvailabilityUnavailable BundleReplicaAvailability = "unavailable"
+)
+
+// BundleReplicaAvailabilityValues 保持 enums.yaml 里的声明顺序。
+var BundleReplicaAvailabilityValues = []BundleReplicaAvailability{
+	BundleReplicaAvailabilityLicensedCopy,
+	BundleReplicaAvailabilityUnavailable,
+}
+
+var BundleReplicaAvailabilityMeta = map[BundleReplicaAvailability]EnumMeta{
+	BundleReplicaAvailabilityLicensedCopy: {Value: "licensed_copy", Label: "离线快照（不是源节点在线，也不是重新授权）", Severity: SeverityWarn},
+	BundleReplicaAvailabilityUnavailable:  {Value: "unavailable", Label: "来源已撤销或过期（410），停止新授权，不显示在线。", Severity: SeverityError},
+}
+
+// Valid 报告 s 是不是一个已知的 bundle_replica_availability 取值。
+func (s BundleReplicaAvailability) Valid() bool {
+	_, ok := BundleReplicaAvailabilityMeta[s]
+	return ok
+}

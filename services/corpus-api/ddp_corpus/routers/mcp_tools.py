@@ -54,7 +54,7 @@ from ddp_corpus.deps import Actor, current_actor
 from ddp_corpus.document_context import DocumentContext, search_contexts
 from ddp_corpus.errors import APIError
 from ddp_corpus.evidence import citation_out
-from ddp_corpus.models import Chunk, Document, Evidence
+from ddp_corpus.models import Chunk, Document, Evidence, Resource, ResourceVersion
 from ddp_corpus.knowledge_policy import accessible_knowledge
 from ddp_corpus.policy import authorized_document_ids, visible_document_condition
 from ddp_corpus.routers import knowledge as knowledge_plane
@@ -343,16 +343,51 @@ async def get_evidence(evidence_id: str, request: Request,
         raise APIError(404, "evidence not found", "invalid_request_error", "not_found")
 
     payload = await _evidence_payload(session, evidence, contexts=allowed)
-    image, payload["crop_degraded"] = await _crop_bytes(
-        getattr(request.app.state, "storage", None), evidence.crop_key)
+    storage = getattr(request.app.state, "storage", None)
+    # 裁图出自原件：许可快照撤销或过期后不再给像素（与站内裁图同一道门），
+    # 证据摘录照常返回。取像素前后各判一次，撤销发生在读取期间也算数。
+    if evidence.crop_key and storage is not None and not await _original_readable(
+            session, storage, allowed):
+        image, payload["crop_degraded"] = None, "source_unavailable"
+    else:
+        image, payload["crop_degraded"] = await _crop_bytes(storage, evidence.crop_key)
     # 取像素是一次外部 await；发出去之前按当下的授权再确认一次
     current = await search_contexts(session, actor, evidence.document_id)
     if evidence.parse_job_id not in current:
         raise APIError(404, "evidence not found", "invalid_request_error", "not_found")
+    if image is not None and not await _original_readable(
+            session, storage, current[evidence.parse_job_id]):
+        image, payload["crop_degraded"] = None, "source_unavailable"
     payload.update(_asset_fields(current[evidence.parse_job_id]))
     return {"status": "ok", "evidence": payload,
             "crop": None if image is None else {
                 "mime": "image/png", "data_base64": base64.b64encode(image).decode()}}
+
+
+async def _original_readable(session: AsyncSession, storage,
+                             contexts: list[DocumentContext]) -> bool:
+    """这次解析的原件此刻是否仍经某一份已授权副本可读。
+
+    本地上传的副本恒可读；许可快照副本要过 `licensed_source_binding`（撤销、过期、
+    绑定被改都在那里判）。只有 410 算"不可读"，其余错误照常抛出、不降级。
+    """
+    from ddp_corpus.bundle_source import licensed_source_binding
+
+    for context in contexts:
+        version = await session.get(ResourceVersion, context.version_id, populate_existing=True)
+        if version is None:
+            continue
+        if not version.bundle_prefix:
+            return True
+        resource = await session.get(Resource, version.resource_id, populate_existing=True)
+        try:
+            await licensed_source_binding(session, storage, resource, version)
+        except APIError as exc:
+            if exc.status_code == 410:
+                continue
+            raise
+        return True
+    return False
 
 
 async def _crop_bytes(storage, key: str | None) -> tuple[bytes | None, str | None]:

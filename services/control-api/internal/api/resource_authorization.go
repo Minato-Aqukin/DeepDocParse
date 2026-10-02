@@ -54,6 +54,9 @@ func (s *Server) documentAccess(ctx context.Context, actor *identity.Actor, docu
 		}
 		return &access, nil
 	}
+	if resp.StatusCode == http.StatusGone {
+		return nil, apierr.New(http.StatusGone, apierr.TypeInvalidRequest, "source_unavailable", "fixed original is unavailable")
+	}
 	if resp.StatusCode == 409 {
 		return nil, apierr.New(409, apierr.TypeInvalidRequest, "resource_context_required", "请选择具体资源")
 	}

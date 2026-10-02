@@ -112,8 +112,14 @@ effective here, not only on the replica-management route.
 Responses are private and non-cacheable. `X-DDP-Authority-Node` and
 `X-DDP-Actor-Subject` bind the response to the established connection.
 Source responses also carry `X-DDP-Source-Digest` (`sha256:<hex>`) and
-`X-DDP-Source-Availability` (`online` or `offline_snapshot`). A snapshot is available
-only through an actual valid permission; a withdrawn permission returns 410.
+`X-DDP-Source-Availability` (`online` or `offline_snapshot`). An imported licensed
+copy always reports `offline_snapshot`, never implies its origin is online, and
+includes `X-DDP-Source-Licence-Valid-Until` when its source-set term is finite.
+The replica directory uses the closed `bundle_replica_availability` enum
+(`licensed_copy` / `unavailable`); the UI shows the digest and finite term and
+offers no source download for unavailable copies. A snapshot is available only
+through an actual valid permission; revocation or expiry returns 410
+`source_unavailable` on every original-byte route.
 The native host verifies the complete source digest before displaying it, and
 validates a complete Bundle before atomically saving it. It never follows a
 redirect or forwards the center credential to an object-store URL. The renderer

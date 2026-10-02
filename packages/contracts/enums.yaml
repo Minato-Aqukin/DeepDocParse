@@ -1626,3 +1626,16 @@ enums:
       - {value: verifying, summary: 已上传，等待确认服务端全量校验结果,   label: 已上传，等待确认服务端全量校验结果, severity: progress, active: true}
       - {value: verified,  summary: 输入已通过服务端校验,                 label: 输入已通过服务端校验,         severity: ok}
       - {value: unknown,   summary: 上次传输中断，需先对账再继续,         label: 上次传输中断，需对账,         severity: warn}
+
+  bundle_replica_availability:
+    description: 固定版本授权副本的可读状态，不代表来源节点在线。
+    applies_to: [bundle]
+    values:
+      - value: licensed_copy
+        summary: 未撤销且未过期的许可离线快照
+        label: 离线快照（不是源节点在线，也不是重新授权）
+        severity: warn
+      - value: unavailable
+        summary: 授权副本已撤销或过期，禁止读取原件
+        label: 来源已撤销或过期（410），停止新授权，不显示在线。
+        severity: error

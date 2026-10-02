@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import {
-  INDEX_STATUS_META, PARSE_STATUS_META, indexStatusLabelOf, parseStatusLabelOf,
+  INDEX_STATUS_META, PARSE_STATUS_META, bundleReplicaAvailabilityLabelOf, indexStatusLabelOf, parseStatusLabelOf,
 } from '@deepdocparse/contracts'
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { downloadAs } from '@/api/http'
 import { resourcesApi } from '@/api/resources'
-import type { BundleEvidence, Resource, ResourceVersion } from '@/api/resources'
+import type { BundleEvidence, BundleReplica, Resource, ResourceVersion } from '@/api/resources'
 import UploadDialog from '@/components/document/UploadDialog.vue'
 import { usePolling } from '@/composables/usePolling'
 import { approvedPlanLabel, federationTaskNewLocation, isDesktop, onLocalSource } from '@/platform/desktop'
@@ -88,18 +88,39 @@ async function remove(resource: Resource) {
 }
 async function bundle(resource: Resource, version: ResourceVersion) {
   try { await downloadAs(resourcesApi.bundleUrl(resource.id, version.id), `${resource.display_name}.ddp.zip`) }
-  catch (cause) { error.value = `Bundle 导出失败：${String(cause)}` }
+  catch (cause) {
+    const status = (cause as { response?: { status?: number } })?.response?.status
+    if (status === 410) {
+      const current: ReplicaState = replicasOf.value[version.id] ?? { items: [], problem: '', availability: '' }
+      replicasOf.value = { ...replicasOf.value, [version.id]: { ...current, sourceUnavailable: true,
+        availability: '', sourceDigest: null, validUntil: null,
+        problem: bundleReplicaAvailabilityLabelOf('unavailable')! } }
+    } else error.value = `Bundle 导出失败：${String(cause)}`
+  }
 }
 
 /**
  * Bundle 证据信封 / 授权副本 / 许可来源。
  * 副本与许可来源接口 404 = 中心尚未提供，显示“尚未提供”，不伪造副本；
- * 410 = 撤销/过期，不显示在线或已重新授权；离线快照只认响应头，不自己猜。
+ * 410 = 撤销/过期，不显示在线或已重新授权；目录副本与响应头离线快照使用同一契约文案。
  */
 const evidenceFor = ref('')
 const evidenceBody = ref<BundleEvidence | null>(null)
 const evidenceProblem = ref('')
-const replicasOf = ref<Record<string, { items: { replica_id: string; availability?: string; [key: string]: unknown }[]; problem: string; availability: string }>>({})
+interface ReplicaState {
+  items: BundleReplica[]
+  problem: string
+  availability: string
+  sourceDigest?: string | null
+  validUntil?: string | null
+  sourceUnavailable?: boolean
+}
+const replicasOf = ref<Record<string, ReplicaState>>({})
+function sourceUnavailable(version: ResourceVersion) {
+  const state = replicasOf.value[version.id]
+  return state?.sourceUnavailable || Boolean(state?.items.length
+    && state.items.every(replica => replica.availability === 'unavailable'))
+}
 async function showEvidence(resource: Resource, version: ResourceVersion) {
   evidenceFor.value = version.id
   evidenceBody.value = null
@@ -111,12 +132,15 @@ async function showEvidence(resource: Resource, version: ResourceVersion) {
   } catch (cause) { evidenceProblem.value = `证据信封读取失败：${String(cause)}` }
 }
 async function loadReplicas(resource: Resource, version: ResourceVersion) {
-  const current = replicasOf.value[version.id] ?? { items: [], problem: '', availability: '' }
+  const current: ReplicaState = replicasOf.value[version.id] ?? { items: [], problem: '', availability: '' }
   replicasOf.value = { ...replicasOf.value, [version.id]: current }
   try {
     const { data } = await resourcesApi.replicas(resource.id, version.id)
+    const items = data.replicas ?? []
+    const unavailable = items.length > 0 && items.every(replica => replica.availability === 'unavailable')
     replicasOf.value = { ...replicasOf.value,
-      [version.id]: { items: (data.replicas ?? []) as typeof current.items, problem: '', availability: current.availability } }
+      [version.id]: { ...current, items, problem: current.sourceUnavailable ? current.problem : '',
+        ...(unavailable ? { availability: '', sourceDigest: null, validUntil: null } : {}) } }
   } catch (cause) {
     const status = (cause as { response?: { status?: number } })?.response?.status
     replicasOf.value = { ...replicasOf.value, [version.id]: { ...current,
@@ -124,11 +148,12 @@ async function loadReplicas(resource: Resource, version: ResourceVersion) {
   }
 }
 async function licensedSource(resource: Resource, version: ResourceVersion) {
-  const current = replicasOf.value[version.id] ?? { items: [], problem: '', availability: '' }
+  const current: ReplicaState = replicasOf.value[version.id] ?? { items: [], problem: '', availability: '' }
   try {
-    const { blob, availability } = await resourcesApi.licensedSource(resource.id, version.id)
-    const label = availability === 'online' ? '在线来源' : availability === 'offline_snapshot' ? '离线快照（不是源节点在线，也不是重新授权）' : '来源可用性未知（老中心，未返回可用性头）'
-    replicasOf.value = { ...replicasOf.value, [version.id]: { ...current, availability: label } }
+    const { blob, availability, sourceDigest, validUntil } = await resourcesApi.licensedSource(resource.id, version.id)
+    const label = availability === 'online' ? '在线来源' : availability === 'offline_snapshot'
+      ? bundleReplicaAvailabilityLabelOf('licensed_copy')! : '来源可用性未知（老中心，未返回可用性头）'
+    replicasOf.value = { ...replicasOf.value, [version.id]: { ...current, availability: label, sourceDigest, validUntil } }
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -138,8 +163,9 @@ async function licensedSource(resource: Resource, version: ResourceVersion) {
   } catch (cause) {
     const status = (cause as { response?: { status?: number } })?.response?.status
     replicasOf.value = { ...replicasOf.value, [version.id]: { ...current,
-      availability: '',
-      problem: status === 410 ? '来源已撤销或过期（410），停止新授权，不显示在线。'
+      availability: '', sourceDigest: null, validUntil: null,
+      sourceUnavailable: status === 410 || current.sourceUnavailable,
+      problem: status === 410 ? bundleReplicaAvailabilityLabelOf('unavailable')!
         : status === 404 ? '中心尚未提供许可来源读取（404）。' : `许可来源读取失败：${String(cause)}` } }
   }
 }
@@ -187,11 +213,11 @@ onBeforeUnmount(() => { generation++ })
           解析 {{ parseStatusLabelOf(version.parse_status) ?? '无解析任务' }} · 索引 {{ indexStatusLabelOf(version.index_status) ?? '无' }}
         </span>
         <span class="digest" :title="version.source_digest">{{ version.source_digest ? (version.source_digest_verified === false ? '原文字节未验证 · ' : '') + version.source_digest.slice(0, 16) : '原文字节未验证' }}</span>
-        <el-button link @click="bundle(resource, version)">导出 Bundle</el-button>
+        <el-button v-if="!sourceUnavailable(version)" link @click="bundle(resource, version)">导出 Bundle</el-button>
         <el-button link @click="showEvidence(resource, version)">证据信封</el-button>
         <template v-if="!onLocalSource">
           <el-button link @click="loadReplicas(resource, version)">授权副本</el-button>
-          <el-button link @click="licensedSource(resource, version)">许可来源</el-button>
+          <el-button v-if="!sourceUnavailable(version)" link @click="licensedSource(resource, version)">许可来源</el-button>
         </template>
       </div>
       <div v-if="evidenceBody && resource.versions.some(v => v.id === evidenceFor)" class="bundle-detail" aria-label="证据信封">
@@ -201,11 +227,18 @@ onBeforeUnmount(() => { generation++ })
       </div>
       <div v-for="version in resource.versions" :key="`replicas-${version.id}`">
         <p v-if="replicasOf[version.id]?.problem" role="alert" class="error">{{ replicasOf[version.id]?.problem }}</p>
-        <p v-if="replicasOf[version.id]?.availability" class="muted">{{ replicasOf[version.id]?.availability }}</p>
+        <p v-if="replicasOf[version.id]?.availability" class="muted">
+          {{ replicasOf[version.id]?.availability }}
+          <span v-if="replicasOf[version.id]?.sourceDigest"> · 原文摘要 <span class="digest">{{ replicasOf[version.id]?.sourceDigest }}</span></span>
+          <span v-if="replicasOf[version.id]?.validUntil"> · 许可有效至 <span class="digest">{{ replicasOf[version.id]?.validUntil }}</span></span>
+        </p>
         <ul v-if="(replicasOf[version.id]?.items ?? []).length" aria-label="授权副本">
           <li v-for="replica in replicasOf[version.id]?.items ?? []" :key="replica.replica_id">
             <span class="digest">{{ replica.replica_id }}</span>
-            <span class="muted">{{ typeof replica.availability === 'string' ? replica.availability : '' }}</span>
+            <span :class="replica.availability === 'unavailable' ? 'error' : 'muted'"
+                  :role="replica.availability === 'unavailable' ? 'alert' : undefined">{{ bundleReplicaAvailabilityLabelOf(replica.availability) }}</span>
+            <span class="muted"> · 原文摘要 <span class="digest">{{ replica.source_digest }}</span></span>
+            <span v-if="replica.valid_until" class="muted"> · 许可有效至 <span class="digest">{{ replica.valid_until }}</span></span>
             <el-tooltip v-if="readonlyHint" :content="readonlyHint">
               <span><el-button link type="danger" disabled>撤销副本</el-button></span>
             </el-tooltip>

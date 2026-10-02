@@ -18,7 +18,8 @@ from datetime import datetime
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ddp_core.models import Base, new_id, utcnow
+from ddp_contracts.enums import BundleReplicaAvailability
+from ddp_core.models import Base, as_aware, new_id, utcnow
 
 
 class BundleReplica(Base):
@@ -83,13 +84,16 @@ def revoke_request_digest(payload: dict) -> str:
     import hashlib
     import json
 
+    payload = {key: payload.get(key) for key in REVOKE_KEY_DIGEST_FIELDS}
+    if payload["revoked_at"] is not None:
+        payload["revoked_at"] = as_aware(datetime.fromisoformat(payload["revoked_at"])).isoformat()
     return hashlib.sha256(json.dumps(
-        {key: payload.get(key) for key in REVOKE_KEY_DIGEST_FIELDS},
+        payload,
         sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
-def replica_out(row: BundleReplica, *, availability: str) -> dict:
-    """Public replica shape the web client already renders."""
+def replica_out(row: BundleReplica, *, availability: BundleReplicaAvailability) -> dict:
+    """Public licensed-copy shape with timezone-stable terms."""
     return {
         "replica_id": row.id,
         "resource_id": row.resource_id,
@@ -99,8 +103,8 @@ def replica_out(row: BundleReplica, *, availability: str) -> dict:
         "source_digest": "sha256:" + row.source_digest,
         "policy_revision": row.policy_revision,
         "owner_id": row.owner_id,
-        "valid_until": row.valid_until.isoformat() if row.valid_until else None,
-        "revoked_at": row.revoked_at.isoformat() if row.revoked_at else None,
+        "valid_until": as_aware(row.valid_until).isoformat() if row.valid_until else None,
+        "revoked_at": as_aware(row.revoked_at).isoformat() if row.revoked_at else None,
         "availability": availability,
     }
 

@@ -2189,4 +2189,24 @@ export function localTransferStateLabelOf(value: string | null | undefined): str
   return LOCAL_TRANSFER_STATE_META[value as LocalTransferState]?.label ?? `未知取值（${value}）`
 }
 
+// 固定版本授权副本的可读状态，不代表来源节点在线。
+export type BundleReplicaAvailability = 'licensed_copy' | 'unavailable'
+
+export const BUNDLE_REPLICA_AVAILABILITY_VALUES: readonly BundleReplicaAvailability[] = [
+  'licensed_copy',
+  'unavailable',
+] as const
+
+export const BUNDLE_REPLICA_AVAILABILITY_META: Record<BundleReplicaAvailability, EnumMeta> = {
+  // 未撤销且未过期的许可离线快照
+  "licensed_copy": { value: 'licensed_copy', label: "离线快照（不是源节点在线，也不是重新授权）", severity: 'warn' },
+  // 授权副本已撤销或过期，禁止读取原件
+  "unavailable": { value: 'unavailable', label: "来源已撤销或过期（410），停止新授权，不显示在线。", severity: 'error' },
+}
+
+export function bundleReplicaAvailabilityLabelOf(value: string | null | undefined): string | null {
+  if (!value) return null
+  return BUNDLE_REPLICA_AVAILABILITY_META[value as BundleReplicaAvailability]?.label ?? `未知取值（${value}）`
+}
+
 export type { GenerationOperation, GenerationCandidate, GenerationCandidates } from './generation-candidates'

@@ -1,4 +1,4 @@
-import type { IndexStatus } from '@deepdocparse/contracts'
+import type { BundleReplicaAvailability, IndexStatus } from '@deepdocparse/contracts'
 
 import type { ParseStatus } from '@/types/api'
 import { http } from './http'
@@ -42,7 +42,9 @@ export interface BundleEvidence {
 }
 export interface BundleReplica {
   replica_id: string
-  availability?: string
+  availability: BundleReplicaAvailability
+  source_digest: string
+  valid_until: string | null
   [key: string]: unknown
 }
 export interface LicensedSource {
@@ -50,6 +52,8 @@ export interface LicensedSource {
   /** `X-DDP-Source-Availability`：online | offline_snapshot；缺席为 null（老中心）。 */
   availability: 'online' | 'offline_snapshot' | null
   filename: string
+  sourceDigest: string | null
+  validUntil: string | null
 }
 export const resourcesApi = {
   list: (scope: 'mine' | 'site_public', offset = 0) => http.get<{ items: Resource[]; has_more: boolean }>(
@@ -73,6 +77,7 @@ export const resourcesApi = {
   /**
    * 许可来源字节。可用性只认响应头 `X-DDP-Source-Availability`；
    * 撤销/过期后端回 410，调用方不得显示“已保存/在线”。
+   * 原文摘要及来源许可期限来自 `X-DDP-Source-Digest` / `X-DDP-Source-Licence-Valid-Until`。
    */
   licensedSource: async (resource: string, version: string): Promise<LicensedSource> => {
     const response = await http.get(
@@ -80,7 +85,11 @@ export const resourcesApi = {
       { responseType: 'blob' })
     const raw = String(response.headers?.['x-ddp-source-availability'] ?? '')
     const availability = raw === 'online' || raw === 'offline_snapshot' ? raw : null
-    return { blob: response.data as Blob, availability, filename: `${resource}-${version}.source` }
+    return {
+      blob: response.data as Blob, availability, filename: `${resource}-${version}.source`,
+      sourceDigest: response.headers?.['x-ddp-source-digest'] ?? null,
+      validUntil: response.headers?.['x-ddp-source-licence-valid-until'] ?? null,
+    }
   },
   /** 撤销一个授权副本。写操作自带幂等键，丢响应后调用方复用同一键对账，不换键重发。 */
   revokeReplica: (resource: string, version: string, replicaId: string, idempotencyKey: string) =>

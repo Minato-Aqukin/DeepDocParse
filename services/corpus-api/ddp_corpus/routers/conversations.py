@@ -329,6 +329,10 @@ async def get_crop(document_id: str, job_id: str, name: str, request: Request,
     from fastapi.responses import Response
 
     document = await require_document_parse(session, actor, document_id, job_id)
+    from ddp_corpus.bundle_source import document_source_key
+
+    source_key = await document_source_key(session, actor, document, storage, parse_job_id=job_id)
+    cache_control = "private, no-store" if source_key and source_key.startswith("bundles/") else _CROP_CACHE_CONTROL
     if "/" in name or ".." in name:
         raise APIError(400, "invalid crop name", "invalid_request_error", "invalid_name")
     # job 也要校验归属：不然路径里的 job_id 会被原样拼进对象键
@@ -345,15 +349,16 @@ async def get_crop(document_id: str, job_id: str, name: str, request: Request,
         # 复访不传字节。**必须把缓存头一起带上** —— 304 上漏了它们，
         # 浏览器下一次又会当成没缓存过
         return Response(status_code=304, headers={
-            "ETag": etag, "Cache-Control": _CROP_CACHE_CONTROL})
+            "ETag": etag, "Cache-Control": cache_control})
 
     try:
         data = await storage.get(build_crop_key(job.id, int(page_part), digest))
     except Exception:
         raise APIError(404, "crop not found", "invalid_request_error", "crop_not_found")
+    await document_source_key(session, actor, document, storage, parse_job_id=job_id)
     return Response(content=data, media_type="image/png", headers={
         "ETag": etag,
-        "Cache-Control": _CROP_CACHE_CONTROL,
+        "Cache-Control": cache_control,
     })
 
 
@@ -557,8 +562,14 @@ async def ask(cid: str, req: AskRequest, request: Request, actor: Actor = Depend
     if not refusing:
         # 候选审计保持完整，但出处编号只为回答模型实际看到的上下文分配。
         trim_hits_to_context(retrieval)
+    if retrieval.hits and not refusing:
+        from ddp_corpus.bundle_source import document_source_key
+
+        await document_source_key(session, actor, document, storage, parse_job_id=job.id)
     crops = (await attach_crops(retrieval, storage, document, job)
              if retrieval.hits and not refusing else [])
+    if retrieval.hits and not refusing:
+        await document_source_key(session, actor, document, storage, parse_job_id=job.id)
     image_uris = [uri for uri, _ in crops]
     messages = build_messages(req.question, retrieval, history_payload, image_uris)
 

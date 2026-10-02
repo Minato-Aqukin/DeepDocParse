@@ -11,6 +11,7 @@ untouched because every replica row is scoped to its own resource/version).
 `licensed-source` reuses the single `bundle_source.source_response` reader.
 """
 from fastapi import APIRouter, Depends, Header, Request
+from ddp_contracts.enums import BundleReplicaAvailability
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -32,7 +33,7 @@ from ddp_corpus.models import utcnow
 router = APIRouter()
 
 
-def _availability(row: BundleReplica) -> str:
+def _availability(row: BundleReplica) -> BundleReplicaAvailability:
     return "licensed_copy" if replica_is_live(row, utcnow()) else "unavailable"
 
 

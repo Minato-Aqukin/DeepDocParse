@@ -3,8 +3,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_corpus.db import get_session
-from ddp_corpus.deps import Actor, current_actor
+from ddp_corpus.deps import Actor, current_actor, get_storage
 from ddp_corpus.errors import APIError
+from ddp_corpus.bundle_source import document_source_key
 from ddp_corpus.document_context import document_context
 from ddp_corpus.policy import require_document
 from ddp_corpus.resources import require_upload_target
@@ -14,13 +15,15 @@ router = APIRouter()
 
 @router.get("/internal/file-access/{document_id}")
 async def file_access(document_id: str, actor: Actor = Depends(current_actor),
-                      session: AsyncSession = Depends(get_session)):
+                      session: AsyncSession = Depends(get_session),
+                      storage=Depends(get_storage)):
     document = await require_document(session, actor, document_id)
-    if not document.object_key:
+    object_key = await document_source_key(session, actor, document, storage)
+    if not object_key:
         raise APIError(404, "file not found", "invalid_request_error", "file_not_found")
     context = await document_context(session, actor, document)
     return {"document_id": document.id, "resource_id": context.resource_id or "",
-            "object_key": document.object_key, "filename": context.filename,
+            "object_key": object_key, "filename": context.filename,
             "mime": document.mime}
 
 
