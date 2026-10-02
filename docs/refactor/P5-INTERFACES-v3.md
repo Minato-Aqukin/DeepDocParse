@@ -252,13 +252,21 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
 
 `federation_root_ledgers` 每个 root 一行，固定调用者预算与服务端上限的交集、deadline，
 并保存 requests / bytes / generation_tokens / hops / discovery / probes / egress_bytes。
-发现分页、健康探测、Probe、执行请求、轮询与证据读取都走同一账本；缓存命中本身不
-伪装成一次网络调用。出站前独立事务扣账，业务事务回滚、进程退出、重新规划和 resume
-不退还或重置已扣额度。BigInteger 计数与条件 UPDATE 处理大字节量及并发争抢。
+账本分两类：hops 与 generation_tokens 是绑定获准计划步骤的额度预占，在步骤首次
+尝试出站时扣账；0039 的 `federation_root_reservations` 以 `(root_task_id,
+reservation_key)` 唯一键绑定 `(step_id, kind)`，同一步骤重试、resume 或崩溃重放不再
+扣这两项。否则资料/生成节点一次短暂拒连，就会耗尽获准步骤额度，使恢复后答案不可达。
+requests / bytes / egress_bytes / probes / discovery 是物理消耗，每次实际尝试仍先扣账，
+失败不退款；发现分页、健康探测、Probe、执行请求、轮询与证据读取均计入，缓存命中本身
+不伪装成网络调用。重新规划、业务回滚或重启不重置根账本。
 
+预占记录的 insert-if-absent 与带上限的根账本 UPDATE 在同一个独立事务提交；仅新记录
+增加计数，超限则两者一起回滚。唯一键使并发协调者只预占一次；读取到已预占的键不重复
+更新账本或内存计数（恢复时已从账本重放用量）。BigInteger 处理大字节量。
 生成 token 是获准输出上限的预占，不宣称是模型实际 usage；bytes 是受限应用层载荷，
 不宣称涵盖 TCP/TLS 开销。读取状态只合并持久消耗，不能借读取动作补发写请求。
-根账本故意不对正在被业务事务锁住的 request 行设置外键，避免独立扣账等待父行锁。
+根账本与预占表故意不对正在被业务事务锁住的 request 行设置外键，避免独立扣账等待父行锁。
+历史账本不退款；0039 不臆造历史步骤预占，升级前已消费额度仍保留。
 
 ## 4. 持久化（corpus alembic 0027）
 

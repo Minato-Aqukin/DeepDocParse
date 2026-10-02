@@ -26,7 +26,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import delete, func, select
 
-from ddp_corpus import cache, federation, queue, reconcile
+from ddp_corpus import cache, db, federation, federation_budget, queue, reconcile
 from ddp_corpus.cache import CacheLimits, FederationCacheEntry
 from ddp_corpus.config import settings
 from ddp_corpus.deps import Actor
@@ -37,6 +37,8 @@ from ddp_corpus.federation_models import (
     FederationAdmission,
     FederationExecution,
     FederationRequest,
+    FederationRootLedger,
+    FederationRootReservation,
 )
 from ddp_corpus.models import Task, new_id, utcnow
 from ddp_core.search import PgVectorIndex
@@ -99,6 +101,55 @@ def _admission(admission_id: str, *, executor_task_id: str | None, org: str = NO
         verified_input_manifest_digest="sha256:" + "3" * 64,
         effective_policy_ref="policy-1", receipt_json={}, receipt_revision=1,
         created_at=utcnow(), updated_at=utcnow())
+
+
+@pytest.mark.parametrize("kind,amount", [("hops", 2), ("generation_tokens", 100)])
+async def test_concurrent_step_reservations_charge_once_without_parent_locks(
+        pg_db, monkeypatch, kind, amount):
+    monkeypatch.setattr(db, "get_sessionmaker", lambda: pg_db)
+    root = new_id()
+    stamp = utcnow()
+    caps = {"max_requests": 32, "max_bytes": 1024, "max_hops": 2,
+            "max_generation_tokens": 100, "max_probe_requests": 0,
+            "max_discovery_requests": 0, "max_egress_bytes": 1024,
+            "deadline": (stamp + timedelta(minutes=5)).isoformat()}
+    async with pg_db() as session:
+        session.add(FederationRequest(
+            root_task_id=root, organization_id=NODE_ORG, actor_id="actor-alice",
+            task_spec_digest="sha256:" + "1" * 64))
+        await federation_budget.ensure_ledger(
+            session, root_task_id=root, organization_id=NODE_ORG,
+            caller_budget=None, server_caps=caps, now=stamp)
+        await session.commit()
+
+    async def attempt():
+        await federation_budget.spend(
+            root_task_id=root, organization_id=NODE_ORG, kind="request")
+        await federation_budget.spend(
+            root_task_id=root, organization_id=NODE_ORG,
+            kind=kind, amount=amount, step_id="approved-step")
+
+    try:
+        async with pg_db() as business:
+            request = await business.get(FederationRequest, root, with_for_update=True)
+            request.status = "running"
+            await business.flush()
+            await asyncio.wait_for(asyncio.gather(*(attempt() for _ in range(16))), timeout=10)
+            await business.rollback()
+        async with pg_db() as reader:
+            used = await federation_budget.ledger_used(
+                reader, root_task_id=root, organization_id=NODE_ORG)
+            assert used[kind] == amount
+            assert used["requests"] == 16
+            assert (await reader.get(FederationRequest, root)).status == "queued"
+            assert await reader.scalar(select(func.count()).select_from(
+                FederationRootReservation).where(
+                    FederationRootReservation.root_task_id == root)) == 1
+    finally:
+        async with pg_db() as session:
+            for model in (FederationRootReservation, FederationRootLedger, FederationRequest):
+                await session.execute(delete(model).where(model.root_task_id == root))
+            await session.commit()
 
 
 # ---------------------------------------------------------------------------

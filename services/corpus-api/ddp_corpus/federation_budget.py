@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_core.application import plans, routing
@@ -144,16 +144,20 @@ def _columns(kind):
 
 
 async def spend(*, root_task_id: str, organization_id: str, kind: str,
-                amount: int = 1, budget=None, now: datetime | None = None) -> None:
-    """Validate plan limits, commit one atomic root increment, then allow I/O."""
+                amount: int = 1, budget=None, now: datetime | None = None,
+                step_id: str | None = None) -> None:
+    """Prepay physical attempts, or reserve a plan step's allowance exactly once."""
     from ddp_corpus.db import get_sessionmaker
-    from ddp_corpus.federation_models import FederationRootLedger
+    from ddp_corpus.federation_models import FederationRootLedger, FederationRootReservation
 
     if type(amount) is not int or not 0 <= amount <= 2**63 - 1:
         raise ApplicationError("budget_exhausted", "invalid budget amount")
-    if budget is not None:
-        budget.check(kind, amount)
     counter, sub, sub_cap = _columns(kind)
+    reserved = counter in {"hops", "generation_tokens"}
+    if reserved and (not isinstance(step_id, str) or not step_id):
+        raise ApplicationError("protocol_incompatible", "reservation requires a plan step")
+    if not reserved and budget is not None:
+        budget.check(kind, amount)
     if not amount:
         return
     stamp = now or utcnow()
@@ -168,6 +172,30 @@ async def spend(*, root_task_id: str, organization_id: str, kind: str,
         conditions.append(sub_field <= getattr(FederationRootLedger, sub_cap) - amount)
         values["used_" + sub] = sub_field + amount
     async with get_sessionmaker()() as independent:
+        if reserved:
+            # No FK/parent lock: this independent transaction must not wait on the
+            # business request row. The PK arbitrates concurrent coordinators.
+            ledger = await independent.scalar(select(FederationRootLedger).where(
+                FederationRootLedger.root_task_id == root_task_id,
+                FederationRootLedger.organization_id == organization_id))
+            if ledger is None:
+                raise ApplicationError("budget_exhausted", "root budget not found")
+            if independent.bind.dialect.name == "postgresql":
+                from sqlalchemy.dialects.postgresql import insert
+            else:
+                from sqlalchemy.dialects.sqlite import insert
+            inserted = await independent.scalar(
+                insert(FederationRootReservation).values(
+                    root_task_id=root_task_id, reservation_key=f"{counter}:{step_id}",
+                    kind=counter, amount=amount, created_at=stamp)
+                .on_conflict_do_nothing(index_elements=["root_task_id", "reservation_key"])
+                .returning(FederationRootReservation.reservation_key))
+            if inserted is None:
+                # rebuild_from_ledger has already replayed this persisted usage.
+                await independent.commit()
+                return
+            if budget is not None:
+                budget.check(kind, amount)
         changed = await independent.execute(
             update(FederationRootLedger).where(*conditions).values(**values)
             .execution_options(synchronize_session=False))

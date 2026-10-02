@@ -2050,7 +2050,7 @@ async def _run_remote_step(peers: PeerDirectory, *, root_task_id: str, plan: dic
             # egress 前先持久记账：admission 外发一次 request + hops（数据边一跳）。
             if spend is not None:
                 await spend(kind="request", amount=1)
-                await spend(kind="hops", amount=2)  # query and evidence-return edges
+                await spend(kind="hops", amount=2, step_id=step["step_id"])
                 await spend(kind="egress_bytes", amount=len(plans.canonical_bytes(body)))
             try:
                 receipt = await client.admit(body, idempotency_key=key)
@@ -2250,9 +2250,9 @@ async def _delegated_answer(row: FederationRequest, *, plan: dict, step: dict,
             if receipt is None:
                 if spend is not None:
                     await spend(kind="request", amount=1)
-                    await spend(kind="hops", amount=1)
+                    await spend(kind="hops", amount=1, step_id=step["step_id"])
                     await spend(kind="egress_bytes", amount=len(plans.canonical_bytes(body)))
-                    await spend(kind="generation_tokens",
+                    await spend(kind="generation_tokens", step_id=step["step_id"],
                                 amount=int(plan["budget"].get("max_generation_tokens", 0)))
                 receipt = await client.admit(body, idempotency_key=key)
         except PeerUnavailable as exc:
@@ -2671,9 +2671,9 @@ async def _delegated_wiki_draft(row: FederationRequest, *, plan: dict, step: dic
             if receipt is None:
                 if spend is not None:
                     await spend(kind="request", amount=1)
-                    await spend(kind="hops", amount=2)  # evidence and draft-return edges
+                    await spend(kind="hops", amount=2, step_id=step["step_id"])
                     await spend(kind="egress_bytes", amount=len(plans.canonical_bytes(body)))
-                    await spend(kind="generation_tokens",
+                    await spend(kind="generation_tokens", step_id=step["step_id"],
                                 amount=int(plan["budget"].get("max_generation_tokens", 0)))
                 receipt = await client.admit(body, idempotency_key=key)
         except PeerUnavailable as exc:
@@ -2800,7 +2800,7 @@ async def _wiki_result(session: AsyncSession, actor: Actor, row: FederationReque
         for item in items]
     if generator == node:
         if spend is not None:
-            await spend(kind="generation_tokens", amount=cap)
+            await spend(kind="generation_tokens", amount=cap, step_id=wiki_step["step_id"])
             await spend(kind="request", amount=1)
         try:
             draft = await federated_wiki_plane.generate_federated(
@@ -2874,7 +2874,7 @@ async def _answer_result(session: AsyncSession, actor: Actor, row: FederationReq
                                        excerpts=excerpts, actor=actor,
                                        budget=budget, spend=spend)
     if spend is not None:
-        await spend(kind="generation_tokens", amount=cap)
+        await spend(kind="generation_tokens", amount=cap, step_id=answer_step["step_id"])
         await spend(kind="request", amount=1)
     return await _grounded_answer(http, query=row.task_spec_json.get("query") or "",
                                   fused=fused, excerpts=excerpts,
@@ -2965,10 +2965,10 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
     peers = peer_directory(actor, Delegation(root_task_id=root_task_id,
                                              task_spec_digest=row.task_spec_digest))
 
-    async def _spend(kind: str, amount: int = 1) -> None:
+    async def _spend(kind: str, amount: int = 1, step_id: str | None = None) -> None:
         await federation_budget.spend(
             root_task_id=root_task_id, organization_id=actor.organization_id,
-            kind=kind, amount=amount, budget=exec_budget, now=utcnow())
+            kind=kind, amount=amount, budget=exec_budget, now=utcnow(), step_id=step_id)
     try:
         for target in candidates:
             # 每次派出之前确认任务还在 running：取消可能在上一个目标检索期间

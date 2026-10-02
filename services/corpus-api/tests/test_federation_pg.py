@@ -81,7 +81,8 @@ FEDERATION_TABLES = (
     "federation_probes", "federation_admissions", "federation_executions",
     "federation_requests", "federation_task_events", "coverage_ledgers",
     "coverage_entries", "federation_deliveries", "federation_cache_entries",
-    "federation_credential_nonces", "tasks",
+    "federation_credential_nonces", "federation_root_ledgers",
+    "federation_root_reservations", "tasks",
 )
 
 
@@ -250,6 +251,10 @@ async def test_migration_drill_head_orm_drift_and_one_step_down(pg_engine):
             assert "federation_credential_nonces" not in after, \
                 "0033 downgrade must drop federation_credential_nonces"
             assert "federation_cache_entries" in after
+        if down == "0038":
+            assert "federation_root_reservations" not in after, \
+                "0039 downgrade must drop federation_root_reservations"
+            assert "federation_root_ledgers" in after
     finally:
         # Never leave the scratch DB mid-drill, even when an assertion above fired.
         await asyncio.to_thread(checked_alembic, "upgrade", "head", dsn=dsn)

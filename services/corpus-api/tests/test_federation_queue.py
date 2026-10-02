@@ -804,15 +804,8 @@ async def test_worker_reclaim_reconciles_durable_data_and_compute_admissions(
     assert any(path.endswith("/admissions/lookup") for _, path, _ in data_peer.calls)
 
 
-async def test_root_budget_exhausted_before_generation_is_not_reported_as_overflow(
-        actor_client, session, app_state, monkeypatch):
-    """资料节点连不上、恢复后补做：生成那一跳已经没有根预算时，如实说"预算用完"。
-
-    ABC 演练 F5：连接被拒的那次受理按设计先扣了 2 跳（出站前记账、不退还），补做
-    再扣 2 跳，默认 4 跳用完，生成请求根本没发出去。旧行为把这个显示成
-    `budget_exceeded`（「超出生成预算，答案作废」），那是"模型输出超出 token 预算"
-    的代码 —— 用户看到的是一个从没发生过的生成被作废。
-    """
+async def _remote_answer_reservation_flow(
+        actor_client, session, app_state, monkeypatch, outage_node):
     compute_node = "node-compute-c"
     data_peer = peer_with_excerpt()
     compute_peer = StubPeer(can_generate=True, answer_document=ready_document())
@@ -821,12 +814,16 @@ async def test_root_budget_exhausted_before_generation_is_not_reported_as_overfl
         PEER_NODE: {"endpoint": "https://peer.example"},
         compute_node: {"endpoint": "https://compute.example"},
     }))
-    data_down = True
+    outage_active = False
+    admission_attempts = {"data": 0, "compute": 0}
 
     def handler(request):
-        if request.url.host != "compute.example":
-            if data_down:
+        node = "compute" if request.url.host == "compute.example" else "data"
+        if request.method == "POST" and request.url.path.endswith("/admissions"):
+            admission_attempts[node] += 1
+            if outage_active and node == outage_node:
                 raise httpx.ConnectError("connection refused", request=request)
+        if node == "data":
             return data_transport.handle_request(request)
         response = compute_transport.handle_request(request)
         body = response.json()
@@ -843,37 +840,79 @@ async def test_root_budget_exhausted_before_generation_is_not_reported_as_overfl
 
     monkeypatch.setattr(federation_tasks, "peer_directory", factory)
     intent = await create_intent(
-        actor_client,
+        actor_client, key=f"reservation-intent-{outage_node}",
         spec=task_spec(scope="federation_public", scope_ref="scope-1",
                        mode="exhaustive_scope"),
         consent=exploration(recipients=(PEER_NODE, compute_node)),
         manifest=scope_manifest([member("peer-collection-1", PEER_NODE)],
                                 revisions=[(NODE, 1), (PEER_NODE, 1), (compute_node, 1)]))
     root = intent["root_task_id"]
-    data_down = False  # 规划期探测照常；只有执行期连不上
     plan = await plan_task(actor_client, root)
     assert plan["budget"]["max_hops"] == 4
     await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE, compute_node))
-    data_down = True
+    outage_active = outage_node in {"data", "compute"}
+    if outage_node == "physical":
+        real_answer = federation_tasks._answer_result
+
+        async def exhaust_requests_before_generation(*args, **kwargs):
+            remaining = plan["budget"]["max_requests"] - kwargs["budget"].used()["requests"]
+            await kwargs["spend"](kind="request", amount=remaining)
+            return await real_answer(*args, **kwargs)
+
+        monkeypatch.setattr(federation_tasks, "_answer_result", exhaust_requests_before_generation)
     submitted = await actor_client.post(
-        "/api/v1/tasks", headers={"Idempotency-Key": "root-budget-before-generation"},
+        "/api/v1/tasks", headers={"Idempotency-Key": f"reservation-outage-{outage_node}"},
         json={"root_task_id": root, "plan_digest": plan["plan_digest"]})
     assert submitted.status_code == 202, submitted.text
     await drain_tasks(app_state)
     outage = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
-    assert outage["status"] == "failed", outage
+    if outage_node == "physical":
+        assert outage["status"] == "succeeded", outage
+        assert outage["result"]["evidence"]
+        assert outage["result"]["answer"] is None
+        assert outage["result"]["answer_reason"] == "root_budget_exhausted"
+        assert outage["used_budget"]["requests"] == plan["budget"]["max_requests"]
+        assert admission_attempts["compute"] == 0
+        assert compute_peer.admissions == []
+        return outage
+    if outage_node == "clean":
+        assert outage["result"]["answer"] == "peer cited answer [1]", outage["result"]
+        return outage
+    assert outage["status"] == ("failed" if outage_node == "data" else "succeeded"), outage
+    assert outage["result"]["answer"] is None
 
-    data_down = False
+    outage_active = False
     resumed = await actor_client.post(f"/api/v1/tasks/{root}/resume")
     assert resumed.status_code == 202, resumed.text
     await drain_tasks(app_state)
     final = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
     assert final["status"] == "succeeded", final
     assert final["result"]["evidence"], "补做取回的证据照样交付"
-    assert final["result"]["answer"] is None
-    assert final["result"]["answer_reason"] == "root_budget_exhausted", final["result"]
-    assert compute_peer.admissions == [], "预算用完时生成请求一个字节都不许发"
-    assert final["used_budget"]["hops"] == 4
+    assert final["result"]["answer"] == "peer cited answer [1]", final["result"]
+    assert final["result"]["validation_state"] == "passed"
+    assert final["used_budget"]["hops"] == 3
+    assert final["used_budget"]["generation_tokens"] == plan["budget"]["max_generation_tokens"]
+    assert admission_attempts[outage_node] == 2
+    assert len(compute_peer.admissions) == 1
+    assert final["used_budget"]["requests"] > outage["used_budget"]["requests"]
+    return final
+
+
+@pytest.mark.parametrize("outage_node", ["data", "compute"])
+async def test_resume_after_admission_outage_reserves_plan_step_budget_once(
+        actor_client, session, app_state, monkeypatch, outage_node):
+    """A refused B/C admission can resume without consuming its plan allowance twice."""
+    clean = await _remote_answer_reservation_flow(
+        actor_client, session, app_state, monkeypatch, "clean")
+    retried = await _remote_answer_reservation_flow(
+        actor_client, session, app_state, monkeypatch, outage_node)
+    assert retried["used_budget"]["requests"] > clean["used_budget"]["requests"]
+
+
+async def test_physical_root_budget_exhaustion_before_generation_is_visible(
+        actor_client, session, app_state, monkeypatch):
+    await _remote_answer_reservation_flow(
+        actor_client, session, app_state, monkeypatch, "physical")
 
 
 async def test_resume_reconciles_target_admitted_before_the_crash(

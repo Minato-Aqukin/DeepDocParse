@@ -319,3 +319,15 @@ class FederationRootLedger(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
                                                  onupdate=utcnow)
+
+
+class FederationRootReservation(Base):
+    """Once-per-approved-step allowance, independent of request-row locks (0039)."""
+
+    __tablename__ = "federation_root_reservations"
+
+    root_task_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    reservation_key: Mapped[str] = mapped_column(String(256), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    amount: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
