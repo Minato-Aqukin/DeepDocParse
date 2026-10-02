@@ -121,6 +121,7 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 
 	s.mountDiscovery(mux)
+	s.mountFederationCorpus(mux)
 
 	// ---- 无需鉴权 ----
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {

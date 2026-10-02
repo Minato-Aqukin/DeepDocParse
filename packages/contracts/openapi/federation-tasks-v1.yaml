@@ -27,11 +27,20 @@ info:
 
     所有写操作必须带 `Idempotency-Key`。
 
+    统一入口对本契约的 corpus-owned 节点/执行者端点实施 8 MiB
+    （8388608 字节）的请求体传输上限，含 Content-Length 未知的 chunked 请求，
+    在流式转发过程中计数且不完整缓冲请求。超限返回 HTTP 413，
+    `invalid_request_error` / `too_large`（既有控制面传输错误，不属于联邦操作枚举）。
+    该上限也适用于 GET 的请求体。证据业务上限仍为 50 条 × 2000 字符；
+    传输预算覆盖最坏 JSON 转义证据载荷并给 task_spec / plan / consent 留出余量，
+    不表示这些元数据的无界 schema 已有可计算的最大大小。
+
     schema 绑定类型直接 `$ref ../schemas/*.json`。**生成枚举不在本文件另写取值**：
     字段上的 `x-ddp-enum` 指向 `packages/contracts/enums.yaml` 里的枚举名
     （与 schemas/*.json 同一套约定）；只有协议错误码清单（enums.yaml 的
     `federation_error`，计划 §9.6）在 components 里落成字面量。
 security: [{service: []}]
+x-ddp-peer-request-body-max-bytes: 8388608
 paths:
   # ---------------------------------------------------------------- 节点/执行者
   /api/v1/federation/probes:
@@ -48,6 +57,7 @@ paths:
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProbeRequest'}}}}
       responses:
+        '413': {$ref: '#/components/responses/PeerBodyTooLarge'}
         '201': {description: 实际 Probe 回执；没有探索许可就不该存在这个回执, content: {application/json: {schema: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/ProbeResult'}}}}
         '400': {description: 请求形状不合法或引用了不可用的输入}
         '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
@@ -61,6 +71,7 @@ paths:
       security: [{nodeCredential: []}]
       x-ddp-node-credential-operation: probe_read
       responses:
+        '413': {$ref: '#/components/responses/PeerBodyTooLarge'}
         '200': {description: 保留中的 Probe 回执；可复用性按 observed_at / query_digest / index_revision 判定，过期或缺失一律重新探测, content: {application/json: {schema: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/ProbeResult'}}}}
         '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
         '404': {description: 不存在或对调用者不可见（不借状态码泄露存在性）}
@@ -92,6 +103,7 @@ paths:
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AdmissionRequest'}}}}
       responses:
+        '413': {$ref: '#/components/responses/PeerBodyTooLarge'}
         '200': {description: 同键同摘要：返回已有 receipt（幂等复用，不是一次新执行）, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/AdmissionReceipt'}}}}
         '201': {description: 新受理：持久写 receipt 与 execution 行, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/AdmissionReceipt'}}}}
         '400': {description: 请求形状不合法}
@@ -107,6 +119,7 @@ paths:
       description: 幂等键放在受认证请求体里，不放 URL（计划 §9.5）；用于回执丢失后的对账。
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AdmissionLookup'}}}}
       responses:
+        '413': {$ref: '#/components/responses/PeerBodyTooLarge'}
         '200': {description: 该幂等键的持久 receipt, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/AdmissionReceipt'}}}}
         '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
         '403': {description: 凭证操作或范围不覆盖本请求（credential_operation_denied / credential_scope_denied）}
@@ -118,6 +131,7 @@ paths:
       security: [{nodeCredential: []}]
       x-ddp-node-credential-operation: execution_read
       responses:
+        '413': {$ref: '#/components/responses/PeerBodyTooLarge'}
         '200': {description: 执行者的权威执行状态；lease/generation 与结果引用分离, content: {application/json: {schema: {$ref: '#/components/schemas/ExecutionStatus'}}}}
         '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
         '404': {description: 未知 executor_task_id 或对调用者不可见}
@@ -133,6 +147,7 @@ paths:
         `federation_execute` 任务，迟到的执行结果因 generation 前移写不进来。
       requestBody: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/Empty'}}}}
       responses:
+        '413': {$ref: '#/components/responses/PeerBodyTooLarge'}
         '200': {description: 幂等取消后的权威执行状态；重复取消返回同一结果, content: {application/json: {schema: {$ref: '#/components/schemas/ExecutionStatus'}}}}
         '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
         '404': {description: 未知 executor_task_id 或对调用者不可见}
@@ -144,6 +159,7 @@ paths:
       description: 校验指定版本（缺省则解析当前可读版本）的可读性与权威归属；不返回临时 URL——位置不是证据身份。
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LocateRequest'}}}}
       responses:
+        '413': {$ref: '#/components/responses/PeerBodyTooLarge'}
         '200': {description: 版本可读性与来源/权威节点, content: {application/json: {schema: {$ref: '#/components/schemas/LocateResult'}}}}
         '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
         '403': {description: 凭证操作或范围不覆盖本请求（credential_operation_denied / credential_scope_denied）}
@@ -156,6 +172,7 @@ paths:
       description: 把稳定原始引用解析成一条可验证证据（含 locator 与摘要）；虚构、过期、越权的引用一律失败。
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ResolveRequest'}}}}
       responses:
+        '413': {$ref: '#/components/responses/PeerBodyTooLarge'}
         '200': {description: 授权范围内的证据信封, content: {application/json: {schema: {$ref: '../schemas/ddp-evidence/v1.json#/$defs/FederatedEvidence'}}}}
         '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
         '403': {description: 凭证操作或范围不覆盖本请求（credential_operation_denied / credential_scope_denied）}
@@ -174,6 +191,7 @@ paths:
         `results/resolve` 同一条路径，远端证据按存它的组织/调用者绑定）；有任意一条
         越权就整集 404，不借部分返回泄露存在性。最多 50 条，complete=false 表示被截断。
       responses:
+        '413': {$ref: '#/components/responses/PeerBodyTooLarge'}
         '200': {description: 授权范围内的证据集, content: {application/json: {schema: {$ref: '#/components/schemas/EvidenceSet'}}}}
         '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
         '403': {description: 凭证操作或范围不覆盖本请求（credential_operation_denied / credential_scope_denied）}
@@ -194,6 +212,7 @@ paths:
         - {name: cursor, in: query, schema: {type: string, maxLength: 128}}
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 100}}
       responses:
+        '413': {$ref: '#/components/responses/PeerBodyTooLarge'}
         '200': {description: 本节点自发布集合描述符的一页（origin_node_id 恒为本节点）}
         '401': {description: 节点凭证无效/过期/重放/audience 不符，或签发节点未知/已撤销}
         '403': {description: 凭证操作或范围不覆盖本请求}
@@ -408,6 +427,24 @@ paths:
         '404': {description: 交付不存在或对调用者不可见（降敏，不泄露存在性）}
         '410': {description: 'delivery_expired：TTL 已过且未确认；本地不得把过期件当作"已保存"', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
 components:
+  responses:
+    PeerBodyTooLarge:
+      description: '统一入口拒绝超过 8388608 字节的 peer 请求体（含 chunked）；不将超限部分转发给 corpus-api。'
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [error]
+            properties:
+              error:
+                type: object
+                additionalProperties: false
+                required: [message, type, code]
+                properties:
+                  message: {type: string}
+                  type: {const: invalid_request_error}
+                  code: {const: too_large}
   securitySchemes:
     service: {type: http, scheme: bearer, description: 内网同伴服务凭据（SERVICE_TOKEN），不是用户会话}
     nodeCredential: {type: apiKey, in: header, name: X-DDP-Node-Credential, description: '本节点控制面签发的单次 Ed25519 节点凭证（ddp-node-credential/1）。不是用户会话，也不是共享口令；audience 必须是接收节点，操作必须等于端点的 x-ddp-node-credential-operation。'}

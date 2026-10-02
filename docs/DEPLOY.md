@@ -25,6 +25,62 @@ scripts/dev.sh logs corpus-api
 无 GPU 档位注册的解析引擎是 `borndigital`（进程内抽 PDF 文字层与坐标，
 出处三件套一样齐全；不处理扫描件、表格结构与公式）。
 
+## HTTPS 反向代理
+
+TLS 可以在 nginx / Cloudflare 等边缘终结，应用与 MinIO 的内网连接仍用
+HTTP。设置 `PUBLIC_BASE_URL=https://<中心入口>`、浏览器可达的
+`OBJECT_PUBLIC_ENDPOINT=<对象域名[:端口]>`（不带 scheme）和
+`OBJECT_PUBLIC_SECURE=true`，否则预签名 URL 仍是 `http://`，浏览器按混合
+内容拦截而服务端没有错误。Compose 将这个公共 TLS 开关传给 control-api；
+corpus-api / corpus-worker 的 `MINIO_PUBLIC_SECURE` 留空时跟随它，也可显式
+设成 `true`。同一对象入口的两个开关必须一致。它们只控制签名 URL 的 scheme，
+不要为此把内网 MinIO 的 `OBJECT_SECURE` / `MINIO_SECURE` 打开。
+model-gateway 不签对象 URL，没有对应公共 TLS 开关。
+
+代理须保留方法、路径、查询串与请求头，禁用请求/响应缓冲，给长请求足够的
+超时；对象桶路径独立转给 MinIO，保留原始 Host 与路径（签名覆盖它们）。
+`infra/autodl/stack.bash` 的 nginx 已配置这些边界；不要把 corpus-api 另行暴露
+到公网。
+
+## 中心间联邦
+
+每个中心只需要同一个 HTTPS 统一入口，无需额外的 TLS facade。入口精确转发
+corpus-owned peer 端点：`probes`（含读取）、`admissions`（含 `lookup`）、
+`tasks/{executor_task_id}`（含 `cancel`）、`resources/locate`、`results/resolve`、
+`evidence-sets/{set_ref}` 与 `published-collections`，均位于
+`/api/v1/federation/`。这些端点无需用户会话，corpus-api 自行验证
+`X-DDP-Node-Credential` 和目标节点/操作/范围；入口保留 peer 凭证、目标节点、
+幂等键与请求 ID，剥掉内部 actor/service 头、Authorization 与会话 cookie，
+**绝不注入 SERVICE_TOKEN**。`node`、`nodes`、`members`、`collections`、
+`generation-descriptor`、`scopes`、`member-snapshots` 等仍由 control-api 管理；
+会话型语料路由仍需会话，`/internal/*` 不会转发给 corpus。这些端点无需会话即可访问，
+而 corpus 在验证凭证前要读完请求体，所以入口对请求体设 **8 MiB** 传输上限（含 chunked，
+边转发边计数），超限返回 413 `too_large`、超出部分不转给 corpus；前面的反向代理可以
+更严，但不要依赖 nginx 的 `client_max_body_size 0` 兜底。
+
+建立 A ↔ B 信任时：
+
+1. 各中心先设置自己的公网 `PUBLIC_BASE_URL`，保留持久 node-identity 卷。
+2. 在 A 获取 B 的 `GET /api/v1/federation/node`：核对节点 ID、`public_key`、
+   `key_fingerprint` 与入口（通过独立可信渠道核对指纹）。描述符只有 **5 分钟**
+   有效，注册前现取，过期就重新取。
+3. 用 A 的组织管理员会话向 A 的 `POST /api/v1/federation/nodes` 提交
+   `descriptor`、`public_key`、`visible_to_org` 和 `allowed_subjects`；
+   再调用 A 的 `POST /api/v1/federation/nodes/{B_node_id}/approve` 批准。
+4. 在 B 对 A 重复获取、注册与批准步骤；单向批准不是双向信任。信任只允许
+   节点凭证验证，资源仍受各中心本地 ACL 与外发许可约束。
+5. 各中心设置 `FEDERATION_PEERS` 的对等节点目录，例如
+   `{"node-b":{"endpoint":"https://b.example"}}`（节点 ID 换成实际值，endpoint
+   是公网 origin，不带 `/api/v1/federation`）。**control-api、corpus-api 和
+   corpus-worker 三处必须一致，并重启全部三个服务**；Compose 的共享环境
+   已传递该变量。目录不存 SERVICE_TOKEN 或用户 token；公网保持
+   `FEDERATION_ALLOW_LOOPBACK=false`。
+
+撤销节点（`POST /api/v1/federation/nodes/{node_id}/revoke`）是终态：不能再批准，
+要恢复只能让对方以新身份重新入网并双向重新批准。别的中心目录里仍列着这个节点时，
+本中心的穷查范围会把它记成 `denied` 的未展开子树（不签名、不联系），范围因此保持
+partial——这是如实记录，不是故障；要消除只能请对方中心也撤销它。
+
 ## 一台机器，有 N 卡
 
 ```bash
