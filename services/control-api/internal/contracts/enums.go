@@ -539,6 +539,10 @@ const (
 	UsageKindExtract UsageKind = "extract"
 	// 图谱 / wiki 生成，按次计
 	UsageKindKnowledge UsageKind = "knowledge"
+	// 本节点作为联邦执行者完成一次受理的执行（按执行任务号恰好一次）
+	UsageKindFederatedExecution UsageKind = "federated_execution"
+	// 本节点协调的联邦任务产出一份可交付结果（按根任务恰好一次，补做不重复）
+	UsageKindFederatedDelivery UsageKind = "federated_delivery"
 )
 
 // UsageKindValues 保持 enums.yaml 里的声明顺序。
@@ -552,18 +556,22 @@ var UsageKindValues = []UsageKind{
 	UsageKindCompileVision,
 	UsageKindExtract,
 	UsageKindKnowledge,
+	UsageKindFederatedExecution,
+	UsageKindFederatedDelivery,
 }
 
 var UsageKindMeta = map[UsageKind]EnumMeta{
-	UsageKindParse:         {Value: "parse", Label: "解析", Severity: SeverityNeutral},
-	UsageKindChat:          {Value: "chat", Label: "对话", Severity: SeverityNeutral},
-	UsageKindEmbeddings:    {Value: "embeddings", Label: "向量化", Severity: SeverityNeutral},
-	UsageKindMcp:           {Value: "mcp", Label: "MCP 调用", Severity: SeverityNeutral},
-	UsageKindQa:            {Value: "qa", Label: "问答", Severity: SeverityNeutral},
-	UsageKindEmbed:         {Value: "embed", Label: "索引向量化", Severity: SeverityNeutral},
-	UsageKindCompileVision: {Value: "compile_vision", Label: "视觉理解", Severity: SeverityNeutral},
-	UsageKindExtract:       {Value: "extract", Label: "结构化抽取", Severity: SeverityNeutral},
-	UsageKindKnowledge:     {Value: "knowledge", Label: "知识生成", Severity: SeverityNeutral},
+	UsageKindParse:              {Value: "parse", Label: "解析", Severity: SeverityNeutral},
+	UsageKindChat:               {Value: "chat", Label: "对话", Severity: SeverityNeutral},
+	UsageKindEmbeddings:         {Value: "embeddings", Label: "向量化", Severity: SeverityNeutral},
+	UsageKindMcp:                {Value: "mcp", Label: "MCP 调用", Severity: SeverityNeutral},
+	UsageKindQa:                 {Value: "qa", Label: "问答", Severity: SeverityNeutral},
+	UsageKindEmbed:              {Value: "embed", Label: "索引向量化", Severity: SeverityNeutral},
+	UsageKindCompileVision:      {Value: "compile_vision", Label: "视觉理解", Severity: SeverityNeutral},
+	UsageKindExtract:            {Value: "extract", Label: "结构化抽取", Severity: SeverityNeutral},
+	UsageKindKnowledge:          {Value: "knowledge", Label: "知识生成", Severity: SeverityNeutral},
+	UsageKindFederatedExecution: {Value: "federated_execution", Label: "联邦执行", Severity: SeverityNeutral},
+	UsageKindFederatedDelivery:  {Value: "federated_delivery", Label: "联邦交付", Severity: SeverityNeutral},
 }
 
 // Valid 报告 s 是不是一个已知的 usage_kind 取值。

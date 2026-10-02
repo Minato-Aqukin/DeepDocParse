@@ -315,6 +315,11 @@ enums:
       # 注释也没列）。于是 control 侧的账目会出现一个没人认识的分类，
       # 对账时表现为"总数对不上"
       - {value: knowledge,      summary: 图谱 / wiki 生成，按次计, label: 知识生成, severity: neutral}
+      # 联邦计量（2026-10-03，T81／T58）：只记账、不扣配额（requests=1，pages=0）。
+      # 两个种类是两笔不同的账：执行者记它替别人跑了一次执行，协调者记它的任务
+      # 产出了一份可交付结果；都按业务键恰好一次，重放、补做、代次推进、对账都不再记。
+      - {value: federated_execution, summary: 本节点作为联邦执行者完成一次受理的执行（按执行任务号恰好一次）, label: 联邦执行, severity: neutral}
+      - {value: federated_delivery,  summary: 本节点协调的联邦任务产出一份可交付结果（按根任务恰好一次，补做不重复）, label: 联邦交付, severity: neutral}
 
   # ---------------- 以下是企业化重构新增（control-api / 持久任务） ----------
 

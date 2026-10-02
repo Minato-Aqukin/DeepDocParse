@@ -85,6 +85,7 @@ from ddp_corpus.models import (
     utcnow,
 )
 from ddp_corpus.policy import authorized_document_ids, require_resource
+from ddp_corpus.usage import record_usage
 
 #: 一次 probe 回执的有效期。过了就不该被当成当前证据复用（§5.5）。
 PROBE_TTL_SECONDS = 300
@@ -1294,12 +1295,16 @@ async def _finish_execution(session: AsyncSession, executor_task_id: str, genera
                             state: str, now: datetime, error: str | None = None,
                             result_json: dict | None = None,
                             result_ref: str | None = None,
-                            evidence_set_ref: str | None = None) -> bool:
+                            evidence_set_ref: str | None = None,
+                            usage: dict | None = None) -> bool:
     """generation-fenced 落终态。rowcount=0 表示有更新的代次/终态，不许覆盖。
 
     **状态围栏与代次围栏同等重要**：超时分支会在 `execute` 可能已经提交
     `succeeded` 之后到达，这时同代次的 `failed` 写入必须被拒绝（T85 复核），
     否则一次迟到超时会把刚提交的成功翻掉。
+
+    `usage` 与终态同一个事务，而且只有赢下围栏的那次写入才记：被接管的旧
+    代次、已取消、已终态的执行一笔都不记（T81／T58）。
     """
     values = {"state": state, "error": error, "updated_at": now, "lease_until": None,
               "result_ref": result_ref, "evidence_set_ref": evidence_set_ref}
@@ -1309,8 +1314,18 @@ async def _finish_execution(session: AsyncSession, executor_task_id: str, genera
         FederationExecution.executor_task_id == executor_task_id,
         FederationExecution.generation == generation,
         FederationExecution.state.in_(("queued", "running"))).values(**values))
+    won = changed.rowcount == 1
+    if won and usage is not None:
+        await record_usage(session, **usage)
     await session.commit()
-    return changed.rowcount == 1
+    return won
+
+
+def _execution_usage(actor: Actor, executor_task_id: str) -> dict:
+    """执行者侧计量：记在本节点替对方跑这次执行的那个身份上，按执行任务号恰好一次。"""
+    return {"actor_id": acting_actor(actor), "organization_id": actor.organization_id,
+            "kind": "federated_execution", "requests": 1,
+            "business_key": f"federation-execution:{executor_task_id}"}
 
 
 async def execute(session: AsyncSession, actor: Actor, execution: FederationExecution, *,
@@ -1365,7 +1380,8 @@ async def execute(session: AsyncSession, actor: Actor, execution: FederationExec
                            "degraded": degraded, "internal_limits": limits}
             await _finish_execution(
                 session, execution_id, generation, state="succeeded", now=utcnow(),
-                result_json=result_json, result_ref=f"result:{execution_id}")
+                result_json=result_json, result_ref=f"result:{execution_id}",
+                usage=_execution_usage(actor, execution_id))
         elif execution.operation == "wiki_pages":
             # 远端只出原始页面草稿：消费受理快照，不回读本地资源、不扩权；
             # 版本化提交权永远在 A，C 的结果经协调器校验后由 A 落库。
@@ -1374,7 +1390,8 @@ async def execute(session: AsyncSession, actor: Actor, execution: FederationExec
                            "degraded": degraded, "internal_limits": limits}
             await _finish_execution(
                 session, execution_id, generation, state="succeeded", now=utcnow(),
-                result_json=result_json, result_ref=f"result:{execution_id}")
+                result_json=result_json, result_ref=f"result:{execution_id}",
+                usage=_execution_usage(actor, execution_id))
         else:
             evidence_set_ref = f"federation-execution:{execution_id}"
             result, degraded, limits, evidence = await _run_retrieve(
@@ -1385,7 +1402,8 @@ async def execute(session: AsyncSession, actor: Actor, execution: FederationExec
             await _finish_execution(
                 session, execution_id, generation, state="succeeded", now=utcnow(),
                 result_json=result_json, result_ref=f"result:{execution_id}",
-                evidence_set_ref=evidence_set_ref if evidence else None)
+                evidence_set_ref=evidence_set_ref if evidence else None,
+                usage=_execution_usage(actor, execution_id))
     except Exception as exc:                      # noqa: BLE001 —— 失败必须落库并可见
         await session.rollback()
         # APIError / ApplicationError 都带机器码；其它异常记类型名，便于排查。

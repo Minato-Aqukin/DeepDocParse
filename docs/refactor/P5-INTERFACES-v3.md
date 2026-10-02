@@ -268,6 +268,19 @@ requests / bytes / egress_bytes / probes / discovery 是物理消耗，每次实
 根账本与预占表故意不对正在被业务事务锁住的 request 行设置外键，避免独立扣账等待父行锁。
 历史账本不退款；0039 不臆造历史步骤预占，升级前已消费额度仍保留。
 
+### 联邦计量（T81 / T58）
+
+根账本是预算闸门，计量是业务结果的账单记录，两者分开。执行者每条执行在赢得终态围栏
+（`generation` 匹配且尚未终止的那一次 UPDATE）时记一条 `federated_execution`；协调者每个
+root 在结果交付后记一条 `federated_delivery`。两种 kind 都是只报告（`requests=1`、
+`pages=0`），不进页数配额。用量事件写入 `corpus_outbox`，与终态写入同一事务；`event_id`
+由业务键 `federation-execution:{executor_task_id}` / `federation-delivery:{root_task_id}`
+确定性派生，outbox 插入是 insert-if-absent，control 的 `usage_ledger.event_id` 唯一约束
+再去重一次。因此受理重放、响应丢失后的 lookup 对账、resume、代次轮换与崩溃重放都不重复
+计量；被围栏挡下的迟到写入、取消后的成功、`waiting_input`、幂等冲突与失败的 root 不计量。
+部署顺序：先升级 control（认识新 kind），再升级 corpus；顺序反了 control 会对未知 kind
+回 200 并记 ERROR 日志，那笔用量不入账。
+
 ## 4. 持久化（corpus alembic 0027）
 
 - `federation_probes`：probe_id、organization_id、actor_id、target_node_id、

@@ -69,6 +69,7 @@ from ddp_corpus.federation_models import (
 )
 from ddp_corpus.federation_peers import Delegation, PeerDirectory, PeerUnavailable
 from ddp_corpus.models import ResourceVersion, as_aware, new_id, utcnow
+from ddp_corpus.usage import record_usage
 
 #: 取数目标统一用这个 operation 进覆盖账本；与节点能力清单的 operation 同名。
 RETRIEVAL_OPERATION = "corpus.retrieve"
@@ -3193,6 +3194,12 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
     if status == "succeeded":
         await _deliver_result(session, row, document=document,
                               digest=result["result_manifest_digest"], now=now)
+        # 协调者侧计量：与终态同一个事务、只在赢下终态围栏时记，按根任务恰好一次 ——
+        # 补做后再次成功、交付读取与确认都不是第二笔（T81／T58）。
+        await record_usage(session, actor_id=federation.acting_actor(actor),
+                           organization_id=actor.organization_id, api_key_id=actor.api_key_id,
+                           kind="federated_delivery", requests=1,
+                           business_key=f"federation-delivery:{row.root_task_id}")
     await _append_event(session, row.root_task_id,
                         _EVENT_COMPLETED if status == "succeeded" else _EVENT_FAILED, {
                             "retrieval_completeness": ledger["retrieval_completeness"],

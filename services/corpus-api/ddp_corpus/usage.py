@@ -16,21 +16,36 @@
 **与业务写入同一个事务**是关键：分两次写的话，进程在中间崩溃会让
 "解析成功了但没记账"或者反过来 —— 前者是漏收钱，后者是收了不该收的钱。
 """
+import hashlib
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_contracts import USAGE_KIND_VALUES
 from ddp_corpus.models import CorpusOutbox, new_id
 
 
+def business_event_id(business_key: str) -> str:
+    """业务键 -> 确定的 32 位事件 ID（与 `new_id()` 同宽）。
+
+    同一业务事实无论被写几次都得到同一个 ID：outbox 主键挡住同库重复，
+    control 侧 `usage_ledger.event_id` 的唯一约束挡住投递后的重复。
+    """
+    return hashlib.sha256(business_key.encode()).hexdigest()[:32]
+
+
 async def record_usage(session: AsyncSession, *, actor_id: str, organization_id: str,
                        kind: str, api_key_id: str | None = None,
                        parse_job_id: str | None = None,
-                       pages: int = 0, requests: int = 1) -> str:
+                       pages: int = 0, requests: int = 1,
+                       business_key: str | None = None) -> str:
     """把一笔用量写进 outbox，返回事件 ID。
 
     **不 commit** —— 由调用方连同业务写入一起提交。这是"同一个事务"的落点，
     也是最容易被改坏的地方：谁在这里加一句 `await session.commit()`，
     就把原子性拆掉了（有守卫钉着）。
+
+    `business_key` 给出时事件 ID 由它确定，同一事实恰好记一次（联邦计量用：
+    受理重放、补做、代次推进都会再次走到成功分支）。
     """
     if kind not in USAGE_KIND_VALUES:
         # 契约外的计量种类会让 control 侧的账目出现一个没人认识的分类，
@@ -44,19 +59,24 @@ async def record_usage(session: AsyncSession, *, actor_id: str, organization_id:
         "kind": kind,
         "pages": pages,
         "requests": requests,
-    })
+    }, event_id=business_event_id(business_key) if business_key else None)
 
 
 async def emit(session: AsyncSession, organization_id: str, event_type: str,
-               payload: dict) -> str:
+               payload: dict, *, event_id: str | None = None) -> str:
     """通用的 outbox 写入。
 
     **用 ORM 而不是裸 SQL**：裸 INSERT 绕过 SQLAlchemy 的 Python 端默认值
     （`created_at` / `next_attempt_at` 都是 `default=utcnow`），在 SQLite 上
     直接 NOT NULL 失败，在 PG 上则要另写一套 server_default —— 两个方言
     各写一份的第一步。
+
+    确定的 `event_id` 已经在表里（尚未投递或尚未清理）时不再写第二行；已投递
+    并被清掉后再写一次也无妨 —— control 按 event_id 幂等落账。
     """
-    event = CorpusOutbox(id=new_id(), organization_id=organization_id,
+    if event_id is not None and await session.get(CorpusOutbox, event_id) is not None:
+        return event_id
+    event = CorpusOutbox(id=event_id or new_id(), organization_id=organization_id,
                          type=event_type, payload=payload)
     session.add(event)
     await session.flush()

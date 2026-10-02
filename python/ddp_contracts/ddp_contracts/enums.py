@@ -444,7 +444,7 @@ def block_type_label(value: str | None) -> str | None:
 
 # 计量流水的种类。`extract` 按**字段数**计 requests：一次抽取 = N 次检索
 # + N 次模型调用，按"一次请求"计费会让 60 字段的 schema 和 1 字段的一样便宜。
-UsageKind = Literal["parse", "chat", "embeddings", "mcp", "qa", "embed", "compile_vision", "extract", "knowledge"]
+UsageKind = Literal["parse", "chat", "embeddings", "mcp", "qa", "embed", "compile_vision", "extract", "knowledge", "federated_execution", "federated_delivery"]
 
 USAGE_KIND_VALUES: Final[tuple[str, ...]] = (
     "parse",
@@ -456,6 +456,8 @@ USAGE_KIND_VALUES: Final[tuple[str, ...]] = (
     "compile_vision",
     "extract",
     "knowledge",
+    "federated_execution",
+    "federated_delivery",
 )
 
 USAGE_KIND_META: Final[dict[str, EnumMeta]] = {
@@ -477,6 +479,10 @@ USAGE_KIND_META: Final[dict[str, EnumMeta]] = {
     "extract": {"value": "extract", "label": "结构化抽取", "severity": "neutral"},
     # 图谱 / wiki 生成，按次计
     "knowledge": {"value": "knowledge", "label": "知识生成", "severity": "neutral"},
+    # 本节点作为联邦执行者完成一次受理的执行（按执行任务号恰好一次）
+    "federated_execution": {"value": "federated_execution", "label": "联邦执行", "severity": "neutral"},
+    # 本节点协调的联邦任务产出一份可交付结果（按根任务恰好一次，补做不重复）
+    "federated_delivery": {"value": "federated_delivery", "label": "联邦交付", "severity": "neutral"},
 }
 
 
