@@ -33,7 +33,7 @@ import sqlalchemy as sa
 from sqlalchemy import func, inspect, select, text
 
 from conftest import actor_headers, drain_tasks
-from ddp_corpus import db, directory, federation
+from ddp_corpus import db, directory, federation, federation_tasks
 from ddp_corpus.cache import FederationCacheEntry  # noqa: F401 — registers metadata
 from ddp_corpus.config import settings
 from ddp_corpus.federation_models import (  # noqa: F401 — registers metadata
@@ -314,6 +314,57 @@ async def test_concurrent_planning_of_one_root_probes_once_on_pg(pg_stack, monke
         stored = await session.get(FederationRequest, root)
     assert ready_events == 1
     assert stored.plan_digest == first.json()["plan_digest"]
+
+
+async def test_cancel_is_not_queued_behind_a_running_coordinator_on_pg(pg_stack, monkeypatch):
+    """检索进行中的取消必须立刻落库，不许排在协调者整段执行之后。
+
+    旧行为（ABC 演练 F10）：`run_queued` 握着每 root 的事务级咨询锁跑完整段
+    远端检索；取消要同一把锁，只能等协调者放锁才落库，而协调者放锁时读到的
+    仍是 running，照样把问题与证据摘录发给了生成节点。SQLite 没有咨询锁，
+    这条只能在真 PostgreSQL 上验。
+    """
+    client, factory, state = pg_stack
+    run_key = new_id()
+    async with factory() as session:
+        _, version, _, _, _ = await indexed_source(session)
+    collection = await publish_collection(client, version, key=f"pg-cancel-{run_key}")
+    consent = exploration(egress="local_only", recipients=(), payload=(),
+                          budget={"max_probe_requests": 0, "max_egress_bytes": 0})
+    intent = await create_intent(
+        client, spec=task_spec(scope="federation_public", mode="fast"), consent=consent,
+        manifest=scope_manifest([member(collection["collection_id"], node=NODE)]),
+        key=f"pg-cancel-intent-{run_key}")
+    root = intent["root_task_id"]
+    plan = await plan_task(client, root)
+    await approve_task(client, root, plan)
+
+    real_step = federation_tasks._run_local_step
+    cancels: list[str] = []
+
+    async def cancel_while_retrieving(*args, **kwargs):
+        if not cancels:
+            try:
+                response = await asyncio.wait_for(
+                    client.post(f"/api/v1/tasks/{root}/cancel"), timeout=5)
+                cancels.append(response.json()["status"])
+            except TimeoutError:
+                cancels.append("blocked_behind_coordinator")
+        return await real_step(*args, **kwargs)
+
+    monkeypatch.setattr(federation_tasks, "_run_local_step", cancel_while_retrieving)
+    submitted = await client.post(
+        "/api/v1/tasks", headers={"Idempotency-Key": f"pg-cancel-{run_key}"},
+        json={"root_task_id": root, "plan_digest": plan["plan_digest"]})
+    assert submitted.status_code == 202, submitted.text
+    await drain_tasks(state)
+
+    assert cancels == ["cancelled"], cancels
+    status = (await client.get(f"/api/v1/tasks/{root}")).json()
+    assert status["status"] == "cancelled", status
+    coverage = (await client.get(f"/api/v1/tasks/{root}/coverage")).json()
+    assert {entry["state"] for entry in coverage["entries"]} == {"not_attempted"}, \
+        "迟到的检索结果不许改写取消记下的账本"
 
 
 async def test_coordinator_end_to_end_on_pg_queue_path(pg_stack):

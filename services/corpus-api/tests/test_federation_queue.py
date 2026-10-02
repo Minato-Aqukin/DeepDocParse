@@ -352,6 +352,8 @@ async def test_cancel_before_worker_runs_marks_coordinator_cancelled(
     assert coverage["counts"]["total_targets"] == 1
     assert {entry["state"] for entry in coverage["entries"]} == {"not_attempted"}
     assert status["retrieval_completeness"] == coverage["retrieval_completeness"] == "partial"
+    assert status["coverage_ref"] == run["root"], \
+        "取消落下的覆盖账本必须能从任务状态指过去，否则界面无从解释 partial"
     assert status["evidence_sufficiency"] == coverage["evidence_sufficiency"] == "insufficient"
     assert cancelled.json()["retrieval_completeness"] == "partial"
     # 取消在"还没跑过"时现建覆盖账本行：counts 必须跟逐目标记录一致，
@@ -949,6 +951,64 @@ async def test_execute_plan_never_overwrites_a_cancelled_row(
     coverage = (await actor_client.get(f"/api/v1/tasks/{run['root']}/coverage")).json()
     assert {entry["state"] for entry in coverage["entries"]} == {"not_attempted"}, \
         "执行期间的迟到账本重写必须被丢弃，cancel 的 not_attempted 保留"
+
+
+async def test_cancel_during_retrieval_stops_every_later_dispatch(
+        actor_client, session, app_state, monkeypatch):
+    """取消落在第一个目标检索期间：之后的目标一个都不许再派出，生成也不许进。
+
+    ABC 演练 F10：协调者把剩下的步骤照常做完，取消之后仍把问题与证据摘录
+    发给了生成节点；终态围栏只挡住了结果覆盖，挡不住外发。
+    """
+    collections = []
+    for index in range(2):
+        _, version, *_ = await indexed_source(session)
+        collections.append(await publish_collection(
+            actor_client, version, key=f"queue-cancel-mid-retrieval-{index}"))
+    consent = exploration(egress="local_only", recipients=(), payload=(),
+                          budget={"max_probe_requests": 0, "max_egress_bytes": 0})
+    intent = await create_intent(
+        actor_client, spec=task_spec(scope="federation_public", scope_ref="scope-1",
+                                     mode="exhaustive_scope"),
+        consent=consent, manifest=scope_manifest(
+            [member(item["collection_id"], node=NODE) for item in collections]))
+    root = intent["root_task_id"]
+    plan = await plan_task(actor_client, root)
+    assert sum(step["operation"] == "retrieve" for step in plan["steps"]) == 2
+    await approve_task(actor_client, root, plan)
+
+    real_step = federation_tasks._run_local_step
+    real_answer = federation_tasks._answer_result
+    dispatched: list[str] = []
+    answered: list[bool] = []
+
+    async def cancel_during_first(*args, **kwargs):
+        dispatched.append(kwargs["target"]["collection_id"])
+        if len(dispatched) == 1:
+            # 用户在第一个目标还在检索时点了取消（另一个会话走真实取消路径）。
+            from ddp_corpus.db import get_sessionmaker
+            async with get_sessionmaker()() as other:
+                actor = Actor(id="actor-alice", kind="user", organization_id="org-test",
+                              role="contributor")
+                await federation_tasks.cancel(other, actor, root, now=utcnow())
+        return await real_step(*args, **kwargs)
+
+    async def record_answer(*args, **kwargs):
+        answered.append(True)
+        return await real_answer(*args, **kwargs)
+
+    monkeypatch.setattr(federation_tasks, "_run_local_step", cancel_during_first)
+    monkeypatch.setattr(federation_tasks, "_answer_result", record_answer)
+    submitted = await actor_client.post(
+        "/api/v1/tasks", headers={"Idempotency-Key": "queue-cancel-mid-retrieval"},
+        json={"root_task_id": root, "plan_digest": plan["plan_digest"]})
+    assert submitted.status_code == 202, submitted.text
+    await drain_tasks(app_state)
+
+    assert len(dispatched) == 1, f"取消之后又派出了 {dispatched[1:]}"
+    assert answered == [], "取消之后不许再进生成"
+    status = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert status["status"] == "cancelled"
 
 
 # ------------------------------------------------------------------ 逃生口

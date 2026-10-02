@@ -2881,6 +2881,22 @@ async def _answer_result(session: AsyncSession, actor: Actor, row: FederationReq
                                   max_generation_tokens=cap)
 
 
+async def _no_longer_running(session: AsyncSession, root_task_id: str) -> bool:
+    """协调者在下一次外发前读一次**已提交**的执行轴：不再是 running 就停手。
+
+    **先结束读事务再读**：取消来自另一个会话；SQLite（以及 PG 的非 READ
+    COMMITTED 快照）里不结束旧事务就看不到那次提交。协调者 session 在这里没有
+    未提交的业务写入（执行/受理都在内部 commit 过，花费走独立会话），rollback
+    是安全的；它也让本 session 不再握任何事务级咨询锁。
+    """
+    if session.in_transaction():
+        await session.rollback()
+    status = await session.scalar(select(FederationRequest.status).where(
+        FederationRequest.root_task_id == root_task_id))
+    return status != "running"
+
+
+
 async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequest, *,
                         now: datetime, http, index, retry_only: bool) -> dict:
     task_spec = row.task_spec_json
@@ -2955,6 +2971,11 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
             kind=kind, amount=amount, budget=exec_budget, now=utcnow())
     try:
         for target in candidates:
+            # 每次派出之前确认任务还在 running：取消可能在上一个目标检索期间
+            # 落了库，之后的目标与生成都不许再外发（ABC 演练 F10：取消之后协调者
+            # 仍把问题与证据摘录发给了生成节点）。
+            if await _no_longer_running(session, root_task_id):
+                break
             key = (target["origin_node_id"], target["collection_id"], target["operation"])
             digest = _target_digest(target)
             current = entries.get(digest)
@@ -3067,24 +3088,15 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
     finally:
         await peers.aclose()
     # 本地执行失败时 `federation.execute` 会 rollback 整个 session（那是对的：
-    # 失败要落库），副作用是协调者行被 expire。做账前按主键重新加载一次，
-    # 不让"某个目标失败"把后面所有属性读都变成 MissingGreenlet。
-    #
-    # **先结束读事务再重读**：取消可能来自另一个会话；SQLite（以及 PG 的非
-    # READ COMMITTED 快照）里不结束旧事务就看不到那个提交，围栏会拿着
-    # "running" 的旧快照把一次迟到成功写进去。到这一步协调者 session 里
-    # 没有未提交的业务写入（执行/受理都在内部 commit 过），rollback 是安全的。
-    if session.in_transaction():
-        await session.rollback()
-    row = await session.get(FederationRequest, root_task_id,
-                            populate_existing=True)
-    if row.status != "running":
+    # 失败要落库），副作用是协调者行被 expire。生成与做账之前先确认终态，再按
+    # 主键重新加载一次，不让"某个目标失败"把后面所有属性读都变成 MissingGreenlet。
+    if await _no_longer_running(session, root_task_id):
         # 取消（cancelled）、回收清扫（failed）或别的终态在本次执行期间落了库：
         # 迟到的成功/失败结果一律不许覆盖，覆盖账本也不许重写 —— cancel 已经把
         # 未完成目标记成 not_attempted，这里再写一遍会把那份账目改掉。
-        await session.rollback()
         return await _status_output(session, await session.get(FederationRequest, root_task_id,
                                                 populate_existing=True))
+    row = await session.get(FederationRequest, root_task_id, populate_existing=True)
     ordered = [entries[_target_digest(target)] for target in _ordered_targets(all_targets)]
     fused = list(evidence.values())
     # §7.6 规则一路：同一来源不同版本在同一定位上的正文分歧，生成之前就能算。
@@ -3287,6 +3299,11 @@ async def run_queued(session: AsyncSession, actor: Actor, root_task_id: str, *,
     row = await _load_request(session, actor, root_task_id)
     if row.status != "running":
         return await _status_output(session, row)
+    # 锁只仲裁"由谁开跑"，不罩住整段执行：内联受理与 resume 都在执行前提交过，
+    # 只有这里一直握着它。取消要拿同一把锁，于是排在整段远端检索之后才落库，
+    # 而协调者放锁时读到的仍是 running，照样派出了生成（ABC 演练 F10）。执行期间
+    # 的并发由 generation 围栏、业务键幂等与最后那次条件 UPDATE 仲裁。
+    await session.commit()
     try:
         return await _execute_plan(session, actor, row, now=now, http=http, index=index,
                                    retry_only=retry_only)
@@ -3453,6 +3470,7 @@ async def cancel(session: AsyncSession, actor: Actor, root_task_id: str, *,
         ledger_row.evidence_sufficiency = ledger["evidence_sufficiency"]
         ledger_row.counts_json = ledger["counts"]
         ledger_row.updated_at = now
+    row.coverage_ref = root_task_id   # 账本已落（上面建或更新），状态要能指过去
     row.retrieval_completeness = ledger["retrieval_completeness"]
     row.evidence_sufficiency = ledger["evidence_sufficiency"]
     row.status = "cancelled"
