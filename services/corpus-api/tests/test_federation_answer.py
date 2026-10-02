@@ -623,10 +623,10 @@ async def test_two_node_remote_excerpt_reaches_real_prompt(
     monkeypatch.setattr(settings, "federation_admissions_enabled", True)
     monkeypatch.setattr(settings, "federation_peers", two_node.peers_json())
     monkeypatch.setattr(settings, "federation_allow_loopback", True)
-    async def _embed(_http, _text):
-        return [0.1, 0.2, 0.3, 0.4]
+    async def _embed(_http, texts):
+        return [[0.1, 0.2, 0.3, 0.4] for _ in texts]
 
-    monkeypatch.setattr(upstream, "embed_one", _embed)
+    monkeypatch.setattr(upstream, "embed_batched", _embed)
 
     respx.route(url__startswith=two_node.b_endpoint).pass_through()
     mock_gateway(channels=[gateway_channel()])

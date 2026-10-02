@@ -65,10 +65,10 @@ def configure_federation(monkeypatch):
     monkeypatch.setattr(settings, "bundle_node_id", NODE)
     monkeypatch.setattr(settings, "federation_admissions_enabled", True)
 
-    async def _embed(_http, _text):
-        return [0.1, 0.2, 0.3, 0.4]
+    async def _embed(_http, texts):
+        return [[0.1, 0.2, 0.3, 0.4] for _ in texts]
 
-    monkeypatch.setattr(upstream, "embed_one", _embed)
+    monkeypatch.setattr(upstream, "embed_batched", _embed)
 
 
 @pytest.fixture(autouse=True)

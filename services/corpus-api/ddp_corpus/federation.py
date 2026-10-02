@@ -3,9 +3,10 @@
 This module is the corpus-api half of `docs/refactor/P5-INTERFACES-v3.md` §2/§4.
 It owns no kernel logic: contract validation, digests, plan checks and receipt
 building come from `ddp_core.application.{probe,admission,plans}` — the frozen
-shared kernel. Retrieval reuses the same primitives the search plane uses
-(`ddp_core.search` index + `upstream.embed_one` + the policy/context helpers), so
-a probe can never drift into a second, weaker retrieval implementation.
+shared kernel. Retrieval uses `search_query_with_truncation`, the bounded
+over-fetch variant of the search plane's facet-aware `search_query`, with
+`upstream.embed_batched` and the same policy/context helpers. A probe therefore
+cannot drift into a second, weaker retrieval implementation.
 
 Boundaries kept here on purpose:
 
@@ -59,6 +60,7 @@ from ddp_core.application.plans import (
 from ddp_core.application.probe import PROBE_KINDS, build_probe, validate_probe
 from ddp_core.application.ports import ApplicationError
 from ddp_core.bundle import digest as byte_digest
+from ddp_core.search import search_query_with_truncation
 from ddp_core.tokenize import tokens
 from ddp_contracts.enums import FEDERATED_ANSWER_REASON_VALUES
 
@@ -176,10 +178,10 @@ async def _retrieve(session: AsyncSession, actor: Actor, *, query: str, candidat
                     contexts: dict | None = None,
                     document_ids: list[str] | None = None,
                     http=None, index=None) -> tuple[list, str | None, bool, dict]:
-    """一次真实混合检索，作用域下推到 SQL。
+    """与搜索/问答共用分面混合检索，作用域下推到 SQL。
 
-    返回 `(hits, degraded, truncated, contexts)`。`truncated` 用 `limit+1` 探测
-    候选是否超过 `candidate_limit`：这是 T85 的 `truncated_by_limit` 依据。
+    返回 `(hits, degraded, truncated, contexts)`。共享选择器每条查询多取一个候选，
+    不改变 `candidate_limit` 的分面优先级；这是 T85 的 `truncated_by_limit` 依据。
     授权集合在模型 await 之后由调用方复核（生成/模拟器都可能挂起）。
     """
     if contexts is None:
@@ -193,22 +195,15 @@ async def _retrieve(session: AsyncSession, actor: Actor, *, query: str, candidat
     if index is None:
         raise APIError(503, "search index is unavailable in this process",
                        "server_error", "search_index_unavailable")
-    vector, degraded = None, None
-    if http is not None:
-        try:
-            vector = await upstream.embed_one(http, query)
-        except Exception:
-            # 零向量顶上就是假的语义检索；如实降级到关键词路（铁律 5）。
-            degraded = "embedding_unavailable"
     limit = max(1, int(candidate_limit))
-    hits = await index.search(
-        session, vector=vector, query=query, document_id=None,
-        limit=limit + 1, candidates=max(settings.qa_candidates, limit * 3),
+    hits, degraded, truncated = await search_query_with_truncation(
+        session, index, embed=lambda texts: upstream.embed_batched(http, texts),
+        query=query, document_id=None,
+        limit=limit, candidates=max(settings.qa_candidates, limit * 3),
         min_similarity=settings.qa_min_similarity,
         authorized_document_ids=sorted(set(document_ids)),
         authorized_parse_job_ids=list(contexts))
-    truncated = len(hits) > limit
-    return hits[:limit], degraded, truncated, contexts
+    return hits, degraded, truncated, contexts
 
 
 async def _excerpts(session: AsyncSession, actor: Actor, hits: list, contexts: dict, *,

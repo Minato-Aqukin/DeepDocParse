@@ -1,0 +1,423 @@
+{
+  "id": "federated-compound-retrieval-20261003",
+  "date": "2026-10-03",
+  "environment": {
+    "database_role": "ddp_corpus",
+    "transaction_read_only": "on",
+    "embedding": "Live llama.cpp bge-m3 Q8_0 at http://127.0.0.1:48181/v1/embeddings; model alias bge-m3",
+    "embedding_batch_size": 1
+  },
+  "collection_id": "471b80409c6e4df9aace894f9c871829",
+  "index_revision": "sha256:0eb85e53d4eaf938371ae4259b4d728864f4cb22a5097c91bb07809e202ded5f",
+  "question": "How many multi-function GPIOs does Raspberry Pi Pico expose, how many programmable GPIOs does ESP32 have, and what is the difference?",
+  "facets": [
+    "multi-function GPIOs",
+    "programmable GPIOs"
+  ],
+  "candidate_limit": 8,
+  "candidates": 24,
+  "min_similarity": 0.45,
+  "degraded": null,
+  "truncated_by_limit": true,
+  "collection_limits": [],
+  "returned_excerpt_count": 8,
+  "pico_page_4_returned": true,
+  "esp32_page_4_gpio_returned": false,
+  "hits": [
+    {
+      "rank": 1,
+      "chunk_id": "2d9e0f5a023b45848314eeefbf8423ec",
+      "document_id": "4ec760d4a5384f9fb021beabad8dc458",
+      "parse_job_id": "66e776e7d4e54d9c8cfd3822e6ef21af",
+      "page_idx": 3,
+      "evidence_id": "7bd30f02e2a64cb2a47e54ed77b8b21b",
+      "similarity": 0.659,
+      "text": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for RP2040, with the following key features: RP2040 microcontroller with 2 MB Flash Micro-USB B port for power and data (and for reprogramming the Flash) 40 pin 21×51 ‘DIP’ style 1 mm thick PCB with 0.1″ through-hole pins also with edge castellations Exposes 26 multi-function 3.3 V General Purpose I/O (GPIO) 23 GPIO are digital-only and 3 are ADC capable Can be surface mounted as a module 3-pin ARM Serial Wire Debug (SWD) port Simple yet highly flexible power supply architecture Various options for easily powering the unit from micro-USB, external supplies or batteries High quality, low cost, high availability Comprehensive SDK, software examples and documentation For full details of the RP2040"
+    },
+    {
+      "rank": 2,
+      "chunk_id": "9a58a16f27e34154aa7ee54c642254b1",
+      "document_id": "121c42f16ca84325a00d298c7cedbfcf",
+      "parse_job_id": "4585afdaa46c49bca67375b860c074f8",
+      "page_idx": 70,
+      "evidence_id": "317ef271401c4d9eb3c7aa7ae72cfec3",
+      "similarity": 0.8567,
+      "text": "GPIOs"
+    },
+    {
+      "rank": 3,
+      "chunk_id": "0f5d43edd5f74636b81139513875d918",
+      "document_id": "121c42f16ca84325a00d298c7cedbfcf",
+      "parse_job_id": "4585afdaa46c49bca67375b860c074f8",
+      "page_idx": 35,
+      "evidence_id": "53e0b62c73ed4239859a9604fde37821",
+      "similarity": 0.6351,
+      "text": "4.8.2 Serial Peripheral Interface (SPI) ESP32 integrates four SPI controllers which can be used to communicate with external devices that use the SPI protocol. Controller SPI0 is used as a buffer for accessing external memory. Controller SPI1 can be used as a master. Controllers SPI2 and SPI3 can be configured as either a master or a slave. SPI1, SPI2, and SPI3 use signal buses prefixed with SPI, HSPI, and VSPI, respectively.\nFeatures of General Purpose SPI (GP-SPI)\n• Programmable data transfer length, in multiples of 1 byte • Four-line full-duplex/half-duplex communication and three-line half-duplex communication support • Master mode and slave mode • Programmable CPOL and CPHA • Programmable clock For details, see ESP32 Technical Reference Manual > Chapter SPI Controller.\nPin Assignment"
+    },
+    {
+      "rank": 4,
+      "chunk_id": "bf8d7bf1915f410fa66379c0b692e9c0",
+      "document_id": "121c42f16ca84325a00d298c7cedbfcf",
+      "parse_job_id": "4585afdaa46c49bca67375b860c074f8",
+      "page_idx": 16,
+      "evidence_id": "b670cfbafebd464d8ca960aeb9a896fc",
+      "similarity": 0.8574,
+      "text": "GPIOs"
+    },
+    {
+      "rank": 5,
+      "chunk_id": "892668e11c8542939b077d2e2e461bbb",
+      "document_id": "4ec760d4a5384f9fb021beabad8dc458",
+      "parse_job_id": "66e776e7d4e54d9c8cfd3822e6ef21af",
+      "page_idx": 6,
+      "evidence_id": "17b72debcdb246e89a68a8cf072184ba",
+      "similarity": 0.6557,
+      "text": "2.1. Raspberry Pi Pico pinout\nThe Pico pinout has been designed to directly bring out as much of the RP2040 GPIO and internal circuitry function as possible, while also providing a suitable number of ground pins to reduce EMI (Electro Magnetic Interference) and signal crosstalk. This is important in general but especially for RP2040 which is built on a modern 40 nm silicon process and hence the digital IO edge rates are very fast."
+    },
+    {
+      "rank": 6,
+      "chunk_id": "0448f23fc9b1453384552228cc4ed740",
+      "document_id": "121c42f16ca84325a00d298c7cedbfcf",
+      "parse_job_id": "4585afdaa46c49bca67375b860c074f8",
+      "page_idx": 60,
+      "evidence_id": "6d7bcc887d0a4954b1807341058d83ce",
+      "similarity": 0.5997,
+      "text": "RTC pins support the RTC function, and can work during Deep-sleep. For example, an RTC-GPIO can be used for waking up the chip from Deep-sleep. The GPIO pins support up to six digital functions, as shown in columns “Function 0 ~ 5” In Table IO"
+    },
+    {
+      "rank": 7,
+      "chunk_id": "4ef19fa96b5b4ee5ab453536c123b6b1",
+      "document_id": "121c42f16ca84325a00d298c7cedbfcf",
+      "parse_job_id": "4585afdaa46c49bca67375b860c074f8",
+      "page_idx": 35,
+      "evidence_id": "253e12c2281a4ad7b9309115d4a156e3",
+      "similarity": 0.6608,
+      "text": "multiplexed with other functions, such as the SDIO, UART, SPI, etc. (More details can be found in the Appendix, Table IO_MUX. ) For low-power operations, the GPIOs can be set to hold their states. For details, see Section 4.10 Peripheral Pin Configurations, Appendix A –ESP32 Pin Lists and ESP32 Technical Reference Manual > Chapter IO_MUX and GPIO Matrix."
+    },
+    {
+      "rank": 8,
+      "chunk_id": "ad0de8f8410e4ae9a4d880bc4cb04758",
+      "document_id": "121c42f16ca84325a00d298c7cedbfcf",
+      "parse_job_id": "4585afdaa46c49bca67375b860c074f8",
+      "page_idx": 35,
+      "evidence_id": "02c9cb10b3d44adda75098371eca3c01",
+      "similarity": 0.7193,
+      "text": "4.8 Digital Peripherals 4.8.1 General Purpose Input / Output Interface (GPIO) ESP32 has 34 GPIO pins which can be assigned various functions by programming the appropriate registers. There are several kinds of GPIOs: digital-only, analog-enabled, capacitive-touch-enabled, etc. Analog-enabled GPIOs and Capacitive-touch-enabled GPIOs can be configured as digital GPIOs. Most of the digital GPIOs can be configured as internal pull-up or pull-down, or set to high impedance. When configured as an input, the input value can be read through the register. The input can also be set to edge-trigger or level-trigger to generate CPU interrupts. Most of the digital IO pins are bi-directional, non-inverting and tristate, including input and output buffers with tristate control. These pins can be"
+    }
+  ],
+  "excerpts": [
+    {
+      "schema": "ddp-evidence/1#FederatedEvidence",
+      "evidence_id": "7bd30f02e2a64cb2a47e54ed77b8b21b",
+      "origin_node_id": "node-read-only-b",
+      "authority_node_id": "node-read-only-b",
+      "resource_id": "0341f9d5fc404cf8bb8b04d391a3c9de",
+      "source_version_id": "77c1392bb1ad42c5aff771ee836b92b3",
+      "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+      "parse_revision": "66e776e7d4e54d9c8cfd3822e6ef21af",
+      "excerpt_digest": "sha256:31989d68b2e2943cad52968f593c6dfd8c40a7af8c353e0f9f8c4857205e7fa3",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 3,
+        "seq": 26,
+        "bbox": [
+          71.53014373779297,
+          474.5745849609375,
+          524.1144409179688,
+          763.6390609741211
+        ],
+        "page_size": {
+          "width": 595.2755737304688,
+          "height": 841.8897705078125
+        }
+      },
+      "source_type": "source",
+      "derived_from": null,
+      "uploader_ref": "952489a8cf96dcbe04121c83ac560adc",
+      "retrieval_receipt_ref": "measurement:f2:20261003",
+      "policy_revision": "published:2026-10-01T11:14:50.549774+00:00",
+      "block_type": "text",
+      "_excerpt": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for RP2040, with the following key features: RP2040 microcontroller with 2 MB Flash Micro-USB B port for power and data (and for reprogramming the Flash) 40 pin 21×51 ‘DIP’ style 1 mm thick PCB with 0.1″ through-hole pins also with edge castellations Exposes 26 multi-function 3.3 V General Purpose I/O (GPIO) 23 GPIO are digital-only and 3 are ADC capable Can be surface mounted as a module 3-pin ARM Serial Wire Debug (SWD) port Simple yet highly flexible power supply architecture Various options for easily powering the unit from micro-USB, external supplies or batteries High quality, low cost, high availability Comprehensive SDK, software examples and documentation For full details of the RP2040",
+      "_score": 0.031514,
+      "_similarity": 0.659
+    },
+    {
+      "schema": "ddp-evidence/1#FederatedEvidence",
+      "evidence_id": "317ef271401c4d9eb3c7aa7ae72cfec3",
+      "origin_node_id": "node-read-only-b",
+      "authority_node_id": "node-read-only-b",
+      "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+      "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+      "source_digest": "sha256:a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+      "parse_revision": "4585afdaa46c49bca67375b860c074f8",
+      "excerpt_digest": "sha256:76d3c9a6a9f10be252e8596bfdcc8bfe7baa693a4558a9cb23b5a7bb8aa2c484",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 70,
+        "seq": 2044,
+        "bbox": [
+          450.9419860839844,
+          249.03216552734375,
+          476.80487060546875,
+          256.40447998046875
+        ],
+        "page_size": {
+          "width": 595.280029296875,
+          "height": 841.8900146484375
+        }
+      },
+      "source_type": "source",
+      "derived_from": null,
+      "uploader_ref": "952489a8cf96dcbe04121c83ac560adc",
+      "retrieval_receipt_ref": "measurement:f2:20261003",
+      "policy_revision": "published:2026-10-01T11:14:50.569475+00:00",
+      "block_type": "text",
+      "_excerpt": "GPIOs",
+      "_score": 0.029287,
+      "_similarity": 0.8567
+    },
+    {
+      "schema": "ddp-evidence/1#FederatedEvidence",
+      "evidence_id": "53e0b62c73ed4239859a9604fde37821",
+      "origin_node_id": "node-read-only-b",
+      "authority_node_id": "node-read-only-b",
+      "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+      "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+      "source_digest": "sha256:a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+      "parse_revision": "4585afdaa46c49bca67375b860c074f8",
+      "excerpt_digest": "sha256:a6f50a09a83db23a273ff1776139899342572ca6d02062edbc2f7974ab2a4017",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 35,
+        "seq": 882,
+        "bbox": [
+          56.80059814453125,
+          312.02581787109375,
+          528.8805541992188,
+          590.6390533447266
+        ],
+        "page_size": {
+          "width": 595.280029296875,
+          "height": 841.8900146484375
+        }
+      },
+      "source_type": "source",
+      "derived_from": null,
+      "uploader_ref": "952489a8cf96dcbe04121c83ac560adc",
+      "retrieval_receipt_ref": "measurement:f2:20261003",
+      "policy_revision": "published:2026-10-01T11:14:50.569475+00:00",
+      "block_type": "text",
+      "_excerpt": "4.8.2 Serial Peripheral Interface (SPI) ESP32 integrates four SPI controllers which can be used to communicate with external devices that use the SPI protocol. Controller SPI0 is used as a buffer for accessing external memory. Controller SPI1 can be used as a master. Controllers SPI2 and SPI3 can be configured as either a master or a slave. SPI1, SPI2, and SPI3 use signal buses prefixed with SPI, HSPI, and VSPI, respectively.\nFeatures of General Purpose SPI (GP-SPI)\n• Programmable data transfer length, in multiples of 1 byte • Four-line full-duplex/half-duplex communication and three-line half-duplex communication support • Master mode and slave mode • Programmable CPOL and CPHA • Programmable clock For details, see ESP32 Technical Reference Manual > Chapter SPI Controller.\nPin Assignment",
+      "_score": 0.02879,
+      "_similarity": 0.6351
+    },
+    {
+      "schema": "ddp-evidence/1#FederatedEvidence",
+      "evidence_id": "b670cfbafebd464d8ca960aeb9a896fc",
+      "origin_node_id": "node-read-only-b",
+      "authority_node_id": "node-read-only-b",
+      "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+      "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+      "source_digest": "sha256:a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+      "parse_revision": "4585afdaa46c49bca67375b860c074f8",
+      "excerpt_digest": "sha256:76d3c9a6a9f10be252e8596bfdcc8bfe7baa693a4558a9cb23b5a7bb8aa2c484",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 16,
+        "seq": 703,
+        "bbox": [
+          265.2751770019531,
+          91.45550537109375,
+          296.848876953125,
+          100.3023681640625
+        ],
+        "page_size": {
+          "width": 595.280029296875,
+          "height": 841.8900146484375
+        }
+      },
+      "source_type": "source",
+      "derived_from": null,
+      "uploader_ref": "952489a8cf96dcbe04121c83ac560adc",
+      "retrieval_receipt_ref": "measurement:f2:20261003",
+      "policy_revision": "published:2026-10-01T11:14:50.569475+00:00",
+      "block_type": "text",
+      "_excerpt": "GPIOs",
+      "_score": 0.028739,
+      "_similarity": 0.8574
+    },
+    {
+      "schema": "ddp-evidence/1#FederatedEvidence",
+      "evidence_id": "17b72debcdb246e89a68a8cf072184ba",
+      "origin_node_id": "node-read-only-b",
+      "authority_node_id": "node-read-only-b",
+      "resource_id": "0341f9d5fc404cf8bb8b04d391a3c9de",
+      "source_version_id": "77c1392bb1ad42c5aff771ee836b92b3",
+      "source_digest": "sha256:757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb",
+      "parse_revision": "66e776e7d4e54d9c8cfd3822e6ef21af",
+      "excerpt_digest": "sha256:6af11469e901b6bd6fee177e7462c8ea5568e89ac400db119f4a7dc3bf39e054",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 6,
+        "seq": 38,
+        "bbox": [
+          71.03414154052734,
+          670.3094177246094,
+          524.952392578125,
+          745.3314361572266
+        ],
+        "page_size": {
+          "width": 595.2755737304688,
+          "height": 841.8897705078125
+        }
+      },
+      "source_type": "source",
+      "derived_from": null,
+      "uploader_ref": "952489a8cf96dcbe04121c83ac560adc",
+      "retrieval_receipt_ref": "measurement:f2:20261003",
+      "policy_revision": "published:2026-10-01T11:14:50.549774+00:00",
+      "block_type": "text",
+      "_excerpt": "2.1. Raspberry Pi Pico pinout\nThe Pico pinout has been designed to directly bring out as much of the RP2040 GPIO and internal circuitry function as possible, while also providing a suitable number of ground pins to reduce EMI (Electro Magnetic Interference) and signal crosstalk. This is important in general but especially for RP2040 which is built on a modern 40 nm silicon process and hence the digital IO edge rates are very fast.",
+      "_score": 0.028624,
+      "_similarity": 0.6557
+    },
+    {
+      "schema": "ddp-evidence/1#FederatedEvidence",
+      "evidence_id": "6d7bcc887d0a4954b1807341058d83ce",
+      "origin_node_id": "node-read-only-b",
+      "authority_node_id": "node-read-only-b",
+      "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+      "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+      "source_digest": "sha256:a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+      "parse_revision": "4585afdaa46c49bca67375b860c074f8",
+      "excerpt_digest": "sha256:26c6a232d3fa8119ca165ee4e73b717e9584c760657d6974a25f736bfe7ad93c",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 60,
+        "seq": 1162,
+        "bbox": [
+          119.91169738769531,
+          411.8497009277344,
+          516.1941528320312,
+          466.3954772949219
+        ],
+        "page_size": {
+          "width": 595.280029296875,
+          "height": 841.8900146484375
+        }
+      },
+      "source_type": "source",
+      "derived_from": null,
+      "uploader_ref": "952489a8cf96dcbe04121c83ac560adc",
+      "retrieval_receipt_ref": "measurement:f2:20261003",
+      "policy_revision": "published:2026-10-01T11:14:50.569475+00:00",
+      "block_type": "text",
+      "_excerpt": "RTC pins support the RTC function, and can work during Deep-sleep. For example, an RTC-GPIO can be used for waking up the chip from Deep-sleep. The GPIO pins support up to six digital functions, as shown in columns “Function 0 ~ 5” In Table IO",
+      "_score": 0.025286,
+      "_similarity": 0.5997
+    },
+    {
+      "schema": "ddp-evidence/1#FederatedEvidence",
+      "evidence_id": "253e12c2281a4ad7b9309115d4a156e3",
+      "origin_node_id": "node-read-only-b",
+      "authority_node_id": "node-read-only-b",
+      "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+      "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+      "source_digest": "sha256:a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+      "parse_revision": "4585afdaa46c49bca67375b860c074f8",
+      "excerpt_digest": "sha256:d4673f82562a94773d1a12cd804e240bf529002a5279eda0db62d9e33571ba6c",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 35,
+        "seq": 881,
+        "bbox": [
+          56.74281311035156,
+          62.3814697265625,
+          537.8866577148438,
+          291.72161865234375
+        ],
+        "page_size": {
+          "width": 595.280029296875,
+          "height": 841.8900146484375
+        }
+      },
+      "source_type": "source",
+      "derived_from": null,
+      "uploader_ref": "952489a8cf96dcbe04121c83ac560adc",
+      "retrieval_receipt_ref": "measurement:f2:20261003",
+      "policy_revision": "published:2026-10-01T11:14:50.569475+00:00",
+      "block_type": "text",
+      "_excerpt": "multiplexed with other functions, such as the SDIO, UART, SPI, etc. (More details can be found in the Appendix, Table IO_MUX. ) For low-power operations, the GPIOs can be set to hold their states. For details, see Section 4.10 Peripheral Pin Configurations, Appendix A –ESP32 Pin Lists and ESP32 Technical Reference Manual > Chapter IO_MUX and GPIO Matrix.",
+      "_score": 0.025004,
+      "_similarity": 0.6608
+    },
+    {
+      "schema": "ddp-evidence/1#FederatedEvidence",
+      "evidence_id": "02c9cb10b3d44adda75098371eca3c01",
+      "origin_node_id": "node-read-only-b",
+      "authority_node_id": "node-read-only-b",
+      "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+      "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+      "source_digest": "sha256:a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+      "parse_revision": "4585afdaa46c49bca67375b860c074f8",
+      "excerpt_digest": "sha256:42d7ae2925e1e6e462d992d6d461c5f5630df8c956479fe81c027afc17f097c2",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 35,
+        "seq": 880,
+        "bbox": [
+          56.74281311035156,
+          62.3814697265625,
+          537.8866577148438,
+          291.72161865234375
+        ],
+        "page_size": {
+          "width": 595.280029296875,
+          "height": 841.8900146484375
+        }
+      },
+      "source_type": "source",
+      "derived_from": null,
+      "uploader_ref": "952489a8cf96dcbe04121c83ac560adc",
+      "retrieval_receipt_ref": "measurement:f2:20261003",
+      "policy_revision": "published:2026-10-01T11:14:50.569475+00:00",
+      "block_type": "text",
+      "_excerpt": "4.8 Digital Peripherals 4.8.1 General Purpose Input / Output Interface (GPIO) ESP32 has 34 GPIO pins which can be assigned various functions by programming the appropriate registers. There are several kinds of GPIOs: digital-only, analog-enabled, capacitive-touch-enabled, etc. Analog-enabled GPIOs and Capacitive-touch-enabled GPIOs can be configured as digital GPIOs. Most of the digital GPIOs can be configured as internal pull-up or pull-down, or set to high impedance. When configured as an input, the input value can be read through the register. The input can also be set to edge-trigger or level-trigger to generate CPU interrupts. Most of the digital IO pins are bi-directional, non-inverting and tristate, including input and output buffers with tristate control. These pins can be",
+      "_score": 0.028177,
+      "_similarity": 0.7193
+    }
+  ],
+  "code_sha256": {
+    "python/ddp_core/ddp_core/search.py": "95283960854b5c2a72f316c15b5da73c01a166666de876fda22074d46605fadd",
+    "services/corpus-api/ddp_corpus/federation.py": "7091966501c766e4ce1ac901b97b9750b5379c6208d0b6331d22a4b562ab4608"
+  },
+  "limits": [
+    "Read-only in-process production collection/retrieval/excerpt path; no peer HTTP transport, generation, UI or writes.",
+    "Page 4 means zero-based page_idx=3.",
+    "Pico page predicate is source+page; ESP32 additionally requires the 34 programmable GPIOs excerpt."
+  ],
+  "expected_page_miss": {
+    "source": "esp32",
+    "physical_page_number": 4,
+    "expected_excerpt": "34 programmable GPIOs",
+    "present": false
+  },
+  "esp32_gpio_count_fact": {
+    "present": true,
+    "rank": 8,
+    "physical_page_number": 36,
+    "chunk_id": "ad0de8f8410e4ae9a4d880bc4cb04758",
+    "excerpt": "ESP32 has 34 GPIO pins which can be assigned various functions by programming the appropriate registers."
+  },
+  "generic_gpio_label_ranks": [
+    2,
+    4
+  ],
+  "assessment": "The drill question is now split. Pico page 4 is returned; the expected ESP32 page 4 evidence remains absent, while ESP32 page 36 at rank 8 supplies the same 34-GPIO fact. Generic GPIOs labels occupy ranks 2 and 4. This is a remaining ranking-quality limitation, not proof of the expected-page recall.",
+  "post_measurement_code_change": {
+    "search_py_sha256_after": "ed8fa7700b1200d1a241094cd50162bba68eae81c4d2841e8294c573d8941422",
+    "change": "After this measurement the comma rule was narrowed: a bare comma starts a facet only before 'how many/how much' in a question that starts with an interrogative; 'and which/what/how many/how much' unchanged. Reason: independent review found ', which supports …' relative clauses split into invented facets.",
+    "effect_on_measured_runs": "none: _query_facets recomputed offline for every measured question (6 frozen cases + the federated drill question) gives identical facets under both rules; the only input question whose facets differ is the unmeasured negative case ('According only to the uploaded Pico datasheet, what is …'), which the narrowed rule leaves unsplit exactly like the 20261001 baseline.",
+    "measured_with_search_py_sha256": "95283960854b5c2a72f316c15b5da73c01a166666de876fda22074d46605fadd"
+  }
+}

@@ -80,10 +80,10 @@ def _node_a_federation_config(two_node, monkeypatch):
     monkeypatch.setattr(settings, "federation_allow_loopback", True)
     two_node.install_counting_transport(monkeypatch)
 
-    async def _embed(_http, _text):
-        return [0.1, 0.2, 0.3, 0.4]
+    async def _embed(_http, texts):
+        return [[0.1, 0.2, 0.3, 0.4] for _ in texts]
 
-    monkeypatch.setattr(upstream, "embed_one", _embed)
+    monkeypatch.setattr(upstream, "embed_batched", _embed)
 
 
 # --------------------------------------------------------------------------- fixtures

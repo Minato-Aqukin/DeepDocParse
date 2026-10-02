@@ -129,9 +129,17 @@ class SearchIndex(Protocol):
                      authorized_parse_job_ids: list[str] | None = None) -> list[Hit]: ...
 
 
+# "and which/what/how many/how much …" coordinates questions. A bare comma starts a new
+# facet only before an unambiguous count question: ", which supports …" and ", what makes
+# …" are usually relative or appositive clauses, and splitting them would invent a facet.
+_AND_FACET = r"\band\s+(?=(?:which|what|how\s+(?:many|much))\b)"
+_COMMA_FACET = r",\s*(?:and\s+)?(?=how\s+(?:many|much)\b)"
+
+
 def _query_facets(query: str) -> list[str]:
     """Only split explicit coordinated questions; never invent missing subjects/facts."""
-    parts = re.split(r"\band\s+(?=(?:which|what|how\s+(?:many|much))\b)",
+    interrogative = re.match(r"\s*(?:which|what|how)\b", query, flags=re.IGNORECASE)
+    parts = re.split(f"{_COMMA_FACET}|{_AND_FACET}" if interrogative else _AND_FACET,
                      query, flags=re.IGNORECASE)
     if not 2 <= len(parts) <= 4:
         return [query]
@@ -143,10 +151,10 @@ def _query_facets(query: str) -> list[str]:
         # subject ("does X support, according to ...") swamps the requested attribute.
         part = re.split(r"\b(?:does|do|did)\b", part, maxsplit=1,
                         flags=re.IGNORECASE)[0].strip(" ,;?")
-        if len(_deduped_terms(part)) < 2:
-            return [query]
-        focused.append(part)
-    return list(dict.fromkeys(focused))
+        if len(_deduped_terms(part)) >= 2:
+            focused.append(part)
+    focused = list(dict.fromkeys(focused))
+    return focused if len(focused) >= 2 else [query]
 
 
 async def search_query(
@@ -157,6 +165,39 @@ async def search_query(
     authorized_parse_job_ids: list[str] | None = None,
 ) -> tuple[list[Hit], str | None]:
     """Bounded facet retrieval shared by search and QA, with one visible fallback."""
+    hits, degraded, _ = await _search_query(
+        session, index, embed=embed, query=query, document_id=document_id,
+        limit=limit, candidates=candidates, min_similarity=min_similarity,
+        authorized_document_ids=authorized_document_ids,
+        authorized_parse_job_ids=authorized_parse_job_ids, detect_truncation=False)
+    return hits, degraded
+
+
+async def search_query_with_truncation(
+    session: AsyncSession, index: SearchIndex, *,
+    embed: Callable[[list[str]], Awaitable[list[list[float]]]],
+    query: str, document_id: str | None, limit: int, candidates: int,
+    min_similarity: float, authorized_document_ids: list[str] | None = None,
+    authorized_parse_job_ids: list[str] | None = None,
+) -> tuple[list[Hit], str | None, bool]:
+    """Over-fetch one distinct hit without changing the final limit's facet priority."""
+    return await _search_query(
+        session, index, embed=embed, query=query, document_id=document_id,
+        limit=limit, candidates=candidates, min_similarity=min_similarity,
+        authorized_document_ids=authorized_document_ids,
+        authorized_parse_job_ids=authorized_parse_job_ids, detect_truncation=True)
+
+
+async def _search_query(
+    session: AsyncSession, index: SearchIndex, *,
+    embed: Callable[[list[str]], Awaitable[list[list[float]]]],
+    query: str, document_id: str | None, limit: int, candidates: int,
+    min_similarity: float, authorized_document_ids: list[str] | None = None,
+    authorized_parse_job_ids: list[str] | None = None,
+    detect_truncation: bool,
+) -> tuple[list[Hit], str | None, bool]:
+    """One selection implementation; over-fetch never changes slot allocation."""
+    fetch_limit = limit + int(detect_truncation)
     facets = _query_facets(query)
     queries = [query, *facets] if len(facets) > 1 else [query]
     try:
@@ -171,11 +212,11 @@ async def search_query(
     for part, vector in zip(queries, vectors, strict=True):
         ranked.append(await index.search(
             session, vector=vector, query=part, document_id=document_id,
-            limit=limit, candidates=candidates * (2 if len(queries) > 1 else 1),
+            limit=fetch_limit, candidates=candidates * (2 if len(queries) > 1 else 1),
             min_similarity=min_similarity, authorized_document_ids=authorized_document_ids,
             authorized_parse_job_ids=authorized_parse_job_ids))
     if len(ranked) == 1:
-        return ranked[0], degraded
+        return ranked[0][:limit], degraded, len(ranked[0]) > limit
     best: dict[str, Hit] = {}
     for hits in ranked:
         for hit in hits:
@@ -197,9 +238,9 @@ async def search_query(
                 continue
             seen.add(hit["chunk_id"])
             selected.append(best[hit["chunk_id"]])
-            if len(selected) >= limit:
-                return selected, degraded
-    return selected, degraded
+            if len(selected) >= fetch_limit:
+                return selected[:limit], degraded, len(selected) > limit
+    return selected, degraded, False
 
 
 def _rrf(ranked_lists: list[list[str]]) -> dict[str, float]:

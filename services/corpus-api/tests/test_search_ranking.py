@@ -1,6 +1,8 @@
 """Keyword ranking keeps rare facts visible without changing OR recall or ACLs."""
 from hashlib import sha256
 
+import pytest
+
 from ddp_core.models import Chunk, Document, ParseJob
 from ddp_core.search import MemoryIndex
 
@@ -92,7 +94,12 @@ async def test_cross_document_facts_survive_repeated_document_names(session):
     assert {hit["chunk_id"] for hit in hits[:2]} == {"pico-fact", "esp-fact"}
 
 
-async def test_compound_query_preserves_each_requested_facet_with_keyword_fallback(session):
+# ", which …" alone is ambiguous with a relative clause and is deliberately not split
+# (ddp_core tests pin that); coordination needs "and".
+@pytest.mark.parametrize("coordination", [" and which ", ", and which "])
+@pytest.mark.parametrize("comparison", ["", ", and what is the difference?"])
+async def test_compound_query_preserves_each_requested_facet_with_keyword_fallback(
+        session, coordination, comparison):
     from ddp_core.search import search_query
 
     document = await add_document(session, {
@@ -109,8 +116,8 @@ async def test_compound_query_preserves_each_requested_facet_with_keyword_fallba
 
     hits, degraded = await search_query(
         session, MemoryIndex(), embed=unavailable,
-        query=("What supply voltage does the device use "
-               "and which wireless protocol does it support?"),
+        query=("What supply voltage does the device use"
+               + coordination + "wireless protocol does it support?" + comparison),
         document_id=None, authorized_document_ids=[document.id],
         limit=2, candidates=4, min_similarity=0.4)
 
