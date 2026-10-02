@@ -521,3 +521,57 @@ func TestExpandScopeUnknownMemberReasonMatchesLocalFallback(t *testing.T) {
 		t.Fatalf("fallback reasons drifted: %+v", reasons)
 	}
 }
+
+func TestExpandScopeLocalRevocationPrecedesChildMetadata(t *testing.T) {
+	for _, shape := range []string{"approved", "expired", "missing_endpoint", "non_enumerable"} {
+		t.Run(shape, func(t *testing.T) {
+			child := federatedPeerMember("node-revoked", true)
+			switch shape {
+			case "expired":
+				child.ValidUntil = time.Now().UTC().Add(-time.Hour)
+			case "missing_endpoint":
+				child.Endpoints = nil
+			case "non_enumerable":
+				child.ExpansionState = ExpansionUnexpanded
+			}
+			parent := &fakeDirectory{members: []PeerMember{child}}
+			parentServer := parent.serve(t, "node-parent")
+			revoked := &fakeDirectory{}
+			revokedServer := revoked.serve(t, "node-revoked")
+			dir := directoryFor(t, map[string]string{"node-parent": parentServer.URL, "node-revoked": revokedServer.URL})
+
+			out := ExpandScope(context.Background(), dir, ExpansionInput{
+				Members:        []Member{federatedMemberDescriptor("node-parent", true)},
+				RevokedNodeIDs: map[string]bool{"node-revoked": true}, LocalNodeID: "node-local",
+				Operation: "search", MaxTargets: 100, MaxRequests: 64, MaxNodes: 32,
+			})
+			want := UnknownSubtree{NodeID: "node-revoked", Reason: "denied"}
+			if len(out.Unknowns) != 1 || out.Unknowns[0] != want {
+				t.Fatalf("local revocation must override child metadata: %+v", out.Unknowns)
+			}
+			if revoked.count() != 0 {
+				t.Fatalf("locally revoked child received %d requests", revoked.count())
+			}
+		})
+	}
+}
+
+func TestExpandScopeUnconfiguredChildrenWithoutLocalRevocationStayUnknown(t *testing.T) {
+	parent := &fakeDirectory{members: []PeerMember{
+		federatedPeerMember("node-unregistered", true),
+		federatedPeerMember("node-approved", true),
+	}}
+	parentServer := parent.serve(t, "node-parent")
+	dir := directoryFor(t, map[string]string{"node-parent": parentServer.URL})
+	out := ExpandScope(context.Background(), dir, ExpansionInput{
+		Members:     []Member{federatedMemberDescriptor("node-parent", true), federatedMemberDescriptor("node-approved", true)},
+		LocalNodeID: "node-local", Operation: "search", MaxTargets: 100, MaxRequests: 64, MaxNodes: 32,
+	})
+	reasons := map[string]string{}
+	for _, subtree := range out.Unknowns {
+		reasons[subtree.NodeID] = subtree.Reason
+	}
+	if len(reasons) != 2 || reasons["node-unregistered"] != "unknown" || reasons["node-approved"] != "unknown" {
+		t.Fatalf("unconfigured children without local revocation changed reason: %+v", out.Unknowns)
+	}
+}

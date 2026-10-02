@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -166,6 +167,72 @@ func TestScopeCreateToleratesMutualMemberDirectoriesAndSeals(t *testing.T) {
 	}
 	if p.countPath("/api/v1/federation/members") != 2 || b.countPath("/api/v1/federation/members") != 2 {
 		t.Fatalf("cycle re-queried a directory: p=%d b=%d", p.countPath("/api/v1/federation/members"), b.countPath("/api/v1/federation/members"))
+	}
+}
+
+func TestScopeCreateLocallyRevokedChildIsDeniedWithoutSigning(t *testing.T) {
+	for _, configured := range []bool{true, false} {
+		t.Run(map[bool]string{true: "configured", false: "unconfigured"}[configured], func(t *testing.T) {
+			f := discoveryPGFixture(t)
+			verifiedEmptyCatalog(t, f)
+			parentRegistration := remoteRegistration(t, true)
+			approveEnumerableNode(t, f, parentRegistration)
+			parentNode := parentRegistration.Descriptor.NodeID
+			childRegistration := remoteRegistration(t, true)
+			approveEnumerableNode(t, f, childRegistration)
+			childNode := childRegistration.Descriptor.NodeID
+			decodeDiscovery[map[string]any](t, requestDiscovery(t, f.handler, "POST", "/api/v1/federation/nodes/"+childNode+"/revoke", f.adminToken, nil), 200)
+
+			parent := newFakePeerServer(parentNode,
+				[]discovery.PeerMember{enumerablePeerMember(childNode)},
+				[]discovery.CollectionRef{{CollectionID: "parent-col", OriginNodeID: parentNode}})
+			child := newFakePeerServer(childNode, nil,
+				[]discovery.CollectionRef{{CollectionID: "revoked-col", OriginNodeID: childNode}})
+			childServer := child.serve(t)
+			configs := map[string]discovery.PeerConfig{
+				parentNode: {NodeID: parentNode, Endpoint: parent.serve(t).URL},
+			}
+			if configured {
+				configs[childNode] = discovery.PeerConfig{NodeID: childNode, Endpoint: childServer.URL}
+			}
+			sign := peerCollectorSigner(t)
+			childSignAttempts := 0
+			f.server.peers = discovery.NewPeerDirectory(configs, nil, 2*time.Second,
+				func(ctx context.Context, cfg discovery.PeerConfig, r *http.Request) error {
+					if cfg.NodeID == childNode {
+						childSignAttempts++
+					}
+					trust, err := f.server.store.PeerTrust(ctx, f.org, cfg.NodeID)
+					if err != nil {
+						return err
+					}
+					if trust.State != discovery.MemberApproved {
+						return errors.New("peer audience is not approved")
+					}
+					return sign(ctx, cfg, r)
+				})
+
+			out := createScope(t, f, map[string]any{"operation": "search"})
+			want := discovery.UnknownSubtree{NodeID: childNode, Reason: "denied"}
+			if len(out.Manifest.UnexpandedSubtrees) != 1 || out.Manifest.UnexpandedSubtrees[0] != want {
+				t.Errorf("locally revoked child must have reason denied: got %+v", out.Manifest.UnexpandedSubtrees)
+			}
+			if childSignAttempts != 0 {
+				t.Errorf("locally revoked child must not reach signer: got %d attempts", childSignAttempts)
+			}
+			if child.count() != 0 {
+				t.Errorf("locally revoked child must receive zero requests: got %d", child.count())
+			}
+			if out.Manifest.EnumerationState != "partial" || out.TotalTargets != 1 ||
+				len(out.Manifest.ExpandedMembers) != 1 || out.Manifest.ExpandedMembers[0].OriginNodeID != parentNode {
+				t.Fatalf("revocation must preserve the gap and observed parent target: %+v", out.Manifest)
+			}
+			read := decodeDiscovery[discovery.ScopeEnvelope](t, requestDiscovery(t, f.handler, "GET", "/api/v1/federation/scopes/"+out.Manifest.ScopeID, f.aliceToken, nil), 200)
+			if len(read.Manifest.UnexpandedSubtrees) != 1 || read.Manifest.UnexpandedSubtrees[0] != want ||
+				read.Manifest.ManifestDigest != out.Manifest.ManifestDigest {
+				t.Errorf("persisted scope must retain the denied subtree: %+v", read.Manifest)
+			}
+		})
 	}
 }
 

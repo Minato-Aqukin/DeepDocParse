@@ -12,6 +12,26 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// RevokedScopeNodes returns the current local trust revocations independently
+// of snapshot visibility. Fresh snapshots omit these members; old snapshots
+// also label hidden or superseded approvals revoked, which is not a trust state.
+func (s *Store) RevokedScopeNodes(ctx context.Context, org string) (map[string]bool, error) {
+	rows, err := s.pool.Query(ctx, `SELECT node_id FROM control.node_members WHERE organization_id=$1 AND state='revoked'`, org)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	nodes := map[string]bool{}
+	for rows.Next() {
+		var nodeID string
+		if err = rows.Scan(&nodeID); err != nil {
+			return nil, err
+		}
+		nodes[nodeID] = true
+	}
+	return nodes, rows.Err()
+}
+
 // CreateScope consumes one fixed, authorized member snapshot and a server-observed
 // local collection catalog. Directory writes and the freeze share the directory lock.
 // It is the local-only entry point; CreateExpandedScope additionally consumes the

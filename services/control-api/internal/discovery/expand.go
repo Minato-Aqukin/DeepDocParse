@@ -34,7 +34,10 @@ type RemoteExpansion struct {
 }
 
 type ExpansionInput struct {
-	Members        []Member
+	Members []Member
+	// RevokedNodeIDs is this center's current membership revocation set, not the
+	// frozen snapshot's authorization overlay or a peer's advertised state.
+	RevokedNodeIDs map[string]bool
 	LocalNodeID    string
 	Operation      string
 	AllowedNodeIDs []string
@@ -370,6 +373,12 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 			// Re-entering the local node or an already scheduled directory is the
 			// loop/duplicate path itself, not an unexpanded subtree.
 			if !allowed(child.NodeID) || child.NodeID == in.LocalNodeID || visited[child.NodeID] || scheduled[child.NodeID] {
+				continue
+			}
+			// Local revocation overrides a peer's stale approval before inspecting
+			// its descriptor or configuration, and before enqueueing any work.
+			if in.RevokedNodeIDs[child.NodeID] {
+				addUnknown(child.NodeID, "denied")
 				continue
 			}
 			if child.State != MemberApproved {
