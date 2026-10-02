@@ -1,0 +1,826 @@
+{
+  "schema": "ddp-abc-federation-drill/1",
+  "date": "2026-10-02",
+  "source_revisions": {
+    "drill1_cases_still_applicable": "uncommitted pre-3c21177 working tree",
+    "cases": "c01877a621542fb0714384a248ff11734333e18a",
+    "drill2_cases": "per case `code` (repository HEAD at run time; e9a8d21 before the fixes, then 0cbd019289062eb60a313c0425a2f2c3938ee06e and b6369f64f266d84ac69d4603ca3f8a1cbabfb2a8)"
+  },
+  "platform": {
+    "os": "Linux-7.2.8-1-cachyos-x86_64-with-glibc2.44",
+    "host": "single physical host",
+    "note": "Three independent centers on one host: separate PostgreSQL clusters, MinIO, Redis, Ed25519 node identities, TLS ingress (loopback test CA). Not three physical machines."
+  },
+  "topology": {
+    "A": {
+      "node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "role": "entry/coordinator, no generation model, no published data"
+    },
+    "B": {
+      "node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+      "role": "data node: collection 471b80409c6e4df9aace894f9c871829 (pico-datasheet.pdf, esp32-datasheet.pdf), generation unhealthy"
+    },
+    "C1": {
+      "node_id": "node-38f260609e6ec4a08f1c7c9f01ed6b6d815fa94bc7fc4f7c",
+      "role": "compute-only generator; revoked on A in this drill"
+    },
+    "C2": {
+      "node_id": "node-00bd4effc78276d080de112271f735b49f4b692fe68714b4",
+      "role": "C re-enrolled with a new identity on a fresh database"
+    },
+    "data_edges": "answer: A->B query, B->A evidence excerpts, A->C evidence excerpts (3 approved edges; C answer returns via executor status). Wiki: the same three plus C->A wiki_draft (4 approved edges)"
+  },
+  "models": {
+    "qwen3-4b": {
+      "name": "Qwen3-4B-Instruct-2507 Q4_K_M (GGUF, unsloth via ModelScope)",
+      "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+      "runtime": "llama.cpp llama-server b10809-5266f24da, CPU",
+      "served_as": "qwen3-4b-instruct-2507",
+      "used_by": [
+        "cases",
+        "drill2_cases"
+      ]
+    },
+    "qwen3-1.7b": {
+      "name": "Qwen3-1.7B Q8_0 (GGUF)",
+      "sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+      "runtime": "llama.cpp llama-server b10809-5266f24da, CPU",
+      "served_as": "qwen3-1.7b",
+      "used_by": [
+        "drill1_cases_still_applicable"
+      ],
+      "note": "drill 1 answers failed unsupported_generation (F1, later fixed in c01877a); the drill-1 cases kept here are permission, restart, lost-response and delivery checks whose verdict does not depend on answer quality"
+    }
+  },
+  "cases": [
+    {
+      "case": "answer.single_document",
+      "status": "PASS",
+      "root_task_id": "dc1cd5ccc2de4903bf57333b668d2ff4",
+      "model": "qwen3-4b",
+      "code": "c01877a",
+      "input": {
+        "operation": "rag.answer.cited",
+        "question": "Which ESP32 GPIO pins are input-only, and what output/pull circuitry do they lack?",
+        "scope": "federation_public exhaustive_scope; recipients B and C; payload question + evidence excerpts"
+      },
+      "expected": {
+        "answer": "GPIO34–GPIO39 are input-only; they lack an output driver and internal pull-up/pull-down circuitry.",
+        "source_page": "esp32-datasheet.pdf p61"
+      },
+      "measured": {
+        "placement": "B retrieve, A fuse, C1 answer",
+        "answer": "GPIO pins 34 to 39 are input-only and lack output drivers and internal pull-up/pull-down circuitry ...",
+        "citation": "ESP32 p61",
+        "validation_state": "passed",
+        "claims": "needs_review",
+        "used_hops": 3,
+        "generation_tokens": 1024,
+        "C1": "1 admission / 1 execution"
+      },
+      "trace": [
+        ".dev-logs/abc-20261001/drill/ui-a-answer-single-c01877a.webp"
+      ]
+    },
+    {
+      "case": "wiki.two_sources",
+      "status": "PASS",
+      "root_task_id": "64242bc11d6546a5904c535918e6f29f",
+      "model": "qwen3-4b",
+      "code": "c01877a",
+      "input": {
+        "operation": "wiki.pages",
+        "question": "GPIO capabilities of Raspberry Pi Pico and ESP32",
+        "title": "Pico and ESP32 GPIO overview",
+        "max_pages": 2,
+        "sources": "B pico-datasheet.pdf + esp32-datasheet.pdf",
+        "generator": "C1"
+      },
+      "expected": "C1 drafts from fixed excerpts; A validates and commits a revision whose every generated claim is bound to evidence frozen as a source dependency",
+      "measured": {
+        "wiki_revision": "23a4e02a0a8b48c4a9c8fe4e682519ec",
+        "pages": 2,
+        "generated_claims": 13,
+        "bound_claims": 13,
+        "claim_bindings": 15,
+        "bindings_outside_dependencies": 0,
+        "dependency_rows": 5,
+        "source_versions": 2,
+        "origin_node": "B",
+        "validation_state": "passed",
+        "used_hops": 4,
+        "generation_tokens": 4096,
+        "C1": "1 admission / 1 execution",
+        "how_measured": "SELECT over A wiki_pages.generated_sections, wiki_claim_bindings and wiki_dependencies for the revision (2026-10-02)"
+      },
+      "not_covered": "Wiki update of an existing page and publication permission on A",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/ui-a-wiki-task-c01877a.webp",
+        ".dev-logs/abc-20261001/drill/ui-a-wiki-revision-c01877a.webp"
+      ]
+    }
+  ],
+  "drill2_cases": [
+    {
+      "scenario": "answer.two_documents",
+      "status": "PASS_WITH_FINDING",
+      "root": "dfb38ebeb5454de1a6bc37a3bbc53ef0",
+      "code": "e9a8d21",
+      "model": "qwen3-4b-instruct-2507 (Qwen3-4B-Instruct-2507 Q4_K_M, llama.cpp b10809-5266f24da)",
+      "input": {
+        "operation": "rag.answer.cited",
+        "question": "How many multi-function GPIOs does Raspberry Pi Pico expose, how many programmable GPIOs does ESP32 have, and what is the difference?",
+        "scope": "federation_public exhaustive_scope; recipients B and the compute node; payload question + evidence excerpts",
+        "ui": "A web /#/tasks/new as abc-a-user"
+      },
+      "expected": "Pico 26, ESP32 34, difference 8; both stated on PDF page 4",
+      "observed": "C1 answered: Pico 26 multi-function GPIOs [1] (Pico p4), ESP32 34 programmable GPIOs [4] (ESP32 p36: \"ESP32 has 34 GPIO pins\"); validation passed; claims needs_review. The difference (8) was not stated numerically.",
+      "finding": "F2 persists: ESP32 p4 (the expected page) is not among the 8 retrieved excerpts; p36 carries the same fact.",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/ui-a-answer-two-doc-c01877a.webp"
+      ],
+      "expected_source_fact": null,
+      "measured": {
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "error": "",
+        "answer_reason": "",
+        "validation_state": "passed",
+        "evidence_count": "8",
+        "coverage_ref_set": "t",
+        "used_requests": "20",
+        "used_hops": "3",
+        "max_hops": "4",
+        "used_generation_tokens": "1024",
+        "B": "1 admissions / 1 executions succeeded",
+        "C": "1 admissions / 1 executions succeeded",
+        "A_events": "intent_created@23:58:07.446 plan_ready@23:58:07.461 plan_approved@23:58:22.474 execution_started@23:58:22.489 task_completed@23:58:23.471 delivery_pending@23:58:23.471"
+      }
+    },
+    {
+      "scenario": "fault.c_worker_crash_mid_generation",
+      "status": "PASS",
+      "root": "95707a71cea84581b6bd2e719ea3f240",
+      "code": "e9a8d21",
+      "model": "qwen3-4b-instruct-2507 (Qwen3-4B-Instruct-2507 Q4_K_M, llama.cpp b10809-5266f24da)",
+      "input": {
+        "operation": "rag.answer.cited",
+        "question": "Which ESP32 GPIO pins are input-only, and what output/pull circuitry do they lack?",
+        "scope": "federation_public exhaustive_scope; recipients B and the compute node; payload question + evidence excerpts",
+        "ui": "A web /#/tasks/new as abc-a-user",
+        "fault": "SIGKILL the C1 corpus-worker process tree right after C1 admitted generation; restart it"
+      },
+      "expected": "No fabricated answer; visible delegated failure; no second generation for the same step",
+      "observed": "A polled with backoff until peer_execution_timeout and reported delegated_execution_failed:peer_execution_timeout with evidence kept; C1 sweeper marked the execution failed/lease_expired; one admission and one execution.",
+      "note": "The kill was aimed at A worker; pgrep matched the C1 worker. Recorded as the executor-crash scenario.",
+      "trace": [
+        ".dev-logs/abc-20261001/drill2/faults/observations.json"
+      ],
+      "expected_source_fact": "GPIO34-GPIO39 are input-only; no output driver and no internal pull-up/pull-down (ESP32 p61)",
+      "measured": {
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "error": "",
+        "answer_reason": "delegated_execution_failed:peer_execution_timeout",
+        "validation_state": "failed",
+        "evidence_count": "8",
+        "coverage_ref_set": "t",
+        "used_requests": "34",
+        "used_hops": "3",
+        "max_hops": "4",
+        "used_generation_tokens": "1024",
+        "B": "1 admissions / 1 executions succeeded",
+        "C": "1 admissions / 1 executions failed:lease_expired",
+        "A_events": "intent_created@00:01:42.688 plan_ready@00:01:42.705 plan_approved@00:01:57.718 execution_started@00:01:57.733 task_completed@00:01:58.721 delivery_pending@00:01:58.721"
+      }
+    },
+    {
+      "scenario": "fault.a_coordinator_worker_crash",
+      "status": "PASS",
+      "root": "ae199bcf6c584966badaa4a5803cb111",
+      "code": "e9a8d21",
+      "model": "qwen3-4b-instruct-2507 (Qwen3-4B-Instruct-2507 Q4_K_M, llama.cpp b10809-5266f24da)",
+      "input": {
+        "operation": "rag.answer.cited",
+        "question": "Which ESP32 GPIO pins are input-only, and what output/pull circuitry do they lack?",
+        "scope": "federation_public exhaustive_scope; recipients B and the compute node; payload question + evidence excerpts",
+        "ui": "A web /#/tasks/new as abc-a-user",
+        "fault": "SIGKILL the A corpus-worker process tree right after C1 admitted generation (hops 3/4); restart it"
+      },
+      "expected": "Reclaimed coordinator reconciles durable B and C admissions by business key; no extra hop charge; one generation",
+      "observed": "Restarted worker reclaimed the federation_plan task and succeeded with the correct GPIO34-39 answer; hops stayed 3. F4 (drill 1) is fixed.",
+      "note": "First attempt 17e40717 is not a valid fault test: the task had already succeeded before the kill.",
+      "trace": [
+        ".dev-logs/abc-20261001/drill2/faults/observations.json"
+      ],
+      "expected_source_fact": "GPIO34-GPIO39 are input-only; no output driver and no internal pull-up/pull-down (ESP32 p61)",
+      "measured": {
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "error": "",
+        "answer_reason": "",
+        "validation_state": "passed",
+        "evidence_count": "8",
+        "coverage_ref_set": "t",
+        "used_requests": "20",
+        "used_hops": "3",
+        "max_hops": "4",
+        "used_generation_tokens": "1024",
+        "B": "1 admissions / 1 executions succeeded",
+        "C": "1 admissions / 1 executions succeeded",
+        "A_events": "intent_created@00:07:04.043 plan_ready@00:07:04.060 plan_approved@00:07:19.071 execution_started@00:07:19.088 task_completed@00:07:55.440 delivery_pending@00:07:55.440"
+      }
+    },
+    {
+      "scenario": "fault.cancel_during_retrieval_before_fix",
+      "status": "FAIL_FIXED",
+      "root": "9bb4b6da2eac4c8388343394df22f0b6",
+      "code": "e9a8d21",
+      "model": "qwen3-4b-instruct-2507 (Qwen3-4B-Instruct-2507 Q4_K_M, llama.cpp b10809-5266f24da)",
+      "input": {
+        "operation": "rag.answer.cited",
+        "question": "Which ESP32 GPIO pins are input-only, and what output/pull circuitry do they lack?",
+        "scope": "federation_public exhaustive_scope; recipients B and the compute node; payload question + evidence excerpts",
+        "ui": "A web /#/tasks/new as abc-a-user",
+        "fault": "click 取消任务 0.7 s after 批准并执行"
+      },
+      "expected": "Cancelled task; nothing further sent; coverage visible",
+      "observed": "A ended cancelled, but C1 still received the question and evidence excerpts and generated (admission 3 s after the cancel request). Coverage panel said 执行开始后才有覆盖记录 although cancel wrote a partial ledger.",
+      "finding": "F10: run_queued held the per-root advisory lock for the whole execution; cancel committed only when the coordinator released it, after its last status check. coverage_ref was not set by cancel(). Fixed in 0cbd019.",
+      "trace": [
+        ".dev-logs/abc-20261001/drill2/ui-cancel-before-fix.webp"
+      ],
+      "expected_source_fact": "GPIO34-GPIO39 are input-only; no output driver and no internal pull-up/pull-down (ESP32 p61)",
+      "measured": {
+        "status": "cancelled",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "insufficient",
+        "error": "cancelled",
+        "answer_reason": "",
+        "validation_state": "",
+        "evidence_count": "0",
+        "coverage_ref_set": "f",
+        "used_requests": "14",
+        "used_hops": "3",
+        "max_hops": "4",
+        "used_generation_tokens": "1024",
+        "B": "1 admissions / 1 executions succeeded",
+        "C": "1 admissions / 1 executions succeeded",
+        "A_events": "intent_created@00:09:54.646 plan_ready@00:09:54.664 plan_approved@00:10:09.674 execution_started@00:10:09.690 task_cancelled@00:10:10.402"
+      }
+    },
+    {
+      "scenario": "fault.cancel_before_dispatch_after_fix",
+      "status": "PASS",
+      "root": "55f798a73f5f4c4a84af8dcf36b6205b",
+      "code": "0cbd019",
+      "model": "qwen3-4b-instruct-2507 (Qwen3-4B-Instruct-2507 Q4_K_M, llama.cpp b10809-5266f24da)",
+      "input": {
+        "operation": "rag.answer.cited",
+        "question": "Which ESP32 GPIO pins are input-only, and what output/pull circuitry do they lack?",
+        "scope": "federation_public exhaustive_scope; recipients B and the compute node; payload question + evidence excerpts",
+        "ui": "A web /#/tasks/new as abc-a-user",
+        "fault": "click 取消任务 0.7 s after 批准并执行"
+      },
+      "expected": "Cancelled; zero admissions anywhere after the cancel; coverage visible",
+      "observed": "Cancel landed before the B dispatch: 0 B and 0 C2 admissions; coverage panel visible.",
+      "trace": [
+        ".dev-logs/abc-20261001/drill2/ui-cancel-before-dispatch.webp"
+      ],
+      "expected_source_fact": "GPIO34-GPIO39 are input-only; no output driver and no internal pull-up/pull-down (ESP32 p61)",
+      "measured": {
+        "status": "cancelled",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "insufficient",
+        "error": "cancelled",
+        "answer_reason": "",
+        "validation_state": "",
+        "evidence_count": "0",
+        "coverage_ref_set": "t",
+        "used_requests": "5",
+        "used_hops": "0",
+        "max_hops": "4",
+        "used_generation_tokens": "0",
+        "B": "0 admissions / 0 executions",
+        "C": "0 admissions / 0 executions",
+        "A_events": "intent_created@04:24:25.725 plan_ready@04:24:25.751 plan_approved@04:24:40.754 execution_started@04:24:40.771 task_cancelled@04:24:41.482"
+      }
+    },
+    {
+      "scenario": "fault.cancel_during_b_retrieval_after_fix",
+      "status": "PASS",
+      "root": "e7c6a7b0fe4d4f2b8150991cf9235b17",
+      "code": "0cbd019",
+      "model": "qwen3-4b-instruct-2507 (Qwen3-4B-Instruct-2507 Q4_K_M, llama.cpp b10809-5266f24da)",
+      "input": {
+        "operation": "rag.answer.cited",
+        "question": "Which ESP32 GPIO pins are input-only, and what output/pull circuitry do they lack?",
+        "scope": "federation_public exhaustive_scope; recipients B and the compute node; payload question + evidence excerpts",
+        "ui": "A web /#/tasks/new as abc-a-user",
+        "fault": "watcher cancels via A API as soon as B persists the retrieve admission"
+      },
+      "expected": "Cancelled; the generation step is never dispatched",
+      "observed": "Cancel 44 ms after B accepted the retrieve admission (B execution still queued). A cancelled; C2 received 0 admissions; root ledger 2 hops / 0 generation tokens; coverage panel shows the B target not_attempted/cancelled.",
+      "trace": [
+        ".dev-logs/abc-20261001/drill2/cancel-during-retrieval/e7c6a7b0fe4d4f2b8150991cf9235b17.json",
+        ".dev-logs/abc-20261001/drill2/ui-cancel-during-b-retrieval.webp",
+        ".dev-logs/abc-20261001/drill2/cancel-on-b-admission.py"
+      ],
+      "expected_source_fact": "GPIO34-GPIO39 are input-only; no output driver and no internal pull-up/pull-down (ESP32 p61)",
+      "measured": {
+        "status": "cancelled",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "insufficient",
+        "error": "cancelled",
+        "answer_reason": "",
+        "validation_state": "",
+        "evidence_count": "0",
+        "coverage_ref_set": "t",
+        "used_requests": "9",
+        "used_hops": "2",
+        "max_hops": "4",
+        "used_generation_tokens": "0",
+        "B": "1 admissions / 1 executions succeeded",
+        "C": "0 admissions / 0 executions",
+        "A_events": "intent_created@04:27:17.468 plan_ready@04:27:17.485 plan_approved@04:27:42.000 execution_started@04:27:42.016 task_cancelled@04:27:43.086"
+      }
+    },
+    {
+      "scenario": "fault.cancel_after_completion",
+      "status": "PASS",
+      "root": "d1c0d3a34a664bc4b9e5e558068b3e3c",
+      "code": "e9a8d21",
+      "model": "qwen3-4b-instruct-2507 (Qwen3-4B-Instruct-2507 Q4_K_M, llama.cpp b10809-5266f24da)",
+      "input": {
+        "operation": "rag.answer.cited",
+        "question": "Which ESP32 GPIO pins are input-only, and what output/pull circuitry do they lack?",
+        "scope": "federation_public exhaustive_scope; recipients B and the compute node; payload question + evidence excerpts",
+        "ui": "A web /#/tasks/new as abc-a-user",
+        "fault": "click 取消任务 after the task already finished"
+      },
+      "expected": "Terminal result unchanged",
+      "observed": "Cancel left the succeeded result untouched.",
+      "trace": [
+        ".dev-logs/abc-20261001/drill2/ui-cancel-after-completion.webp"
+      ],
+      "expected_source_fact": "GPIO34-GPIO39 are input-only; no output driver and no internal pull-up/pull-down (ESP32 p61)",
+      "measured": {
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "error": "",
+        "answer_reason": "",
+        "validation_state": "passed",
+        "evidence_count": "8",
+        "coverage_ref_set": "t",
+        "used_requests": "17",
+        "used_hops": "3",
+        "max_hops": "4",
+        "used_generation_tokens": "1024",
+        "B": "1 admissions / 1 executions succeeded",
+        "C": "1 admissions / 1 executions succeeded",
+        "A_events": "intent_created@00:08:29.924 plan_ready@00:08:29.940 plan_approved@00:08:44.952 execution_started@00:08:44.967 task_completed@00:08:45.926 delivery_pending@00:08:45.926"
+      }
+    },
+    {
+      "scenario": "permission.revocation_of_compute_node",
+      "status": "PASS",
+      "root": "540e6602fb9d475596581269739ebe1a",
+      "code": "e9a8d21",
+      "model": "qwen3-4b-instruct-2507 (Qwen3-4B-Instruct-2507 Q4_K_M, llama.cpp b10809-5266f24da)",
+      "input": {
+        "admin_action": "A admin POST /api/v1/federation/nodes/{C1}/revoke, then approve again",
+        "checks": "A generation candidates; C1-signed probe to A; new answer task from the A web"
+      },
+      "expected": "Revocation terminal; C1 no longer offered or trusted; new plans have no C1 step",
+      "observed": "Revoke 200; approve after revoke 409 discovery_revision_conflict; candidates dropped C1; C1->A probe 401 node_revoked; composer showed no approved compute-only candidate; the plan had no generation step and the result said local_model_missing (没有可用的生成模型，只返回证据).",
+      "trace": [
+        ".dev-logs/abc-20261001/drill2/revocation/",
+        ".dev-logs/abc-20261001/drill2/revocation.py",
+        ".dev-logs/abc-20261001/drill2/revocation/ui-plan-after-revoke.webp",
+        ".dev-logs/abc-20261001/drill2/revocation/ui-result-after-revoke.webp"
+      ],
+      "expected_source_fact": null,
+      "measured": {
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "error": "",
+        "answer_reason": "local_model_missing",
+        "validation_state": "pending",
+        "evidence_count": "8",
+        "coverage_ref_set": "t",
+        "used_requests": "9",
+        "used_hops": "2",
+        "max_hops": "4",
+        "used_generation_tokens": "0",
+        "B": "1 admissions / 1 executions succeeded",
+        "C": "0 admissions / 0 executions",
+        "A_events": "intent_created@00:12:21.194 plan_ready@00:12:21.213 plan_approved@00:12:48.527 execution_started@00:12:48.542 task_completed@00:12:48.747 delivery_pending@00:12:48.747"
+      }
+    },
+    {
+      "scenario": "trust.reenroll_compute_node_with_new_identity",
+      "status": "PASS",
+      "code": "e9a8d21 + uncommitted 0cbd019 work (control-api trust code unchanged)",
+      "model": "qwen3-4b-instruct-2507 (Qwen3-4B-Instruct-2507 Q4_K_M, llama.cpp b10809-5266f24da)",
+      "input": {
+        "operator_action": "fresh database deepdocparse_c2 + identity dir in C cluster; first admin/user; mutual register/approve A<->C2; A peer map C1 -> C2; restart A control/corpus"
+      },
+      "expected": "New node id; trust requires fresh mutual approval; C1 stays refused",
+      "observed": "C2 node id differs from C1 (new key); register 201 / approve 200 on both sides; C1 approval still 409; C2 ready/accepting in A generation candidates after restarting A control.",
+      "trace": [
+        ".dev-logs/abc-20261001/drill2/reenroll/",
+        ".dev-logs/abc-20261001/drill2/reenroll-c2-bootstrap.sh",
+        ".dev-logs/abc-20261001/drill2/reenroll-c2-trust.py"
+      ],
+      "expected_source_fact": null
+    },
+    {
+      "scenario": "fault.b_facade_down_then_resume",
+      "status": "FAIL_OPEN",
+      "root": "4f98a5c972f04a0b9dbd2e329525c1c4",
+      "code": "0cbd019",
+      "model": "qwen3-4b-instruct-2507 (Qwen3-4B-Instruct-2507 Q4_K_M, llama.cpp b10809-5266f24da)",
+      "input": {
+        "operation": "rag.answer.cited",
+        "question": "Which ESP32 GPIO pins are input-only, and what output/pull circuitry do they lack?",
+        "scope": "federation_public exhaustive_scope; recipients B and the compute node; payload question + evidence excerpts",
+        "ui": "A web /#/tasks/new as abc-a-user",
+        "fault": "stop the B TLS facade before approval; restore; click 补做未完成目标"
+      },
+      "expected": "Outage visible (unreachable, partial, no fabricated answer); after resume a complete answer",
+      "observed": "During outage: failed peer_unavailable, B target 无法连接 after 2 attempts, 0 B admissions, yet 2 of 4 hops charged. After restore + resume: B retrieval succeeded (8 excerpts), but the generation hop no longer fit (4/4), C2 received 0 admissions, answer null. UI said 超出生成预算，答案作废 (budget_exceeded = model output overflow).",
+      "finding": "F5 persists by design (hops prepaid per physical attempt, never refunded; max_hops sized for one pass). Label fixed to root_budget_exhausted in b6369f6; hop semantics need a decision.",
+      "trace": [
+        ".dev-logs/abc-20261001/drill2/ui-b-down-during.webp",
+        ".dev-logs/abc-20261001/drill2/ui-b-down-after-resume.webp"
+      ],
+      "expected_source_fact": "GPIO34-GPIO39 are input-only; no output driver and no internal pull-up/pull-down (ESP32 p61)",
+      "measured": {
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "error": "",
+        "answer_reason": "budget_exceeded",
+        "validation_state": "pending",
+        "evidence_count": "8",
+        "coverage_ref_set": "t",
+        "used_requests": "14",
+        "used_hops": "4",
+        "max_hops": "4",
+        "used_generation_tokens": "0",
+        "B": "1 admissions / 1 executions succeeded",
+        "C": "0 admissions / 0 executions",
+        "A_events": "intent_created@04:28:48.100 plan_ready@04:28:48.117 plan_approved@04:29:10.104 execution_started@04:29:10.120 task_failed@04:29:10.666 task_resumed@04:29:40.639 task_completed@04:29:40.920 delivery_pending@04:29:40.920"
+      }
+    },
+    {
+      "scenario": "fault.b_facade_down_then_resume_after_label_fix",
+      "status": "PASS_WITH_FINDING",
+      "root": "724121c83d6a49aaacb8c9a4a61ed4e3",
+      "code": "b6369f6",
+      "model": "qwen3-4b-instruct-2507 (Qwen3-4B-Instruct-2507 Q4_K_M, llama.cpp b10809-5266f24da)",
+      "input": {
+        "operation": "rag.answer.cited",
+        "question": "Which ESP32 GPIO pins are input-only, and what output/pull circuitry do they lack?",
+        "scope": "federation_public exhaustive_scope; recipients B and the compute node; payload question + evidence excerpts",
+        "ui": "A web /#/tasks/new as abc-a-user",
+        "fault": "same F5 sequence"
+      },
+      "expected": "If the root budget cannot fund generation, say so truthfully and keep the evidence",
+      "observed": "Result says 任务预算已用完，未生成答案 (root_budget_exhausted, warn) with the 8 excerpts kept; C2 received 0 admissions.",
+      "finding": "F5 hop accounting unchanged (open).",
+      "trace": [
+        ".dev-logs/abc-20261001/drill2/ui-f5-root-budget-exhausted.webp"
+      ],
+      "expected_source_fact": "GPIO34-GPIO39 are input-only; no output driver and no internal pull-up/pull-down (ESP32 p61)",
+      "measured": {
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "error": "",
+        "answer_reason": "root_budget_exhausted",
+        "validation_state": "pending",
+        "evidence_count": "8",
+        "coverage_ref_set": "t",
+        "used_requests": "15",
+        "used_hops": "4",
+        "max_hops": "4",
+        "used_generation_tokens": "0",
+        "B": "1 admissions / 1 executions succeeded",
+        "C": "0 admissions / 0 executions",
+        "A_events": "intent_created@04:47:42.148 plan_ready@04:47:42.171 plan_approved@04:48:03.575 execution_started@04:48:03.591 task_failed@04:48:03.806 task_resumed@04:48:18.283 task_completed@04:48:18.955 delivery_pending@04:48:18.955"
+      }
+    },
+    {
+      "scenario": "fault.c2_worker_absent_then_restored",
+      "status": "PASS",
+      "root": "745b1b6f3a88453bb815e1471d53f746",
+      "code": "0cbd019",
+      "model": "qwen3-4b-instruct-2507 (Qwen3-4B-Instruct-2507 Q4_K_M, llama.cpp b10809-5266f24da)",
+      "input": {
+        "operation": "rag.answer.cited",
+        "question": "Which ESP32 GPIO pins are input-only, and what output/pull circuitry do they lack?",
+        "scope": "federation_public exhaustive_scope; recipients B and the compute node; payload question + evidence excerpts",
+        "ui": "A web /#/tasks/new as abc-a-user",
+        "fault": "SIGSTOP the C2 corpus-worker tree before approval; SIGCONT 20 s after the admission is durable"
+      },
+      "expected": "Admission durably queued; A keeps waiting; one execution after the worker returns",
+      "observed": "C2 admission accepted/queued for 20 s while frozen, A running; after SIGCONT the task succeeded with the correct cited answer; 1 admission / 1 execution; hops 3, tokens 1024.",
+      "trace": [
+        ".dev-logs/abc-20261001/drill2/faults/observations.json"
+      ],
+      "expected_source_fact": "GPIO34-GPIO39 are input-only; no output driver and no internal pull-up/pull-down (ESP32 p61)",
+      "measured": {
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "error": "",
+        "answer_reason": "",
+        "validation_state": "passed",
+        "evidence_count": "8",
+        "coverage_ref_set": "t",
+        "used_requests": "20",
+        "used_hops": "3",
+        "max_hops": "4",
+        "used_generation_tokens": "1024",
+        "B": "1 admissions / 1 executions succeeded",
+        "C": "1 admissions / 1 executions succeeded",
+        "A_events": "intent_created@04:36:14.245 plan_ready@04:36:14.262 plan_approved@04:36:37.687 execution_started@04:36:37.703 task_completed@04:36:37.981 delivery_pending@04:36:37.981"
+      }
+    }
+  ],
+  "drill1_cases_still_applicable": [
+    {
+      "scenario": "permission.replayed_jti",
+      "status": "PASS",
+      "observations": {
+        "first_request": 201,
+        "reuse": 401,
+        "code": "credential_replayed"
+      },
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/permissions/valid-before-replay.json",
+        ".dev-logs/abc-20261001/drill/permissions/replay.json"
+      ]
+    },
+    {
+      "scenario": "permission.wrong_audience",
+      "status": "PASS",
+      "observations": {
+        "status": 401,
+        "code": "credential_audience_mismatch"
+      },
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/permissions/wrong-audience.json"
+      ]
+    },
+    {
+      "scenario": "permission.unapproved_node",
+      "status": "PASS",
+      "observations": {
+        "status": 401,
+        "code": "node_unknown",
+        "proof": "Fresh genuine independent Ed25519 identity, domain-separated signing; not registered"
+      },
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/permissions/unapproved-domain-signed-node.json"
+      ]
+    },
+    {
+      "scenario": "permission.outside_consented_edges",
+      "status": "PASS",
+      "observations": {
+        "C_real_key_to_B_foreign_coordinator": 403,
+        "C_error": "credential_scope_denied",
+        "A_executor_edge_omission": 403,
+        "A_error": "egress_denied",
+        "no_B_or_C_admissions_for_denied_root": true,
+        "operator_credential": "Used existing actual C identity; C normal signer separately rejects B as node_unknown; no trust mutation to bypass this"
+      },
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/permissions/c-real-key-outside-plan-coordinator.json",
+        ".dev-logs/abc-20261001/drill/permissions/c-direct-b-admission-lookup-sign.json",
+        ".dev-logs/abc-20261001/drill/permission-edge-omitted/denied-approval.json",
+        ".dev-logs/abc-20261001/drill/permissions/executor-edge-fresh.json",
+        ".dev-logs/abc-20261001/drill/permission-executor-edge/after-denial-no-admissions.json"
+      ]
+    },
+    {
+      "scenario": "permission.other_A_user_task_read",
+      "status": "PASS",
+      "observations": {
+        "ordinary_other_user": 404,
+        "code": "task_not_found",
+        "same_org_admin": 200,
+        "admin_read": "legitimately allowed; not a failed ACL"
+      },
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/permissions/ordinary-other-task-read.json",
+        ".dev-logs/abc-20261001/drill/permissions/other-A-user-registration.json",
+        ".dev-logs/abc-20261001/drill/permissions/other-A-user-task-read.json"
+      ]
+    },
+    {
+      "scenario": "permission.no_credential",
+      "status": "PASS",
+      "observations": {
+        "status": 401,
+        "code": "peer_unauthenticated"
+      },
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/permissions/no-node-credential.json"
+      ]
+    },
+    {
+      "scenario": "permission.request_binding",
+      "status": "PASS",
+      "observations": {
+        "changed_exact_body": 403,
+        "body_error": "credential_scope_denied",
+        "changed_method_and_route": 403,
+        "method_error": "credential_operation_denied",
+        "inconsistent_operation_method_signing_request": 400,
+        "signing_error": "credential_invalid"
+      },
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/permissions/body-binding.json",
+        ".dev-logs/abc-20261001/drill/permissions/method-binding.json",
+        ".dev-logs/abc-20261001/drill/permissions/operation-binding-sign.json"
+      ]
+    },
+    {
+      "scenario": "permission.private_resource_and_actor_separation",
+      "status": "PASS",
+      "observations": {
+        "private_B_resource": 404,
+        "missing_B_resource": 404,
+        "same_error_shape": "resource_not_found",
+        "published_B_resource": 200,
+        "A_username_b_alice_cannot_inherit_B_b_alice_private_owner": 404,
+        "B_actor": "hashed peer-* in B-approved organization, not B local owner"
+      },
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/permissions/private-resource.json",
+        ".dev-logs/abc-20261001/drill/permissions/nonexistent-resource.json",
+        ".dev-logs/abc-20261001/drill/permissions/published-resource.json",
+        ".dev-logs/abc-20261001/drill/permissions/actor-separation.json",
+        ".dev-logs/abc-20261001/drill/permissions/same-name-A-registration.json",
+        ".dev-logs/abc-20261001/drill/permissions/same-name-A-actor-private-B-denied.json"
+      ]
+    },
+    {
+      "scenario": "permission.local_only_exploration",
+      "status": "PASS",
+      "observations": {
+        "root_task_id": "42c8e1b16e5a43a58d4d0dbbea3e9bea",
+        "B_probes": 0,
+        "C_probes": 0,
+        "B_admissions": 0,
+        "C_admissions": 0,
+        "approved_or_executed": false,
+        "placement_gate": "negative plan has no generation; never approved/submitted"
+      },
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/permissions/local-only-valid-intent.json",
+        ".dev-logs/abc-20261001/drill/permissions/local-only-valid-plan.json",
+        ".dev-logs/abc-20261001/drill/permissions/local-only/no-remote-probes-database.json",
+        ".dev-logs/abc-20261001/drill/permissions/local-only-events.json"
+      ]
+    },
+    {
+      "scenario": "permission.excerpt_minimization_no_originals",
+      "status": "PASS",
+      "observations": {
+        "C_content": "Only bounded approved excerpt content; query/task metadata accompany it, not original PDF bytes or fetch locations",
+        "answer_excerpt_ids_subset_of_A_result": true,
+        "all_excerpt_digests_valid": true,
+        "max_observed_excerpt_chars": 799,
+        "C_documents": 0,
+        "C_resources": 0,
+        "C_bucket_objects": 0,
+        "literal_excerpt_only_bytes": "Not asserted: actual admission also contains query and task metadata"
+      },
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/permissions/payload-minimization.json",
+        ".dev-logs/abc-20261001/drill/answer-two/database.json",
+        ".dev-logs/abc-20261001/drill/answer-single/database.json",
+        ".dev-logs/abc-20261001/drill/wiki/database.json",
+        ".dev-logs/abc-20261001/drill/permissions/c-no-originals-database.json",
+        ".dev-logs/abc-20261001/drill/permissions/c-object-store-inventory.json"
+      ]
+    },
+    {
+      "scenario": "fault.a_API_restart",
+      "status": "PASS",
+      "observations": {
+        "pre": "202 durable acceptance, running",
+        "post": "succeeded",
+        "C_executions": 1,
+        "B_retrieve_executions": 1,
+        "B_persisted_probe_rows": 1,
+        "duplicate_generation": false,
+        "dependency_interruption": "First API relaunch failed because owned A MinIO was already down; restored owned A MinIO then identical launcher",
+        "factual_answer_gate": "Still fails unsupported_generation, independent of lifecycle recovery"
+      },
+      "root_task_id": "cd748c1cc1ff490ca863d74f530c2e19",
+      "plan_digest": "sha256:18ea5c2677f941a5fc2a9fda12670e380163ab21e8cccba4146cd3c0dfe2d8c4",
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/fault-api-restart/submit.json",
+        ".dev-logs/abc-20261001/drill/fault-api-restart/restart-observation.json",
+        ".dev-logs/abc-20261001/drill/fault-api-restart/post-restart-status.json",
+        ".dev-logs/abc-20261001/drill/fault-api-restart/post-restart-database.json",
+        ".dev-logs/abc-20261001/drill/fault-api-restart/events.json"
+      ]
+    },
+    {
+      "scenario": "fault.e_lost_response_vs_known_denial",
+      "status": "PASS",
+      "observations": {
+        "fault": "Owned temporary B facade forwarded actual admission, received real201, then closed TLS before HTTP response",
+        "lost_outcome": "A reconciled same admission business key; one B execution, one C execution; no duplicate",
+        "post": "succeeded",
+        "C_executions": 1,
+        "B_retrieve_executions": 1,
+        "B_persisted_probe_rows": 1,
+        "known_failure_comparison": "Fresh executor consent denial403 egress_denied created no admissions/executions; not treated as an unknown accepted request",
+        "factual_answer_gate": "Still fails unsupported_generation"
+      },
+      "root_task_id": "175bca37e70f48e2850d8b050a68f991",
+      "plan_digest": "sha256:e21f68a6c33f7a97ad66cbb13e74be40181731947ddbe3b0105a3d0acd5a4cac",
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/fault-lost-b-admission-response/injected-loss.json",
+        ".dev-logs/abc-20261001/drill/fault-lost-b-admission-response/submit.json",
+        ".dev-logs/abc-20261001/drill/fault-lost-b-admission-response/final-status.json",
+        ".dev-logs/abc-20261001/drill/fault-lost-b-admission-response/final-database.json",
+        ".dev-logs/abc-20261001/drill/fault-lost-b-admission-response/final-events.json",
+        ".dev-logs/abc-20261001/drill/permissions/executor-edge-fresh.json",
+        ".dev-logs/abc-20261001/drill/permission-executor-edge/after-denial-no-admissions.json"
+      ]
+    },
+    {
+      "scenario": "delivery.local_verification_and_ack",
+      "status": "PASS",
+      "observations": {
+        "delivery_id": "141320fb16ab454ca3a6e0cbe0303543",
+        "digest": "Locally recomputed SHA256 over actual canonical result bytes; matches server digest",
+        "ack": 200,
+        "state": "confirmed",
+        "not_an_answer_quality_PASS": true
+      },
+      "root_task_id": "175bca37e70f48e2850d8b050a68f991",
+      "plan_digest": "sha256:e21f68a6c33f7a97ad66cbb13e74be40181731947ddbe3b0105a3d0acd5a4cac",
+      "model": "qwen3-1.7b",
+      "code": "uncommitted pre-3c21177 working tree",
+      "trace": [
+        ".dev-logs/abc-20261001/drill/delivery/read-actual-result.json",
+        ".dev-logs/abc-20261001/drill/delivery/locally-verified-result.json",
+        ".dev-logs/abc-20261001/drill/delivery/ack.json"
+      ]
+    }
+  ],
+  "findings_fixed_during_abc": {
+    "F1": "unsupported_generation on real model (shared grounded-claims schema; c01877a)",
+    "F3": "Wiki reason projection (c01877a)",
+    "F4": "coordinator crash recovery reconcile (d27820d)",
+    "F6": "automatic descriptor lease renewal (a3e597a)",
+    "F7": "cancel axis (d27820d)",
+    "F10": "0cbd019 (cancel during retrieval stops later dispatch; cancel sets coverage_ref)",
+    "budget_label": "b6369f6 (root_budget_exhausted instead of budget_exceeded)"
+  },
+  "findings_open": {
+    "F2": "candidate cap 8 can miss the expected source page (ESP32 p4)",
+    "F5": "transport failure before delivery still charges 2 hops; resume then exhausts max_hops before generation",
+    "F11": "a node revoked on A but still approved in B's directory keeps every A exhaustive scope partial; the unexpanded-subtree reason is denied while A still maps the node in FEDERATION_PEERS and unknown after removal",
+    "F12": "center tier: B cannot forbid onward transfer of its evidence to C. The coordinator authorises the A->C edge as relay:{coordinator} and B admission only checks the user consent; the source-policy downstream check (ddp_core validate_scope) runs only on the desktop dispatch path"
+  },
+  "redaction": "Statuses, ids, digests and error codes only; no tokens, credentials, passwords or excerpt text beyond the cited answer sentences."
+}
