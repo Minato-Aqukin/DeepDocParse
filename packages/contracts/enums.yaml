@@ -642,6 +642,7 @@ enums:
       - {value: upstream_error, summary: 调生成模型的请求失败或返回非 200, label: 生成服务出错，只返回证据, severity: error}
       - {value: no_model_output, summary: 模型没有返回可用文本, label: 模型没有输出，只返回证据, severity: error}
       - {value: budget_exceeded, summary: 生成结果超出计划的生成 token 预算, label: 超出生成预算，答案作废, severity: error}
+      - {value: root_budget_exhausted, summary: 本任务的根预算（请求、字节、跳数、生成 token 或截止时间）在生成这一步用完，没有拿到生成结果；不是模型输出超出 token 预算, label: 任务预算已用完，未生成答案, severity: warn}
       - {value: unsupported_generation, summary: 生成文本的引用结构不成立（无引用、越界引用、矛盾标注不成立）, label: 生成的答案引用不成立，已作废, severity: error}
       - {value: delegated_answer_missing, summary: 远端执行完成但没有返回答案文档, label: 远端没有返回答案, severity: error}
       - {value: delegated_answer_rejected, summary: 远端答案校验未通过；远端自报的原因认不出来时放进细节, label: 远端答案未通过校验, severity: error}

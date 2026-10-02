@@ -1002,7 +1002,7 @@ def evidence_conflict_basis_label(value: str | None) -> str | None:
 # `peer_unavailable:http_503`），细节是对端的状态/错误码或出错字段，经过字符集与长度
 # 清洗；其余代码不带后缀。对端给的字符串**永远只进细节**，不会变成新的代码。
 # 查文案前先去掉冒号后缀；协调者写出之前会检查代码已声明（`federation.unavailable_answer`）。
-FederatedAnswerReason = Literal["insufficient_evidence", "local_model_missing", "evidence_excerpt_unavailable", "excerpt_over_contract_bound", "upstream_error", "no_model_output", "budget_exceeded", "unsupported_generation", "delegated_answer_missing", "delegated_answer_rejected", "delegated_bindings_missing", "delegated_binding_out_of_scope", "delegated_conflict_out_of_scope", "evidence_delegation_over_limit", "invalid_admission_receipt", "receipt_binding_mismatch", "delegated_admission_not_accepted", "delegated_execution_failed", "peer_unavailable"]
+FederatedAnswerReason = Literal["insufficient_evidence", "local_model_missing", "evidence_excerpt_unavailable", "excerpt_over_contract_bound", "upstream_error", "no_model_output", "budget_exceeded", "root_budget_exhausted", "unsupported_generation", "delegated_answer_missing", "delegated_answer_rejected", "delegated_bindings_missing", "delegated_binding_out_of_scope", "delegated_conflict_out_of_scope", "evidence_delegation_over_limit", "invalid_admission_receipt", "receipt_binding_mismatch", "delegated_admission_not_accepted", "delegated_execution_failed", "peer_unavailable"]
 
 FEDERATED_ANSWER_REASON_VALUES: Final[tuple[str, ...]] = (
     "insufficient_evidence",
@@ -1012,6 +1012,7 @@ FEDERATED_ANSWER_REASON_VALUES: Final[tuple[str, ...]] = (
     "upstream_error",
     "no_model_output",
     "budget_exceeded",
+    "root_budget_exhausted",
     "unsupported_generation",
     "delegated_answer_missing",
     "delegated_answer_rejected",
@@ -1041,6 +1042,8 @@ FEDERATED_ANSWER_REASON_META: Final[dict[str, EnumMeta]] = {
     "no_model_output": {"value": "no_model_output", "label": "模型没有输出，只返回证据", "severity": "error"},
     # 生成结果超出计划的生成 token 预算
     "budget_exceeded": {"value": "budget_exceeded", "label": "超出生成预算，答案作废", "severity": "error"},
+    # 本任务的根预算（请求、字节、跳数、生成 token 或截止时间）在生成这一步用完，没有拿到生成结果；不是模型输出超出 token 预算
+    "root_budget_exhausted": {"value": "root_budget_exhausted", "label": "任务预算已用完，未生成答案", "severity": "warn"},
     # 生成文本的引用结构不成立（无引用、越界引用、矛盾标注不成立）
     "unsupported_generation": {"value": "unsupported_generation", "label": "生成的答案引用不成立，已作废", "severity": "error"},
     # 远端执行完成但没有返回答案文档

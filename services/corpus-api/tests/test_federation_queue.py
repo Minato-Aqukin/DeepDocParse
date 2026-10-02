@@ -804,6 +804,78 @@ async def test_worker_reclaim_reconciles_durable_data_and_compute_admissions(
     assert any(path.endswith("/admissions/lookup") for _, path, _ in data_peer.calls)
 
 
+async def test_root_budget_exhausted_before_generation_is_not_reported_as_overflow(
+        actor_client, session, app_state, monkeypatch):
+    """资料节点连不上、恢复后补做：生成那一跳已经没有根预算时，如实说"预算用完"。
+
+    ABC 演练 F5：连接被拒的那次受理按设计先扣了 2 跳（出站前记账、不退还），补做
+    再扣 2 跳，默认 4 跳用完，生成请求根本没发出去。旧行为把这个显示成
+    `budget_exceeded`（「超出生成预算，答案作废」），那是"模型输出超出 token 预算"
+    的代码 —— 用户看到的是一个从没发生过的生成被作废。
+    """
+    compute_node = "node-compute-c"
+    data_peer = peer_with_excerpt()
+    compute_peer = StubPeer(can_generate=True, answer_document=ready_document())
+    data_transport, compute_transport = data_peer.transport(), compute_peer.transport()
+    peers = parse_peers(json.dumps({
+        PEER_NODE: {"endpoint": "https://peer.example"},
+        compute_node: {"endpoint": "https://compute.example"},
+    }))
+    data_down = True
+
+    def handler(request):
+        if request.url.host != "compute.example":
+            if data_down:
+                raise httpx.ConnectError("connection refused", request=request)
+            return data_transport.handle_request(request)
+        response = compute_transport.handle_request(request)
+        body = response.json()
+        for field in ("target_node_id", "executor_node_id"):
+            if field in body:
+                body[field] = compute_node
+        return httpx.Response(response.status_code, json=body)
+
+    def factory(actor, delegation=None):
+        return PeerDirectory(
+            peers, actor=actor, delegation=delegation,
+            signer=LocalControlSigner(issuer_node_id=NODE),
+            transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(federation_tasks, "peer_directory", factory)
+    intent = await create_intent(
+        actor_client,
+        spec=task_spec(scope="federation_public", scope_ref="scope-1",
+                       mode="exhaustive_scope"),
+        consent=exploration(recipients=(PEER_NODE, compute_node)),
+        manifest=scope_manifest([member("peer-collection-1", PEER_NODE)],
+                                revisions=[(NODE, 1), (PEER_NODE, 1), (compute_node, 1)]))
+    root = intent["root_task_id"]
+    data_down = False  # 规划期探测照常；只有执行期连不上
+    plan = await plan_task(actor_client, root)
+    assert plan["budget"]["max_hops"] == 4
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE, compute_node))
+    data_down = True
+    submitted = await actor_client.post(
+        "/api/v1/tasks", headers={"Idempotency-Key": "root-budget-before-generation"},
+        json={"root_task_id": root, "plan_digest": plan["plan_digest"]})
+    assert submitted.status_code == 202, submitted.text
+    await drain_tasks(app_state)
+    outage = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert outage["status"] == "failed", outage
+
+    data_down = False
+    resumed = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert resumed.status_code == 202, resumed.text
+    await drain_tasks(app_state)
+    final = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert final["status"] == "succeeded", final
+    assert final["result"]["evidence"], "补做取回的证据照样交付"
+    assert final["result"]["answer"] is None
+    assert final["result"]["answer_reason"] == "root_budget_exhausted", final["result"]
+    assert compute_peer.admissions == [], "预算用完时生成请求一个字节都不许发"
+    assert final["used_budget"]["hops"] == 4
+
+
 async def test_resume_reconciles_target_admitted_before_the_crash(
         actor_client, session, app_state, monkeypatch):
     """上一轮受理了目标、落账前死掉：resume 必须对账到那条受理，而不是按新代次重发。

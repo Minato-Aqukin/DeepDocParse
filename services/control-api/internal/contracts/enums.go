@@ -1168,6 +1168,8 @@ const (
 	FederatedAnswerReasonNoModelOutput FederatedAnswerReason = "no_model_output"
 	// 生成结果超出计划的生成 token 预算
 	FederatedAnswerReasonBudgetExceeded FederatedAnswerReason = "budget_exceeded"
+	// 本任务的根预算（请求、字节、跳数、生成 token 或截止时间）在生成这一步用完，没有拿到生成结果；不是模型输出超出 token 预算
+	FederatedAnswerReasonRootBudgetExhausted FederatedAnswerReason = "root_budget_exhausted"
 	// 生成文本的引用结构不成立（无引用、越界引用、矛盾标注不成立）
 	FederatedAnswerReasonUnsupportedGeneration FederatedAnswerReason = "unsupported_generation"
 	// 远端执行完成但没有返回答案文档
@@ -1203,6 +1205,7 @@ var FederatedAnswerReasonValues = []FederatedAnswerReason{
 	FederatedAnswerReasonUpstreamError,
 	FederatedAnswerReasonNoModelOutput,
 	FederatedAnswerReasonBudgetExceeded,
+	FederatedAnswerReasonRootBudgetExhausted,
 	FederatedAnswerReasonUnsupportedGeneration,
 	FederatedAnswerReasonDelegatedAnswerMissing,
 	FederatedAnswerReasonDelegatedAnswerRejected,
@@ -1225,6 +1228,7 @@ var FederatedAnswerReasonMeta = map[FederatedAnswerReason]EnumMeta{
 	FederatedAnswerReasonUpstreamError:                 {Value: "upstream_error", Label: "生成服务出错，只返回证据", Severity: SeverityError},
 	FederatedAnswerReasonNoModelOutput:                 {Value: "no_model_output", Label: "模型没有输出，只返回证据", Severity: SeverityError},
 	FederatedAnswerReasonBudgetExceeded:                {Value: "budget_exceeded", Label: "超出生成预算，答案作废", Severity: SeverityError},
+	FederatedAnswerReasonRootBudgetExhausted:           {Value: "root_budget_exhausted", Label: "任务预算已用完，未生成答案", Severity: SeverityWarn},
 	FederatedAnswerReasonUnsupportedGeneration:         {Value: "unsupported_generation", Label: "生成的答案引用不成立，已作废", Severity: SeverityError},
 	FederatedAnswerReasonDelegatedAnswerMissing:        {Value: "delegated_answer_missing", Label: "远端没有返回答案", Severity: SeverityError},
 	FederatedAnswerReasonDelegatedAnswerRejected:       {Value: "delegated_answer_rejected", Label: "远端答案未通过校验", Severity: SeverityError},

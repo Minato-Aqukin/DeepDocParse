@@ -872,6 +872,7 @@ class _Session:
                     reason if isinstance(reason, str) and reason in
                     ("local_model_missing", "insufficient_evidence",
                      "upstream_error", "no_model_output", "budget_exceeded",
+                     "root_budget_exhausted",
                      "unsupported_generation",
                      "evidence_excerpt_unavailable") else "insufficient_evidence",
                     f"no answer: {reason}"[:200])

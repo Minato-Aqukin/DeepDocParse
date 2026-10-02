@@ -3127,7 +3127,9 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
     except ApplicationError as exc:
         if exc.code != "budget_exhausted":
             raise
-        answer = _unavailable_answer("budget_exceeded")
+        # 根预算在生成这一步用完（通常在出站前扣账时，生成请求根本没发出）。
+        # `budget_exceeded` 是"模型输出超出 token 预算、答案作废"，不能拿来描述这里。
+        answer = _unavailable_answer("root_budget_exhausted")
     if answer.get("conflicts"):
         # 生成一路标出的矛盾（已按本次证据编号域校验）并入账本：只会把充分性压成
         # conflicting，不会把 insufficient 抬高 —— 没有证据就根本不会走到生成。

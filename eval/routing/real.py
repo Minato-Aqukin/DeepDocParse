@@ -43,6 +43,7 @@ EXPLICIT_FAILURE_REASONS = frozenset({
     "upstream_error",
     "no_model_output",
     "budget_exceeded",
+    "root_budget_exhausted",
     "unsupported_generation",
     "evidence_excerpt_unavailable",
     "peer_unavailable",
