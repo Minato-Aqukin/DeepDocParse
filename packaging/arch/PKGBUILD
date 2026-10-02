@@ -7,7 +7,8 @@
 # workspaces (~/.deepdocparse or explicit --workspace dirs) and the model
 # cache outside the package tree so upgrades never delete user data.
 pkgname=deepdocparse-desktop-spike
-pkgver=0.1.0
+# scripts/build_desktop_arch.sh sets the release version (it must match the directory artifact).
+pkgver=BUILD_SCRIPT_MUST_SET_VERSION
 pkgrel=1
 pkgdesc='DeepDocParse shared Vue desktop host (integration spike)'
 arch=('x86_64')
@@ -19,12 +20,12 @@ depends=('python>=3.14' 'python<3.15' 'alsa-lib' 'at-spi2-core' 'cairo' 'libcups
          'libxkbcommon' 'libxrandr' 'mesa' 'nspr' 'nss' 'pango' 'systemd-libs' 'zlib')
 options=('!strip')
 # scripts/build_desktop_arch.sh replaces this template with exact local input SHA256s.
-source=('deepdocparse-0.1.0-linux-x64.tar.gz' 'deepdocparse.desktop' 'deepdocparse')
+source=("deepdocparse-${pkgver}-linux-x64.tar.gz" 'deepdocparse.desktop' 'deepdocparse')
 sha256sums=('BUILD_SCRIPT_MUST_SET_SHA256' 'BUILD_SCRIPT_MUST_SET_SHA256' 'BUILD_SCRIPT_MUST_SET_SHA256')
 
 package() {
     install -d "$pkgdir/opt/deepdocparse"
-    cp -a "$srcdir/deepdocparse-0.1.0-linux-x64/." "$pkgdir/opt/deepdocparse/"
+    cp -a "$srcdir/deepdocparse-${pkgver}-linux-x64/." "$pkgdir/opt/deepdocparse/"
     install -Dm755 "$srcdir/deepdocparse" "$pkgdir/usr/bin/deepdocparse"
     install -Dm644 "$srcdir/deepdocparse.desktop" "$pkgdir/usr/share/applications/deepdocparse.desktop"
     install -Dm644 "$pkgdir/opt/deepdocparse/LICENSE.DeepDocParse" \

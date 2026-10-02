@@ -26,6 +26,10 @@ scripts/build_desktop_arch.sh --reproduce
   (`builddate` was wall-clock); the script now exports the artifact epoch, and
   two runs produced the same `c9353b42…`.
 - `makepkg --verifysource` verifies all three sources; nothing is installed.
+- `--version X.Y.Z` builds the directory artifact for that release and sets the
+  recipe's `pkgver`, source name and install path from the same value (default:
+  `scripts/build_desktop.py`'s `VERSION`). The checked-in PKGBUILD is a template
+  (`BUILD_SCRIPT_MUST_SET_VERSION` / `..._SHA256`); build it only through the script.
 
 ## Inputs and integrity
 

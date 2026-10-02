@@ -72,7 +72,7 @@ node apps/desktop/scripts/package-smoke.mjs \
   dist/desktop/deepdocparse-0.1.0-linux-x64 tests/fixtures/sample.pdf
 
 # 6. Arch 配方：准备 + makepkg（不安装、不发布）
-scripts/build_desktop_arch.sh --build        # 或 --reproduce 连打两次比哈希
+scripts/build_desktop_arch.sh --build        # 或 --reproduce 连打两次比哈希；--version X.Y.Z 指定发行版本
 ```
 
 2026-09-13 的实测输出摘要：
