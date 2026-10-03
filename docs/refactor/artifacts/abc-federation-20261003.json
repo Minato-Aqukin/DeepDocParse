@@ -1,0 +1,1262 @@
+{
+  "schema": "ddp-abc-federation-drill/1",
+  "date": "2026-10-03",
+  "code": "7f5aa3c",
+  "topology": {
+    "A": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+    "B": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+    "C2": "node-00bd4effc78276d080de112271f735b49f4b692fe68714b4",
+    "note": "Same three centers as abc-federation-20261001.json; every control/corpus process restarted on the committed code, corpus migrated to 0039."
+  },
+  "models": {
+    "generation": "qwen3-4b-instruct-2507 on C2 (CPU, llama.cpp)",
+    "embedding": "bge-m3 on A and B"
+  },
+  "fixtures": {
+    "a_collection": "ec5e587c3b924819821007ed82d2de77 (Raspberry Pi Pico datasheet)",
+    "b_collection": "471b80409c6e4df9aace894f9c871829 reshaped to the ESP32 datasheet only (b-collection-split.json); policy changes recorded in b-collection-*.json"
+  },
+  "cases": [
+    {
+      "scenario": "T34 answer.split_evidence_a_b",
+      "root_task_id": "2b84303847cb48119a3cef621432dde9",
+      "status": "succeeded",
+      "plan_steps": [
+        [
+          "retrieve",
+          "A"
+        ],
+        [
+          "retrieve",
+          "B"
+        ],
+        [
+          "fuse",
+          "A"
+        ],
+        [
+          "answer",
+          "C2"
+        ]
+      ],
+      "data_edges": [
+        [
+          "A",
+          "B",
+          "query_text"
+        ],
+        [
+          "B",
+          "A",
+          "evidence_excerpts"
+        ],
+        [
+          "A",
+          "C2",
+          "evidence_excerpts"
+        ]
+      ],
+      "answer_probes": {
+        "B": "not_ready",
+        "C2": "ready"
+      },
+      "retrieval_completeness": "partial",
+      "targets": [
+        [
+          "A",
+          "partial",
+          null
+        ],
+        [
+          "B",
+          "partial",
+          null
+        ]
+      ],
+      "evidence_origins": [
+        "A",
+        "B"
+      ],
+      "answer": "The Raspberry Pi Pico exposes 26 multi-function GPIOs. [1][5] The ESP32 has 34 programmable GPIOs. [16][15] The difference between the Raspberry Pi Pico and ESP32 GPIOs is that the Pico exposes 26 multi-function GPIOs (out of 30 possible on the RP2040), while the ESP32 has 34 programmable GPIOs that can be assigned various functions including digital, analog, and capacitive touch, and are multiplexed with other peripherals such as UART, SPI, and SDIO. [1][5][15][16][13]",
+      "answer_reason": null,
+      "validation_state": "passed",
+      "bindings": [
+        {
+          "claim": "The Raspberry Pi Pico exposes 26 multi-function GPIOs.",
+          "evidence": [
+            {
+              "origin": "A",
+              "physical_page_index": 3
+            },
+            {
+              "origin": "A",
+              "physical_page_index": 19
+            }
+          ],
+          "structural_validation": "passed"
+        },
+        {
+          "claim": "The ESP32 has 34 programmable GPIOs.",
+          "evidence": [
+            {
+              "origin": "B",
+              "physical_page_index": 3
+            },
+            {
+              "origin": "B",
+              "physical_page_index": 35
+            }
+          ],
+          "structural_validation": "passed"
+        },
+        {
+          "claim": "The difference between the Raspberry Pi Pico and ESP32 GPIOs is that the Pico exposes 26 multi-function GPIOs (out of 30 possible on the RP2040), while the ESP32 has 34 programmable GPIOs that can be assigned various functions including digital, analog, and capacitive touch, and are multiplexed with other peripherals such as UART, SPI, and SDIO.",
+          "evidence": [
+            {
+              "origin": "A",
+              "physical_page_index": 3
+            },
+            {
+              "origin": "A",
+              "physical_page_index": 19
+            },
+            {
+              "origin": "B",
+              "physical_page_index": 35
+            },
+            {
+              "origin": "B",
+              "physical_page_index": 3
+            },
+            {
+              "origin": "B",
+              "physical_page_index": 35
+            }
+          ],
+          "structural_validation": "passed"
+        }
+      ],
+      "provider": {
+        "model": "qwen3-4b-instruct-2507",
+        "endpoint": "http://127.0.0.1:51431/v1/chat/completions",
+        "location": "remote"
+      },
+      "used_budget": {
+        "requests": 26,
+        "bytes": 44761,
+        "generation_tokens": 1024,
+        "hops": 3,
+        "discovery": 3,
+        "probes": 3,
+        "egress_bytes": 20161
+      }
+    },
+    {
+      "scenario": "T83 B forbids C at planning (onward_recipients=[])",
+      "root_task_id": "01a9aaa2899545e6bca0ef91059df805",
+      "status": "succeeded",
+      "plan_steps": [
+        [
+          "retrieve",
+          "A"
+        ],
+        [
+          "retrieve",
+          "B"
+        ],
+        [
+          "fuse",
+          "A"
+        ]
+      ],
+      "data_edges": [
+        [
+          "A",
+          "B",
+          "query_text"
+        ],
+        [
+          "B",
+          "A",
+          "evidence_excerpts"
+        ]
+      ],
+      "answer_probes": {
+        "B": "not_ready",
+        "C2": "source_policy_denied"
+      },
+      "retrieval_completeness": "partial",
+      "targets": [
+        [
+          "A",
+          "partial",
+          null
+        ],
+        [
+          "B",
+          "partial",
+          null
+        ]
+      ],
+      "evidence_origins": [
+        "A",
+        "B"
+      ],
+      "answer": null,
+      "answer_reason": "source_policy_denied",
+      "validation_state": "pending",
+      "bindings": [],
+      "provider": null,
+      "used_budget": {
+        "requests": 10,
+        "bytes": 16493,
+        "generation_tokens": 0,
+        "hops": 2,
+        "discovery": 3,
+        "probes": 1,
+        "egress_bytes": 4177
+      }
+    },
+    {
+      "scenario": "T83 B forbids C after approval: executor refuses",
+      "root_task_id": "d715f1b37baf4113ad4ec407502f24fa",
+      "status": "succeeded",
+      "plan_steps": [
+        [
+          "retrieve",
+          "A"
+        ],
+        [
+          "retrieve",
+          "B"
+        ],
+        [
+          "fuse",
+          "A"
+        ],
+        [
+          "answer",
+          "C2"
+        ]
+      ],
+      "data_edges": [
+        [
+          "A",
+          "B",
+          "query_text"
+        ],
+        [
+          "B",
+          "A",
+          "evidence_excerpts"
+        ],
+        [
+          "A",
+          "C2",
+          "evidence_excerpts"
+        ]
+      ],
+      "answer_probes": {
+        "B": "not_ready",
+        "C2": "ready"
+      },
+      "retrieval_completeness": "partial",
+      "targets": [
+        [
+          "A",
+          "partial",
+          null
+        ],
+        [
+          "B",
+          "denied",
+          "egress_denied"
+        ]
+      ],
+      "evidence_origins": [
+        "A"
+      ],
+      "answer": "Raspberry Pi Pico exposes 26 multi-function GPIOs. [1][5] ESP32 has 30 multi-function GPIOs. [4] The difference between Raspberry Pi Pico and ESP32 is that Raspberry Pi Pico exposes 26 of the 30 multi-function GPIOs available on the RP2040 microcontroller, while ESP32 has 30 multi-function GPIOs in total. [1][4]",
+      "answer_reason": null,
+      "validation_state": "passed",
+      "bindings": [
+        {
+          "claim": "Raspberry Pi Pico exposes 26 multi-function GPIOs.",
+          "evidence": [
+            {
+              "origin": "A",
+              "physical_page_index": 3
+            },
+            {
+              "origin": "A",
+              "physical_page_index": 19
+            }
+          ],
+          "structural_validation": "passed"
+        },
+        {
+          "claim": "ESP32 has 30 multi-function GPIOs.",
+          "evidence": [
+            {
+              "origin": "A",
+              "physical_page_index": 3
+            }
+          ],
+          "structural_validation": "passed"
+        },
+        {
+          "claim": "The difference between Raspberry Pi Pico and ESP32 is that Raspberry Pi Pico exposes 26 of the 30 multi-function GPIOs available on the RP2040 microcontroller, while ESP32 has 30 multi-function GPIOs in total.",
+          "evidence": [
+            {
+              "origin": "A",
+              "physical_page_index": 3
+            },
+            {
+              "origin": "A",
+              "physical_page_index": 3
+            }
+          ],
+          "structural_validation": "passed"
+        }
+      ],
+      "provider": {
+        "model": "qwen3-4b-instruct-2507",
+        "endpoint": "http://127.0.0.1:51431/v1/chat/completions",
+        "location": "remote"
+      },
+      "used_budget": {
+        "requests": 16,
+        "bytes": 14655,
+        "generation_tokens": 1024,
+        "hops": 3,
+        "discovery": 3,
+        "probes": 2,
+        "egress_bytes": 14655
+      },
+      "b_policy_changed_after_approval": true,
+      "leak_check": {
+        "root_task_id": "d715f1b37baf4113ad4ec407502f24fa",
+        "at": "2026-10-03T05:42:00.726491+00:00",
+        "b_admissions_for_root": 0,
+        "b_executions_for_root": 0,
+        "c2_received_evidence_ids": 8,
+        "c2_received_ids_served_by_b_ever": 0,
+        "c2_received_ids_from_a_retrieval_of_this_root": 8
+      },
+      "note": "C2 had only A's Pico excerpts. Its second claim attributes the RP2040 '30 GPIO' sentence to ESP32 while citing that Pico excerpt: structurally valid (cited id was sent), semantic_review stays needs_review. A 4B-model attribution error, not a policy leak."
+    },
+    {
+      "scenario": "T83 B lists C2 (onward_recipients=[C2])",
+      "root_task_id": "337c4cb7e44e45e08dbf5887a69d0d13",
+      "status": "succeeded",
+      "plan_steps": [
+        [
+          "retrieve",
+          "A"
+        ],
+        [
+          "retrieve",
+          "B"
+        ],
+        [
+          "fuse",
+          "A"
+        ],
+        [
+          "answer",
+          "C2"
+        ]
+      ],
+      "data_edges": [
+        [
+          "A",
+          "B",
+          "query_text"
+        ],
+        [
+          "B",
+          "A",
+          "evidence_excerpts"
+        ],
+        [
+          "A",
+          "C2",
+          "evidence_excerpts"
+        ]
+      ],
+      "answer_probes": {
+        "B": "not_ready",
+        "C2": "ready"
+      },
+      "retrieval_completeness": "partial",
+      "targets": [
+        [
+          "A",
+          "partial",
+          null
+        ],
+        [
+          "B",
+          "partial",
+          null
+        ]
+      ],
+      "evidence_origins": [
+        "A",
+        "B"
+      ],
+      "answer": "The Raspberry Pi Pico exposes 26 multi-function GPIOs. [1][5] The ESP32 has 34 programmable GPIOs. [16][15] The difference between the Raspberry Pi Pico and ESP32 GPIOs is that the Pico exposes 26 multi-function GPIOs (out of 30 possible), while the ESP32 has 34 programmable GPIOs that can be assigned various functions including digital, analog, and capacitive touch, and are multiplexed with other peripherals such as UART, SPI, and SDIO. [1][5][15][16][13]",
+      "answer_reason": null,
+      "validation_state": "passed",
+      "bindings": [
+        {
+          "claim": "The Raspberry Pi Pico exposes 26 multi-function GPIOs.",
+          "evidence": [
+            {
+              "origin": "A",
+              "physical_page_index": 3
+            },
+            {
+              "origin": "A",
+              "physical_page_index": 19
+            }
+          ],
+          "structural_validation": "passed"
+        },
+        {
+          "claim": "The ESP32 has 34 programmable GPIOs.",
+          "evidence": [
+            {
+              "origin": "B",
+              "physical_page_index": 3
+            },
+            {
+              "origin": "B",
+              "physical_page_index": 35
+            }
+          ],
+          "structural_validation": "passed"
+        },
+        {
+          "claim": "The difference between the Raspberry Pi Pico and ESP32 GPIOs is that the Pico exposes 26 multi-function GPIOs (out of 30 possible), while the ESP32 has 34 programmable GPIOs that can be assigned various functions including digital, analog, and capacitive touch, and are multiplexed with other peripherals such as UART, SPI, and SDIO.",
+          "evidence": [
+            {
+              "origin": "A",
+              "physical_page_index": 3
+            },
+            {
+              "origin": "A",
+              "physical_page_index": 19
+            },
+            {
+              "origin": "B",
+              "physical_page_index": 35
+            },
+            {
+              "origin": "B",
+              "physical_page_index": 3
+            },
+            {
+              "origin": "B",
+              "physical_page_index": 35
+            }
+          ],
+          "structural_validation": "passed"
+        }
+      ],
+      "provider": {
+        "model": "qwen3-4b-instruct-2507",
+        "endpoint": "http://127.0.0.1:51431/v1/chat/completions",
+        "location": "remote"
+      },
+      "used_budget": {
+        "requests": 22,
+        "bytes": 31891,
+        "generation_tokens": 1024,
+        "hops": 3,
+        "discovery": 3,
+        "probes": 2,
+        "egress_bytes": 19575
+      }
+    },
+    {
+      "scenario": "fault.b_facade_down_then_resume (before F13)",
+      "root_task_id": "a08328f25129436faba927900f4e7f76",
+      "status": "succeeded",
+      "plan_steps": [
+        [
+          "retrieve",
+          "A"
+        ],
+        [
+          "retrieve",
+          "B"
+        ],
+        [
+          "fuse",
+          "A"
+        ],
+        [
+          "answer",
+          "C2"
+        ]
+      ],
+      "data_edges": [
+        [
+          "A",
+          "B",
+          "query_text"
+        ],
+        [
+          "B",
+          "A",
+          "evidence_excerpts"
+        ],
+        [
+          "A",
+          "C2",
+          "evidence_excerpts"
+        ]
+      ],
+      "answer_probes": {
+        "B": "not_ready",
+        "C2": "ready"
+      },
+      "retrieval_completeness": "partial",
+      "targets": [
+        [
+          "A",
+          "partial",
+          null
+        ],
+        [
+          "B",
+          "partial",
+          null
+        ]
+      ],
+      "evidence_origins": [
+        "A",
+        "B"
+      ],
+      "answer": "The Raspberry Pi Pico has 26 user-programmable GPIO pins available, as it exposes 26 of the 30 possible RP2040 GPIO pins to the user. [3] The ESP32 is not discussed in the provided evidence, so the number of programmable GPIOs on the ESP32 cannot be determined from the given text. [1][2][4][5][6][7]",
+      "answer_reason": null,
+      "validation_state": "passed",
+      "bindings": [
+        {
+          "claim": "The Raspberry Pi Pico has 26 user-programmable GPIO pins available, as it exposes 26 of the 30 possible RP2040 GPIO pins to the user.",
+          "evidence": [
+            {
+              "origin": "A",
+              "physical_page_index": 19
+            }
+          ],
+          "structural_validation": "passed"
+        },
+        {
+          "claim": "The ESP32 is not discussed in the provided evidence, so the number of programmable GPIOs on the ESP32 cannot be determined from the given text.",
+          "evidence": [
+            {
+              "origin": "A",
+              "physical_page_index": 4
+            },
+            {
+              "origin": "A",
+              "physical_page_index": 8
+            },
+            {
+              "origin": "A",
+              "physical_page_index": 7
+            },
+            {
+              "origin": "A",
+              "physical_page_index": 8
+            },
+            {
+              "origin": "A",
+              "physical_page_index": 20
+            },
+            {
+              "origin": "A",
+              "physical_page_index": 6
+            }
+          ],
+          "structural_validation": "passed"
+        }
+      ],
+      "provider": {
+        "model": "qwen3-4b-instruct-2507",
+        "endpoint": "http://127.0.0.1:51431/v1/chat/completions",
+        "location": "remote"
+      },
+      "used_budget": {
+        "requests": 29,
+        "bytes": 46523,
+        "generation_tokens": 1024,
+        "hops": 3,
+        "discovery": 3,
+        "probes": 3,
+        "egress_bytes": 19399
+      },
+      "first_run": {
+        "scenario": "first run",
+        "root_task_id": "a08328f25129436faba927900f4e7f76",
+        "status": "succeeded",
+        "plan_steps": [
+          [
+            "retrieve",
+            "A"
+          ],
+          [
+            "retrieve",
+            "B"
+          ],
+          [
+            "fuse",
+            "A"
+          ],
+          [
+            "answer",
+            "C2"
+          ]
+        ],
+        "data_edges": [
+          [
+            "A",
+            "B",
+            "query_text"
+          ],
+          [
+            "B",
+            "A",
+            "evidence_excerpts"
+          ],
+          [
+            "A",
+            "C2",
+            "evidence_excerpts"
+          ]
+        ],
+        "answer_probes": {
+          "B": "not_ready",
+          "C2": "ready"
+        },
+        "retrieval_completeness": "partial",
+        "targets": [
+          [
+            "A",
+            "partial",
+            null
+          ],
+          [
+            "B",
+            "unreachable",
+            "peer_unavailable"
+          ]
+        ],
+        "evidence_origins": [
+          "A"
+        ],
+        "answer": "The Raspberry Pi Pico has 26 user-programmable GPIO pins available, as it exposes 26 of the 30 possible RP2040 GPIO pins to the user. [3] The ESP32 is not discussed in the provided evidence, so the number of programmable GPIOs on the ESP32 cannot be determined from the given text. [1][2][4][5][6][7]",
+        "answer_reason": null,
+        "validation_state": "passed",
+        "bindings": [
+          {
+            "claim": "The Raspberry Pi Pico has 26 user-programmable GPIO pins available, as it exposes 26 of the 30 possible RP2040 GPIO pins to the user.",
+            "evidence": [
+              {
+                "origin": "A",
+                "physical_page_index": 19
+              }
+            ],
+            "structural_validation": "passed"
+          },
+          {
+            "claim": "The ESP32 is not discussed in the provided evidence, so the number of programmable GPIOs on the ESP32 cannot be determined from the given text.",
+            "evidence": [
+              {
+                "origin": "A",
+                "physical_page_index": 4
+              },
+              {
+                "origin": "A",
+                "physical_page_index": 8
+              },
+              {
+                "origin": "A",
+                "physical_page_index": 7
+              },
+              {
+                "origin": "A",
+                "physical_page_index": 8
+              },
+              {
+                "origin": "A",
+                "physical_page_index": 20
+              },
+              {
+                "origin": "A",
+                "physical_page_index": 6
+              }
+            ],
+            "structural_validation": "passed"
+          }
+        ],
+        "provider": {
+          "model": "qwen3-4b-instruct-2507",
+          "endpoint": "http://127.0.0.1:51431/v1/chat/completions",
+          "location": "remote"
+        },
+        "used_budget": {
+          "requests": 21,
+          "bytes": 28705,
+          "generation_tokens": 1024,
+          "hops": 3,
+          "discovery": 3,
+          "probes": 3,
+          "egress_bytes": 15159
+        }
+      },
+      "ledger": {
+        "down": {
+          "root_ledger": "21|3|1024|3",
+          "reservations": [
+            "generation_tokens:answer-1|1024",
+            "hops:answer-1|1",
+            "hops:retrieve-2|2"
+          ],
+          "b_admissions": "0"
+        },
+        "resumed": {
+          "root_ledger": "29|3|1024|3",
+          "reservations": [
+            "generation_tokens:answer-1|1024",
+            "hops:answer-1|1",
+            "hops:retrieve-2|2"
+          ],
+          "b_admissions": "1"
+        }
+      }
+    },
+    {
+      "scenario": "fault.b_facade_down_then_resume (F13 fixed)",
+      "root_task_id": "5d24063fa86546a5802c51769209bd5e",
+      "status": "succeeded",
+      "plan_steps": [
+        [
+          "retrieve",
+          "A"
+        ],
+        [
+          "retrieve",
+          "B"
+        ],
+        [
+          "fuse",
+          "A"
+        ],
+        [
+          "answer",
+          "C2"
+        ]
+      ],
+      "data_edges": [
+        [
+          "A",
+          "B",
+          "query_text"
+        ],
+        [
+          "B",
+          "A",
+          "evidence_excerpts"
+        ],
+        [
+          "A",
+          "C2",
+          "evidence_excerpts"
+        ]
+      ],
+      "answer_probes": {
+        "B": "not_ready",
+        "C2": "ready"
+      },
+      "retrieval_completeness": "partial",
+      "targets": [
+        [
+          "A",
+          "partial",
+          null
+        ],
+        [
+          "B",
+          "partial",
+          null
+        ]
+      ],
+      "evidence_origins": [
+        "A",
+        "B"
+      ],
+      "answer": "ESP32 has 34 programmable GPIO pins. [11]",
+      "answer_reason": null,
+      "validation_state": "passed",
+      "bindings": [
+        {
+          "claim": "ESP32 has 34 programmable GPIO pins.",
+          "evidence": [
+            {
+              "origin": "B",
+              "physical_page_index": 35
+            }
+          ],
+          "structural_validation": "passed"
+        }
+      ],
+      "provider": {
+        "model": "qwen3-4b-instruct-2507",
+        "endpoint": "http://127.0.0.1:51431/v1/chat/completions",
+        "location": "remote"
+      },
+      "used_budget": {
+        "requests": 33,
+        "bytes": 62597,
+        "generation_tokens": 1024,
+        "hops": 3,
+        "discovery": 3,
+        "probes": 3,
+        "egress_bytes": 35473
+      },
+      "first_run": {
+        "scenario": "first run",
+        "root_task_id": "5d24063fa86546a5802c51769209bd5e",
+        "status": "succeeded",
+        "plan_steps": [
+          [
+            "retrieve",
+            "A"
+          ],
+          [
+            "retrieve",
+            "B"
+          ],
+          [
+            "fuse",
+            "A"
+          ],
+          [
+            "answer",
+            "C2"
+          ]
+        ],
+        "data_edges": [
+          [
+            "A",
+            "B",
+            "query_text"
+          ],
+          [
+            "B",
+            "A",
+            "evidence_excerpts"
+          ],
+          [
+            "A",
+            "C2",
+            "evidence_excerpts"
+          ]
+        ],
+        "answer_probes": {
+          "B": "not_ready",
+          "C2": "ready"
+        },
+        "retrieval_completeness": "partial",
+        "targets": [
+          [
+            "A",
+            "partial",
+            null
+          ],
+          [
+            "B",
+            "unreachable",
+            "peer_unavailable"
+          ]
+        ],
+        "evidence_origins": [
+          "A"
+        ],
+        "answer": "The Raspberry Pi Pico has 26 user-programmable GPIO pins available, as it exposes 26 of the 30 possible RP2040 GPIO pins to the user. [3] The ESP32 is not discussed in the provided evidence, so the number of programmable GPIOs on the ESP32 cannot be determined from the given text. [1][2][4][5][6][7]",
+        "answer_reason": null,
+        "validation_state": "passed",
+        "bindings": [
+          {
+            "claim": "The Raspberry Pi Pico has 26 user-programmable GPIO pins available, as it exposes 26 of the 30 possible RP2040 GPIO pins to the user.",
+            "evidence": [
+              {
+                "origin": "A",
+                "physical_page_index": 19
+              }
+            ],
+            "structural_validation": "passed"
+          },
+          {
+            "claim": "The ESP32 is not discussed in the provided evidence, so the number of programmable GPIOs on the ESP32 cannot be determined from the given text.",
+            "evidence": [
+              {
+                "origin": "A",
+                "physical_page_index": 4
+              },
+              {
+                "origin": "A",
+                "physical_page_index": 8
+              },
+              {
+                "origin": "A",
+                "physical_page_index": 7
+              },
+              {
+                "origin": "A",
+                "physical_page_index": 8
+              },
+              {
+                "origin": "A",
+                "physical_page_index": 20
+              },
+              {
+                "origin": "A",
+                "physical_page_index": 6
+              }
+            ],
+            "structural_validation": "passed"
+          }
+        ],
+        "provider": {
+          "model": "qwen3-4b-instruct-2507",
+          "endpoint": "http://127.0.0.1:51431/v1/chat/completions",
+          "location": "remote"
+        },
+        "used_budget": {
+          "requests": 20,
+          "bytes": 28808,
+          "generation_tokens": 1024,
+          "hops": 3,
+          "discovery": 3,
+          "probes": 3,
+          "egress_bytes": 15262
+        }
+      },
+      "ledger": {
+        "down": {
+          "root_ledger": "20|3|1024|3",
+          "reservations": [
+            "generation_tokens:answer-1|1024",
+            "hops:answer-1|1",
+            "hops:retrieve-2|2"
+          ],
+          "b_admissions": "0"
+        },
+        "resumed": {
+          "root_ledger": "33|3|1024|3",
+          "reservations": [
+            "generation_tokens:answer-1|1024",
+            "hops:answer-1|1",
+            "hops:retrieve-2|2"
+          ],
+          "b_admissions": "1"
+        }
+      }
+    }
+  ],
+  "f11_revoked_child_in_peer_directory": [
+    {
+      "enumeration_state": "partial",
+      "unexpanded_subtrees": [
+        {
+          "node_id": "node-38f260609e6ec4a08f1c7c9f01ed6b6d815fa94bc7fc4f7c",
+          "reason": "denied"
+        }
+      ]
+    },
+    {
+      "enumeration_state": "partial",
+      "unexpanded_subtrees": [
+        {
+          "node_id": "node-38f260609e6ec4a08f1c7c9f01ed6b6d815fa94bc7fc4f7c",
+          "reason": "denied"
+        }
+      ]
+    },
+    {
+      "enumeration_state": "partial",
+      "unexpanded_subtrees": [
+        {
+          "node_id": "node-38f260609e6ec4a08f1c7c9f01ed6b6d815fa94bc7fc4f7c",
+          "reason": "denied"
+        }
+      ]
+    }
+  ],
+  "t48_licensed_snapshot": {
+    "source": "B exports the ESP32 datasheet with a source-issued licence_valid_until; A's user imports it; licensed-source sha256 equals B's source_digest a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf; 'offline-b' is read with B's public origin stopped (an HTTPS probe of https://127.0.0.1:55176 returned no response, status 000, captured in the console only).",
+    "long_term": {
+      "online-b": {
+        "replicas": {
+          "status": 200,
+          "availability": "licensed_copy"
+        },
+        "licensed-source": {
+          "status": 200,
+          "availability_header": "offline_snapshot",
+          "licence_header": "2026-10-03T05:46:43+00:00",
+          "sha256": "sha256:a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf"
+        },
+        "download-url": {
+          "status": 200,
+          "expires_at": "2026-10-03T13:32:04.884806765+08:00"
+        },
+        "evidence": {
+          "status": 200,
+          "items": 9931
+        }
+      },
+      "offline-b": {
+        "replicas": {
+          "status": 200,
+          "availability": "licensed_copy"
+        },
+        "licensed-source": {
+          "status": 200,
+          "availability_header": "offline_snapshot",
+          "licence_header": "2026-10-03T05:46:43+00:00",
+          "sha256": "sha256:a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf"
+        },
+        "download-url": {
+          "status": 200,
+          "expires_at": "2026-10-03T13:32:23.43260382+08:00"
+        },
+        "evidence": {
+          "status": 200,
+          "items": 9931
+        }
+      },
+      "after-revoke": {
+        "replicas": {
+          "status": 200,
+          "availability": "unavailable"
+        },
+        "licensed-source": {
+          "status": 410,
+          "availability_header": null,
+          "licence_header": null
+        },
+        "download-url": {
+          "status": 410
+        },
+        "evidence": {
+          "status": 200,
+          "items": 9931
+        }
+      }
+    },
+    "short_term": {
+      "before-term": {
+        "replicas": {
+          "status": 200,
+          "availability": "licensed_copy"
+        },
+        "licensed-source": {
+          "status": 200,
+          "availability_header": "offline_snapshot",
+          "licence_header": "2026-10-03T05:19:35+00:00",
+          "sha256": "sha256:a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf"
+        },
+        "download-url": {
+          "status": 200,
+          "expires_at": "2026-10-03T13:19:34.112052328+08:00"
+        },
+        "evidence": {
+          "status": 200,
+          "items": 9931
+        }
+      },
+      "after-term": {
+        "replicas": {
+          "status": 200,
+          "availability": "unavailable"
+        },
+        "licensed-source": {
+          "status": 410,
+          "availability_header": null,
+          "licence_header": null
+        },
+        "download-url": {
+          "status": 410
+        },
+        "evidence": {
+          "status": 200,
+          "items": 9931
+        }
+      }
+    },
+    "terms": {
+      "long": "2026-10-03T05:46:43+00:00",
+      "short": "2026-10-03T05:19:35+00:00"
+    }
+  },
+  "ingress_b_control": [
+    {
+      "case": "peer route without credential reaches corpus",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/federation/published-collections"
+      },
+      "status": 401,
+      "body": {
+        "error": {
+          "message": "a node credential is required",
+          "type": "authentication_error",
+          "code": "peer_unauthenticated"
+        }
+      },
+      "at": "2026-10-03T05:10:23.143363+00:00"
+    },
+    {
+      "case": "forged credential refused by corpus",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/federation/published-collections",
+        "headers": {
+          "X-DDP-Node-Credential": "bogus"
+        }
+      },
+      "status": 401,
+      "body": {
+        "error": {
+          "message": "credential must be payload.signature",
+          "type": "authentication_error",
+          "code": "credential_invalid"
+        }
+      },
+      "at": "2026-10-03T05:10:23.144935+00:00"
+    },
+    {
+      "case": "declared oversize body",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/federation/admissions",
+        "bytes": 8388609
+      },
+      "status": 413,
+      "body": {
+        "error": {
+          "message": "peer 请求体上限 8388608 字节",
+          "type": "invalid_request_error",
+          "code": "too_large"
+        }
+      },
+      "at": "2026-10-03T05:10:23.648028+00:00"
+    },
+    {
+      "case": "chunked oversize body",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/federation/admissions",
+        "bytes": 9437184,
+        "transfer": "chunked"
+      },
+      "status": 413,
+      "body": {
+        "error": {
+          "message": "peer 请求体上限 8388608 字节",
+          "type": "invalid_request_error",
+          "code": "too_large"
+        }
+      },
+      "at": "2026-10-03T05:10:23.656617+00:00"
+    },
+    {
+      "case": "non-allowlisted path",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/federation/probesX"
+      },
+      "status": 404,
+      "body": "404 page not found\n",
+      "at": "2026-10-03T05:10:23.657374+00:00"
+    }
+  ],
+  "metering": {
+    "at": "2026-10-03T05:31:30.491942+00:00",
+    "note": "kind|events|requests|pages; all federated usage since the drill3 restart on committed code",
+    "per_root": {
+      "t34-split": {
+        "root_task_id": "2b84303847cb48119a3cef621432dde9",
+        "c2_executions_succeeded": "1",
+        "b_executions_succeeded": "1",
+        "a_root_ledger_requests_hops_tokens": "26|3|1024",
+        "a_delivery_ledger_rows_for_root_business_key": 1
+      },
+      "f12-executor-gate": {
+        "root_task_id": "d715f1b37baf4113ad4ec407502f24fa",
+        "c2_executions_succeeded": "1",
+        "b_executions_succeeded": "0",
+        "a_root_ledger_requests_hops_tokens": "16|3|1024",
+        "a_delivery_ledger_rows_for_root_business_key": 1
+      },
+      "f12-plan-avoids": {
+        "root_task_id": "01a9aaa2899545e6bca0ef91059df805",
+        "c2_executions_succeeded": "0",
+        "b_executions_succeeded": "1",
+        "a_root_ledger_requests_hops_tokens": "10|2|0",
+        "a_delivery_ledger_rows_for_root_business_key": 1
+      },
+      "f12-allows-c2": {
+        "root_task_id": "337c4cb7e44e45e08dbf5887a69d0d13",
+        "c2_executions_succeeded": "1",
+        "b_executions_succeeded": "1",
+        "a_root_ledger_requests_hops_tokens": "22|3|1024",
+        "a_delivery_ledger_rows_for_root_business_key": 1
+      },
+      "f5-resume": {
+        "root_task_id": "a08328f25129436faba927900f4e7f76",
+        "c2_executions_succeeded": "1",
+        "b_executions_succeeded": "1",
+        "a_root_ledger_requests_hops_tokens": "29|3|1024",
+        "a_delivery_ledger_rows_for_root_business_key": 1
+      },
+      "f5-resume-fixed": {
+        "root_task_id": "5d24063fa86546a5802c51769209bd5e",
+        "c2_executions_succeeded": "2",
+        "b_executions_succeeded": "1",
+        "a_root_ledger_requests_hops_tokens": "33|3|1024",
+        "a_delivery_ledger_rows_for_root_business_key": 1
+      }
+    },
+    "totals": {
+      "a_control_usage_ledger": [
+        "federated_delivery|6|6|0",
+        "federated_execution|6|6|0"
+      ],
+      "b_control_usage_ledger": [
+        "federated_execution|5|5|0"
+      ],
+      "c2_control_usage_ledger": [
+        "federated_execution|6|6|0"
+      ]
+    }
+  },
+  "drill_findings_fixed": [
+    "F2",
+    "F5",
+    "F11",
+    "F12",
+    "F13"
+  ],
+  "drill_findings_open": [],
+  "known_limits": [
+    "three centers on one physical host with separate stores and identities",
+    "answers come from a 4B model on CPU: structural validation passes, semantic review stays needs_review (see the executor-gate note)"
+  ],
+  "redaction": "Statuses, ids, digests, error codes and cited answer sentences only; no credentials, excerpts or original bytes."
+}
