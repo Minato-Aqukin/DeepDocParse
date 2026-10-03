@@ -1,0 +1,220 @@
+{
+  "schema": "ddp-drill/1#FastDecoyContinuation",
+  "date": "2026-10-03",
+  "criterion": "T35: local look-alike evidence must not end a fast search that still lacks remote facts; fast vs exhaustive on real decoys",
+  "setup": {
+    "coordinator": "A (no local chat model; answer delegated to C2 qwen3-4b-instruct-2507)",
+    "question": "How many programmable GPIOs does the ESP32 have?",
+    "decoys": {
+      "node": "A",
+      "count": 9,
+      "collections": [
+        "96d5dd4bf7f94f518134ae0ac5afc313",
+        "2fa23c964f09491a86a3c2a0f976bef4",
+        "12c6184c472b4124bea1c89abea8448e",
+        "5ec3fb1303904dfb83251bf58f95c216",
+        "a078127cbc2d4935b5c7945d8380cdff",
+        "dbe1037f270e4da5ba39b5ccdeecfb7c",
+        "a4bbd28d05994b21927d6317c30600b8",
+        "cc4f148a2d1e4b58b644baf2c6493646",
+        "8d1316fe9de8461db99f47bed839d6b7"
+      ],
+      "content": "each pins the Raspberry Pi Pico datasheet version ff6d02b3176f48c9b34cd0fbdf05d344 (GPIO-rich, no ESP32 facts)"
+    },
+    "fact_holder": {
+      "node": "B",
+      "collection": "471b80409c… ESP32 datasheet only"
+    },
+    "ordering": "local_first",
+    "code": "corpus-api/worker at c7fd2fe (F14) from a clean worktree"
+  },
+  "fast": {
+    "root_task_id": "c57859463e0c4bbb9ef71fbe53336263",
+    "stages": [
+      {
+        "stage": "fast first batch",
+        "plan_revision": 1,
+        "targets_in_revision": 8,
+        "fast_stop": "candidate_limit_reached",
+        "answer_executor": "C2",
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "coverage_states": {
+          "A:partial": 8,
+          "A:not_attempted": 2,
+          "B:not_attempted": 1
+        },
+        "answer_reason": null,
+        "answer": "The Raspberry Pi Pico has 26 user-programmable GPIO pins exposed on its header, out of a total of 30 available GPIO pins on the RP2040 chip. [2][4] The ESP32 does not have the same GPIO configuration as the Raspberry Pi Pico, and the provided evidence does not specify the number of programmable GPIOs on the ESP32. [1][2][4][3][5][6][7]",
+        "evidence_origins": [
+          "A"
+        ],
+        "used_budget": {
+          "requests": 22,
+          "bytes": 10961,
+          "generation_tokens": 1024,
+          "hops": 1,
+          "discovery": 3,
+          "probes": 1,
+          "egress_bytes": 10961
+        }
+      },
+      {
+        "stage": "explicit continuation round 1",
+        "plan_revision": 2,
+        "targets_in_revision": 9,
+        "fast_stop": "candidate_limit_reached",
+        "answer_executor": "C2",
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "coverage_states": {
+          "B:not_attempted": 1,
+          "A:partial": 9,
+          "A:not_attempted": 1
+        },
+        "answer_reason": null,
+        "answer": "The Raspberry Pi Pico has 26 user-programmable GPIO pins exposed on its header, out of a total of 30 available GPIO pins on the RP2040 chip. [2][4] The ESP32 does not have the same GPIO configuration as the Raspberry Pi Pico, and the provided evidence does not specify the number of programmable GPIOs on the ESP32. [1][2][3][4][5][6][7]",
+        "evidence_origins": [
+          "A"
+        ],
+        "used_budget": {
+          "requests": 45,
+          "bytes": 22273,
+          "generation_tokens": 1024,
+          "hops": 1,
+          "discovery": 6,
+          "probes": 2,
+          "egress_bytes": 22273
+        }
+      },
+      {
+        "stage": "explicit continuation round 2",
+        "plan_revision": 3,
+        "targets_in_revision": 10,
+        "fast_stop": "candidate_limit_reached",
+        "answer_executor": "C2",
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "coverage_states": {
+          "A:partial": 10,
+          "B:not_attempted": 1
+        },
+        "answer_reason": null,
+        "answer": "The Raspberry Pi Pico has 26 user-programmable GPIO pins exposed on its header, out of a total of 30 available GPIO pins on the RP2040 chip. [2][4] The ESP32 does not have the same GPIO configuration as the Raspberry Pi Pico, and the provided evidence does not specify the number of programmable GPIOs on the ESP32. [1][2][3][4][5][6][7]",
+        "evidence_origins": [
+          "A"
+        ],
+        "used_budget": {
+          "requests": 69,
+          "bytes": 33866,
+          "generation_tokens": 1024,
+          "hops": 1,
+          "discovery": 9,
+          "probes": 3,
+          "egress_bytes": 33866
+        }
+      },
+      {
+        "stage": "explicit continuation round 3",
+        "plan_revision": 4,
+        "targets_in_revision": 11,
+        "fast_stop": "complete_scope_covered",
+        "answer_executor": "C2",
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "coverage_states": {
+          "A:partial": 10,
+          "B:partial": 1
+        },
+        "answer_reason": null,
+        "answer": "The ESP32 has 34 programmable GPIO pins. [11]",
+        "evidence_origins": [
+          "A",
+          "B"
+        ],
+        "used_budget": {
+          "requests": 100,
+          "bytes": 86257,
+          "generation_tokens": 1024,
+          "hops": 3,
+          "discovery": 12,
+          "probes": 6,
+          "egress_bytes": 59991
+        }
+      }
+    ]
+  },
+  "exhaustive": {
+    "root_task_id": "cd0f59d9616a43fb8269f653e47cbdb6",
+    "stage": "exhaustive_scope",
+    "plan_revision": 1,
+    "targets_in_revision": 11,
+    "fast_stop": "complete_scope_covered",
+    "answer_executor": "C2",
+    "status": "succeeded",
+    "retrieval_completeness": "partial",
+    "evidence_sufficiency": "sufficient_by_policy",
+    "coverage_states": {
+      "A:partial": 10,
+      "B:partial": 1
+    },
+    "answer_reason": null,
+    "answer": "The ESP32 has 34 programmable GPIO pins. [11]",
+    "evidence_origins": [
+      "A",
+      "B"
+    ],
+    "used_budget": {
+      "requests": 30,
+      "bytes": 52261,
+      "generation_tokens": 1024,
+      "hops": 3,
+      "discovery": 3,
+      "probes": 3,
+      "egress_bytes": 25995
+    }
+  },
+  "finding_f14": {
+    "root_task_id": "f4632cb95fa348e5b6e69ebeb3d4b367",
+    "observed_before_fix": {
+      "stage": "pre-F14 continuation round 1",
+      "plan_revision": 2,
+      "targets_in_revision": 9,
+      "fast_stop": "candidate_limit_reached",
+      "answer_executor": "C2",
+      "status": "succeeded",
+      "retrieval_completeness": "partial",
+      "evidence_sufficiency": "sufficient_by_policy",
+      "coverage_states": {
+        "A:partial": 9,
+        "A:not_attempted": 1,
+        "B:not_attempted": 1
+      },
+      "answer_reason": "root_budget_exhausted",
+      "answer": null,
+      "evidence_origins": [
+        "A"
+      ],
+      "used_budget": {
+        "requests": 39,
+        "bytes": 22225,
+        "generation_tokens": 1024,
+        "hops": 2,
+        "discovery": 6,
+        "probes": 2,
+        "egress_bytes": 22225
+      }
+    },
+    "cause": "continuation revisions rename steps (r2-answer-1); once-only generation reservations were keyed by that id, so the continuation reserved the root's whole token cap again and ended root_budget_exhausted",
+    "fix": "c7fd2fe: reservations keyed by logical step"
+  },
+  "conclusions": [
+    "Fast stops its first batch at candidate_limit_reached with 8 local decoy targets; B's target stays not_attempted with reason search_mode_fast, completeness is partial, and the answer says the evidence does not cover ESP32 instead of claiming the decoys answer it.",
+    "Each explicit continuation needs its own plan revision and approval; the root ledger is never reset: generation_tokens stay at one reservation while physical requests keep growing.",
+    "Local-first ordering spends continuations on the remaining local decoys first; the third continuation reaches B and answers with B's evidence, matching the exhaustive run."
+  ]
+}
