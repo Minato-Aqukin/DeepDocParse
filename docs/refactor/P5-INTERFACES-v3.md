@@ -249,7 +249,13 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
   `evidence_excerpts` 数据边，由协调者消费。
 - **远端生成**：执行者正式接单后才生成；委托返回的证据绑定必须是实际传入证据的子集。
   没有模型、授权数据边不完整、输入摘要不匹配或结构校验失败均明确拒绝，不能用空答案
-  冒充成功，也不能用模型输出新建原始证据。
+  冒充成功，也不能用模型输出新建原始证据。生成步骤（answer / wiki_pages）的业务幂等键是
+  `{root}:{step}:{证据集摘要前 24 位}`（按 `(evidence_id, digest)` 排序后的规范 JSON 取
+  sha256）：同一证据集的重放与丢响应对账复用原执行；resume 补回更多证据后是一次新的
+  生成，绝不采用没见过这些证据的旧答案（执行者的请求摘要不覆盖 `evidence`）。该步骤的
+  生成 token 预留仍按 (root, step) 只扣一次。升级前用旧键 `{root}:{step}` 受理的生成步骤，
+  升级后 resume 查不到旧回执，会再受理一次并重新生成（多一条执行与 `federated_execution`
+  计量），方向是重做而不是沿用可能过期的答案。
 - **Wiki**：使用同一固定原始证据集合规划与生成版本化 Wiki，可委托 `wiki_pages` 给
   仅有生成能力的节点。计划同时记录 evidence 外发与 wiki_draft 返回边；中心保留不可变
   修订、人工段落、关系和依赖。`semantic_review=needs_review` 不表示已完成人工支持度评审。

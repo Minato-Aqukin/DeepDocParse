@@ -1811,12 +1811,20 @@ def _admission_body(*, root_task_id: str, plan: dict, task_spec: dict,
                     generation: int, evidence: list[dict] | None = None) -> dict:
     # **收的是裸值而不是 ORM 行**：本地目标等终态时 `_local_execution_outcome`
     # 会 rollback 结束读事务，行对象随之过期；循环里再摸 `row.*` 会 MissingGreenlet。
+    key = f"{root_task_id}:{step['step_id']}"
+    if evidence:
+        # A generation step's business fact includes the evidence it was given. A resume
+        # that fused more evidence must not adopt the answer generated without it (the
+        # executor's request digest does not cover `evidence`); an unchanged evidence set
+        # keeps the same key, so a lost reply still reconciles instead of regenerating.
+        key += ":" + hashlib.sha256(plans.canonical_bytes(sorted(
+            [item["evidence_id"], item["digest"]] for item in evidence))).hexdigest()[:24]
     body = {
         "schema": "ddp-plan-admission/1#AdmissionRequest",
         # **业务幂等键，不含 delegation_generation**。把代次写进键里会让丢响应后的
         # 对账永远 404，于是 resume 把一次已受理的执行重做成第二次执行（T81/T82）。
         # 代次只进请求体：同键同体由执行者复用回执，同键异体当场 409。
-        "idempotency_key": f"{root_task_id}:{step['step_id']}",
+        "idempotency_key": key,
         "root_task_id": root_task_id,
         "step_id": step["step_id"],
         "delegation_generation": generation,
