@@ -1,0 +1,108 @@
+{
+  "schema": "ddp-drill/1#FastDecoyContinuation",
+  "date": "2026-10-04",
+  "criterion": "T35 follow-up: an approved fast continuation adds the next bounded batch (plan §7.2)",
+  "setup": {
+    "same_as": "docs/refactor/artifacts/fast-decoy-continuation-20261003.json",
+    "code": "b2d14c3 on A/B/C (pinned worktree); 9 decoys still published for the batch run",
+    "change": "continuation adds up to FAST_CANDIDATE_LIMIT (8) next targets instead of one; settled targets are not probed again"
+  },
+  "fast": {
+    "root_task_id": "e7469c9b3e8d41ea800a9900443cebb7",
+    "stages": [
+      {
+        "stage": "fast first batch",
+        "plan_revision": 1,
+        "targets_in_revision": 8,
+        "fast_stop": "candidate_limit_reached",
+        "answer_executor": "C2",
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "coverage_states": {
+          "A:partial": 8,
+          "A:not_attempted": 2,
+          "B:not_attempted": 1
+        },
+        "answer_reason": null,
+        "answer": "The Raspberry Pi Pico has 26 user-programmable GPIO pins exposed on its header, out of a total of 30 available GPIO pins on the RP2040 chip. [2][4] The ESP32 does not have the same GPIO configuration as the Raspberry Pi Pico, and the provided evidence does not specify the number of programmable GPIOs on the ESP32. [1][2][3][4][5][6][7]",
+        "evidence_origins": [
+          "A"
+        ],
+        "used_budget": {
+          "requests": 23,
+          "bytes": 10973,
+          "generation_tokens": 1024,
+          "hops": 1,
+          "discovery": 3,
+          "probes": 1,
+          "egress_bytes": 10973
+        }
+      },
+      {
+        "stage": "explicit continuation round 1",
+        "plan_revision": 2,
+        "targets_in_revision": 11,
+        "fast_stop": "complete_scope_covered",
+        "answer_executor": "C2",
+        "status": "succeeded",
+        "retrieval_completeness": "partial",
+        "evidence_sufficiency": "sufficient_by_policy",
+        "coverage_states": {
+          "A:partial": 10,
+          "B:partial": 1
+        },
+        "answer_reason": null,
+        "answer": "The ESP32 has 34 programmable GPIO pins. [11]",
+        "evidence_origins": [
+          "A",
+          "B"
+        ],
+        "used_budget": {
+          "requests": 55,
+          "bytes": 63390,
+          "generation_tokens": 1024,
+          "hops": 3,
+          "discovery": 6,
+          "probes": 4,
+          "egress_bytes": 37124
+        }
+      }
+    ]
+  },
+  "after_decoys_withdrawn": {
+    "root_task_id": "1929b6b66a0e44a99de3b9b5b4e57d6e",
+    "stage": "fast after the decoys were withdrawn",
+    "plan_revision": 1,
+    "targets_in_revision": 2,
+    "fast_stop": "complete_scope_covered",
+    "answer_executor": "C2",
+    "status": "succeeded",
+    "retrieval_completeness": "partial",
+    "evidence_sufficiency": "sufficient_by_policy",
+    "coverage_states": {
+      "B:partial": 1,
+      "A:partial": 1
+    },
+    "answer_reason": null,
+    "answer": "The ESP32 has 34 programmable GPIO pins. [11] The ESP32's GPIO pins can be configured as digital-only, analog-enabled, or capacitive-touch-enabled. [11][12] The ESP32 supports 10 capacitive-sensing GPIOs, which are used for touch detection. [14][12]",
+    "evidence_origins": [
+      "A",
+      "B"
+    ],
+    "used_budget": {
+      "requests": 19,
+      "bytes": 33682,
+      "generation_tokens": 1024,
+      "hops": 3,
+      "discovery": 3,
+      "probes": 2,
+      "egress_bytes": 20533
+    }
+  },
+  "conclusions": [
+    "The first batch still stops at the candidate limit on local decoys and records B as not_attempted/search_mode_fast.",
+    "One approved continuation now adds the remaining targets (B included) and answers with B's evidence, matching the exhaustive run.",
+    "With the decoys withdrawn, A's scope holds A's Pico and B's ESP32 collections and the first fast batch covers both."
+  ]
+}
