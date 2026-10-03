@@ -1,0 +1,109 @@
+{
+  "environment": "live-A",
+  "enumeration_state": "partial",
+  "member_health_counts": {
+    "configured": 0,
+    "ready": 0,
+    "draining": 0,
+    "unhealthy": 0,
+    "unknown": 2
+  },
+  "registry_revision_vector": [
+    {
+      "node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "directory_ref": "members",
+      "registry_revision": 14,
+      "fetched_at": "2026-10-03T17:47:17.226921+08:00"
+    },
+    {
+      "node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "directory_ref": "collections",
+      "registry_revision": 3,
+      "fetched_at": "2026-10-03T09:47:17.258311Z"
+    },
+    {
+      "node_id": "node-00bd4effc78276d080de112271f735b49f4b692fe68714b4",
+      "directory_ref": "members",
+      "registry_revision": 17,
+      "fetched_at": "2026-10-03T09:47:17.397571779Z"
+    },
+    {
+      "node_id": "node-00bd4effc78276d080de112271f735b49f4b692fe68714b4",
+      "directory_ref": "collections",
+      "registry_revision": 1,
+      "fetched_at": "2026-10-03T09:47:17.397571779Z"
+    },
+    {
+      "node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+      "directory_ref": "members",
+      "registry_revision": 39,
+      "fetched_at": "2026-10-03T09:47:17.397571779Z"
+    },
+    {
+      "node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+      "directory_ref": "collections",
+      "registry_revision": 5,
+      "fetched_at": "2026-10-03T09:47:17.397571779Z"
+    }
+  ],
+  "unexpanded_subtrees": [
+    {
+      "node_id": "node-38f260609e6ec4a08f1c7c9f01ed6b6d815fa94bc7fc4f7c",
+      "reason": "denied"
+    }
+  ],
+  "local_collections": [
+    {
+      "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "collection_id": "12c6184c472b4124bea1c89abea8448e"
+    },
+    {
+      "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "collection_id": "2fa23c964f09491a86a3c2a0f976bef4"
+    },
+    {
+      "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "collection_id": "5ec3fb1303904dfb83251bf58f95c216"
+    },
+    {
+      "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "collection_id": "8d1316fe9de8461db99f47bed839d6b7"
+    },
+    {
+      "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "collection_id": "96d5dd4bf7f94f518134ae0ac5afc313"
+    },
+    {
+      "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "collection_id": "a078127cbc2d4935b5c7945d8380cdff"
+    },
+    {
+      "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "collection_id": "a4bbd28d05994b21927d6317c30600b8"
+    },
+    {
+      "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "collection_id": "cc4f148a2d1e4b58b644baf2c6493646"
+    },
+    {
+      "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "collection_id": "dbe1037f270e4da5ba39b5ccdeecfb7c"
+    },
+    {
+      "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "collection_id": "ec5e587c3b924819821007ed82d2de77"
+    }
+  ],
+  "remote_collections": [
+    {
+      "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+      "collection_id": "471b80409c6e4df9aace894f9c871829"
+    }
+  ],
+  "public_resource_count": 1,
+  "public_uploader_reference_visible": true,
+  "target_terminal_page_visible": true,
+  "member_terminal_page_visible": true,
+  "bounded_scope_count_visible": true,
+  "content_unfrozen_disclaimer_visible": true
+}

@@ -1,4 +1,19 @@
+import type { CapabilityReadiness, MemberExpansionState, NodeMembershipState } from '@deepdocparse/contracts'
+import type { ScopeEnvelope } from '@/federation/task-model'
 import { http } from './http'
+
+/** Inline enum in ddp-scope-coverage/v1.json#ScopeManifest (not an enums.yaml enum). */
+export interface DirectoryUnexpandedSubtree {
+  node_id: string
+  reason: 'timeout' | 'denied' | 'enumeration_unsupported' | 'budget_exhausted' | 'unknown'
+}
+export type DirectoryScopeEnvelope = ScopeEnvelope & {
+  manifest: {
+    unexpanded_subtrees: DirectoryUnexpandedSubtree[]
+    registry_revision_vector: (ScopeEnvelope['manifest']['registry_revision_vector'][number] & { directory_ref?: string })[]
+  }
+}
+
 
 /**
  * 互联公开目录浏览（`packages/contracts/openapi/discovery-v1.yaml`）。
@@ -10,14 +25,14 @@ import { http } from './http'
 
 export interface DirectoryMember {
   node_id: string
-  state: string
+  state: NodeMembershipState
   revision: number
   descriptor?: Record<string, unknown> | null
   route?: Record<string, unknown> | null
   configured: boolean
-  health: string
+  health: CapabilityReadiness
   accepting_admissions: boolean
-  expansion_state: string
+  expansion_state: MemberExpansionState
 }
 
 export interface MemberSnapshot {
@@ -40,6 +55,14 @@ export interface MemberSnapshotPage extends MemberSnapshot {
 const inline = { suppressErrorToast: true } as const
 
 export const directoryApi = {
+  /** 使用同一成员快照枚举公开检索集合；不调用需要节点凭据的 peer 端点。 */
+  createScope: (memberSnapshotId: string) =>
+    http.post<DirectoryScopeEnvelope>('/api/v1/federation/scopes',
+      { operation: 'corpus.retrieve', member_snapshot_id: memberSnapshotId }, inline),
+  /** 仅本节点有会话鉴权的集合详情；远端目录没有 owner 引用时不可臆造。 */
+  collection: (collectionId: string) =>
+    http.get<{ collection_id: string; name: string; owner_id: string; publication: string }>(
+      `/api/v1/collections/${encodeURIComponent(collectionId)}`, inline),
   /** 封存一份当前调用者可见成员快照（`createMemberSnapshot`）。 */
   createSnapshot: (body: { page_size?: number; ttl_seconds?: number } = {}) =>
     http.post<MemberSnapshot>('/api/v1/federation/member-snapshots', body, inline),
