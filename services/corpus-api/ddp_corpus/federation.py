@@ -55,6 +55,7 @@ from ddp_core.application.plans import (
     NODE as NODE_PATTERN,
     canonical_bytes,
     content_digest,
+    onward_recipients,
     validate_plan,
 )
 from ddp_core.application.probe import PROBE_KINDS, build_probe, validate_probe
@@ -501,6 +502,38 @@ async def _collection_target(session: AsyncSession, actor: Actor, collection_id:
                        if member.parse_job_id}
     document_ids = sorted({job_to_document[job] for job in contexts if job in job_to_document})
     return collection, index_revision, limits, contexts, document_ids
+
+
+async def _onward_policy_gate(session: AsyncSession, actor: Actor, *, plan: dict,
+                              task_spec: dict, step: dict, node: str) -> None:
+    """来源集合的转交策略（T83）：这一步放出去的摘录沿整份计划还能到哪些节点。
+
+    根协调者是发布授权的直接请求方；除它之外，本节点外发边（含中继）下游能到达的
+    每个节点都必须在集合的 `onward_recipients` 里。没有集合目标的检索在调用者可见
+    语料上跑，可能命中任何带策略的已发布集合，所以按全部带策略的已发布集合核对
+    （fail closed）。不通过就 egress_denied：不落受理、不执行、不外发。
+    """
+    if step.get("operation") != "retrieve":
+        return
+    downstream = onward_recipients(plan, node)
+    if not downstream:
+        return
+    from ddp_corpus.collection_models import Collection
+
+    collection_id = _execution_spec(task_spec, step)["collection_id"]
+    query = select(Collection).where(Collection.organization_id == actor.organization_id)
+    query = (query.where(Collection.id == collection_id) if collection_id
+             else query.where(Collection.publication == "published"))
+    for collection in (await session.scalars(query)).all():
+        allowed = (collection.metadata_json or {}).get("onward_recipients")
+        if allowed is None:
+            continue
+        denied = sorted(downstream - set(allowed))
+        if denied:
+            raise ApplicationError(
+                "egress_denied",
+                f"collection {collection.id} onward-transfer policy does not allow "
+                + ", ".join(denied))
 
 
 def _query_input_validation(query: str, query_digest: str) -> str:
@@ -1120,6 +1153,10 @@ async def _create_admission(session: AsyncSession, actor: Actor, request: dict,
         if int((plan.get("budget") or {}).get("max_generation_tokens") or 0) <= 0:
             raise ApplicationError("budget_exceeded",
                                    "a wiki_pages step requires a positive generation token reservation")
+    # 来源转交策略（T83）在任何持久化之前：整份已批准计划里，本节点放出去的摘录
+    # 能到的节点必须都被集合允许，否则不受理、不执行、不外发。
+    await _onward_policy_gate(session, actor, plan=plan, task_spec=task_spec,
+                              step=step, node=node)
 
     # 3. 输入校验。注意方向：校验不了是 waiting_input（不占算力），
     #    声明与本地内容对不上才是 input_changed / input_not_verified。

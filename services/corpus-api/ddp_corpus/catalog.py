@@ -150,6 +150,15 @@ async def pin_members(session, actor, collection_id, version_ids):
     await session.flush()
 
 
+#: Caller-supplied descriptor metadata. `onward_recipients` is the source's onward-transfer
+#: policy (T83): an empty list is a real policy ("root coordinator only"), absent is none.
+METADATA_FIELDS = ("licence", "languages", "topics", "time_range", "onward_recipients")
+
+
+def _metadata(body: dict) -> dict:
+    return {key: body[key] for key in METADATA_FIELDS if body.get(key) is not None}
+
+
 async def mutate(session, actor, operation, body, key, collection_id=None):
     actor.require(actor.principal_id is not None and actor.kind in ("user", "api_key"), "管理集合")
     if operation == "create":
@@ -170,7 +179,7 @@ async def mutate(session, actor, operation, body, key, collection_id=None):
     now = utcnow()
     if operation == "create":
         row = Collection(id=new_id(), organization_id=actor.organization_id, owner_id=actor.principal_id,
-            name=body["name"], metadata_json={k: body[k] for k in ("licence", "languages", "topics", "time_range") if body.get(k) is not None},
+            name=body["name"], metadata_json=_metadata(body),
             publication="draft", revision=1, created_at=now, updated_at=now)
         session.add(row)
         await session.flush()
@@ -184,8 +193,7 @@ async def mutate(session, actor, operation, body, key, collection_id=None):
             raise error("collection_revision_conflict", 409)
         values = {"revision": row.revision+1, "updated_at": now}
         if operation == "replace":
-            values.update(name=body["name"], metadata_json={k: body[k] for k in
-                ("licence", "languages", "topics", "time_range") if body.get(k) is not None}, publication="draft")
+            values.update(name=body["name"], metadata_json=_metadata(body), publication="draft")
         elif operation == "publish":
             try:
                 _, _, readiness = await members_state(session, row, actor, public=True)

@@ -890,11 +890,12 @@ export function evidenceConflictBasisLabelOf(value: string | null | undefined): 
 // `peer_unavailable:http_503`），细节是对端的状态/错误码或出错字段，经过字符集与长度
 // 清洗；其余代码不带后缀。对端给的字符串**永远只进细节**，不会变成新的代码。
 // 查文案前先去掉冒号后缀；协调者写出之前会检查代码已声明（`federation.unavailable_answer`）。
-export type FederatedAnswerReason = 'insufficient_evidence' | 'local_model_missing' | 'evidence_excerpt_unavailable' | 'excerpt_over_contract_bound' | 'upstream_error' | 'no_model_output' | 'budget_exceeded' | 'root_budget_exhausted' | 'unsupported_generation' | 'delegated_answer_missing' | 'delegated_answer_rejected' | 'delegated_bindings_missing' | 'delegated_binding_out_of_scope' | 'delegated_conflict_out_of_scope' | 'evidence_delegation_over_limit' | 'invalid_admission_receipt' | 'receipt_binding_mismatch' | 'delegated_admission_not_accepted' | 'delegated_execution_failed' | 'peer_unavailable'
+export type FederatedAnswerReason = 'insufficient_evidence' | 'local_model_missing' | 'source_policy_denied' | 'evidence_excerpt_unavailable' | 'excerpt_over_contract_bound' | 'upstream_error' | 'no_model_output' | 'budget_exceeded' | 'root_budget_exhausted' | 'unsupported_generation' | 'delegated_answer_missing' | 'delegated_answer_rejected' | 'delegated_bindings_missing' | 'delegated_binding_out_of_scope' | 'delegated_conflict_out_of_scope' | 'evidence_delegation_over_limit' | 'invalid_admission_receipt' | 'receipt_binding_mismatch' | 'delegated_admission_not_accepted' | 'delegated_execution_failed' | 'peer_unavailable'
 
 export const FEDERATED_ANSWER_REASON_VALUES: readonly FederatedAnswerReason[] = [
   'insufficient_evidence',
   'local_model_missing',
+  'source_policy_denied',
   'evidence_excerpt_unavailable',
   'excerpt_over_contract_bound',
   'upstream_error',
@@ -920,6 +921,8 @@ export const FEDERATED_ANSWER_REASON_META: Record<FederatedAnswerReason, EnumMet
   "insufficient_evidence": { value: 'insufficient_evidence', label: "证据不足，未生成答案", severity: 'warn' },
   // 本节点与计划内远端都没有可用的生成能力（或生成预算为 0）
   "local_model_missing": { value: 'local_model_missing', label: "没有可用的生成模型，只返回证据", severity: 'warn' },
+  // 规划时远端生成候选被某个选中来源集合的转交策略（onward_recipients）排除（不再探测它们的能力），其余候选也不可用；不发出证据
+  "source_policy_denied": { value: 'source_policy_denied', label: "来源不允许把证据转给生成节点，只返回证据", severity: 'warn' },
   // 某条证据取不到正文（空白或缺失），不能拿无根片段生成
   "evidence_excerpt_unavailable": { value: 'evidence_excerpt_unavailable', label: "有证据取不到原文片段，未生成答案", severity: 'warn' },
   // 证据正文超过契约上限（2000 字符），显式拒绝而不是静默截断

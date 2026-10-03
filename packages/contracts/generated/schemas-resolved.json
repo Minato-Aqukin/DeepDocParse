@@ -1361,6 +1361,15 @@
             "licence": {
               "type": "string"
             },
+            "onward_recipients": {
+              "description": "**来源集合的转交策略**（T83）：除直接请求它的根协调者之外，这个集合的证据摘录及其派生物沿计划数据边（含中继）还能到达哪些节点。缺省 = 来源不额外限制（只由用户的执行许可决定）；空数组 = 只给根协调者。执行者受理时按整份计划算下游接收方，有一个不在名单内就 `egress_denied`，不执行、不外发；协调者规划时不选被禁止的生成节点。",
+              "items": {
+                "$ref": "#/$defs/node_id"
+              },
+              "maxItems": 100,
+              "type": "array",
+              "uniqueItems": true
+            },
             "origin_node_id": {
               "$ref": "#/$defs/node_id",
               "description": "**来源身份，不随路径变化**（I02）。经上级中继拿到的描述，这里仍是原始来源。"

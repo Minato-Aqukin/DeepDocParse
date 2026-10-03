@@ -1166,6 +1166,8 @@ const (
 	FederatedAnswerReasonInsufficientEvidence FederatedAnswerReason = "insufficient_evidence"
 	// 本节点与计划内远端都没有可用的生成能力（或生成预算为 0）
 	FederatedAnswerReasonLocalModelMissing FederatedAnswerReason = "local_model_missing"
+	// 规划时远端生成候选被某个选中来源集合的转交策略（onward_recipients）排除（不再探测它们的能力），其余候选也不可用；不发出证据
+	FederatedAnswerReasonSourcePolicyDenied FederatedAnswerReason = "source_policy_denied"
 	// 某条证据取不到正文（空白或缺失），不能拿无根片段生成
 	FederatedAnswerReasonEvidenceExcerptUnavailable FederatedAnswerReason = "evidence_excerpt_unavailable"
 	// 证据正文超过契约上限（2000 字符），显式拒绝而不是静默截断
@@ -1208,6 +1210,7 @@ const (
 var FederatedAnswerReasonValues = []FederatedAnswerReason{
 	FederatedAnswerReasonInsufficientEvidence,
 	FederatedAnswerReasonLocalModelMissing,
+	FederatedAnswerReasonSourcePolicyDenied,
 	FederatedAnswerReasonEvidenceExcerptUnavailable,
 	FederatedAnswerReasonExcerptOverContractBound,
 	FederatedAnswerReasonUpstreamError,
@@ -1231,6 +1234,7 @@ var FederatedAnswerReasonValues = []FederatedAnswerReason{
 var FederatedAnswerReasonMeta = map[FederatedAnswerReason]EnumMeta{
 	FederatedAnswerReasonInsufficientEvidence:          {Value: "insufficient_evidence", Label: "证据不足，未生成答案", Severity: SeverityWarn},
 	FederatedAnswerReasonLocalModelMissing:             {Value: "local_model_missing", Label: "没有可用的生成模型，只返回证据", Severity: SeverityWarn},
+	FederatedAnswerReasonSourcePolicyDenied:            {Value: "source_policy_denied", Label: "来源不允许把证据转给生成节点，只返回证据", Severity: SeverityWarn},
 	FederatedAnswerReasonEvidenceExcerptUnavailable:    {Value: "evidence_excerpt_unavailable", Label: "有证据取不到原文片段，未生成答案", Severity: SeverityWarn},
 	FederatedAnswerReasonExcerptOverContractBound:      {Value: "excerpt_over_contract_bound", Label: "证据片段超出长度上限，未生成答案", Severity: SeverityWarn},
 	FederatedAnswerReasonUpstreamError:                 {Value: "upstream_error", Label: "生成服务出错，只返回证据", Severity: SeverityError},

@@ -78,6 +78,10 @@ LOCATE_OPERATION = "corpus.locate"
 #: fast 的有界候选数（§7.2）。exhaustive 不受它限制。
 FAST_CANDIDATE_LIMIT = 8
 MAX_ANSWER_CANDIDATES = 8
+#: 规划时因来源集合的转交策略（T83）排除了远端生成候选、又没有别的可用生成节点：
+#: 内部字段记下原因，执行时答案原因写 `source_policy_denied` 而不是"没有模型"。
+GENERATION_WITHHELD_FIELD = "_generation_withheld"
+SOURCE_POLICY_DENIED = "source_policy_denied"
 #: 命中探测复用（P6 缓存回执）时覆盖账本 search_profile 上的可见标记。
 #: 它不声称"本次真的探测过" —— 回执本身的 observed_at 才是新鲜度事实。
 CACHED_PROBE_PROFILE = "cached_probe_receipt"
@@ -901,6 +905,28 @@ def _descriptor_index(descriptors: list[dict]) -> dict[tuple[str, str], dict]:
     return index
 
 
+def _onward_policies(targets: list[dict],
+                     descriptors: dict[tuple[str, str], dict]) -> list[tuple[str, frozenset]]:
+    """选中目标里带转交策略（`onward_recipients`）的集合：[(来源节点, 允许的节点)]。
+
+    策略取自来源自己的集合描述；描述没取到就不知道策略 —— 那时执行者受理会按整份
+    计划复核并 egress_denied，规划这一层只是不去选来源明说禁止的生成节点。
+    """
+    policies = []
+    for target in targets:
+        descriptor = descriptors.get((target["origin_node_id"], target["collection_id"])) or {}
+        allowed = descriptor.get("onward_recipients")
+        if isinstance(allowed, list):
+            policies.append((target["origin_node_id"],
+                             frozenset(item for item in allowed if isinstance(item, str))))
+    return policies
+
+
+def _policy_forbids(policies: list[tuple[str, frozenset]], candidate: str) -> bool:
+    """委托生成会把融合证据 A -> candidate 外发；任一来源不允许它就不能选。"""
+    return any(candidate != origin and candidate not in allowed for origin, allowed in policies)
+
+
 async def _gather_descriptors(session: AsyncSession, actor: Actor, *, node: str,
                               all_targets: list[dict], manifest: dict | None,
                               consent: dict, budget: routing.RootBudget,
@@ -1346,11 +1372,16 @@ async def _probe_answer_candidates(*, root_task_id: str, task_spec_digest: str,
                                    operation: str = "rag.answer.cited",
                                    revision: int = 1,
                                    spend=None,
+                                   policies: list[tuple[str, frozenset]] = (),
                                    ) -> tuple[str | None, dict]:
     chosen: str | None = None
     outcomes: dict[str, str] = {}
     for candidate in _answer_candidates(targets, node=federation.local_node_id(),
                                         extra_nodes=extra_nodes):
+        if _policy_forbids(policies, candidate):
+            # 来源不允许把证据转给它：连能力探测都不发（T83）。
+            outcomes[candidate] = SOURCE_POLICY_DENIED
+            continue
         denial = _peer_probe_denial(consent, candidate)
         if denial is not None:
             outcomes[candidate] = denial
@@ -1554,7 +1585,8 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
                 consent=consent, scope_ref=scope_ref, targets=selected,
                 peers=peers, budget=root_budget, extra_nodes=capability_only,
                 operation="wiki.pages" if wants_wiki else "rag.answer.cited",
-                revision=int(row.plan_revision or 0) + 1, spend=_plan_spend)
+                revision=int(row.plan_revision or 0) + 1, spend=_plan_spend,
+                policies=_onward_policies(selected, _descriptor_index(descriptors)))
     except ApplicationError as exc:
         raise federation.api_error(exc) from None
     finally:
@@ -1665,6 +1697,10 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
                            task_spec, all_targets, selected, outcome,
                            generation_ready, delegated)}
     row.result_json.pop("_continuation_targets", None)
+    row.result_json.pop(GENERATION_WITHHELD_FIELD, None)
+    if delegated is None and SOURCE_POLICY_DENIED in answer_outcomes.values():
+        # 没有可用生成节点的原因是来源策略，不是"没有模型"（T83）。
+        row.result_json[GENERATION_WITHHELD_FIELD] = SOURCE_POLICY_DENIED
     await _commit(session)
     return plan
 
@@ -2745,6 +2781,13 @@ async def _live_recheck_evidence(session: AsyncSession, actor: Actor, *,
     return live, None
 
 
+def _no_generator_reason(row: FederationRequest) -> str:
+    """计划里没有生成步骤的原因：来源策略排除了生成节点（T83），否则就是没有模型。"""
+    if (row.result_json or {}).get(GENERATION_WITHHELD_FIELD) == SOURCE_POLICY_DENIED:
+        return "source_policy_denied"
+    return "local_model_missing"
+
+
 async def _wiki_result(session: AsyncSession, actor: Actor, row: FederationRequest, *,
                        plan: dict, fused: list[dict], live_excerpts: dict[str, str],
                        sufficiency: str, http,
@@ -2756,7 +2799,7 @@ async def _wiki_result(session: AsyncSession, actor: Actor, row: FederationReque
     wiki_step = next((step for step in plan["steps"]
                       if step["operation"] == "wiki_pages"), None)
     if wiki_step is None:
-        return _wiki_failure("local_model_missing")
+        return _wiki_failure(_no_generator_reason(row))
     if sufficiency == "insufficient" or not fused:
         return _wiki_failure("insufficient_evidence")
     excerpts = await _load_excerpts(session, actor, plan)
@@ -2858,7 +2901,7 @@ async def _answer_result(session: AsyncSession, actor: Actor, row: FederationReq
                         if step["operation"] == "answer"), None)
     if answer_step is None:
         # 规划时本地与远端都没有可用的生成能力：明说没有模型，不伪造答案。
-        return _unavailable_answer("local_model_missing")
+        return _unavailable_answer(_no_generator_reason(row))
     if sufficiency == "insufficient" or not fused:
         # 没有可引用的证据就不给模型留"凭常识补一句"的机会；契约也要求
         # insufficient 时绑定必须为空（ddp-evidence/v1 FederatedAnswer 的 allOf）。
@@ -3154,7 +3197,8 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
     result = {**document, "result_manifest_digest": plans.digest(document),
               _ATTRIBUTED_FIELD: sorted({_evidence_key(item) for item in attributed},
                                         key=lambda key: tuple(str(part) for part in key))}
-    for key in (federation_budget.CANDIDATE_GRAPH_FIELD, federation_budget.FAST_STOP_FIELD):
+    for key in (federation_budget.CANDIDATE_GRAPH_FIELD, federation_budget.FAST_STOP_FIELD,
+                GENERATION_WITHHELD_FIELD):
         if key in previous:
             result[key] = previous[key]
     await session.execute(delete(CoverageEntry).where(

@@ -173,6 +173,12 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
 3. step 的 `executor_node_id` 是本节点；数据边若要求输入，digest 必须与 `inputs`
    逐一验证（`content_verified`）；验证不了则 `input_not_verified` 且
    state=`waiting_input`（不占 GPU、不执行）。
+   `retrieve` 步骤还要过来源集合的转交策略（T83）：集合带 `onward_recipients` 时，
+   按整份计划算本节点外发边（含 `relay_via`）下游能到的节点 ——
+   `plans.onward_recipients`，与桌面 `validate_scope` 同一个下游遍历，只是不沿
+   `query_text` 边走（问题原文不携带来源内容）；除根协调者外有一个不在名单里就
+   403 `egress_denied`，不写 receipt、不排队。没有集合目标的检索按本组织全部
+   带策略的已发布集合核对。
 4. 幂等：同键同 `request_digest` 返回已有 receipt（200，不复算执行）；
    同键不同摘要 409 `idempotency_conflict`。
 5. 通过后**同一个事务**持久写 receipt（`accepted`）、execution 行与一条
@@ -210,6 +216,11 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
   校验与持久化，**不代用户签署**。
 - **执行许可门**：`/tasks` 必须校验 `ExecutionConsent.plan_digest` 与提交的 plan
   修订一致、接收方集合覆盖所有数据边（含 relay），否则 `egress_denied`。
+- **来源转交策略**（T83）：规划时从选中目标的集合描述读 `onward_recipients`；
+  委托生成会把融合证据 A→候选节点外发，任一来源不允许该候选就跳过它（不发能力
+  探测，`answer_probes` 记 `source_policy_denied`）。因此没有生成步骤时结果的
+  `answer_reason` 是 `source_policy_denied` 而不是 `local_model_missing`。描述没取到
+  时不知道策略，由来源执行者受理时按整份计划复核兜底。
 - **fast**：按 `routing.candidates` 取有界候选，统一融合，结果
   `retrieval_completeness="partial"`，响应显式列出未检索目标。显式续查从持久候选图
   选择尚未批准的下一目标，即使上一轮有命中也不把它当作问题已完整回答的证明。

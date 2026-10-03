@@ -5,9 +5,10 @@ calls corpus over its authenticated HTTP boundary and never reads corpus SQL. Th
 automatic collection for a resource, user, organization or private corpus inventory.
 
 `POST /api/v1/collections` creates an owner-bound private draft. The body contains `name`,
-`licence`, explicit `languages` and `topics`, optional `time_range`, and 1–100 distinct
-`version_ids`. Metadata is supplied by the caller; neither summaries nor counts are inferred
-from private content. `PUT /api/v1/collections/{id}` replaces the same fields and requires
+`licence`, explicit `languages` and `topics`, optional `time_range`, optional
+`onward_recipients`, and 1–100 distinct `version_ids`. Metadata is supplied by the caller;
+neither summaries nor counts are inferred from private content. `PUT /api/v1/collections/{id}`
+replaces the same fields (omitting `onward_recipients` removes the policy) and requires
 `expected_revision`; replacement returns the collection to draft. `POST .../{id}/publish`
 and `POST .../{id}/withdraw` require `expected_revision`. Every write requires an
 `Idempotency-Key` and a user/API-key principal who owns the collection or is an administrator
@@ -46,11 +47,25 @@ continuation cannot change its page size. Its response is:
 ```
 
 `CollectionDescriptor` is the strict existing DDP-DISCOVERY v1 schema: origin_node_id,
-collection_id, explicit licence/languages/topics/time_range, revision, index_revision and
+collection_id, explicit licence/languages/topics/time_range/onward_recipients, revision,
+index_revision and
 valid_until only. Source IDs, members, filenames, counts, text, embeddings and storage keys
 never enter descriptors. Only explicitly published, currently public-authorized collections
 owned by the caller's organization enter the directory or its total/revision fingerprint.
 A private collection write cannot change another caller's registry_revision.
+
+`onward_recipients` is the source's onward-transfer policy (T83). Absent means the source
+adds no restriction beyond the user's execution consent. A list (possibly empty) names the
+only nodes, besides the plan's root coordinator, that evidence excerpts from this collection
+and anything derived from them may reach along the plan's data edges, relays included. The
+executor enforces it at admission over the whole approved plan: if any downstream recipient
+of its outbound edges is not the root coordinator and not listed, a `retrieve` step on this
+collection is refused with 403 `egress_denied` and nothing is persisted or executed. A
+`retrieve` with no collection target is checked against every published collection of the
+organization that carries a policy (fail closed). The coordinator also reads the field from
+descriptors at planning and never selects a delegated generator a selected source forbids;
+if that leaves no generator the result says `answer_reason=source_policy_denied`. Changing
+the policy is a `PUT`, so it bumps the revision and returns the collection to draft.
 
 Pages are fixed at creation. `complete=true` occurs only on the separate empty terminal
 page, with next_cursor=null; an empty catalog still has that terminal proof. New collections

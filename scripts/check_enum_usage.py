@@ -117,6 +117,9 @@ RETURN_POSITIONS = {
         {-1: "federated_answer_reason"},
     "services/corpus-api/ddp_corpus/federation_tasks.py::_remote_answer_reason":
         {-1: "federated_answer_reason"},
+    # 计划里没有生成步骤时的原因（来源策略排除了生成节点 / 没有模型）
+    "services/corpus-api/ddp_corpus/federation_tasks.py::_no_generator_reason":
+        {-1: "federated_answer_reason"},
 }
 
 #: 调用处**第几个位置参数**是哪个枚举。按函数名认（`federation.unavailable_answer`

@@ -17,6 +17,7 @@ from ddp_corpus.errors import APIError, error_body
 router = APIRouter()
 Tag = Annotated[str, Field(min_length=1, max_length=128)]
 VersionID = Annotated[str, Field(min_length=1, max_length=32)]
+NodeID = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._-]{2,63}$")]
 
 
 class TimeRange(BaseModel):
@@ -38,12 +39,17 @@ class CollectionInput(BaseModel):
     languages: list[Tag] = Field(default_factory=list, max_length=30)
     topics: list[Tag] = Field(default_factory=list, max_length=50)
     time_range: TimeRange | None = None
+    # Source onward-transfer policy (T83). None = no source restriction; [] = coordinator only.
+    onward_recipients: list[NodeID] | None = Field(default=None, max_length=100)
     version_ids: list[VersionID] = Field(min_length=1, max_length=100)
 
     @model_validator(mode="after")
     def distinct(self):
         if len(self.version_ids) != len(set(self.version_ids)):
             raise ValueError("version_ids must be distinct")
+        if self.onward_recipients is not None and \
+                len(self.onward_recipients) != len(set(self.onward_recipients)):
+            raise ValueError("onward_recipients must be distinct")
         return self
 
 

@@ -642,6 +642,7 @@ enums:
     values:
       - {value: insufficient_evidence, summary: 证据不足（或没有可引用证据），不给模型凭常识补答的机会, label: 证据不足，未生成答案, severity: warn}
       - {value: local_model_missing, summary: 本节点与计划内远端都没有可用的生成能力（或生成预算为 0）, label: 没有可用的生成模型，只返回证据, severity: warn}
+      - {value: source_policy_denied, summary: 规划时远端生成候选被某个选中来源集合的转交策略（onward_recipients）排除（不再探测它们的能力），其余候选也不可用；不发出证据, label: 来源不允许把证据转给生成节点，只返回证据, severity: warn}
       - {value: evidence_excerpt_unavailable, summary: 某条证据取不到正文（空白或缺失），不能拿无根片段生成, label: 有证据取不到原文片段，未生成答案, severity: warn}
       - {value: excerpt_over_contract_bound, summary: 证据正文超过契约上限（2000 字符），显式拒绝而不是静默截断, label: 证据片段超出长度上限，未生成答案, severity: warn}
       - {value: upstream_error, summary: 调生成模型的请求失败或返回非 200, label: 生成服务出错，只返回证据, severity: error}

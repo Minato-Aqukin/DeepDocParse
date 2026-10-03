@@ -1,0 +1,16 @@
+{
+  "schema": "ddp-discovery/1#CollectionDescriptor",
+  "origin_node_id": "node-b",
+  "collection_id": "b:robotics",
+  "licence": "internal",
+  "languages": [
+    "en"
+  ],
+  "topics": [
+    "gpio"
+  ],
+  "onward_recipients": [],
+  "index_revision": "index-42",
+  "revision": 4,
+  "valid_until": "2026-09-13T00:00:00Z"
+}

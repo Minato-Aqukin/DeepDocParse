@@ -103,11 +103,14 @@ async def indexed_source(session, *, owner=ACTOR, texts=("retrieval target text"
     return resource, version, job, document, evidence_rows
 
 
-async def publish_collection(client, version, *, who=ACTOR, key="probe-collection"):
+async def publish_collection(client, version, *, who=ACTOR, key="probe-collection",
+                             onward_recipients=None):
+    fields = {"name": "Probe collection", "licence": "CC-BY-4.0", "languages": ["en"],
+              "topics": ["probe"], "version_ids": [version.id]}
+    if onward_recipients is not None:
+        fields["onward_recipients"] = list(onward_recipients)
     created = await client.post("/api/v1/collections",
-        headers={**headers(who), "Idempotency-Key": key},
-        json={"name": "Probe collection", "licence": "CC-BY-4.0", "languages": ["en"],
-              "topics": ["probe"], "version_ids": [version.id]})
+        headers={**headers(who), "Idempotency-Key": key}, json=fields)
     assert created.status_code == 201, created.text
     body = created.json()
     published = await client.post(

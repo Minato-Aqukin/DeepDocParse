@@ -11,7 +11,18 @@
 - {fixture: valid/node-descriptor.json,           schema: ddp-discovery/v1.json, def: NodeDescriptor,        expect: valid}
 - {fixture: valid/capability-profile-ready.json,  schema: ddp-discovery/v1.json, def: CapabilityProfile,     expect: valid}
 - {fixture: valid/collection-descriptor.json,     schema: ddp-discovery/v1.json, def: CollectionDescriptor,  expect: valid}
+- {fixture: valid/collection-descriptor-onward-policy.json, schema: ddp-discovery/v1.json, def: CollectionDescriptor, expect: valid}
 - {fixture: valid/route-record.json,              schema: ddp-discovery/v1.json, def: RouteRecord,           expect: valid}
+
+- fixture: invalid/collection-descriptor-onward-duplicate.json
+  schema: ddp-discovery/v1.json
+  def: CollectionDescriptor
+  expect: invalid
+  violates: $.onward_recipients
+  violates_keyword: uniqueItems
+  because: |
+    来源的转交策略是一个节点集合（T83）。重复项在执行者那里无害，但它说明写入方
+    把名单当成了别的东西 —— 契约在边界上拒收，而不是默默去重。
 
 - fixture: invalid/capability-readiness-unknown-value.json
   schema: ddp-discovery/v1.json

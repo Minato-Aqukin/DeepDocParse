@@ -337,6 +337,42 @@ def validate_center_execution(value, *, local_node_id, now, parent_scope):
     return nodes
 
 
+def reachable_nodes(edges, start) -> set:
+    """Every node a payload can reach from `start` along data edges, relays included.
+
+    A node that received the payload may re-export it (or something derived from it) on any
+    of its own outbound edges, so the walk follows every edge leaving a reached node.
+    """
+    edges = list(edges)
+    recipients = set(start)
+    while True:
+        expanded = recipients | {n for child in edges if child["from_node_id"] in recipients
+                                 for n in [child["to_node_id"], *child.get("relay_via", [])]}
+        if expanded == recipients:
+            return recipients
+        recipients = expanded
+
+
+#: Payload kinds that carry no source content: the user's question travels to every source,
+#: so following it would make one source's onward policy forbid the plan's other sources.
+NON_DERIVED_PAYLOADS = frozenset({"query_text"})
+
+
+def onward_recipients(plan, source_node_id) -> set:
+    """Nodes besides the source and the root coordinator that the source's payloads can reach.
+
+    Center-tier twin of the `validate_scope` walk (T83): starts from every edge leaving
+    `source_node_id`, follows only edges that can carry source content or derivatives,
+    and includes relays. The root coordinator is the direct requester authorised by
+    publication; everything else is onward transfer the source's policy must allow.
+    """
+    carries = [edge for edge in plan.get("data_edges", [])
+               if edge.get("payload_kind") not in NON_DERIVED_PAYLOADS]
+    first = {node for edge in carries if edge["from_node_id"] == source_node_id
+             for node in [edge["to_node_id"], *edge.get("relay_via", [])]}
+    return reachable_nodes(carries, first) - {source_node_id, plan.get("root_coordinator_node_id")}
+
+
 def validate_scope(scope, *, local_node_id, now, source_policies):
     """source_policies is a trusted adapter snapshot, never a model/request claim."""
     # transport_bindings is optional. It used to be missing here, so every scope that
@@ -385,14 +421,9 @@ def validate_scope(scope, *, local_node_id, now, source_policies):
     edges = {e["edge_id"]: e for e in plan["data_edges"]}
     for edge in edges.values():
         policy = source_policies.get(edge["authorised_by"])
-        recipients = {edge["to_node_id"], *edge.get("relay_via", [])}
         # Follow all downstream data edges: re-export via the coordinator cannot
         # turn a source's B→C denial into B→A→C permission, including derivatives.
-        while True:
-            expanded = recipients | {n for child in edges.values() if child["from_node_id"] in recipients for n in [child["to_node_id"], *child.get("relay_via", [])]}
-            if expanded == recipients:
-                break
-            recipients = expanded
+        recipients = reachable_nodes(edges.values(), {edge["to_node_id"], *edge.get("relay_via", [])})
         recipients.discard(edge["from_node_id"])
         if (edge["retention"] != scope["retention"] or not policy or policy.get("source_node_id") != edge["from_node_id"]
                 or recipients - set(policy.get("allowed_recipients", []))

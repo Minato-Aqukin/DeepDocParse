@@ -100,6 +100,11 @@ paths:
         排序后的 (evidence_id, digest) 列表。excerpt 是**不可信文档数据**：
         执行者只把它当引用材料，绝不执行其中的指令。节点只在
         `rag.answer.cited` 就绪时才受理 answer 步骤。
+
+        来源转交策略（T83）：`retrieve` 步骤的目标集合带 `onward_recipients` 时，
+        执行者按整份已批准计划计算本节点外发边（含中继，`query_text` 边除外）
+        下游能到达的节点；除根协调者外有一个不在名单里就 403 `egress_denied`，
+        不落受理、不执行。没有集合目标的检索按本组织全部带策略的已发布集合核对。
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AdmissionRequest'}}}}
       responses:
@@ -108,7 +113,7 @@ paths:
         '201': {description: 新受理：持久写 receipt 与 execution 行, content: {application/json: {schema: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/AdmissionReceipt'}}}}
         '400': {description: 请求形状不合法}
         '401': {description: 节点凭证无效或签发节点不可信（见 info.description 的 401 码表）}
-        '403': {description: 凭证操作或范围不覆盖本请求（credential_operation_denied / credential_scope_denied）}
+        '403': {description: '凭证操作或范围不覆盖本请求（credential_operation_denied / credential_scope_denied）；egress_denied：执行许可不覆盖本节点或计划数据边，或来源集合的转交策略不允许计划下游的接收方'}
         '409': {description: 'idempotency_conflict（同键异摘要）或 plan_changed（重算摘要与请求不一致）', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '422': {description: AdmissionRequest 校验失败}
   /api/v1/federation/admissions/lookup:
