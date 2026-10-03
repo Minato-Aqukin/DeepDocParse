@@ -246,16 +246,27 @@ func TestFederationCorpusIngressStreamsBothDirections(t *testing.T) {
 // never pass more than the cap to corpus.
 func TestFederationCorpusIngressBoundsPeerRequestBodies(t *testing.T) {
 	var reached atomic.Int64
-	var forwarded atomic.Int64
+	// Each upstream request reports how many body bytes it received when it finishes, so a
+	// subtest never reads (or resets) a counter a previous request's handler still writes.
+	finished := make(chan int64, 4)
 	s := peerIngressServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached.Add(1)
 		n, err := io.Copy(io.Discard, r.Body)
-		forwarded.Add(n)
+		defer func() { finished <- n }()
 		if err != nil {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
 	}))
+	upstreamReceived := func(t *testing.T) (int64, bool) {
+		t.Helper()
+		select {
+		case n := <-finished:
+			return n, true
+		case <-time.After(5 * time.Second):
+			return 0, false
+		}
+	}
 	entry := httptest.NewServer(s.Routes())
 	defer entry.Close()
 	send := func(t *testing.T, body io.Reader, length int64) *http.Response {
@@ -292,20 +303,23 @@ func TestFederationCorpusIngressBoundsPeerRequestBodies(t *testing.T) {
 	})
 	t.Run("chunked", func(t *testing.T) {
 		reached.Store(0)
-		forwarded.Store(0)
 		body := io.MultiReader(strings.NewReader(strings.Repeat("y", int(peerRequestBodyMaxBytes))),
 			strings.NewReader(strings.Repeat("z", 64<<10)))
 		resp := send(t, body, -1)
 		expectTooLarge(t, resp)
-		if forwarded.Load() > peerRequestBodyMaxBytes {
-			t.Fatalf("corpus received %d bytes, more than the %d-byte cap", forwarded.Load(), peerRequestBodyMaxBytes)
+		n, done := upstreamReceived(t)
+		if !done && reached.Load() != 0 {
+			t.Fatal("the aborted upstream request never finished")
+		}
+		if n > peerRequestBodyMaxBytes {
+			t.Fatalf("corpus received %d bytes, more than the %d-byte cap", n, peerRequestBodyMaxBytes)
 		}
 	})
 	t.Run("at the cap", func(t *testing.T) {
-		forwarded.Store(0)
 		resp := send(t, strings.NewReader(strings.Repeat("a", int(peerRequestBodyMaxBytes))), -1)
-		if resp.StatusCode != http.StatusCreated || forwarded.Load() != peerRequestBodyMaxBytes {
-			t.Fatalf("a body exactly at the cap must pass intact: got %d after %d bytes", resp.StatusCode, forwarded.Load())
+		n, done := upstreamReceived(t)
+		if resp.StatusCode != http.StatusCreated || !done || n != peerRequestBodyMaxBytes {
+			t.Fatalf("a body exactly at the cap must pass intact: got %d after %d bytes", resp.StatusCode, n)
 		}
 	})
 }
