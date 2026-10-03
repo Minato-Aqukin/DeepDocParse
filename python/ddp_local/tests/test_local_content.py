@@ -506,3 +506,37 @@ def _wiki_protocol(runtime):
             {"name": "fixture", "location": "local"}
 
     return generate
+
+
+async def test_wiki_app_dependencies_rebuild_fixed_source_and_locate_original(client):
+    handle, runtime = client
+    version_id, resource_id = await _ready_version(handle, runtime)
+    _grounded_model(runtime)
+    runtime.provider.generate = _wiki_protocol(runtime)
+    created = await handle.post("/api/wikis", json={
+        "title": "合同", "sources": [
+            {"resource_id": resource_id, "source_version_id": version_id}]},
+        headers={"Idempotency-Key": "app-dependency-build"})
+    assert created.status_code == 201, created.text
+    built = created.json()
+    wiki_id, revision_id = built["wiki"]["id"], built["revision"]["id"]
+    listed = (await handle.get("/api/wikis")).json()
+    for document in [built, next(row for row in listed if row["wiki"]["id"] == wiki_id),
+                     (await handle.get(f"/api/wikis/{wiki_id}")).json(),
+                     (await handle.get(f"/api/wikis/{wiki_id}/revisions/{revision_id}")).json()]:
+        dependency = document["revision"]["dependency_manifest"][0]
+        assert dependency["resource_id"] == resource_id
+        assert dependency["source_version_id"] == version_id
+        assert dependency["document_id"] == version_id
+        evidence = runtime.store.evidence(dependency["evidence_id"])
+        assert dependency["locator"] == evidence["evidence"]["locator"]
+        assert dependency["source_digest"] == evidence["evidence"]["source_digest"]
+        assert dependency["parse_revision"] == evidence["evidence"]["parse_revision"]
+        assert dependency["excerpt_digest"] == evidence["evidence"]["excerpt_digest"]
+    rebuilt = await handle.post(f"/api/wikis/{wiki_id}/revisions", json={
+        "title": "合同", "base_revision_id": revision_id, "sources": [
+            {"resource_id": dependency["resource_id"],
+             "source_version_id": dependency["source_version_id"]}]},
+        headers={"Idempotency-Key": "app-dependency-rebuild"})
+    assert rebuilt.status_code == 201, rebuilt.text
+    assert rebuilt.json()["revision"]["base_revision_id"] == revision_id

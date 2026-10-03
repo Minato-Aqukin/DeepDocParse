@@ -1,0 +1,149 @@
+{
+  "id": "app-local-wiki-drill-20261003",
+  "date": "2026-10-03",
+  "criterion": "T51: current App + local model + local sources produce multiple pages, relations, original citations, human edit and restart recovery in one offline configuration",
+  "status": "passed",
+  "code": {
+    "base_revision": "9b15d9177311407fe3ad28172d42423f1fed5c0c",
+    "recovery_revision": "c7fd2fe5096f65de7084cc3240aa6151b9a84bc0",
+    "local_fix_sha256": "00d9c7ac94789ce00778c872c76c2d1885eec1e16c3121efa0b3d0c7be597f01",
+    "uncommitted_fix": "Wiki content projection: canonical dependency fields on every App response"
+  },
+  "platform": {
+    "os": "Linux-7.2.8-2-cachyos-x86_64-with-glibc2.44",
+    "arch": "x86_64",
+    "python": "Python 3.14.7",
+    "electron": "44.3.0",
+    "app": "current unpackaged Electron; current tree web build; actual host/runtime children"
+  },
+  "model": {
+    "engine": "openai-compatible",
+    "location": "local",
+    "provider_resolved": true,
+    "model_id": "qwen3-1.7b-q8_0",
+    "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+    "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+    "runtime_id": "llama-cpp-cpu-linux-x64",
+    "runtime_revision": "b10809",
+    "runtime_sha256": "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941",
+    "device": "cpu",
+    "offloaded_layers": 0,
+    "gpu_devices": [],
+    "context_tokens": 8192
+  },
+  "isolation": {
+    "interfaces": [
+      "lo"
+    ],
+    "external_ipv4_routes": 0,
+    "external_ipv6_routes": 0,
+    "method": "unshare user/network namespace, loopback only; host CDP bridge uses owned Unix socket",
+    "model_precondition": "previously verified model/runtime artifacts copied into private models directory; local App checksum verification; no download or remote fallback"
+  },
+  "input": {
+    "filename": "entities.pdf",
+    "bytes": 2061,
+    "sha256": "b9349bb7625f19e14ec52506df6f908c246bbd5f4f12e737852f6ae9c99fdcf3",
+    "topic": "Collector and Validator",
+    "limits": {
+      "max_evidence": 50,
+      "max_input_chars": 12000,
+      "max_output_tokens": 4096,
+      "max_pages": 2
+    }
+  },
+  "expectation": {
+    "pages": 2,
+    "supported_original_citations": true,
+    "interpage_relation": true,
+    "human_edit_CAS": true,
+    "restart_preserves_pages_relations_human_citations": true,
+    "no_duplicate_model_attempts": true
+  },
+  "actual": {
+    "wiki_id": "64e7697461f040df9db40ac453b5ea38",
+    "build_revision_id": "445d819fb9e049bca87b4fb5bc166400",
+    "human_revision_id": "6a7eeab723754236b9b95978fec04b87",
+    "recovered_revision_id": "6a7eeab723754236b9b95978fec04b87",
+    "pages": 2,
+    "cited_claims": 6,
+    "relations": 1,
+    "relation_statement": "Validator receives batches from Collector.",
+    "dependency_count": 4,
+    "original_physical_pages": [
+      0,
+      1
+    ],
+    "human_paragraphs": 1,
+    "human_flags": {
+      "kind": "human",
+      "source_type": "generated",
+      "unsupported": true,
+      "review_state": "unreviewed",
+      "evidence_ids": []
+    },
+    "stale_editor_HTTP": 409,
+    "stale_editor_code": "revision_conflict",
+    "recovery": "full App closed normally and owned runtime/model exited; relaunched same profile/workspace in fresh loopback-only net namespace",
+    "pages_and_relations_exactly_equal_after_restart": true,
+    "human_text_exactly_equal_after_restart": true,
+    "model_attempt_ids_exactly_equal_after_restart": true,
+    "final_build_attempts": [
+      "plan",
+      "write",
+      "relations"
+    ],
+    "citation_surface": "actual App relation citation opens entities.pdf PDF page 2, original text and bbox before and after restart"
+  },
+  "recorded_prior_runs": [
+    {
+      "input": "aurora-wiki-source.pdf",
+      "topic": "Aurora Pipeline: Collector and Validator",
+      "pages": 2,
+      "claims": 6,
+      "relations": 0,
+      "cause": "real planner chose source_term Aurora Pipeline: Collector/Validator, no co-mention candidate"
+    },
+    {
+      "input": "aurora-wiki-source.pdf",
+      "topic": "Collector and Validator",
+      "pages": 2,
+      "relations": 0,
+      "cause": "real planner chose source_term Collector module/Validator module, no co-mention candidate"
+    }
+  ],
+  "bug_fix": {
+    "observed": "rebuild initially prefills undefined source chip; fixed dependency locator not projected",
+    "files": [
+      "python/ddp_local/ddp_local/content_http.py",
+      "python/ddp_local/tests/test_local_content.py",
+      "python/ddp_local/docs/local-api.md"
+    ],
+    "test": "test_local_content.py::test_wiki_app_dependencies_rebuild_fixed_source_and_locate_original",
+    "red": "pre-change KeyError resource_id; 1 failed",
+    "green": "new regression 1 passed; scoped test_local_content.py 10 passed",
+    "real_App_after_fix": "rebuild preselects entities.pdf v1 without ghost chip; no source-unavailable warning; citations still recover"
+  },
+  "raw_evidence": ".dev-logs/acceptance-20261003/app-drills/offline/",
+  "trace_files": [
+    "build-1.json",
+    "attempts-1.json",
+    "attempts-2.json",
+    "build-final.json",
+    "edited.json",
+    "recovered.json",
+    "all-attempts-before-restart.json",
+    "all-attempts-after-restart.json",
+    "stale-editor.json",
+    "network-isolation.json",
+    "citation-before-restart.png",
+    "citation-after-restart.png"
+  ],
+  "limits": [
+    "unpackaged development App, not installed package; Playwright launcher adds no-sandbox",
+    "native directory/quit dialogs automated; human edit entered via real Wiki UI",
+    "relation profile is model_selected_source_statement/1; direction is source_mention_order; all generated text remains needs_review",
+    "no crops available in local runtime; original text, physical page and bbox are visible; semantic truth not generally certified",
+    "two prior explicit builds with no relation were preserved, not silently discarded"
+  ]
+}

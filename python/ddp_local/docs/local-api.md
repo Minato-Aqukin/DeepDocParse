@@ -67,6 +67,14 @@ The existing private `/api/v1/*` routes above keep working unchanged.
 | GET | `/api/resources/{id}/versions/{vid}/bundle`, `.../bundle/evidence` | DDP-Bundle v1 export and frozen evidence |
 | GET | `/api/v1/capabilities` | Gains `content_features: ["resources","documents","search","wiki","federation_tasks"]` |
 
+The Wiki content adapter projects frozen dependencies to the same `resource_id`,
+`source_version_id`, `document_id`, `source_digest`, `parse_revision`,
+`excerpt_digest` and `locator` fields on list, detail, history and write responses.
+The resource/version/document IDs address the local fixed source; the `original`
+envelope retains its original provenance. This lets the App preselect a rebuild's
+fixed local versions and display citation locators without reading kernel-private
+`local_*` storage fields.
+
 Anything else under `/api/` → `404 {"error":{"code":"not_supported_locally",…}}`
 (message from the generated `source_error` labels). In particular: `PATCH
 /api/resources/{id}` (publication), `POST /api/wikis/{id}/publish`, reparse /

@@ -1,0 +1,136 @@
+{
+  "id": "app-remote-input-change-drill-20261003",
+  "date": "2026-10-03",
+  "criterion": "T14: mutating the local input during the real App -> B -> App remote compute chain must use a digest-bound fixed snapshot or reject; never register mixed bytes as one version",
+  "status": "passed",
+  "code": {
+    "app_revision": "c7fd2fe5096f65de7084cc3240aa6151b9a84bc0",
+    "app_worktree": "current tree with local Wiki projection fix; remote compute unchanged",
+    "B_corpus_revision": "c7fd2fe",
+    "B_corpus_worktree": "/tmp/ddp-live-c7fd2fe",
+    "B_schema_head": "0039",
+    "control_and_gateway": "existing B processes unchanged by this agent"
+  },
+  "platform": {
+    "os": "Linux-7.2.8-2-cachyos-x86_64-with-glibc2.44",
+    "arch": "x86_64",
+    "python": "Python 3.14.7",
+    "electron": "44.3.0",
+    "app": "current unpackaged App, real host and owned ddp_local child; web rebuilt from current tree",
+    "parser": "borndigital real PDF text-layer parse; no generated-answer model required",
+    "B_model_capability_version": "qwen3-1.7b advertised by existing gateway; not a claim of generation inference in this PDF drill"
+  },
+  "input": {
+    "filename": "input.pdf",
+    "bytes": 2360151,
+    "sha256_before": "726d234c21f31634ec15917b639ae8ac31275b8c53bd41da9ec0de153ec90b32",
+    "sha256_after": "f236be24f6391b0703948e66b4b1f78645e82cb02282a496470ee0dd19efd411",
+    "mutation": "same-size byte edit of PDF launch-code text 8712 -> 9966; unique trailing PDF comment avoids dedup with shared earlier fixtures",
+    "local_resource_id": "61b7f95318dd4422b86ba810a9d766d5",
+    "local_version_id": "040599c7ea554babb9a102e3065fd364"
+  },
+  "expectation": "source path changes after immutable snapshot/manifest and remote allocation, while first object PUT is issued; upload and returned source must remain pinned to pre-change digest, or fail explicitly",
+  "fault_injection": {
+    "at": "2026-10-03T09:33:53.673Z",
+    "phase": "first object PUT; pinned manifest and upload allocation already complete",
+    "method": "drill-only Electron main fetch observer writes actual local input path at first object-storage PUT, immediately before forwarding the real request; request body and services untouched",
+    "observed_upload_body_sha256": "726d234c21f31634ec15917b639ae8ac31275b8c53bd41da9ec0de153ec90b32",
+    "no_fake_server_or_model": true
+  },
+  "actual": {
+    "plan_id": "plan-871c3d18645849c8bb67ff6309479a6b",
+    "compute_id": "5b4f6479dee240ac922ff089dc1d0356",
+    "upload_id": "1dd1fcc8576de8ae5e834bd07ebc805b",
+    "parse_job_id": "c08d25bbc3134d7eba6b80d7154ea145",
+    "center": {
+      "compute": {
+        "id": "5b4f6479dee240ac922ff089dc1d0356",
+        "status": "acked",
+        "input_sha256": "726d234c21f31634ec15917b639ae8ac31275b8c53bd41da9ec0de153ec90b32",
+        "input_size": 2360151,
+        "parse_job_id": "c08d25bbc3134d7eba6b80d7154ea145",
+        "output_sha256": "95d1a6852937a83b5e2930dadb7d0f2677599f7a5c785724edb94655e94fd318"
+      },
+      "upload": {
+        "id": "1dd1fcc8576de8ae5e834bd07ebc805b",
+        "status": "ready",
+        "declared_sha256": "726d234c21f31634ec15917b639ae8ac31275b8c53bd41da9ec0de153ec90b32",
+        "verified_sha256": "726d234c21f31634ec15917b639ae8ac31275b8c53bd41da9ec0de153ec90b32",
+        "declared_size": 2360151,
+        "actual_size": 2360151
+      },
+      "parse": {
+        "id": "c08d25bbc3134d7eba6b80d7154ea145",
+        "status": "succeeded",
+        "index_status": "ready",
+        "compile_status": "ready"
+      },
+      "source_version": {
+        "id": "63a394e4d34246eebff55098c70ab578",
+        "source_digest": "726d234c21f31634ec15917b639ae8ac31275b8c53bd41da9ec0de153ec90b32",
+        "size_bytes": 2360151
+      }
+    },
+    "local_proof": {
+      "local_snapshot_sha256": "726d234c21f31634ec15917b639ae8ac31275b8c53bd41da9ec0de153ec90b32",
+      "mutated_disk_sha256": "f236be24f6391b0703948e66b4b1f78645e82cb02282a496470ee0dd19efd411",
+      "returned_bundle_sha256": "95d1a6852937a83b5e2930dadb7d0f2677599f7a5c785724edb94655e94fd318",
+      "returned_bundle_source_sha256": "726d234c21f31634ec15917b639ae8ac31275b8c53bd41da9ec0de153ec90b32",
+      "returned_source_bytes": 2360151,
+      "returned_markdown_has_original_8712": true,
+      "returned_markdown_has_changed_9966": false
+    },
+    "imported_version_id": "70f0e78d80454bc1976ed082623274ff",
+    "delivery_bytes": 2364030,
+    "output_sha256": "95d1a6852937a83b5e2930dadb7d0f2677599f7a5c785724edb94655e94fd318",
+    "host_independent_verification": {
+      "state": "passed",
+      "expected": "sha256:95d1a6852937a83b5e2930dadb7d0f2677599f7a5c785724edb94655e94fd318",
+      "actual": "sha256:95d1a6852937a83b5e2930dadb7d0f2677599f7a5c785724edb94655e94fd318"
+    },
+    "local_state": "delivered",
+    "center_state": "acked",
+    "parse_status": "succeeded",
+    "compile_status": "ready",
+    "index_status": "ready",
+    "compile_degraded": [],
+    "degraded": [],
+    "UI": "actual App task page shows 已交付, 输入已通过服务端校验 and matching center/local bundle digests"
+  },
+  "earlier_attempts": [
+    {
+      "compute_id": "4120ca683f8247d7be925c7a924ce00e",
+      "mutated_source": true,
+      "center_input_fixed_digest_verified": true,
+      "delivery_not_completed": "2-hour local approval expired before fetch; source dedup index was also affected by hot-code environment mismatch"
+    },
+    {
+      "compute_id": "c521e8d91565492695b6f88c0d902c3a",
+      "mutated_source": true,
+      "center_input_fixed_digest_verified": true,
+      "delivery_not_completed": "B worker lazily imported in-progress indexing.py but had previously loaded models.py: printed_page_label invalid keyword for Evidence; not a product behavior verdict; main restarted corpus/worker from consistent c7fd2fe worktree before successful unique third run"
+    }
+  ],
+  "raw_evidence": ".dev-logs/acceptance-20261003/app-drills/remote/",
+  "trace_files": [
+    "mutation.json",
+    "host-fetch.log",
+    "dispatch-unique.json",
+    "fetched-unique.json",
+    "confirmed-unique.json",
+    "center-db-unique.json",
+    "imported-result.json",
+    "independent-hash-proof.json",
+    "confirmed-unique.png",
+    "run-1/",
+    "run-2/"
+  ],
+  "tests": "No remote-compute product bug exposed; real chain is behavioral proof. Separate T51 regression: test_local_content.py new dependency roundtrip test red/green, scoped file 10 passed.",
+  "limits": [
+    "single-machine loopback B stack and test CA; not a production-network drill",
+    "unpackaged Electron, Playwright launch no-sandbox",
+    "native approval dialogs automatically answered; final plan/propose/dispatch/fetch/confirm invoked through supported renderer preload bridge, not hand-written direct center mutation calls",
+    "original mutable path changed after its immutable local snapshot was imported; immutable blob tampering is not claimed",
+    "B consistency restart performed by main, not this agent; earlier environment-failed attempts retained"
+  ]
+}

@@ -674,7 +674,7 @@ def content_router(runtime):
         with runtime.store.lock:
             rows = runtime.store.db.execute(
                 "SELECT * FROM wikis ORDER BY created_at DESC,id DESC LIMIT 200").fetchall()
-        return [runtime.wikis.get(row["id"]) for row in rows]
+        return [_wiki_out(runtime.wikis.get(row["id"])) for row in rows]
 
     @router.post("/api/wikis", status_code=201)
     async def wikis_create(body: WikiBuild, request: Request):
@@ -720,6 +720,25 @@ def content_router(runtime):
     def _wiki_out(result):
         revision = dict(result["revision"])
         revision["created_at"] = _iso(revision["created_at"])
+        dependencies = []
+        for dependency in revision["dependency_manifest"]:
+            if dependency.get("local_version_id") is None:
+                dependencies.append(dependency)
+                continue
+            original = dependency["original"]
+            dependencies.append({
+                "page_key": dependency["page_key"],
+                "resource_id": dependency["local_resource_id"],
+                "source_version_id": dependency["local_version_id"],
+                "document_id": dependency["local_version_id"],
+                "evidence_id": dependency["evidence_id"],
+                "source_digest": original["source_digest"],
+                "parse_revision": original["parse_revision"],
+                "excerpt_digest": original["excerpt_digest"],
+                "locator": original["locator"],
+                "original": original,
+            })
+        revision["dependency_manifest"] = dependencies
         return {"wiki": result["wiki"], "revision": revision}
 
     # Explicitly unsupported center operations used by the Web shell.
