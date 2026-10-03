@@ -6,6 +6,7 @@ import { searchApi } from '@/api'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { DEFAULT_WARN_BELOW, similarityText } from '@/constants/status'
 import type { SearchHit, SearchResult } from '@/types/api'
+import { formatPageLocator } from '@/utils/page-locator'
 
 /** 跨文档检索：命中带页码，点击直达工作台对应页。 */
 const route = useRoute()
@@ -101,7 +102,7 @@ watch(() => route.query.q, query => {
     <router-link v-for="hit in group.hits" :key="hit.chunk_id" class="hit"
                  :to="target(group, hit)">
       <!-- 页码是元信息不是状态，按准则二排成普通文字，不做成标签 -->
-      <span class="page ddp-cite-page">PDF 第 {{ hit.page_idx + 1 }} 页</span>
+      <span class="page ddp-cite-page">{{ formatPageLocator(hit.page_idx, hit.printed_page_label, 'PDF 第') }}</span>
       <!-- 相关度用 similarity（有校准量纲），不用 score（RRF 名次分，表达不了相关度）。
            阈值收在 constants/status.ts，不再在这里写第二个字面量 -->
       <StatusTag

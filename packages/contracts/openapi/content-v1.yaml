@@ -400,10 +400,12 @@ components:
 
     SearchHit:
       type: object
+      description: 印刷标签只用于展示（印刷页 iv · PDF 第 4 页）；打开原文始终使用从零起算的 page_idx。
       required: [chunk_id, page_idx, score, snippet]
       properties:
         chunk_id: { type: string }
         page_idx: { type: integer }
+        printed_page_label: { type: string, nullable: true, description: 'PDF /PageLabels 显示标签；缺省/null 不得用物理页码编造' }
         bbox:
           type: array
           items: { type: number }

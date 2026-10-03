@@ -14,6 +14,7 @@ import {
   sourceTypeLabel,
 } from '@/constants/federation'
 import { citationIndex, type FederatedEvidence, type TaskResult } from '@/federation/task-model'
+import { formatPageLocator } from '@/utils/page-locator'
 
 /**
  * 联邦任务结果 —— 结论、证据、矛盾、没查到的地方放在同一处。
@@ -67,7 +68,7 @@ function isLocal(item: FederatedEvidence) {
 function locator(item: FederatedEvidence) {
   const { physical_page_index: page, printed_page_label: label, seq } = item.locator ?? {}
   const parts = []
-  if (typeof page === 'number') parts.push(label ? `印刷页 ${label} · PDF 第 ${page + 1} 页` : `第 ${page + 1} 页`)
+  if (typeof page === 'number') parts.push(formatPageLocator(page, label))
   if (typeof seq === 'number') parts.push(`块 ${seq}`)
   return parts.join(' · ') || '定位缺失'
 }

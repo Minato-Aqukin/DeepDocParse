@@ -349,6 +349,7 @@ export interface ConversationInfo {
 export interface SearchHit {
   chunk_id: string
   page_idx: number
+  printed_page_label?: string | null
   bbox: [number, number, number, number] | null
   /** RRF 名次分，排序用 */
   score: number

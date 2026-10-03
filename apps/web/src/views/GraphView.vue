@@ -7,6 +7,7 @@ import EvidencePreview from '@/components/evidence/EvidencePreview.vue'
 import GraphCanvas from '@/components/knowledge/GraphCanvas.vue'
 import ReviewQueue from '@/components/knowledge/ReviewQueue.vue'
 import type { KnowledgeEdge, KnowledgeEntity, KnowledgeGraph } from '@/types/api'
+import { formatPageLocator } from '@/utils/page-locator'
 
 const graph = ref<KnowledgeGraph>({ graph_version: 'ddp-graph/1', entities: [], edges: [] })
 const loading = ref(false)
@@ -126,7 +127,7 @@ onMounted(load)
           <el-button v-for="citation in selectedEdge.citations" :key="citation.evidence_id || citation.snippet"
                      class="citation" :disabled="!citation.resolved || !citation.evidence_id"
                      @click="evidenceId = citation.evidence_id || ''">
-            第 {{ citation.page_idx + 1 }} 页 · {{ citation.snippet.slice(0, 80) }}
+            {{ formatPageLocator(citation.page_idx, citation.printed_page_label) }} · {{ citation.snippet.slice(0, 80) }}
           </el-button>
         </template>
         <template v-else-if="selectedEntity">

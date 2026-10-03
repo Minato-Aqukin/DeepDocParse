@@ -11,7 +11,7 @@ from ddp_core.application.borndigital import extract_pages, to_markdown
 from ddp_core.application.layout import build
 from ddp_corpus.config import settings
 from ddp_core.bundle import read_bundle
-from ddp_corpus.models import Evidence, ResourceVersion
+from ddp_corpus.models import Chunk, Evidence, ResourceVersion
 from ddp_corpus import federation
 from ddp_corpus.deps import Actor
 from ddp_corpus.evidence import load_citations, record_evidence
@@ -75,3 +75,36 @@ async def test_fixed_evidence_and_bundle_keep_printed_labels_and_physical_pages(
     validator = Draft202012Validator({"$ref": "#/$defs/FederatedEvidence", "$defs": schema["$defs"]})
     for record in bundle.evidence:
         validator.validate(record["evidence"])
+
+
+@pytest.mark.parametrize("fixture,expected", [
+    ("page-labels.pdf", ["i", "ii", "iii", "iv", "1", "2"]),
+    ("long-doc.pdf", [None] * 5),
+])
+@respx.mock
+async def test_search_preserves_printed_labels_without_changing_physical_locators(
+        actor_client, session, fixture, expected):
+    pages = extract_pages((FIXTURES / fixture).read_bytes())
+    _mock_service(result={"markdown": to_markdown(pages),
+                          "layout_json": build(pages, engine="borndigital"), "images": []})
+    document = await _upload(actor_client, (FIXTURES / fixture).read_bytes())
+    assert (await _callback(actor_client)).status_code == 200
+    rows = list((await session.execute(select(Chunk).order_by(Chunk.seq))).scalars())
+    assert rows
+    response = await actor_client.get("/api/search", params={
+        "q": rows[0].text.split()[0], "doc": document["id"], "limit": 50,
+    })
+    assert response.status_code == 200, response.text
+    groups = response.json()["groups"]
+    assert groups
+    by_chunk = {row.id: row for row in rows}
+    for group in groups:
+        assert group["document_id"] == document["id"]
+        assert group["parse_revision"] == rows[0].parse_job_id
+        assert group["hits"]
+        for hit in group["hits"]:
+            row = by_chunk[hit["chunk_id"]]
+            assert "printed_page_label" in hit
+            assert hit["printed_page_label"] == expected[row.page_idx]
+            assert hit["page_idx"] == row.page_idx
+            assert hit["bbox"] == row.bbox

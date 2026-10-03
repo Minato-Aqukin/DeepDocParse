@@ -1,3 +1,5 @@
+import { formatPageLocator } from '@/utils/page-locator'
+
 import { http } from './http'
 
 /**
@@ -148,8 +150,8 @@ export function formatWikiLocator(locator: Record<string, unknown> | undefined |
   const page = typeof rec.physical_page_index === 'number'
     ? rec.physical_page_index
     : typeof rec.page_idx === 'number' ? rec.page_idx : null
-  if (typeof page === 'number') parts.push(typeof rec.printed_page_label === 'string' && rec.printed_page_label
-    ? `印刷页 ${rec.printed_page_label} · PDF 第 ${page + 1} 页` : `第 ${page + 1} 页`)
+  if (typeof page === 'number') parts.push(formatPageLocator(page,
+    typeof rec.printed_page_label === 'string' ? rec.printed_page_label : null))
   if (typeof rec.seq === 'number') parts.push(`块 ${rec.seq}`)
   if (Array.isArray(rec.bbox) && rec.bbox.length === 4
     && (rec.bbox as unknown[]).every((n) => typeof n === 'number')) {

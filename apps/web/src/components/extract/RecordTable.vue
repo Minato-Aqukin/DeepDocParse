@@ -5,6 +5,7 @@ import CitationChip from '@/components/ask/CitationChip.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { degradedLabelOf, fieldStatusOf, similarityText } from '@/constants/status'
 import type { ExtractionItem, FieldResult } from '@/types/api'
+import { formatPageLocator } from '@/utils/page-locator'
 
 /**
  * 抽取结果表格：**行 = 文档 × 记录序号，列 = schema 字段**。
@@ -94,8 +95,7 @@ function open(item: ExtractionItem, name: string) {
             <span class="value">{{ display(cellOf(row, name)) }}</span>
             <span v-if="cellOf(row, name)?.status === 'found'" class="meta">
               <template v-if="cellOf(row, name)!.citations.length">
-                <template v-if="cellOf(row, name)!.citations[0]!.printed_page_label">印刷页 {{ cellOf(row, name)!.citations[0]!.printed_page_label }} · PDF 第 {{ cellOf(row, name)!.citations[0]!.page_idx + 1 }} 页</template>
-                <template v-else>PDF 第 {{ cellOf(row, name)!.citations[0]!.page_idx + 1 }} 页</template>
+                {{ formatPageLocator(cellOf(row, name)!.citations[0]!.page_idx, cellOf(row, name)!.citations[0]!.printed_page_label, 'PDF 第') }}
               </template>
               <template v-if="similarityText(cellOf(row, name)!.confidence?.top_similarity)">
                 · {{ similarityText(cellOf(row, name)!.confidence.top_similarity) }}

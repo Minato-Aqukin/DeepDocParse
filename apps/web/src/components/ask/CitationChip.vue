@@ -4,6 +4,7 @@ import { computed } from 'vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { DEFAULT_WARN_BELOW, similarityText } from '@/constants/status'
 import type { Citation } from '@/types/api'
+import { formatPageLocator } from '@/utils/page-locator'
 
 /**
  * 一条出处：截图 + 页码 + 片段 + **相关度**。
@@ -43,7 +44,7 @@ const tooltip = computed(() =>
     <img v-if="cropUrl" :src="cropUrl" alt="出处截图" />
     <div class="cite-text">
       <div class="line">
-        <b class="ddp-cite-page" title="印刷标签只用于显示；打开与高亮始终使用 PDF 物理页序">[{{ index }}] <template v-if="citation.printed_page_label">印刷页 {{ citation.printed_page_label }} · PDF 第 {{ citation.page_idx + 1 }} 页</template><template v-else>PDF 第 {{ citation.page_idx + 1 }} 页</template></b>
+        <b class="ddp-cite-page" title="印刷标签只用于显示；打开与高亮始终使用 PDF 物理页序">[{{ index }}] {{ formatPageLocator(citation.page_idx, citation.printed_page_label, 'PDF 第') }}</b>
         <el-tooltip :content="tooltip">
           <StatusTag :label="`相关度 ${percent ?? '—'}`" :type="tagType" />
         </el-tooltip>
