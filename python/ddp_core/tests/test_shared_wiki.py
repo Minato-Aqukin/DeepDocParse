@@ -144,3 +144,86 @@ def test_multisource_coverage_distinguishes_origins_with_equal_version_ids(evide
             "sentences": [{"text": "Collector forwards batches.", "references": [1]}]}]}]},
             plan, evidence, {})
     assert omitted.value.code == "wiki_generation_invalid"
+
+
+@pytest.mark.asyncio
+async def test_wiki_citation_expansion_stops_at_original_sources(evidence):
+    from ddp_core.application.wiki import generate_wiki
+
+    class Provider:
+        def __init__(self):
+            self.stages = []
+
+        async def generate(self, messages, **kwargs):
+            stage = json.loads(messages[-1]["content"])["stage"]
+            self.stages.append(stage)
+            if stage == "plan":
+                value = {"pages": [{"title": "Collector", "references": [1]}]}
+            else:
+                value = {"pages": [{"page": 1, "sections": [{"heading": "Facts",
+                    "sentences": [{"text": "Collector forwards batches.", "references": [1]}]}]}]}
+            return json.dumps(value), {"name": "fixture"}
+
+    provider = Provider()
+    options = dict(execution_policy="local_only", allow_remote=False,
+                   record_attempt=lambda *args: lambda **updates: None)
+    result = await generate_wiki(provider, "Collector", evidence, limits_for({}), **options)
+    claim = result["pages"][0]["generated_sections"][0]["sentences"][0]
+    assert claim["evidence_ids"] == ["original-1"]
+    generated = copy.deepcopy(evidence[0])
+    generated.update(id=claim["id"], excerpt=claim["text"])
+    generated["evidence"].update(source_type=claim["source_type"],
+        derived_from=claim["evidence_ids"],
+        excerpt_digest="sha256:" + hashlib.sha256(claim["text"].encode()).hexdigest())
+    with pytest.raises(ApplicationError) as rejected:
+        await generate_wiki(provider, "Expand Collector", [generated], limits_for({}), **options)
+    assert rejected.value.code == "wiki_source_unavailable"
+    # Reusing the generated page must not trigger even another planning call.
+    assert provider.stages == ["plan", "write"]
+
+
+@pytest.mark.parametrize("depth", [1, 4, 32])
+@pytest.mark.asyncio
+async def test_wiki_dependency_depth_rejects_ancestry_even_when_labeled_source(evidence, depth):
+    from ddp_core.application.wiki import generate_wiki
+
+    ancestor = {"evidence_id": "original-1", "derived_from": None}
+    for number in range(depth):
+        ancestor = {"evidence_id": f"generated-{number}", "derived_from": ancestor}
+    evidence[0]["evidence"]["derived_from"] = ancestor
+
+    class Provider:
+        async def generate(self, messages, **kwargs):
+            pytest.fail("derived evidence must be rejected before any model request")
+
+    with pytest.raises(ApplicationError) as rejected:
+        await generate_wiki(Provider(), "Nested dependencies", evidence, limits_for({}),
+            execution_policy="local_only", allow_remote=False,
+            record_attempt=lambda *args: lambda **updates: None)
+    assert rejected.value.code == "wiki_source_unavailable"
+
+
+@pytest.mark.parametrize("budget", ["max_evidence", "max_input_chars"])
+@pytest.mark.asyncio
+async def test_wiki_context_budget_rejects_overflow_before_model_request(evidence, budget):
+    from ddp_core.application.wiki import generate_wiki
+
+    limits = limits_for({budget: 1 if budget == "max_evidence" else 1000})
+    if budget == "max_evidence":
+        second = copy.deepcopy(evidence[0])
+        second["id"] = "original-2"
+        evidence.append(second)
+    else:
+        evidence[0]["excerpt"] = "Collector forwards batches. " * 60
+        evidence[0]["evidence"]["excerpt_digest"] = (
+            "sha256:" + hashlib.sha256(evidence[0]["excerpt"].encode()).hexdigest())
+
+    class Provider:
+        async def generate(self, messages, **kwargs):
+            pytest.fail("over-budget evidence must not leave for model inference")
+
+    with pytest.raises(ApplicationError) as rejected:
+        await generate_wiki(Provider(), "Collector", evidence, limits,
+            execution_policy="local_only", allow_remote=False,
+            record_attempt=lambda *args: lambda **updates: None)
+    assert rejected.value.code == "wiki_budget_exceeded"

@@ -1,0 +1,31 @@
+{
+  "acceptance": "T53",
+  "date": "2026-10-03",
+  "status": "local_automated_append_preservation_proven",
+  "changed_test_file": "python/ddp_local/tests/test_local_content.py",
+  "test": "test_append_source_marks_edited_wiki_stale_and_rebuild_preserves_human_paragraph",
+  "implementation_changed": false,
+  "proof": {
+    "red_first_isolated_preservation_mutant": "failed_as_expected",
+    "target_file_tests": "9_passed",
+    "standalone_http_smoke": "passed",
+    "old_edited_wiki_after_append": "source_version_changed",
+    "rebuilt_latest_fixed_source_draft": "needs_review_unpublished",
+    "exact_human_paragraph_preserved": true,
+    "human_paragraph_sha256_utf8": "f9fce850154f0ca31b53994d05b9bd0d8238b7150ee8ca43ae42a5354ade1ebd",
+    "generated_citations": "appended_version_only",
+    "rebuilt_draft_stale": false,
+    "historical_edited_revision": "stale_with_human_paragraph_preserved"
+  },
+  "evidence": {
+    "red": ".dev-logs/acceptance-20261003/local-desktop/t53-local-append-red.json",
+    "green": ".dev-logs/acceptance-20261003/local-desktop/t53-local-append-green.json",
+    "smoke": ".dev-logs/acceptance-20261003/local-desktop/t53-local-append-smoke.json"
+  },
+  "limits": {
+    "real_model_inference": "not_exercised_fixture_transport",
+    "desktop_visual_surface": "not_exercised",
+    "live_services": "untouched"
+  },
+  "redaction": "No document or human paragraph text retained; paragraph identified by SHA-256 digest."
+}

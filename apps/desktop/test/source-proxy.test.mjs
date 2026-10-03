@@ -27,7 +27,8 @@ const keyBytes = Buffer.from(keys.publicKey.export({ format: 'jwk' }).x, 'base64
 const NODE = 'node-' + createHash('sha256').update(keyBytes).digest('hex').slice(0, 48)
 const CENTER = 'https://center.test/team'
 
-function centerDouble(t, { loginStatus = 200, handshakeStatus = 200, endpoint = CENTER } = {}) {
+function centerDouble(t, { loginStatus = 200, handshakeStatus = 200, endpoint = CENTER,
+  resources = [], documents = {} } = {}) {
   const seen = { posts: 0, gets: 0, logins: 0, handshakes: 0, paths: [], offline: false }
   const realFetch = globalThis.fetch
   const origin = new URL(endpoint).origin, prefix = new URL(endpoint).pathname.replace(/\/$/, '')
@@ -67,13 +68,14 @@ function centerDouble(t, { loginStatus = 200, handshakeStatus = 200, endpoint = 
         capabilities: ['client.snapshot', 'client.events', 'client.receipt'] })
     }
     if (route === '/api/v1/client/snapshot') {
-      return json({ cursor: 'center-0', sequence: 0, state: { resources: [] } })
+      return json({ cursor: 'center-0', sequence: 0, state: { resources } })
     }
     if (route === '/api/v1/client/events') {
-      const projection = { cursor: 'center-0', sequence: 0, state: { resources: [] } }
+      const projection = { cursor: 'center-0', sequence: 0, state: { resources } }
       return json({ events: [{ ...projection, previous_sequence: 0 }] })
     }
-    if (route === '/api/resources') return json({ items: [], total: 0 })
+    if (route === '/api/resources') return json({ items: resources, total: resources.length })
+    if (documents[route]) return json(documents[route])
     if (route === '/api/documents/doc-broken/download-url') {
       return new Response('{"url":"https://center.test/files/signed?X-Amz-Signature=presigned-secret"',
         { headers: { 'Content-Type': 'application/json' } })
@@ -89,7 +91,7 @@ function centerDouble(t, { loginStatus = 200, handshakeStatus = 200, endpoint = 
   return seen
 }
 
-async function localDouble(t, { capabilities } = {}) {
+async function localDouble(t, { capabilities, resources = [], documents = {} } = {}) {
   const seen = { authorization: [], paths: [], forwarded: [] }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://local'), chunks = []
@@ -111,10 +113,10 @@ async function localDouble(t, { capabilities } = {}) {
       identity: LOCAL, profile: LOCAL_PROFILE,
       capabilities: ['client.snapshot', 'client.events', 'client.receipt'] })
     if (url.pathname === '/api/v1/client/snapshot') {
-      return send(200, { cursor: 'local-0', sequence: 0, state: { resources: [], tasks: [] } })
+      return send(200, { cursor: 'local-0', sequence: 0, state: { resources, tasks: [] } })
     }
     if (url.pathname === '/api/v1/client/events') {
-      const projection = { cursor: 'local-0', sequence: 0, state: { resources: [], tasks: [] } }
+      const projection = { cursor: 'local-0', sequence: 0, state: { resources, tasks: [] } }
       return send(200, { events: [{ ...projection, previous_sequence: 0 }] })
     }
     if (url.pathname === '/api/ask' && req.method === 'POST') {
@@ -124,6 +126,7 @@ async function localDouble(t, { capabilities } = {}) {
       return
     }
     if (url.pathname === '/api/resources') return send(200, { items: [{ id: 'r1' }], total: 1 })
+    if (documents[url.pathname]) return send(200, documents[url.pathname])
     return send(404, { error: { code: 'not_found' } })
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -134,10 +137,10 @@ async function localDouble(t, { capabilities } = {}) {
       handshake: { protocol_version: 'ddp-client/1', identity: LOCAL, profile: LOCAL_PROFILE } }) } }
 }
 
-async function hosts(t, { capabilities, loopbackCenters } = {}) {
+async function hosts(t, { capabilities, loopbackCenters, resources, documents } = {}) {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'ddp-source-test-'))
   const workspaces = new WorkspaceHandles()
-  const runtime = await localDouble(t, { capabilities })
+  const runtime = await localDouble(t, { capabilities, resources, documents })
   const stored = new Map()
   const options = { workspaces, runtime: runtime.object, directory: path.join(temporary, 'client'), loopbackCenters,
     credentials: {
@@ -161,8 +164,7 @@ async function hosts(t, { capabilities, loopbackCenters } = {}) {
   return { clients, options, runtime, temporary, stored }
 }
 
-async function connectLocalSource(t, clients, options) {
-  const directory = path.join(options.directory, '..', 'workspace')
+async function connectLocalSource(t, clients, options, directory = path.join(options.directory, '..', 'workspace')) {
   await import('node:fs/promises').then(fs => fs.mkdir(directory, { recursive: true }))
   const workspaces = options.workspaces
   const selected = await workspaces.selectedByNativeDialog(directory)
@@ -257,6 +259,71 @@ test('every proxied response carries X-DDP-Source; stale source requests are dis
   clients.selectWorkspace = async () => null
   await assert.rejects(clients.apiProxy({ sourceId: opened.sourceId + '-other', method: 'GET',
     path: '/api/resources', headers: {} }), error => ['source_changed', 'unknown_connection'].includes(error.code))
+})
+
+test('equal local and center names and document paths keep selection, cached projections and drafts isolated', async t => {
+  const localResource = { id: 'r1', display_name: 'Report.pdf', publication: 'private' }
+  const centerResource = { id: 'r1', display_name: 'Report.pdf', publication: 'published' }
+  const route = '/api/documents/doc-1'
+  const localDocument = { id: 'doc-1', filename: 'Report.pdf', resource_id: 'r1', status: 'succeeded', size_bytes: 111 }
+  const centerDocument = { id: 'doc-1', filename: 'Report.pdf', resource_id: 'r1', status: 'succeeded', size_bytes: 222 }
+  const { clients, options, runtime } = await hosts(t,
+    { resources: [localResource], documents: { [route]: localDocument } })
+  const directory = path.join(options.directory, '..', 'center.test')
+  // Equal source labels and identical directory/endpoint path text are presentation,
+  // never identity. Document and resource IDs deliberately collide as well.
+  const endpoint = 'https://center.test' + directory
+  const seen = centerDouble(t, { endpoint, resources: [centerResource], documents: { [route]: centerDocument } })
+  const local = await connectLocalSource(t, clients, options, directory)
+  const center = await clients.centerConnect({ endpoint, username: 'alice', password: 'secret', persist: true },
+    { packaged: false })
+  assert.equal(local.label, center.label)
+  assert.notEqual(local.sourceId, center.sourceId)
+  assert.notEqual(local.environment.environmentId, center.environment.environmentId)
+  assert.deepEqual((await clients.sourceList()).map(item => [item.sourceId, item.active]),
+    [[local.sourceId, false], [center.sourceId, true]])
+  await clients.saveDraft({ connectionId: local.sourceId, key: 'document:doc-1', expectedRevision: 0,
+    value: { question: 'Private notes' } })
+  await clients.saveDraft({ connectionId: center.sourceId, key: 'document:doc-1', expectedRevision: 0,
+    value: { question: 'Published notes' } })
+  const readDocument = async (host, source, expected) => {
+    const response = await host.apiProxy({ sourceId: source.sourceId, method: 'GET', path: route, headers: {} })
+    assert.equal(response.headers['X-DDP-Source'], source.sourceId)
+    assert.deepEqual(await new Response(response.body).json(), expected)
+  }
+  await readDocument(clients, center, centerDocument)
+  const remoteReads = seen.paths.filter(p => p === directory + route).length
+  await clients.sourceActivate({ sourceId: local.sourceId })
+  await readDocument(clients, local, localDocument)
+  assert.equal(seen.paths.filter(p => p === directory + route).length, remoteReads,
+    'opening a local document must not query the identically named center document')
+  const localReads = runtime.seen.paths.filter(p => p === 'GET ' + route).length
+  await assert.rejects(clients.apiProxy({ sourceId: center.sourceId, method: 'GET', path: route, headers: {} }),
+    { code: 'source_changed' })
+  await clients.sourceActivate({ sourceId: center.sourceId })
+  await readDocument(clients, center, centerDocument)
+  assert.equal(runtime.seen.paths.filter(p => p === 'GET ' + route).length, localReads)
+  await clients.close()
+  const restarted = await new ClientHost(options).initialize()
+  try {
+    const restored = restarted.list()
+    assert.equal(restored.length, 2)
+    assert.deepEqual(restored.find(item => item.connectionId === local.sourceId).view.projection.state.resources,
+      [localResource])
+    assert.deepEqual(restored.find(item => item.connectionId === center.sourceId).view.projection.state.resources,
+      [centerResource])
+    assert.deepEqual(await restarted.readDraft({ connectionId: local.sourceId, key: 'document:doc-1' }),
+      { revision: 1, value: { question: 'Private notes' } })
+    assert.deepEqual(await restarted.readDraft({ connectionId: center.sourceId, key: 'document:doc-1' }),
+      { revision: 1, value: { question: 'Published notes' } })
+    assert.equal(restarted.activeSourceId(), center.sourceId)
+    await restarted.restoreActiveSource()
+    await readDocument(restarted, center, centerDocument)
+    await restarted.sourceActivate({ sourceId: local.sourceId })
+    await readDocument(restarted, local, localDocument)
+    assert.deepEqual((await restarted.sourceList()).map(item => [item.sourceId, item.active]),
+      [[local.sourceId, true], [center.sourceId, false]])
+  } finally { await restarted.close() }
 })
 
 test('active source persists across restart; no source → 503 no_active_source', async t => {

@@ -404,6 +404,73 @@ async def test_local_content_wiki_build_and_append_version(client):
     assert publish.json()["error"]["code"] == "not_supported_locally"
 
 
+async def test_append_source_marks_edited_wiki_stale_and_rebuild_preserves_human_paragraph(client):
+    handle, runtime = client
+    version_id, resource_id = await _ready_version(handle, runtime)
+    _grounded_model(runtime)
+    runtime.provider.generate = _wiki_protocol(runtime)
+    body = {"title": "合同", "sources": [
+        {"resource_id": resource_id, "source_version_id": version_id}]}
+    created = await handle.post("/api/wikis", json=body,
+                                headers={"Idempotency-Key": "human-append-build"})
+    assert created.status_code == 201, created.text
+    wiki_id = created.json()["wiki"]["id"]
+    original = created.json()["revision"]
+    page_key = original["pages"][0]["page_key"]
+    paragraph = {"id": "editor-note", "text": "人工说明：保留原文，不要改写。\n第二行含 café、42 和 [手工备注]。"}
+    edited = await handle.patch(
+        f"/api/wikis/{wiki_id}/pages/{page_key}",
+        json={"base_revision_id": original["id"], "paragraphs": [paragraph]},
+        headers={"Idempotency-Key": "human-append-edit"})
+    assert edited.status_code == 201, edited.text
+    edited_revision = edited.json()["revision"]
+    human = edited_revision["pages"][0]["human_paragraphs"]
+    assert [(item["id"], item["text"]) for item in human] == [
+        (paragraph["id"], paragraph["text"])]
+
+    appended_id, appended_resource = await _ready_version(
+        handle, runtime, key="human-append-pdf", target=resource_id)
+    assert appended_resource == resource_id and appended_id != version_id
+    stale = (await handle.get(f"/api/wikis/{wiki_id}")).json()["revision"]
+    assert stale["id"] == edited_revision["id"]
+    assert stale["stale"] is True
+    assert stale["stale_reasons"] == {page_key: ["source_version_changed"]}
+    assert stale["pages"][0]["stale"] is True
+    assert stale["pages"][0]["human_paragraphs"] == human
+
+    rebuilt = await handle.post(
+        f"/api/wikis/{wiki_id}/revisions",
+        json={**body, "base_revision_id": edited_revision["id"], "sources": [
+            {"resource_id": resource_id, "source_version_id": appended_id}]},
+        headers={"Idempotency-Key": "human-append-rebuild"})
+    assert rebuilt.status_code == 201, rebuilt.text
+    current = (await handle.get(f"/api/wikis/{wiki_id}")).json()
+    draft = current["revision"]
+    assert draft["id"] == rebuilt.json()["revision"]["id"]
+    assert draft["id"] != edited_revision["id"]
+    assert draft["base_revision_id"] == edited_revision["id"]
+    assert current["wiki"]["published_revision_id"] is None
+    assert draft["semantic_review"] == "needs_review"
+    assert draft["stale"] is False and draft["stale_reasons"] == {}
+    assert draft["merge_conflicts"] == []
+    page = next(item for item in draft["pages"] if item["page_key"] == page_key)
+    assert page["human_paragraphs"] == human
+    cited_versions = set()
+    for section in page["generated_sections"]:
+        for sentence in section["sentences"]:
+            for evidence_id in sentence["evidence_ids"]:
+                evidence = await handle.get(f"/api/evidence/{evidence_id}")
+                assert evidence.status_code == 200, evidence.text
+                cited_versions.add(evidence.json()["document"]["id"])
+    assert cited_versions == {appended_id}
+
+    history = await handle.get(
+        f"/api/wikis/{wiki_id}/revisions/{edited_revision['id']}")
+    assert history.status_code == 200, history.text
+    assert history.json()["revision"]["stale"] is True
+    assert history.json()["revision"]["pages"][0]["human_paragraphs"] == human
+
+
 async def test_local_content_unsupported_fallback_shape(client):
     handle, _ = client
     for method, path, kwargs in [

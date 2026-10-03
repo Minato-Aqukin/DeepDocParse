@@ -5,6 +5,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
+import { spawn } from 'node:child_process'
+import { createServer } from 'node:net'
 import { WorkspaceHandles } from '../src/workspaces.mjs'
 import { OwnedRuntimeManager } from '../src/runtime.mjs'
 import { ClientHost, clientFailure } from '../src/client-host.mjs'
@@ -30,16 +32,29 @@ test('renderer command IPC is local model management only; content writes cannot
 })
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
-async function fixture(t, { native = true } = {}) {
+async function fixture(t, { native = true, socketControlPort } = {}) {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'ddp-client-host-test-'))
   const workspaces = new WorkspaceHandles()
   let runtime = null
+  const socketAudit = socketControlPort === undefined ? null : {
+    file: path.join(temporary, 'runtime-sockets.jsonl'), pid: null,
+  }
   if (native) {
     const [version] = (await readdir(path.join(repository, '.venv/lib'))).filter(name => /^python\d+\.\d+$/.test(name))
     runtime = new OwnedRuntimeManager({ workspaces, directory: path.join(temporary, 'sessions'),
       python: path.join(repository, '.venv/bin/python'), launcher: path.join(repository, 'apps/desktop/src/runtime-launcher.py'),
       cwd: repository, pythonPaths: ['ddp_local', 'ddp_core', 'ddp_contracts'].map(name => path.join(repository, 'python', name))
-        .concat(path.join(repository, '.venv/lib', version, 'site-packages')) })
+        .concat(path.join(repository, '.venv/lib', version, 'site-packages')),
+      ...(socketAudit ? { spawnProcess: (command, args, options) => {
+        const launcher = args[2]
+        const child = spawn(command, [...args.slice(0, 2),
+          path.join(repository, 'apps/desktop/test/helpers/runtime-network-audit.py'), ...args.slice(3)], {
+          ...options, env: { ...options.env, DDP_TEST_REAL_RUNTIME_LAUNCHER: launcher,
+            DDP_TEST_SOCKET_AUDIT_FILE: socketAudit.file, DDP_TEST_SOCKET_CONTROL_PORT: String(socketControlPort) },
+        })
+        socketAudit.pid = child.pid
+        return child
+      } } : {}) })
   }
   const stored = new Map()
   const options = { workspaces, runtime: runtime ?? {}, directory: path.join(temporary, 'client'),
@@ -55,7 +70,7 @@ async function fixture(t, { native = true } = {}) {
   })
   await mkdir(path.join(temporary, 'workspace'))
   const selected = await workspaces.selectedByNativeDialog(path.join(temporary, 'workspace'))
-  return { clients, options, runtime, selected, temporary, stored }
+  return { clients, options, runtime, selected, temporary, stored, socketAudit }
 }
 async function current(clients, id) {
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -198,6 +213,94 @@ test('native upload goes through the proxied content chain: session â†’ parts â†
   const again = await readBY('POST', `/api/uploads/${session.id}/finalize`,
     Buffer.from(JSON.stringify({ engine: 'borndigital', options: {} })))
   assert.equal(again.version_id, finalized.version_id)
+})
+
+test('missing local model rejects desktop answers and Wiki without remote fetches or credential use',
+  { skip: nativeRuntimeSkipReason() }, async t => {
+  const control = createServer(socket => socket.end())
+  await new Promise(resolve => control.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise(resolve => control.close(resolve)))
+  const socketControlPort = control.address().port
+  const { clients, runtime, selected, socketAudit } = await fixture(t, { socketControlPort })
+  const fetched = [], credentialUse = []
+  const actualFetch = globalThis.fetch
+  globalThis.fetch = async (input, init) => {
+    fetched.push({ url: typeof input === 'string' ? input : input.url, method: init?.method ?? 'GET' })
+    return actualFetch(input, init)
+  }
+  t.after(() => { globalThis.fetch = actualFetch })
+  clients.credentials.withCredential = async pair => {
+    credentialUse.push(pair)
+    assert.fail('a missing local model must not request a remote secret')
+  }
+  clients.selectWorkspace = async () => selected
+  const opened = await clients.workspaceOpen()
+  const localOrigin = runtime.connection(selected.workspaceId).url
+  const proxy = async (method, route, body, headers = {}) => {
+    const response = await clients.apiProxy({ sourceId: opened.sourceId, method, path: route,
+      headers: { 'Content-Type': 'application/json', ...headers },
+      ...(body === undefined ? {} : { body: Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body)) }) })
+    assert.equal(response.headers['X-DDP-Source'], opened.sourceId)
+    return new Response(response.body, { status: response.status, headers: response.headers })
+  }
+  const models = await clients.query({ connectionId: opened.sourceId, name: 'models.list', payload: {} })
+  assert.equal(models.items.find(item => item.manifest.id === 'qwen3-1.7b-q8_0').status, 'not_installed')
+  await assert.rejects(clients.command({ connectionId: opened.sourceId, name: 'models.start',
+    payload: { model_id: 'qwen3-1.7b-q8_0' }, idempotencyKey: 'missing-model-start' }),
+  { code: 'model_not_installed' })
+
+  const bytes = await readFile(path.join(repository, 'tests/fixtures/sample.pdf'))
+  const upload = await (await proxy('POST', '/api/uploads',
+    { filename: 'sample.pdf', size: bytes.length, mime: 'application/pdf' })).json()
+  assert.equal((await proxy('PUT', `/api/uploads/${upload.id}/parts/1`, bytes,
+    { 'Content-Type': 'application/pdf' })).status, 200)
+  const finalized = await (await proxy('POST', `/api/uploads/${upload.id}/finalize`,
+    { engine: 'borndigital', options: {} })).json()
+  let document
+  for (let attempt = 0; attempt < 120; attempt++) {
+    document = await (await proxy('GET', `/api/documents/${finalized.version_id}`)).json()
+    if (document.status === 'succeeded') break
+    assert.notEqual(document.status, 'failed', JSON.stringify(document))
+    await delay(100)
+  }
+  assert.equal(document.status, 'succeeded')
+  const search = await clients.apiProxy({ method: 'GET', path: '/api/search',
+    query: 'q=contract&doc=' + finalized.version_id, headers: {} })
+  const hits = await new Response(search.body).json()
+  assert.ok(hits.groups.some(group => group.hits.length > 0),
+    'the question must reach model generation, not the no-evidence answer path')
+  const conversation = await (await proxy('POST',
+    `/api/documents/${finalized.version_id}/conversations`)).json()
+  const asked = await proxy('POST', `/api/conversations/${conversation.id}/ask`, { question: 'contract' })
+  assert.equal(asked.status, 200)
+  const events = (await asked.text()).trim().split('\n\n').map(block => {
+    const [event, data] = block.split('\n')
+    return [event.slice(7), JSON.parse(data.slice(6))]
+  })
+  assert.deepEqual(events.map(([name]) => name), ['error'])
+  assert.equal(events[0][1].code, 'model_unavailable')
+  assert.match(events[0][1].message, /local instruction model/)
+  assert.deepEqual(await (await proxy('GET', `/api/conversations/${conversation.id}/messages`)).json(), [])
+  const wiki = await proxy('POST', '/api/wikis',
+    { title: 'Contract', sources: [{ resource_id: finalized.resource_id,
+      source_version_id: finalized.version_id }] }, { 'Idempotency-Key': 'missing-model-wiki' })
+  assert.equal(wiki.status, 503)
+  assert.equal((await wiki.json()).error.code, 'model_unavailable')
+  assert.deepEqual(await (await proxy('GET', '/api/wikis')).json(), [])
+  assert.ok(fetched.some(call => call.url.endsWith(`/api/conversations/${conversation.id}/ask`)))
+  assert.ok(fetched.some(call => call.url.endsWith('/api/wikis') && call.method === 'POST'))
+  assert.deepEqual(fetched.filter(call => new URL(call.url).origin !== localOrigin), [],
+    'all host HTTP calls stay on the owned native runtime; no center/model fallback')
+  assert.deepEqual(credentialUse, [], 'no remote secret is read')
+  const sockets = (await readFile(socketAudit.file, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+  assert.ok(sockets.some(row => row.event === 'socket.getaddrinfo' &&
+    row.host === '127.0.0.1' && row.port === socketControlPort && row.pid === socketAudit.pid),
+  'DNS observer must be active in the owned runtime process, not a separate probe')
+  assert.ok(sockets.some(row => row.event === 'socket.connect' &&
+    row.host === '127.0.0.1' && row.port === socketControlPort && row.pid === socketAudit.pid),
+  'socket observer must see the real positive-control connection in the runtime process')
+  assert.deepEqual(sockets.filter(row => !row.loopback_or_unix), [],
+    'the owned Python runtime must not attempt remote DNS or socket connections when its model is missing')
 })
 
 test('lost upload finalize response is reconciled by re-reading the session, never by re-sending bytes', { skip: nativeRuntimeSkipReason() }, async t => {

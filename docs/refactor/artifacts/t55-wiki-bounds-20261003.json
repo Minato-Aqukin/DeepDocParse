@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-03",
+  "rows": ["T55"],
+  "status": "passed",
+  "implementation_changed": false,
+  "citation_dependency_depth": {
+    "max_original_source_hops": 1,
+    "generated_result_reuse_error": "wiki_source_unavailable",
+    "relabelled_source_ancestry_depths_rejected": [1, 4, 32],
+    "requests_after_rejection": 0
+  },
+  "context_overflow": {
+    "tested_limits": ["max_evidence", "max_input_chars"],
+    "error": "wiki_budget_exceeded",
+    "model_requests": 0
+  },
+  "completion_tokens": {
+    "transport": "real_loopback_http",
+    "model_protocol": "deterministic_fixture_not_real_inference",
+    "total_budget": 512,
+    "successful_stage_allowances": {"plan": 128, "write": 256, "relations": 128},
+    "tested_failure_stages": ["plan", "write", "relations"],
+    "tested_failures": ["finish_reason_length", "completion_tokens_above_allowance"],
+    "error": "generation_budget_exceeded",
+    "later_model_stages_after_failure": 0
+  },
+  "red_first": {
+    "method": "throwaway_copy_fault_injection_shared_implementation_untouched",
+    "depth_and_context_mutant_failures": 6,
+    "completion_guard_mutant_failures": 6
+  },
+  "green": {
+    "shared_wiki_tests": {"passed": 15, "failed": 0},
+    "local_wiki_budget_tests": {"passed": 7, "failed": 0}
+  },
+  "evidence_paths": [
+    ".dev-logs/acceptance-20261003/local-desktop/t55-depth-context-red.txt",
+    ".dev-logs/acceptance-20261003/local-desktop/t55-tokens-red.txt",
+    ".dev-logs/acceptance-20261003/local-desktop/t55-green.txt",
+    ".dev-logs/acceptance-20261003/local-desktop/t55-http-smoke.json"
+  ]
+}

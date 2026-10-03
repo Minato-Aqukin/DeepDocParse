@@ -1,0 +1,128 @@
+{
+  "date": "2026-10-03",
+  "scope": "T18 and T65 desktop host boundaries",
+  "evidence_source": "Completed targeted test and isolated mutation runs; persisted without rerunning",
+  "document_text": "omitted",
+  "credentials": "omitted",
+  "production_changes": [],
+  "test_files": [
+    "apps/desktop/test/client-host.test.mjs",
+    "apps/desktop/test/source-proxy.test.mjs"
+  ],
+  "green": {
+    "command": "umask 022 && PATH=/tmp/nodeshim:$PATH node --test apps/desktop/test/client-host.test.mjs apps/desktop/test/source-proxy.test.mjs",
+    "exit_code": 0,
+    "tests": 30,
+    "passed": 30,
+    "failed": 0,
+    "skipped": 0,
+    "duration_ms": 20594.573103,
+    "output": ".dev-logs/acceptance-20261003/local-desktop/t18-python-socket-green.txt"
+  },
+  "final_T18_verification": {
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "output": ".dev-logs/acceptance-20261003/local-desktop/t18-python-socket-final.txt"
+  },
+  "T18": {
+    "test": "missing local model rejects desktop answers and Wiki without remote fetches or credential use",
+    "runtime": "Real OwnedRuntimeManager launches the native runtime with the repository absolute .venv/bin/python interpreter",
+    "preconditions": {
+      "model_id": "qwen3-1.7b-q8_0",
+      "artifact_status": "not_installed",
+      "document_upload_and_parse": "succeeded",
+      "question_retrieval": "positive keyword hits, avoiding the no-evidence answer path"
+    },
+    "observed": {
+      "model_start_error": "model_not_installed",
+      "answer_http_status": 200,
+      "answer_sse_events": ["error"],
+      "answer_error_code": "model_unavailable",
+      "answer_guidance": "explicit local instruction model requirement",
+      "stored_conversation_messages": 0,
+      "wiki_http_status": 503,
+      "wiki_error_code": "model_unavailable",
+      "published_wikis": 0,
+      "host_fetches_outside_owned_runtime_origin": 0,
+      "remote_credential_broker_reads": 0,
+      "answer_and_wiki_host_requests_observed": true,
+      "python_nonloopback_getaddrinfo_attempts": 0,
+      "python_nonloopback_socket_connect_attempts": 0,
+      "audit_positive_control_getaddrinfo_observed": true,
+      "audit_positive_control_socket_connect_observed": true,
+      "audit_positive_control_pid_equals_owned_runtime_pid": true
+    },
+    "python_observer": {
+      "helper": "apps/desktop/test/helpers/runtime-network-audit.py",
+      "events": ["socket.getaddrinfo", "socket.connect"],
+      "installation": "Supported spawnProcess test seam preserves native -S/-P flags and launch environment, installing sys.addaudithook before executing the unchanged trusted runtime launcher in the same child process.",
+      "positive_control": "Real TCP connection from the owned runtime child to a temporary loopback listener; both audit events are required with the actual child PID.",
+      "allowed_addresses": "loopback or Unix-domain sockets"
+    },
+    "identifiers": {
+      "native_workspace_document_resource_and_conversation_ids": "not retained; assertions used actual runtime-issued identifiers",
+      "digests": "not collected by this scenario"
+    }
+  },
+  "T65": {
+    "test": "equal local and center names and document paths keep selection, cached projections and drafts isolated",
+    "transports": ["real local loopback HTTP server", "center fetch fixture with actual Ed25519 node challenge proof"],
+    "collision_inputs": {
+      "source_label": "center.test",
+      "local_directory_equals_center_endpoint_pathname": true,
+      "synthetic_resource_id": "r1",
+      "synthetic_document_id": "doc-1",
+      "synthetic_document_route": "/api/documents/doc-1",
+      "synthetic_filename": "Report.pdf",
+      "draft_key": "document:doc-1"
+    },
+    "observed": {
+      "source_ids_distinct": true,
+      "environment_ids_distinct": true,
+      "center_initially_selected": true,
+      "local_document_bytes_metadata": 111,
+      "center_document_bytes_metadata": 222,
+      "local_open_additional_center_document_requests": 0,
+      "center_open_additional_local_document_requests": 0,
+      "inactive_source_request_error": "source_changed",
+      "restored_source_count": 2,
+      "local_restored_projection_publication": "private",
+      "center_restored_projection_publication": "published",
+      "local_draft_restored_independently": true,
+      "center_draft_restored_independently": true,
+      "local_draft_revision": 1,
+      "center_draft_revision": 1,
+      "center_selection_survives_restart": true,
+      "restored_center_and_local_document_routing": "passed",
+      "final_local_selection_is_exclusive": true
+    },
+    "identifiers": {
+      "actual_source_and_environment_ids": "redacted from summary",
+      "digests": "not collected by this scenario"
+    }
+  },
+  "red_first_fault_injection": {
+    "output": ".dev-logs/acceptance-20261003/local-desktop/t18-t65-red.txt",
+    "method": "Isolated throwaway copies mutate host behavior or the Python generation provider; shared production source and client-runtime remain untouched. Mutants run before green; copies are removed.",
+    "commands": {
+      "T18": "PATH=/tmp/nodeshim:$PATH /usr/bin/node --test --test-name-pattern='missing local model' apps/desktop/test/client-host.test.mjs",
+      "T65": "PATH=/tmp/nodeshim:$PATH /usr/bin/node --test --test-name-pattern='equal local and center' apps/desktop/test/source-proxy.test.mjs"
+    },
+    "results": [
+      {"mutant": "model-error", "exit_code": 1, "fault": "Swallow local Wiki model failure as success", "failure": "201 !== 503"},
+      {"mutant": "broker", "exit_code": 1, "fault": "Read remote fallback credential during local requests", "failure": "no remote secret is read: recorded remote credential accesses were nonempty"},
+      {"mutant": "identity", "exit_code": 1, "fault": "Reuse same-label local entry for center registration", "failure": "local and center source IDs were equal"},
+      {"mutant": "draft", "exit_code": 1, "fault": "Key draft storage by display label", "failure": "draft_conflict on independent center draft creation"},
+      {"mutant": "cache", "exit_code": 1, "fault": "Reuse same-label cached projection after restart", "failure": "private !== published in restored center projection"},
+      {"mutant": "routing", "exit_code": 1, "fault": "Route matching-label center document request to local transport", "failure": "111 !== 222 in document metadata"},
+      {"mutant": "python-outbound-socket", "exit_code": 1, "fault": "Before missing-model failure, Python generation attempts socket.create_connection to TEST-NET 192.0.2.1:9 with 0.01-second timeout", "failure": "New runtime socket assertion records two nonloopback getaddrinfo and two socket.connect attempts across answer and Wiki", "output": ".dev-logs/acceptance-20261003/local-desktop/t18-python-socket-red.txt"}
+    ]
+  },
+  "limits": [
+    "No rendered App UI proof in this host-owned slice.",
+    "Host fetch/broker and owned Python CPython socket.getaddrinfo/socket.connect audit observations are covered. This is not packet capture and does not observe sockets created by native code bypassing CPython audit events.",
+    "No live service modifications, build, formatter, linter or project-wide test suite."
+  ],
+  "remaining_owned_gaps": []
+}
