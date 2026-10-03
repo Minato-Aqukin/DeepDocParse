@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/apierr"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/config"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/httpx"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/identity"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/objectstore"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/proxy"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/rbac"
 )
@@ -107,5 +110,32 @@ func TestFileAuthorizationReturnsSourceUnavailable(t *testing.T) {
 	}
 	if recorder.Code != http.StatusGone || response.Error.Code != "source_unavailable" || response.Error.Type != apierr.TypeInvalidRequest {
 		t.Fatalf("lost source refusal: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// The corpus reports a licensed copy's term; it must reach the URL signer, and an
+// ended term must surface as 410, never as a URL valid past the licence.
+func TestLicenceTermFromCorpusBoundsSignedURLs(t *testing.T) {
+	until := time.Now().Add(-time.Second).UTC().Truncate(time.Second)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"document_id":"doc1","resource_id":"asset1","object_key":"bundles/v/source.bin","filename":"a.pdf","mime":"application/pdf","valid_until":%q}`, until.Format(time.RFC3339))
+	}))
+	defer target.Close()
+	up, _ := proxy.New("corpus", target.URL, "secret")
+	s := &Server{cfg: &config.Config{CorpusURL: target.URL, ServiceToken: "secret"}, corpus: up}
+	actor := &identity.Actor{ID: "u", UserID: "u", Kind: identity.KindUser}
+	access, err := s.documentAccess(context.Background(), actor, "doc1", "asset1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !access.notAfter().Equal(until) {
+		t.Fatalf("licence term lost between corpus and signer: %v", access.notAfter())
+	}
+	recorder := httptest.NewRecorder()
+	httpx.Wrap(func(_ http.ResponseWriter, _ *http.Request) error {
+		return presignError(objectstore.ErrNotAfterPassed)
+	}).ServeHTTP(recorder, httptest.NewRequest("GET", "/api/documents/doc1/download-url", nil))
+	if recorder.Code != http.StatusGone || !strings.Contains(recorder.Body.String(), `"source_unavailable"`) {
+		t.Fatalf("ended licence must be 410 source_unavailable: %d %s", recorder.Code, recorder.Body.String())
 	}
 }

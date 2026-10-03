@@ -92,7 +92,8 @@ class ExtractContext:
                  storage: Storage, document: Document, job: ParseJob | None,
                  actor_id: str, verify: bool | None = None,
                  authorize: Callable[[], Awaitable[None]] | None = None,
-                 authorized_parse_job_ids: list[str] | None = None):
+                 authorized_parse_job_ids: list[str] | None = None,
+                 authorize_original: Callable[[], Awaitable[str | None]] | None = None):
         self.session = session
         self.index = index
         self.http = http
@@ -101,6 +102,7 @@ class ExtractContext:
         self.job = job
         self.actor_id = actor_id
         self._authorize = authorize
+        self._authorize_original = authorize_original
         self.authorized_parse_job_ids = authorized_parse_job_ids
         self.verify = settings.extract_verify if verify is None else verify
         self.usage = {"fields": 0, "retrievals": 0, "chat_calls": 0, "verifications": 0}
@@ -115,6 +117,16 @@ class ExtractContext:
     async def check_access(self) -> None:
         if self._authorize is not None:
             await self._authorize()
+
+    async def original_key(self) -> str | None:
+        """Object key of the original for pixel reads (crops, visual verification).
+
+        Stored excerpts stay usable after a licensed copy's term ends; pixels cut from
+        the original do not, so the run's authorizer may raise 410 source_unavailable.
+        """
+        if self._authorize_original is None:
+            return self.document.object_key
+        return await self._authorize_original()
 
 
 # ---------- 上游 ----------
@@ -254,7 +266,7 @@ async def _crop_and_verify(ctx: ExtractContext, hit: Hit) -> tuple[str | None, b
     key = None
     if ctx.job is not None:
         key = await get_or_create_crop(
-            ctx.storage, job_id=ctx.job.id, source_key=ctx.document.object_key,
+            ctx.storage, job_id=ctx.job.id, source_key=await ctx.original_key(),
             mime=ctx.document.mime, page_idx=hit["page_idx"], bbox=hit.get("bbox"),
             page_size=hit.get("page_size"))
 
@@ -267,6 +279,8 @@ async def _crop_and_verify(ctx: ExtractContext, hit: Hit) -> tuple[str | None, b
         raw = await ctx.storage.get(key)
         uri = "data:image/png;base64," + base64.b64encode(raw).decode()
         await ctx.check_access()
+        # The licence can end during the crop read; pixels go out only while it holds.
+        await ctx.original_key()
         consistent = await verify_parse_consistency(ctx.http, uri, hit["text"])
 
     ctx._crop_cache[cache_key] = (key, consistent, attempted)

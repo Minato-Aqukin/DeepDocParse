@@ -13,7 +13,8 @@ from ddp_bundle_fixture import ORIGINAL
 from ddp_core.bundle import digest, json_bytes, read_bundle
 from ddp_corpus import bundle_source
 from ddp_corpus.config import settings
-from ddp_corpus.models import Document, Evidence, Resource, ResourceVersion, new_id
+from ddp_corpus.errors import APIError
+from ddp_corpus.models import Document, Evidence, ParseJob, Resource, ResourceVersion, new_id
 from ddp_corpus.routers import bundle_replicas
 from ddp_corpus.storage import crop_key
 from tests.conftest import CONTROL, actor_headers
@@ -166,7 +167,9 @@ async def test_finite_licence_expires_at_exact_term(actor_client, session, app_s
     )
     assert imported.status_code == 201, imported.text
     result = imported.json()
-    clock[0] = TERM - timedelta(microseconds=1)
+    # A signed URL needs at least one second of licence left (it must not outlive it).
+    clock[0] = TERM - (timedelta(seconds=1) if path == "document-download"
+                       else timedelta(microseconds=1))
     live = await original_request(actor_client, result, path, session, app_state.storage)
     expected_status = 302 if path == "document-download" else 304 if path == "cached-crop" else 200
     assert live.status_code == expected_status, live.text
@@ -353,3 +356,147 @@ async def test_mcp_evidence_withholds_original_crop_after_licence_ends(
     assert body["evidence"]["crop_degraded"] == "source_unavailable"
     assert body["evidence"]["content"] == "A fixed source"
     assert b"crop cut from original" not in ended.content
+
+
+async def import_licensed(client, term=TERM):
+    imported = await client.post(
+        "/api/bundles/import", content=licensed_bundle(term.isoformat()), headers=upload_headers())
+    assert imported.status_code == 201, imported.text
+    return imported.json()
+
+
+async def reparse_and_select(client, session, result):
+    """A local reparse of the imported copy, selected as current: a version without a prefix."""
+    version = await session.get(ResourceVersion, result["source_version_id"])
+    imported_job = await session.get(ParseJob, version.parse_job_id)
+    job = ParseJob(document_id=version.document_id, resource_id=result["resource_id"],
+                   result_prefix=imported_job.result_prefix,
+                   engine="borndigital", options={}, options_hash="r" * 64,
+                   status="succeeded", index_status="ready", page_count=1,
+                   document_version=2)
+    session.add(job)
+    await session.commit()
+    selected = await client.put(f"/api/documents/{result['document_id']}/current-job",
+                                json={"job_id": job.id})
+    assert selected.status_code == 200, selected.text
+    derived = await session.scalar(select(ResourceVersion).where(
+        ResourceVersion.resource_id == result["resource_id"],
+        ResourceVersion.parse_job_id == job.id))
+    assert derived is not None and not derived.bundle_prefix
+    return derived
+
+
+@pytest.mark.parametrize("path", ["client-source", "document-download", "source-url",
+                                  "internal-file-access"])
+async def test_reparsed_licensed_copy_stays_bound_to_the_licence(
+        actor_client, session, clock, path):
+    result = await import_licensed(actor_client)
+    derived = await reparse_and_select(actor_client, session, result)
+    endpoint = {
+        "client-source": f"/api/v1/client/versions/{derived.id}/source",
+        "document-download": f"/api/documents/{result['document_id']}/download?format=source",
+        "source-url": f"/api/documents/{result['document_id']}/source-url",
+        "internal-file-access": f"/internal/file-access/{result['document_id']}",
+    }[path]
+
+    async def request():
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(f"{CONTROL}/internal/file-grants").respond(
+                200, json={"token": "fixed-token", "url": f"{CONTROL}/files/fixed-token"})
+            return await actor_client.get(endpoint, headers=client_headers(), follow_redirects=False)
+
+    clock[0] = TERM - (timedelta(seconds=1) if path == "document-download"
+                       else timedelta(microseconds=1))
+    live = await request()
+    assert live.status_code == (302 if path == "document-download" else 200), live.text
+    if path == "client-source":
+        assert live.headers["x-ddp-source-availability"] == "offline_snapshot", \
+            "a reparse of a licensed copy is not an online original"
+    clock[0] = TERM
+    assert_unavailable(await request())
+
+
+async def test_reparsed_licensed_copy_cannot_be_exported_as_a_new_source(
+        actor_client, session, clock):
+    result = await import_licensed(actor_client)
+    derived = await reparse_and_select(actor_client, session, result)
+    for query in ("", "?licence_valid_until=2099-01-01T00:00:00Z"):
+        exported = await actor_client.get(
+            f"/api/resources/{result['resource_id']}/versions/{derived.id}/bundle{query}")
+        assert exported.status_code == 409, exported.text
+        assert exported.json()["error"]["code"] == "bundle_licensed_derivative"
+        assert ORIGINAL not in exported.content
+    snapshot = await actor_client.get(bundle_path(result))
+    assert snapshot.status_code == 200, "the imported snapshot itself still re-exports"
+
+
+async def test_original_urls_never_outlive_the_licence(actor_client, app_state, clock, monkeypatch):
+    result = await import_licensed(actor_client)
+    clock[0] = TERM - timedelta(seconds=10)
+    lifetimes = []
+    real = app_state.storage.presigned_get
+
+    async def recording(key, expires_seconds=3600, **kwargs):
+        lifetimes.append(expires_seconds)
+        return await real(key, expires_seconds, **kwargs)
+
+    monkeypatch.setattr(app_state.storage, "presigned_get", recording)
+    download = await actor_client.get(
+        f"/api/documents/{result['document_id']}/download?format=source",
+        headers=client_headers(), follow_redirects=False)
+    assert download.status_code == 302, download.text
+    assert lifetimes == [10], f"URL must end with the licence, signed for {lifetimes}"
+    access = await actor_client.get(f"/internal/file-access/{result['document_id']}",
+                                    headers=client_headers())
+    assert access.status_code == 200, access.text
+    assert datetime.fromisoformat(access.json()["valid_until"]) == TERM, \
+        "control signs /files and download-url URLs; it needs the term to cap them"
+
+
+async def test_extraction_cuts_no_pixels_from_an_ended_licence(actor_client, session, app_state, clock):
+    from ddp_corpus.deps import Actor
+    from ddp_corpus.routers.extractions import original_authorizer
+    from tests.conftest import ACTOR, ORG
+
+    result = await import_licensed(actor_client)
+    version = await session.get(ResourceVersion, result["source_version_id"])
+    source_actor = Actor(id=ACTOR, kind="user", organization_id=ORG, role="contributor",
+                         resource_id=result["resource_id"], version_id=version.id)
+    authorize = original_authorizer(source_actor, result["document_id"],
+                                    resource_id=result["resource_id"],
+                                    parse_job_id=version.parse_job_id, storage=app_state.storage)
+    clock[0] = TERM - timedelta(microseconds=1)
+    assert await authorize() == f"bundles/{version.id}/source.bin"
+    clock[0] = TERM
+    with pytest.raises(APIError) as ended:
+        await authorize()
+    assert ended.value.status_code == 410 and ended.value.code == "source_unavailable"
+
+
+@pytest.mark.parametrize("reparsed", [False, True], ids=["snapshot", "reparse"])
+async def test_indexing_cuts_no_pixels_from_an_ended_licence(
+        actor_client, session, app_state, clock, monkeypatch, reparsed):
+    """Compile renders crops and vision descriptions from the original: same licence gate."""
+    from ddp_corpus import compilation, indexing
+
+    result = await import_licensed(actor_client)
+    version = await session.get(ResourceVersion, result["source_version_id"])
+    job = await session.get(ParseJob, version.parse_job_id)
+    if reparsed:
+        job = await session.get(ParseJob, (await reparse_and_select(actor_client, session, result)).parse_job_id)
+    job.index_status = "pending"
+    await session.commit()
+    rendered = []
+
+    async def recording_crops(*args, **kwargs):
+        rendered.append(kwargs.get("source_key"))
+        return {}
+
+    monkeypatch.setattr(compilation, "get_or_create_crops", recording_crops)
+    clock[0] = TERM
+    await indexing.index_document(session, app_state.storage, app_state.http,
+                                  result["document_id"], job_id=job.id)
+    job = await session.get(ParseJob, job.id, populate_existing=True)
+    assert job.index_status == "failed"
+    assert "licensed copy" in (job.index_error or "")
+    assert rendered == [], "no page of an ended licensed copy is rendered"

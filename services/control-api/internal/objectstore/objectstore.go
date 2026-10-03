@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -298,13 +299,18 @@ func (s *Store) Digest(ctx context.Context, key string) (string, int64, error) {
 	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
+// ErrNotAfterPassed means the caller's deadline leaves no time to sign a URL.
+var ErrNotAfterPassed = errors.New("objectstore: signing deadline has passed")
+
 // PresignGet 签一个短期下载 URL。
 //
 // `disposition` 决定浏览器是内联预览还是下载。**MIME 白名单由调用方把关** ——
 // 上传 text/html 并 inline 打开就是本站同源 XSS（旧系统 `/files` 的铁律 6）。
 // PresignGet 签给**浏览器**的下载地址（用浏览器可达的 endpoint）。
-func (s *Store) PresignGet(ctx context.Context, key, docID, mime, disposition string) (string, time.Time, error) {
-	return s.presignGetWith(s.publicClient, ctx, key, docID, mime, disposition)
+// `notAfter` 非零时 URL 寿命截到它为止（许可离线副本的期限），不足 1 秒返回
+// ErrNotAfterPassed。
+func (s *Store) PresignGet(ctx context.Context, key, docID, mime, disposition string, notAfter time.Time) (string, time.Time, error) {
+	return s.presignGetWith(s.publicClient, ctx, key, docID, mime, disposition, notAfter)
 }
 
 // PresignGetInternal 签给**其它服务**的下载地址（用内网 endpoint）。
@@ -313,11 +319,19 @@ func (s *Store) PresignGet(ctx context.Context, key, docID, mime, disposition st
 // 一个容器里的进程，它解析不了 `127.0.0.1:19000`（那是给浏览器的）。
 // 用公网地址签的话，表现是解析任务 `failed: All connection attempts failed`，
 // 而上传、入库、状态查询全都正常 —— 2026-09-02 真起全栈时炸出来的。
-func (s *Store) PresignGetInternal(ctx context.Context, key, docID, mime, disposition string) (string, time.Time, error) {
-	return s.presignGetWith(s.client, ctx, key, docID, mime, disposition)
+func (s *Store) PresignGetInternal(ctx context.Context, key, docID, mime, disposition string, notAfter time.Time) (string, time.Time, error) {
+	return s.presignGetWith(s.client, ctx, key, docID, mime, disposition, notAfter)
 }
 
-func (s *Store) presignGetWith(client *minio.Client, ctx context.Context, key, filename, mime, disposition string) (string, time.Time, error) {
+func (s *Store) presignGetWith(client *minio.Client, ctx context.Context, key, filename, mime, disposition string, notAfter time.Time) (string, time.Time, error) {
+	ttl := s.presignTTL
+	if !notAfter.IsZero() {
+		remaining := time.Until(notAfter).Truncate(time.Second)
+		if remaining < time.Second {
+			return "", time.Time{}, ErrNotAfterPassed
+		}
+		ttl = min(ttl, remaining)
+	}
 	q := url.Values{}
 	if disposition != "" {
 		q.Set("response-content-disposition",
@@ -326,11 +340,11 @@ func (s *Store) presignGetWith(client *minio.Client, ctx context.Context, key, f
 	if mime != "" {
 		q.Set("response-content-type", mime)
 	}
-	u, err := client.PresignedGetObject(ctx, s.bucket, key, s.presignTTL, q)
+	u, err := client.PresignedGetObject(ctx, s.bucket, key, ttl, q)
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	return u.String(), time.Now().Add(s.presignTTL), nil
+	return u.String(), time.Now().Add(ttl), nil
 }
 
 // Remove 删对象。

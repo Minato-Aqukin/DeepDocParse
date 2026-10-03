@@ -64,32 +64,89 @@ async def licensed_source_binding(session, storage, resource, version):
     return prefix + "source.bin", replica
 
 
-async def document_source_key(session, actor, document, storage, *, parse_job_id=None):
-    """Resolve source bytes through the authorized logical version, not a shared hash."""
+async def licensed_version(session, version):
+    """The imported snapshot version whose licence governs `version`'s original bytes.
+
+    A local reparse selected through `current-job` creates a new version of the same
+    resource and document without a bundle prefix; its original is still the licensed
+    copy. Soft-deleted snapshot versions still bind it (fail closed). None = native.
+    """
+    if version.bundle_prefix:
+        return version
+    return await session.scalar(select(ResourceVersion).where(
+        ResourceVersion.resource_id == version.resource_id,
+        ResourceVersion.document_id == version.document_id,
+        ResourceVersion.source_digest == version.source_digest,
+        # Native versions store an empty prefix, not NULL.
+        ResourceVersion.bundle_prefix.is_not(None), ResourceVersion.bundle_prefix != "",
+    ).order_by(ResourceVersion.version_no).limit(1).execution_options(populate_existing=True))
+
+
+async def live_source_key(session, resource, version, document):
+    """Original key for background processing (indexing, compile vision) of `version`.
+
+    Native: the document's object. Licensed copy (or a reparse of one): the snapshot's own
+    `source.bin`, only while its replica is live — 410 otherwise. DB-only on purpose: this
+    runs before every model request of a compile, and manifest binding is checked on the
+    byte-serving paths.
+    """
+    snapshot = await licensed_version(session, version)
+    if snapshot is None:
+        return document.object_key
+    if snapshot.bundle_prefix != f"bundles/{snapshot.id}/":
+        raise _unavailable()
+    await _licensed_replica(session, resource, snapshot)
+    return snapshot.bundle_prefix + "source.bin"
+
+
+
+async def document_source(session, actor, document, storage, *, parse_job_id=None):
+    """`(object key, licence deadline)` of the authorized logical version's original.
+
+    The deadline is the licensed replica's `valid_until` (None for native originals or
+    unlimited licences); callers that hand out URLs must not let them outlive it.
+    """
     from ddp_corpus.document_context import document_context
     from ddp_corpus.routers.bundles import _version
 
     context = await document_context(session, actor, document)
     if context.resource_id is None:
-        return document.object_key
+        return document.object_key, None
     version_id = context.version_id
     if parse_job_id is not None:
-        version_id = await session.scalar(select(ResourceVersion.id).where(
+        bound = await session.scalar(select(ResourceVersion.id).where(
             ResourceVersion.resource_id == context.resource_id,
             ResourceVersion.document_id == document.id,
             ResourceVersion.parse_job_id == parse_job_id,
             ResourceVersion.deleted_at.is_(None),
             *([ResourceVersion.id == actor.version_id] if actor.version_id else []),
         ).order_by(ResourceVersion.version_no.desc()).limit(1))
-        if version_id is None:
-            # Legacy native parse jobs can predate a fixed-version binding.
-            return document.object_key
+        # A parse without its own fixed version (legacy, or a reparse not selected yet)
+        # reads the same original as the authorized context version, licence included.
+        version_id = bound or version_id
     resource, version = await _version(session, actor, context.resource_id, version_id)
-    if version.bundle_prefix:
-        key, _ = await licensed_source_binding(session, storage, resource, version)
-        await _version(session, actor, resource.id, version.id)
-        return key
-    return document.object_key
+    snapshot = await licensed_version(session, version)
+    if snapshot is None:
+        return document.object_key, None
+    key, replica = await licensed_source_binding(session, storage, resource, snapshot)
+    await _version(session, actor, resource.id, version.id)
+    return key, as_aware(replica.valid_until) if replica.valid_until else None
+
+
+async def document_source_key(session, actor, document, storage, *, parse_job_id=None):
+    """Resolve source bytes through the authorized logical version, not a shared hash."""
+    key, _ = await document_source(session, actor, document, storage, parse_job_id=parse_job_id)
+    return key
+
+
+def licence_ttl(deadline, cap_seconds: int) -> int:
+    """Lifetime for a URL to a licensed original: never past the licence term."""
+    if deadline is None:
+        return cap_seconds
+    remaining = int((deadline - utcnow()).total_seconds())
+    if remaining < 1:
+        raise _unavailable()
+    return min(cap_seconds, remaining)
 
 
 async def source_response(resource_id, version_id, *, actor, session, storage, http):
@@ -103,9 +160,10 @@ async def source_response(resource_id, version_id, *, actor, session, storage, h
     expected_digest = "sha256:" + version.source_digest
     original_key, availability = document.object_key, "online"
     replica_binding = None
+    snapshot = await licensed_version(session, version)
     try:
-        if version.bundle_prefix:
-            original_key, replica = await licensed_source_binding(session, storage, resource, version)
+        if snapshot is not None:
+            original_key, replica = await licensed_source_binding(session, storage, resource, snapshot)
             availability = "offline_snapshot"
             replica_binding = (
                 replica.id, replica.origin_node_id, replica.authority_node_id, replica.policy_revision,
@@ -134,7 +192,7 @@ async def source_response(resource_id, version_id, *, actor, session, storage, h
             or version.size_bytes != len(content)):
         raise _unavailable()
     if replica_binding is not None:
-        current = await _licensed_replica(session, resource, version)
+        current = await _licensed_replica(session, resource, snapshot)
         if (current.id, current.origin_node_id, current.authority_node_id, current.policy_revision,
                 as_aware(current.valid_until) if current.valid_until else None) != replica_binding:
             raise _unavailable()

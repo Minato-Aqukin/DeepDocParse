@@ -42,6 +42,7 @@ paths:
             application/zip:
               schema: {type: string, format: binary}
         '400': {description: 无时区或无效期限，或持有方尝试覆盖来源期限}
+        '409': {description: bundle_licensed_derivative：导入快照的本地重解析版本不能另作来源导出，请导出导入的快照版本}
         '410': {description: 授权副本已撤销或过期，source_unavailable}
         '404': {description: 资源不存在或无权访问}
         '503': {description: 本节点持久身份未配置}

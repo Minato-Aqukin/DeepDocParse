@@ -55,7 +55,7 @@ async def compare_server(archive):
                 document=Document(id="parity-document", mime="application/pdf",
                                   object_key="source.pdf"),
                 job=ParseJob(id="parity-job", options_hash=provider["parse_options_hash"]),
-                layout=gateway_layout,
+                layout=gateway_layout, source_key="source.pdf",
             )
     finally:
         for name, value in original_settings.items():

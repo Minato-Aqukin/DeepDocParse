@@ -31,6 +31,9 @@ RFC 3339 时间。原始来源导出方可通过导出参数 `licence_valid_unti
 导入后复制到授权副本的 `valid_until`，持有方只能撤销，不能设置、延长或移除期限。
 再导出保留来源期限；对导入快照传入期限覆盖参数返回 400。
 期限属于验证后的 source manifest，读取原件时必须与副本记录绑定一致。
+**期限不是防篡改的 DRM**：Bundle 未签名（见开头），持有 ZIP 的一方本来就持有原件
+字节，也能在导入前改写 manifest。期限约束的是导入之后本中心对这份副本的全部原件
+读取路径；需要来源可验证期限时要靠签名 Bundle，v1 不提供。
 
 授权副本目录 `GET .../bundle/replicas` 返回 `{replicas:[{replica_id,
 resource_id,source_version_id,source_digest,origin_node_id,authority_node_id,
@@ -44,7 +47,13 @@ policy_revision,valid_until,revoked_at,availability}]}`，availability 的封闭
 同键同副本重放幂等，冲突 409，非空正文 400。
 
 已撤销或已到期副本的原件读取、client source、文档原件下载/source-url，以及
-从原件产生的裁图均返回 410 `source_unavailable`，不能通过旧下载路径绕过。
+从原件产生的裁图（含 MCP `get_evidence` 的像素）均返回 410 `source_unavailable`
+（MCP 证据仍返回摘录，裁图字段为空并标 `crop_degraded=source_unavailable`）；抽取
+要裁图或做视觉核对时该文档以 `source_unavailable` 失败，不把原件像素发给模型。
+不能通过旧下载路径绕过。导入快照在本地重新解析并选为当前版本后，新版本读取的仍是
+同一份许可副本，受同一期限与撤销约束；这种重解析版本不能另作来源导出（409
+`bundle_licensed_derivative`），请导出导入的快照版本。签出的原件 URL（302 短期直读、
+`/files/{token}` 跳转、`download-url`）寿命截到许可期限为止，剩余不足 1 秒按 410 处理。
 Bundle 再导出含原件时也受同一有效许可约束；已验证 Bundle 信封中的存储文字
 excerpt 仍可通过 evidence 端点读取，不意味着仍许可原文或允许原件预览。
 

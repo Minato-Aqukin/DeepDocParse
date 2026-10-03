@@ -26,6 +26,7 @@ from ddp_corpus.db import get_session, get_sessionmaker
 from ddp_corpus.deps import Actor, current_actor
 from ddp_corpus.queue import enqueue
 from ddp_corpus.errors import APIError
+from ddp_corpus.bundle_source import document_source_key
 from ddp_corpus.document_context import document_context
 from ddp_corpus.policy import require_document_parse, document_resource_id, require_document, require_history_document, visible_document_condition
 from ddp_core.extract_format import SchemaError, parse_schema, validate_schema
@@ -363,6 +364,23 @@ async def execute_run(run_id: str, document_ids: list[str], schema: dict, *,
             await _fail_run(session, run_id, f"抽取中断：{type(exc).__name__}: {exc}")
 
 
+def original_authorizer(source_actor: Actor, document_id: str, *, resource_id: str | None,
+                        parse_job_id: str | None, storage):
+    """Per-read authorizer for pixels cut from the original (crops, visual verification).
+
+    A licensed copy that is revoked or past its term is 410 `source_unavailable` here,
+    while stored excerpts keep feeding the text path. Fresh session per call: the
+    licence can end while a run is in flight.
+    """
+    async def authorize_original() -> str | None:
+        async with get_sessionmaker()() as policy_session:
+            source_document = await require_history_document(
+                policy_session, source_actor, document_id, resource_id=resource_id)
+            return await document_source_key(policy_session, source_actor, source_document,
+                                             storage, parse_job_id=parse_job_id)
+    return authorize_original
+
+
 async def _extract_one(session: AsyncSession, run_id: str, document_id: str, spec, *,
                        storage, http, index, verify: bool | None) -> None:
     document = await session.get(Document, document_id)
@@ -425,7 +443,10 @@ async def _extract_one(session: AsyncSession, run_id: str, document_id: str, spe
     ctx = ExtractContext(session=session, index=index, http=http, storage=storage,
                          document=document, job=job, actor_id=initiator, verify=verify,
                          authorize=authorize,
-                         authorized_parse_job_ids=[job.id] if job else [])
+                         authorized_parse_job_ids=[job.id] if job else [],
+                         authorize_original=original_authorizer(
+                             source_actor, document_id, resource_id=source_resource_id,
+                             parse_job_id=fixed_context.parse_job_id, storage=storage))
     outcome = await run_extraction(ctx, spec)
     await authorize()
 

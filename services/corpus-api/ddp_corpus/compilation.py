@@ -77,7 +77,11 @@ async def _understand(http: httpx.AsyncClient, png: bytes, kind: str,
 
 
 async def compile_document(*, storage: Storage, http: httpx.AsyncClient,
-                           document: Document, job: ParseJob, layout: dict) -> CompileOutput:
+                           document: Document, job: ParseJob, layout: dict,
+                           source_key: str | None) -> CompileOutput:
+    """`source_key` is the authorized original (a live licensed snapshot's own copy for
+    imported bundles), resolved by the indexing authorizer — never `document.object_key`
+    directly: imports of the same bytes share one Document."""
     # Keep one provider/configuration across awaited crop and vision work.
     compile_options = {
         "parse_options_hash": job.options_hash,
@@ -91,9 +95,9 @@ async def compile_document(*, storage: Storage, http: httpx.AsyncClient,
     crop_keys: dict[int, str] = {}
     vision_requests = 0
 
-    crop_supported = "pdf" in (document.mime or "").lower() and bool(document.object_key)
+    crop_supported = "pdf" in (document.mime or "").lower() and bool(source_key)
     crop_keys = await get_or_create_crops(
-        storage, job_id=job.id, source_key=document.object_key, mime=document.mime,
+        storage, job_id=job.id, source_key=source_key, mime=document.mime,
         atoms=base) if crop_supported else {}
     for chunk in base:
         if not chunk.get("bbox") or not chunk.get("page_size") or not crop_supported:

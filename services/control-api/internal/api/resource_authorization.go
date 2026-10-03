@@ -21,6 +21,17 @@ type fileAccess struct {
 	ObjectKey  string `json:"object_key"`
 	Filename   string `json:"filename"`
 	MIME       string `json:"mime"`
+	// ValidUntil is a licensed offline copy's term (nil = native or unlimited).
+	// A signed URL must never outlive it.
+	ValidUntil *time.Time `json:"valid_until"`
+}
+
+// notAfter is the signing deadline for URLs to this original (zero = no licence term).
+func (a *fileAccess) notAfter() time.Time {
+	if a.ValidUntil == nil {
+		return time.Time{}
+	}
+	return *a.ValidUntil
 }
 
 func (s *Server) documentAccess(ctx context.Context, actor *identity.Actor, documentID, resourceID string) (*fileAccess, error) {

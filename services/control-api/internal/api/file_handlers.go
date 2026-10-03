@@ -7,6 +7,7 @@ import (
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/apierr"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/httpx"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/objectstore"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/obs"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/store"
 )
@@ -59,10 +60,9 @@ func (s *Server) handleFileByToken(w http.ResponseWriter, r *http.Request) error
 		name = grant.DocumentID
 	}
 	url, _, err := s.objects.PresignGetInternal(r.Context(), grant.ObjectKey,
-		name, grant.MIME, disposition)
+		name, grant.MIME, disposition, access.notAfter())
 	if err != nil {
-		return apierr.New(http.StatusBadGateway, apierr.TypeUpstream, "presign_failed",
-			"签发下载地址失败").WithCause(err)
+		return presignError(err)
 	}
 	obs.PresignedURL("stable_file")
 
@@ -112,10 +112,9 @@ func (s *Server) handleDownloadURL(w http.ResponseWriter, r *http.Request) error
 		filename = docID // 老凭证没存名字，退回旧行为而不是给个空名
 	}
 	url, expires, err := s.objects.PresignGet(r.Context(), grant.ObjectKey,
-		filename, grant.MIME, disposition)
+		filename, grant.MIME, disposition, access.notAfter())
 	if err != nil {
-		return apierr.New(http.StatusBadGateway, apierr.TypeUpstream, "presign_failed",
-			"签发下载地址失败").WithCause(err)
+		return presignError(err)
 	}
 	obs.PresignedURL("browser_download")
 
@@ -127,4 +126,14 @@ func (s *Server) handleDownloadURL(w http.ResponseWriter, r *http.Request) error
 		// 而不是为了看第 200 页把 200MB 全下下来
 		"supports_range": true,
 	})
+}
+
+// presignError keeps an expired licence visible as 410 instead of a signing failure.
+func presignError(err error) error {
+	if errors.Is(err, objectstore.ErrNotAfterPassed) {
+		return apierr.New(http.StatusGone, apierr.TypeInvalidRequest, "source_unavailable",
+			"fixed original is unavailable")
+	}
+	return apierr.New(http.StatusBadGateway, apierr.TypeUpstream, "presign_failed",
+		"签发下载地址失败").WithCause(err)
 }

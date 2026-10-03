@@ -10,8 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ddp_core.anchor import digest_of
 from ddp_core.compilation import code_detection_of, fingerprint, source_anchor
+from ddp_corpus.bundle_source import live_source_key
 from ddp_corpus.compilation import CompileOutput, compile_document
 from ddp_corpus.config import settings
+from ddp_corpus.errors import APIError
 from ddp_corpus.usage import record_usage
 from ddp_corpus.models import Chunk, Document, Evidence, ParseJob, Resource, ResourceVersion, new_id, utcnow
 from ddp_corpus.storage import Storage
@@ -100,14 +102,24 @@ async def _authorized_job(session, document_id, job_id, generation):
         raise IndexSuperseded("index generation changed")
     if document is None or document.deleted_at is not None or not job.result_prefix:
         raise IndexSourceUnavailable("parse source is unavailable")
+    source_key = document.object_key
     if job.resource_id:
         resource = await session.get(Resource, job.resource_id, populate_existing=True)
-        binding = await session.scalar(select(ResourceVersion.id).where(
+        binding = await session.scalar(select(ResourceVersion).where(
             ResourceVersion.resource_id == job.resource_id, ResourceVersion.document_id == document_id,
-            ResourceVersion.parse_job_id == job_id, ResourceVersion.deleted_at.is_(None)).limit(1))
+            ResourceVersion.parse_job_id == job_id, ResourceVersion.deleted_at.is_(None)).limit(1)
+            .execution_options(populate_existing=True))
         if (resource is None or resource.deleted_at is not None or not binding
                 or resource.publication not in ("private", "draft", "published")):
             raise IndexSourceUnavailable("resource was withdrawn, deleted or unbound")
+        # A licensed copy (or a reparse of one) is compiled from its snapshot only while
+        # the replica is live: crops and vision descriptions are cut from the original.
+        try:
+            source_key = await live_source_key(session, resource, binding, document)
+        except APIError as exc:
+            if exc.status_code != 410:
+                raise
+            raise IndexSourceUnavailable("licensed copy was revoked or its term ended") from exc
         # Copied assets retain their source ancestry; a withdrawn ancestor stops new processing.
         # An owner's private source is still authorized. Only another owner's
         # source requires publication; otherwise appending one's own new PDF
@@ -131,7 +143,7 @@ async def _authorized_job(session, document_id, job_id, generation):
                 ResourceVersion.document_id == document_id).limit(1)):
             raise IndexSourceUnavailable("historical parse has no logical resource binding")
         actor_id, organization_id = job.initiated_by or document.uploaded_by, document.organization_id
-    return document, job, actor_id, organization_id
+    return document, job, actor_id, organization_id, source_key
 
 
 class _AuthorizedHTTP:
@@ -181,7 +193,7 @@ async def index_document(session: AsyncSession, storage: Storage, http: httpx.As
 async def _index_claimed(session, storage, http, *, document_id, generation, job_id=None):
     job_id = await _resolve_job_id(session, document_id, job_id)
     try:
-        document, job, actor_id, organization_id = await _authorized_job(
+        document, job, actor_id, organization_id, source_key = await _authorized_job(
             session, document_id, job_id, generation)
     except IndexSuperseded:
         await session.rollback()
@@ -198,7 +210,7 @@ async def _index_claimed(session, storage, http, *, document_id, generation, job
         layout = json.loads(raw.decode())
         await check()
         compiled = await compile_document(storage=storage, http=guarded_http, document=document,
-                                          job=job, layout=layout)
+                                          job=job, layout=layout, source_key=source_key)
         chunks = compiled.chunks
     except IndexSuperseded:
         await session.rollback()
@@ -236,7 +248,7 @@ async def _index_claimed(session, storage, http, *, document_id, generation, job
     await _lock_document(session, document_id)
     await session.execute(select(ParseJob.id).where(ParseJob.id == job_id).with_for_update())
     try:
-        document, job, _, _ = await _authorized_job(session, document_id, job_id, generation)
+        document, job, _, _, _ = await _authorized_job(session, document_id, job_id, generation)
     except IndexSuperseded:
         await session.rollback()
         return 0

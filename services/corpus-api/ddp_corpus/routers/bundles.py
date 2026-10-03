@@ -524,6 +524,15 @@ async def export_bundle(
     licence_valid_until: str | None = None,
 ):
     resource, version = await _version(session, actor, resource_id, version_id)
+    from ddp_corpus.bundle_source import licensed_version
+
+    snapshot = await licensed_version(session, version)
+    if snapshot is not None and snapshot.id != version.id:
+        # A local reparse of a licensed copy would otherwise leave as a native source
+        # under this node's identity with a fresh, holder-chosen term.
+        raise APIError(409, "a reparse of a licensed copy cannot be exported as a new source; "
+                       "export the imported snapshot version", "invalid_request_error",
+                       "bundle_licensed_derivative")
     if version.bundle_prefix and licence_valid_until is not None:
         raise APIError(400, "only the source exporter may set the licence term",
                        "invalid_request_error", "bundle_licence_term_invalid")

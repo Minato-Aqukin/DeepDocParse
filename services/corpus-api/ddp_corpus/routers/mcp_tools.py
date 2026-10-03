@@ -368,20 +368,22 @@ async def _original_readable(session: AsyncSession, storage,
                              contexts: list[DocumentContext]) -> bool:
     """这次解析的原件此刻是否仍经某一份已授权副本可读。
 
-    本地上传的副本恒可读；许可快照副本要过 `licensed_source_binding`（撤销、过期、
-    绑定被改都在那里判）。只有 410 算"不可读"，其余错误照常抛出、不降级。
+    本地上传的副本恒可读；许可快照副本（含它的本地重解析版本）要过
+    `licensed_source_binding`（撤销、过期、绑定被改都在那里判）。只有 410 算
+    "不可读"，其余错误照常抛出、不降级。
     """
-    from ddp_corpus.bundle_source import licensed_source_binding
+    from ddp_corpus.bundle_source import licensed_source_binding, licensed_version
 
     for context in contexts:
         version = await session.get(ResourceVersion, context.version_id, populate_existing=True)
         if version is None:
             continue
-        if not version.bundle_prefix:
+        snapshot = await licensed_version(session, version)
+        if snapshot is None:
             return True
         resource = await session.get(Resource, version.resource_id, populate_existing=True)
         try:
-            await licensed_source_binding(session, storage, resource, version)
+            await licensed_source_binding(session, storage, resource, snapshot)
         except APIError as exc:
             if exc.status_code == 410:
                 continue

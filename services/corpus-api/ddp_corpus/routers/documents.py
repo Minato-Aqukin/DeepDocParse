@@ -37,7 +37,7 @@ from ddp_corpus.queue import enqueue
 from ddp_corpus.db import get_session
 from ddp_corpus.deps import Actor, current_actor, get_service_client, get_storage
 from ddp_corpus.errors import APIError
-from ddp_corpus.bundle_source import document_source_key
+from ddp_corpus.bundle_source import document_source, document_source_key, licence_ttl
 from ddp_corpus.policy import document_resource_id, require_document, require_resource, resource_condition, visible_document_condition
 from ddp_corpus.resources import tombstone_resource
 from ddp_corpus.models import (
@@ -733,7 +733,7 @@ async def download(document_id: str, format: str = "md", job: str = "",
     stem = (await document_context(session, actor, document)).filename.rsplit(".", 1)[0]
 
     if format == "source":
-        object_key = await document_source_key(session, actor, document, storage)
+        object_key, licence_until = await document_source(session, actor, document, storage)
         # **不变式 6**：原件不整份进应用进程内存，也不由应用进程中转下载流量。
         # 这里只做鉴权与存在性判断（exists 是一次 HEAD，不取字节），
         # 然后 302 到一条短期直读 URL —— 字节从对象存储直接到客户端。
@@ -748,7 +748,7 @@ async def download(document_id: str, format: str = "md", job: str = "",
             raise APIError(404, "original file is no longer available",
                            "invalid_request_error", "source_missing")
         url = await storage.presigned_get(
-            object_key, expires_seconds=settings.source_url_ttl_seconds,
+            object_key, expires_seconds=licence_ttl(licence_until, settings.source_url_ttl_seconds),
             filename=(await document_context(session, actor, document)).filename, content_type=document.mime)
         await document_source_key(session, actor, document, storage)
         return RedirectResponse(url, status_code=302)

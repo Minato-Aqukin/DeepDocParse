@@ -40,7 +40,7 @@ func TestPublicSecureOnlyAffectsTheBrowserFacingClient(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	pub, _, err := s.PresignGet(ctx, "objects/a", "a.pdf", "application/pdf", "inline")
+	pub, _, err := s.PresignGet(ctx, "objects/a", "a.pdf", "application/pdf", "inline", time.Time{})
 	if err != nil {
 		t.Fatalf("PresignGet: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestPublicSecureOnlyAffectsTheBrowserFacingClient(t *testing.T) {
 		t.Fatalf("给浏览器的预签名 URL 应当是 https 的公网地址，实际 %s", pub)
 	}
 
-	internal, _, err := s.PresignGetInternal(ctx, "objects/a", "a.pdf", "application/pdf", "inline")
+	internal, _, err := s.PresignGetInternal(ctx, "objects/a", "a.pdf", "application/pdf", "inline", time.Time{})
 	if err != nil {
 		t.Fatalf("PresignGetInternal: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestPublicSecureDefaultsToTheInternalScheme(t *testing.T) {
 	if s.client != s.publicClient {
 		t.Fatal("endpoint 与 scheme 都相同时不该多建一个 client")
 	}
-	pub, _, err := s.PresignGet(ctx, "objects/a", "a.pdf", "application/pdf", "inline")
+	pub, _, err := s.PresignGet(ctx, "objects/a", "a.pdf", "application/pdf", "inline", time.Time{})
 	if err != nil {
 		t.Fatalf("PresignGet: %v", err)
 	}
@@ -122,14 +122,14 @@ func TestPublicSecureAloneSplitsTheClients(t *testing.T) {
 	if s.client == s.publicClient {
 		t.Fatal("scheme 不同就必须是两个 client")
 	}
-	pub, _, err := s.PresignGet(ctx, "objects/a", "a.pdf", "application/pdf", "inline")
+	pub, _, err := s.PresignGet(ctx, "objects/a", "a.pdf", "application/pdf", "inline", time.Time{})
 	if err != nil {
 		t.Fatalf("PresignGet: %v", err)
 	}
 	if !strings.HasPrefix(pub, "https://"+host+"/") {
 		t.Fatalf("公网那条应当是同 host 的 https，实际 %s", pub)
 	}
-	internal, _, err := s.PresignGetInternal(ctx, "objects/a", "a.pdf", "application/pdf", "inline")
+	internal, _, err := s.PresignGetInternal(ctx, "objects/a", "a.pdf", "application/pdf", "inline", time.Time{})
 	if err != nil {
 		t.Fatalf("PresignGetInternal: %v", err)
 	}
