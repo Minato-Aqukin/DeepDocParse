@@ -271,8 +271,12 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
 并保存 requests / bytes / generation_tokens / hops / discovery / probes / egress_bytes。
 账本分两类：hops 与 generation_tokens 是绑定获准计划步骤的额度预占，在步骤首次
 尝试出站时扣账；0039 的 `federation_root_reservations` 以 `(root_task_id,
-reservation_key)` 唯一键绑定 `(step_id, kind)`，同一步骤重试、resume 或崩溃重放不再
+reservation_key)` 唯一键绑定 `(逻辑步骤, kind)`，同一步骤重试、resume 或崩溃重放不再
 扣这两项。否则资料/生成节点一次短暂拒连，就会耗尽获准步骤额度，使恢复后答案不可达。
+逻辑步骤不随 fast 续查的计划修订改名：retrieve 按目标（`retrieve:{执行节点}:{集合}`），
+其余步骤按去掉 `r{n}-` 前缀的步骤 id；否则续查的生成步骤会再预占一次整份生成上限，
+续查取回的证据永远进不了答案（F14）。升级前按旧键预占的进行中任务，续查时会按新键
+再预占一次。
 requests / bytes / egress_bytes / probes / discovery 是物理消耗，每次实际尝试仍先扣账，
 失败不退款；发现分页、健康探测、Probe、执行请求、轮询与证据读取均计入，缓存命中本身
 不伪装成网络调用。重新规划、业务回滚或重启不重置根账本。

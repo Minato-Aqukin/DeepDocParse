@@ -2095,7 +2095,7 @@ async def _run_remote_step(peers: PeerDirectory, *, root_task_id: str, plan: dic
             # egress 前先持久记账：admission 外发一次 request + hops（数据边一跳）。
             if spend is not None:
                 await spend(kind="request", amount=1)
-                await spend(kind="hops", amount=2, step_id=step["step_id"])
+                await spend(kind="hops", amount=2, step_id=_reservation_step(step))
                 await spend(kind="egress_bytes", amount=len(plans.canonical_bytes(body)))
             try:
                 receipt = await client.admit(body, idempotency_key=key)
@@ -2153,6 +2153,25 @@ def _delegated_failure(reason: str) -> dict:
 
 
 _REASON_DETAIL_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
+
+#: A continuation revision renames every step (`r2-retrieve-1`) and re-indexes retrieves.
+_REVISION_PREFIX = re.compile(r"^r\d+-")
+
+
+def _reservation_step(step: dict) -> str:
+    """The logical plan step a once-only allowance (hops, generation tokens) belongs to.
+
+    Fast continuations stage new plan revisions of the same root: step ids gain an
+    `r{n}-` prefix and retrieve indexes shift as targets are added. A retrieve step's
+    allowance belongs to its target (executor + collection), any other step's to its id
+    without the revision prefix; otherwise every continuation re-reserves the root's whole
+    generation cap and can never answer with the evidence it fetched (F14).
+    """
+    if step["operation"] == "retrieve":
+        target = next((ref for ref in step.get("fixed_inputs") or [] if ref != "query"), "")
+        return f"retrieve:{step['executor_node_id']}:{target}"
+    return _REVISION_PREFIX.sub("", step["step_id"])
+
 
 
 def _reason_detail(value) -> str:
@@ -2295,9 +2314,9 @@ async def _delegated_answer(row: FederationRequest, *, plan: dict, step: dict,
             if receipt is None:
                 if spend is not None:
                     await spend(kind="request", amount=1)
-                    await spend(kind="hops", amount=1, step_id=step["step_id"])
+                    await spend(kind="hops", amount=1, step_id=_reservation_step(step))
                     await spend(kind="egress_bytes", amount=len(plans.canonical_bytes(body)))
-                    await spend(kind="generation_tokens", step_id=step["step_id"],
+                    await spend(kind="generation_tokens", step_id=_reservation_step(step),
                                 amount=int(plan["budget"].get("max_generation_tokens", 0)))
                 receipt = await client.admit(body, idempotency_key=key)
         except PeerUnavailable as exc:
@@ -2716,9 +2735,9 @@ async def _delegated_wiki_draft(row: FederationRequest, *, plan: dict, step: dic
             if receipt is None:
                 if spend is not None:
                     await spend(kind="request", amount=1)
-                    await spend(kind="hops", amount=2, step_id=step["step_id"])
+                    await spend(kind="hops", amount=2, step_id=_reservation_step(step))
                     await spend(kind="egress_bytes", amount=len(plans.canonical_bytes(body)))
-                    await spend(kind="generation_tokens", step_id=step["step_id"],
+                    await spend(kind="generation_tokens", step_id=_reservation_step(step),
                                 amount=int(plan["budget"].get("max_generation_tokens", 0)))
                 receipt = await client.admit(body, idempotency_key=key)
         except PeerUnavailable as exc:
@@ -2852,7 +2871,7 @@ async def _wiki_result(session: AsyncSession, actor: Actor, row: FederationReque
         for item in items]
     if generator == node:
         if spend is not None:
-            await spend(kind="generation_tokens", amount=cap, step_id=wiki_step["step_id"])
+            await spend(kind="generation_tokens", amount=cap, step_id=_reservation_step(wiki_step))
             await spend(kind="request", amount=1)
         try:
             draft = await federated_wiki_plane.generate_federated(
@@ -2926,7 +2945,7 @@ async def _answer_result(session: AsyncSession, actor: Actor, row: FederationReq
                                        excerpts=excerpts, actor=actor,
                                        budget=budget, spend=spend)
     if spend is not None:
-        await spend(kind="generation_tokens", amount=cap, step_id=answer_step["step_id"])
+        await spend(kind="generation_tokens", amount=cap, step_id=_reservation_step(answer_step))
         await spend(kind="request", amount=1)
     return await _grounded_answer(http, query=row.task_spec_json.get("query") or "",
                                   fused=fused, excerpts=excerpts,
