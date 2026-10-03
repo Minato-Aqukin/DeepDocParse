@@ -1,0 +1,65 @@
+{
+  "date": "2026-10-03",
+  "rows": [
+    "T44",
+    "T78"
+  ],
+  "runtime": {
+    "coordinator": "real uvicorn TCP",
+    "executor": "real uvicorn subprocess TCP",
+    "generation": "real loopback HTTP deterministic model adapter"
+  },
+  "metadata": {
+    "http_status": 201,
+    "state": "waiting_input",
+    "input_validation": "metadata_only",
+    "gateway_calls": 0,
+    "execution_tasks": 0,
+    "queue_tasks": 0,
+    "leases": 0,
+    "slots": 0
+  },
+  "support": {
+    "http_status": 200,
+    "root_task_id": "a41a7834fb9f49ffafa6d70db35c4033",
+    "counts": {
+      "independent_sources": 1,
+      "evidence_copies": 2
+    },
+    "support_groups": [
+      {
+        "support_id": "sha256:0eb0af100a830a92ba008769de18b946f0d08deaf08d30d5b0d50e34926052b1",
+        "copies": [
+          {
+            "origin_node_id": "node-08566d75d7fad4ca34611783fabb9dd8157213eab3d76a8c",
+            "resource_id": "d5c02c3c82344f60aaac9c6c1f42b0a4",
+            "source_version_id": "fbfe10ddb4204dba9d980003e2e04b0a",
+            "evidence_id": "655dfa1fca034a959dfc3fd79a998c31"
+          },
+          {
+            "origin_node_id": "node-8d5498b21d8b8a6714ff6848adb7879035fb2311f9669170",
+            "resource_id": "c554c3ff99984c1faa9c35bbb699977b",
+            "source_version_id": "2c3d81c9bc984be980b37c093dd342cf",
+            "evidence_id": "455570bbc0de46aa9fb6f39ce88c58cc"
+          }
+        ],
+        "representatives": [
+          {
+            "origin_node_id": "node-08566d75d7fad4ca34611783fabb9dd8157213eab3d76a8c",
+            "resource_id": "d5c02c3c82344f60aaac9c6c1f42b0a4",
+            "source_version_id": "fbfe10ddb4204dba9d980003e2e04b0a",
+            "evidence_id": "655dfa1fca034a959dfc3fd79a998c31"
+          }
+        ]
+      }
+    ],
+    "binding_evidence_refs": [
+      "655dfa1fca034a959dfc3fd79a998c31"
+    ],
+    "binding_support_refs": [
+      "sha256:0eb0af100a830a92ba008769de18b946f0d08deaf08d30d5b0d50e34926052b1"
+    ],
+    "generation_excerpts": 1,
+    "result_manifest_digest": "sha256:3d1fcddf81fb2d3cd8c0f273d2975daf87bb4faa2b51dc3b64d10605b2b06429"
+  }
+}

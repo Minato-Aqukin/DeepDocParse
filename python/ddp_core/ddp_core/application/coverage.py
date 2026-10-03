@@ -340,6 +340,61 @@ def sufficiency(entries, *, bindings=(), conflicting=False) -> str:
     return "sufficient_by_policy"
 
 
+def support_groups(evidence: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Return independent support units and generation representatives.
+
+    Source-byte equality or excerpt-byte equality joins copies transitively.
+    A unit may retain several different excerpts from one source; only repeated
+    excerpts are withheld from generation. Input order (node policy/local rank)
+    decides the representative, never the node's raw vector score.
+    """
+    fields = ("origin_node_id", "resource_id", "source_version_id", "evidence_id")
+    parent = list(range(len(evidence)))
+    owners: dict[tuple[str, str], int] = {}
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def digest_keys(item: dict) -> list[tuple[str, str]]:
+        return [(field, value) for field in ("source_digest", "excerpt_digest")
+                if isinstance(value := item.get(field), str)
+                and plans.DIGEST.fullmatch(value)]
+
+    for index, item in enumerate(evidence):
+        for key in digest_keys(item):
+            if key in owners:
+                parent[root(index)] = root(owners[key])
+            else:
+                owners[key] = index
+    grouped: dict[int, list[dict]] = {}
+    for index, item in enumerate(evidence):
+        grouped.setdefault(root(index), []).append(item)
+    groups = []
+    selected_keys = set()
+    for copies in grouped.values():
+        representatives = []
+        seen_excerpts = set()
+        for item in copies:
+            excerpt = item.get("excerpt_digest")
+            key = ("excerpt", excerpt) if isinstance(excerpt, str) \
+                and plans.DIGEST.fullmatch(excerpt) else tuple(item.get(field) for field in fields)
+            if key not in seen_excerpts:
+                representatives.append({field: item[field] for field in fields})
+                selected_keys.add(tuple(item.get(field) for field in fields))
+                seen_excerpts.add(key)
+        content_keys = sorted({key for item in copies for key in digest_keys(item)})
+        copy_refs = [{field: item[field] for field in fields} for item in copies]
+        support_id = plans.digest(content_keys or sorted(
+            [list(ref.values()) for ref in copy_refs]))
+        groups.append({"support_id": support_id, "copies": copy_refs,
+                       "representatives": representatives})
+    return groups, [item for item in evidence
+                    if tuple(item.get(field) for field in fields) in selected_keys]
+
+
 def _counts(entries):
     total = succeeded = excluded = incomplete = 0
     for group in _groups(entries).values():

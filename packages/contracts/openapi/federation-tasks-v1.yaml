@@ -86,7 +86,12 @@ paths:
         同键不同摘要 409 idempotency_conflict（T80）。accepted 必须同时有
         executor_task_id / verified_input_manifest_digest / input_validation=
         content_verified / accepted_at；验证不了输入则 state=waiting_input 且
-        不占 GPU（P5-INTERFACES-v3 §2 / AdmissionReceipt 的 allOf）。
+        不占 GPU（P5-INTERFACES-v3 §2 / AdmissionReceipt 的 allOf）。metadata_only
+        只持久化受理回执：不建执行行、不入队、不持有租约/槽位，且不调用任何模型、
+        embedding、parse 或能力网关；生成就绪度检查只在输入内容校验通过后进行。
+        受理键域是接收方认证的组织 + issuer_node_id + 原始业务键；不同协调节点
+        不能复用彼此的回执。原始 root:step[:evidence-digest] 业务键不改写；
+        同一签发节点对同一任务的对账不因它携带的远端用户身份变化而生成第二份执行。
 
         **accepted 不等于已执行**：受理回执、执行行与一条 `federation_execute`
         持久队列任务在同一个事务里提交，随后由 corpus-worker 领取执行（进程
@@ -233,6 +238,8 @@ paths:
         探索许可门先于任何远端 Probe。同键同请求体返回已持久化的同一 TaskIntent
         （本实现固定 201），同键不同请求体 409 idempotency_conflict —— HTTP 重试
         不得造出第二个 root task。
+        幂等键域是组织 + acting principal（API key 使用其所属用户）+ 键；
+        同组织不同用户可独立使用同一键，既不冲突也不返回对方的任务需求。
         可选 budget 是调用方从自己的总预算预留的、不重叠的中心份额。中心与服务器
         上限取交集后冻结；规划修订、恢复、重试与重启不得重置。省略则沿用服务器预算；
         提供 budget 但省略 max_generation_tokens 等同于 0，不授权生成。
@@ -327,6 +334,8 @@ paths:
         以幂等键受理已批准计划。执行许可必须覆盖所有数据边（含 relay），
         否则 egress_denied。同键同摘要返回已有任务，同键不同摘要 409
         idempotency_conflict，不因 HTTP 重试增加逻辑执行代次。
+        执行键同样按任务所属组织 + acting principal 隔离；不同用户提交自己的
+        已批准任务时，同名键不能串用或相互阻塞。
 
         **执行是异步的**：受理行与 `federation_plan` 持久队列任务在同一个事务里
         提交后立即返回 202，由 corpus-worker 推进；受理进程重启不会让任务永远
@@ -407,6 +416,8 @@ paths:
         本地校验并持久提交后的幂等确认（计划 §9.4）。**只有提交的
         `result_manifest_digest` 与已交付结果一致才可能 confirmed**；TTL 到期的
         交付一律 expired，过期件永远不可确认，也不得显示"已保存本地"。
+        已确认后同键同摘要返回原回执；同键携带不同结果摘要仍是 409
+        idempotency_conflict，不得以已 confirmed 绕过正文一致性校验。
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DeliveryAckRequest'}}}}
       responses:
@@ -414,7 +425,7 @@ paths:
         '401': {description: 缺少或错误的服务凭据}
         '403': {description: 缺少可信调用者上下文}
         '404': {description: 交付不存在或对调用者不可见}
-        '409': {description: 'input_not_verified：提交的结果摘要与已交付结果不一致', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: 'input_not_verified：首次提交的摘要不一致；idempotency_conflict：已确认后的同键异正文', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   /api/v1/deliveries/{delivery_id}:
     parameters: [{$ref: '#/components/parameters/DeliveryId'}]
     get:
@@ -779,7 +790,18 @@ components:
             discovery: {type: integer, minimum: 0}
             probes: {type: integer, minimum: 0}
             egress_bytes: {type: integer, minimum: 0}
-        result: {type: [object, 'null'], description: '结果摘要；完整结果与证据经 results/resolve 与交付流程取回。没有答案时分两种：**没请求生成**（operation 是 `corpus.retrieve`）`answer` 与 `answer_reason` 都为 null；**请求了但没生成出来**则 `answer_reason` 说明原因，取值见 enums.yaml 的 `federated_answer_reason`：代码封闭，其中五个可带 `:细节` 后缀（对端状态/错误码只进细节、经过清洗）；查文案前先去掉后缀'}
+        result:
+          type: [object, 'null']
+          description: |
+            结果摘要；完整结果与证据经 results/resolve 与交付流程取回。没有答案时分两种：
+            未请求生成（corpus.retrieve）answer/answer_reason 均为 null；请求后未生成时
+            answer_reason 使用 federated_answer_reason 闭集，可允许的后缀只携带清洗后的细节。
+            evidence 保留每份副本的资源与节点归属；support_groups/support_counts 使用
+            ddp-evidence 的 EvidenceSupportGroup/EvidenceSupportCounts。覆盖 counts 是目标数，
+            不是独立来源数。相同 source_digest 或 excerpt_digest 不增加独立支持来源，
+            生成只接收每种不同摘录的一份代表；claim_evidence_bindings.support_refs 由协调者
+            计算，重复资料不能制造共识。sufficient_by_policy 表示存在可引用支持，不表示
+            多来源证实或语义正确；Wiki 的来源归属仍保持真实代表的原始定位。
         error: {type: [string, 'null']}
         scope_ref: {type: [string, 'null']}
         created_at: {type: string, format: date-time}

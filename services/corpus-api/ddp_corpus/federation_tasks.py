@@ -426,10 +426,11 @@ def _replay_intent(row: FederationRequest, request_digest: str) -> dict:
     return _intent_output(row)
 
 
-async def _find_intent_by_key(session: AsyncSession, organization_id: str,
+async def _find_intent_by_key(session: AsyncSession, actor: Actor,
                               idempotency_key: str) -> FederationRequest | None:
     return await session.scalar(select(FederationRequest).where(
-        FederationRequest.organization_id == organization_id,
+        FederationRequest.organization_id == actor.organization_id,
+        FederationRequest.actor_id == federation.acting_actor(actor),
         FederationRequest.intent_idempotency_key == idempotency_key))
 
 
@@ -455,8 +456,9 @@ async def create_intent(session: AsyncSession, actor: Actor, *, task_spec,
                        "invalid_request_error", "idempotency_key_required")
     # 串行化同键并发，UNIQUE 约束兜底；先查后写才不会把重放变成第二个 task。
     await catalog.lock_key(session, "federation-intent:" + hashlib.sha256(
-        plans.canonical_bytes([actor.organization_id, idempotency_key])).hexdigest())
-    existing = await _find_intent_by_key(session, actor.organization_id, idempotency_key)
+        plans.canonical_bytes([actor.organization_id, federation.acting_actor(actor),
+                               idempotency_key])).hexdigest())
+    existing = await _find_intent_by_key(session, actor, idempotency_key)
     if existing is not None:
         return _replay_intent(existing, request_digest)
     if not isinstance(task_spec, dict):
@@ -515,7 +517,7 @@ async def create_intent(session: AsyncSession, actor: Actor, *, task_spec,
     except IntegrityError:
         # 并发同键：唯一约束替我们仲裁；重放已有行，异实体如实报冲突。
         await session.rollback()
-        existing = await _find_intent_by_key(session, actor.organization_id, idempotency_key)
+        existing = await _find_intent_by_key(session, actor, idempotency_key)
         if existing is not None:
             return _replay_intent(existing, request_digest)
         raise APIError(409, "concurrent intent for the same idempotency key",
@@ -1859,7 +1861,8 @@ async def _lookup_local_receipt(session: AsyncSession, actor: Actor,
     running（N3 复核）——所以这里只有一个字段可认。
     """
     try:
-        return await federation.lookup_admission(session, actor, key)
+        return await federation.lookup_admission(
+            session, actor, key, issuer_node_id=federation.local_node_id())
     except APIError as exc:
         if exc.status_code == 404:
             return None
@@ -3170,6 +3173,7 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
     row = await session.get(FederationRequest, root_task_id, populate_existing=True)
     ordered = [entries[_target_digest(target)] for target in _ordered_targets(all_targets)]
     fused = list(evidence.values())
+    support_groups, representatives = coverage_kernel.support_groups(fused)
     # §7.6 规则一路：同一来源不同版本在同一定位上的正文分歧，生成之前就能算。
     # 它只会把"充分"压成"矛盾"：没有绑定时账本仍是 insufficient，下面的生成闸
     # 照样拦住（内核 `sufficiency` 的优先级钉着这件事）。
@@ -3192,7 +3196,7 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
                    for entry in ordered if entry["state"] != "succeeded"]
     try:
         answer = await _answer_result(
-            session, actor, row, plan=plan, fused=fused, live_excerpts=live_excerpts,
+            session, actor, row, plan=plan, fused=representatives, live_excerpts=live_excerpts,
             sufficiency=ledger["evidence_sufficiency"], http=http,
             budget=exec_budget, spend=_spend)
     except ApplicationError as exc:
@@ -3211,6 +3215,13 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
         coverage_kernel.validate_ledger(ledger)
     # 结果文档 = 交付字节的规范原文（**不含摘要字段本身**）。摘要是对这份文档的
     # content_digest，客户端下载后重算它才允许 ack；文档有界且不含正文摘录。
+    support_by_evidence: dict[str, set[str]] = {}
+    for group in support_groups:
+        for copy_ref in group["copies"]:
+            support_by_evidence.setdefault(copy_ref["evidence_id"], set()).add(group["support_id"])
+    for binding in answer.get("claim_evidence_bindings") or []:
+        binding["support_refs"] = sorted({support_id for ref in binding["evidence_refs"]
+                                         for support_id in support_by_evidence.get(ref, ())})
     document = {
         **answer,
         "operation": task_spec.get("operation"),
@@ -3220,6 +3231,9 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
         "counts": ledger["counts"], "coverage_ref": row.root_task_id,
         "conflicts": ledger.get("conflicts", []),
         "evidence": fused, "unretrieved_targets": unretrieved,
+        "support_groups": support_groups,
+        "support_counts": {"independent_sources": len(support_groups),
+                           "evidence_copies": len(fused)},
     }
     result = {**document, "result_manifest_digest": plans.digest(document),
               _ATTRIBUTED_FIELD: sorted({_evidence_key(item) for item in attributed},
@@ -3348,6 +3362,7 @@ async def execute_task(session: AsyncSession, actor: Actor, root_task_id: str, *
         await session.rollback()
         existing = await session.scalar(select(FederationRequest).where(
             FederationRequest.organization_id == actor.organization_id,
+            FederationRequest.actor_id == federation.acting_actor(actor),
             FederationRequest.idempotency_key == idempotency_key))
         if existing is not None and existing.root_task_id != root_task_id:
             raise APIError(409, "idempotency key already accepted for another task",
@@ -3709,6 +3724,9 @@ async def ack_delivery(session: AsyncSession, actor: Actor, delivery_id: str, *,
             or (row.actor_id != federation.acting_actor(actor) and not actor.can_manage):
         raise APIError(404, "delivery not found", "invalid_request_error", "delivery_not_found")
     if delivery.state == "confirmed":
+        if result_manifest_digest != delivery.result_manifest_digest:
+            raise APIError(409, "confirmed delivery replay has a different request body",
+                           "invalid_request_error", "idempotency_conflict")
         return delivery.receipt_json
     expired = delivery.state == "expired" or (
         delivery.expires_at is not None and as_aware(delivery.expires_at) <= now)

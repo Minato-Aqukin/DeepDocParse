@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-03",
+  "rows": [
+    "T37"
+  ],
+  "http_status": 200,
+  "status": "succeeded",
+  "root_task_id": "c2c7826f9cf24afa9cfd8fcf1481a554",
+  "runtime": "A real uvicorn TCP, B real uvicorn subprocess TCP; SQLite cosine index and HTTP encoders",
+  "models": [
+    {
+      "node_id": "node-08566d75d7fad4ca34611783fabb9dd8157213eab3d76a8c",
+      "model_id": "amber-encoder-3",
+      "dimension": 3
+    },
+    {
+      "node_id": "node-8d5498b21d8b8a6714ff6848adb7879035fb2311f9669170",
+      "model_id": "violet-encoder-7",
+      "dimension": 7
+    }
+  ],
+  "local_encoding_status": "dimension-matched on each node",
+  "score_scale_divergence_status": "every B raw score above every A raw score",
+  "fusion_status": "local_first then each node local rank retained",
+  "evidence_order": [
+    [
+      "A",
+      1
+    ],
+    [
+      "A",
+      0
+    ],
+    [
+      "B",
+      1
+    ],
+    [
+      "B",
+      0
+    ]
+  ],
+  "peer_http_score_status": "no raw scores",
+  "task_result_score_status": "no raw scores",
+  "result_manifest_digest": "sha256:4d86fcf2d19580ba79d0d062e6e755a5f270455c4754ebafe0acd9addb063dd8"
+}

@@ -1938,6 +1938,14 @@
               ],
               "type": "string",
               "x-ddp-enum": "validation_state"
+            },
+            "support_refs": {
+              "description": "协调者按真实证据归组后计算的支持单位引用；同资料多份引用不得冒充独立共识。",
+              "items": {
+                "$ref": "#/$defs/digest"
+              },
+              "type": "array",
+              "uniqueItems": true
             }
           },
           "required": [
@@ -2073,6 +2081,83 @@
           "type": "object",
           "x-ddp-doc": "**计算成功不代表本地拿到结果**（§8.3）。`state=confirmed` 只能由**本地校验过 manifest 与文件之后**发出（T29：下载后回执丢失/重复时，本地验证后可重复确认，结果不重复发布或提前清理）。"
         },
+        "EvidenceCopyRef": {
+          "additionalProperties": false,
+          "description": "真实证据副本的身份引用；不以内容摘要替换资源或节点归属。",
+          "properties": {
+            "evidence_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "origin_node_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "resource_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "source_version_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "origin_node_id",
+            "resource_id",
+            "source_version_id",
+            "evidence_id"
+          ],
+          "type": "object"
+        },
+        "EvidenceSupportCounts": {
+          "additionalProperties": false,
+          "description": "支持单位数与实际证据副本数；不同于覆盖账本的检索目标计数。",
+          "properties": {
+            "evidence_copies": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "independent_sources": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "independent_sources",
+            "evidence_copies"
+          ],
+          "type": "object"
+        },
+        "EvidenceSupportGroup": {
+          "additionalProperties": false,
+          "description": "保守的独立支持单位：相同 source_digest 或 excerpt_digest 的副本（含传递关系）只算一份来源；copies 保留每份资源归属。representatives 保留每种不同摘录的一份真实副本供生成，不能把同文档的不同片段丢掉。缺失摘要不构成相等证据；不是语义相似性或置信度判定。",
+          "properties": {
+            "copies": {
+              "items": {
+                "$ref": "#/$defs/EvidenceCopyRef"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "representatives": {
+              "items": {
+                "$ref": "#/$defs/EvidenceCopyRef"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "support_id": {
+              "$ref": "#/$defs/digest"
+            }
+          },
+          "required": [
+            "support_id",
+            "copies",
+            "representatives"
+          ],
+          "type": "object"
+        },
         "FederatedAnswer": {
           "additionalProperties": false,
           "allOf": [
@@ -2166,6 +2251,15 @@
             },
             "schema": {
               "const": "ddp-evidence/1#FederatedAnswer"
+            },
+            "support_counts": {
+              "$ref": "#/$defs/EvidenceSupportCounts"
+            },
+            "support_groups": {
+              "items": {
+                "$ref": "#/$defs/EvidenceSupportGroup"
+              },
+              "type": "array"
             }
           },
           "required": [

@@ -134,6 +134,40 @@
       ]
     },
 
+    "EvidenceCopyRef": {
+      "type": "object",
+      "description": "真实证据副本的身份引用；不以内容摘要替换资源或节点归属。",
+      "properties": {
+        "origin_node_id": { "type": "string", "minLength": 1 },
+        "resource_id": { "type": "string", "minLength": 1 },
+        "source_version_id": { "type": "string", "minLength": 1 },
+        "evidence_id": { "type": "string", "minLength": 1 }
+      },
+      "required": ["origin_node_id", "resource_id", "source_version_id", "evidence_id"],
+      "additionalProperties": false
+    },
+    "EvidenceSupportGroup": {
+      "type": "object",
+      "description": "保守的独立支持单位：相同 source_digest 或 excerpt_digest 的副本（含传递关系）只算一份来源；copies 保留每份资源归属。representatives 保留每种不同摘录的一份真实副本供生成，不能把同文档的不同片段丢掉。缺失摘要不构成相等证据；不是语义相似性或置信度判定。",
+      "properties": {
+        "support_id": { "$ref": "#/$defs/digest" },
+        "copies": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/EvidenceCopyRef" } },
+        "representatives": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/EvidenceCopyRef" } }
+      },
+      "required": ["support_id", "copies", "representatives"],
+      "additionalProperties": false
+    },
+    "EvidenceSupportCounts": {
+      "type": "object",
+      "description": "支持单位数与实际证据副本数；不同于覆盖账本的检索目标计数。",
+      "properties": {
+        "independent_sources": { "type": "integer", "minimum": 0 },
+        "evidence_copies": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["independent_sources", "evidence_copies"],
+      "additionalProperties": false
+    },
+
     "ClaimEvidenceBinding": {
       "type": "object",
       "description": "一句实质性主张与支撑它的证据之间的绑定（§4.3、§4.4）。",
@@ -142,6 +176,7 @@
         "claim_id": { "type": "string", "minLength": 1 },
         "claim_text": { "type": "string", "minLength": 1 },
         "evidence_refs": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "support_refs": { "description": "协调者按真实证据归组后计算的支持单位引用；同资料多份引用不得冒充独立共识。", "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/digest" } },
         "structural_validation": { "type": "string", "x-ddp-enum": "validation_state" },
         "semantic_review": { "type": "string", "x-ddp-enum": "validation_state" }
       },
@@ -160,6 +195,8 @@
           "type": "array", "items": { "$ref": "#/$defs/ClaimEvidenceBinding" }
         },
         "evidence": { "type": "array", "items": { "$ref": "#/$defs/FederatedEvidence" } },
+        "support_groups": { "type": "array", "items": { "$ref": "#/$defs/EvidenceSupportGroup" } },
+        "support_counts": { "$ref": "#/$defs/EvidenceSupportCounts" },
         "coverage_ref": {
           "description": "指向 CoverageLedger。**没有它就无法判断「未找到」是什么意思**（§7.6）。",
           "type": "string", "minLength": 1

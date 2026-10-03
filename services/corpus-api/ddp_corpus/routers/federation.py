@@ -204,7 +204,8 @@ async def lookup_admission(body: LookupRequest,
                                                      "/api/v1/federation/admissions/lookup"),
                            _target: None = Depends(require_target),
                            session: AsyncSession = Depends(get_session)):
-    receipt = await federation.lookup_admission(session, peer.actor, body.idempotency_key)
+    receipt = await federation.lookup_admission(
+        session, peer.actor, body.idempotency_key, issuer_node_id=peer.issuer_node_id)
     peer.within(root_task_id=receipt.get("root_task_id"), step_id=receipt.get("step_id"))
     return JSONResponse(receipt, headers={"Cache-Control": "no-store"})
 

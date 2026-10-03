@@ -51,9 +51,9 @@ class FederationProbe(Base):
 class FederationAdmission(Base):
     """The persistent admission receipt for one executor step.
 
-    Unique `(organization_id, idempotency_key)` is the reconciliation anchor:
-    same key + same `request_digest` replays the stored receipt, same key +
-    different digest is `idempotency_conflict` (never reuse an unrelated result).
+    Unique `(organization_id, issuer_node_id, idempotency_key)` is the
+    reconciliation anchor: within an issuer's organization, same key + same
+    `request_digest` replays, while a different digest is `idempotency_conflict`.
     """
 
     __tablename__ = "federation_admissions"
@@ -81,8 +81,8 @@ class FederationAdmission(Base):
                                                  onupdate=utcnow)
 
     __table_args__ = (
-        UniqueConstraint("organization_id", "idempotency_key",
-                         name="uq_federation_admissions_org_idempotency"),
+        UniqueConstraint("organization_id", "issuer_node_id", "idempotency_key",
+                         name="uq_federation_admissions_org_issuer_idempotency"),
     )
 
 
@@ -168,10 +168,10 @@ class FederationRequest(Base):
                                                  onupdate=utcnow)
 
     __table_args__ = (
-        UniqueConstraint("organization_id", "idempotency_key",
-                         name="uq_federation_requests_org_idempotency"),
-        UniqueConstraint("organization_id", "intent_idempotency_key",
-                         name="uq_federation_requests_org_intent_idempotency"),
+        UniqueConstraint("organization_id", "actor_id", "idempotency_key",
+                         name="uq_federation_requests_org_actor_idempotency"),
+        UniqueConstraint("organization_id", "actor_id", "intent_idempotency_key",
+                         name="uq_federation_requests_org_actor_intent_idempotency"),
     )
 
 

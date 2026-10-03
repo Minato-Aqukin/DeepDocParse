@@ -314,10 +314,12 @@ async def test_admission_unsupported_operation_is_rejected_not_faked(
         {"step_id": "retrieve-1", "operation": "retrieve", "executor_node_id": NODE,
          "depends_on": [], "fixed_inputs": []},
         {"step_id": "answer-1", "operation": "answer", "executor_node_id": NODE,
-         "depends_on": ["retrieve-1"]},
+         "depends_on": ["retrieve-1"], "fixed_inputs": ["query"]},
     ]
     body = admission_body(key="answer-key", operation="answer", step_id="answer-1",
                           steps=steps)
+    body["evidence"] = [{"evidence_id": "verified-source", "excerpt": "verified source text",
+                         "digest": content_digest(b"verified source text")}]
     response = await post_admission(peer(client), body)
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "capability_unsupported"

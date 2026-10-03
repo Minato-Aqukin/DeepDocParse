@@ -10,9 +10,9 @@ real single-use `X-DDP-Node-Credential` (Ed25519, issued by A's test signer)
 and `X-DDP-Target-Node` header. No shared service bearer, no shared peer token,
 and no caller-asserted actor headers cross the wire: B derives the caller as a
 read-only `peer-*` principal from its own approved-member trust record.
-The only test scaffolding on B is a request-log middleware and an opt-in fault
-injection middleware, both defined in this file on top of the unmodified
-`ddp_corpus.routers.federation` router.
+Test scaffolding on B consists of request logging, opt-in fault injection, and
+an opt-in dimension-instrumented cosine index, defined here on top of the
+unmodified `ddp_corpus.routers.federation` router.
 
 The in-process part is node A: the tests drive A's entry endpoints through
 `httpx.ASGITransport` against the repo's standard pytest app (SQLite
@@ -29,6 +29,11 @@ Server-side instrumentation (test-only, lives in this file's `build_node_app`):
 - `--fault-file`: while the file exists, `POST /api/v1/federation/admissions`
   answers `503 fault_injected`. Used to fail a peer *after* planning succeeded
   (probe receipt already stored), then clear the fault and resume.
+- `--embedding-domain` / `--vector-log`: opt into a named local encoder,
+  dimension-matched cosine seeds, and private vector observations. Each node
+  reaches its own real loopback `/v1/embeddings` stub over HTTP; score rescaling
+  deliberately makes the two nodes' raw scores incomparable. Default fixtures
+  retain their keyword-only `MemoryIndex` behavior and outbound log shape.
 
 The caller is responsible for starting/stopping the fixture and for pointing
 node A's `settings.federation_peers` at `peers_json()`.
@@ -39,6 +44,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import math
 import os
 import socket
 import subprocess
@@ -87,16 +93,100 @@ class NodeSeed:
     text: str
 
 
+@dataclass(frozen=True)
+class EmbeddingDomain:
+    """Opt-in node-local coordinate space and score calibration for acceptance."""
+
+    model: str
+    dimension: int
+    similarities: tuple[float, ...]
+    score_scale: float = 1.0
+
+    def seed_vector(self, seq: int) -> list[float]:
+        cosine = self.similarities[seq]
+        return [cosine, math.sqrt(1 - cosine * cosine)] + [0.0] * (self.dimension - 2)
+
+
+class VectorDomainIndex:
+    """Real cosine retrieval with explicit dimension-matched local test seeds.
+
+    SQLite cannot represent independently configured pgvector column dimensions.
+    Seeds therefore live in this test index, keyed by each real chunk's sequence.
+    ACL/parse-generation filters and the production search/executor path remain
+    real. Score rescaling changes no local rank, exposing cross-node comparisons.
+    """
+
+    def __init__(self, domain: EmbeddingDomain, log_path: str = ""):
+        self.domain = domain
+        self.log_path = log_path
+        self.observations: list[dict] = []
+
+    async def search(self, session, *, vector, query, document_id, limit,
+                     candidates, min_similarity, authorized_document_ids=None,
+                     authorized_parse_job_ids=None):
+        from ddp_core.hits import Hit
+        from ddp_core.models import Chunk, Document
+        from sqlalchemy import select
+
+        assert vector is not None and len(vector) == self.domain.dimension, (
+            "query was not encoded in this node's local embedding domain")
+        stmt = select(Chunk).join(Document, Document.id == Chunk.document_id).where(
+            Document.deleted_at.is_(None))
+        if document_id:
+            stmt = stmt.where(Chunk.document_id == document_id)
+        if authorized_document_ids is not None:
+            stmt = stmt.where(Document.id.in_(authorized_document_ids))
+        if authorized_parse_job_ids is not None:
+            stmt = stmt.where(Chunk.parse_job_id.in_(authorized_parse_job_ids))
+        chunks = list(await session.scalars(stmt))
+        ranked = []
+        dimensions = []
+        for chunk in chunks:
+            seed = self.domain.seed_vector(chunk.seq)
+            dimensions.append(len(seed))
+            dot = sum(a * b for a, b in zip(vector, seed, strict=True))
+            norm = math.sqrt(sum(a * a for a in vector) * sum(b * b for b in seed))
+            similarity = dot / norm
+            if similarity > min_similarity:
+                ranked.append((similarity, chunk))
+        ranked.sort(key=lambda pair: (-pair[0], pair[1].seq))
+        observation = {
+            "model": self.domain.model, "query_dimension": len(vector),
+            "seed_dimensions": dimensions,
+            "ranked_seqs": [chunk.seq for _, chunk in ranked],
+            "scores": [similarity * self.domain.score_scale for similarity, _ in ranked],
+            "similarities": [similarity for similarity, _ in ranked],
+        }
+        self.observations.append(observation)
+        if self.log_path:
+            with open(self.log_path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(observation) + "\n")
+        return [Hit(
+            chunk_id=chunk.id, document_id=chunk.document_id,
+            parse_job_id=chunk.parse_job_id, seq=chunk.seq, page_idx=chunk.page_idx,
+            bbox=chunk.bbox, page_size=chunk.page_size, text=chunk.text,
+            derived_text=chunk.derived_text, evidence_id=chunk.evidence_id,
+            derived_evidence_id=chunk.derived_evidence_id, block_type=chunk.block_type,
+            table_html=chunk.table_html, similarity=similarity,
+            score=similarity * self.domain.score_scale)
+            for similarity, chunk in ranked[:min(limit, candidates)]]
+
 class _CountingTransport(httpx.AsyncBaseTransport):
     """Real sockets underneath, plus an exact count of A-side outbound attempts."""
 
-    def __init__(self, sink: list[dict]):
+    def __init__(self, sink: list[dict], *, capture_evidence: bool = False):
         self._inner = httpx.AsyncHTTPTransport()
         self._sink = sink
+        self._capture_evidence = capture_evidence
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        self._sink.append({"method": request.method, "path": request.url.path})
-        return await self._inner.handle_async_request(request)
+        call = {"method": request.method, "path": request.url.path}
+        self._sink.append(call)
+        response = await self._inner.handle_async_request(request)
+        if self._capture_evidence and "/evidence-sets/" in request.url.path:
+            await response.aread()
+            call["body"] = response.json()
+        return response
 
     async def aclose(self) -> None:
         await self._inner.aclose()
@@ -178,8 +268,10 @@ class ModelStub:
     the A -> B path stays real HTTP.
     """
 
-    def __init__(self, claims: tuple[ModelClaim, ...]):
+    def __init__(self, claims: tuple[ModelClaim, ...], *,
+                 embedding_domain: EmbeddingDomain | None = None):
         self.claims = claims
+        self.embedding_domain = embedding_domain
         self.requests: list[dict] = []
         self._server: ThreadingHTTPServer | None = None
 
@@ -235,6 +327,14 @@ class ModelStub:
                 except ValueError:
                     payload = {}
                 outer.requests.append({"path": self.path, "payload": payload})
+                if self.path == "/v1/embeddings" and outer.embedding_domain is not None:
+                    domain = outer.embedding_domain
+                    if payload.get("model") != domain.model:
+                        return self._json(400, {"error": "wrong local embedding model"})
+                    return self._json(200, {
+                        "model": domain.model,
+                        "data": [{"index": i, "embedding": [1.0] + [0.0] * (domain.dimension - 1)}
+                                 for i, _ in enumerate(payload["input"])]})
                 if self.path == "/v1/chat/completions":
                     return self._json(200, {
                         "choices": [{"message": {"role": "assistant",
@@ -260,7 +360,9 @@ class ModelStub:
 
 
 def build_node_app(*, call_log: str = "", fault_file: str = "", generate: bool = False,
-                   peer_trust: dict | None = None):
+                   peer_trust: dict | None = None,
+                   embedding_domain: EmbeddingDomain | None = None,
+                   vector_log: str = ""):
     """A real FastAPI app mounting the unmodified federation executor router.
 
     No lifespan: this process intentionally has no MinIO/PG dependency. Search
@@ -269,6 +371,8 @@ def build_node_app(*, call_log: str = "", fault_file: str = "", generate: bool =
     reports unknown — the honest not-ready shape. `generate=True` gives the
     node a real HTTP client so its capability producer and grounded answer can
     reach the test's `ModelStub` via `settings.service_url`.
+    An explicit `embedding_domain` instead uses `VectorDomainIndex` and the
+    node-local HTTP encoder; no vector or raw score enters federation payloads.
 
     `peer_trust` is B's approved-member directory: node A must be approved
     there with A's real Ed25519 public key, otherwise B answers 401
@@ -287,9 +391,10 @@ def build_node_app(*, call_log: str = "", fault_file: str = "", generate: bool =
     app = FastAPI(title="P5 two-node acceptance peer")
     install_error_handlers(app)
     app.include_router(federation_router)
-    app.state.search_index = MemoryIndex()
+    app.state.search_index = (VectorDomainIndex(embedding_domain, vector_log)
+                              if embedding_domain is not None else MemoryIndex())
     app.state.http = (httpx.AsyncClient(trust_env=False, follow_redirects=False)
-                      if generate else None)
+                      if generate or embedding_domain is not None else None)
     app.state.redis = None
     if peer_trust is not None:
         from node_credentials_fixture import StaticPeerTrust
@@ -339,6 +444,9 @@ def _serve(argv=None) -> None:
     parser.add_argument("--fault-file", default="")
     parser.add_argument("--service-url", default="",
                         help="model gateway origin; empty = no generation plane")
+    parser.add_argument("--embedding-domain", default="",
+                        help="JSON: opt-in local embedding model/dimension/seeds/score scale")
+    parser.add_argument("--vector-log", default="")
     args = parser.parse_args(argv)
 
     settings.database_url = "sqlite+aiosqlite:///" + str(Path(args.database).resolve())
@@ -350,10 +458,16 @@ def _serve(argv=None) -> None:
     settings.federation_execution_inline = True
     if args.service_url:
         settings.service_url = args.service_url
+    embedding_domain = (EmbeddingDomain(**json.loads(args.embedding_domain))
+                        if args.embedding_domain else None)
+    if embedding_domain is not None:
+        settings.embedding_model = embedding_domain.model
+        settings.embedding_url = args.service_url + "/v1/embeddings"
     db.reset_engine()
     trust = json.loads(Path(args.trust).read_text(encoding="utf-8"))
     uvicorn.run(build_node_app(call_log=args.call_log, fault_file=args.fault_file,
-                               generate=bool(args.service_url), peer_trust=trust),
+                               generate=bool(args.service_url), peer_trust=trust,
+                               embedding_domain=embedding_domain, vector_log=args.vector_log),
                 host="127.0.0.1", port=args.port, log_level="warning")
 
 
@@ -375,6 +489,7 @@ class TwoNodeFixture:
         self.b_endpoint = f"http://127.0.0.1:{b_port}"
         self.c_endpoint = f"http://127.0.0.1:{c_port}"
         self.outbound: list[dict] = []
+        self.capture_evidence = False
 
     # ------------------------------------------------------------- lifecycle
 
@@ -382,7 +497,8 @@ class TwoNodeFixture:
     async def create(cls, tmpdir, *, b_texts=NODE_B_TEXTS,
                      b_name: str = "Node B federation collection",
                      b_generate_claims: tuple[ModelClaim, ...] | None = None,
-                     b_trust: dict | None = None) -> TwoNodeFixture:
+                     b_trust: dict | None = None,
+                     b_embedding_domain: EmbeddingDomain | None = None) -> TwoNodeFixture:
         """Spawn B with an explicit approved-member trust file.
 
         `b_trust` maps node id -> trust record (the `GET peer-keys/{id}` shape).
@@ -412,8 +528,8 @@ class TwoNodeFixture:
         # must be exercised over HTTP too, not by monkeypatching B's process.
         model_stub = None
         service_url = ""
-        if b_generate_claims is not None:
-            model_stub = ModelStub(b_generate_claims)
+        if b_generate_claims is not None or b_embedding_domain is not None:
+            model_stub = ModelStub(b_generate_claims or (), embedding_domain=b_embedding_domain)
             service_url = model_stub.start()
 
         if b_trust is None:
@@ -439,12 +555,18 @@ class TwoNodeFixture:
                 "--call-log", str(call_log), "--fault-file", str(fault_file)]
         if service_url:
             args += ["--service-url", service_url]
+        if b_embedding_domain is not None:
+            from dataclasses import asdict
+
+            args += ["--embedding-domain", json.dumps(asdict(b_embedding_domain)),
+                     "--vector-log", str(tmpdir / "node-b-vectors.jsonl")]
         log = open(log_path, "wb")
         process = subprocess.Popen(args, cwd=str(corpus_api), env=env,
                                    stdout=log, stderr=subprocess.STDOUT)
         fixture = cls(tmpdir=tmpdir, b_seed=b_seed, b_port=b_port, c_port=c_port,
                       call_log=call_log, fault_file=fault_file, log_path=log_path,
                       process=process, model_stub=model_stub)
+        fixture.capture_evidence = b_embedding_domain is not None
         try:
             await fixture._wait_healthy()
         except Exception:
@@ -522,7 +644,8 @@ class TwoNodeFixture:
             peers = parse_peers(settings.federation_peers,
                                 allow_loopback=settings.federation_allow_loopback)
             return PeerDirectory(peers, actor=actor,
-                                 transport=_CountingTransport(self.outbound),
+                                 transport=_CountingTransport(
+                                     self.outbound, capture_evidence=self.capture_evidence),
                                  signer=signer, delegation=delegation)
 
         monkeypatch.setattr(federation_tasks, "peer_directory", factory)
@@ -553,6 +676,11 @@ class TwoNodeFixture:
         return [call for call in self.calls()
                 if fragment in call["path"]
                 and (status is None or call["status"] == status)]
+
+    def vector_observations(self) -> list[dict]:
+        path = self.tmpdir / "node-b-vectors.jsonl"
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()] if path.exists() else []
 
 
 if __name__ == "__main__":

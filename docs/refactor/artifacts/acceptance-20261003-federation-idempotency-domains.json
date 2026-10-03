@@ -1,0 +1,65 @@
+{
+  "acceptance_row": "T80",
+  "date": "2026-10-03",
+  "status": "passed-scoped-verification",
+  "domains": {
+    "task_intents": ["organization_id", "acting_principal", "intent_key"],
+    "task_submits": ["organization_id", "acting_principal", "submit_key"],
+    "admissions_and_lookup": ["organization_id", "authenticated_issuer_node_id", "business_key"],
+    "bundle_import": ["organization_id", "owning_principal", "import_key"],
+    "catalog_mutation": ["organization_id", "actor_kind", "actor_id", "principal_id", "operation", "collection_id", "key"],
+    "delivery_ack": "visible delivery; same key may be used for independent deliveries; confirmed changed-body replay conflicts"
+  },
+  "unchanged": [
+    "Admission business key remains root:step[:evidence_digest], without delegation generation",
+    "User-owned API keys share their user's task-intent, submit and bundle-import domains",
+    "Catalog mutation and bundle import already had isolated domains; no implementation changes required",
+    "Other users and organizations cannot acknowledge or read another owner's private delivery/import"
+  ],
+  "tests": {
+    "new_file": "services/corpus-api/tests/test_federation_idempotency_domains.py",
+    "cases": [
+      "test_intents_and_submits_scope_keys_to_principal_and_organization",
+      "test_admissions_scope_keys_to_issuer_and_organization",
+      "test_bundle_import_keys_scope_to_principal_and_organization",
+      "test_catalog_keys_scope_to_actor_binding_and_organization",
+      "test_pg_submit_domains_follow_migrated_constraints"
+    ],
+    "targeted_run": "54 passed: new domain tests, federation admissions, bundle import/export and collection catalog",
+    "coordinator_regressions": "7 passed, 86 deselected: idempotency/concurrent_intent/local_lookup_receipt/ack selection",
+    "updated_injectors": "Existing coordinator lookup and intent-race fault injectors follow the new required issuer/actor parameters"
+  },
+  "red_evidence": {
+    "intents": "Second user in same organization and same intent key returned 409 instead of independent 201",
+    "admissions": "Second issuer in same organization and same business key returned 409 instead of independent 201",
+    "delivery": "Confirmed acknowledgment with same key and changed result digest returned 200 instead of 409",
+    "pg_submit": "Pre-0040 organization/key uniqueness rejected the second user's submit; sibling 0041 nullable label columns were staged only in the disposable database to run the shared ORM before 0040, then removed before real migrations"
+  },
+  "migration": {
+    "file": "database/corpus/alembic/versions/0040_federation_idempotency_domains.py",
+    "revision": "0040",
+    "down_revision": "0039",
+    "proof": "Real PG upgrade 0039->0040, downgrade 0040->0039, upgrade head (0041) succeeded with historical receipts retained",
+    "occupied_downgrade": "Downgrade to 0039 rejected occupied expanded domains; transaction rollback retained Alembic 0041, sibling label column and all three 0040 scoped unique constraints"
+  },
+  "runtime_smoke": {
+    "transport": "actual loopback HTTP on disposable port 19060",
+    "database": "disposable PostgreSQL/pgvector on assigned port 15460",
+    "observed": "Two users used identical intent and submit keys with different bodies, replayed independently, executed to succeeded and acknowledged distinct deliveries; changed intent/ack bodies conflicted; two signed issuer nodes admitted and looked up the same business key independently",
+    "adapters": "In-memory object storage, fixture embedding vectors and fixture control-plane trust/signer; production SQL, HTTP handlers, node credential signing/verification and queue execution used",
+    "live_drills": "No live A/B/C services or databases touched"
+  },
+  "logs": [
+    ".dev-logs/acceptance-20261003/federation-semantics/key-domains-intents-red.log",
+    ".dev-logs/acceptance-20261003/federation-semantics/key-domains-admissions-red.log",
+    ".dev-logs/acceptance-20261003/federation-semantics/key-domains-delivery-red.log",
+    ".dev-logs/acceptance-20261003/federation-semantics/key-domains-submit-pg-red.log",
+    ".dev-logs/acceptance-20261003/federation-semantics/key-domains-migration-pg.log",
+    ".dev-logs/acceptance-20261003/federation-semantics/key-domains-migration-occupied-downgrade.log",
+    ".dev-logs/acceptance-20261003/federation-semantics/key-domains-targeted-green.log",
+    ".dev-logs/acceptance-20261003/federation-semantics/key-domains-coordinator-regressions-green.log",
+    ".dev-logs/acceptance-20261003/federation-semantics/key-domains-real-http-smoke.log"
+  ],
+  "docs": ["docs/refactor/P5-INTERFACES-v3.md"],
+  "remaining_gaps": ["Project-wide checks and shared contract regeneration belong to the parent; no project-wide validation run by this worker"]
+}

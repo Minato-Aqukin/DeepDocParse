@@ -179,8 +179,10 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
    `query_text` 边走（问题原文不携带来源内容）；除根协调者外有一个不在名单里就
    403 `egress_denied`，不写 receipt、不排队。没有集合目标的检索按本组织全部
    带策略的已发布集合核对。
-4. 幂等：同键同 `request_digest` 返回已有 receipt（200，不复算执行）；
-   同键不同摘要 409 `idempotency_conflict`。
+4. 幂等域是 `(organization_id, authenticated issuer_node_id, key)`：
+   同域同键同 `request_digest` 返回已有 receipt（200，不复算执行）；
+   同域同键不同摘要 409 `idempotency_conflict`。lookup 使用相同的签发节点边界，
+   业务键仍为 `{root}:{step}[:证据摘要]`，不加入用户身份或 delegation_generation。
 5. 通过后**同一个事务**持久写 receipt（`accepted`）、execution 行与一条
    `federation_execute` 持久队列任务；worker 领取后执行 `retrieve` 或
    `answer` 步骤，执行结果与 receipt 分离。受理响应不等执行（进程重启后
@@ -210,6 +212,9 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
 | POST | `/api/v1/tasks/{root_task_id}/resume` | 重判权、对账未知受理、补做未完成目标；fast 还可暂存下一批并要求重新批准；已取消任务 409 `task_cancelled` |
 | POST | `/api/v1/tasks/{root_task_id}/cancel` | 显式、幂等取消；`cancelled` 是终态，迟到写入一律被状态守卫拒绝 |
 
+- **协调者幂等域**：intent 和 submit 的键分别存储，均按组织 + 实际用户主体
+  隔离；API key 取其所属用户。不同用户或组织可使用同键创建、提交独立任务；
+  同主体同键重放仍返回原 intent/task，同主体改实体或改用另一 root 则 409。
 - **探索许可门**：没有有效 `ExplorationConsent`（或 `egress_mode=local_only`）时，
   `/task-plans` 不得向任何远端发出 Probe，返回 `egress_denied`；问题/实体/资源名
   一个字都不出网。`task-intents` 的请求体携带用户已批准的探索许可，协调者只做
@@ -312,7 +317,7 @@ root 在结果交付后记一条 `federated_delivery`。两种 kind 都是只报
   delegation_generation、issuer_node_id、executor_node_id、state（admission_state）、
   input_validation、executor_task_id、verified_input_manifest_digest、
   effective_policy_ref、receipt_json、receipt_revision、created_at、updated_at；
-  unique `(organization_id, idempotency_key)`。
+  unique `(organization_id, issuer_node_id, idempotency_key)`（迁移 0040）。
 - `federation_executions`：executor_task_id、admission_id、root_task_id、step_id、
   operation、state（task_status）、generation、lease_until、result_ref、
   evidence_set_ref、result_json、error、created_at、updated_at。
@@ -320,7 +325,11 @@ root 在结果交付后记一条 `federated_delivery`。两种 kind 都是只报
   task_spec_digest、scope_id、scope_digest、search_mode、planning_state、
   plan_revision、plan_digest、execution_consent_ref、status（task_status）、
   retrieval_completeness、evidence_sufficiency、result_json、coverage_ref、
-  delivery_id、delivery_state、error、created_at、updated_at。
+  delivery_id、delivery_state、error、created_at、updated_at；
+  submit 和 intent 分别 unique `(organization_id, actor_id, idempotency_key)` /
+  `(organization_id, actor_id, intent_idempotency_key)`（迁移 0040）。0040 只收窄唯一键，
+  请求摘要不含 issuer／actor，升级前的受理、意图与提交行在同一 issuer／用户下仍可原样重放；
+  回退前若扩大后的键域已被占用（同组织同键多行）则拒绝降级。
 - `coverage_ledgers`：root_task_id（pk）、scope_ref、search_mode、enumeration_state、
   retrieval_completeness、evidence_sufficiency、counts_json、manifest_digest、
   created_at、updated_at。

@@ -1165,8 +1165,8 @@ async def test_local_lookup_receipt_that_does_not_bind_this_step_is_rejected(
 
     real_lookup = federation.lookup_admission
 
-    async def _foreign_lookup(session_, actor_, key):
-        receipt = await real_lookup(session_, actor_, key)
+    async def _foreign_lookup(session_, actor_, key, *, issuer_node_id):
+        receipt = await real_lookup(session_, actor_, key, issuer_node_id=issuer_node_id)
         return {**receipt, "step_id": "retrieve-99",
                 "plan_digest": "sha256:" + "9" * 64}
 
@@ -1202,11 +1202,11 @@ async def test_concurrent_intent_same_key_insert_race_replays_not_500(
     real_find = federation_tasks._find_intent_by_key
     misses = {"remaining": 1}
 
-    async def _flaky_find(session_, organization_id, idempotency_key):
+    async def _flaky_find(session_, actor_, idempotency_key):
         if misses["remaining"]:
             misses["remaining"] -= 1
             return None
-        return await real_find(session_, organization_id, idempotency_key)
+        return await real_find(session_, actor_, idempotency_key)
 
     monkeypatch.setattr(federation_tasks, "_find_intent_by_key", _flaky_find)
     replay = await actor_client.post("/api/v1/task-intents", json=body,

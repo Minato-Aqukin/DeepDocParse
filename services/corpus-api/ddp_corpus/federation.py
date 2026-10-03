@@ -1066,10 +1066,12 @@ async def admit(session: AsyncSession, actor: Actor, request: dict, *, now: date
     except ApplicationError as exc:
         raise api_error(exc) from None
 
+    issuer_node_id = request["plan"].get("root_coordinator_node_id")
     await catalog.lock_key(session, "federation-admission:" + hashlib.sha256(
-        canonical_bytes([actor.organization_id, key])).hexdigest())
+        canonical_bytes([actor.organization_id, issuer_node_id, key])).hexdigest())
     existing = await session.scalar(select(FederationAdmission).where(
         FederationAdmission.organization_id == actor.organization_id,
+        FederationAdmission.issuer_node_id == issuer_node_id,
         FederationAdmission.idempotency_key == key))
     if existing is not None:
         try:
@@ -1090,6 +1092,7 @@ async def admit(session: AsyncSession, actor: Actor, request: dict, *, now: date
         await session.rollback()
         existing = await session.scalar(select(FederationAdmission).where(
             FederationAdmission.organization_id == actor.organization_id,
+            FederationAdmission.issuer_node_id == issuer_node_id,
             FederationAdmission.idempotency_key == key))
         if existing is not None:
             try:
@@ -1126,33 +1129,6 @@ async def _create_admission(session: AsyncSession, actor: Actor, request: dict,
         # 不伪造生成：答不出就当场拒收，而不是收下再静默失败。
         raise ApplicationError("capability_unsupported",
                                f"operation {operation!r} is not implemented by this node")
-    if operation == "answer":
-        # 能力清单与接单用同一条观测：清单说 ready 才对，实际受理前再复核一次；
-        # 收进来再 upstream_error 是把"本节点没有生成能力"伪装成执行失败。
-        try:
-            ready = await capabilities.answer_generation_ready(http, now=now)
-        except Exception:                  # noqa: BLE001 —— 可用性探测不许把接单打挂
-            ready = False
-        if not ready:
-            raise ApplicationError("capability_unsupported",
-                                   "cited-answer generation is not ready on this node")
-        if int((plan.get("budget") or {}).get("max_generation_tokens") or 0) <= 0:
-            # 生成必须有固定 token 预留：没有额度就执行等于越权花算力。
-            raise ApplicationError("budget_exceeded",
-                                   "an answer step requires a positive generation token reservation")
-    if operation == "wiki_pages":
-        # Wiki 生成接单同一口径：`wiki.pages` profile 就绪 + 固定 token 预留，
-        # 否则当场拒收。远端只出原始页面草稿，版本化提交权永远在 A。
-        try:
-            ready = await capabilities.wiki_generation_ready(http, now=now)
-        except Exception:                  # noqa: BLE001 —— 可用性探测不许把接单打挂
-            ready = False
-        if not ready:
-            raise ApplicationError("capability_unsupported",
-                                   "wiki generation is not ready on this node")
-        if int((plan.get("budget") or {}).get("max_generation_tokens") or 0) <= 0:
-            raise ApplicationError("budget_exceeded",
-                                   "a wiki_pages step requires a positive generation token reservation")
     # 来源转交策略（T83）在任何持久化之前：整份已批准计划里，本节点放出去的摘录
     # 能到的节点必须都被集合允许，否则不受理、不执行、不外发。
     await _onward_policy_gate(session, actor, plan=plan, task_spec=task_spec,
@@ -1188,6 +1164,33 @@ async def _create_admission(session: AsyncSession, actor: Actor, request: dict,
             manifest = evidence_manifest
     # 取数步骤携带 evidence 不是协议的一部分，但 `_verify_evidence` 对任何
     # operation 都逐条重算过摘要；它不改变取数自己的输入摘要口径。
+    if state == "accepted" and operation == "answer":
+        # 能力清单与接单用同一条观测：清单说 ready 才对，实际受理前再复核一次；
+        # 收进来再 upstream_error 是把"本节点没有生成能力"伪装成执行失败。
+        try:
+            ready = await capabilities.answer_generation_ready(http, now=now)
+        except Exception:                  # noqa: BLE001 —— 可用性探测不许把接单打挂
+            ready = False
+        if not ready:
+            raise ApplicationError("capability_unsupported",
+                                   "cited-answer generation is not ready on this node")
+        if int((plan.get("budget") or {}).get("max_generation_tokens") or 0) <= 0:
+            # 生成必须有固定 token 预留：没有额度就执行等于越权花算力。
+            raise ApplicationError("budget_exceeded",
+                                   "an answer step requires a positive generation token reservation")
+    if state == "accepted" and operation == "wiki_pages":
+        # Wiki 生成接单同一口径：`wiki.pages` profile 就绪 + 固定 token 预留，
+        # 否则当场拒收。远端只出原始页面草稿，版本化提交权永远在 A。
+        try:
+            ready = await capabilities.wiki_generation_ready(http, now=now)
+        except Exception:                  # noqa: BLE001 —— 可用性探测不许把接单打挂
+            ready = False
+        if not ready:
+            raise ApplicationError("capability_unsupported",
+                                   "wiki generation is not ready on this node")
+        if int((plan.get("budget") or {}).get("max_generation_tokens") or 0) <= 0:
+            raise ApplicationError("budget_exceeded",
+                                   "a wiki_pages step requires a positive generation token reservation")
 
     admission_id = new_id()
     executor_task_id = new_id() if state == "accepted" else None
@@ -1263,9 +1266,11 @@ async def _create_admission(session: AsyncSession, actor: Actor, request: dict,
     return receipt, True
 
 
-async def lookup_admission(session: AsyncSession, actor: Actor, idempotency_key: str) -> dict:
+async def lookup_admission(session: AsyncSession, actor: Actor, idempotency_key: str, *,
+                           issuer_node_id: str) -> dict:
     row = await session.scalar(select(FederationAdmission).where(
         FederationAdmission.organization_id == actor.organization_id,
+        FederationAdmission.issuer_node_id == issuer_node_id,
         FederationAdmission.idempotency_key == idempotency_key))
     if row is None:
         raise APIError(404, "admission not found", "invalid_request_error", "admission_not_found")

@@ -55,6 +55,28 @@
 第④件事在 `ClaimEvidenceBinding` 上分成 `structural_validation`（机器给）
 与 `semantic_review`（人给）。**引用可点击率不是正确率** —— 计划 §14.3 原话。
 
+## 副本不是独立共识
+
+任务结果的 `evidence` 保留每份真实副本的节点、资源、版本与证据身份。
+`support_groups` 把相同 `source_digest` 或 `excerpt_digest`（包括传递关系）
+归为一个保守支持单位，`support_counts.independent_sources` 不随多次上传、
+多节点副本或多路径命中增长。覆盖账本的 `counts` 仍是检索目标数，不能当来源数。
+每组的 `copies` 列出全部归属；`representatives` 只去重重复摘录，同文档的
+不同片段仍供生成使用。生成与 Wiki 来源清单只消费代表，答案绑定的 `support_refs`
+由协调者按实际副本归组计算，不相信模型自报的独立来源数。
+缺失摘要不构成相等证明；这不是语义相似性判断。`sufficient_by_policy`
+只表示存在可引用支持，不表示跨来源证实，更不表示结论已经人工语义核验。
+
+## 不同 embedding 域不共享分数尺
+
+每个检索节点在本域用自己的 embedding 模型编码问题；向量不跨节点转交，
+不同维度与模型不需要协商成一个向量空间。HTTP 证据集和任务结果不携带内部
+`_score` / `_similarity`。融合保留计划选定的节点顺序与各节点的本地排名，
+不能因为另一节点的原始分数数值更大，就把它当作更可靠的证据。
+`test_federation_embedding_domains.py` 与真实双 uvicorn HTTP 演练分别使用
+3 维和 7 维命名编码器、刻意不同比例的分数；演练使用 SQLite cosine adapter
+和真实 HTTP 编码器替身，不把它冒充 pgvector 或 GPU 运行时验证。
+
 ## 三个阶段的"不能推断什么"
 
 契约里每个对象都带 `x-ddp-doc`，写的全是这一句的变体。挑三条最容易搞错的：
@@ -96,12 +118,21 @@ ExplorationConsent  ──→  远端 Probe  ──→  TaskPlan  ──→  Exe
 `services/corpus-api` 的 `Task` 模型上已经有一份：lease 只解决"谁**可以**接管"，
 解决不了"被判死的旧 worker 其实还活着"，所以最终写入还要比 generation。
 
+内容尚不能校验的接单只记 `waiting_input/metadata_only` 回执：不建执行行、
+不入队、不取得租约或槽位，也不调用模型、embedding、parse 或能力网关。
+生成就绪检查在内容校验通过之后，不能用预检启动计算。
+
 联邦侧多出来的是**对账**：
 
 - 相同幂等键 + 相同请求摘要 → 返回已有任务
 - 相同幂等键 + 不同正文 → `idempotency_conflict`，不许复用不相关结果
 - 回执丢失 → `admission_state=unknown`。**`unknown` 不等于「没执行」**，
   要先按幂等键查询对账，不能立刻把有副作用的步骤换个节点重做
+
+任务需求与提交键域包含组织和 acting principal（API key 随所属用户），
+不同用户的同名键互不串用。Peer admission 的原始业务键保持不变，接收方按
+认证组织与签发节点隔离；不同协调节点不能查出或复用彼此的受理回执。
+交付确认先校验结果摘要：已确认后的同键异正文仍返回 `idempotency_conflict`。
 
 `state=accepted` 在 schema 里要求三件套同时成立：有 `executor_task_id`、
 有 `verified_input_manifest_digest`、`input_validation=content_verified`。

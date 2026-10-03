@@ -260,7 +260,8 @@ async def test_remote_conflicts_are_accepted_as_generation_reported_only(
     mock_gateway_not_ready()
     peer = peer_with_excerpt()
     second = {**peer.items[0], "evidence_id": "peer-evidence-2",
-              "resource_id": "peer-resource-2", "excerpt": "retrieval target other text"}
+              "resource_id": "peer-resource-2", "excerpt": "retrieval target other text",
+              "excerpt_digest": content_digest(b"retrieval target other text")}
     peer.items.append(second)
     peer.can_generate = True
     peer.answer_document = {**ready_document(), "conflicts": [{
