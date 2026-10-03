@@ -291,6 +291,7 @@ components:
         parse_job_id: { type: string, nullable: true }
         seq: { type: integer, nullable: true }
         page_idx: { type: integer }
+        printed_page_label: { type: string, nullable: true, description: 'PDF /PageLabels 显示标签；缺省/null 不得用物理页码编造' }
         bbox:
           type: array
           items: { type: number }
@@ -466,6 +467,7 @@ components:
             id: { type: string }
             filename: { type: string }
         page_idx: { type: integer }
+        printed_page_label: { type: string, nullable: true, description: '固定解析版本的 PDF /PageLabels 显示标签；定位仍使用 page_idx' }
         seq: { type: integer }
         parse_job_id: { type: string }
         doc_version: { type: integer }

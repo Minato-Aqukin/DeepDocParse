@@ -449,7 +449,9 @@ def extract_pages(pdf_bytes: bytes) -> list[dict]:
             lines, page_size, to_display = _lines_of_page(page)
             # 分段在阅读坐标系里做，块序也是阅读序；最后才把 bbox 换到显示空间
             blocks = [{**block, "bbox": to_display(block["bbox"])} for block in _merge_lines(lines)]
-            pages.append({"page_idx": page_idx, "page_size": page_size, "blocks": blocks})
+            label = document.get_page_label(page_idx) or None
+            pages.append({"page_idx": page_idx, "page_size": page_size, "blocks": blocks,
+                          "printed_page_label": label})
         return pages if any(page["blocks"] for page in pages) else []
     finally:
         document.close()

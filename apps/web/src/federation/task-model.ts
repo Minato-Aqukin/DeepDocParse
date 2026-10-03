@@ -168,6 +168,7 @@ export interface TaskIntent {
 export interface Locator {
   kind: string
   physical_page_index?: number
+  printed_page_label?: string | null
   seq?: number
   bbox?: number[]
   page_size?: { width: number; height: number }

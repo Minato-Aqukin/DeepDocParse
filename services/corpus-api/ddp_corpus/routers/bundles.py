@@ -181,6 +181,8 @@ async def _snapshot(session, storage, resource, version) -> VerifiedBundle:
                 locator={
                     "kind": "page_block",
                     "physical_page_index": evidence.page_idx,
+                    **({"printed_page_label": evidence.printed_page_label}
+                       if evidence.printed_page_label is not None else {}),
                     "seq": evidence.seq,
                     "bbox": evidence.bbox,
                     "page_size": size,
@@ -890,6 +892,7 @@ async def import_bundle(
                     seq=int(locator.get("seq") or 0),
                     atom_key=f"bundle:{envelope['evidence_id']}",
                     page_idx=int(locator.get("physical_page_index") or 0),
+                    printed_page_label=locator.get("printed_page_label"),
                     bbox=locator.get("bbox"),
                     page_size=[size.get("width"), size.get("height")]
                     if isinstance(size, dict) and size.get("width") and size.get("height")
@@ -963,6 +966,7 @@ async def import_bundle(
                         seq=bundle_chunk["seq"],
                         atom_key=f"bundle:chunk:{bundle_chunk['seq']}",
                         page_idx=bundle_chunk.get("page_idx") or 0,
+                        printed_page_label=bundle_chunk.get("printed_page_label"),
                         bbox=bundle_chunk.get("bbox"),
                         page_size=bundle_chunk.get("page_size"),
                         kind=bundle_chunk.get("block_type") or "text",
@@ -1000,6 +1004,7 @@ async def import_bundle(
                         parse_job_id=job.id,
                         seq=bundle_chunk["seq"],
                         page_idx=bundle_chunk.get("page_idx") or 0,
+                        printed_page_label=bundle_chunk.get("printed_page_label"),
                         bbox=bundle_chunk.get("bbox"),
                         page_size=bundle_chunk.get("page_size"),
                         text=excerpt,

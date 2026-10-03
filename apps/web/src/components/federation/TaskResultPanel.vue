@@ -65,9 +65,9 @@ function isLocal(item: FederatedEvidence) {
 }
 
 function locator(item: FederatedEvidence) {
-  const { physical_page_index: page, seq } = item.locator ?? {}
+  const { physical_page_index: page, printed_page_label: label, seq } = item.locator ?? {}
   const parts = []
-  if (typeof page === 'number') parts.push(`第 ${page + 1} 页`)
+  if (typeof page === 'number') parts.push(label ? `印刷页 ${label} · PDF 第 ${page + 1} 页` : `第 ${page + 1} 页`)
   if (typeof seq === 'number') parts.push(`块 ${seq}`)
   return parts.join(' · ') || '定位缺失'
 }

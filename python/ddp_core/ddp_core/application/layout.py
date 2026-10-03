@@ -58,6 +58,7 @@ PROMISED_PAGE_FIELDS = {
         and all(isinstance(x, (int, float)) and x > 0 for x in v)
     ),
     "para_blocks": lambda v: isinstance(v, list),
+    "printed_page_label": lambda v: v is None or isinstance(v, str),
 }
 PROMISED_BLOCK_FIELDS = {
     # bbox 允许为 None：缺它的块仍然有效，只是不能裁剪
@@ -70,6 +71,11 @@ PROMISED_BLOCK_FIELDS = {
     # 输出报一串假问题，自检工具就成了狼来了（block_text/chunking 本来就容忍缺失）
     "lines": lambda v: v is None or isinstance(v, list),
 }
+
+
+def _printed_page_label(page: dict):
+    label = page.get("printed_page_label")
+    return None if label == "" else label
 
 
 def build(pages: list[dict], *, engine: str, code_detection: str = "unavailable") -> dict:
@@ -85,6 +91,7 @@ def build(pages: list[dict], *, engine: str, code_detection: str = "unavailable"
             {
                 "page_idx": page["page_idx"],
                 "page_size": list(page["page_size"]),
+                "printed_page_label": _printed_page_label(page),
                 "para_blocks": [
                     {
                         "type": normalize_type(block.get("type", "text")),
@@ -121,6 +128,7 @@ def build_pages(pages: list[dict], *, engine: str, code_detection: str = "unavai
             {
                 "page_idx": page.get("page_idx", i),
                 "page_size": list(page.get("page_size") or [0, 0]),
+                "printed_page_label": _printed_page_label(page),
                 "para_blocks": [
                     _normalize_block(b)
                     for b in (page.get("para_blocks") or [])
@@ -151,6 +159,8 @@ def from_mineru(middle_json: dict | None, *, engine: str = "mineru") -> dict:
         page = dict(page)
         # page_idx 缺失就按出现顺序补：缺了它出处就落不到具体页，那是这套东西的立身之本
         page.setdefault("page_idx", index)
+        if "printed_page_label" in page:
+            page["printed_page_label"] = _printed_page_label(page)
         blocks = page.get("para_blocks")
         if not isinstance(blocks, list):
             page["para_blocks"] = []

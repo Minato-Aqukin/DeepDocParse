@@ -696,6 +696,7 @@ class LocalRuntime:
                 "text": excerpt,
                 "text_tokenized": " ".join(tokens(excerpt)),
                 "page_idx": loc["physical_page_index"],
+                "printed_page_label": loc.get("printed_page_label"),
                 "bbox": loc["bbox"],
                 "page_size": [size["width"], size["height"]] if size else None,
                 "block_type": e.get("block_type") or "text",

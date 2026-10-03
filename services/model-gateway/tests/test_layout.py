@@ -21,6 +21,31 @@ LONG_DOC = FIXTURES / "long-doc.pdf"
 FACT = "The launch code of project Zephyr is 8712."
 
 
+def test_borndigital_preserves_pdf_page_labels_without_fabricating_physical_numbers():
+    result = layout.build(
+        borndigital.extract_pages((FIXTURES / "page-labels.pdf").read_bytes()),
+        engine="borndigital",
+    )
+    assert [page.get("printed_page_label") for page in result["pdf_info"]] == [
+        "i", "ii", "iii", "iv", "1", "2",
+    ]
+    assert [page["page_idx"] for page in result["pdf_info"]] == list(range(6))
+    assert layout.validate(result) == []
+    unlabelled = layout.build(borndigital.extract_pages(LONG_DOC.read_bytes()), engine="borndigital")
+    assert all(page.get("printed_page_label") is None for page in unlabelled["pdf_info"])
+
+
+@pytest.mark.parametrize("normalizer", ["build", "build_pages", "from_mineru"])
+def test_layout_normalizers_treat_empty_printed_labels_as_unknown(normalizer):
+    page = {"page_idx": 0, "page_size": [612, 792], "printed_page_label": "",
+            "blocks": [], "para_blocks": []}
+    if normalizer == "from_mineru":
+        result = layout.from_mineru({"pdf_info": [page]})
+    else:
+        result = getattr(layout, normalizer)([page], engine="borndigital")
+    assert result["pdf_info"][0].get("printed_page_label") is None
+
+
 def test_promised_fields_survive_normalization_of_mineru_output():
     """mineru 的 middle_json 过一遍归一化后，承诺字段一个不少。"""
     middle = {"pdf_info": [{"page_size": [612, 792], "para_blocks": [

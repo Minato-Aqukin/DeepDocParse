@@ -260,6 +260,7 @@ async def _index_claimed(session, storage, http, *, document_id, generation, job
     session.add_all([Chunk(
         document_id=document_id, parse_job_id=job_id, seq=c["seq"],
         page_idx=c["page_idx"], bbox=c["bbox"], page_size=c["page_size"],
+        printed_page_label=c.get("printed_page_label"),
         text=c["text"], search_text=c.get("search_text") or "", derived_text=c.get("derived_text"),
         char_len=c["char_len"], block_type=c.get("block_type", "text"), table_html=c.get("table_html"),
         text_tokenized=c.get("text_tokenized", ""), provider=c.get("provider") or {},
@@ -347,6 +348,7 @@ async def _materialize_evidence(session: AsyncSession, document: Document, job: 
                 atom_key=f"source:{seq}:{_anchor_key(chunk)}",
                 page_idx=chunk["page_idx"], bbox=chunk.get("bbox"),
                 page_size=chunk.get("page_size"), kind=chunk["block_type"],
+                printed_page_label=chunk.get("printed_page_label"),
                 crop_key=compiled.crop_keys.get(seq), content_digest=digest,
                 content=chunk["text"], provider=compiled.provider,
                 provider_fingerprint=fp,
@@ -356,6 +358,7 @@ async def _materialize_evidence(session: AsyncSession, document: Document, job: 
             source_by_anchor[key] = source
         elif source.crop_key is None and compiled.crop_keys.get(seq):
             source.crop_key = compiled.crop_keys[seq]
+        source.printed_page_label = chunk.get("printed_page_label")
 
         derived = None
         if chunk.get("derived_text"):
@@ -370,6 +373,7 @@ async def _materialize_evidence(session: AsyncSession, document: Document, job: 
                     atom_key=f"vision:{seq}:{derived_digest[:16]}",
                     page_idx=chunk["page_idx"], bbox=chunk.get("bbox"),
                     page_size=chunk.get("page_size"), kind=chunk["block_type"],
+                    printed_page_label=chunk.get("printed_page_label"),
                     crop_key=compiled.crop_keys.get(seq), content_digest=derived_digest,
                     content=chunk["derived_text"], provider=derived_provider,
                     provider_fingerprint=fingerprint(derived_provider), derived_from=source.id,
@@ -377,6 +381,7 @@ async def _materialize_evidence(session: AsyncSession, document: Document, job: 
                 session.add(derived)
                 await session.flush()
                 derived_by_anchor[dkey] = derived
+            derived.printed_page_label = chunk.get("printed_page_label")
         rows[seq] = (source, derived)
     return rows
 

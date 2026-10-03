@@ -269,6 +269,8 @@ async def _federated_evidence(session: AsyncSession, evidence: Evidence,
         "locator": {
             "kind": "page_block",
             "physical_page_index": evidence.page_idx,
+            **({"printed_page_label": evidence.printed_page_label}
+               if evidence.printed_page_label is not None else {}),
             "seq": evidence.seq,
             "bbox": evidence.bbox,
             "page_size": page_size,

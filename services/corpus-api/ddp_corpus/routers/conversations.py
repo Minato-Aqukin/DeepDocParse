@@ -418,6 +418,7 @@ async def get_evidence_detail(evidence_id: str, actor: Actor = Depends(current_a
         "id": evidence.id,
         "document": {"id": document.id, "filename": version.filename if version else document.filename},
         "page_idx": evidence.page_idx, "seq": evidence.seq,
+        "printed_page_label": evidence.printed_page_label,
         "parse_job_id": evidence.parse_job_id, "doc_version": evidence.doc_version,
         "bbox": evidence.bbox, "page_size": evidence.page_size, "kind": evidence.kind,
         "content": evidence.content, "source_type": (

@@ -9,7 +9,8 @@ rerank / qa / extraction 都拿它，而那几个模块正在陆续迁进 core�
 
 
 class Hit(dict):
-    """命中：{chunk_id, document_id, parse_job_id, seq, page_idx, bbox, page_size, text,
+    """命中：{chunk_id, document_id, parse_job_id, seq, page_idx, printed_page_label,
+              bbox, page_size, text,
               derived_text, evidence_id, derived_evidence_id, block_type, table_html,
               score, similarity}
 

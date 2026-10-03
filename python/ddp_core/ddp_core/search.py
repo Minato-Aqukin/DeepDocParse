@@ -391,7 +391,7 @@ class PgVectorIndex:
 async def _load_hits(session: AsyncSession, chunk_ids: list[str], scores: dict[str, float],
                      similarity: dict[str, float] | None = None) -> list[Hit]:
     rows = (await session.execute(
-        text("""SELECT id, document_id, parse_job_id, seq, page_idx, bbox, page_size,
+        text("""SELECT id, document_id, parse_job_id, seq, page_idx, printed_page_label, bbox, page_size,
                        text, derived_text, evidence_id, derived_evidence_id,
                        block_type, table_html
                 FROM chunks WHERE id IN :ids""").bindparams(
@@ -408,6 +408,7 @@ async def _load_hits(session: AsyncSession, chunk_ids: list[str], scores: dict[s
                         parse_job_id=row["parse_job_id"], seq=row["seq"],
                         page_idx=row["page_idx"], bbox=_as_list(row["bbox"]),
                         page_size=_as_list(row["page_size"]), text=row["text"],
+                        printed_page_label=row["printed_page_label"],
                         derived_text=row["derived_text"], evidence_id=row["evidence_id"],
                         derived_evidence_id=row["derived_evidence_id"],
                         block_type=row["block_type"] or "text",
@@ -490,6 +491,7 @@ class MemoryIndex:
                     parse_job_id=by_id[cid].parse_job_id, seq=by_id[cid].seq,
                     page_idx=by_id[cid].page_idx, bbox=by_id[cid].bbox,
                     page_size=by_id[cid].page_size, text=by_id[cid].text,
+                    printed_page_label=by_id[cid].printed_page_label,
                     derived_text=getattr(by_id[cid], "derived_text", None),
                     evidence_id=getattr(by_id[cid], "evidence_id", None),
                     derived_evidence_id=getattr(by_id[cid], "derived_evidence_id", None),

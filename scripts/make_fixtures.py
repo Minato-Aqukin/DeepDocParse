@@ -41,7 +41,7 @@ def build_long_pdf(pages: int = 5) -> bytes:
 
 
 def _write_pdf(page_lines: list[list[str]], *, leading: int = 34,
-               font: str = "Helvetica") -> bytes:
+               font: str = "Helvetica", page_labels: bytes | None = None) -> bytes:
     """把每页的文本行写成一份合法 PDF（不引入额外依赖）。
 
     **xref 表不可省**：缺 xref 的 PDF 解析器只能读出第一页，
@@ -54,6 +54,8 @@ def _write_pdf(page_lines: list[list[str]], *, leading: int = 34,
     font_num = 3 + 2 * pages
 
     objects: dict[int, bytes] = {1: b"<</Type/Catalog/Pages 2 0 R>>"}
+    if page_labels is not None:
+        objects[1] = b"<</Type/Catalog/Pages 2 0 R/PageLabels " + page_labels + b">>"
     kids = " ".join(f"{n} 0 R" for n in page_nums)
     objects[2] = f"<</Type/Pages/Kids[{kids}]/Count {pages}>>".encode()
     for i, lines in enumerate(page_lines):
@@ -90,6 +92,15 @@ def _write_pdf(page_lines: list[list[str]], *, leading: int = 34,
     out += (f"trailer<</Size {last + 1}/Root 1 0 R>>\n"
             f"startxref\n{xref_offset}\n%%EOF\n").encode()
     return bytes(out)
+
+
+def build_labelled_pdf() -> bytes:
+    """Real /PageLabels number tree: front matter i–iv, body 1–2."""
+    return _write_pdf(
+        [[f"This section discusses {topic} in the labelled document."] for topic in
+         ("preface", "acknowledgements", "contents", "introduction", "methods", "results")],
+        page_labels=b"<</Nums[0 <</S/r/St 1>> 4 <</S/D/St 1>>]>>",
+    )
 
 
 # 抽取评测的真值。**放在这里而不是评测数据集里**：PDF 由本脚本生成，
@@ -282,6 +293,9 @@ def build_test_png() -> bytes:
 if __name__ == "__main__":
     FIXTURES.mkdir(parents=True, exist_ok=True)
     import json
+    labelled = FIXTURES / "page-labels.pdf"
+    labelled.write_bytes(build_labelled_pdf())
+    print(f"wrote {labelled} ({labelled.stat().st_size} bytes)")
 
     contract = FIXTURES / "contract.pdf"
     contract.write_bytes(build_contract_pdf())

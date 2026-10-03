@@ -205,6 +205,7 @@ def _citation(hit: Hit, crop_key: str | None) -> dict:
         "doc_hash": None,
         "seq": hit.get("seq"),
         "page_idx": hit["page_idx"],
+        "printed_page_label": hit.get("printed_page_label"),
         "bbox": hit.get("bbox"),
         # 裁剪时按它换算坐标，缺它遇到 CropBox 偏移/旋转页会裁错区域
         "page_size": hit.get("page_size"),

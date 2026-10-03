@@ -194,6 +194,7 @@ def layout_to_chunks(layout_json: dict[str, Any], max_chars: int = 800) -> list[
                 "seq": len(chunks),
                 "text": text,
                 "page_idx": page_idx,
+                "printed_page_label": page.get("printed_page_label"),
                 "bbox": box,
                 "page_size": page_size,
                 "char_len": len(text),

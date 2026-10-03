@@ -158,6 +158,7 @@ export interface Citation {
   parse_job_id: string | null
   seq: number | null
   page_idx: number
+  printed_page_label?: string | null
   bbox: [number, number, number, number] | null
   /** 引用当时 bbox 所在页面的坐标基准；缺失时不得拿当前解析版本的尺寸猜。 */
   page_size: [number, number] | null
@@ -244,6 +245,7 @@ export interface EvidenceDetail {
   source_version_id: string | null
   document: { id: string; filename: string }
   page_idx: number
+  printed_page_label?: string | null
   seq: number
   parse_job_id: string
   doc_version: number

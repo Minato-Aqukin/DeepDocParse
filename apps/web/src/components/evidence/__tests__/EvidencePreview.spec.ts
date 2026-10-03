@@ -47,6 +47,16 @@ describe('EvidencePreview fixed source context', () => {
   })
 })
 
+it('shows the printed roman label alongside the physical PDF page', async () => {
+  loadEvidence.mockResolvedValue({ data: {
+    ...evidence('r', 'labelled.pdf'), page_idx: 3, printed_page_label: 'iv',
+  } })
+  const wrapper = mount(EvidencePreview, { props: { evidenceId: 'shared-evidence' } })
+  await flushPromises()
+  expect(wrapper.find('.layers').text()).toContain('印刷页 iv · PDF 第 4 页')
+  wrapper.unmount()
+})
+
 describe('EvidencePreview locator gaps are explicit', () => {
   // el-empty 在单测里没注册（见 src/__tests__/setup.ts），description 以属性留在 DOM 上
   it('no bbox: says page-only and never claims a whole-page box exists', async () => {

@@ -2555,7 +2555,7 @@
         "authority_node_id": "无对应列 —— 同上",
         "evidence_id": "evidence.id",
         "excerpt_digest": "无对应列 —— citations.snippet 存的是文本本身，没有摘要（P1 新增）",
-        "locator": "evidence.page_idx + bbox + page_size（已有，且已处理 CropBox 偏移与页旋转）",
+        "locator": "evidence.page_idx + printed_page_label + bbox + page_size（printed_page_label 来自固定 DDP-Layout 页的 PDF /PageLabels；打开与高亮仍使用物理 page_idx）",
         "origin_node_id": "无对应列 —— 当前没有节点概念（P1/P4 新增）",
         "parse_revision": "evidence.parse_job_id（列名不同，语义对应）",
         "policy_revision": "无对应列（P1 随 ACL 贯通新增）",

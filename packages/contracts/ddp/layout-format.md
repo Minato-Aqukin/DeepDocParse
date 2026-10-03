@@ -1,5 +1,11 @@
 # DDP-Layout v1 —— 版面中间表示
 
+> **2026-10-03 扩展**：页级可选 `printed_page_label`（string | null）来自 PDF
+> `/PageLabels` number tree，保留 roman、arabic 与前缀；没有标签时省略或 null，
+> 空字符串在 `build` / `build_pages` / `from_mineru` 入口归一化为 null；
+> **不得用物理页序编造标签**。标签只用于显示，打开页、bbox 与固定版本定位仍使用
+> 0 基 `page_idx`。证据信封的同名 locator 字段从这份固定版面传播。
+
 > **v1.2（2026-08-26，2026-08-28 扩展）**：新增顶层可选承诺
 > `engine_notes` 与 `code_detection`，并把 `code` 加进块类型词汇表。
 > `layout_version` **不变**（仍是 `ddp-layout/1`）——这些都是向后兼容的新增：
@@ -60,6 +66,7 @@
 | `pdf_info[]` | array | 按页序排列 |
 | `pdf_info[].page_idx` | int | 0 基页码 |
 | `pdf_info[].page_size` | [number, number] | 该页的 `[宽, 高]`，与 bbox 同一坐标系 |
+| `pdf_info[].printed_page_label` | string \| null | 可选，PDF `/PageLabels` 的显示标签；缺省/null 表示未提供。绝不改变物理 `page_idx` |
 | `pdf_info[].para_blocks[]` | array | 页内块，按阅读序 |
 | `pdf_info[].para_blocks[].bbox` | [x0, y0, x1, y1] \| null | 块的外接矩形；可能缺失（缺了就不能裁剪，但块仍然有效）|
 | `pdf_info[].para_blocks[].type` | string | **v1.1，v1.2 扩展**：归一化块类型，取值只能是下表八个之一 |

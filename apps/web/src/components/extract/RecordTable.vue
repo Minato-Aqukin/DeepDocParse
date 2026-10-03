@@ -94,7 +94,8 @@ function open(item: ExtractionItem, name: string) {
             <span class="value">{{ display(cellOf(row, name)) }}</span>
             <span v-if="cellOf(row, name)?.status === 'found'" class="meta">
               <template v-if="cellOf(row, name)!.citations.length">
-                p.{{ cellOf(row, name)!.citations[0]!.page_idx + 1 }}
+                <template v-if="cellOf(row, name)!.citations[0]!.printed_page_label">印刷页 {{ cellOf(row, name)!.citations[0]!.printed_page_label }} · PDF 第 {{ cellOf(row, name)!.citations[0]!.page_idx + 1 }} 页</template>
+                <template v-else>PDF 第 {{ cellOf(row, name)!.citations[0]!.page_idx + 1 }} 页</template>
               </template>
               <template v-if="similarityText(cellOf(row, name)!.confidence?.top_similarity)">
                 · {{ similarityText(cellOf(row, name)!.confidence.top_similarity) }}

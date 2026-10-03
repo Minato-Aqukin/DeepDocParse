@@ -43,7 +43,7 @@ const tooltip = computed(() =>
     <img v-if="cropUrl" :src="cropUrl" alt="出处截图" />
     <div class="cite-text">
       <div class="line">
-        <b class="ddp-cite-page" title="PDF 物理页序，从 1 开始；不是印刷页码">[{{ index }}] PDF 第 {{ citation.page_idx + 1 }} 页</b>
+        <b class="ddp-cite-page" title="印刷标签只用于显示；打开与高亮始终使用 PDF 物理页序">[{{ index }}] <template v-if="citation.printed_page_label">印刷页 {{ citation.printed_page_label }} · PDF 第 {{ citation.page_idx + 1 }} 页</template><template v-else>PDF 第 {{ citation.page_idx + 1 }} 页</template></b>
         <el-tooltip :content="tooltip">
           <StatusTag :label="`相关度 ${percent ?? '—'}`" :type="tagType" />
         </el-tooltip>

@@ -356,7 +356,9 @@ async def client_evidence(session, actor, request, result):
         "parse_revision":payload["parse_revision"],
         "excerpt_digest":"sha256:"+hashlib.sha256(payload["content"].encode()).hexdigest(),
         "locator":{"kind":"page_block", "physical_page_index":payload["page_idx"], "seq":payload["seq"],
-                   "bbox":payload["bbox"], "page_size":size},
+                   "bbox":payload["bbox"], "page_size":size,
+                   **({"printed_page_label":payload["printed_page_label"]}
+                      if payload.get("printed_page_label") is not None else {})},
         "source_type":payload["source_type"], "derived_from":payload.get("derived_from"),
         "uploader_ref":resource.uploaded_by, "retrieval_receipt_ref":None,
         "policy_revision":resource.publication+":"+as_aware(resource.updated_at).isoformat(),

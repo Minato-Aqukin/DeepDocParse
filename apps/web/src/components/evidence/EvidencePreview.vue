@@ -122,7 +122,7 @@ onBeforeUnmount(() => {
     <template v-if="detail">
       <nav class="layers" aria-label="证据定位层级">
         <span><b>文档</b>{{ detail.document.filename }}</span>
-        <span title="PDF 物理页序，从 1 开始；不是印刷页码"><b>PDF 页</b>第 {{ detail.page_idx + 1 }} 页</span>
+        <span title="印刷标签只用于显示；打开与高亮始终使用 PDF 物理页序"><b>PDF 页</b><template v-if="detail.printed_page_label">印刷页 {{ detail.printed_page_label }} · PDF 第 {{ detail.page_idx + 1 }} 页</template><template v-else>第 {{ detail.page_idx + 1 }} 页</template></span>
         <span><b>块</b><code>#{{ detail.seq }}</code></span>
         <span><b>原子</b>{{ detail.kind }} · {{ detail.source_type === 'generated' ? '生成理解' : '原文' }}</span>
       </nav>

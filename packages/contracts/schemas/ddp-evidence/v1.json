@@ -13,7 +13,7 @@
     "source_digest": "evidence.content_digest",
     "evidence_id": "evidence.id",
     "excerpt_digest": "无对应列 —— citations.snippet 存的是文本本身，没有摘要（P1 新增）",
-    "locator": "evidence.page_idx + bbox + page_size（已有，且已处理 CropBox 偏移与页旋转）",
+    "locator": "evidence.page_idx + printed_page_label + bbox + page_size（printed_page_label 来自固定 DDP-Layout 页的 PDF /PageLabels；打开与高亮仍使用物理 page_idx）",
     "uploader_ref": "documents.uploaded_by，全部上传者在 document_uploads",
     "retrieval_receipt_ref": "无对应列（P5 随 Probe 新增）",
     "policy_revision": "无对应列（P1 随 ACL 贯通新增）"

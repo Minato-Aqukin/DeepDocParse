@@ -98,6 +98,8 @@ def evidence_records(chunks: list[dict], source: dict) -> list[dict]:
             "locator": {
                 "kind": "page_block",
                 "physical_page_index": chunk["page_idx"],
+                **({"printed_page_label": chunk["printed_page_label"]}
+                   if chunk.get("printed_page_label") is not None else {}),
                 "seq": chunk["seq"],
                 "bbox": chunk["bbox"],
                 "page_size": size,

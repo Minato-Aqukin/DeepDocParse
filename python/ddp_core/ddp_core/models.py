@@ -355,6 +355,7 @@ class Chunk(Base):
     parse_job_id: Mapped[str] = mapped_column(String(32), ForeignKey("parse_jobs.id"))
     seq: Mapped[int] = mapped_column(Integer, default=0)
     page_idx: Mapped[int] = mapped_column(Integer, default=0)
+    printed_page_label: Mapped[str | None] = mapped_column(Text, default=None)
     bbox: Mapped[list | None] = mapped_column(JSON, default=None)
     page_size: Mapped[list | None] = mapped_column(JSON, default=None)
     text: Mapped[str] = mapped_column(Text)
@@ -427,6 +428,7 @@ class Evidence(Base):
     # 同一个 seq 可以同时有源原子与 VLM 派生理解，靠 atom_key 区分。
     atom_key: Mapped[str] = mapped_column(String(64), default="", index=True)
     page_idx: Mapped[int] = mapped_column(Integer, default=0)
+    printed_page_label: Mapped[str | None] = mapped_column(Text, default=None)
     bbox: Mapped[list | None] = mapped_column(JSON, default=None)
     # 缺它遇到 CropBox 偏移/旋转页会裁错区域 —— 出处图对不上原文是最恶劣的一种错。
     # **问答侧的 citation dict 里没有这个字段**，所以 evidence 一律从 chunks 行取，
