@@ -16,14 +16,16 @@ type UploadReclamation struct {
 	EligibleAt     time.Time
 }
 
-// ReclaimTerminalUploads holds a database claim through the destructive callback.
-// Failed callbacks retain the original key and a durable, bounded diagnostic.
+// ReclaimTerminalUploads commits a five-minute lease before destructive cleanup.
+// Finalization is fenced by that lease; failed callbacks retain a bounded diagnostic.
 func (s *Store) ReclaimTerminalUploads(ctx context.Context, grace time.Duration, limit int, reclaim func(UploadReclamation) (bool, error)) (int, error) {
 	cleaned := 0
 	for range limit {
 		claimed := false
+		var u UploadReclamation
+		var claimedAt time.Time
 		err := s.InTx(ctx, func(tx pgx.Tx) error {
-			var u UploadReclamation
+			// Keep the row lock only until the lease timestamp is persisted.
 			err := tx.QueryRow(ctx, `
     SELECT u.id,u.organization_id,u.object_key,
       greatest(u.expires_at,u.updated_at,coalesce(e.rejected_at,u.updated_at))
@@ -41,7 +43,7 @@ func (s *Store) ReclaimTerminalUploads(ctx context.Context, grace time.Duration,
       AND NOT EXISTS (
        SELECT 1 FROM control.upload_sessions other
        WHERE other.id<>u.id AND other.object_key=u.object_key AND other.reclaimed_at IS NULL)
-      AND (u.reclaim_error IS NULL OR u.reclaim_attempted_at < now()-interval '5 minutes')
+      AND (u.reclaim_attempted_at IS NULL OR u.reclaim_attempted_at < now()-interval '5 minutes')
     ORDER BY u.updated_at
     FOR UPDATE OF u SKIP LOCKED LIMIT 1`, grace.Seconds()).
 				Scan(&u.ID, &u.OrganizationID, &u.ObjectKey, &u.EligibleAt)
@@ -51,22 +53,8 @@ func (s *Store) ReclaimTerminalUploads(ctx context.Context, grace time.Duration,
 			if err != nil {
 				return err
 			}
-			claimed = true
-			ok, failure := reclaim(u)
-			var diagnostic any
-			if failure != nil {
-				diagnostic = fmt.Sprintf("reclaim_failed:%T:%.200s", failure, failure.Error())
-			} else if !ok {
-				diagnostic = "reference_protected"
-			}
-			if ok && failure == nil {
-				_, err = tx.Exec(ctx, `UPDATE control.upload_sessions SET reclaimed_at=now(),reclaim_error=NULL,reclaim_attempted_at=now() WHERE id=$1`, u.ID)
-				if err == nil {
-					cleaned++
-				}
-			} else {
-				_, err = tx.Exec(ctx, `UPDATE control.upload_sessions SET reclaim_error=$2,reclaim_attempted_at=now() WHERE id=$1`, u.ID, diagnostic)
-			}
+			err = tx.QueryRow(ctx, `UPDATE control.upload_sessions SET reclaim_attempted_at=now() WHERE id=$1 RETURNING reclaim_attempted_at`, u.ID).Scan(&claimedAt)
+			claimed = err == nil
 			return err
 		})
 		if err != nil {
@@ -74,6 +62,34 @@ func (s *Store) ReclaimTerminalUploads(ctx context.Context, grace time.Duration,
 		}
 		if !claimed {
 			break
+		}
+		// No transaction or pooled connection is held during HTTP/S3 work.
+		ok, failure := reclaim(u)
+		var diagnostic any
+		if failure != nil {
+			diagnostic = fmt.Sprintf("reclaim_failed:%T:%.200s", failure, failure.Error())
+		} else if !ok {
+			diagnostic = "reference_protected"
+		}
+		finalized := false
+		err = s.InTx(ctx, func(tx pgx.Tx) error {
+			if ok && failure == nil {
+				tag, err := tx.Exec(ctx, `UPDATE control.upload_sessions
+ SET reclaimed_at=now(),reclaim_error=NULL,reclaim_attempted_at=now()
+ WHERE id=$1 AND reclaimed_at IS NULL AND reclaim_attempted_at=$2`, u.ID, claimedAt)
+				finalized = tag.RowsAffected() == 1
+				return err
+			}
+			_, err := tx.Exec(ctx, `UPDATE control.upload_sessions
+ SET reclaim_error=$3,reclaim_attempted_at=now()
+ WHERE id=$1 AND reclaimed_at IS NULL AND reclaim_attempted_at=$2`, u.ID, claimedAt, diagnostic)
+			return err
+		})
+		if err != nil {
+			return cleaned, err
+		}
+		if finalized {
+			cleaned++
 		}
 	}
 	return cleaned, nil

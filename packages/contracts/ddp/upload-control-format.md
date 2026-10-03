@@ -123,10 +123,16 @@ clear the original business-key association or silently restart an unknown row.
 Terminal `failed` / `expired` sessions and permanent `ready` sessions whose
 DocumentSubmitted event was deterministically rejected are reclaimed by control
 housekeeping after **one hour from the later of expiry and terminal transition**.
-The original session/business key and rejection remain readable. A transactional
-`FOR UPDATE SKIP LOCKED` claim holds the session through the cleanup request;
-successful reclamation is recorded in `reclaimed_at`, failures in `reclaim_error`
-with `reclaim_attempted_at`, and retried no sooner than five minutes later.
+The original session/business key and rejection remain readable. A short
+`FOR UPDATE SKIP LOCKED` transaction records a five-minute lease in
+`reclaim_attempted_at` and commits before cleanup; HTTP and S3 calls hold no
+control transaction or row lock. Unexpired leases exclude other collectors,
+including claims whose collector stopped before recording an outcome. Expired
+claims can be retried. A second short transaction records `reclaimed_at` on
+success or the bounded `reclaim_error` on failure, only if the claim timestamp
+still matches and the session remains unreclaimed. Stale collectors cannot
+overwrite a newer attempt's outcome. Failures retry no sooner than five minutes
+after completion; the completion timestamp remains in `reclaim_attempted_at`.
 Other unreclaimed sessions sharing the object key protect it.
 Pending/retrying registration is never a cleanup candidate.
 

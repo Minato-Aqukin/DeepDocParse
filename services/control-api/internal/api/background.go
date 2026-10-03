@@ -237,6 +237,8 @@ func (s *Server) housekeeping(ctx context.Context) {
 
 func (s *Server) reclaimUploads(ctx context.Context) (int, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
+	// The store commits its lease before this callback; corpus HTTP and exact-key
+	// multipart aborts run without holding a control transaction or row lock.
 	return s.store.ReclaimTerminalUploads(ctx, time.Hour, 20, func(u store.UploadReclamation) (bool, error) {
 		body, err := json.Marshal(map[string]any{"object_key": u.ObjectKey, "eligible_at": u.EligibleAt})
 		if err != nil {
