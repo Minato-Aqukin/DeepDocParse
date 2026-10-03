@@ -765,18 +765,18 @@ def _select_targets(targets: list[dict], task_spec: dict, node: str, *,
 
 
 def _fast_continuation_targets(ranked: list[dict], selected: list[dict]) -> list[dict]:
-    """An explicit continuation may expand even a nonempty previous result.
+    """The next fast batch: up to `FAST_CANDIDATE_LIMIT` unselected targets in rank order.
 
-    Having cited evidence is not proof that the user's question is fully answered.
-    The next candidate remains inside the frozen scope and needs a fresh approval.
+    An explicit continuation may expand even a nonempty previous result: cited evidence
+    is not proof that the question is fully answered. Like the first batch it is bounded,
+    stays inside the frozen scope and needs a fresh approval (plan §7.2 "继续下一批").
     """
     selected_keys = {(item["origin_node_id"], item["collection_id"], item["operation"])
                      for item in selected}
-    for target in ranked:
-        identity = (target["origin_node_id"], target["collection_id"], target["operation"])
-        if identity not in selected_keys:
-            return [target]
-    return []
+    remaining = [target for target in ranked
+                 if (target["origin_node_id"], target["collection_id"], target["operation"])
+                 not in selected_keys]
+    return remaining[:FAST_CANDIDATE_LIMIT]
 
 
 def _plan_selected_targets(plan: dict, all_targets: list[dict]) -> list[dict]:
@@ -1489,6 +1489,21 @@ async def read_plan(session: AsyncSession, actor: Actor, root_task_id: str) -> d
     return row.plan_json
 
 
+def _target_identity(target: dict) -> tuple[str, str, str]:
+    return (target["origin_node_id"], target["collection_id"], target["operation"])
+
+
+async def _settled_targets(session: AsyncSession, root_task_id: str
+                           ) -> dict[tuple[str, str, str], tuple[str, str | None, list[str]]]:
+    """Targets whose coverage entry is final for this root: (state, last error, receipts)."""
+    entries = await session.scalars(select(CoverageEntry).where(
+        CoverageEntry.root_task_id == root_task_id))
+    return {_target_identity(entry.target_key_json):
+            (entry.state, entry.last_error, list(entry.probe_refs_json or []))
+            for entry in entries if entry.state not in _RETRYABLE_STATES}
+
+
+
 async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
                       now: datetime, http, index) -> dict:
     """按持久化的 scope 与探索许可做 Probe、生成并持久化 TaskPlan。"""
@@ -1572,9 +1587,15 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
         pending = (row.result_json or {}).get("_continuation_targets")
         selected = pending if pending is not None else _select_targets(
             all_targets, task_spec, node, descriptors=descriptors)
+        # A continuation re-runs only targets whose coverage entry is still retryable; a
+        # settled target keeps its recorded receipts. Re-probing it would spend the
+        # exploration budget on work that never executes again and starve the new batch.
+        settled = await _settled_targets(session, root_task_id) if pending is not None else {}
         budget = federation_budget.limits(ledger)
         probes, outcome, extra = await _probe_targets(
-            session, actor, row, targets=selected, now=now, http=http, index=index,
+            session, actor, row,
+            targets=[target for target in selected if _target_identity(target) not in settled],
+            now=now, http=http, index=index,
             peers=peers, budget=root_budget, manifest=manifest,
             descriptors=_descriptor_index(descriptors), spend=_plan_spend)
         if wants_generation and not generation_ready:
@@ -1640,7 +1661,8 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
             fixed_inputs.append(f"collection:{target['collection_id']}")
         step["fixed_inputs"] = fixed_inputs
         probe_id = extra["probe_ids"].get(key)
-        step["probe_refs"] = [probe_id] if probe_id else []
+        _, _, carried = settled.get(key, (None, None, []))
+        step["probe_refs"] = [probe_id] if probe_id else list(carried)
     revision = int(row.plan_revision or 0) + 1
     if revision > 1:
         # A new approved graph must never collide with an old admission key.
@@ -1674,6 +1696,12 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
     row.planning_state = "ready"
     row.scope_id = manifest["scope_id"] if manifest is not None else row.scope_id
     row.updated_at = now
+    # Settled targets were not probed this round; their recorded outcome (e.g. a consent
+    # denial) still explains why fast stopped where it did.
+    fast_stop = _fast_stop_reason(
+        task_spec, all_targets, selected,
+        {**{key: (state, error) for key, (state, error, _) in settled.items()}, **outcome},
+        generation_ready, delegated)
     await _append_event(session, row.root_task_id, _EVENT_PLAN_READY, {
         "plan_digest": plan["plan_digest"], "revision": plan["revision"],
         "targets": len(selected),
@@ -1689,15 +1717,12 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
         # fast 可审查的停止原因与预声明候选图：首轮只选有界候选，完整排序
         # 与 capability-only 候选持久化在结果内部字段，供 resume 逐批继续；
         # 扩展超原批准图必须 plan_changed/新审批，不能静默增边。
-        "fast_stop": _fast_stop_reason(task_spec, all_targets, selected,
-                                       outcome, generation_ready, delegated),
+        "fast_stop": fast_stop,
         "capability_only_nodes": sorted(capability_only),
     }, now=now)
     row.result_json = {**row.result_json,
                        federation_budget.CANDIDATE_GRAPH_FIELD: candidate_graph,
-                       federation_budget.FAST_STOP_FIELD: _fast_stop_reason(
-                           task_spec, all_targets, selected, outcome,
-                           generation_ready, delegated)}
+                       federation_budget.FAST_STOP_FIELD: fast_stop}
     row.result_json.pop("_continuation_targets", None)
     row.result_json.pop(GENERATION_WITHHELD_FIELD, None)
     if delegated is None and SOURCE_POLICY_DENIED in answer_outcomes.values():
@@ -3337,6 +3362,9 @@ async def execute_task(session: AsyncSession, actor: Actor, root_task_id: str, *
         if exc.code == "consent_expired":
             raise _egress_denied("plan or budget has expired; re-plan instead") from None
         raise federation.api_error(exc) from None
+    # The submit key lives in the root owner's domain (`row.actor_id`), also when an
+    # administrator submits someone else's root; the conflict lookup must use the same one.
+    owner_id = row.actor_id
     row.idempotency_key = idempotency_key
     row.delegation_generation = int(row.delegation_generation or 0) + 1
     row.status = "running"
@@ -3362,7 +3390,7 @@ async def execute_task(session: AsyncSession, actor: Actor, root_task_id: str, *
         await session.rollback()
         existing = await session.scalar(select(FederationRequest).where(
             FederationRequest.organization_id == actor.organization_id,
-            FederationRequest.actor_id == federation.acting_actor(actor),
+            FederationRequest.actor_id == owner_id,
             FederationRequest.idempotency_key == idempotency_key))
         if existing is not None and existing.root_task_id != root_task_id:
             raise APIError(409, "idempotency key already accepted for another task",

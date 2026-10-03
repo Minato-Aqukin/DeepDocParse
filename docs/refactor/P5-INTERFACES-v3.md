@@ -228,7 +228,9 @@ def receipt(*, admission_id, issuer_node_id, executor_node_id, root_task_id, ste
   时不知道策略，由来源执行者受理时按整份计划复核兜底。
 - **fast**：按 `routing.candidates` 取有界候选，统一融合，结果
   `retrieval_completeness="partial"`，响应显式列出未检索目标。显式续查从持久候选图
-  选择尚未批准的下一目标，即使上一轮有命中也不把它当作问题已完整回答的证明。
+  按排序取下一批尚未选中的目标（至多 `FAST_CANDIDATE_LIMIT` 个，与首批同一上限），即使
+  上一轮有命中也不把它当作问题已完整回答的证明。覆盖已落定（不在可重试状态）的目标
+  不再 Probe、沿用账本里的回执，探索额度只花在新批次与仍可重试的目标上。
   新修订有新的 digest 与步骤 ID，清除旧执行许可，先返回 `planning_state=ready`；
   只读对账或加载计划均不批准或执行它。批准后再次显式 resume 才可执行。
   旧交付保持不可变，新修订使用新的交付 ID；固定文档任务不会自动扩展资料范围。
@@ -329,7 +331,9 @@ root 在结果交付后记一条 `federated_delivery`。两种 kind 都是只报
   submit 和 intent 分别 unique `(organization_id, actor_id, idempotency_key)` /
   `(organization_id, actor_id, intent_idempotency_key)`（迁移 0040）。0040 只收窄唯一键，
   请求摘要不含 issuer／actor，升级前的受理、意图与提交行在同一 issuer／用户下仍可原样重放；
-  回退前若扩大后的键域已被占用（同组织同键多行）则拒绝降级。
+  回退前若扩大后的键域已被占用（同组织同键多行）则拒绝降级。`actor_id` 是根任务的所有者：
+  管理员代为提交他人的根任务时，提交键落在所有者的键域，与所有者已用于另一根任务的键
+  相同即 409 `idempotency_conflict`；所有者之后用同一键重放得到同一受理。
 - `coverage_ledgers`：root_task_id（pk）、scope_ref、search_mode、enumeration_state、
   retrieval_completeness、evidence_sufficiency、counts_json、manifest_digest、
   created_at、updated_at。

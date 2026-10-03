@@ -284,3 +284,39 @@ async def test_pg_submit_domains_follow_migrated_constraints(pg_stack):  # noqa:
     for actor, root in zip((ACTOR, "actor-bob"), accepted_roots, strict=True):
         status = await client.get(f"/api/v1/tasks/{root}", headers=actor_headers(actor))
         assert status.status_code == 200 and status.json()["status"] == "succeeded", status.text
+
+
+async def test_admin_submit_uses_the_root_owners_key_domain(client, app_state, session):
+    """An administrator submitting another user's root writes the key into the owner's
+    domain, so a key the owner already used for a different root is a 409 conflict."""
+    _, version, _, _, _ = await indexed_source(session)
+    headers = {**actor_headers(organization_id=ORG), "Idempotency-Key": "admin-domain-source"}
+    created = await client.post("/api/v1/collections", headers=headers, json={
+        "name": "Admin domain source", "licence": "CC-BY-4.0", "version_ids": [version.id]})
+    assert created.status_code == 201, created.text
+    published = await client.post(
+        f"/api/v1/collections/{created.json()['collection_id']}/publish", headers=headers,
+        json={"expected_revision": created.json()["revision"]})
+    assert published.status_code == 200, published.text
+    first = (await intent(client, ACTOR, ORG, "owner-intent-1", "retrieval target one")).json()
+    second = (await intent(client, ACTOR, ORG, "owner-intent-2", "retrieval target two")).json()
+    first_digest = await approve(client, ACTOR, ORG, first["root_task_id"])
+    second_digest = await approve(client, ACTOR, ORG, second["root_task_id"])
+    accepted = await submit(client, ACTOR, ORG, first["root_task_id"], first_digest, "owner-key")
+    assert accepted.status_code == 202, accepted.text
+
+    admin = {**actor_headers("actor-admin", role="admin", organization_id=ORG),
+             "Idempotency-Key": "owner-key"}
+    conflict = await client.post(
+        "/api/v1/tasks", headers=admin,
+        json={"root_task_id": second["root_task_id"], "plan_digest": second_digest})
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["error"]["code"] == "idempotency_conflict"
+
+    fresh = await client.post(
+        "/api/v1/tasks", headers={**admin, "Idempotency-Key": "admin-key"},
+        json={"root_task_id": second["root_task_id"], "plan_digest": second_digest})
+    assert fresh.status_code == 202, fresh.text
+    replay = await submit(client, ACTOR, ORG, second["root_task_id"], second_digest, "admin-key")
+    assert replay.status_code == 200, "the owner replays the key the administrator used"
+    await drain_tasks(app_state)
