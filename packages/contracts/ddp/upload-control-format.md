@@ -120,7 +120,29 @@ first establish that the original create cannot still complete, inspect only the
 session's fixed object key, and explicitly clean up obsolete multipart receipts.
 This version does not provide an automatic operator cleanup command. It must not
 clear the original business-key association or silently restart an unknown row.
-Multipart/object garbage collection remains an operational follow-up.
+Terminal `failed` / `expired` sessions and permanent `ready` sessions whose
+DocumentSubmitted event was deterministically rejected are reclaimed by control
+housekeeping after **one hour from the later of expiry and terminal transition**.
+The original session/business key and rejection remain readable. A transactional
+`FOR UPDATE SKIP LOCKED` claim holds the session through the cleanup request;
+successful reclamation is recorded in `reclaimed_at`, failures in `reclaim_error`
+with `reclaim_attempted_at`, and retried no sooner than five minutes later.
+Other unreclaimed sessions sharing the object key protect it.
+Pending/retrying registration is never a cleanup candidate.
+
+Control calls service-authenticated `POST /internal/upload-reclamation` on corpus
+with `{object_key, eligible_at}` (UTC timestamp). Corpus independently enforces
+`GC_GRACE_SECONDS` after `eligible_at`, locks original-reference tables during the
+check and deletion, and returns `{reclaimed:boolean}`. Document originals and
+durable GC manifests, parse/result prefixes, version/bundle prefixes and compute
+input/output references all protect bytes, including tombstoned references that
+must go through document GC. Storage failure is not success. Control then aborts
+multipart receipts for the exact key before recording reclamation.
+
+`allocating` / `unknown` allocations remain visibly retained: no bounded grace
+proves that an unacknowledged S3 creation can no longer complete. The operator
+recovery rule above still applies; this is not permission to restart an unknown
+row. Once its receipt is reconciled (`ready`), terminal-session GC applies.
 
 ## Quota and admission boundary
 

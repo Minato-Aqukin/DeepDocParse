@@ -1,0 +1,90 @@
+{
+  "date": "2026-10-03",
+  "row": "T30",
+  "status": "passed",
+  "stack": {
+    "postgres": "pgvector/pgvector:pg16",
+    "minio": "minio/minio:RELEASE.2025-04-22T22-12-26Z",
+    "isolated": true,
+    "live_abc_touched": false,
+    "corpus_fixture": "metadata.create_all; production routes; lifespan disabled"
+  },
+  "document_id": "a240f85f8c85495ba391e86593ae07e1",
+  "parse_job_id": "5de974b577bb4afe92662409ac38bcd2",
+  "resource_ids": [
+    "1165accf1e8a44569c52c8e62e393d61",
+    "3b237077294949068c727fbbd1bacf31"
+  ],
+  "shared_content": {
+    "first_delete_http": 204,
+    "gc_cleaned": 0,
+    "all_bytes_kept": true,
+    "chunks_kept": 1
+  },
+  "last_reference": {
+    "second_delete_http": 204,
+    "gc_cleaned": 1,
+    "removed": {
+      "original": true,
+      "full_text": true,
+      "layout": true,
+      "parse_image": true,
+      "crop": true,
+      "bundle_snapshot": true
+    },
+    "chunks_remaining": 0,
+    "pgvector_type": "vector",
+    "pgvector_rows_before": 1,
+    "pgvector_rows_remaining": 0
+  },
+  "retained": {
+    "evidence_atom": true,
+    "evidence_ttl": "undecided; no automatic expiry",
+    "desktop_model": "actual ModelInstaller GGUF test fixture verified installed after GC; not inference weights",
+    "model_sha256": "c7a8cef2a5ac5989e3b16e0f5c439b24474f14446cad57a4284e400e1e7dac7b",
+    "diagnostic_log_sha256": "f0ff7258de441ab1090935b13581c8e5f0b7d9d8d2b548753af1725563f2b3b6",
+    "pg_dump_sha256": "387c193266b7f6076235596da27922246ae1488f1af82337f501de8ab56aec4a",
+    "logs_backups_ttl": "operator-managed; no automatic expiry"
+  },
+  "scope_limit": "Synthetic document/parse/image/crop fixtures; no external parser or model inference performed.",
+  "terminal_uploads": {
+    "failed": "original_and_multipart_reclaimed",
+    "expired": "original_and_multipart_reclaimed",
+    "rejected": "original_and_multipart_reclaimed",
+    "durable_receipts": "retained",
+    "unknown_allocation": "retained_for_operator_reconciliation"
+  },
+  "tests": {
+    "go_store": {
+      "status": "passed",
+      "count": 2
+    },
+    "go_real_http_s3": {
+      "status": "passed",
+      "count": 1
+    },
+    "python_cleanup_and_ops": {
+      "status": "passed",
+      "count": 16
+    }
+  },
+  "red_first": {
+    "go": "behavioral failure: first sweep 0, expected 2; no-op seam preserves pre-change retention",
+    "python": "404 before the route existed; three tests failed"
+  },
+  "evidence_paths": [
+    ".dev-logs/acceptance-20261003/cleanup/go-store-red.txt",
+    ".dev-logs/acceptance-20261003/cleanup/python-red.txt",
+    ".dev-logs/acceptance-20261003/cleanup/go-store-green.txt",
+    ".dev-logs/acceptance-20261003/cleanup/go-http-s3-green.txt",
+    ".dev-logs/acceptance-20261003/cleanup/python-green.txt",
+    ".dev-logs/acceptance-20261003/cleanup/derived-data-run.json",
+    ".dev-logs/acceptance-20261003/cleanup/run_cleanup.py",
+    ".dev-logs/acceptance-20261003/cleanup/serve_cleanup.py",
+    ".dev-logs/acceptance-20261003/cleanup/before-cleanup.dump"
+  ],
+  "remaining_decisions": [
+    "Evidence retention period remains undecided; no TTL chosen.",
+    "No bounded grace proves unknown in-flight S3 creation has ended; documented operator reconciliation remains required."
+  ]
+}

@@ -288,6 +288,29 @@ WSL2）上，Windows 端 Tier A 只是现有 `client-runtime` 的 HTTPS 客户�
 
 生产必须用这两个角色连库，不要用超级用户 —— 那样这一整层保护等于没有。
 
+## 数据清理与保留边界（T30）
+
+**删除资产不是整机擦除，也不是撤销已有备份。** 同一份去重内容仍被任一
+ResourceVersion、运行任务、待确认 compute、有效 Bundle 副本或引用中的证据绑定
+使用时必须保留。只有最后一个引用释放且宽限期结束后才回收可重建产物。
+
+| 类别 / 位置 | 当前保留与清理规则 | 显式清除方式 |
+|---|---|---|
+| 原件：MinIO `uploads/`、临时 compute input | 文档 GC 默认 `GC_GRACE_SECONDS=3600`，持久化精确 key 清单，claim 后重查引用；部分失败保留剩余 key 和 `documents.gc_error`，后续重试 | 正常删除资源/版本，等待最后引用释放与 worker GC；不要按桶前缀强删共享对象 |
+| 全文 / layout / 解析图片 / crops：`results/{parse}/`；固定快照：`bundles/{version}/` | 与原件同一个 reference-safe GC 清单；迁移 parse 的 `result_prefix` 与当前 job crop 前缀都覆盖；不删其它 job / 文档共用前缀 | 同上；列举失败或对象删除失败时不宣称回收完成 |
+| 检索 chunk 文本及 pgvector：`chunks.text/search_text/embedding` | 对象清单完全清空后删除该 Document 的 chunk 行；共享 Document 有活版本时原件、图片与向量都留存 | 同上；不是仅清向量而留下全文缓存 |
+| 上传拒绝 / 失败 / 过期：`control.upload_sessions` | housekeeping 每 5 分钟领取；从 expiry 与终态时间的较晚者起至少 1 小时，corpus 再独立执行自己的 GC 宽限；claim 内调用 corpus 检查所有原件引用并删除，随后 abort 精确 key 的 multipart；`reclaimed_at/reclaim_error/reclaim_attempted_at` 可查，失败至少 5 分钟后重试 | 已知 receipt 的 `ready` 或尚未分配的 `pending` 可自动清理；`allocating/unknown` 保留并需先确认 S3 在途创建不会再完成，再按 upload-control 契约对账，不能凭超时强删 |
+| 证据原子 / citation / Wiki dependency / 审计 | **长期保留，无自动 TTL**。证据 `content` 可以保留原文片段，GC 不清除此内容；已绑定引用还可能保护整份原件。证据最终保留期限是尚未决策的产品事项，不以本次清理擅定 | 当前无受支持的按期限清除接口；需要完整离线销毁时应关闭服务、清除整个选定工作区/数据库及其所有备份，而非破坏引用外键或审计权限 |
+| 桌面模型文件：所选 runtime 工作区的 `models/`（部署也可显式指定 `--models DIR`） | 权重按 `artifact-id.sha256`，验证状态 `.state.json`、锁及中断下载 `.part` 同目录；**不属于文档派生数据，无自动 TTL**，文档 GC / 升级 / 默认卸载都保留，partial 留给显式续传 | 先停止该 runtime 与模型进程，删除所选模型对应的权重、状态、partial 与锁文件；或明确删除整个选定 `models/`。下次使用必须重新安装/校验，无隐式卸载按钮 |
+| 运行日志 | control JSON stdout、Python/桌面 stderr 由启动器/容器采集；Compose 未声明应用级轮转/TTL，遵循宿主 Docker logging driver；AutoDL 在 `${LOG_DIR:-$DDP_ROOT/logs}/*.log`，启动覆盖该进程日志但运行中无轮转；本机 drill 的 `.dev-logs/` 不自动过期 | 运维显式设置 Docker/logrotate 保留上限；文件日志停止对应写入进程后按选定路径删/截断；不要误删 node-identity、数据库或模型目录。保留多久由部署策略配置，仓库当前不承诺统一天数 |
+| 备份 / 旧版本 | 中心 `pg_dump -Fc`、MinIO/卷快照是运维管理；桌面 `<root>.previous`、指定 `--backup-dir` 的应用备份及 `<root>-<old-version>-workspaces/` 的 SQLite backup API 副本由 `UPDATE-STATE.json` 记录；**无自动 TTL**，恢复会恢复备份时仍存在的原文 | 校验新版本和恢复窗口后，显式删除选定离线备份/快照及外部副本；应用卸载可显式 `--remove-backups --backup-dir DIR` 清理其记录的备份，但默认保留工作区与模型。要求不可恢复删除时也必须清理备份、WAL/存储历史版本，不能只调用文档 DELETE |
+
+一致性边界：文档 GC 只处理可重建的文档数据；模型、诊断日志、备份、证据审计有
+各自明确的保留所有者，**没有声称随文档一起销毁**。删除 API / GC 不承诺介质级安全
+擦除；中心部署若开启 S3 versioning，还需运维清理历史版本/delete markers 与备份。
+隔离 PostgreSQL/pgvector + MinIO 的实测（含共享内容、证据保留、终态上传与 multipart）
+见 `docs/refactor/artifacts/derived-data-cleanup-20261003.json`；不是对生产备份的清除证明。
+
 ## 健康与就绪
 
 | 探针 | 语义 |

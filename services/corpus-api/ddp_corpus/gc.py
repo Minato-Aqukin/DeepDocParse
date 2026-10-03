@@ -7,7 +7,7 @@ object deletion. A failed or interrupted sweep never loses its remaining keys.
 
 from datetime import timedelta
 
-from sqlalchemy import delete, exists, func, or_, select, update
+from sqlalchemy import String, cast, delete, exists, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ddp_corpus.config import settings
@@ -34,6 +34,58 @@ ACTIVE_PARSES = ("pending", "running", "archiving")
 # Temporary compute originals use the same durable, reference-safe collector;
 # the compute owner only reclaims otherwise unreferenced delivery artifacts.
 REMOTE_COMPUTE_TMP_PREFIX = "tmp-remote-compute/"
+
+
+async def collect_terminal_upload(session, storage, *, object_key, eligible_at) -> bool:
+    """Collect only an original with no corpus reference; control owns its claim.
+
+    A missing row cannot be row-locked. PostgreSQL table locks fence *all* writers
+    of original references, including bundle import and compute binding, through
+    the destructive call. This rare orphan path never guesses by content hash.
+    """
+    from ddp_corpus.remote_compute_models import RemoteCompute
+
+    if as_aware(eligible_at) > utcnow() - timedelta(seconds=settings.gc_grace_seconds):
+        return False
+    if session.bind.dialect.name == "postgresql":
+        await session.execute(text(
+            "LOCK TABLE documents, remote_computes IN SHARE ROW EXCLUSIVE MODE"))
+    if await session.scalar(
+        select(Document.id).where(Document.object_key == object_key).limit(1)
+    ):
+        return False
+    if await session.scalar(
+        select(RemoteCompute.id)
+        .where(RemoteCompute.input_object_key == object_key).limit(1)
+    ):
+        return False
+    # Pending manifests also protect keys after object_key has been cleared.
+    # Do not require a tombstone: interrupted or revived rows can still own one.
+    pending_keys = (await session.execute(
+        select(Document.gc_pending_keys)
+        .where(func.json_array_length(Document.gc_pending_keys) > 0)
+    )).scalars()
+    if any(object_key in keys for keys in pending_keys):
+        return False
+    # Arbitrary nested JSON references have no portable indexed membership
+    # operator. Exclude null/empty candidates in SQL and project just the trees;
+    # even closed computes can retain a source/output reference.
+    trees = await session.execute(
+        select(RemoteCompute.manifest_json, RemoteCompute.source_identity).where(
+            or_(
+                cast(RemoteCompute.manifest_json, String).not_in(("null", "{}")),
+                cast(RemoteCompute.source_identity, String).not_in(("null", "{}")),
+            )
+        )
+    )
+    identities = {object_key}
+    if any(_references(manifest, identities) or _references(source, identities)
+           for manifest, source in trees):
+        return False
+    # Parse/result and fixed-version bundle prefixes are results/ and bundles/:
+    # neither can reference the uploads/ or tmp-remote-compute/ keys admitted here.
+    await storage.delete(object_key)
+    return True
 
 
 def _live_versions(document_id):

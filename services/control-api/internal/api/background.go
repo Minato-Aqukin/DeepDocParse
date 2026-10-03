@@ -211,10 +211,8 @@ func (s *Server) verifyUploads(ctx context.Context) {
 	}
 }
 
-// housekeeping 只做一件不可逆性最低的事：把过期未完成的上传标成 expired。
-//
-// **不删对象**：删除是不可逆的，回收交给 corpus 侧带宽限期与 claim 的 GC
-// （那是全项目唯一会不可逆毁数据的地方，两道防护缺一不可）。
+// housekeeping expires unfinished uploads and claims terminal original cleanup.
+// Corpus owns the final reference check and irreversible object deletion.
 func (s *Server) housekeeping(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -229,5 +227,54 @@ func (s *Server) housekeeping(ctx context.Context) {
 		} else if n > 0 {
 			slog.Info("已把过期上传标为 expired", "count", n)
 		}
+		if n, err := s.reclaimUploads(ctx); err != nil {
+			slog.Error("terminal upload reclamation failed", "err", err)
+		} else if n > 0 {
+			slog.Info("terminal upload originals reclaimed", "count", n)
+		}
 	}
+}
+
+func (s *Server) reclaimUploads(ctx context.Context) (int, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	return s.store.ReclaimTerminalUploads(ctx, time.Hour, 20, func(u store.UploadReclamation) (bool, error) {
+		body, err := json.Marshal(map[string]any{"object_key": u.ObjectKey, "eligible_at": u.EligibleAt})
+		if err != nil {
+			return false, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.CorpusURL+"/internal/upload-reclamation", bytes.NewReader(body))
+		if err != nil {
+			return false, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+s.cfg.ServiceToken)
+		(&identity.Actor{Kind: identity.KindService, ID: "control-api", OrganizationID: u.OrganizationID, Role: rbac.Admin}).Apply(req, "control-api")
+		resp, err := client.Do(req)
+		if err != nil {
+			return false, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return false, fmt.Errorf("corpus reclamation status %d", resp.StatusCode)
+		}
+		var result struct {
+			Reclaimed bool `json:"reclaimed"`
+		}
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result); err != nil {
+			return false, err
+		}
+		if !result.Reclaimed {
+			return false, nil
+		}
+		ids, err := s.objects.FindMultipart(ctx, u.ObjectKey)
+		if err != nil {
+			return false, err
+		}
+		for _, id := range ids {
+			if err := s.objects.AbortMultipart(ctx, u.ObjectKey, id); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	})
 }

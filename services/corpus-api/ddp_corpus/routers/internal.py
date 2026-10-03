@@ -17,9 +17,10 @@
 两次解析、两次计费。
 """
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +40,25 @@ from ddp_corpus.service_client import ServiceClient
 from ddp_corpus.storage import Storage
 
 router = APIRouter()
+
+
+class UploadReclamation(BaseModel):
+    object_key: str = Field(min_length=1, max_length=512,
+                            pattern=r"^(uploads|tmp-remote-compute)/[^/]+/.+$")
+    eligible_at: datetime
+
+
+@router.post("/internal/upload-reclamation")
+async def reclaim_upload(body: UploadReclamation,
+                         _: Actor = Depends(require_service_actor),
+                         session: AsyncSession = Depends(get_session),
+                         storage: Storage = Depends(get_storage)):
+    from ddp_corpus.gc import collect_terminal_upload
+
+    reclaimed = await collect_terminal_upload(
+        session, storage, object_key=body.object_key, eligible_at=body.eligible_at)
+    await session.commit()
+    return {"reclaimed": reclaimed}
 
 
 @router.get("/internal/capabilities")
