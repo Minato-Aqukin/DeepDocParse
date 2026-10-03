@@ -5,6 +5,7 @@ import { createServer } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { WorkspaceHandles } from '../src/workspaces.mjs'
 import { ClientHost } from '../src/client-host.mjs'
@@ -270,9 +271,11 @@ test('equal local and center names and document paths keep selection, cached pro
   const { clients, options, runtime } = await hosts(t,
     { resources: [localResource], documents: { [route]: localDocument } })
   const directory = path.join(options.directory, '..', 'center.test')
-  // Equal source labels and identical directory/endpoint path text are presentation,
-  // never identity. Document and resource IDs deliberately collide as well.
-  const endpoint = 'https://center.test' + directory
+  // Equal source labels and the same directory/endpoint path are presentation, never
+  // identity (on POSIX the URL path is the directory text itself; Windows needs the
+  // file-URL form of the drive path). Document and resource IDs deliberately collide.
+  const centerPath = pathToFileURL(directory).pathname
+  const endpoint = 'https://center.test' + centerPath
   const seen = centerDouble(t, { endpoint, resources: [centerResource], documents: { [route]: centerDocument } })
   const local = await connectLocalSource(t, clients, options, directory)
   const center = await clients.centerConnect({ endpoint, username: 'alice', password: 'secret', persist: true },
@@ -292,10 +295,10 @@ test('equal local and center names and document paths keep selection, cached pro
     assert.deepEqual(await new Response(response.body).json(), expected)
   }
   await readDocument(clients, center, centerDocument)
-  const remoteReads = seen.paths.filter(p => p === directory + route).length
+  const remoteReads = seen.paths.filter(p => p === centerPath + route).length
   await clients.sourceActivate({ sourceId: local.sourceId })
   await readDocument(clients, local, localDocument)
-  assert.equal(seen.paths.filter(p => p === directory + route).length, remoteReads,
+  assert.equal(seen.paths.filter(p => p === centerPath + route).length, remoteReads,
     'opening a local document must not query the identically named center document')
   const localReads = runtime.seen.paths.filter(p => p === 'GET ' + route).length
   await assert.rejects(clients.apiProxy({ sourceId: center.sourceId, method: 'GET', path: route, headers: {} }),
