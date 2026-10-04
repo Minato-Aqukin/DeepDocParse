@@ -1759,3 +1759,34 @@ def test_self_consistent_package_with_wrong_app_version_is_rejected(tmp_path):
     (directory / "BUILD-MANIFEST.json").write_text(json.dumps(manifest))
     with pytest.raises(SystemExit):
         build_desktop.verify_directory(directory)
+
+
+def test_release_stage_and_archive_modes_ignore_builder_checkout_and_umask(tmp_path):
+    """The Linux release is installed root-owned (from the tarball or by copying the
+    stage) and run by an ordinary user: a 0600 checkout file, a 0700 tool or a 0700
+    directory must end up readable in both (a clean-OS install found the App unreadable
+    from 0600 checkout files)."""
+    stage = tmp_path / "stage"
+    (stage / "private-dir").mkdir(parents=True)
+    (stage / "private-dir").chmod(0o700)
+    payload = stage / "private-dir" / "payload.mjs"
+    payload.write_text("export {};\n")
+    payload.chmod(0o600)
+    tool = stage / "run.sh"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o700)
+    build_desktop.normalize_release_modes(stage)
+    assert {path.relative_to(tmp_path).as_posix(): path.stat().st_mode & 0o777
+            for path in [stage, *stage.rglob("*")]} == {
+        "stage": 0o755, "stage/private-dir": 0o755,
+        "stage/private-dir/payload.mjs": 0o644, "stage/run.sh": 0o755}
+    archive = tmp_path / "out.tar"
+    with tarfile.open(archive, "w", format=tarfile.PAX_FORMAT) as tar:
+        for path in [stage, *sorted(stage.rglob("*"))]:
+            entry = build_desktop.release_tarinfo(tar, path, path.relative_to(tmp_path).as_posix(), 0)
+            with path.open("rb") if path.is_file() else open(os.devnull, "rb") as content:
+                tar.addfile(entry, content if path.is_file() else None)
+    with tarfile.open(archive) as tar:
+        members = {member.name: (member.mode, member.uid, member.mtime) for member in tar.getmembers()}
+    assert members["stage/private-dir/payload.mjs"] == (0o644, 0, 0)
+    assert members["stage/run.sh"] == (0o755, 0, 0)

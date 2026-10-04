@@ -296,6 +296,30 @@ def extract_zip(archive, target):
                 os.chmod(destination, permissions)
 
 
+def normalize_release_modes(stage):
+    """Give every staged path a public mode, whatever the builder's checkout or umask.
+
+    The Linux release is installed under a root-owned prefix — from the tarball or by
+    copying this directory — and run by ordinary users. git records only the executable
+    bit, and a 0600 checkout file once made the installed App unreadable. Directories
+    and anything with an executable bit become 0755, other files 0644. Packaging adds
+    special modes (e.g. chrome-sandbox) afterwards.
+    """
+    for path in [stage, *stage.rglob("*")]:
+        mode = stat.S_IMODE(os.lstat(path).st_mode)
+        os.chmod(path, 0o755 if path.is_dir() or mode & 0o111 else 0o644)
+
+
+def release_tarinfo(tar, path, arcname, epoch):
+    """Tar header for a staged file: root-owned and time-pinned; modes come from the
+    stage, which `normalize_release_modes` has already made public."""
+    entry = tar.gettarinfo(str(path), arcname=arcname)
+    entry.uid = entry.gid = 0
+    entry.uname = entry.gname = ""
+    entry.mtime = epoch
+    return entry
+
+
 def write_deterministic_zip(stage, archive, epoch):
     """Zip a stage directory with pinned timestamps, mode bits and order."""
     stage = Path(stage)
@@ -1131,6 +1155,7 @@ def build_linux(args):
         )
         + "\n"
     )
+    normalize_release_modes(stage)
     for file in stage.rglob("*"):
         os.utime(file, (epoch, epoch))
     archive = output / (stage.name + ".tar.gz")
@@ -1140,10 +1165,7 @@ def build_linux(args):
     ):
         with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as tar:
             for file in [stage, *sorted(stage.rglob("*"))]:
-                entry = tar.gettarinfo(str(file), arcname=str(file.relative_to(output)))
-                entry.uid = entry.gid = 0
-                entry.uname = entry.gname = ""
-                entry.mtime = epoch
+                entry = release_tarinfo(tar, file, str(file.relative_to(output)), epoch)
                 with file.open("rb") if file.is_file() else open(os.devnull, "rb") as content:
                     tar.addfile(entry, content if file.is_file() else None)
     archive_sha = digest(archive)
