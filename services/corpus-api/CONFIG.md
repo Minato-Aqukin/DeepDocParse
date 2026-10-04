@@ -16,7 +16,7 @@
 **`VITE_DEFAULT_ENGINE` 要与 `DEFAULT_PARSE_ENGINE`、`infra/registry/models.yaml`
 三者对齐** —— 任一处对不上，上传会在网关侧收 404 unknown_engine。
 
-共 **88** 项。
+共 **90** 项。
 
 ## 本层资源
 
@@ -135,6 +135,7 @@
 | `FEDERATION_ADMISSIONS_ENABLED` | `bool` | `True` | 本节点是否接受 peer 的 admission。关掉时能力清单里的 accepting_admissions 如实报 false，admission 端点也会拒绝（不排队、不占算力）。 |
 | `FEDERATION_PEERS` | `str` | `''` | 节点对节点端点只认一种认证（契约 enums.yaml 的 peer_auth_mode，唯一取值 node_credential）：出站每个请求向本节点控制面申请一张单次、≤120s、限定 audience/actor/操作/范围的 Ed25519 凭证；入站按控制面成员目录里已批准节点的 公钥验签、记 jti 防重放，远端调用者映射成本地只读的 peer-* 主体再按本地 ACL 判权（packages/contracts/ddp/node-credential-format.md）。 这里没有档位开关：旧的 FEDERATION_PEER_AUTH / FEDERATION_PEER_TOKEN 与登记里 的 service_token/peer_token 一律视为配置错误（启动或调用即失败），绝不静默 沿用共享凭据。 协调者出站时登记的远端节点目录（P5-INTERFACES-v3 §5）。JSON 对象： {"<node_id>": {"endpoint": "https://…"}} —— 只登记地址，不登记任何口令； 带着 service_token/peer_token 等口令字段是配置错误（留着不用的秘密迟早被 复制到别处，parse_peers 直接拒绝）。 **Fail Closed**：没登记的节点一个请求也不发（连 DNS 都不解析）；endpoint 必须是 HTTPS 且无 userinfo/query/fragment。登记在这里只决定"往哪发"； 能不能签出凭证还要控制面批准该节点。 |
 | `FEDERATION_PEER_KEY_CACHE_SECONDS` | `int` | `5` | 入站验签时对**已批准**节点信任记录的缓存秒数，也就是控制面撤销一个节点后 本节点最迟多久拒绝它的新请求。0 = 每个请求都查控制面；上限 60。 未知 / pending / revoked 从不缓存（新批准立即生效，撤销不会被旧的否定结果挡住）。 |
+| `FEDERATION_PEER_KEY_CACHE_MAX_ENTRIES` | `int` | `1024` | 批准成员信任缓存的进程级条目上限；与 TTL 同时执行。每次读/写全局清理 已过期身份，满时驱逐最早取得的记录，下一次需要它时重新查本节点控制面。 只保留公钥/批准状态，绝不镜像来源内容；0 不是禁用（禁用用上面的 TTL=0）。 |
 | `FEDERATION_CREDENTIAL_TTL_SECONDS` | `int` | `60` | 出站凭证的有效期（秒，1..120）。凭证单次使用，这个值只需覆盖一次请求的 往返加两台主机的时钟偏差；调大不会减少签发次数，只会让被截获的凭证活得更久。 |
 | `FEDERATION_IDENTITY_RETRY_SECONDS` | `int` | `5` | 启动时向控制面绑定本节点持久身份失败后的重试间隔（秒）。绑定成功之前所有 联邦端点与出站都 503 node_identity_unavailable —— 慢启动不会让节点换个身份跑。 |
 | `FEDERATION_ALLOW_LOOPBACK` | `bool` | `False` | 只给本地回路集成用的逃生口：允许 http://127.0.0.1 或 http://[::1] 的 peer endpoint。**只认字面回环地址**，不接受 localhost 或任何域名。 生产保持 false —— 打开它等于允许明文外发问题与证据。 |
@@ -149,6 +150,7 @@
 | `FEDERATION_CACHE_MAX_ENTRIES` | `int` | `10000` | 有界缓存的**总条目上限**。缓存是可重建的投影，不是事实来源：满了按 使用次数/创建时间确定性驱逐，绝不为了保住缓存而牺牲正确性。默认 10000 条是"单节点正常工作量一整天也住不满"的量级；条目多不等于命中率高， 大缓存只会在驱逐时更贵。 |
 | `FEDERATION_CACHE_MAX_BYTES` | `int` | `64 * 1024 * 1024` | 缓存的**总字节上限**（value 的规范 JSON 字节，全表合计）。64 MiB 是刻意的 小：联邦缓存只存有界摘要/投影，不存正文、图片或向量 —— 那些走对象存储。 单条超过它的 value 直接不缓存（装不下，不是截断）。 |
 | `FEDERATION_CACHE_TTL_SECONDS` | `int` | `900` | 单条缓存的 **TTL 上限**（秒）。写入请求给的 TTL 会被压到这个上限以内； 900s = 15 分钟，与探测回执 300s 的短周期同一设计取向：过期宁可重算， 不把旧证据洗成新证据。 |
+| `FEDERATION_PROBE_EVIDENCE_RETENTION_SECONDS` | `int` | `86400` | 联邦探针证据载荷的留存秒数（默认 24 小时）。`expires_at` 过了这个窗口、 且没有任何仍可恢复的任务引用它时（未取消，且原计划/执行许可仍有效可 resume， 或 fast 任务的范围清单与探索许可仍有效可续查；引用来自计划 `probe_refs` 与 覆盖条目回执），清扫只剥离 `result_json.evidence` 里的证据信封/摘录（可从 权威资产重建的投影），行主键/状态/摘要/幂等键与回执元数据保留 —— 覆盖账本引的 是行 id，删行等于让已落账的覆盖条目指向空洞。0 表示过期后立即可剥离，不是禁用。 |
 | `ALLOW_INSECURE_DEFAULTS` | `bool` | `False` | 只有明确知道自己在做什么才打开（一次性容器、CI）。生产打开等于没有鉴权 |
 
 <!-- 由 scripts/gen_config_docs.py 生成，请勿手改 -->

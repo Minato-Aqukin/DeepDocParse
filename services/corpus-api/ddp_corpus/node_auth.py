@@ -153,12 +153,24 @@ class ControlPeerTrust:
         self._clock = clock
         self._cache: dict[str, tuple[dict, float]] = {}
 
+    def _prune(self, now: float, ttl: int) -> None:
+        if ttl == 0:
+            self._cache.clear()
+            return
+        expired = [node for node, (_, fetched) in self._cache.items()
+                   if now - fetched >= ttl]
+        for node in expired:
+            del self._cache[node]
+        while len(self._cache) > settings.federation_peer_key_cache_max_entries:
+            oldest = min(self._cache, key=lambda node: (self._cache[node][1], node))
+            del self._cache[oldest]
+
     async def trust(self, node_id: str) -> dict | None:
         ttl = settings.federation_peer_key_cache_seconds
+        self._prune(self._clock(), ttl)
         cached = self._cache.get(node_id)
-        if cached is not None and ttl > 0 and self._clock() - cached[1] < ttl:
+        if cached is not None:
             return cached[0]
-        self._cache.pop(node_id, None)
         client = self._http or httpx.AsyncClient(timeout=5.0, trust_env=False,
                                                  follow_redirects=False)
         try:
@@ -184,8 +196,10 @@ class ControlPeerTrust:
         if not isinstance(record, dict):
             raise ApplicationError("credential_unavailable",
                                    "control-api returned a malformed trust record")
+        now = self._clock()
         if record.get("state") == "approved" and ttl > 0:
-            self._cache[node_id] = (record, self._clock())
+            self._cache[node_id] = (record, now)
+        self._prune(now, ttl)
         return record
 
 

@@ -20,6 +20,9 @@ type Config struct {
 	// 已批准目录成员的自动pull续期间隔（秒，1..120，默认60；描述TTL300秒）。
 	// 四并发、每peer两秒，失败持久指数退避至120秒，不延长失败成员的租约。
 	DiscoveryRenewalInterval time.Duration
+	// 目录快照/范围失效后的保留窗口（秒，默认24小时，0..604800）。
+	// 续期后台循环清理到期元数据及其页；0 表示失效后立即可清理，不返回伪空范围。
+	DiscoveryRetention time.Duration
 
 	// ---- 监听 ----
 	// 监听地址。容器里通常保持 :8080，对外端口由编排层映射
@@ -172,6 +175,7 @@ func Load() (*Config, error) {
 	c := &Config{
 		NodeIdentityDir:          env("NODE_IDENTITY_DIR", "./state/control-node"),
 		DiscoveryRenewalInterval: time.Duration(envInt("DISCOVERY_RENEWAL_INTERVAL_SECONDS", 60)) * time.Second,
+		DiscoveryRetention:       time.Duration(envInt("DISCOVERY_METADATA_RETENTION_SECONDS", 86400)) * time.Second,
 		Addr:                     env("CONTROL_ADDR", ":8080"),
 		DatabaseURL:              env("CONTROL_DATABASE_URL", "postgres://ddp_control:ddp@127.0.0.1:15432/deepdocparse"),
 		DBMaxConns:               int32(envInt("CONTROL_DB_MAX_CONNS", 20)),
@@ -226,6 +230,9 @@ func (c *Config) validate() error {
 	var problems []string
 	if c.DiscoveryRenewalInterval < time.Second || c.DiscoveryRenewalInterval > 120*time.Second {
 		problems = append(problems, "DISCOVERY_RENEWAL_INTERVAL_SECONDS 必须在 1..120 之间（低于描述TTL）")
+	}
+	if c.DiscoveryRetention < 0 || c.DiscoveryRetention > 7*24*time.Hour {
+		problems = append(problems, "DISCOVERY_METADATA_RETENTION_SECONDS 必须在 0..604800 之间")
 	}
 
 	// 占位密钥。CI / 一次性容器可以用 ALLOW_INSECURE_DEFAULTS 显式跳过 ——

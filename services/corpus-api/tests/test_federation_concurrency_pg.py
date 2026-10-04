@@ -537,7 +537,8 @@ async def test_sweeper_on_pg_fails_expired_lease_and_stalled_request(pg_db):
         assert untouched.status == "queued", "other roots' queue tasks stay untouched"
 
     assert await reconcile.sweep_federation_once(factory, now=now) == \
-        {"executions": 0, "requests": 0, "cancelled_tasks": 0, "credential_nonces": 0}
+        {"executions": 0, "requests": 0, "cancelled_tasks": 0, "credential_nonces": 0,
+         "probe_evidence_stripped": 0}
 
 
 async def test_sweeper_on_pg_marks_queued_execution_whose_queue_task_died(pg_db):

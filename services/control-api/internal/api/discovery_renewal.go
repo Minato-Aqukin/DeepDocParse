@@ -79,5 +79,12 @@ func (s *Server) renewDiscoveryBatch(ctx context.Context, client *http.Client, i
 	}
 	close(jobs)
 	workers.Wait()
+	if ctx.Err() == nil && s.cfg != nil {
+		if swept, err := s.store.SweepDiscoveryMetadata(ctx, s.cfg.DiscoveryRetention, 500); err != nil {
+			slog.Warn("discovery retention sweep failed", "error", err)
+		} else if swept != (store.DiscoveryRetentionStats{}) {
+			slog.Info("discovery retention sweep", "scopes", swept.Scopes, "members", swept.Members, "subtrees", swept.Subtrees)
+		}
+	}
 	return len(claims)
 }

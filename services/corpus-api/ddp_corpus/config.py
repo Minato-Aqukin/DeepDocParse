@@ -281,6 +281,10 @@ class Settings(BaseSettings):
     # 本节点最迟多久拒绝它的新请求。0 = 每个请求都查控制面；上限 60。
     # 未知 / pending / revoked 从不缓存（新批准立即生效，撤销不会被旧的否定结果挡住）。
     federation_peer_key_cache_seconds: int = 5
+    # 批准成员信任缓存的进程级条目上限；与 TTL 同时执行。每次读/写全局清理
+    # 已过期身份，满时驱逐最早取得的记录，下一次需要它时重新查本节点控制面。
+    # 只保留公钥/批准状态，绝不镜像来源内容；0 不是禁用（禁用用上面的 TTL=0）。
+    federation_peer_key_cache_max_entries: int = 1024
     # 出站凭证的有效期（秒，1..120）。凭证单次使用，这个值只需覆盖一次请求的
     # 往返加两台主机的时钟偏差；调大不会减少签发次数，只会让被截获的凭证活得更久。
     federation_credential_ttl_seconds: int = 60
@@ -323,6 +327,13 @@ class Settings(BaseSettings):
     # 900s = 15 分钟，与探测回执 300s 的短周期同一设计取向：过期宁可重算，
     # 不把旧证据洗成新证据。
     federation_cache_ttl_seconds: int = 900
+    # 联邦探针证据载荷的留存秒数（默认 24 小时）。`expires_at` 过了这个窗口、
+    # 且没有任何仍可恢复的任务引用它时（未取消，且原计划/执行许可仍有效可 resume，
+    # 或 fast 任务的范围清单与探索许可仍有效可续查；引用来自计划 `probe_refs` 与
+    # 覆盖条目回执），清扫只剥离 `result_json.evidence` 里的证据信封/摘录（可从
+    # 权威资产重建的投影），行主键/状态/摘要/幂等键与回执元数据保留 —— 覆盖账本引的
+    # 是行 id，删行等于让已落账的覆盖条目指向空洞。0 表示过期后立即可剥离，不是禁用。
+    federation_probe_evidence_retention_seconds: int = 86400
 
     # **没有额度与限速默认值**：配额与限速归 control-api（见它的 CONFIG.md）。
     # 两处各配一份的表现是"我明明把限速调大了"却没生效
@@ -385,7 +396,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_federation_cache_limits(self):
-        """缓存上限必须为正数。
+        """缓存上限必须为正数；探针证据留存是保留窗口（0 表示过期即剥离）。
 
         0 或负数不会让缓存"关闭"，而是让每一次 put 都在驱逐循环里把所有行删光，
         然后在下一个写入时重演 —— 一个看起来在工作、实际每次都是冷缓存的系统。
@@ -397,6 +408,10 @@ class Settings(BaseSettings):
             raise ValueError(
                 "FEDERATION_CACHE_MAX_ENTRIES / FEDERATION_CACHE_MAX_BYTES / "
                 "FEDERATION_CACHE_TTL_SECONDS 必须都是正整数（0 不是「关闭缓存」）")
+        if self.federation_probe_evidence_retention_seconds < 0 or \
+                self.federation_probe_evidence_retention_seconds > 7 * 24 * 3600:
+            raise ValueError(
+                "FEDERATION_PROBE_EVIDENCE_RETENTION_SECONDS 必须在 0..604800")
         return self
 
     @model_validator(mode="after")
@@ -417,6 +432,8 @@ class Settings(BaseSettings):
                     "peer 目录只登记 endpoint（见 FEDERATION_PEERS 注释）。")
         if not 0 <= self.federation_peer_key_cache_seconds <= 60:
             raise ValueError("FEDERATION_PEER_KEY_CACHE_SECONDS 必须在 0..60（它就是撤销生效的最长延迟）")
+        if self.federation_peer_key_cache_max_entries < 1:
+            raise ValueError("FEDERATION_PEER_KEY_CACHE_MAX_ENTRIES 必须是正整数")
         if not 1 <= self.federation_credential_ttl_seconds <= 120:
             raise ValueError("FEDERATION_CREDENTIAL_TTL_SECONDS 必须在 1..120")
         if self.federation_identity_retry_seconds < 1:
