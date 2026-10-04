@@ -1682,10 +1682,16 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
             coordinator_node_id=node, query=task_spec.get("query") or "",
             now=_ts(now), node_routes=(manifest or {}).get("node_routes", []),
             budget={**budget,
-                    "max_requests": max(0, budget["max_requests"] - root_budget.used()["requests"]
+                    # Room for the coordinator's own generation request and hops; plan_steps
+                    # carves shares from the REMAINING ledger (cap − used below), because
+                    # planning probes/discovery/bytes were already spent above.
+                    "max_requests": max(0, budget["max_requests"]
                                         - int(wants_generation and (generation_ready or delegated is not None))),
                     "max_hops": budget["max_hops"] - 2 * int(wants_generation and delegated is not None),
-                    "max_bytes": max(0, budget["max_bytes"] - root_budget.used()["bytes"])})
+                    "used_requests": root_budget.used()["requests"],
+                    "used_bytes": root_budget.used()["bytes"],
+                    "used_probes": root_budget.used()["probes"],
+                    "used_hops": root_budget.used()["hops"]})
     except ApplicationError as exc:
         raise federation.api_error(exc) from None
     steps, edges = _drop_answer_steps(steps, edges)
@@ -4079,7 +4085,15 @@ async def execute_delegation(session, actor, spec, *, execution_id, now, http, i
             routes.append({"node_id": item["target_key"]["origin_node_id"], "via_node_ids": rest})
     steps, edges = routing.plan_steps(targets=targets, probes=[], local_node_id=node,
                                      coordinator_node_id=node, query=request["task_spec"].get("query") or "",
-                                     now=_ts(now), node_routes=routes, budget=budget_caps)
+                                     now=_ts(now), node_routes=routes, budget={
+                                         **budget_caps,
+                                         # The delegate already spent part of its
+                                         # share (lookups, local steps) before
+                                         # carving sub-shares: carve from rest.
+                                         "used_requests": budget.used()["requests"],
+                                         "used_bytes": budget.used()["bytes"],
+                                         "used_probes": budget.used()["probes"],
+                                         "used_hops": budget.used()["hops"]})
     mapping = _steps_by_target({"steps": steps}, targets)
     for target in targets:
         step = mapping[_target_identity(target)]

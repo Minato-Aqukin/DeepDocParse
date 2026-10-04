@@ -82,6 +82,36 @@ def test_plan_rejects_child_when_no_depth_share_remains():
     assert caught.value.code == "budget_exceeded"
 
 
+def test_shares_carve_from_remaining_budget_proportionally_to_leaves():
+    """Used budget is not carved twice; each group's share follows its leaves."""
+    members = [target("node-direct", "papers"), target("node-far-1", "papers"),
+               target("node-far-2", "papers"), target("node-far-3", "papers")]
+    routes = [{"node_id": "node-far-1", "via_node_ids": ["node-p"]},
+              {"node_id": "node-far-2", "via_node_ids": ["node-p"]},
+              {"node_id": "node-far-3", "via_node_ids": ["node-q"]}]
+    steps, _ = routing.plan_steps(
+        targets=members, probes=[], local_node_id="node-a", coordinator_node_id="node-a",
+        query="facts", now=0, node_routes=routes,
+        budget={"max_requests": 100, "max_bytes": 200000, "max_hops": 12,
+                "max_probe_requests": 9, "deadline": DEADLINE,
+                "used_requests": 10, "used_bytes": 20000, "used_probes": 2, "used_hops": 1})
+    shares = {step["executor_node_id"]: step["budget_share"] for step in steps
+              if step["operation"] == "delegate"}
+    assert set(shares) == {"node-p", "node-q"}
+    # Two leaves vs one leaf: the bigger group gets the bigger share.
+    assert shares["node-p"]["max_requests"] > shares["node-q"]["max_requests"]
+    assert shares["node-p"]["max_bytes"] > shares["node-q"]["max_bytes"]
+    assert shares["node-p"]["max_probes"] >= shares["node-q"]["max_probes"]
+    # Nothing carved twice: shares + own needs fit inside the remaining caps.
+    remaining_requests = 100 - 10
+    remaining_bytes = 200000 - 20000
+    remaining_probes = 9 - 2
+    assert sum(share["max_requests"] for share in shares.values()) <= remaining_requests - 8 * 2 - 68
+    assert sum(share["max_bytes"] for share in shares.values()) <= remaining_bytes - 32768 * 2 - 4096
+    assert sum(share["max_probes"] for share in shares.values()) <= remaining_probes
+    assert sum(share["max_hops"] for share in shares.values()) <= 12 - 1 - 2 * 2 - 2
+
+
 @pytest.mark.parametrize("state", ["succeeded", "unsupported"])
 def test_reported_leaf_never_upgrades_exhaustive_coverage_to_complete(state):
     entry = coverage.new_entry(target("node-r"), "scope-1", "sha256:" + "b" * 64)

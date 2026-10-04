@@ -151,7 +151,8 @@ def test_root_budget_shared_caps_and_sub_caps():
     root.reserve("generation_tokens")
     with pytest.raises(ApplicationError):
         root.reserve("generation_tokens")
-    assert root.used() == {"requests": 3, "bytes": 110, "generation_tokens": 1, "hops": 1, "discovery": 1}
+    assert root.used() == {"requests": 3, "bytes": 110, "generation_tokens": 1, "hops": 1, "discovery": 1,
+                           "probes": 1, "egress_bytes": 50}
     with pytest.raises(ApplicationError):
         root.reserve("mystery")
     with pytest.raises(ApplicationError):

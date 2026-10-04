@@ -272,7 +272,8 @@ class RootBudget:
 
     def used(self) -> dict:
         return {key: self._used[key] for key in
-                ("requests", "bytes", "generation_tokens", "hops", "discovery")}
+                ("requests", "bytes", "generation_tokens", "hops", "discovery",
+                 "probes", "egress_bytes")}
 
 
 def _probe_fresh(probe, now, ttl_seconds=_PROBE_TTL_SECONDS):
@@ -349,23 +350,48 @@ def plan_steps(*, targets, probes, local_node_id, coordinator_node_id, query, no
     if groups:
         if budget is None:
             reject("budget_exceeded", "recursive plans require a frozen parent budget")
-        direct = sum(step["operation"] == "retrieve" for step in steps)
         count = len(groups)
-        # Keep parent HTTP attempts and local work outside child shares.
-        requests = max(0, budget["max_requests"] - 8 * count - 68 * direct)
-        byte_cap = max(0, budget["max_bytes"] - 32768 * count - 4096 * direct)
-        hops = max(0, budget["max_hops"] - 2 * count - 2 * sum(
-            step["operation"] == "retrieve" and step["executor_node_id"] != coordinator_node_id
-            for step in steps))
-        probe_cap = min(requests, budget.get("max_probe_requests", 0))
+        used = budget.get("used_requests", 0) if isinstance(budget.get("used_requests"), int) else 0
+        used_bytes = budget.get("used_bytes", 0) if isinstance(budget.get("used_bytes"), int) else 0
+        used_probes = budget.get("used_probes", 0) if isinstance(budget.get("used_probes"), int) else 0
+        used_hops = budget.get("used_hops", 0) if isinstance(budget.get("used_hops"), int) else 0
+        # Shares come out of what the parent has NOT spent yet: planning probes,
+        # discovery reads and payload bytes already went through this same ledger.
+        # A share carved from raw caps would fail its reservation at execution.
+        remaining_requests = max(0, budget["max_requests"] - used)
+        remaining_bytes = max(0, budget["max_bytes"] - used_bytes)
+        remaining_probes = max(0, budget.get("max_probe_requests", budget["max_requests"]) - used_probes)
+        remaining_hops = max(0, budget["max_hops"] - used_hops)
+        own_targets = sum(1 for step in steps if step["operation"] == "retrieve")
+        own_remote = sum(1 for step in steps
+                         if step["operation"] == "retrieve"
+                         and step["executor_node_id"] != coordinator_node_id)
+        # The coordinator's own work keeps its proportion plus its fixed costs:
+        # one admission attempt per delegate, and per direct target the same
+        # per-target allowance a share leaf gets. Requests/bytes/probes split
+        # by leaf count (floor); hops keep today's even split among groups —
+        # all from the remaining allowance, not the raw caps.
+        total_leaves = sum(len(step["delegated_targets"]) for step in groups.values()) + own_targets
+        requests = max(0, remaining_requests - 8 * count - 68 * own_targets)
+        byte_cap = max(0, remaining_bytes - 32768 * count - 4096 * own_targets)
+        hops = max(0, remaining_hops - 2 * count - 2 * own_remote)
+        probe_cap = min(requests, remaining_probes)
         for position, step in enumerate(groups.values()):
-            def portion(value, _position=position):
+            leaves = len(step["delegated_targets"])
+            def portion(value, _leaves=leaves):
+                # Leaf-proportional floor; the coordinator's own targets already
+                # hold their share outside `requests`, so floors here can never
+                # exceed the pool they came from.
+                if not total_leaves:
+                    return 0
+                return max(0, (value * _leaves) // total_leaves)
+            def hop_portion(value, _position=position):
                 return value // count + int(_position < value % count)
-            if portion(hops) < 1:
+            if hop_portion(hops) < 1:
                 reject("budget_exceeded", "no hop share remains for delegation")
             step["budget_share"] = {
                 "max_requests": portion(requests), "max_bytes": portion(byte_cap),
-                "max_hops": portion(hops), "max_probes": portion(probe_cap),
+                "max_hops": hop_portion(hops), "max_probes": portion(probe_cap),
                 "deadline": budget["deadline"]}
     steps.append({"step_id": "fuse-1", "operation": "fuse", "executor_node_id": coordinator_node_id,
                   "depends_on": retrieve_ids})
