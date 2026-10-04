@@ -522,6 +522,13 @@ components:
         root_task_id: {type: string, minLength: 1}
         step_id: {type: string, minLength: 1}
         delegation_generation: {type: integer, minimum: 0}
+        delegation_path:
+          description: 根到发出者的节点序列；接收者在路径中拒绝 delegation_loop，达到 max_hops 拒绝 budget_exceeded。
+          type: array
+          minItems: 1
+          maxItems: 1000
+          uniqueItems: true
+          items: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{2,63}$'}
         task_spec: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/TaskSpec'}
         plan: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/TaskPlan'}
         execution_consent: {$ref: '../schemas/ddp-plan-admission/v1.json#/$defs/ExecutionConsent'}
@@ -569,6 +576,7 @@ components:
         lease_until: {type: [string, 'null'], format: date-time}
         result_ref: {type: [string, 'null']}
         evidence_set_ref: {type: [string, 'null']}
+        actual_index_revision: {description: retrieve 实际使用的索引修订；不可拿 parse_revision 替代。, type: [string, 'null']}
         error: {type: [string, 'null']}
         degraded: {description: 本次执行的可见降级（如 embedding_unavailable）；没有降级为 null。协调者不得把它当成 internal_limits, type: [string, 'null'], x-ddp-enum: degraded, x-ddp-enum-nullable: true}
         internal_limits: {description: '本次执行自报的内部不完整（如 truncated_by_limit / index_lagging）。非空时协调者必须把覆盖记 partial，绝不允许由此推出 complete（T85）', type: [array, 'null'], items: {type: string, enum: [shard_failed, index_lagging, subset_only, truncated_by_limit]}}
@@ -588,6 +596,29 @@ components:
           description: 'wiki_pages 执行的原始草稿；succeeded 且 validation_state=failed 必须返回 error，由协调者公开 delegated_answer_rejected:<error>，不是继续轮询。'
           type: [object, 'null']
           additionalProperties: true
+        delegation_report:
+          description: delegate 的有界结果；目标不得超出分配，消费不得超过份额，证据保持叶来源。
+          type: object
+          additionalProperties: false
+          required: [entries, consumption, evidence]
+          properties:
+            entries:
+              type: array
+              maxItems: 1000
+              items: {$ref: '../schemas/ddp-scope-coverage/v1.json#/$defs/CoverageEntry'}
+            consumption:
+              type: object
+              additionalProperties: false
+              required: [requests, bytes, hops, probes]
+              properties:
+                requests: {type: integer, minimum: 0}
+                bytes: {type: integer, minimum: 0}
+                hops: {type: integer, minimum: 0}
+                probes: {type: integer, minimum: 0}
+            evidence:
+              type: array
+              maxItems: 1000
+              items: {$ref: '../schemas/ddp-evidence/v1.json#/$defs/FederatedEvidence'}
         updated_at: {description: '当前状态实际写入时间；终态使用生成/检索结束后的时钟，不沿用领取时间。', type: string, format: date-time}
     AdmissionEvidence:
       type: object

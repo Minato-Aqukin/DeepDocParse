@@ -311,6 +311,12 @@ def _go_manifest_digest(manifest: dict) -> str:
         "expanded_members": [
             {key: item[key] for key in ("origin_node_id", "collection_id", "operation")}
             for item in manifest.get("expanded_members", [])],
+    })
+    if manifest.get("node_routes"):
+        body["node_routes"] = [
+            {"node_id": item["node_id"], "via_node_ids": item["via_node_ids"]}
+            for item in manifest["node_routes"]]
+    body.update({
         "unexpanded_subtrees": [
             {key: item[key] for key in ("node_id", "reason")}
             for item in manifest.get("unexpanded_subtrees", [])],
@@ -741,7 +747,9 @@ def _fast_stop_reason(task_spec: dict, all_targets: list[dict], selected: list[d
 
 def _select_targets(targets: list[dict], task_spec: dict, node: str, *,
                     descriptors: list[dict] | None = None,
-                    rank_all: bool = False) -> list[dict]:
+                    rank_all: bool = False,
+                    manifest: dict | None = None,
+                    unreachable_node_ids=()) -> list[dict]:
     """按集合目录摘要给候选定序并截到模式上限（排序实现只在路由内核里）。
 
     没有摘要（未取到/未授权/预算耗尽）时排序退化为确定性 local_first ——
@@ -758,10 +766,34 @@ def _select_targets(targets: list[dict], task_spec: dict, node: str, *,
         ranked = routing.candidates(
             targets, list(descriptors or []), query=task_spec.get("query") or "", limit=limit,
             ordering=task_spec["search_policy"].get("ordering", "local_first"),
-            local_node_id=node)
+            local_node_id=node, node_routes=(manifest or {}).get("node_routes"),
+            unreachable_node_ids=unreachable_node_ids)
     except ApplicationError as exc:
         raise federation.api_error(exc) from None
     return [item["target_key"] for item in ranked]
+
+
+async def _ranking_unreachable_nodes(session: AsyncSession, actor: Actor,
+                                     manifest: dict | None, *, now: datetime) -> dict[str, str]:
+    """只采信当前组织/目录修订下仍存活的负面观测；没有观测不捏造健康。
+
+    返回 {node_id: reason}：排序只看键，探测复用值里的理由，不再为同一
+    修订读第二次（负面命中的使用计数只 +1，见 test_negative_hit_…）。
+    """
+    negative: dict[str, str] = {}
+    scope_key = cache.organization_scope(actor.organization_id)
+    for origin, revision in _registry_revisions(manifest).items():
+        seen = await cache.get_negative(session, scope_key=scope_key, node_id=origin,
+                                        node_revision=revision, now=now)
+        if seen is not None:
+            negative[origin] = str(seen.get("reason") or "unreachable")
+    # 中间节点不可达时，该路径上的叶目标同样不能由此协调者直接到达。
+    for route in (manifest or {}).get("node_routes") or []:
+        for origin in route["via_node_ids"]:
+            if origin in negative:
+                negative.setdefault(route["node_id"], negative[origin])
+                break
+    return negative
 
 
 def _fast_continuation_targets(ranked: list[dict], selected: list[dict]) -> list[dict]:
@@ -799,6 +831,14 @@ def _plan_selected_targets(plan: dict, all_targets: list[dict]) -> list[dict]:
     selected: list[dict] = []
     consumed: dict[tuple[str, str], int] = {}
     for step in plan.get("steps") or []:
+        if step.get("operation") == "delegate":
+            for assigned in step["delegated_targets"]:
+                target = assigned["target_key"]
+                if target not in all_targets:
+                    raise APIError(409, "delegated leaf lies outside frozen scope",
+                                   "invalid_request_error", "plan_changed")
+                selected.append(target)
+            continue
         if step.get("operation") != "retrieve":
             continue
         inputs = step.get("fixed_inputs") or []
@@ -826,11 +866,18 @@ def _target_key(target: dict) -> dict:
 
 
 def _steps_by_target(plan: dict, candidates: list[dict]) -> dict:
-    retrieve = [step for step in plan["steps"] if step["operation"] == "retrieve"]
     mapping = {}
-    for step, target in zip(retrieve, _ordered_targets(candidates), strict=False):
-        mapping[(target["origin_node_id"], target["collection_id"], target["operation"])] = step
-    return mapping
+    delegated = {}
+    for step in plan["steps"]:
+        if step["operation"] == "delegate":
+            for item in step["delegated_targets"]:
+                delegated[_target_identity(item["target_key"])] = step
+    direct = [target for target in _ordered_targets(candidates)
+              if _target_identity(target) not in delegated]
+    retrieve = [step for step in plan["steps"] if step["operation"] == "retrieve"]
+    for step, target in zip(retrieve, direct, strict=False):
+        mapping[_target_identity(target)] = step
+    return {**mapping, **delegated}
 
 
 def _peer_probe_denial(consent: dict, node_id: str) -> str | None:
@@ -957,7 +1004,9 @@ async def _gather_descriptors(session: AsyncSession, actor: Actor, *, node: str,
     exhausted = {"budget": False}
 
     resource_nodes = {target["origin_node_id"] for target in all_targets}
-    remote_nodes = sorted((resource_nodes | set(_registry_revisions(manifest))) - {node})
+    routed = {node_id for route in (manifest or {}).get("node_routes", [])
+              for node_id in [route["node_id"], *route["via_node_ids"]]}
+    remote_nodes = sorted((resource_nodes | set(_registry_revisions(manifest))) - {node} - routed)
     # A frozen scope can include a compute-only node with no collection. It is
     # merely a candidate until its separately authorized capability probe passes.
     capability_only = [origin for origin in remote_nodes if origin not in resource_nodes
@@ -1134,13 +1183,14 @@ async def _probe_targets(session: AsyncSession, actor: Actor, row: FederationReq
                          peers: PeerDirectory, budget: routing.RootBudget,
                          manifest: dict | None = None,
                          descriptors: dict[tuple[str, str], dict] | None = None,
-                         spend=None,
+                         spend=None, unreachable_nodes: dict[str, str] | None = None,
                          ) -> tuple[list[dict], dict, dict]:
     """执行探索许可允许的 Probe。返回 (probes, target_outcome, extra)。
 
     顺序对每个目标固定：**先看能不能复用已有回执（零外发、零预算）**，再看
     负面缓存（零外发），最后才发真请求。复用只在前端拿到"当前索引修订"时
     才可能发生（描述符给的口径），所以不会拿旧修订的回执冒充当前检索。
+    `unreachable_nodes` 是调用点已读出的负面理由（同一修订不再读第二次）。
     """
     task_spec = row.task_spec_json
     consent = row.exploration_consent_json
@@ -1198,16 +1248,18 @@ async def _probe_targets(session: AsyncSession, actor: Actor, row: FederationReq
             outcome[key] = ("denied", denial)
             continue
         node_revision = revisions.get(origin)
-        if node_revision:
+        reason = (unreachable_nodes or {}).get(origin)
+        if reason is None and node_revision:
             seen = await cache.get_negative(session, scope_key=negative_scope,
                                             node_id=origin, node_revision=node_revision,
                                             now=now)
             if seen is not None:
-                # 命中负面条目：不发一个字节、不占探测预算，也不续命
-                # （get_negative 只读，expires_at 原样）。
                 reason = str(seen.get("reason") or "unreachable")
-                outcome[key] = (_negative_state(reason), reason)
-                continue
+        if reason is not None:
+            # 命中负面条目：不发一个字节、不占探测预算，也不续命
+            # （get_negative 只读，expires_at 原样）。
+            outcome[key] = (_negative_state(reason), reason)
+            continue
         try:
             # 单次预扣在 spend 内部（独立提交 + 内存 reserve 二合一）：
             # 调用点不再另做 reserve，否则内存扣 2 次、持久只 1 次。
@@ -1297,6 +1349,12 @@ def _intent_budget(task_spec, manifest, consent, *, now):
         remote_count=sum(target["origin_node_id"] != node for target in targets),
         deadline=plans.utc_instant(deadline),
         generation_ready=task_spec["operation"] in GENERATION_OPERATIONS)
+    routes = {route["node_id"]: route["via_node_ids"]
+              for route in (manifest or {}).get("node_routes", [])}
+    budget["max_hops"] += sum(2 * len(routes.get(target["origin_node_id"], []))
+                              for target in targets)
+    if routes:
+        budget["max_hops"] = max(8, budget["max_hops"])
     if task_spec["operation"] == WIKI_OPERATION:
         # Wiki's planner/writer/optional relations share this kernel allowance.
         # Cited answers have a different output profile; never lend their cap to Wiki.
@@ -1346,25 +1404,6 @@ def _append_delegated_answer_step(steps: list[dict], edges: list[dict], *,
     return steps, edges
 
 
-def _answer_candidates(targets: list[dict], *, node: str,
-                       extra_nodes: list[str] | None = None) -> list[str]:
-    """候选生成执行节点：取数目标里的远端节点 + 已许可的 capability-only 节点。
-    ...
-    只在本切片已知的范围内找候选（不递归目录、不联系未进 scope 的节点）；
-    顺序 = `_ordered_targets` 的顺序，保证同一计划每次得到同一个选择。
-    `extra_nodes` 是已获许可且认证的目录里有 `rag.answer.cited` profile、
-    但本轮没有取数目标的节点（无集合的 C）：真实 capability probe 就绪后
-    才进计划；B 只供证据，A 无模型可委托完整回答。
-    """
-    candidates: list[str] = []
-    for target in _ordered_targets(targets):
-        origin = target["origin_node_id"]
-        if origin != node and origin not in candidates:
-            candidates.append(origin)
-    for origin in sorted(set(extra_nodes or [])):
-        if origin != node and origin not in candidates:
-            candidates.append(origin)
-    return candidates[:MAX_ANSWER_CANDIDATES]
 
 async def _probe_answer_candidates(*, root_task_id: str, task_spec_digest: str,
                                    consent: dict, scope_ref: str, targets: list[dict],
@@ -1375,11 +1414,23 @@ async def _probe_answer_candidates(*, root_task_id: str, task_spec_digest: str,
                                    revision: int = 1,
                                    spend=None,
                                    policies: list[tuple[str, frozenset]] = (),
+                                   manifest: dict | None = None,
+                                   unreachable_node_ids=(),
                                    ) -> tuple[str | None, dict]:
     chosen: str | None = None
     outcomes: dict[str, str] = {}
-    for candidate in _answer_candidates(targets, node=federation.local_node_id(),
-                                        extra_nodes=extra_nodes):
+    node = federation.local_node_id()
+    origins = {target["origin_node_id"] for target in targets}
+    origins.update(extra_nodes or [])
+    origins.discard(node)
+    # 先排全部节点，再截探测上限：身份顺序不能在距离排序前挤掉最近节点。
+    ranked = routing.candidates(
+        [{"origin_node_id": origin, "collection_id": "generation", "operation": operation}
+         for origin in origins], [], query="", limit=MAX_ANSWER_CANDIDATES,
+        local_node_id=node, node_routes=(manifest or {}).get("node_routes"),
+        unreachable_node_ids=unreachable_node_ids)
+    for item in ranked:
+        candidate = item["target_key"]["origin_node_id"]
         if _policy_forbids(policies, candidate):
             # 来源不允许把证据转给它：连能力探测都不发（T83）。
             outcomes[candidate] = SOURCE_POLICY_DENIED
@@ -1526,6 +1577,7 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
     node = federation.local_node_id()
     task_spec = row.task_spec_json
     all_targets = _all_targets(task_spec, manifest, node)
+    routed_nodes = {route["node_id"] for route in (manifest or {}).get("node_routes", [])}
     valid_until = min(plans.instant(manifest["valid_until"]) if manifest is not None
                       else plans.instant(consent["valid_until"]),
                       plans.instant(consent["valid_until"]), _ts(now) + SCOPE_TTL_SECONDS)
@@ -1581,12 +1633,15 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
             consent=consent, budget=root_budget, peers=peers,
             valid_until=datetime.fromtimestamp(valid_until, timezone.utc),
             spend=_plan_spend)
+        unreachable_nodes = await _ranking_unreachable_nodes(session, actor, manifest, now=now)
         candidate_graph = (row.result_json or {}).get(
             federation_budget.CANDIDATE_GRAPH_FIELD) or _select_targets(
-                all_targets, task_spec, node, descriptors=descriptors, rank_all=True)
+                all_targets, task_spec, node, descriptors=descriptors, rank_all=True,
+                manifest=manifest, unreachable_node_ids=unreachable_nodes)
         pending = (row.result_json or {}).get("_continuation_targets")
         selected = pending if pending is not None else _select_targets(
-            all_targets, task_spec, node, descriptors=descriptors)
+            all_targets, task_spec, node, descriptors=descriptors,
+            manifest=manifest, unreachable_node_ids=unreachable_nodes)
         # A continuation re-runs only targets whose coverage entry is still retryable; a
         # settled target keeps its recorded receipts. Re-probing it would spend the
         # exploration budget on work that never executes again and starve the new batch.
@@ -1594,10 +1649,12 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
         budget = federation_budget.limits(ledger)
         probes, outcome, extra = await _probe_targets(
             session, actor, row,
-            targets=[target for target in selected if _target_identity(target) not in settled],
+            targets=[target for target in selected if _target_identity(target) not in settled
+                     and target["origin_node_id"] not in routed_nodes],
             now=now, http=http, index=index,
             peers=peers, budget=root_budget, manifest=manifest,
-            descriptors=_descriptor_index(descriptors), spend=_plan_spend)
+            descriptors=_descriptor_index(descriptors), spend=_plan_spend,
+            unreachable_nodes=unreachable_nodes)
         if wants_generation and not generation_ready:
             # 本地没有生成能力：在探索许可与根预算之内问候选执行节点
             # "你能不能生成"。answer 问 `rag.answer.cited`，wiki 问 `wiki.pages`
@@ -1609,7 +1666,9 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
                 peers=peers, budget=root_budget, extra_nodes=capability_only,
                 operation="wiki.pages" if wants_wiki else "rag.answer.cited",
                 revision=int(row.plan_revision or 0) + 1, spend=_plan_spend,
-                policies=_onward_policies(selected, _descriptor_index(descriptors)))
+                policies=_onward_policies(selected, _descriptor_index(descriptors)),
+                manifest=manifest, unreachable_node_ids=set(unreachable_nodes) | {
+                    key[0] for key, value in outcome.items() if value[0] == "unreachable"})
     except ApplicationError as exc:
         raise federation.api_error(exc) from None
     finally:
@@ -1621,7 +1680,12 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
         steps, edges = routing.plan_steps(
             targets=selected, probes=probes, local_node_id=node,
             coordinator_node_id=node, query=task_spec.get("query") or "",
-            now=_ts(now))
+            now=_ts(now), node_routes=(manifest or {}).get("node_routes", []),
+            budget={**budget,
+                    "max_requests": max(0, budget["max_requests"] - root_budget.used()["requests"]
+                                        - int(wants_generation and (generation_ready or delegated is not None))),
+                    "max_hops": budget["max_hops"] - 2 * int(wants_generation and delegated is not None),
+                    "max_bytes": max(0, budget["max_bytes"] - root_budget.used()["bytes"])})
     except ApplicationError as exc:
         raise federation.api_error(exc) from None
     steps, edges = _drop_answer_steps(steps, edges)
@@ -1652,7 +1716,7 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
     for target in _ordered_targets(selected):
         key = (target["origin_node_id"], target["collection_id"], target["operation"])
         step = steps_by_target.get(key)
-        if step is None:
+        if step is None or step["operation"] == "delegate":
             continue
         fixed_inputs = ["query"]
         if target["operation"] == LOCATE_OPERATION:
@@ -1860,6 +1924,8 @@ def _admission_body(*, root_task_id: str, plan: dict, task_spec: dict,
         "execution_consent": consent,
         "inputs": inputs,
     }
+    if step["operation"] == "delegate":
+        body["delegation_path"] = [plan["root_coordinator_node_id"]]
     if evidence:
         # 类型化数据边的载荷：有界、逐条带摘要。空就不带这个键，保持取数步骤的
         # 请求摘要口径不变。
@@ -2094,7 +2160,7 @@ async def _run_remote_step(peers: PeerDirectory, *, root_task_id: str, plan: dic
                            task_spec: dict, consent: dict, step: dict, target: dict,
                            generation: int, reconcile: bool,
                            budget: routing.RootBudget | None = None,
-                           spend=None
+                           spend=None, receipt_refs=None
                            ) -> tuple[str, str | None,
                                                                         list[dict],
                                                                         str | None,
@@ -2148,6 +2214,8 @@ async def _run_remote_step(peers: PeerDirectory, *, root_task_id: str, plan: dic
         executor_task_id = str(receipt.get("executor_task_id") or "")
         if not executor_task_id:
             return "failed", "invalid_admission_receipt", [], None, []
+        if receipt_refs is not None:
+            receipt_refs.append("admission:" + receipt["admission_id"])
         status = await _poll_execution(client, executor_task_id, budget=budget,
                                        spend=spend, deadline_ts=plans.instant(plan["budget"]["deadline"]))
         if status.get("state") == "unreachable":
@@ -2167,7 +2235,7 @@ async def _run_remote_step(peers: PeerDirectory, *, root_task_id: str, plan: dic
             if spend is not None:
                 await spend(kind="bytes",
                             amount=len(plans.canonical_bytes({"items": evidence})))
-        return ("succeeded", None, evidence, None,
+        return ("succeeded", None, evidence, status.get("actual_index_revision"),
                 list(status.get("internal_limits") or []))
     except PeerUnavailable as exc:
         state = "unreachable" if exc.status is None else (
@@ -2433,11 +2501,11 @@ def _entry_row(root_task_id: str, entry: dict) -> CoverageEntry:
         search_profile=entry.get("search_profile"), attempts=int(entry.get("attempts") or 0),
         last_error=entry.get("last_error"), evidence_refs_json=list(entry.get("evidence_refs") or []),
         used_budget_json=dict(entry.get("used_budget") or {"requests": 0, "bytes": 0}),
-        exclusion_basis=entry.get("exclusion_basis"))
+        exclusion_basis=entry.get("exclusion_basis"), reported_by=entry.get("reported_by"))
 
 
 def _entry_from_row(row: CoverageEntry, scope_ref: str) -> dict:
-    return {
+    entry = {
         "target_key": row.target_key_json, "scope_ref": scope_ref,
         "query_or_subquery_digest": row.query_digest, "state": row.state,
         "probe_receipts": list(row.probe_refs_json or []),
@@ -2447,6 +2515,9 @@ def _entry_from_row(row: CoverageEntry, scope_ref: str) -> dict:
         "used_budget": dict(row.used_budget_json or {"requests": 0, "bytes": 0}),
         "exclusion_basis": row.exclusion_basis,
     }
+    if row.reported_by is not None:
+        entry["reported_by"] = row.reported_by
+    return entry
 
 
 async def _load_probe(session: AsyncSession, actor: Actor, step: dict, *,
@@ -3068,6 +3139,7 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
         await federation_budget.spend(
             root_task_id=root_task_id, organization_id=actor.organization_id,
             kind=kind, amount=amount, budget=exec_budget, now=utcnow(), step_id=step_id)
+    delegated_done = set()
     try:
         for target in candidates:
             # 每次派出之前确认任务还在 running：取消可能在上一个目标检索期间
@@ -3082,6 +3154,39 @@ async def _execute_plan(session: AsyncSession, actor: Actor, row: FederationRequ
                 continue
             step = steps_by_target.get(key)
             if step is None:
+                continue
+            if step["operation"] == "delegate":
+                if step["step_id"] in delegated_done:
+                    continue
+                delegated_done.add(step["step_id"])
+                try:
+                    recipients = {step["executor_node_id"]}
+                    for assigned in step["delegated_targets"]:
+                        recipients.update([assigned["target_key"]["origin_node_id"],
+                                           *assigned["via_node_ids"]])
+                    if any(_peer_probe_denial(exploration_consent, recipient) for recipient in recipients):
+                        raise _egress_denied("exploration consent omits a relay or leaf")
+                    report = await _run_delegate_step(
+                        peers, actor, root_task_id=root_task_id, plan=plan, task_spec=task_spec,
+                        consent=consent, step=step, budget=exec_budget, spend=_spend,
+                        scope_ref=scope_id, query_digest=query_digest,
+                        reconcile=retry_only or current is not None)
+                    delegated_entries = report["entries"]
+                    for item in report["evidence"]:
+                        item_key = _evidence_key(item)
+                        if item_key not in evidence:
+                            evidence[item_key] = _public_item(item)
+                            attributed.append(_public_item(item))
+                        excerpt = _generation_excerpt(item, local_source=False)
+                        if excerpt is not None:
+                            live_excerpts[item["evidence_id"]] = excerpt
+                except (APIError, ApplicationError, PeerUnavailable) as exc:
+                    error = getattr(exc, "code", None) or "peer_unavailable"
+                    state = _delegation_failure_state(exc)
+                    delegated_entries = _delegation_failed_entries(
+                        step, scope_ref=scope_id, query_digest=query_digest, state=state, error=error)
+                for delegated_entry in delegated_entries:
+                    entries[_target_digest(delegated_entry["target_key"])] = delegated_entry
                 continue
             entry = coverage_kernel.new_entry(_target_key(target), scope_id, query_digest)
             probe, probe_reused = await _load_probe(
@@ -3833,3 +3938,259 @@ async def read_delivery(session: AsyncSession, actor: Actor, delivery_id: str, *
         "result": delivery.result_json,
         "expires_at": _instant(delivery.expires_at) if delivery.expires_at else None,
     }
+
+
+def validate_delegation_report(report, step, *, scope_ref, query_digest):
+    """A relay report is untrusted: reject the entire report on any boundary breach."""
+    if not isinstance(report, dict) or set(report) != {"entries", "consumption", "evidence"}:
+        raise ApplicationError("protocol_incompatible", "invalid delegation report")
+    consumption = report["consumption"]
+    if not isinstance(consumption, dict) or set(consumption) != {"requests", "bytes", "hops", "probes"}:
+        raise ApplicationError("protocol_incompatible", "invalid reported consumption")
+    for counter, value in consumption.items():
+        cap = step["budget_share"]["max_" + counter]
+        if type(value) is not int or value < 0 or value > cap:
+            raise ApplicationError("budget_exceeded", "reported consumption exceeds delegated share")
+    assigned = {_target_identity(item["target_key"]) for item in step["delegated_targets"]}
+    entries = report["entries"]
+    if not isinstance(entries, list) or len(entries) != len(assigned):
+        raise ApplicationError("protocol_incompatible", "delegated report omits or adds leaf targets")
+    seen, merged = set(), []
+    for entry in entries:
+        coverage_kernel.validate_entry(entry)
+        key = _target_identity(entry["target_key"])
+        if key not in assigned or key in seen:
+            raise ApplicationError("protocol_incompatible", "delegated leaf lies outside its allocation")
+        seen.add(key)
+        merged.append({**entry, "scope_ref": scope_ref, "query_or_subquery_digest": query_digest,
+                       "reported_by": step["executor_node_id"]})
+    items = report["evidence"]
+    if not isinstance(items, list) or len(items) > 1000:
+        raise ApplicationError("protocol_incompatible", "unbounded delegated evidence")
+    origins = {key[0] for key in assigned}
+    routes = {}
+    for item in step["delegated_targets"]:
+        routes[item["target_key"]["origin_node_id"]] = list(item["via_node_ids"])
+    references = {(entry["target_key"]["origin_node_id"], ref)
+                  for entry in merged for ref in entry.get("evidence_refs", [])}
+    for item in items:
+        if not isinstance(item, dict) or item.get("origin_node_id") not in origins \
+                or (item.get("origin_node_id"), item.get("evidence_id")) not in references:
+            raise ApplicationError("protocol_incompatible", "delegated evidence lies outside its leaf allocation")
+        for field in ("evidence_id", "resource_id", "source_version_id", "parse_revision", "policy_revision"):
+            plans.string(item.get(field))
+        plans.string(item.get("authority_node_id"), node=True)
+        plans.string(item.get("source_digest"), checksum=True)
+        excerpt = item.get("excerpt")
+        if federation.excerpt_reason(excerpt) is not None \
+                or plans.content_digest(excerpt.encode("utf-8")) != item.get("excerpt_digest"):
+            raise ApplicationError("input_not_verified", "delegated excerpt digest differs from concrete content")
+        relay = item.get("relay_via", [])
+        plans.strings(relay, node=True)
+        expected = [*reversed(routes[item["origin_node_id"]]), step["executor_node_id"]]
+        if list(relay) != expected and list(relay) != expected[1:]:
+            raise ApplicationError("protocol_incompatible", "delegated evidence relay does not match its route")
+    return {"entries": merged, "consumption": consumption, "evidence": items}
+
+
+async def _run_delegate_step(peers, actor, *, root_task_id, plan, task_spec, consent,
+                             step, budget, spend, scope_ref, query_digest,
+                             delegation_path=None, reconcile=False):
+    await federation_budget.reserve_share(
+        root_task_id=root_task_id, organization_id=actor.organization_id,
+        step_id=_reservation_step(step), share=step["budget_share"], budget=budget, now=utcnow())
+    client = peers.client(step["executor_node_id"])
+    body = _admission_body(root_task_id=root_task_id, plan=plan, task_spec=task_spec,
+                           consent=consent, step=step, inputs=_step_inputs(task_spec.get("query") or ""),
+                           generation=0)
+    body["delegation_path"] = delegation_path or [plan["root_coordinator_node_id"]]
+    key = body["idempotency_key"]
+    receipt = None
+    if reconcile:
+        await spend(kind="request")
+        receipt = await _lookup_remote_receipt(client, key)
+    if receipt is None:
+        await spend(kind="hops", amount=2, step_id=_reservation_step(step))
+        await spend(kind="request")
+        await spend(kind="egress_bytes", amount=len(plans.canonical_bytes(body)))
+        try:
+            receipt = await client.admit(body, idempotency_key=key)
+        except PeerUnavailable as exc:
+            if not _unknown_admission(exc):
+                raise
+            await spend(kind="request")
+            receipt = await _lookup_remote_receipt(client, key)
+            if receipt is None:
+                raise
+    mismatch = _receipt_binding_error(receipt, key=key, root_task_id=root_task_id,
+                                      step_id=step["step_id"], plan_digest=plan["plan_digest"],
+                                      executor_node_id=step["executor_node_id"])
+    if mismatch or receipt.get("state") != "accepted":
+        raise ApplicationError("protocol_incompatible", mismatch or "delegation not accepted")
+    status = await _poll_execution(client, receipt["executor_task_id"], spend=spend,
+                                   budget=budget, deadline_ts=plans.instant(step["budget_share"]["deadline"]))
+    if status.get("state") != "succeeded":
+        raise ApplicationError("peer_unavailable" if status.get("state") == "unreachable"
+                               else status.get("error") or "protocol_incompatible", "delegation did not succeed")
+    report = status.get("delegation_report")
+    await spend(kind="bytes", amount=len(plans.canonical_bytes(report)))
+    await federation_budget.record_share_report(
+        root_task_id=root_task_id, organization_id=actor.organization_id,
+        step_id=_reservation_step(step), reported=report.get("consumption") if isinstance(report, dict) else {},
+        now=utcnow())
+    return validate_delegation_report(report, step, scope_ref=scope_ref, query_digest=query_digest)
+
+
+def _delegation_failed_entries(step, *, scope_ref, query_digest, state, error):
+    entries = []
+    for assigned in step["delegated_targets"]:
+        entry = coverage_kernel.new_entry(assigned["target_key"], scope_ref, query_digest)
+        entry = coverage_kernel.record(entry, None, state=state, error=error, now=_ts(utcnow()))
+        entry["reported_by"] = step["executor_node_id"]
+        entries.append(entry)
+    return entries
+
+
+async def execute_delegation(session, actor, spec, *, execution_id, now, http, index):
+    """Coordinate only allocated leaves using a durable ledger owned by this execution."""
+    from ddp_corpus.db import get_sessionmaker
+    request, delegated_step = spec["request"], spec["step"]
+    node = federation.local_node_id()
+    share = delegated_step["budget_share"]
+    budget_caps = {
+        "max_requests": share["max_requests"], "max_bytes": share["max_bytes"],
+        "max_hops": share["max_hops"], "deadline": share["deadline"],
+        "max_probe_requests": share["max_probes"], "max_egress_bytes": share["max_bytes"],
+        "max_discovery_requests": 0, "max_generation_tokens": 0}
+    async with get_sessionmaker()() as ledger_session:
+        ledger = await federation_budget.ensure_ledger(
+            ledger_session, root_task_id=execution_id, organization_id=actor.organization_id,
+            caller_budget=None, server_caps=budget_caps, now=now)
+        await ledger_session.commit()
+    budget = federation_budget.rebuild_from_ledger(ledger, None, now=_ts(now))
+    async def spend(kind, amount=1, step_id=None):
+        await federation_budget.spend(root_task_id=execution_id, organization_id=actor.organization_id,
+                                      kind=kind, amount=amount, step_id=step_id, budget=budget, now=utcnow())
+    targets = [item["target_key"] for item in delegated_step["delegated_targets"]]
+    routes = []
+    for item in delegated_step["delegated_targets"]:
+        rest = [hop for hop in item["via_node_ids"] if hop != node]
+        if rest:
+            routes.append({"node_id": item["target_key"]["origin_node_id"], "via_node_ids": rest})
+    steps, edges = routing.plan_steps(targets=targets, probes=[], local_node_id=node,
+                                     coordinator_node_id=node, query=request["task_spec"].get("query") or "",
+                                     now=_ts(now), node_routes=routes, budget=budget_caps)
+    mapping = _steps_by_target({"steps": steps}, targets)
+    for target in targets:
+        step = mapping[_target_identity(target)]
+        if step["operation"] == "retrieve":
+            step["fixed_inputs"] = ["query", "collection:" + target["collection_id"]]
+    path = request["delegation_path"]
+    final_node = request["plan"]["final_result_writer"]
+    edges.append({"edge_id": "edge-final-recipient", "from_node_id": node, "to_node_id": final_node,
+                  "relay_via": list(reversed(path[1:])), "payload_kind": "evidence_excerpts",
+                  "retention": request["execution_consent"]["retention"], "authorised_by": f"relay:{node}"})
+    # Downstream generation is onward transfer too: retain the approved root's
+    # evidence-bearing edges leaving its final recipient, without expanding recipients.
+    for edge in request["plan"]["data_edges"]:
+        if edge["from_node_id"] == final_node and edge["payload_kind"] != "query_text":
+            edges.append({**edge, "edge_id": "upstream-" + edge["edge_id"]})
+    plan = {
+        "schema": "ddp-plan-admission/1#TaskPlan", "plan_id": "child-" + execution_id, "revision": 1,
+        "task_spec_digest": plans.task_spec_digest(request["task_spec"]),
+        "root_coordinator_node_id": node, "final_result_writer": final_node,
+        "planning_state": "approved", "execution_consent_ref": request["execution_consent"]["consent_id"],
+        "steps": steps, "data_edges": edges,
+        "budget": {key: budget_caps[key] for key in ("max_requests", "max_bytes", "max_hops", "deadline")},
+        "valid_until": share["deadline"]}
+    plan["plan_digest"] = plans.task_plan_digest(plan)
+    consent = {**request["execution_consent"], "plan_digest": plan["plan_digest"],
+               "allowed_edges": [edge["edge_id"] for edge in edges]}
+    plans.validate_plan(plan, request["task_spec"], local_node_id=node, now=_ts(now))
+    peers = peer_directory(actor, Delegation(root_task_id=execution_id, task_spec_digest=plan["task_spec_digest"]))
+    query_digest = plans.content_digest((request["task_spec"].get("query") or "").encode("utf-8"))
+    entries, evidence, executed = [], [], set()
+    try:
+        for target in targets:
+            step = mapping[_target_identity(target)]
+            if step["step_id"] in executed:
+                continue
+            executed.add(step["step_id"])
+            try:
+                if step["operation"] == "delegate":
+                    report = await _run_delegate_step(
+                        peers, actor, root_task_id=execution_id, plan=plan, task_spec=request["task_spec"],
+                        consent=consent, step=step, budget=budget, spend=spend,
+                        scope_ref=execution_id, query_digest=query_digest,
+                        delegation_path=path + [node], reconcile=True)
+                    entries.extend(report["entries"])
+                    evidence.extend(report["evidence"])
+                    continue
+                receipt_refs = []
+                if target["origin_node_id"] == node:
+                    state, error, items, revision, limits = await _run_local_step(
+                        session, actor, root_task_id=execution_id, plan=plan,
+                        task_spec=request["task_spec"], consent=consent, step=step, target=target,
+                        generation=0, now=now, http=http, index=index, reconcile=True,
+                        budget=budget, spend=spend)
+                    local_receipt = await _lookup_local_receipt(session, actor, f"{execution_id}:{step['step_id']}")
+                    if local_receipt:
+                        receipt_refs.append("admission:" + local_receipt["admission_id"])
+                else:
+                    state, error, items, revision, limits = await _run_remote_step(
+                        peers, root_task_id=execution_id, plan=plan, task_spec=request["task_spec"],
+                        consent=consent, step=step, target=target, generation=0, reconcile=True,
+                        budget=budget, spend=spend, receipt_refs=receipt_refs)
+                entry = coverage_kernel.new_entry(target, execution_id, query_digest)
+                # The executed receipt, not a planning probe, is explicitly self-reported.
+                if state == "succeeded":
+                    entry["probe_receipts"] = receipt_refs
+                    entry["actual_index_revision"] = revision
+                    if entry["actual_index_revision"] is None:
+                        state, error = "partial", "probe_receipt_missing"
+                entry["evidence_refs"] = [item["evidence_id"] for item in items]
+                entries.append(coverage_kernel.record(entry, None, state=state, error=error,
+                                                       now=_ts(utcnow()), limits=limits))
+                evidence.extend(items)
+            except (ApplicationError, APIError, PeerUnavailable) as exc:
+                code = getattr(exc, "code", None) or "peer_unavailable"
+                state = _delegation_failure_state(exc)
+                assigned_step = step if step["operation"] == "delegate" else {
+                    "executor_node_id": node, "delegated_targets": [{"target_key": target}]}
+                entries.extend(_delegation_failed_entries(
+                    assigned_step, scope_ref=execution_id, query_digest=query_digest, state=state, error=code))
+    finally:
+        await peers.aclose()
+    for item in evidence:
+        via = list(item.get("relay_via", []))
+        via = [entry for entry in via if entry != node]
+        via.append(node)
+        item["relay_via"] = via
+    used = await federation_budget.ledger_used(
+        session, root_task_id=execution_id, organization_id=actor.organization_id)
+    from ddp_corpus.federation_models import FederationDelegationConsumption
+    # The root ledger includes prepaid sub-shares. A successful sub-report replaces
+    # that conservative reservation in the actual report only, never in the ledger.
+    children = await session.scalars(select(FederationDelegationConsumption).where(
+        FederationDelegationConsumption.root_task_id == execution_id))
+    for child in children:
+        reported = child.reported_json
+        if not isinstance(reported, dict) or set(reported) != {"requests", "bytes", "hops", "probes"}:
+            continue
+        if any(type(reported[key]) is not int or not 0 <= reported[key] <= child.reserved_json["max_" + key]
+               for key in reported):
+            continue
+        for key, value in reported.items():
+            used[key] += value - child.reserved_json["max_" + key]
+    return {"entries": entries, "evidence": evidence,
+            "consumption": {key: used[key] for key in ("requests", "bytes", "hops", "probes")}}
+
+
+def _delegation_failure_state(exc):
+    if getattr(exc, "code", None) == "egress_denied" or getattr(exc, "status_code", None) == 403 \
+            or getattr(exc, "status", None) == 403:
+        return "denied"
+    if isinstance(exc, PeerUnavailable) and exc.status is None \
+            or getattr(exc, "code", None) == "peer_unavailable":
+        return "unreachable"
+    return "failed"

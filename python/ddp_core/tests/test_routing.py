@@ -103,8 +103,9 @@ def test_candidates_deterministic_bounded_and_never_drop_members():
     second = candidates(members, descriptors, query="robotics review", limit=2, local_node_id="node-a")
     assert first == second
     assert len(first) == 2
-    assert first[0]["target_key"] == target("node-c", "c:robotics")  # 主题命中压过本地加分
-    assert first[0]["score"] == 3 and "topic_match:1" in first[0]["reason"]
+    assert first[0]["target_key"] == target("node-a", "a:robotics")  # 本地优先先于描述符加分。
+    assert first[1]["target_key"] == target("node-c", "c:robotics")
+    assert first[1]["score"] == 3 and "topic_match:1" in first[1]["reason"]
     every = candidates(members, descriptors, query="anything", limit=10, local_node_id="node-b")
     assert {row["target_key"]["origin_node_id"] for row in every} == {"node-a", "node-b", "node-c"}
 

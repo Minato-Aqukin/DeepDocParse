@@ -24,6 +24,64 @@
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
     },
+    "SubtreeSnapshotPage": {
+      "type": "object",
+      "description": "已批准同伴的有界递归目录快照；路由相对响应者，消耗为整份快照实际出站请求数（每页重复，不累加）。",
+      "properties": {
+        "authority_node_id": { "$ref": "#/$defs/node_id" },
+        "snapshot_id": { "type": "string", "minLength": 1 },
+        "created_at": { "$ref": "#/$defs/instant" },
+        "valid_until": { "$ref": "#/$defs/instant" },
+        "first_cursor": { "type": "string", "minLength": 1 },
+        "terminal_cursor": { "type": "string", "minLength": 1 },
+        "targets": {
+          "type": "array", "maxItems": 100,
+          "items": {
+            "type": "object",
+            "properties": {
+              "target_key": { "$ref": "../ddp-scope-coverage/v1.json#/$defs/TargetKey" },
+              "via_node_ids": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/node_id" } }
+            },
+            "required": ["target_key", "via_node_ids"], "additionalProperties": false
+          }
+        },
+        "registry_revision_vector": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "node_id": { "$ref": "#/$defs/node_id" },
+              "registry_revision": { "type": "integer", "minimum": 1 },
+              "fetched_at": { "$ref": "#/$defs/instant" },
+              "directory_ref": { "type": "string", "minLength": 1 },
+              "snapshot_ref": { "type": "string", "minLength": 1 }
+            },
+            "required": ["node_id", "registry_revision", "fetched_at"], "additionalProperties": false
+          }
+        },
+        "unexpanded_subtrees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "node_id": { "$ref": "#/$defs/node_id" },
+              "reason": { "type": "string", "enum": ["timeout", "denied", "enumeration_unsupported", "budget_exhausted", "unknown"] }
+            },
+            "required": ["node_id", "reason"], "additionalProperties": false
+          }
+        },
+        "enumeration_state": { "type": "string", "enum": ["sealed", "partial"] },
+        "consumption": {
+          "type": "object",
+          "properties": { "requests": { "type": "integer", "minimum": 0 }, "nodes": { "type": "integer", "minimum": 0 } },
+          "required": ["requests", "nodes"], "additionalProperties": false
+        },
+        "next_cursor": { "type": ["string", "null"] },
+        "complete": { "type": "boolean" }
+      },
+      "required": ["authority_node_id", "snapshot_id", "created_at", "valid_until", "first_cursor", "terminal_cursor", "targets", "registry_revision_vector", "unexpanded_subtrees", "enumeration_state", "consumption", "next_cursor", "complete"],
+      "additionalProperties": false
+    },
     "NodeDescriptor": {
       "type": "object",
       "description": "节点自己发布的身份与入口。",

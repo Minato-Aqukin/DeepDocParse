@@ -593,6 +593,7 @@ def test_go_produced_manifest_with_children_digest_is_accepted():
 
     期望值与 control-api 的 `TestScopeDigestCrossLanguageFixture` 冻结的是同
     一个 —— 任何一侧编码漂移，两边之一就会红。`<`/`>`/`&` 验 Go 的 HTML 转义。
+    `node_routes` 同理编进原像（expanded 与 unexpanded 之间，omitempty）。
     """
     node = "node-" + "a" * 48
     manifest = {
@@ -608,18 +609,26 @@ def test_go_produced_manifest_with_children_digest_is_accepted():
                              "enumeration_state": "sealed"}],
         "expanded_members": [{"origin_node_id": "node-p", "collection_id": "col<1>&",
                               "operation": "corpus.retrieve"}],
+        "node_routes": [{"node_id": "node-r", "via_node_ids": ["node-p"]}],
         "unexpanded_subtrees": [], "enumeration_state": "sealed",
-        "manifest_digest": "sha256:2477d7718bc66f6ce793a05bc6020b9d8ef72e84eba88a0130b6091948704caf",
+        "manifest_digest": "sha256:7e4c2bb9f69a609dc965bb2e40491f4f890beed9f2b7706a67e10a26238eb99e",
     }
     assert federation_tasks._manifest_digest_matches(manifest) is True
     # child manifest 的状态必须在摘要里：改它就对不上。
     tampered = json.loads(json.dumps(manifest))
     tampered["child_manifests"][0]["enumeration_state"] = "partial"
     assert federation_tasks._manifest_digest_matches(tampered) is False
+    # 路由同样在摘要里：改中继就对不上。
+    rerouted = json.loads(json.dumps(manifest))
+    rerouted["node_routes"][0]["via_node_ids"] = ["node-q"]
+    assert federation_tasks._manifest_digest_matches(rerouted) is False
     # 空列表与缺省等价（Go omitempty），不能因为多了一个 `[]` 就改变摘要。
     bare = {key: value for key, value in manifest.items() if key != "child_manifests"}
     assert (federation_tasks._go_manifest_digest(dict(bare, child_manifests=[]))
             == federation_tasks._go_manifest_digest(bare))
+    noroutes = {key: value for key, value in manifest.items() if key != "node_routes"}
+    assert (federation_tasks._go_manifest_digest(dict(noroutes, node_routes=[]))
+            == federation_tasks._go_manifest_digest(noroutes))
 
 
 async def test_coordination_tables_and_tampered_manifest(actor_client, engine):

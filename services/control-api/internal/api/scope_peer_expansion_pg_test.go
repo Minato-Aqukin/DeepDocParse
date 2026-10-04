@@ -65,7 +65,9 @@ func TestScopeCreateExpandsRemoteDirectoryAndPersistsChildManifests(t *testing.T
 	registration := remoteRegistration(t, true)
 	approveEnumerableNode(t, f, registration)
 	pNode := registration.Descriptor.NodeID
-	bNode := freshNodeID(t)
+	childRegistration := remoteRegistration(t, true)
+	approveEnumerableNode(t, f, childRegistration)
+	bNode := childRegistration.Descriptor.NodeID
 
 	p := newFakePeerServer(pNode,
 		[]discovery.PeerMember{enumerablePeerMember(bNode)},
@@ -120,8 +122,8 @@ func TestScopeCreateExpandsRemoteDirectoryAndPersistsChildManifests(t *testing.T
 		t.Fatalf("child_manifests column not persisted: %s", persisted)
 	}
 
-	// A discovered origin (B) has no local registration; its authorization root
-	// is P, so its targets stay usable instead of being falsely revoked.
+	// Both mesh origins are approved locally, so their frozen targets remain
+	// available without relying on a transitive trust registration.
 	page := decodeDiscovery[discovery.ScopeTargetPage](t, requestDiscovery(t, f.handler, "GET", "/api/v1/federation/scopes/"+out.Manifest.ScopeID+"/targets", f.aliceToken, nil), 200)
 	for _, target := range page.Targets {
 		if target.State != "not_attempted" {
@@ -129,12 +131,16 @@ func TestScopeCreateExpandsRemoteDirectoryAndPersistsChildManifests(t *testing.T
 		}
 	}
 
-	// Revoking the direct root P propagates to every origin discovered through it.
+	// Revoking P cannot revoke a separately approved direct member B.
 	decodeDiscovery[map[string]any](t, requestDiscovery(t, f.handler, "POST", "/api/v1/federation/nodes/"+pNode+"/revoke", f.adminToken, nil), 200)
 	revoked := decodeDiscovery[discovery.ScopeTargetPage](t, requestDiscovery(t, f.handler, "GET", "/api/v1/federation/scopes/"+out.Manifest.ScopeID+"/targets", f.aliceToken, nil), 200)
 	for _, target := range revoked.Targets {
-		if target.State != "revoked" {
-			t.Fatalf("target of a revoked discovery root stayed usable: %+v", target)
+		wantState := "not_attempted"
+		if target.TargetKey.OriginNodeID == pNode {
+			wantState = "revoked"
+		}
+		if target.State != wantState {
+			t.Fatalf("live mesh authorization overlay wrong: %+v", target)
 		}
 	}
 	if revoked.TotalTargets != 2 || revoked.ManifestDigest != out.Manifest.ManifestDigest {
@@ -148,7 +154,9 @@ func TestScopeCreateToleratesMutualMemberDirectoriesAndSeals(t *testing.T) {
 	registration := remoteRegistration(t, true)
 	approveEnumerableNode(t, f, registration)
 	pNode := registration.Descriptor.NodeID
-	bNode := freshNodeID(t)
+	childRegistration := remoteRegistration(t, true)
+	approveEnumerableNode(t, f, childRegistration)
+	bNode := childRegistration.Descriptor.NodeID
 	// P lists B and B lists P (and the local node); a directory cycle must not
 	// recurse, duplicate targets or manufacture unknown subtrees.
 	p := newFakePeerServer(pNode,
@@ -290,7 +298,9 @@ func TestScopeCreateApprovedBoundaryExcludesDirectAndTransitivePeers(t *testing.
 	approveEnumerableNode(t, f, excludedRegistration)
 	pNode := pRegistration.Descriptor.NodeID
 	excludedNode := excludedRegistration.Descriptor.NodeID
-	bNode, childNode := freshNodeID(t), freshNodeID(t)
+	childRegistration := remoteRegistration(t, true)
+	approveEnumerableNode(t, f, childRegistration)
+	bNode, childNode := childRegistration.Descriptor.NodeID, freshNodeID(t)
 	p := newFakePeerServer(pNode,
 		[]discovery.PeerMember{enumerablePeerMember(bNode), enumerablePeerMember(childNode)},
 		[]discovery.CollectionRef{{CollectionID: "p-col", OriginNodeID: pNode}})
@@ -335,7 +345,9 @@ func TestScopeCreateRemoteBudgetStopsRecursionHonestly(t *testing.T) {
 	registration := remoteRegistration(t, true)
 	approveEnumerableNode(t, f, registration)
 	pNode := registration.Descriptor.NodeID
-	bNode := freshNodeID(t)
+	childRegistration := remoteRegistration(t, false)
+	approveEnumerableNode(t, f, childRegistration)
+	bNode := childRegistration.Descriptor.NodeID
 	p := newFakePeerServer(pNode,
 		[]discovery.PeerMember{enumerablePeerMember(bNode)},
 		[]discovery.CollectionRef{{CollectionID: "p-col", OriginNodeID: pNode}})

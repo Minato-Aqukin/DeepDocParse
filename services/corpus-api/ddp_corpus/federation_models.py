@@ -237,6 +237,7 @@ class CoverageEntry(Base):
     # 内核把 missing_requirements 拼成依据（上限见 coverage.MAX_EXCLUSION_BASIS_CHARS）；
     # Text 与内核上限一起保证它不会在 PostgreSQL 上撞列宽 500。
     exclusion_basis: Mapped[str | None] = mapped_column(Text, default=None)
+    reported_by: Mapped[str | None] = mapped_column(String(64), default=None)
 
 
 class FederationDelivery(Base):
@@ -331,3 +332,15 @@ class FederationRootReservation(Base):
     kind: Mapped[str] = mapped_column(String(32))
     amount: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FederationDelegationConsumption(Base):
+    """A child share is prepaid once; its untrusted report is stored separately."""
+
+    __tablename__ = "federation_delegation_consumption"
+
+    root_task_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    step_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    reserved_json: Mapped[dict] = mapped_column(JSON)
+    reported_json: Mapped[dict | None] = mapped_column(JSON, default=None)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -332,6 +332,7 @@ enums:
       - {value: user,    summary: 浏览器会话（JWT / OIDC）, label: 用户,     severity: neutral}
       - {value: api_key, summary: sk- 开头的对外 key,       label: API Key,  severity: neutral}
       - {value: service, summary: 服务间调用（服务凭据）,   label: 服务,     severity: neutral}
+      - {value: peer, summary: 已验签节点请求派生的只读主体，可在已批准子图内向直接成员转委托；不继承本地用户权限, label: 联邦节点主体, severity: neutral}
 
   role:
     description: |
@@ -678,6 +679,22 @@ enums:
       - {value: corpus.retrieve, summary: 只按范围取证据，不生成结论, label: 只取证据, severity: neutral}
       - {value: rag.answer.cited, summary: 取证据并生成带出处的回答, label: 带出处的回答, severity: neutral}
       - {value: wiki.pages, summary: 按固定原始证据生成并验证版本化 Wiki 草稿, label: 构建 Wiki 草稿, severity: neutral}
+
+  plan_step_operation:
+    description: 已登记的类型化执行步骤；delegate 只协调分配的叶目标，不扩权。
+    applies_to: [federation, plans]
+    values:
+      - {value: parse, summary: 解析固定输入, label: 解析, severity: neutral}
+      - {value: index, summary: 构建本域索引, label: 索引, severity: neutral}
+      - {value: retrieve, summary: 本域检索, label: 检索, severity: neutral}
+      - {value: delegate, summary: 用非重叠预算份额协调子树, label: 子树委托, severity: neutral}
+      - {value: fuse, summary: 融合取回证据, label: 融合, severity: neutral}
+      - {value: rerank, summary: 对证据重排, label: 重排, severity: neutral}
+      - {value: answer, summary: 生成带引用答案, label: 回答, severity: neutral}
+      - {value: source_manifest, summary: 固定来源清单, label: 来源清单, severity: neutral}
+      - {value: wiki_pages, summary: 生成 Wiki 页面, label: Wiki 页面, severity: neutral}
+      - {value: validate, summary: 校验输出, label: 校验, severity: neutral}
+      - {value: deliver, summary: 交付固定结果, label: 交付, severity: neutral}
 
   task_event_type:
     description: |
@@ -1035,6 +1052,7 @@ enums:
       - {value: result_resolve,    summary: 'POST /api/v1/federation/results/resolve',               label: 解析证据引用,   severity: neutral}
       - {value: catalog_read,      summary: 'GET /api/v1/federation/published-collections',          label: 读取发布目录,   severity: neutral}
       - {value: directory_members_read, summary: 'GET /api/v1/federation/members',                  label: 读取目录成员,   severity: neutral}
+      - {value: directory_subtree_read, summary: 'GET /api/v1/federation/subtree',                  label: 读取目录子树,   severity: neutral}
       - {value: directory_collections_read, summary: 'GET /api/v1/federation/collections',          label: 读取目录集合,   severity: neutral}
       - {value: directory_capabilities_read, summary: 'GET /api/v1/federation/generation-descriptor', label: 读取生成能力, severity: neutral}
 
@@ -1435,6 +1453,10 @@ enums:
         summary: 计划或批准已过期，需准备新计划
         label: 计划或批准已过期；需要准备新计划。
         severity: warn
+      - value: delegation_loop
+        summary: 委托路径已含接收者或重复节点，拒绝执行
+        label: 委托路径存在环路，未执行。
+        severity: error
       - value: budget_exceeded
         summary: 超出已批准的请求或外发字节预算，未发送
         label: 超出已批准的请求或外发字节预算，未发送。

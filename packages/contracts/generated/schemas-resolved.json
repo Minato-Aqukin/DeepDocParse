@@ -1872,6 +1872,193 @@
           "type": "object",
           "x-ddp-doc": "**A 能连 B 不代表 App 能直连 B**（§5.2）—— 所以有 observed_by。客户端连不上下游时由中心中继或委托读取，而**中继也是数据接收方**，要进外发许可与保留策略（§5.3）。提供传输 URL 时要防错误回环地址、内网地址与跨目标凭证泄露。"
         },
+        "SubtreeSnapshotPage": {
+          "additionalProperties": false,
+          "description": "已批准同伴的有界递归目录快照；路由相对响应者，消耗为整份快照实际出站请求数（每页重复，不累加）。",
+          "properties": {
+            "authority_node_id": {
+              "$ref": "#/$defs/node_id"
+            },
+            "complete": {
+              "type": "boolean"
+            },
+            "consumption": {
+              "additionalProperties": false,
+              "properties": {
+                "nodes": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "requests": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "requests",
+                "nodes"
+              ],
+              "type": "object"
+            },
+            "created_at": {
+              "$ref": "#/$defs/instant"
+            },
+            "enumeration_state": {
+              "enum": [
+                "sealed",
+                "partial"
+              ],
+              "type": "string"
+            },
+            "first_cursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "registry_revision_vector": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "directory_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "fetched_at": {
+                    "$ref": "#/$defs/instant"
+                  },
+                  "node_id": {
+                    "$ref": "#/$defs/node_id"
+                  },
+                  "registry_revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "snapshot_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "node_id",
+                  "registry_revision",
+                  "fetched_at"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "snapshot_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "targets": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "target_key": {
+                    "$ref": "#/$defs/ddp-scope-coverage:v1.json:TargetKey"
+                  },
+                  "via_node_ids": {
+                    "items": {
+                      "$ref": "#/$defs/node_id"
+                    },
+                    "type": "array",
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "target_key",
+                  "via_node_ids"
+                ],
+                "type": "object"
+              },
+              "maxItems": 100,
+              "type": "array"
+            },
+            "terminal_cursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "unexpanded_subtrees": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "node_id": {
+                    "$ref": "#/$defs/node_id"
+                  },
+                  "reason": {
+                    "enum": [
+                      "timeout",
+                      "denied",
+                      "enumeration_unsupported",
+                      "budget_exhausted",
+                      "unknown"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "node_id",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "valid_until": {
+              "$ref": "#/$defs/instant"
+            }
+          },
+          "required": [
+            "authority_node_id",
+            "snapshot_id",
+            "created_at",
+            "valid_until",
+            "first_cursor",
+            "terminal_cursor",
+            "targets",
+            "registry_revision_vector",
+            "unexpanded_subtrees",
+            "enumeration_state",
+            "consumption",
+            "next_cursor",
+            "complete"
+          ],
+          "type": "object"
+        },
+        "ddp-scope-coverage:v1.json:TargetKey": {
+          "additionalProperties": false,
+          "description": "去重后的检索目标。",
+          "properties": {
+            "collection_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operation": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "origin_node_id": {
+              "$ref": "#/$defs/ddp-scope-coverage:v1.json:node_id"
+            }
+          },
+          "required": [
+            "origin_node_id",
+            "collection_id",
+            "operation"
+          ],
+          "type": "object",
+          "x-ddp-doc": "键是 `(origin_node_id, collection_id, operation)` 三元组（§7.3）。**一台服务器有多个集合时，探测了其中一个不能把整台标成完成** —— 计划 T85 就是这条。用 origin 而不是 next_hop 是为了「同一来源经多条路径到达只计一次」（§5.3），否则备用路径会变成重复证据。"
+        },
+        "ddp-scope-coverage:v1.json:node_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$",
+          "type": "string"
+        },
         "digest": {
           "description": "sha256 十六进制。摘要证明来源与传输完整，**不证明内容真实或推理正确**（§4.3）。",
           "pattern": "^sha256:[0-9a-f]{64}$",
@@ -2376,6 +2563,14 @@
               "minLength": 1,
               "type": "string"
             },
+            "relay_via": {
+              "description": "回传链上的中继；不改变来源或权限权威。",
+              "items": {
+                "$ref": "#/$defs/node_id"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
             "resource_id": {
               "minLength": 1,
               "type": "string"
@@ -2576,7 +2771,8 @@
               "enum": [
                 "user",
                 "api_key",
-                "service"
+                "service",
+                "peer"
               ],
               "type": "string",
               "x-ddp-enum": "actor_kind"
@@ -2765,6 +2961,7 @@
                 "result_resolve",
                 "catalog_read",
                 "directory_members_read",
+                "directory_subtree_read",
                 "directory_collections_read",
                 "directory_capabilities_read"
               ],
@@ -2941,6 +3138,7 @@
                 "result_resolve",
                 "catalog_read",
                 "directory_members_read",
+                "directory_subtree_read",
                 "directory_collections_read",
                 "directory_capabilities_read"
               ],
@@ -3200,6 +3398,39 @@
           "type": "object",
           "x-ddp-doc": "**已受理不等于算力预留，也不等于计算成功**（I06、§6.6）。`delegation_generation` 是防旧结果提交的围栏 —— 与项目已有的 `tasks.generation` fencing 同一个思想（见 corpus-api 的 Task 模型）：lease 只解决「谁可以接管」，最终写入还要比代次，否则被判死的旧 worker 迟到写入会覆盖新结果。**相同幂等键 + 相同请求摘要返回已有任务；同键但不同正文返回 idempotency_conflict**（T80），不能因 HTTP 重试自动增加逻辑执行代次（§6.6）。"
         },
+        "BudgetShare": {
+          "additionalProperties": false,
+          "description": "从父预算切出的非重叠份额；预占不退款，实际消费另记。",
+          "properties": {
+            "deadline": {
+              "$ref": "#/$defs/instant"
+            },
+            "max_bytes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_hops": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "max_probes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_requests": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "max_requests",
+            "max_bytes",
+            "max_hops",
+            "max_probes",
+            "deadline"
+          ],
+          "type": "object"
+        },
         "DataEdge": {
           "additionalProperties": false,
           "description": "一条数据传输边。",
@@ -3337,8 +3568,72 @@
         },
         "PlanStep": {
           "additionalProperties": false,
+          "allOf": [
+            {
+              "else": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "delegated_targets"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "budget_share"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "if": {
+                "properties": {
+                  "operation": {
+                    "const": "delegate"
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "required": [
+                  "delegated_targets",
+                  "budget_share"
+                ]
+              }
+            }
+          ],
           "description": "执行图里的一个类型化步骤。",
           "properties": {
+            "budget_share": {
+              "$ref": "#/$defs/BudgetShare"
+            },
+            "delegated_targets": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "target_key": {
+                    "$ref": "#/$defs/ddp-scope-coverage:v1.json:TargetKey"
+                  },
+                  "via_node_ids": {
+                    "items": {
+                      "$ref": "#/$defs/node_id"
+                    },
+                    "type": "array",
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "target_key",
+                  "via_node_ids"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "minItems": 1,
+              "type": "array"
+            },
             "depends_on": {
               "items": {
                 "type": "string"
@@ -3360,6 +3655,7 @@
                 "parse",
                 "index",
                 "retrieve",
+                "delegate",
                 "fuse",
                 "rerank",
                 "answer",
@@ -3368,7 +3664,8 @@
                 "validate",
                 "deliver"
               ],
-              "type": "string"
+              "type": "string",
+              "x-ddp-enum": "plan_step_operation"
             },
             "probe_refs": {
               "items": {
@@ -3526,6 +3823,34 @@
           ],
           "type": "object",
           "x-ddp-doc": "**每个范围只有一个预算负责人和结果提交者**（§2.2、I10）——不能本地与中心互相把同一任务当作新任务转发。`final_result_writer` 就是这件事的字段化。"
+        },
+        "ddp-scope-coverage:v1.json:TargetKey": {
+          "additionalProperties": false,
+          "description": "去重后的检索目标。",
+          "properties": {
+            "collection_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operation": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "origin_node_id": {
+              "$ref": "#/$defs/ddp-scope-coverage:v1.json:node_id"
+            }
+          },
+          "required": [
+            "origin_node_id",
+            "collection_id",
+            "operation"
+          ],
+          "type": "object",
+          "x-ddp-doc": "键是 `(origin_node_id, collection_id, operation)` 三元组（§7.3）。**一台服务器有多个集合时，探测了其中一个不能把整台标成完成** —— 计划 T85 就是这条。用 origin 而不是 next_hop 是为了「同一来源经多条路径到达只计一次」（§5.3），否则备用路径会变成重复证据。"
+        },
+        "ddp-scope-coverage:v1.json:node_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$",
+          "type": "string"
         },
         "digest": {
           "pattern": "^sha256:[0-9a-f]{64}$",
@@ -3836,6 +4161,10 @@
             "query_or_subquery_digest": {
               "$ref": "#/$defs/digest"
             },
+            "reported_by": {
+              "$ref": "#/$defs/node_id",
+              "description": "委托者自报；存在时整个账本不能为 complete。"
+            },
             "scope_ref": {
               "minLength": 1,
               "type": "string"
@@ -3957,6 +4286,31 @@
                     "properties": {
                       "incomplete": {
                         "const": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "retrieval_completeness": {
+                    "const": "complete"
+                  }
+                },
+                "required": [
+                  "retrieval_completeness"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "entries": {
+                    "not": {
+                      "contains": {
+                        "required": [
+                          "reported_by"
+                        ]
                       }
                     }
                   }
@@ -4250,6 +4604,31 @@
             },
             "manifest_digest": {
               "$ref": "#/$defs/digest"
+            },
+            "node_routes": {
+              "description": "仅列不能直接到达的来源；via_node_ids 是从本节点到来源之间的中继序列，不含两端。最短路优先，再按节点 id 排序；计入 manifest_digest。",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "node_id": {
+                    "$ref": "#/$defs/node_id"
+                  },
+                  "via_node_ids": {
+                    "items": {
+                      "$ref": "#/$defs/node_id"
+                    },
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "node_id",
+                  "via_node_ids"
+                ],
+                "type": "object"
+              },
+              "type": "array"
             },
             "registry_revision_vector": {
               "description": "每个目录自己的快照版本。**这就是「不是全局快照」的证据** —— 它是一个向量而不是一个数。",

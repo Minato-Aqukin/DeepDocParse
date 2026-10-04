@@ -68,6 +68,10 @@ func (s *Server) handleScopeCreate(w http.ResponseWriter, r *http.Request) error
 			if e != nil {
 				return discoveryError(e)
 			}
+			approvedNodes, e := s.store.ApprovedScopeNodes(r.Context(), a.OrganizationID, true)
+			if e != nil {
+				return discoveryError(e)
+			}
 			budget := opts.MaxMembers - len(catalog.Collections)
 			if budget < 0 {
 				budget = 0
@@ -75,9 +79,10 @@ func (s *Server) handleScopeCreate(w http.ResponseWriter, r *http.Request) error
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 			remote = discovery.ExpandScope(ctx, s.peers, discovery.ExpansionInput{
 				Members: members, LocalNodeID: s.nodeIdentity.NodeID(), Operation: opts.Operation,
-				RevokedNodeIDs: revokedNodes,
-				AllowedNodeIDs: opts.AllowedNodeIDs,
-				MaxTargets:     budget, MaxRequests: opts.MaxDiscoveryRequests, MaxNodes: opts.MaxRemoteMembers,
+				RevokedNodeIDs:  revokedNodes,
+				ApprovedNodeIDs: approvedNodes,
+				AllowedNodeIDs:  opts.AllowedNodeIDs,
+				MaxTargets:      budget, MaxRequests: opts.MaxDiscoveryRequests, MaxNodes: opts.MaxRemoteMembers,
 				Now: time.Now().UTC(),
 			})
 			cancel()

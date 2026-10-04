@@ -126,6 +126,7 @@ func (s *Store) CreateExpandedScope(ctx context.Context, org, subject, callerSco
 		}
 		m.RegistryRevisionVector = append(m.RegistryRevisionVector, remote.Revisions...)
 		m.ChildManifests = remote.Children
+		m.NodeRoutes = remote.NodeRoutes
 		m.UnexpandedSubtrees = append(m.UnexpandedSubtrees, remote.Unknowns...)
 		// Follow the stored cursor chain all the way to its separate terminal page.
 		// A missing page, cycle, incomplete terminal or expired snapshot is partial.

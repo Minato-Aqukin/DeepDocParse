@@ -56,6 +56,19 @@ def request_digest(body: dict) -> str:
     return content_digest(canonical_bytes(body))
 
 
+def validate_delegation_path(path, *, receiver_node_id, issuer_node_id, max_hops):
+    if not isinstance(path, list) or not path or len(path) > 1000:
+        reject(message="delegation requires a bounded path")
+    for node in path:
+        _string(node, node=True)
+    if receiver_node_id in path or len(set(path)) != len(path):
+        reject("delegation_loop", "receiver or repeated node occurs in delegation path")
+    if path[-1] != issuer_node_id:
+        reject("wrong_target", "delegation path must end at its issuer")
+    if len(path) >= max_hops:
+        reject("budget_exceeded", "delegation depth exceeds its approved share")
+
+
 def validate_receipt(receipt: dict) -> None:
     """校验 ddp-plan-admission/1#AdmissionReceipt 的字段与两条 allOf 规则。"""
     _obj(receipt, _REQUIRED, _OPTIONAL, name="admission receipt")

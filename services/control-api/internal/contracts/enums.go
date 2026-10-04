@@ -591,6 +591,8 @@ const (
 	ActorKindApiKey ActorKind = "api_key"
 	// 服务间调用（服务凭据）
 	ActorKindService ActorKind = "service"
+	// 已验签节点请求派生的只读主体，可在已批准子图内向直接成员转委托；不继承本地用户权限
+	ActorKindPeer ActorKind = "peer"
 )
 
 // ActorKindValues 保持 enums.yaml 里的声明顺序。
@@ -598,12 +600,14 @@ var ActorKindValues = []ActorKind{
 	ActorKindUser,
 	ActorKindApiKey,
 	ActorKindService,
+	ActorKindPeer,
 }
 
 var ActorKindMeta = map[ActorKind]EnumMeta{
 	ActorKindUser:    {Value: "user", Label: "用户", Severity: SeverityNeutral},
 	ActorKindApiKey:  {Value: "api_key", Label: "API Key", Severity: SeverityNeutral},
 	ActorKindService: {Value: "service", Label: "服务", Severity: SeverityNeutral},
+	ActorKindPeer:    {Value: "peer", Label: "联邦节点主体", Severity: SeverityNeutral},
 }
 
 // Valid 报告 s 是不是一个已知的 actor_kind 取值。
@@ -1297,6 +1301,69 @@ var FederationTaskOperationMeta = map[FederationTaskOperation]EnumMeta{
 // Valid 报告 s 是不是一个已知的 federation_task_operation 取值。
 func (s FederationTaskOperation) Valid() bool {
 	_, ok := FederationTaskOperationMeta[s]
+	return ok
+}
+
+// 已登记的类型化执行步骤；delegate 只协调分配的叶目标，不扩权。
+type PlanStepOperation string
+
+const (
+	// 解析固定输入
+	PlanStepOperationParse PlanStepOperation = "parse"
+	// 构建本域索引
+	PlanStepOperationIndex PlanStepOperation = "index"
+	// 本域检索
+	PlanStepOperationRetrieve PlanStepOperation = "retrieve"
+	// 用非重叠预算份额协调子树
+	PlanStepOperationDelegate PlanStepOperation = "delegate"
+	// 融合取回证据
+	PlanStepOperationFuse PlanStepOperation = "fuse"
+	// 对证据重排
+	PlanStepOperationRerank PlanStepOperation = "rerank"
+	// 生成带引用答案
+	PlanStepOperationAnswer PlanStepOperation = "answer"
+	// 固定来源清单
+	PlanStepOperationSourceManifest PlanStepOperation = "source_manifest"
+	// 生成 Wiki 页面
+	PlanStepOperationWikiPages PlanStepOperation = "wiki_pages"
+	// 校验输出
+	PlanStepOperationValidate PlanStepOperation = "validate"
+	// 交付固定结果
+	PlanStepOperationDeliver PlanStepOperation = "deliver"
+)
+
+// PlanStepOperationValues 保持 enums.yaml 里的声明顺序。
+var PlanStepOperationValues = []PlanStepOperation{
+	PlanStepOperationParse,
+	PlanStepOperationIndex,
+	PlanStepOperationRetrieve,
+	PlanStepOperationDelegate,
+	PlanStepOperationFuse,
+	PlanStepOperationRerank,
+	PlanStepOperationAnswer,
+	PlanStepOperationSourceManifest,
+	PlanStepOperationWikiPages,
+	PlanStepOperationValidate,
+	PlanStepOperationDeliver,
+}
+
+var PlanStepOperationMeta = map[PlanStepOperation]EnumMeta{
+	PlanStepOperationParse:          {Value: "parse", Label: "解析", Severity: SeverityNeutral},
+	PlanStepOperationIndex:          {Value: "index", Label: "索引", Severity: SeverityNeutral},
+	PlanStepOperationRetrieve:       {Value: "retrieve", Label: "检索", Severity: SeverityNeutral},
+	PlanStepOperationDelegate:       {Value: "delegate", Label: "子树委托", Severity: SeverityNeutral},
+	PlanStepOperationFuse:           {Value: "fuse", Label: "融合", Severity: SeverityNeutral},
+	PlanStepOperationRerank:         {Value: "rerank", Label: "重排", Severity: SeverityNeutral},
+	PlanStepOperationAnswer:         {Value: "answer", Label: "回答", Severity: SeverityNeutral},
+	PlanStepOperationSourceManifest: {Value: "source_manifest", Label: "来源清单", Severity: SeverityNeutral},
+	PlanStepOperationWikiPages:      {Value: "wiki_pages", Label: "Wiki 页面", Severity: SeverityNeutral},
+	PlanStepOperationValidate:       {Value: "validate", Label: "校验", Severity: SeverityNeutral},
+	PlanStepOperationDeliver:        {Value: "deliver", Label: "交付", Severity: SeverityNeutral},
+}
+
+// Valid 报告 s 是不是一个已知的 plan_step_operation 取值。
+func (s PlanStepOperation) Valid() bool {
+	_, ok := PlanStepOperationMeta[s]
 	return ok
 }
 
@@ -2003,6 +2070,8 @@ const (
 	NodeCredentialOperationCatalogRead NodeCredentialOperation = "catalog_read"
 	// GET /api/v1/federation/members
 	NodeCredentialOperationDirectoryMembersRead NodeCredentialOperation = "directory_members_read"
+	// GET /api/v1/federation/subtree
+	NodeCredentialOperationDirectorySubtreeRead NodeCredentialOperation = "directory_subtree_read"
 	// GET /api/v1/federation/collections
 	NodeCredentialOperationDirectoryCollectionsRead NodeCredentialOperation = "directory_collections_read"
 	// GET /api/v1/federation/generation-descriptor
@@ -2022,6 +2091,7 @@ var NodeCredentialOperationValues = []NodeCredentialOperation{
 	NodeCredentialOperationResultResolve,
 	NodeCredentialOperationCatalogRead,
 	NodeCredentialOperationDirectoryMembersRead,
+	NodeCredentialOperationDirectorySubtreeRead,
 	NodeCredentialOperationDirectoryCollectionsRead,
 	NodeCredentialOperationDirectoryCapabilitiesRead,
 }
@@ -2038,6 +2108,7 @@ var NodeCredentialOperationMeta = map[NodeCredentialOperation]EnumMeta{
 	NodeCredentialOperationResultResolve:             {Value: "result_resolve", Label: "解析证据引用", Severity: SeverityNeutral},
 	NodeCredentialOperationCatalogRead:               {Value: "catalog_read", Label: "读取发布目录", Severity: SeverityNeutral},
 	NodeCredentialOperationDirectoryMembersRead:      {Value: "directory_members_read", Label: "读取目录成员", Severity: SeverityNeutral},
+	NodeCredentialOperationDirectorySubtreeRead:      {Value: "directory_subtree_read", Label: "读取目录子树", Severity: SeverityNeutral},
 	NodeCredentialOperationDirectoryCollectionsRead:  {Value: "directory_collections_read", Label: "读取目录集合", Severity: SeverityNeutral},
 	NodeCredentialOperationDirectoryCapabilitiesRead: {Value: "directory_capabilities_read", Label: "读取生成能力", Severity: SeverityNeutral},
 }
@@ -2382,6 +2453,8 @@ const (
 	DesktopErrorConsentRevoked DesktopError = "consent_revoked"
 	// 计划或批准已过期，需准备新计划
 	DesktopErrorConsentExpired DesktopError = "consent_expired"
+	// 委托路径已含接收者或重复节点，拒绝执行
+	DesktopErrorDelegationLoop DesktopError = "delegation_loop"
 	// 超出已批准的请求或外发字节预算，未发送
 	DesktopErrorBudgetExceeded DesktopError = "budget_exceeded"
 	// 接收方、地址或数据边超出已批准范围，未发送
@@ -2538,6 +2611,7 @@ var DesktopErrorValues = []DesktopError{
 	DesktopErrorConsentRequired,
 	DesktopErrorConsentRevoked,
 	DesktopErrorConsentExpired,
+	DesktopErrorDelegationLoop,
 	DesktopErrorBudgetExceeded,
 	DesktopErrorPolicyDenied,
 	DesktopErrorInputChanged,
@@ -2657,6 +2731,7 @@ var DesktopErrorMeta = map[DesktopError]EnumMeta{
 	DesktopErrorConsentRequired:            {Value: "consent_required", Label: "该阶段尚未批准，未发送任何内容。", Severity: SeverityWarn},
 	DesktopErrorConsentRevoked:             {Value: "consent_revoked", Label: "批准已撤销；需要准备并批准新计划。", Severity: SeverityWarn},
 	DesktopErrorConsentExpired:             {Value: "consent_expired", Label: "计划或批准已过期；需要准备新计划。", Severity: SeverityWarn},
+	DesktopErrorDelegationLoop:             {Value: "delegation_loop", Label: "委托路径存在环路，未执行。", Severity: SeverityError},
 	DesktopErrorBudgetExceeded:             {Value: "budget_exceeded", Label: "超出已批准的请求或外发字节预算，未发送。", Severity: SeverityWarn},
 	DesktopErrorPolicyDenied:               {Value: "policy_denied", Label: "接收方、地址或数据边超出已批准范围，未发送。", Severity: SeverityError},
 	DesktopErrorInputChanged:               {Value: "input_changed", Label: "本地输入与锁定摘要不一致，未发送。", Severity: SeverityError},

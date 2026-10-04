@@ -137,7 +137,7 @@ func (d *PeerDirectory) Len() int {
 // peerGet performs one authenticated read against a registered endpoint.
 // The returned reason is "" on a 200, the honest failure reason otherwise
 // (timeout/denied/unknown). Redirects are reported as unknown and never followed.
-func (d *PeerDirectory) peerGet(ctx context.Context, cfg PeerConfig, path string, query url.Values) ([]byte, int, string) {
+func (d *PeerDirectory) peerGet(ctx context.Context, cfg PeerConfig, path string, query url.Values, requests *int) ([]byte, int, string) {
 	registered, ok := d.Configured(cfg.NodeID)
 	if !ok || registered != cfg || d.sign == nil {
 		return nil, 0, "denied"
@@ -155,6 +155,9 @@ func (d *PeerDirectory) peerGet(ctx context.Context, cfg PeerConfig, path string
 	}
 	req.Header.Set(HeaderPeerTarget, cfg.NodeID)
 	req.Header.Set("Accept", "application/json")
+	if requests != nil {
+		*requests++
+	}
 	resp, err := d.client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil || isTimeout(err) {
@@ -184,6 +187,10 @@ func isTimeout(err error) bool {
 
 // MembersPage fetches one stable page of a peer's approved direct directory.
 func (d *PeerDirectory) MembersPage(ctx context.Context, cfg PeerConfig, snapshotID, cursor string, limit int) (*PeerMemberPage, string) {
+	return d.membersPage(ctx, cfg, snapshotID, cursor, limit, nil)
+}
+
+func (d *PeerDirectory) membersPage(ctx context.Context, cfg PeerConfig, snapshotID, cursor string, limit int, requests *int) (*PeerMemberPage, string) {
 	query := url.Values{}
 	if snapshotID != "" {
 		query.Set("snapshot_id", snapshotID)
@@ -194,7 +201,7 @@ func (d *PeerDirectory) MembersPage(ctx context.Context, cfg PeerConfig, snapsho
 	if limit > 0 {
 		query.Set("limit", fmt.Sprint(limit))
 	}
-	body, _, reason := d.peerGet(ctx, cfg, "/api/v1/federation/members", query)
+	body, _, reason := d.peerGet(ctx, cfg, "/api/v1/federation/members", query, requests)
 	if reason != "" {
 		return nil, reason
 	}
@@ -207,6 +214,10 @@ func (d *PeerDirectory) MembersPage(ctx context.Context, cfg PeerConfig, snapsho
 
 // CollectionsPage fetches one stable page of a peer's published collections.
 func (d *PeerDirectory) CollectionsPage(ctx context.Context, cfg PeerConfig, snapshotID, cursor string, limit int) (*PeerCatalogPage, string) {
+	return d.collectionsPage(ctx, cfg, snapshotID, cursor, limit, nil)
+}
+
+func (d *PeerDirectory) collectionsPage(ctx context.Context, cfg PeerConfig, snapshotID, cursor string, limit int, requests *int) (*PeerCatalogPage, string) {
 	query := url.Values{}
 	if snapshotID != "" {
 		query.Set("snapshot_id", snapshotID)
@@ -217,7 +228,7 @@ func (d *PeerDirectory) CollectionsPage(ctx context.Context, cfg PeerConfig, sna
 	if limit > 0 {
 		query.Set("limit", fmt.Sprint(limit))
 	}
-	body, status, reason := d.peerGet(ctx, cfg, "/api/v1/federation/collections", query)
+	body, status, reason := d.peerGet(ctx, cfg, "/api/v1/federation/collections", query, requests)
 	if reason != "" {
 		// A withdrawn/expired peer snapshot reports 410; the collector keeps its
 		// already observed targets and must not fabricate completion either way.
@@ -236,7 +247,7 @@ func (d *PeerDirectory) CollectionsPage(ctx context.Context, cfg PeerConfig, sna
 // GenerationProfiles observes only a registered peer's payload-free descriptor.
 // Identity is checked before the existing producer schema/freshness projection.
 func (d *PeerDirectory) GenerationProfiles(ctx context.Context, cfg PeerConfig) ([]CapabilityProfile, string) {
-	body, _, reason := d.peerGet(ctx, cfg, "/api/v1/federation/generation-descriptor", nil)
+	body, _, reason := d.peerGet(ctx, cfg, "/api/v1/federation/generation-descriptor", nil, nil)
 	if reason != "" {
 		return []CapabilityProfile{}, "unknown"
 	}

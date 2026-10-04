@@ -168,7 +168,8 @@ class PeerClient:
                 operation=operation, constraints=constraints, method=method, path=path,
                 body=body, ttl_seconds=settings.federation_credential_ttl_seconds)
         except ApplicationError as exc:
-            # 例如 peer-* 主体想再转委托给第三个节点：actor.kind 不是契约里的主体类型。
+            # Only contract actor kinds can be signed; peer uses its derived
+            # principal, never the original user's identity or long-lived key.
             raise PeerUnavailable(self.config.node_id, "cannot request a node credential",
                                   code=exc.code) from None
         try:

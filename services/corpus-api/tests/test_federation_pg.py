@@ -82,7 +82,7 @@ FEDERATION_TABLES = (
     "federation_requests", "federation_task_events", "coverage_ledgers",
     "coverage_entries", "federation_deliveries", "federation_cache_entries",
     "federation_credential_nonces", "federation_root_ledgers",
-    "federation_root_reservations", "tasks",
+    "federation_root_reservations", "federation_delegation_consumption", "tasks",
 )
 
 
@@ -226,9 +226,9 @@ async def test_migration_drill_head_orm_drift_and_one_step_down(pg_engine):
 
     unique, foreign = await _constraint_snapshot(engine)
     for table, name in (
-            ("federation_admissions", "uq_federation_admissions_org_idempotency"),
-            ("federation_requests", "uq_federation_requests_org_idempotency"),
-            ("federation_requests", "uq_federation_requests_org_intent_idempotency"),
+            ("federation_admissions", "uq_federation_admissions_org_issuer_idempotency"),
+            ("federation_requests", "uq_federation_requests_org_actor_idempotency"),
+            ("federation_requests", "uq_federation_requests_org_actor_intent_idempotency"),
             ("federation_task_events", "uq_federation_task_events_seq"),
             ("federation_cache_entries", "uq_federation_cache_scope_key")):
         assert name in unique[table], f"{name} missing on {table}"

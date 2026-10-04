@@ -205,3 +205,67 @@ async def spend(*, root_task_id: str, organization_id: str, kind: str,
         await independent.commit()
     if budget is not None:
         budget.reserve(kind, amount)
+
+
+async def reserve_share(*, root_task_id, organization_id, step_id, share, budget, now=None):
+    """Atomically prepay a whole child allowance, once per logical step."""
+    from ddp_corpus.db import get_sessionmaker
+    from ddp_corpus.federation_models import FederationDelegationConsumption, FederationRootLedger
+
+    stamp = now or utcnow()
+    amounts = {"requests": share["max_requests"], "bytes": share["max_bytes"],
+               "hops": share["max_hops"], "probes": share["max_probes"]}
+    async with get_sessionmaker()() as independent:
+        if independent.bind.dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+        inserted = await independent.scalar(
+            insert(FederationDelegationConsumption).values(
+                root_task_id=root_task_id, step_id=step_id,
+                reserved_json=share, updated_at=stamp)
+            .on_conflict_do_nothing(index_elements=["root_task_id", "step_id"])
+            .returning(FederationDelegationConsumption.step_id))
+        if inserted is None:
+            existing = await independent.get(FederationDelegationConsumption, (root_task_id, step_id))
+            if existing.reserved_json != share:
+                raise ApplicationError("plan_changed", "logical delegation share changed")
+            await independent.commit()
+            return
+        for kind, counter in (("request", "requests"), ("bytes", "bytes"), ("hops", "hops")):
+            budget.check(kind, amounts[counter])
+        if budget._used["probes"] + amounts["probes"] > budget._sub_caps["probe"]:
+            raise ApplicationError("budget_exhausted", "delegated probes exceed parent")
+        conditions = [FederationRootLedger.root_task_id == root_task_id,
+                      FederationRootLedger.organization_id == organization_id,
+                      FederationRootLedger.deadline > stamp]
+        values = {"updated_at": stamp}
+        for counter, amount in amounts.items():
+            used = getattr(FederationRootLedger, "used_" + counter)
+            cap = getattr(FederationRootLedger, "max_probe_requests" if counter == "probes" else "max_" + counter)
+            conditions.append(used <= cap - amount)
+            values["used_" + counter] = used + amount
+        changed = await independent.execute(update(FederationRootLedger).where(*conditions).values(**values)
+                                             .execution_options(synchronize_session=False))
+        if changed.rowcount != 1:
+            raise ApplicationError("budget_exhausted", "child share exceeds remaining parent budget")
+        await independent.commit()
+    for kind, counter in (("request", "requests"), ("bytes", "bytes"), ("hops", "hops")):
+        budget.reserve(kind, amounts[counter])
+    budget._used["probes"] += amounts["probes"]
+
+
+async def record_share_report(*, root_task_id, organization_id, step_id, reported, now=None):
+    from ddp_corpus.db import get_sessionmaker
+    from ddp_corpus.federation_models import FederationDelegationConsumption, FederationRootLedger
+
+    async with get_sessionmaker()() as independent:
+        ledger = await independent.get(FederationRootLedger, root_task_id)
+        if ledger is None or ledger.organization_id != organization_id:
+            raise ApplicationError("budget_exhausted", "root ledger is unavailable")
+        row = await independent.get(FederationDelegationConsumption, (root_task_id, step_id))
+        if row is None:
+            raise ApplicationError("budget_exhausted", "share was not reserved")
+        row.reported_json = reported
+        row.updated_at = now or utcnow()
+        await independent.commit()

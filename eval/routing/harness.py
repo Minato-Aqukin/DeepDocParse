@@ -197,14 +197,14 @@ def _kernel_rank_probe(dataset: dict, question: dict, all_targets: list[dict],
                        local_node_id: str) -> dict:
     """内核级摘要排序探针（**不是**协调者 fast 的实际选择）。
 
-    P5 协调者给 `routing.candidates` 传的 descriptors 是空列表（`_select_targets`），
-    所以真实 fast 是身份顺序 + 本地优先。这里额外用夹具的集合摘要跑一遍
-    `routing.candidates`，把"摘要排序会把必需集合排到第几"如实记下来，
-    这正是计划 T84 关注的摘要漏证据情形。
+    本离线评测不模拟目录 HTTP，因此协调者路径不给描述符；这里额外用冻结摘要
+    跑一遍内核，把“摘要排序会把必需集合排到第几”如实记下来。
+    两条路径都使用同一冻结 node_routes；此探针不冒充真实目录/可达性观测。
     """
     ranked = routing.candidates(
         all_targets, copy.deepcopy(dataset["descriptors"]), query=question["query"],
-        limit=len(all_targets), ordering="local_first", local_node_id=local_node_id)
+        limit=len(all_targets), ordering="local_first", local_node_id=local_node_id,
+        node_routes=dataset["scopes"][question["scope_ref"]].get("node_routes"))
     required_collections = []
     missing_required = []
     for evidence_id in question["required_evidence"]:
@@ -253,7 +253,7 @@ def run_question(dataset: dict, question: dict, mode: str, *, executor=None,
     consent = copy.deepcopy(consent) if consent is not None else default_consent(dataset)
     task_spec = _task_spec(question, mode, consent["consent_id"], manifest, local_node_id)
     consent = coordinator.validate_exploration_consent(consent, task_spec, now=now)
-    selected = coordinator._select_targets(all_targets, task_spec, local_node_id)
+    selected = coordinator._select_targets(all_targets, task_spec, local_node_id, manifest=manifest)
     remote_count = sum(1 for target in selected
                        if target["origin_node_id"] != local_node_id)
     valid_until = min(plans.instant(manifest["valid_until"]),

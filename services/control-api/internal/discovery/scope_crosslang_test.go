@@ -6,7 +6,7 @@ import (
 )
 
 // TestScopeDigestCrossLanguageFixture freezes the digest of a manifest that
-// carries child manifests and an HTML-escaped character. corpus-api
+// carries child manifests, node routes and an HTML-escaped character. corpus-api
 // re-derives this Go encoding in `_go_manifest_digest`; its test
 // `test_go_produced_manifest_with_children_digest_is_accepted` pins the same
 // value, so a drift on either side turns one of the two red.
@@ -23,12 +23,13 @@ func TestScopeDigestCrossLanguageFixture(t *testing.T) {
 		},
 		ChildManifests:     []ChildManifest{{NodeID: "node-p", ScopeRef: "snap-m", EnumerationState: "sealed"}},
 		ExpandedMembers:    []TargetKey{{OriginNodeID: "node-p", CollectionID: "col<1>&", Operation: "corpus.retrieve"}},
+		NodeRoutes:         []NodeRoute{{NodeID: "node-r", ViaNodeIDs: []string{"node-p"}}},
 		UnexpandedSubtrees: []UnknownSubtree{},
 	}
 	if err := FinalizeScope(&m); err != nil {
 		t.Fatal(err)
 	}
-	const want = "sha256:2477d7718bc66f6ce793a05bc6020b9d8ef72e84eba88a0130b6091948704caf"
+	const want = "sha256:7e4c2bb9f69a609dc965bb2e40491f4f890beed9f2b7706a67e10a26238eb99e"
 	if m.ManifestDigest != want {
 		t.Fatalf("cross-language fixture digest drifted: %s", m.ManifestDigest)
 	}

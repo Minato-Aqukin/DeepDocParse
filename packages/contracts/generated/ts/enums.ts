@@ -444,12 +444,13 @@ export function usageKindLabelOf(value: string | null | undefined): string | nul
 
 // 调用者身份类型。corpus-api **不自己验用户凭据**，它只信任 control-api
 // 在内部调用里下发的 `X-DDP-Actor-Kind` + `X-DDP-Actor`。
-export type ActorKind = 'user' | 'api_key' | 'service'
+export type ActorKind = 'user' | 'api_key' | 'service' | 'peer'
 
 export const ACTOR_KIND_VALUES: readonly ActorKind[] = [
   'user',
   'api_key',
   'service',
+  'peer',
 ] as const
 
 export const ACTOR_KIND_META: Record<ActorKind, EnumMeta> = {
@@ -459,6 +460,8 @@ export const ACTOR_KIND_META: Record<ActorKind, EnumMeta> = {
   "api_key": { value: 'api_key', label: "API Key", severity: 'neutral' },
   // 服务间调用（服务凭据）
   "service": { value: 'service', label: "服务", severity: 'neutral' },
+  // 已验签节点请求派生的只读主体，可在已批准子图内向直接成员转委托；不继承本地用户权限
+  "peer": { value: 'peer', label: "联邦节点主体", severity: 'neutral' },
 }
 
 export function actorKindLabelOf(value: string | null | undefined): string | null {
@@ -997,6 +1000,53 @@ export function federationTaskOperationLabelOf(value: string | null | undefined)
   return FEDERATION_TASK_OPERATION_META[value as FederationTaskOperation]?.label ?? `未知取值（${value}）`
 }
 
+// 已登记的类型化执行步骤；delegate 只协调分配的叶目标，不扩权。
+export type PlanStepOperation = 'parse' | 'index' | 'retrieve' | 'delegate' | 'fuse' | 'rerank' | 'answer' | 'source_manifest' | 'wiki_pages' | 'validate' | 'deliver'
+
+export const PLAN_STEP_OPERATION_VALUES: readonly PlanStepOperation[] = [
+  'parse',
+  'index',
+  'retrieve',
+  'delegate',
+  'fuse',
+  'rerank',
+  'answer',
+  'source_manifest',
+  'wiki_pages',
+  'validate',
+  'deliver',
+] as const
+
+export const PLAN_STEP_OPERATION_META: Record<PlanStepOperation, EnumMeta> = {
+  // 解析固定输入
+  "parse": { value: 'parse', label: "解析", severity: 'neutral' },
+  // 构建本域索引
+  "index": { value: 'index', label: "索引", severity: 'neutral' },
+  // 本域检索
+  "retrieve": { value: 'retrieve', label: "检索", severity: 'neutral' },
+  // 用非重叠预算份额协调子树
+  "delegate": { value: 'delegate', label: "子树委托", severity: 'neutral' },
+  // 融合取回证据
+  "fuse": { value: 'fuse', label: "融合", severity: 'neutral' },
+  // 对证据重排
+  "rerank": { value: 'rerank', label: "重排", severity: 'neutral' },
+  // 生成带引用答案
+  "answer": { value: 'answer', label: "回答", severity: 'neutral' },
+  // 固定来源清单
+  "source_manifest": { value: 'source_manifest', label: "来源清单", severity: 'neutral' },
+  // 生成 Wiki 页面
+  "wiki_pages": { value: 'wiki_pages', label: "Wiki 页面", severity: 'neutral' },
+  // 校验输出
+  "validate": { value: 'validate', label: "校验", severity: 'neutral' },
+  // 交付固定结果
+  "deliver": { value: 'deliver', label: "交付", severity: 'neutral' },
+}
+
+export function planStepOperationLabelOf(value: string | null | undefined): string | null {
+  if (!value) return null
+  return PLAN_STEP_OPERATION_META[value as PlanStepOperation]?.label ?? `未知取值（${value}）`
+}
+
 // 联邦任务事件流（`GET /api/v1/tasks/{root_task_id}/events`）里 `Event.type` 的取值。
 // 事件是**可恢复的进度记录**，不是状态真相：状态以 `TaskStatus` 各轴为准，事件用来
 // 让界面说清"发生了什么、什么时候"，断线后按 `after=next_seq` 续读不丢。
@@ -1520,7 +1570,7 @@ export function federationErrorLabelOf(value: string | null | undefined): string
 // 一张节点凭证授权的**唯一**操作（DDP-NODE-CREDENTIAL）。每个节点对节点
 // 端点恰好对应一个值；凭证只签一个操作，拿读执行状态的凭证去受理任务是
 // `credential_operation_denied`。
-export type NodeCredentialOperation = 'probe_create' | 'probe_read' | 'admission_create' | 'admission_lookup' | 'execution_read' | 'execution_cancel' | 'evidence_set_read' | 'resource_locate' | 'result_resolve' | 'catalog_read' | 'directory_members_read' | 'directory_collections_read' | 'directory_capabilities_read'
+export type NodeCredentialOperation = 'probe_create' | 'probe_read' | 'admission_create' | 'admission_lookup' | 'execution_read' | 'execution_cancel' | 'evidence_set_read' | 'resource_locate' | 'result_resolve' | 'catalog_read' | 'directory_members_read' | 'directory_subtree_read' | 'directory_collections_read' | 'directory_capabilities_read'
 
 export const NODE_CREDENTIAL_OPERATION_VALUES: readonly NodeCredentialOperation[] = [
   'probe_create',
@@ -1534,6 +1584,7 @@ export const NODE_CREDENTIAL_OPERATION_VALUES: readonly NodeCredentialOperation[
   'result_resolve',
   'catalog_read',
   'directory_members_read',
+  'directory_subtree_read',
   'directory_collections_read',
   'directory_capabilities_read',
 ] as const
@@ -1561,6 +1612,8 @@ export const NODE_CREDENTIAL_OPERATION_META: Record<NodeCredentialOperation, Enu
   "catalog_read": { value: 'catalog_read', label: "读取发布目录", severity: 'neutral' },
   // GET /api/v1/federation/members
   "directory_members_read": { value: 'directory_members_read', label: "读取目录成员", severity: 'neutral' },
+  // GET /api/v1/federation/subtree
+  "directory_subtree_read": { value: 'directory_subtree_read', label: "读取目录子树", severity: 'neutral' },
   // GET /api/v1/federation/collections
   "directory_collections_read": { value: 'directory_collections_read', label: "读取目录集合", severity: 'neutral' },
   // GET /api/v1/federation/generation-descriptor
@@ -1702,7 +1755,7 @@ export function sourceErrorLabelOf(value: string | null | undefined): string | n
 // 宿主 HostError、文件安全检查 code 选项与 fail 调用的用户文案由架构守卫检查，
 // 包含直接字面量与条件分支返回码；含 smoke 的码、development_* 与
 // invalid_development_url 仅用于内部诊断，不提供用户标签。
-export type DesktopError = 'unsafe_runtime_directory' | 'unsafe_credential_directory' | 'unsafe_client_directory' | 'client_configuration_invalid' | 'connection_limit' | 'credential_required' | 'credential_unavailable' | 'export_target_changed' | 'file_changed' | 'file_operation_failed' | 'file_too_large' | 'host_closing' | 'invalid_bundle' | 'invalid_credential' | 'invalid_endpoint' | 'invalid_identity' | 'invalid_pdf' | 'invalid_runtime_session' | 'invalid_workspace' | 'invalid_wsl_distro' | 'runtime_exited' | 'runtime_incompatible' | 'runtime_start_failed' | 'runtime_stopped' | 'runtime_stopping' | 'runtime_unavailable' | 'subscription_limit' | 'unknown_connection' | 'unknown_operation' | 'unknown_runtime_backend' | 'unknown_workspace' | 'unsafe_export_target' | 'unsafe_runtime_token' | 'untrusted_sender' | 'workspace_alias_conflict' | 'workspace_changed' | 'workspace_unavailable' | 'wsl_backend_unavailable' | 'wsl_missing' | 'wsl_pid_record_failed' | 'wsl_runtime_abi_mismatch' | 'wsl_runtime_archive_mismatch' | 'wsl_runtime_manifest_invalid' | 'wsl_runtime_not_installed' | 'wsl_runtime_provision_failed' | 'wsl_unavailable' | 'wsl1_unsupported' | 'wsl_distro_not_found' | 'local_runtime_unavailable' | 'connection_failed' | 'authentication_required' | 'identity_mismatch' | 'profile_mismatch' | 'protocol_incompatible' | 'cache_failure' | 'model_unavailable' | 'unsupported_operation' | 'approved_plan_required' | 'outcome_unknown' | 'receipt_required' | 'disposed' | 'draft_conflict' | 'revision_conflict' | 'input_too_large' | 'not_found' | 'source_unavailable' | 'source_digest_mismatch' | 'wiki_response_too_large' | 'wiki_source_unavailable' | 'wiki_generation_invalid' | 'unsupported_generation' | 'wiki_relation_unsupported' | 'out_of_memory' | 'cursor_expired' | 'approval_cancelled' | 'plan_changed' | 'approval_unavailable' | 'consent_required' | 'consent_revoked' | 'consent_expired' | 'budget_exceeded' | 'policy_denied' | 'input_changed' | 'local_only' | 'center_not_paired' | 'center_not_current' | 'center_identity_changed' | 'center_binding_required' | 'center_unavailable' | 'delivery_unverified' | 'dispatch_already_reserved' | 'connection_not_current' | 'unreachable' | 'transport_error' | 'delivery_expired' | 'delivery_not_found' | 'delivery_id_missing' | 'result_manifest_mismatch' | 'result_unavailable' | 'ack_not_confirmed' | 'transfer_unknown' | 'resume_unknown' | 'transfer_in_progress' | 'upload_expired' | 'upload_failed' | 'upload_incomplete' | 'storage_origin_not_approved' | 'delivery_too_large' | 'gpu_device_unsupported' | 'gpu_offload_unverified' | 'model_backend_incompatible' | 'model_process_busy' | 'egress_denied' | 'invalid_response' | 'invalid_arguments' | 'host_operation_failed'
+export type DesktopError = 'unsafe_runtime_directory' | 'unsafe_credential_directory' | 'unsafe_client_directory' | 'client_configuration_invalid' | 'connection_limit' | 'credential_required' | 'credential_unavailable' | 'export_target_changed' | 'file_changed' | 'file_operation_failed' | 'file_too_large' | 'host_closing' | 'invalid_bundle' | 'invalid_credential' | 'invalid_endpoint' | 'invalid_identity' | 'invalid_pdf' | 'invalid_runtime_session' | 'invalid_workspace' | 'invalid_wsl_distro' | 'runtime_exited' | 'runtime_incompatible' | 'runtime_start_failed' | 'runtime_stopped' | 'runtime_stopping' | 'runtime_unavailable' | 'subscription_limit' | 'unknown_connection' | 'unknown_operation' | 'unknown_runtime_backend' | 'unknown_workspace' | 'unsafe_export_target' | 'unsafe_runtime_token' | 'untrusted_sender' | 'workspace_alias_conflict' | 'workspace_changed' | 'workspace_unavailable' | 'wsl_backend_unavailable' | 'wsl_missing' | 'wsl_pid_record_failed' | 'wsl_runtime_abi_mismatch' | 'wsl_runtime_archive_mismatch' | 'wsl_runtime_manifest_invalid' | 'wsl_runtime_not_installed' | 'wsl_runtime_provision_failed' | 'wsl_unavailable' | 'wsl1_unsupported' | 'wsl_distro_not_found' | 'local_runtime_unavailable' | 'connection_failed' | 'authentication_required' | 'identity_mismatch' | 'profile_mismatch' | 'protocol_incompatible' | 'cache_failure' | 'model_unavailable' | 'unsupported_operation' | 'approved_plan_required' | 'outcome_unknown' | 'receipt_required' | 'disposed' | 'draft_conflict' | 'revision_conflict' | 'input_too_large' | 'not_found' | 'source_unavailable' | 'source_digest_mismatch' | 'wiki_response_too_large' | 'wiki_source_unavailable' | 'wiki_generation_invalid' | 'unsupported_generation' | 'wiki_relation_unsupported' | 'out_of_memory' | 'cursor_expired' | 'approval_cancelled' | 'plan_changed' | 'approval_unavailable' | 'consent_required' | 'consent_revoked' | 'consent_expired' | 'delegation_loop' | 'budget_exceeded' | 'policy_denied' | 'input_changed' | 'local_only' | 'center_not_paired' | 'center_not_current' | 'center_identity_changed' | 'center_binding_required' | 'center_unavailable' | 'delivery_unverified' | 'dispatch_already_reserved' | 'connection_not_current' | 'unreachable' | 'transport_error' | 'delivery_expired' | 'delivery_not_found' | 'delivery_id_missing' | 'result_manifest_mismatch' | 'result_unavailable' | 'ack_not_confirmed' | 'transfer_unknown' | 'resume_unknown' | 'transfer_in_progress' | 'upload_expired' | 'upload_failed' | 'upload_incomplete' | 'storage_origin_not_approved' | 'delivery_too_large' | 'gpu_device_unsupported' | 'gpu_offload_unverified' | 'model_backend_incompatible' | 'model_process_busy' | 'egress_denied' | 'invalid_response' | 'invalid_arguments' | 'host_operation_failed'
 
 export const DESKTOP_ERROR_VALUES: readonly DesktopError[] = [
   'unsafe_runtime_directory',
@@ -1785,6 +1838,7 @@ export const DESKTOP_ERROR_VALUES: readonly DesktopError[] = [
   'consent_required',
   'consent_revoked',
   'consent_expired',
+  'delegation_loop',
   'budget_exceeded',
   'policy_denied',
   'input_changed',
@@ -1984,6 +2038,8 @@ export const DESKTOP_ERROR_META: Record<DesktopError, EnumMeta> = {
   "consent_revoked": { value: 'consent_revoked', label: "批准已撤销；需要准备并批准新计划。", severity: 'warn' },
   // 计划或批准已过期，需准备新计划
   "consent_expired": { value: 'consent_expired', label: "计划或批准已过期；需要准备新计划。", severity: 'warn' },
+  // 委托路径已含接收者或重复节点，拒绝执行
+  "delegation_loop": { value: 'delegation_loop', label: "委托路径存在环路，未执行。", severity: 'error' },
   // 超出已批准的请求或外发字节预算，未发送
   "budget_exceeded": { value: 'budget_exceeded', label: "超出已批准的请求或外发字节预算，未发送。", severity: 'warn' },
   // 接收方、地址或数据边超出已批准范围，未发送

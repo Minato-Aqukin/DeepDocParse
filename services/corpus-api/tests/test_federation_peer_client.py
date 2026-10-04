@@ -230,24 +230,22 @@ async def test_api_key_actor_delegates_the_person_not_the_key():
     assert "x-ddp-api-key" not in seen
 
 
-async def test_a_remote_principal_cannot_redelegate_to_a_third_node():
-    """转委托的闸门在**申请**阶段就落下：`peer` 不是契约里的主体类型。
-
-    否则 A→B 的一次调用会让 B 用 A 的名义再去调 C，而 C 只看得到 B 的签名。
-    """
+async def test_a_remote_principal_redelegates_only_as_its_derived_peer_identity():
+    """P signs its own adjacent-node credential with the derived read-only actor,
+    never masquerading as A's user or inheriting local-user privileges."""
     peer_actor = Actor(id="peer-" + "0" * 27, kind="peer", organization_id=ORG, role="viewer")
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        claims = decode(request.headers[nc.HEADER])
+        assert claims["actor"] == {"organization_id": ORG, "subject": peer_actor.id, "kind": "peer"}
         calls.append(request.url.path)
         return httpx.Response(200, json={})
 
     peers = directory(httpx.MockTransport(handler), actor=peer_actor)
-    with pytest.raises(PeerUnavailable) as info:
-        await peers.client(NODE).execution("exec-1")
+    await peers.client(NODE).execution("exec-1")
     await peers.aclose()
-    assert info.value.status is None and info.value.code == "credential_invalid"
-    assert calls == [], "拿不到凭证就一个字节都不该发出去"
+    assert calls == ["/api/v1/federation/tasks/exec-1"]
 
 
 async def test_unsignable_outbound_is_this_node_s_problem_not_the_peer_s():

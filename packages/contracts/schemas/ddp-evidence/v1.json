@@ -78,6 +78,7 @@
           "description": "当前对该资源权限有最终判定权的节点。**与 origin 可以不同**（获准副本场景），但权限由来源资源权威判定（§8.4）。",
           "$ref": "#/$defs/node_id"
         },
+        "relay_via": { "description": "回传链上的中继；不改变来源或权限权威。", "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/node_id" } },
         "resource_id": { "type": "string", "minLength": 1 },
         "source_version_id": {
           "description": "固定版本。**固定版本内容不能原地变化**（T04）。",

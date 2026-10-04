@@ -25,6 +25,7 @@ import (
 func (s *Server) mountPeer(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/federation/members", s.requirePeerCredentials(httpx.Wrap(s.handlePeerMembers)))
 	mux.Handle("GET /api/v1/federation/collections", s.requirePeerCredentials(httpx.Wrap(s.handlePeerCollections)))
+	mux.Handle("GET /api/v1/federation/subtree", s.requirePeerCredentials(httpx.Wrap(s.handlePeerSubtree)))
 	mux.Handle("GET /api/v1/federation/generation-descriptor", s.requirePeerCredentials(httpx.Wrap(s.handlePeerGenerationDescriptor)))
 }
 
@@ -48,6 +49,8 @@ func peerReadOperation(path string) (string, error) {
 		return string(contracts.NodeCredentialOperationDirectoryMembersRead), nil
 	case "/api/v1/federation/collections":
 		return string(contracts.NodeCredentialOperationDirectoryCollectionsRead), nil
+	case "/api/v1/federation/subtree":
+		return string(contracts.NodeCredentialOperationDirectorySubtreeRead), nil
 	case "/api/v1/federation/generation-descriptor":
 		return string(contracts.NodeCredentialOperationDirectoryCapabilitiesRead), nil
 	default:

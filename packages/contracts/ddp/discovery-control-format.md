@@ -47,3 +47,13 @@
 签名描述的所有字符串字段限定ASCII（码点0..127）；端点URL仍须满足既有HTTP(S)无凭据/query/fragment限制。这样Go、JavaScript与Python不会在U+2028/U+2029或非ASCII转义上产生歧义。时间规范为UTC RFC3339**整秒** `YYYY-MM-DDTHH:MM:SSZ`，发布时去除小数秒，验签不接受小数秒；数组顺序与配置一致，不包括签名本身。ASCII控制字符按JSON标准使用短转义或小写 `\\u00xx`，引号/反斜杠正常转义，`/ < > &` 不转义。Python等价为 `json.dumps(array, ensure_ascii=False, separators=(",", ":"))`，JavaScript为 `JSON.stringify(array)`。该签名绑定完整描述和租约，不证明资源权限、健康或接单意愿。
 
 失败持久保留 `renewal_attempts,renewal_last_attempt_at,renewal_next_attempt_at,renewal_last_error,renewal_last_success_at`，按间隔指数退避，上限120秒；日志 `discovery renewal` 含 node_id / outcome / error（不含凭据）。失败不改 descriptor.valid_until，过期仍由 API 的 descriptor / route.valid_until 与范围展开显示为过期，不能靠最近一次成功假称新鲜。成功清除连续失败计数/原因。旧分页快照的冻结描述/有效期不被延长；重新创建快照才看到新租约。可通过成员行的成功时间与 valid_until 增长、失败原因/计数以及上述日志验证运行。
+
+## 有界递归子树读（P6）
+
+`GET /api/v1/federation/subtree` 使用 `directory_subtree_read` 单次节点凭据，与 members／collections 一样核对本地已批准签发者、公钥、audience、operation、method/path、空 body 摘要与规范查询摘要；服务凭据和用户凭据不能替代。信任不传递：A 只联系自己的已批准 P；P 只联系自己批准且组织可见的 R。
+
+首请求带 `path`（逗号分隔，根在前，最后是签发者）、`max_requests`／`max_nodes`（0..10000）及可选 `limit`（1..100，默认50）。可选 `allowed_node_ids` 是逗号分隔的发现接收方边界（最多100个）；绑定凭据和快照，逐级传递，省略表示完整可见范围。响应方排除自己与 path 中节点；自己已在 path 时返回不做出站请求的空快照。隐藏、pending、revoked 成员不公开。每层只用固定管理员端点，不用拉回的地址作为新的信任依据。
+
+响应是 `SubtreeSnapshotPage`：`authority_node_id,snapshot_id,created_at,valid_until,first_cursor,terminal_cursor,targets:[{target_key,via_node_ids}],registry_revision_vector,unexpanded_subtrees,enumeration_state,consumption:{requests,nodes},next_cursor,complete`。目标路由相对响应方，不含响应方与来源；直接成员的路由为 `[]`。目录目标的 operation 为 `search` 元数据占位，范围冻结时归一为调用者的 operation，并非下游执行授权。每页重复同一快照的修订向量、未知子域和消耗；消耗只累加一次，分页自身的物理请求另计。`requests` 包含实际发出的目录请求与更深响应方报告的消耗，不含本地数据库读或在签名阶段拒绝、未发出的请求。节点预算计目录展开的唯一来源；已观测目标即使耗尽也保留，未展开部分必须是 `partial`／`budget_exhausted`，不能假称空集合。
+
+续页带同一 `path,max_requests,max_nodes,allowed_node_ids` 和 `snapshot_id,cursor`；省略 limit 保留原页大小。随机游标和快照持久保存，重启可继续；末页是单独的空 `complete=true` 页，但这不等于枚举 `sealed`。快照最长五分钟、目标上限10000；每签发者至多保留32份，淘汰后需重新建快照。子树快照是冻结的目录元数据：响应方在快照有效期内撤销某个成员时，已建快照的续页仍按原样返回（每次续页照常对签发者重新鉴权，签发者被撤销即拒绝），但不会出现撤销后的新目录信息；撤销的效果在两处生效——请求方读范围目标时，第一跳被撤销的整棵子树标为 `revoked`（分母与摘要不变），执行时委托者不联系已撤销节点。分页快照只存目录元数据，不镜像原文、全文或向量。

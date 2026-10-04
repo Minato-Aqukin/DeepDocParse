@@ -125,8 +125,28 @@ def _score(descriptor, tokens, local):
     return score, reasons
 
 
-def candidates(targets, descriptors, *, query, limit, ordering="local_first", local_node_id=None) -> list[dict]:
-    """按摘要与排序偏好给目标定序；local_first 本地优先但不独占，相同输入定序恒定。"""
+def _route_lengths(node_routes):
+    if node_routes is None:
+        return {}
+    if not isinstance(node_routes, list):
+        reject(message="node routes must be an array")
+    lengths = {}
+    for route in node_routes:
+        _obj(route, ("node_id", "via_node_ids"), name="node route")
+        _string(route["node_id"], node=True, name="route node")
+        via = route["via_node_ids"]
+        if not isinstance(via, list) or not via:
+            reject(message="delegated route needs intermediate nodes")
+        for node in via:
+            _string(node, node=True, name="intermediate node")
+        origin = route["node_id"]
+        lengths[origin] = min(lengths.get(origin, 1 + len(via)), 1 + len(via))
+    return lengths
+
+
+def candidates(targets, descriptors, *, query, limit, ordering="local_first", local_node_id=None,
+               node_routes=None, unreachable_node_ids=()) -> list[dict]:
+    """只排序已满足硬约束的冻结目标：本地偏好、跳数、负面观测，再比摘要。"""
     if ordering not in ORDERINGS:
         reject(message="unknown ordering")
     _integer(limit, 1, name="candidate limit")
@@ -136,6 +156,8 @@ def candidates(targets, descriptors, *, query, limit, ordering="local_first", lo
         reject(message="descriptors must be an array")
     if local_node_id is not None:
         _string(local_node_id, node=True, name="local node")
+    route_lengths = _route_lengths(node_routes)
+    unreachable = set(unreachable_node_ids)
     catalogue = {}
     for descriptor in descriptors:
         if not isinstance(descriptor, dict):
@@ -150,14 +172,15 @@ def candidates(targets, descriptors, *, query, limit, ordering="local_first", lo
         score, reasons = _score(descriptor, tokens, local)
         recency = _recency(descriptor)
         identity = (target["origin_node_id"], target["collection_id"], target["operation"])
-        if ordering == "freshness_first":
-            # 时效优先：时间范围缺失或解析不了的下沉，其余按分数与稳定键。
-            rank = (-recency, -score, *identity)
-        elif ordering == "cost_first":
-            # CollectionDescriptor 没有费用字段；少一跳的本地目标就是最低成本项。
-            rank = (-score, *identity)
-        else:
-            rank = (-score, -recency, *identity)
+        distance = 0 if local else route_lengths.get(target["origin_node_id"], 1)
+        negative = target["origin_node_id"] in unreachable
+        reasons.append(f"route_length:{distance}")
+        if negative:
+            reasons.append("negative_cache")
+        preference = (not local,) if ordering == "local_first" else ()
+        summary = (-recency, -score) if ordering == "freshness_first" else \
+            (-score,) if ordering == "cost_first" else (-score, -recency)
+        rank = (*preference, distance, negative, *summary, *identity)
         ranked.append((rank, score, reasons, target))
     ranked.sort(key=lambda row: row[0])
     return [
@@ -262,7 +285,8 @@ def _probe_fresh(probe, now, ttl_seconds=_PROBE_TTL_SECONDS):
         return False
 
 
-def plan_steps(*, targets, probes, local_node_id, coordinator_node_id, query, now) -> tuple[list[dict], list[dict]]:
+def plan_steps(*, targets, probes, local_node_id, coordinator_node_id, query, now,
+               node_routes=None, budget=None) -> tuple[list[dict], list[dict]]:
     """生成最小步骤图：每个目标一个 retrieve，协调者上 fuse，能生成就再 answer。
 
     跨节点依赖必须带类型化数据边；同节点不产生边。返回的边都是单跳，
@@ -281,15 +305,35 @@ def plan_steps(*, targets, probes, local_node_id, coordinator_node_id, query, no
         reject(message="a task plan needs at least one retrieval target")
     steps, edges = [], []
     retrieve_ids = []
+    routes = {}
+    for route in node_routes or []:
+        via = route["via_node_ids"]
+        previous = routes.get(route["node_id"])
+        if previous is None or (len(via), tuple(via)) < (len(previous), tuple(previous)):
+            routes[route["node_id"]] = list(via)
+    groups = {}
     for index, member in enumerate(members, 1):
         origin = member["origin_node_id"]
-        step = {"step_id": f"retrieve-{index}", "operation": "retrieve", "executor_node_id": origin, "depends_on": []}
-        refs = sorted({probe["probe_id"] for probe in probes
-                       if probe["target_node_id"] == origin and reusable(probe, now=now)})
-        if refs:
-            step["probe_refs"] = refs
-        steps.append(step)
-        retrieve_ids.append(step["step_id"])
+        via = routes.get(origin, [])
+        if via:
+            executor = via[0]
+            step = groups.get(executor)
+            if step is None:
+                step = {"step_id": f"delegate-{len(groups) + 1}", "operation": "delegate",
+                        "executor_node_id": executor, "depends_on": [], "fixed_inputs": ["query"],
+                        "delegated_targets": []}
+                groups[executor] = step
+                steps.append(step)
+                retrieve_ids.append(step["step_id"])
+            step["delegated_targets"].append({"target_key": member, "via_node_ids": via[1:]})
+        else:
+            step = {"step_id": f"retrieve-{index}", "operation": "retrieve", "executor_node_id": origin, "depends_on": []}
+            refs = sorted({probe["probe_id"] for probe in probes
+                           if probe["target_node_id"] == origin and reusable(probe, now=now)})
+            if refs:
+                step["probe_refs"] = refs
+            steps.append(step)
+            retrieve_ids.append(step["step_id"])
         if origin != coordinator_node_id:
             edges.append({"edge_id": f"edge-query-{index}", "from_node_id": coordinator_node_id,
                           "to_node_id": origin, "payload_kind": "query_text", "retention": "temporary",
@@ -299,6 +343,30 @@ def plan_steps(*, targets, probes, local_node_id, coordinator_node_id, query, no
                           "to_node_id": coordinator_node_id, "payload_kind": "evidence_excerpts",
                           "retention": "temporary",
                           "authorised_by": f"source:{origin}:{member['collection_id']}"})
+            if via:
+                edges[-2]["relay_via"] = via
+                edges[-1]["relay_via"] = list(reversed(via))
+    if groups:
+        if budget is None:
+            reject("budget_exceeded", "recursive plans require a frozen parent budget")
+        direct = sum(step["operation"] == "retrieve" for step in steps)
+        count = len(groups)
+        # Keep parent HTTP attempts and local work outside child shares.
+        requests = max(0, budget["max_requests"] - 8 * count - 68 * direct)
+        byte_cap = max(0, budget["max_bytes"] - 32768 * count - 4096 * direct)
+        hops = max(0, budget["max_hops"] - 2 * count - 2 * sum(
+            step["operation"] == "retrieve" and step["executor_node_id"] != coordinator_node_id
+            for step in steps))
+        probe_cap = min(requests, budget.get("max_probe_requests", 0))
+        for position, step in enumerate(groups.values()):
+            def portion(value, _position=position):
+                return value // count + int(_position < value % count)
+            if portion(hops) < 1:
+                reject("budget_exceeded", "no hop share remains for delegation")
+            step["budget_share"] = {
+                "max_requests": portion(requests), "max_bytes": portion(byte_cap),
+                "max_hops": portion(hops), "max_probes": portion(probe_cap),
+                "deadline": budget["deadline"]}
     steps.append({"step_id": "fuse-1", "operation": "fuse", "executor_node_id": coordinator_node_id,
                   "depends_on": retrieve_ids})
     capable = sorted({probe["target_node_id"] for probe in probes

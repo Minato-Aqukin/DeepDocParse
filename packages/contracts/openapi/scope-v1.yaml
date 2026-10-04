@@ -28,8 +28,8 @@ paths:
                   description: Optional approved recipient boundary, including this coordinator. No directory request is sent to an excluded node, including descendants discovered through another peer. Omission retains the caller-authorized directory scope.
                 page_size: {type: integer, minimum: 1, maximum: 100, default: 50}
                 max_members: {type: integer, minimum: 1, maximum: 10000, default: 1000}
-                max_discovery_requests: {type: integer, minimum: 0, maximum: 10000, default: 64, description: Outbound peer directory request budget; exhaustion keeps observed targets and marks the scope partial}
-                max_remote_members: {type: integer, minimum: 0, maximum: 10000, default: 32, description: Distinct remote nodes contacted while expanding; exhaustion keeps observed targets and marks the scope partial}
+                max_discovery_requests: {type: integer, minimum: 0, maximum: 10000, default: 64, description: Outbound directory requests including reported subtree consumption; exhaustion keeps observed targets and marks the scope partial}
+                max_remote_members: {type: integer, minimum: 0, maximum: 10000, default: 32, description: Remote expansion nodes including subtree reported consumption; exhaustion keeps observed targets and marks the scope partial}
                 ttl_seconds: {type: integer, minimum: 30, maximum: 3600, default: 900}
       responses:
         '201': {description: Persisted sealed or explicitly partial scope, content: {application/json: {schema: {$ref: '#/components/schemas/ScopeEnvelope'}}}}

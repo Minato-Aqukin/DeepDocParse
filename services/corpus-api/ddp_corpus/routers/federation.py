@@ -121,6 +121,7 @@ class AdmissionRequest(BaseModel):
     root_task_id: str = Field(min_length=1, max_length=64)
     step_id: str = Field(min_length=1, max_length=64)
     delegation_generation: int = Field(default=0, ge=0)
+    delegation_path: list[str] | None = Field(default=None, min_length=1, max_length=1000)
     task_spec: dict
     plan: dict
     execution_consent: dict
@@ -192,7 +193,7 @@ async def create_admission(body: AdmissionRequest, request: Request,
         raise APIError(403, "only the plan's root coordinator may submit its admissions",
                        "permission_error", "credential_scope_denied")
     receipt, created = await federation.admit(
-        session, peer.actor, body.model_dump(by_alias=True), now=utcnow(),
+        session, peer.actor, body.model_dump(by_alias=True, exclude_none=True), now=utcnow(),
         http=_http(request), index=_index(request))
     return JSONResponse(receipt, status_code=201 if created else 200,
                         headers={"Cache-Control": "no-store"})

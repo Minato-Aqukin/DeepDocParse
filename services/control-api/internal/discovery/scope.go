@@ -37,6 +37,7 @@ type ScopeManifest struct {
 	RegistryRevisionVector []DirectoryRevision `json:"registry_revision_vector"`
 	ChildManifests         []ChildManifest     `json:"child_manifests,omitempty"`
 	ExpandedMembers        []TargetKey         `json:"expanded_members"`
+	NodeRoutes             []NodeRoute         `json:"node_routes,omitempty"`
 	UnexpandedSubtrees     []UnknownSubtree    `json:"unexpanded_subtrees"`
 	EnumerationState       string              `json:"enumeration_state"`
 	ManifestDigest         string              `json:"manifest_digest,omitempty"`
@@ -131,6 +132,21 @@ func FinalizeScope(m *ScopeManifest) error {
 		return strings.Compare(a.Operation, b.Operation)
 	})
 	m.ExpandedMembers = slices.Compact(m.ExpandedMembers)
+	if len(m.NodeRoutes) > 0 {
+		slices.SortFunc(m.NodeRoutes, func(a, b NodeRoute) int {
+			if c := strings.Compare(a.NodeID, b.NodeID); c != 0 {
+				return c
+			}
+			if routeLess(a.ViaNodeIDs, b.ViaNodeIDs) {
+				return -1
+			}
+			if routeLess(b.ViaNodeIDs, a.ViaNodeIDs) {
+				return 1
+			}
+			return 0
+		})
+		m.NodeRoutes = slices.CompactFunc(m.NodeRoutes, func(a, b NodeRoute) bool { return a.NodeID == b.NodeID })
+	}
 	if len(m.ChildManifests) > 0 {
 		slices.SortFunc(m.ChildManifests, func(a, b ChildManifest) int {
 			if c := strings.Compare(a.NodeID, b.NodeID); c != 0 {

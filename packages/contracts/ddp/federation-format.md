@@ -134,6 +134,31 @@ ExplorationConsent  ──→  远端 Probe  ──→  TaskPlan  ──→  Exe
 认证组织与签发节点隔离；不同协调节点不能查出或复用彼此的受理回执。
 交付确认先校验结果摘要：已确认后的同键异正文仍返回 `idempotency_conflict`。
 
+### 递归受理与预算份额（P6）
+
+`ScopeManifest.node_routes` 只给间接来源。根按最短路径、再按节点 id 稳定选路，
+按第一跳合并为 `delegate`；`delegated_targets` 的路径相对委托者，不含委托者与叶两端。
+`budget_share` 是父预算切片，不是新的完整预算；父节点为自己的 HTTP 尝试留额度。
+`delegation_path` 从根到当前发出者，接收者已在其中或路径重复时拒绝 `delegation_loop`，
+达到份额 `max_hops` 时拒绝 `budget_exceeded`，拒绝发生在落受理与执行队列之前。
+
+子协调者保留原执行许可的接收方集合、授予者与有效期，在已批准叶子图内派生子计划、
+步骤和数据边，不新增接收方；数据边包含最终根接收者及其证据下游，所以来源侧策略
+不能靠 P→A 或 A→生成节点的中转被绕过。凭证使用 P 自己签名与派生 `peer-*` 只读主体，
+`actor_kind=peer` 不把远端用户冒充成本地用户，也不转发长期用户密钥。
+
+迁移 `0042` 的 `federation_delegation_consumption` 以根号／逻辑步骤号保存批准的份额与
+实际回报，份额整笔预扣一次，重放不退款；所有物理 HTTP 请求另记账。成功子回报替换
+实际报告中的子份额预占，但不改写预扣账本。没有可验证回报时保留预占上界，错误逐叶可见。
+回报超份额、目标越界、来源不在分配或摘录摘要不符时整份结果作废，不采用其中的证据。
+
+`CoverageEntry.reported_by` 明确谁自报了叶覆盖；有一条就不能报 `complete`。
+递归成功可以是 `succeeded`，但永远只给 `partial` 的范围保证。自报条目的
+`probe_receipts` 可以引用实际执行 Admission，不把它冒充根直连来源的规划 Probe。
+`ExecutionStatus.actual_index_revision` 来自真实检索结果，不能用 `parse_revision` 替代。
+证据的来源、权威、资源与版本不变，只有回传 `relay_via` 增加中继节点。
+
+
 `state=accepted` 在 schema 里要求三件套同时成立：有 `executor_task_id`、
 有 `verified_input_manifest_digest`、`input_validation=content_verified`。
 只看文件描述（`metadata_only`）就受理，等于信任客户端声明的哈希 ——

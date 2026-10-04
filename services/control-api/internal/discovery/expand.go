@@ -2,6 +2,8 @@ package discovery
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/contracts"
@@ -26,6 +28,8 @@ type RemoteExpansion struct {
 	Handled          map[string]bool
 	Sources          map[string]string
 	Targets          []TargetKey
+	NodeRoutes       []NodeRoute
+	Consumption      DiscoveryConsumption
 	Revisions        []DirectoryRevision
 	Children         []ChildManifest
 	Unknowns         []UnknownSubtree
@@ -45,6 +49,11 @@ type ExpansionInput struct {
 	MaxRequests    int
 	MaxNodes       int
 	Now            time.Time
+	// Path contains upstream callers, root first; none may be contacted.
+	Path []string
+	// A nil set retains the configured-directory test seam. Production supplies
+	// the live local approval set, so endpoint configuration cannot confer trust.
+	ApprovedNodeIDs map[string]bool
 }
 
 func hasFederationEndpoint(d NodeDescriptor) bool {
@@ -86,8 +95,7 @@ func (d *PeerDirectory) pullMembers(ctx context.Context, cfg PeerConfig, request
 		}
 		// Every follow-up page must name the snapshot the first page opened;
 		// both peer endpoints reject a bare cursor with 400.
-		page, reason := d.MembersPage(ctx, cfg, out.snapshotID, cursor, limit)
-		*requests++
+		page, reason := d.membersPage(ctx, cfg, out.snapshotID, cursor, limit, requests)
 		if reason != "" {
 			out.reason = reason
 			return out
@@ -148,8 +156,7 @@ func (d *PeerDirectory) pullCatalog(ctx context.Context, cfg PeerConfig, request
 		if firstPage {
 			limit = 100
 		}
-		page, reason := d.CollectionsPage(ctx, cfg, out.snapshotID, cursor, limit)
-		*requests++
+		page, reason := d.collectionsPage(ctx, cfg, out.snapshotID, cursor, limit, requests)
 		if reason != "" {
 			out.reason = reason
 			return out
@@ -206,6 +213,10 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 		}
 	}
 	allowed := func(nodeID string) bool { return allowedNodes == nil || allowedNodes[nodeID] }
+	reachable := func(nodeID string) bool {
+		_, configured := dir.Configured(nodeID)
+		return configured && (in.ApprovedNodeIDs == nil || in.ApprovedNodeIDs[nodeID])
+	}
 	requests, nodes := 0, 0
 	stopped := false
 	stop := func() { stopped = true }
@@ -222,20 +233,31 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 		out.Unknowns = append(out.Unknowns, UnknownSubtree{NodeID: nodeID, Reason: reason})
 	}
 	visited := map[string]bool{in.LocalNodeID: true}
+	for _, nodeID := range in.Path {
+		visited[nodeID] = true
+	}
+	accounted := map[string]bool{}
+	routes := map[string][]string{}
 	scheduled := map[string]bool{}
 	targetSeen := map[string]bool{}
 
-	addTarget := func(origin, collectionID, root string) bool {
+	addTarget := func(origin, collectionID, root string, via []string) bool {
 		key := origin + "\x00" + collectionID
+		if !targetSeen[key] && len(out.Targets) >= in.MaxTargets {
+			return false
+		}
+		if previous, exists := routes[origin]; !exists || routeLess(via, previous) {
+			routes[origin] = slices.Clone(via)
+			out.Sources[origin] = root
+		}
 		if targetSeen[key] {
 			return true
 		}
-		if len(out.Targets) >= in.MaxTargets {
-			return false
-		}
 		targetSeen[key] = true
 		out.Targets = append(out.Targets, TargetKey{OriginNodeID: origin, CollectionID: collectionID, Operation: in.Operation})
-		out.Sources[origin] = root
+		if out.Sources[origin] == "" {
+			out.Sources[origin] = root
+		}
 		return true
 	}
 	bindValidUntil := func(value time.Time) {
@@ -270,7 +292,7 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 	// Seed the frozen direct members. The classification mirrors the store's
 	// historical fallback exactly for a deployment with no registered peers.
 	for _, member := range in.Members {
-		if member.State != MemberApproved || !allowed(member.NodeID) {
+		if member.State != MemberApproved || !allowed(member.NodeID) || visited[member.NodeID] {
 			continue
 		}
 		out.Handled[member.NodeID] = true
@@ -278,7 +300,7 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 			addUnknown(member.NodeID, "unknown")
 			continue
 		}
-		_, configured := dir.Configured(member.NodeID)
+		configured := reachable(member.NodeID)
 		if !member.Descriptor.DiscoveryCapabilities.EnumerateMembers {
 			// The subtree cannot be enumerated. Its own published collections are
 			// still a legitimate leaf directory when credentials are configured.
@@ -306,13 +328,16 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 			addUnknown(current.nodeID, "budget_exhausted")
 			continue
 		}
-		if nodes >= in.MaxNodes {
+		if !accounted[current.nodeID] && nodes >= in.MaxNodes {
 			stop()
 			addUnknown(current.nodeID, "budget_exhausted")
 			continue
 		}
 		visited[current.nodeID] = true
-		nodes++
+		if !accounted[current.nodeID] {
+			nodes++
+			accounted[current.nodeID] = true
+		}
 		cfg, _ := dir.Configured(current.nodeID)
 
 		membersPull := directoryPull{complete: true}
@@ -350,7 +375,7 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 				}
 			}
 			for _, item := range catalogResult.items {
-				if !addTarget(current.nodeID, item.CollectionID, current.root) {
+				if !addTarget(current.nodeID, item.CollectionID, current.root, nil) {
 					addUnknown(current.nodeID, "budget_exhausted")
 					stop()
 					break
@@ -369,6 +394,7 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 		if stopped {
 			continue
 		}
+		subtreeRead := false
 		for _, child := range membersPull.items {
 			// Re-entering the local node or an already scheduled directory is the
 			// loop/duplicate path itself, not an unexpanded subtree.
@@ -391,8 +417,85 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 				continue
 			}
 			_, configured := dir.Configured(child.NodeID)
-			if !configured {
+			unapproved := in.ApprovedNodeIDs != nil && !in.ApprovedNodeIDs[child.NodeID]
+			if !configured && !unapproved {
 				addUnknown(child.NodeID, "unknown")
+				continue
+			}
+			if unapproved || !configured {
+				if nodes >= in.MaxNodes {
+					addUnknown(child.NodeID, "budget_exhausted")
+					continue
+				}
+				if subtreeRead {
+					continue
+				}
+				subtreeRead = true
+				pull := dir.pullSubtree(ctx, cfg, append(slices.Clone(in.Path), in.LocalNodeID), in.AllowedNodeIDs, &requests, in.MaxRequests, max(0, in.MaxNodes-nodes))
+				if pull.page != nil {
+					reportedNodes := map[string]bool{}
+					for _, revision := range pull.page.Revisions {
+						if revision.NodeID != current.nodeID {
+							reportedNodes[revision.NodeID] = true
+						}
+					}
+					for _, target := range pull.targets {
+						reportedNodes[target.TargetKey.OriginNodeID] = true
+						for _, via := range target.ViaNodeIDs {
+							reportedNodes[via] = true
+						}
+					}
+					overlap := 0
+					for node := range reportedNodes {
+						if accounted[node] {
+							overlap++
+						}
+						accounted[node] = true
+					}
+					nodes += max(0, pull.page.Consumption.Nodes-overlap)
+					bindValidUntil(pull.page.ValidUntil)
+					for _, revision := range pull.page.Revisions {
+						revision.DirectoryRef = "subtree:" + current.nodeID + ":" + revision.DirectoryRef
+						out.Revisions = append(out.Revisions, revision)
+					}
+					for _, unknown := range pull.page.Unknowns {
+						if allowed(unknown.NodeID) && !visited[unknown.NodeID] {
+							addUnknown(unknown.NodeID, unknown.Reason)
+						}
+					}
+					for _, target := range pull.targets {
+						origin := target.TargetKey.OriginNodeID
+						if !allowed(origin) || in.RevokedNodeIDs[origin] || visited[origin] {
+							continue
+						}
+						via := append([]string{current.nodeID}, target.ViaNodeIDs...)
+						if reachable(origin) {
+							via = nil
+						}
+						root := current.nodeID
+						if len(via) == 0 {
+							root = origin
+						}
+						if !addTarget(origin, target.TargetKey.CollectionID, root, via) {
+							addUnknown(origin, "budget_exhausted")
+							stop()
+							break
+						}
+					}
+					if pull.page.EnumerationState == "partial" && len(pull.page.Unknowns) == 0 {
+						addUnknown(current.nodeID, "unknown")
+					}
+					out.Children = append(out.Children, ChildManifest{NodeID: current.nodeID, ScopeRef: pull.page.SnapshotID, EnumerationState: pull.page.EnumerationState})
+				}
+				if pull.reason != "" {
+					addUnknown(current.nodeID, pull.reason)
+					if pull.reason == "budget_exhausted" {
+						stop()
+					}
+				}
+				if !pull.complete && pull.reason == "" {
+					addUnknown(current.nodeID, "unknown")
+				}
 				continue
 			}
 			if !child.Enumerable() {
@@ -403,6 +506,13 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 			enqueue(job{nodeID: child.NodeID, root: current.root, descriptor: childDescriptor, enumerate: true})
 		}
 	}
+	for origin, via := range routes {
+		if len(via) > 0 {
+			out.NodeRoutes = append(out.NodeRoutes, NodeRoute{NodeID: origin, ViaNodeIDs: via})
+		}
+	}
+	slices.SortFunc(out.NodeRoutes, func(a, b NodeRoute) int { return strings.Compare(a.NodeID, b.NodeID) })
+	out.Consumption = DiscoveryConsumption{Requests: requests, Nodes: nodes}
 	out.TargetBudgetUsed = len(out.Targets)
 	return out
 }

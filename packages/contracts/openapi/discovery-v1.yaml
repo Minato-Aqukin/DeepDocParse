@@ -5,8 +5,8 @@ info:
   description: |
     See ../ddp/discovery-control-format.md. Control owns node identity, approvals and
     per-caller persistent directory snapshots. Peer reads expose only the approved,
-    organization-visible direct directory (single-use signed node credentials); recursive
-    expansion, budgets and loop detection live in the scope collector, not here.
+    organization-visible direct directory (single-use signed node credentials); subtree
+    snapshots provide bounded recursive expansion without transitive trust.
     No scanning, address probing or user-credential forwarding is provided.
     Approved direct members are renewed by directory pull, not peer push: every
     60 seconds by default (configurable 1..120), at most four concurrent two-second
@@ -62,6 +62,31 @@ paths:
         '403': {description: Unapproved issuer or credential scope mismatch}
         '409': {description: wrong_target — receiver identity differs from the authenticated target}
         '503': {description: node_identity_unavailable or credential_store_unavailable}
+  /api/v1/federation/subtree:
+    get:
+      operationId: readPeerDirectorySubtree
+      security: [{nodeCredential: []}]
+      x-ddp-node-credential-operation: directory_subtree_read
+      description: |
+        Frozen bounded expansion of this responder's visible approved members. Never contacts
+        unapproved peers, itself or nodes in path. Routes are relative to the responder.
+        Consumption counts actual outbound requests including nested reports, once per snapshot.
+        Continuations retain the signed path and budget parameters and the original page size.
+        A separate empty terminal page proves snapshot paging, not sealed enumeration.
+      parameters:
+        - {name: path, in: query, required: true, schema: {type: string, maxLength: 4096}, description: Comma-separated caller chain root first; receiver in path excludes all expansion}
+        - {name: max_requests, in: query, required: true, schema: {type: integer, minimum: 0, maximum: 10000}}
+        - {name: max_nodes, in: query, required: true, schema: {type: integer, minimum: 0, maximum: 10000}}
+        - {name: allowed_node_ids, in: query, schema: {type: string, maxLength: 6400}, description: Optional comma-separated discovery recipient boundary, recursively forwarded and bound to the snapshot; omission allows the responder's full visible scope}
+        - {name: snapshot_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: cursor, in: query, schema: {type: string, maxLength: 128}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        '200': {description: Honest bounded subtree page, content: {application/json: {schema: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/SubtreeSnapshotPage'}}}}
+        '400': {description: Invalid path, budget, snapshot or pagination}
+        '401': {description: Invalid, expired or replayed node credential}
+        '403': {description: Unapproved issuer or operation/audience/query mismatch}
+        '410': {description: Frozen subtree snapshot expired}
   /api/v1/federation/members:
     get:
       operationId: readPeerDirectoryMembers

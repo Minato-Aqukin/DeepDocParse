@@ -204,12 +204,14 @@ def validate_entry(entry: dict) -> None:
     """校验 ddp-scope-coverage/1#CoverageEntry 的字段与两条 allOf 规则。"""
     _obj(entry, ("target_key", "scope_ref", "query_or_subquery_digest", "state", "attempts"),
          ("probe_receipts", "actual_index_revision", "search_profile", "last_error",
-          "evidence_refs", "used_budget", "exclusion_basis"), name="coverage entry")
+          "evidence_refs", "used_budget", "exclusion_basis", "reported_by"), name="coverage entry")
     _validate_target_key(entry["target_key"])
     _string(entry["scope_ref"], name="scope ref")
     _string(entry["query_or_subquery_digest"], checksum=True, name="query or subquery digest")
     _enum(entry["state"], COVERAGE_TARGET_STATE_VALUES, "coverage target state")
     _integer(entry["attempts"], name="attempts")
+    if "reported_by" in entry:
+        _string(entry["reported_by"], node=True, name="reporting delegate")
     for key in ("probe_receipts", "evidence_refs"):
         if key in entry:
             if not isinstance(entry[key], list):
@@ -239,7 +241,7 @@ def validate_manifest(manifest: dict) -> None:
     """校验 ddp-scope-coverage/1#ScopeManifest；sealed 不得留未展开子域。"""
     _obj(manifest, ("schema", "scope_id", "caller_scope_hash", "created_at", "valid_until",
                     "registry_revision_vector", "expanded_members", "unexpanded_subtrees",
-                    "enumeration_state", "manifest_digest"), ("child_manifests",), name="scope manifest")
+                    "enumeration_state", "manifest_digest"), ("child_manifests", "node_routes"), name="scope manifest")
     if manifest["schema"] != "ddp-scope-coverage/1#ScopeManifest":
         reject(message="unsupported scope manifest schema")
     _string(manifest["scope_id"], name="scope id")
@@ -262,6 +264,15 @@ def validate_manifest(manifest: dict) -> None:
         reject(message="expanded_members must be an array")
     for member in manifest["expanded_members"]:
         _validate_target_key(member)
+    for route in manifest.get("node_routes", []):
+        _obj(route, ("node_id", "via_node_ids"), name="node route")
+        _string(route["node_id"], node=True, name="route origin")
+        if not isinstance(route["via_node_ids"], list) or not route["via_node_ids"]:
+            reject(message="indirect route requires intermediate nodes")
+        for via in route["via_node_ids"]:
+            _string(via, node=True, name="route relay")
+        if len(set(route["via_node_ids"])) != len(route["via_node_ids"]) or route["node_id"] in route["via_node_ids"]:
+            reject("delegation_loop", "node route contains a cycle")
     if not isinstance(manifest["unexpanded_subtrees"], list):
         reject(message="unexpanded_subtrees must be an array")
     for subtree in manifest["unexpanded_subtrees"]:
@@ -307,6 +318,8 @@ def completeness(enumeration_state: str, search_mode: str, entries) -> str:
         return "partial"
     if not entries:
         return "not_started"
+    if any(entry.get("reported_by") for entry in entries):
+        return "partial"
     if enumeration_state != "sealed":
         return "partial"
     for group in _groups(entries).values():
@@ -571,6 +584,8 @@ def validate_ledger(value: dict) -> None:
     if value["search_mode"] == "fast" and value["retrieval_completeness"] == "complete":
         reject("partial_retrieval", "fast mode can never claim complete")
     if value["retrieval_completeness"] == "complete":
+        if any(entry.get("reported_by") for entry in value["entries"]):
+            reject("partial_retrieval", "delegated self-reports cannot prove complete retrieval")
         if value["enumeration_state"] != "sealed":
             reject(message="complete retrieval requires a sealed enumeration")
         if value["counts"]["incomplete"] != 0:

@@ -11,8 +11,8 @@
 任务图、持久 Admission 与幂等对账、快速/范围穷查、覆盖账本、跨中心证据融合与
 整项答案与 Wiki 委托、交付回执，以及这些入口共用的持久根预算。
 
-**相邻边界**：递归目录与缓存见 P6；发行、设备兼容与生产恢复见 P7 的实际验证记录，
-不能由本文件的接口存在性推导真实 GPU、发行或生产验收通过。
+**相邻边界**：递归目录、子树任务与份额账本见 `P6-RECURSIVE-DELEGATION-v3.md`；
+发行、设备兼容与生产恢复见 P7 的实际验证记录，接口存在性不代表真实 GPU 或生产验收通过。
 
 - 正式受理与 `federation_execute` / `federation_plan` 持久任务在同一事务内写入，
   由 worker 领取执行。`FEDERATION_EXECUTION_INLINE=true` 仅用于明确选定的单进程验证；
@@ -64,7 +64,7 @@ def sufficiency(entries, *, bindings=(), conflicting=False) -> str
 - `completeness == "complete"` 当且仅当 ① `enumeration_state == "sealed"`；
   ② 无 `unexpanded_subtrees`（由调用方保证 enumeration 已 sealed）；③ 所有 entry
   为 `succeeded`；④ 无 `in_flight/not_attempted/unreachable/denied/revoked/partial/
-  failed`。**fast 模式永远返回 `partial`**，即使全部成功。
+  failed`；⑤ 无 `reported_by` 自报条目。**fast 模式永远返回 `partial`**，即使全部成功。
 - `record(entry, probe)`：`succeeded` ⟹ 至少一个 probe receipt 且
   `actual_index_revision` 非空；`unsupported` ⟹ 必须有 `exclusion_basis`（由调用方
   传入或从 probe 的 `missing_requirements` 派生）；probe 报 `internal_limits` ⟹
@@ -87,7 +87,7 @@ class RootBudget:
     def reserve(self, kind: str, amount: int = 1) -> None  # 超限 raise budget_exhausted
     def used(self) -> dict
 def plan_steps(*, targets, probes, local_node_id, coordinator_node_id,
-               query, now) -> tuple[list[dict], list[dict]]   # (steps, data_edges)
+               query, now, node_routes=None, budget=None) -> tuple[list[dict], list[dict]]
 ```
 
 语义：
@@ -97,8 +97,9 @@ def plan_steps(*, targets, probes, local_node_id, coordinator_node_id,
 - `candidates` 只影响**顺序**与 fast 模式的取数上限；打分可用 descriptor 的
   languages/topics/time_range 与 `ordering`，**不读内容、不调用模型**。`local_first`
   时本地目标优先但不独占。相同输入必须给出确定顺序。
-- `plan_steps` 生成契约合法的最小步骤图：每个取数目标一个 `retrieve` step
-  （`executor_node_id` 为 origin），跨节点证据汇聚在协调者上做 `fuse`/`answer`；
+ - `plan_steps` 对直接目标保持一个 `retrieve` step；带 `node_routes` 的叶目标按第一跳
+  聚合为一个 `delegate`，携带相对该执行者的 `delegated_targets` 与批准内的 `budget_share`。
+  证据仍以叶 origin 建边，中继进入 `relay_via`；跨节点证据在根协调者上融合。
   data_edges 的 `authorised_by` 由调用方填（函数接收 `authorised_by` 或从 target
   推导，同一 node 不产生数据边）；`max_hops` 与步数/边数必须自洽。生成结果要能
   通过 `plans.validate_plan`。

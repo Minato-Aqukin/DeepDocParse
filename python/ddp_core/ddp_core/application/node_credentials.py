@@ -60,8 +60,8 @@ PUBLIC_KEY_BYTES = 32
 
 #: 读操作走 GET，其余走 POST（契约 Claims.allOf 同一条规则）。
 GET_OPERATIONS = frozenset({"probe_read", "execution_read", "evidence_set_read",
-                            "catalog_read", "directory_members_read", "directory_collections_read",
-                            "directory_capabilities_read"})
+                            "catalog_read", "directory_members_read", "directory_subtree_read",
+                            "directory_collections_read", "directory_capabilities_read"})
 #: 必须带 step_id 约束的操作。
 STEP_BOUND_OPERATIONS = frozenset({"admission_create"})
 #: 必须带 task_spec_digest 约束的操作。
@@ -142,7 +142,7 @@ def validate_claims(claims) -> dict:
         raise _invalid("this operation requires a step_id constraint")
     if operation in SPEC_BOUND_OPERATIONS and "task_spec_digest" not in constraints:
         raise _invalid("this operation requires a task_spec_digest constraint")
-    if operation in {"directory_members_read", "directory_collections_read", "directory_capabilities_read"}:
+    if operation in {"directory_members_read", "directory_subtree_read", "directory_collections_read", "directory_capabilities_read"}:
         _text(constraints.get("scope_ref"), _DIGEST, "constraints.scope_ref")
     issued = _epoch(claims["issued_at"], "issued_at")
     expires = _epoch(claims["expires_at"], "expires_at")

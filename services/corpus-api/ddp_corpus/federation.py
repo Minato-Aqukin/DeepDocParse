@@ -97,7 +97,7 @@ EXECUTION_LEASE_SECONDS = 300
 #: 本切片真正实现的 operation。`answer`/`wiki_pages` 只在本节点生成就绪时受理，
 #: 消费受理时已校验的有界证据快照（远端原始结果，回 A 提交）；不生成就不接单，
 #: 绝不接受后再静默失败。
-SUPPORTED_OPERATIONS = {"retrieve", "answer", "wiki_pages"}
+SUPPORTED_OPERATIONS = {"retrieve", "delegate", "answer", "wiki_pages"}
 #: 从 TaskSpec 就能本地重算摘要的输入引用。其余引用（文件等）拿不到内容，
 #: 一律 waiting_input —— 只看客户端声明的哈希就受理正是 T78 要防的事。
 _LOCAL_INPUT_REFS = {"query", "query_text"}
@@ -504,6 +504,45 @@ async def _collection_target(session: AsyncSession, actor: Actor, collection_id:
                        if member.parse_job_id}
     document_ids = sorted({job_to_document[job] for job in contexts if job in job_to_document})
     return collection, index_revision, limits, contexts, document_ids
+
+
+async def _onward_leaf_gate(session, actor, *, request, step, node) -> None:
+    """A delegate step's P-origin leaves still honor P's source onward policy.
+
+    `_onward_policy_gate` only checks retrieve steps, so a delegated leaf whose
+    origin is P itself would otherwise skip the source-side onward check. This
+    applies the exact single-hop retrieve rule to each P-owned collection in
+    the assignment: the plan-wide downstream walk from P over the received
+    (root) plan with the coordinator exempt (`plans.onward_recipients`), so a
+    policy must list every downstream node A's plan may forward P's evidence
+    to (e.g. a generator). A direct P -> A return is publication, not onward
+    transfer, exactly as for a single-hop retrieve. Fail closed before any
+    persistence, execution or outbound byte.
+    """
+    from ddp_corpus.collection_models import Collection
+
+    own = [item for item in step.get("delegated_targets", [])
+           if item.get("target_key", {}).get("origin_node_id") == node]
+    if not own:
+        return
+    downstream = onward_recipients(request["plan"], node)
+    if not downstream:
+        return
+    wanted = {item["target_key"]["collection_id"] for item in own}
+    rows = list(await session.scalars(select(Collection).where(
+        Collection.organization_id == actor.organization_id,
+        Collection.id.in_(sorted(wanted)))))
+    if {row.id for row in rows} != wanted:
+        raise ApplicationError("egress_denied", "delegated leaf collection is not visible here")
+    for row in rows:
+        allowed = (row.metadata_json or {}).get("onward_recipients")
+        if allowed is None:
+            continue
+        denied = sorted(downstream - set(allowed))
+        if denied:
+            raise ApplicationError(
+                "egress_denied",
+                f"collection {row.id} onward-transfer policy does not allow " + ", ".join(denied))
 
 
 async def _onward_policy_gate(session: AsyncSession, actor: Actor, *, plan: dict,
@@ -1015,6 +1054,12 @@ def _consent_binding(task_spec: dict, plan: dict, consent: dict, *, node: str,
         raise ApplicationError("consent_expired", "execution consent has expired")
     if node not in (consent.get("allowed_recipients") or []):
         raise ApplicationError("egress_denied", "this node is not an approved recipient")
+    recipients = {step["executor_node_id"] for step in plan["steps"]}
+    for edge in plan["data_edges"]:
+        recipients.update([edge["from_node_id"], edge["to_node_id"], *edge.get("relay_via", [])])
+    uncovered = sorted(recipients - set(consent.get("allowed_recipients") or []))
+    if uncovered:
+        raise ApplicationError("egress_denied", "execution consent omits " + ", ".join(uncovered))
     approved = set(consent.get("allowed_edges") or [])
     planned = {edge.get("edge_id") for edge in plan.get("data_edges", [])}
     if not planned <= approved:
@@ -1037,17 +1082,13 @@ def _effective_policy_ref(plan: dict, consent: dict) -> str:
 
 
 def _admission_body(request: dict) -> dict:
-    return {
-        "schema": "ddp-plan-admission/1#AdmissionRequest",
-        "idempotency_key": request["idempotency_key"],
-        "root_task_id": request["root_task_id"],
-        "step_id": request["step_id"],
-        "delegation_generation": request["delegation_generation"],
-        "task_spec": request["task_spec"],
-        "plan": request["plan"],
-        "execution_consent": request["execution_consent"],
-        "inputs": request["inputs"],
-    }
+    body = {key: request[key] for key in (
+        "idempotency_key", "root_task_id", "step_id", "delegation_generation",
+        "task_spec", "plan", "execution_consent", "inputs")}
+    body["schema"] = "ddp-plan-admission/1#AdmissionRequest"
+    if request.get("delegation_path") is not None:
+        body["delegation_path"] = request["delegation_path"]
+    return body
 
 
 async def admit(session: AsyncSession, actor: Actor, request: dict, *, now: datetime,
@@ -1118,7 +1159,6 @@ async def _create_admission(session: AsyncSession, actor: Actor, request: dict,
     validate_plan(plan, task_spec, local_node_id=node, now=_ts(now))
     if plan.get("planning_state") != "approved":
         raise ApplicationError("plan_changed", "only an approved plan can be admitted")
-    _consent_binding(task_spec, plan, consent, node=node, now=now)
     step = next((item for item in plan.get("steps", [])
                  if isinstance(item, dict) and item.get("step_id") == request["step_id"]), None)
     if step is None:
@@ -1127,10 +1167,39 @@ async def _create_admission(session: AsyncSession, actor: Actor, request: dict,
         raise APIError(409, "admission targets another executor node",
                        "invalid_request_error", "wrong_target")
     operation = step.get("operation")
+    if operation == "delegate":
+        from ddp_core.application.admission import validate_delegation_path
+        validate_delegation_path(
+            request.get("delegation_path"), receiver_node_id=node,
+            issuer_node_id=plan["root_coordinator_node_id"],
+            max_hops=step["budget_share"]["max_hops"])
+    _consent_binding(task_spec, plan, consent, node=node, now=now)
     if operation not in SUPPORTED_OPERATIONS:
         # 不伪造生成：答不出就当场拒收，而不是收下再静默失败。
         raise ApplicationError("capability_unsupported",
                                f"operation {operation!r} is not implemented by this node")
+    if operation == "delegate":
+        from ddp_corpus import federation_tasks
+        from ddp_corpus.federation_peers import Delegation
+        allowed = set(consent.get("allowed_recipients") or [])
+        uncovered = set()
+        for assigned in step["delegated_targets"]:
+            uncovered.add(assigned["target_key"]["origin_node_id"])
+            uncovered.update(assigned["via_node_ids"])
+        uncovered.add(step["executor_node_id"])
+        missing = sorted(uncovered - allowed)
+        if missing:
+            raise ApplicationError("egress_denied", "execution consent omits " + ", ".join(missing))
+        peers = federation_tasks.peer_directory(actor, Delegation(
+            root_task_id=request["root_task_id"], task_spec_digest=plan["task_spec_digest"]))
+        try:
+            for assigned in step["delegated_targets"]:
+                recipient = (assigned["via_node_ids"] or [assigned["target_key"]["origin_node_id"]])[0]
+                if recipient != node and not peers.known(recipient):
+                    raise ApplicationError("wrong_target", "delegation target is not a direct member")
+        finally:
+            await peers.aclose()
+        await _onward_leaf_gate(session, actor, request=request, step=step, node=node)
     # 来源转交策略（T83）在任何持久化之前：整份已批准计划里，本节点放出去的摘录
     # 能到的节点必须都被集合允许，否则不受理、不执行、不外发。
     await _onward_policy_gate(session, actor, plan=plan, task_spec=task_spec,
@@ -1227,8 +1296,10 @@ async def _create_admission(session: AsyncSession, actor: Actor, request: dict,
             executor_task_id=executor_task_id, admission_id=admission_id,
             root_task_id=str(request["root_task_id"]), step_id=str(request["step_id"]),
             operation=operation, state="queued", generation=1,
-            result_json={"spec": _execution_spec(task_spec, step, evidence=evidence_items,
-                                                 plan=plan), "result": None},
+            result_json={"spec": (
+                {"request": request, "step": step} if operation == "delegate"
+                else _execution_spec(task_spec, step, evidence=evidence_items, plan=plan)),
+                "result": None},
             created_at=now, updated_at=now)
         session.add(execution)
         if not settings.federation_execution_inline:
@@ -1306,6 +1377,10 @@ def execution_status(row: FederationExecution) -> dict:
     # 执行才带它，其它 operation 不出现该键（缺省比 null 更兼容）。
     if row.operation == "wiki_pages":
         out["wiki_draft"] = result_json.get("wiki_draft")
+    if row.operation == "delegate":
+        out["delegation_report"] = result_json.get("delegation_report")
+    if row.operation == "retrieve" and (result_json.get("result") or {}).get("index_revision"):
+        out["actual_index_revision"] = result_json["result"]["index_revision"]
     return out
 
 
@@ -1416,7 +1491,15 @@ async def execute(session: AsyncSession, actor: Actor, execution: FederationExec
     beater = asyncio.create_task(_beat_execution_lease(execution_id)) if heartbeat else None
 
     try:
-        if execution.operation == "answer":
+        if execution.operation == "delegate":
+            from ddp_corpus import federation_tasks
+            report = await federation_tasks.execute_delegation(
+                session, actor, spec, execution_id=execution_id, now=now, http=http, index=index)
+            await _finish_execution(
+                session, execution_id, generation, state="succeeded", now=utcnow(),
+                result_json={"spec": spec, "delegation_report": report},
+                result_ref=f"result:{execution_id}", usage=_execution_usage(actor, execution_id))
+        elif execution.operation == "answer":
             # 生成失败（上游错误/空输出/超预算/伪造引用）不抛异常：执行完成、
             # 答案为空并带显式原因，证据与受理事实原样保留。
             document, degraded, limits = await _run_answer(spec, http=http)

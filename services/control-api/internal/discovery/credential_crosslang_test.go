@@ -113,7 +113,7 @@ func TestCredentialSigningRefusesForeignIssuerAndInvalidClaims(t *testing.T) {
 		"lifetime":       func(c *CredentialClaims) { c.ExpiresAt = c.IssuedAt + MaxCredentialLifetimeSeconds + 1 },
 		"html_subject":   func(c *CredentialClaims) { c.Actor.Subject = "a<b" },
 		"unknown_op":     func(c *CredentialClaims) { c.Operation = "admin" },
-		"unknown_kind":   func(c *CredentialClaims) { c.Actor.Kind = "peer" },
+		"unknown_kind":   func(c *CredentialClaims) { c.Actor.Kind = "robot" },
 		"missing_step":   func(c *CredentialClaims) { c.Constraints.StepID = "" },
 		"get_for_write":  func(c *CredentialClaims) { c.Request.Method = "GET" },
 		"self_audience":  func(c *CredentialClaims) { c.AudienceNodeID = c.IssuerNodeID },

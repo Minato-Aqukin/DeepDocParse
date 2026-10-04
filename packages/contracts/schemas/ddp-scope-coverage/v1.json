@@ -69,6 +69,19 @@
           "description": "去重后的目标。大范围可分片保存，不要求一次塞进内存或传给浏览器（§5.4）。",
           "type": "array", "items": { "$ref": "#/$defs/TargetKey" }
         },
+        "node_routes": {
+          "description": "仅列不能直接到达的来源；via_node_ids 是从本节点到来源之间的中继序列，不含两端。最短路优先，再按节点 id 排序；计入 manifest_digest。",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "node_id": { "$ref": "#/$defs/node_id" },
+              "via_node_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/node_id" } }
+            },
+            "required": ["node_id", "via_node_ids"],
+            "additionalProperties": false
+          }
+        },
         "unexpanded_subtrees": {
           "description": "**不能展开的子域必须列出来**（§5.5）。空列表 + sealed 才允许后续声明 retrieval=complete。reason 对无权限调用者要降敏，不得泄露私有成员存在性（§5.5、§8.4）。",
           "type": "array",
@@ -112,6 +125,7 @@
         "scope_ref": { "type": "string", "minLength": 1 },
         "query_or_subquery_digest": { "$ref": "#/$defs/digest" },
         "state": { "type": "string", "x-ddp-enum": "coverage_target_state" },
+        "reported_by": { "$ref": "#/$defs/node_id", "description": "委托者自报；存在时整个账本不能为 complete。" },
         "probe_receipts": { "type": "array", "items": { "type": "string" } },
         "actual_index_revision": { "type": ["string", "null"] },
         "search_profile": { "type": ["string", "null"] },
@@ -247,6 +261,10 @@
           "then": {
             "properties": { "counts": { "properties": { "incomplete": { "const": 0 } } } }
           }
+        },
+        {
+          "if": { "properties": { "retrieval_completeness": { "const": "complete" } }, "required": ["retrieval_completeness"] },
+          "then": { "properties": { "entries": { "not": { "contains": { "required": ["reported_by"] } } } } }
         },
         {
           "$comment": "有矛盾记录就不许报 sufficient_by_policy（§7.6）。少了它，互相矛盾的两版证据会被静默记成\"证据满足策略\" —— 路由评测正是这样发现的。**但 insufficient / unknown 优先于 conflicting**：矛盾只能把\"充分\"压成\"矛盾\"，不能把\"不足\"改写成\"矛盾\" —— 那会藏掉\"证据不足\"并放行不该发生的生成（第五次验收复现）。矛盾记录在这两种情况下照样保留、照样可见。",

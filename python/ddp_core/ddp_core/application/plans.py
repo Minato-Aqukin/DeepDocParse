@@ -13,21 +13,22 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+from ddp_contracts import PLAN_STEP_OPERATION_VALUES
 from ddp_core.application.ports import ApplicationError
 
 NODE = re.compile(r"[a-z0-9][a-z0-9._-]{2,63}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
-OPERATIONS = {"parse", "index", "retrieve", "fuse", "rerank", "answer", "source_manifest", "wiki_pages", "validate", "deliver"}
+OPERATIONS = set(PLAN_STEP_OPERATION_VALUES)
 PAYLOADS = {"query_text", "evidence_excerpts", "source_files", "parsed_layout", "embeddings", "answer_text", "wiki_draft"}
 PROBE_PAYLOADS = {"query_text", "subquery_text", "entity_names", "resource_names", "collection_filters", "evidence_excerpts", "source_files"}
 RETENTION = {"temporary", "task_pinned", "persistent"}
 # Registered transition families; shell, arbitrary code and reverse execution
 # dependencies cannot be introduced by a generated plan.
 PREDECESSORS = {
-    "parse": set(), "index": {"parse"}, "retrieve": {"index"},
-    "fuse": {"retrieve"}, "rerank": {"retrieve", "fuse"},
-    "answer": {"retrieve", "fuse", "rerank"},
-    "source_manifest": {"retrieve", "fuse", "rerank"},
+    "parse": set(), "index": {"parse"}, "retrieve": {"index"}, "delegate": set(),
+    "fuse": {"retrieve", "delegate"}, "rerank": {"retrieve", "delegate", "fuse"},
+    "answer": {"retrieve", "delegate", "fuse", "rerank"},
+    "source_manifest": {"retrieve", "delegate", "fuse", "rerank"},
     "wiki_pages": {"source_manifest"}, "validate": {"answer", "wiki_pages"},
     "deliver": {"index", "validate"},
 }
@@ -190,6 +191,38 @@ def validate_spec(spec):
     requirements_wiki(spec.get("requirements", {}).get("wiki"), operation=spec["operation"])
 
 
+def validate_delegation(step, budget):
+    share = step.get("budget_share")
+    obj(share, ("max_requests", "max_bytes", "max_hops", "max_probes", "deadline"))
+    for field in ("max_requests", "max_bytes", "max_hops", "max_probes"):
+        integer(share[field], 1 if field == "max_hops" else 0)
+        parent_field = "max_requests" if field == "max_probes" else field
+        if share[field] > budget[parent_field]:
+            reject("budget_exceeded", "delegation share exceeds its parent")
+    if share["max_probes"] > share["max_requests"]:
+        reject("budget_exceeded", "probes must fit inside the child's request allowance")
+    if instant(share["deadline"]) > instant(budget["deadline"]):
+        reject("budget_exceeded", "delegation deadline exceeds its parent")
+    assigned = step.get("delegated_targets")
+    if not isinstance(assigned, list) or not 1 <= len(assigned) <= 1000:
+        reject(message="delegation requires bounded leaf targets")
+    seen = set()
+    for item in assigned:
+        obj(item, ("target_key", "via_node_ids"))
+        target = item["target_key"]
+        obj(target, ("origin_node_id", "collection_id", "operation"))
+        string(target["origin_node_id"], node=True)
+        string(target["collection_id"])
+        string(target["operation"])
+        strings(item["via_node_ids"], node=True)
+        key = tuple(target[field] for field in ("origin_node_id", "collection_id", "operation"))
+        if key in seen:
+            reject(message="a leaf target may only be delegated once")
+        seen.add(key)
+        if target["origin_node_id"] in item["via_node_ids"] or step["executor_node_id"] in item["via_node_ids"]:
+            reject("delegation_loop", "route contains an endpoint")
+
+
 def validate_plan(plan, spec, *, local_node_id, now):
     validate_spec(spec)
     obj(plan, ("schema", "plan_id", "revision", "plan_digest", "task_spec_digest", "root_coordinator_node_id", "planning_state", "steps", "data_edges", "budget", "final_result_writer", "valid_until"), ("execution_consent_ref",))
@@ -218,13 +251,18 @@ def validate_plan(plan, spec, *, local_node_id, now):
         reject(message="plan needs bounded registered steps")
     steps = {}
     for step in plan["steps"]:
-        obj(step, ("step_id", "operation", "executor_node_id", "depends_on"), ("fixed_inputs", "probe_refs"))
+        obj(step, ("step_id", "operation", "executor_node_id", "depends_on"),
+            ("fixed_inputs", "probe_refs", "delegated_targets", "budget_share"))
         string(step["step_id"])
         string(step["executor_node_id"], node=True)
         if step["operation"] not in OPERATIONS or step["step_id"] in steps:
             reject(message="unregistered operation or duplicate step")
         for field in ("depends_on", "fixed_inputs", "probe_refs"):
             strings(step.get(field, []))
+        if step["operation"] == "delegate":
+            validate_delegation(step, budget)
+        elif "delegated_targets" in step or "budget_share" in step:
+            reject(message="only delegate steps may carry shares and leaf targets")
         steps[step["step_id"]] = step
     visiting, done = set(), set()
 
@@ -239,13 +277,26 @@ def validate_plan(plan, spec, *, local_node_id, now):
             visit(parent)
             if steps[parent]["operation"] not in PREDECESSORS[step["operation"]]:
                 reject(message="dependency is outside registered workflow templates")
-        if step["operation"] not in {"parse", "retrieve"} and not step["depends_on"]:
+        if step["operation"] not in {"parse", "retrieve", "delegate"} and not step["depends_on"]:
             reject(message="registered workflow step requires typed prerequisites")
         visiting.remove(identifier)
         done.add(identifier)
 
     for identifier in steps:
         visit(identifier)
+    delegates = [step for step in steps.values() if step["operation"] == "delegate"]
+    for field in ("max_requests", "max_bytes", "max_hops"):
+        if sum(step["budget_share"][field] for step in delegates) > budget[field]:
+            reject("budget_exceeded", "delegation shares exceed the parent budget")
+    if delegates:
+        remote_retrieves = sum(step["operation"] == "retrieve"
+                              and step["executor_node_id"] != plan["root_coordinator_node_id"]
+                              for step in steps.values())
+        own_requests = len(delegates) + remote_retrieves
+        own_hops = 2 * own_requests
+        if sum(step["budget_share"]["max_requests"] for step in delegates) + own_requests > budget["max_requests"] \
+                or sum(step["budget_share"]["max_hops"] for step in delegates) + own_hops > budget["max_hops"]:
+            reject("budget_exceeded", "shares leave no allowance for the parent's own transmissions")
     if not isinstance(plan["data_edges"], list) or len(plan["data_edges"]) > 1000:
         reject(message="invalid data edge list")
     edges, nodes = set(), {plan["root_coordinator_node_id"], plan["final_result_writer"]}
@@ -266,7 +317,13 @@ def validate_plan(plan, spec, *, local_node_id, now):
         edges.add(edge["edge_id"])
     # Conservatively reserve every planned transmission, including relay hops,
     # against the root cap. Parallel branches do not acquire free hop budgets.
-    if sum(1 + len(edge.get("relay_via", [])) for edge in plan["data_edges"]) > budget["max_hops"]:
+    executing_nodes = {step["executor_node_id"] for step in steps.values()}
+    transmissions = [edge for edge in plan["data_edges"] if not (
+        plan["final_result_writer"] != plan["root_coordinator_node_id"]
+        and ((edge["from_node_id"] == plan["root_coordinator_node_id"]
+              and edge["to_node_id"] == plan["final_result_writer"])
+             or not ({edge["from_node_id"], edge["to_node_id"]} & executing_nodes)))]
+    if sum(1 + len(edge.get("relay_via", [])) for edge in transmissions) > budget["max_hops"]:
         reject("budget_exceeded", "total planned transmissions exceed the root hop budget")
     for step in steps.values():
         for parent_id in step["depends_on"]:
@@ -275,12 +332,14 @@ def validate_plan(plan, spec, *, local_node_id, now):
                 continue
             compatible = {
                 "parse": {"parsed_layout"}, "index": {"embeddings", "parsed_layout"},
-                "retrieve": {"evidence_excerpts"}, "fuse": {"evidence_excerpts"},
+                "retrieve": {"evidence_excerpts"}, "delegate": {"evidence_excerpts"}, "fuse": {"evidence_excerpts"},
                 "rerank": {"evidence_excerpts"}, "source_manifest": {"evidence_excerpts"},
                 "answer": {"answer_text"}, "wiki_pages": {"wiki_draft"},
                 "validate": {"answer_text", "wiki_draft"},
             }.get(parent["operation"], set())
-            if not any(edge["from_node_id"] == parent["executor_node_id"]
+            if not any((edge["from_node_id"] == parent["executor_node_id"]
+                        or (parent["operation"] == "delegate"
+                            and parent["executor_node_id"] in edge.get("relay_via", [])))
                        and edge["to_node_id"] == step["executor_node_id"]
                        and edge["payload_kind"] in compatible for edge in plan["data_edges"]):
                 reject("policy_denied", "cross-node dependency has no typed data transfer edge")

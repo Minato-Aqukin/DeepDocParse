@@ -87,7 +87,8 @@ func credentialGetOperation(op contracts.NodeCredentialOperation) bool {
 	switch op {
 	case contracts.NodeCredentialOperationProbeRead, contracts.NodeCredentialOperationExecutionRead,
 		contracts.NodeCredentialOperationEvidenceSetRead, contracts.NodeCredentialOperationCatalogRead,
-		contracts.NodeCredentialOperationDirectoryMembersRead, contracts.NodeCredentialOperationDirectoryCollectionsRead,
+		contracts.NodeCredentialOperationDirectoryMembersRead, contracts.NodeCredentialOperationDirectorySubtreeRead,
+		contracts.NodeCredentialOperationDirectoryCollectionsRead,
 		contracts.NodeCredentialOperationDirectoryCapabilitiesRead:
 		return true
 	}
@@ -136,7 +137,7 @@ func (c CredentialClaims) Validate() error {
 	if (op == contracts.NodeCredentialOperationProbeCreate || op == contracts.NodeCredentialOperationProbeRead) && k.TaskSpecDigest == "" {
 		return ErrCredentialInvalid
 	}
-	if (op == contracts.NodeCredentialOperationDirectoryMembersRead || op == contracts.NodeCredentialOperationDirectoryCollectionsRead || op == contracts.NodeCredentialOperationDirectoryCapabilitiesRead) && !credentialDigest.MatchString(k.ScopeRef) {
+	if (op == contracts.NodeCredentialOperationDirectoryMembersRead || op == contracts.NodeCredentialOperationDirectorySubtreeRead || op == contracts.NodeCredentialOperationDirectoryCollectionsRead || op == contracts.NodeCredentialOperationDirectoryCapabilitiesRead) && !credentialDigest.MatchString(k.ScopeRef) {
 		return ErrCredentialInvalid
 	}
 	if c.IssuedAt < 1 || c.ExpiresAt > credentialEpochMax || c.ExpiresAt-c.IssuedAt < 1 || c.ExpiresAt-c.IssuedAt > MaxCredentialLifetimeSeconds {

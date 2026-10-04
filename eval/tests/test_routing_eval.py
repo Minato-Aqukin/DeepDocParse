@@ -108,6 +108,25 @@ def test_runs_are_deterministic(frozen):
     assert first == second
 
 
+
+def test_nearest_node_decoy_keeps_qualified_direct_source_and_exhaustive_coverage(frozen):
+    dataset = copy.deepcopy(frozen)
+    scope = dataset["scopes"][routing_dataset.SCOPE_REF]
+    scope["node_routes"] = [
+        {"node_id": node, "via_node_ids": ["node-e"]}
+        for node in ("node-b", "node-c", "node-d", "node-f")]
+    scope["manifest_digest"] = harness.plans.digest(
+        {key: value for key, value in scope.items() if key != "manifest_digest"})
+    question = _question(dataset, "q-near-01")
+    fast = harness.run_question(dataset, question, "fast")
+    assert fast["required_missing"] == []
+    assert fast["retrieval_completeness"] == "partial"
+    assert fast["honesty_violations"] == []
+    exhaustive = harness.run_question(dataset, question, "exhaustive_scope")
+    assert exhaustive["required_missing"] == []
+    assert exhaustive["retrieval_completeness"] == "complete"
+    assert len(exhaustive["executor_calls"]) == 12
+
 # --------------------------------------------------------- 诚实性变异确认
 
 def test_fast_claiming_complete_is_rejected(frozen):
