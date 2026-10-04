@@ -3,7 +3,12 @@
 权威：工作区 [plan.md](../../../plan.md) §5.3、§7.5、§8.4 与 P6；对应台账 T36／T40／T41／T57／T64／T87。
 本文是本轮实现的共同契约：各切片按这里的名字与不变式实现，改动先改契约。
 
-## 现状（2026-10-04，`e4650f8`）
+**实现与验证**：`a048c5b`（子树发现、预算份额委托、最近节点）、`cba01f8`（T64 存储上限）、`befe421`（份额从
+剩余预算按叶目标比例切出）；四中心实机演练（D 只登记在 B）见
+[`artifacts/p6-recursive-delegation-20261004.json`](artifacts/p6-recursive-delegation-20261004.json)，
+规模实验见 [`artifacts/scale-storage-20261004.json`](artifacts/scale-storage-20261004.json)。
+
+## 实现前的状态（2026-10-04，`e4650f8`）
 
 - 信任不传递：节点只联系本地已批准的直接成员（control `peer.go` 只给已批准 audience 签凭证，对端
   `authenticatePeerRead` 只认自己已批准的 issuer；corpus `PeerDirectory.client` 对未登记节点零字节拒绝）。

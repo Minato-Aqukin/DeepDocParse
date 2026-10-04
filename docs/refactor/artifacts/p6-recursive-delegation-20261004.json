@@ -1,0 +1,416 @@
+{
+  "schema": "ddp-drill/1#RecursiveDelegation",
+  "date": "2026-10-04",
+  "criteria": [
+    "T40",
+    "T41",
+    "T57",
+    "T87"
+  ],
+  "topology": {
+    "A": "root/entry, no chat model",
+    "B": "direct member of A; D's only parent",
+    "C2": "direct member of A, Qwen3-4B generation",
+    "D": "registered only on B (A and C2 have no trust record)",
+    "code": "befe421 on A/B/C2/D (pinned worktree)"
+  },
+  "discovery": {
+    "a_scope": {
+      "enumeration_state": "sealed",
+      "targets": [
+        "A",
+        "B",
+        "D"
+      ],
+      "node_routes": [
+        {
+          "node": "D",
+          "via": [
+            "B"
+          ]
+        }
+      ],
+      "unexpanded_subtrees": []
+    },
+    "b_subtree_snapshot_for_a": {
+      "issuer": "A",
+      "targets": [
+        {
+          "origin": "D",
+          "via": []
+        }
+      ],
+      "unexpanded_subtrees": [],
+      "consumption": {
+        "nodes": 1,
+        "requests": 4
+      },
+      "b_approved_members": [
+        "A",
+        "C1",
+        "D"
+      ],
+      "note": "B excludes A (the caller, in path) and C1 (outside the allowed_node_ids A forwarded); it reports only D, with B's real consumption; trust stays per-hop"
+    }
+  },
+  "delegated_answer": {
+    "root_task_id": "2a744a536cdd40f2b4a032c3e9d8acb4",
+    "plan_steps": [
+      {
+        "step": "retrieve-1",
+        "operation": "retrieve",
+        "executor": "A"
+      },
+      {
+        "step": "retrieve-2",
+        "operation": "retrieve",
+        "executor": "B"
+      },
+      {
+        "step": "delegate-1",
+        "operation": "delegate",
+        "executor": "B",
+        "delegated_leaves": [
+          "D"
+        ],
+        "budget_share": {
+          "max_requests": 51,
+          "max_bytes": 420097,
+          "max_hops": 2,
+          "max_probes": 4,
+          "deadline": "2026-10-04T10:37:55.662488Z"
+        }
+      },
+      {
+        "step": "fuse-1",
+        "operation": "fuse",
+        "executor": "A"
+      },
+      {
+        "step": "answer-1",
+        "operation": "answer",
+        "executor": "C2"
+      }
+    ],
+    "root_budget": {
+      "max_requests": 304,
+      "max_bytes": 1310720,
+      "max_hops": 8,
+      "deadline": "2026-10-04T10:37:55.662488Z",
+      "max_generation_tokens": 1024
+    },
+    "status": "succeeded",
+    "retrieval_completeness": "partial",
+    "answer": "The D-only cobalt observatory has 17 calibration beacons. [2]",
+    "answer_reason": null,
+    "evidence": [
+      {
+        "origin": "B",
+        "authority": "B",
+        "relay_via": []
+      },
+      {
+        "origin": "D",
+        "authority": "D",
+        "relay_via": [
+          "B"
+        ]
+      }
+    ],
+    "coverage": [
+      {
+        "origin": "B",
+        "state": "partial",
+        "reported_by": null,
+        "last_error": null
+      },
+      {
+        "origin": "A",
+        "state": "succeeded",
+        "reported_by": null,
+        "last_error": null
+      },
+      {
+        "origin": "D",
+        "state": "succeeded",
+        "reported_by": "B",
+        "last_error": null
+      }
+    ],
+    "used_budget": {
+      "requests": 72,
+      "bytes": 457606,
+      "generation_tokens": 1024,
+      "hops": 7,
+      "discovery": 1,
+      "probes": 6,
+      "egress_bytes": 18402
+    },
+    "scope": {
+      "enumeration_state": "sealed",
+      "targets": [
+        "A",
+        "B",
+        "D"
+      ],
+      "node_routes": [
+        {
+          "node": "D",
+          "via": [
+            "B"
+          ]
+        }
+      ],
+      "unexpanded_subtrees": []
+    }
+  },
+  "delegation_accounting": {
+    "a_share_reserved_vs_reported": [
+      {
+        "step": "delegate-1",
+        "reserved": {
+          "max_requests": 51,
+          "max_bytes": 420097,
+          "max_hops": 2,
+          "max_probes": 4,
+          "deadline": "2026-10-04T10:37:55.662488Z"
+        },
+        "reported": {
+          "requests": 5,
+          "bytes": 5351,
+          "hops": 2,
+          "probes": 0
+        }
+      }
+    ],
+    "a_root_ledger": {
+      "root_task_id": "2a744a536cdd40f2b4a032c3e9d8acb4",
+      "organization_id": "d9cee55e1ab0deffe47208c9d000ba6d",
+      "caller_budget_json": null,
+      "max_requests": 304,
+      "max_bytes": 1310720,
+      "max_hops": 8,
+      "deadline": "2026-10-04T10:37:55.662488+00:00",
+      "max_generation_tokens": 1024,
+      "max_probe_requests": 16,
+      "max_egress_bytes": 1048576,
+      "max_discovery_requests": 16,
+      "used_requests": 72,
+      "used_bytes": 457606,
+      "used_generation_tokens": 1024,
+      "used_hops": 7,
+      "used_discovery": 1,
+      "used_probes": 6,
+      "used_egress_bytes": 18402,
+      "created_at": "2026-10-04T10:32:56.44451+00:00",
+      "updated_at": "2026-10-04T10:33:17.08666+00:00"
+    },
+    "b_admissions_for_root": [
+      [
+        "A",
+        "retrieve-2",
+        "accepted"
+      ],
+      [
+        "A",
+        "delegate-1",
+        "accepted"
+      ]
+    ],
+    "d_admissions": [
+      [
+        "B",
+        "6e8a7ff233b947fbae93d631ed2bcf36",
+        "retrieve-2",
+        "accepted"
+      ],
+      [
+        "B",
+        "2b6b055fb3834ec681886da733ce8f1c",
+        "retrieve-1",
+        "accepted"
+      ]
+    ]
+  },
+  "failure_b_down": {
+    "root_task_id": "63a449b7fceb48368635d09cfbc240cf",
+    "plan_steps": [
+      {
+        "step": "retrieve-1",
+        "operation": "retrieve",
+        "executor": "A"
+      },
+      {
+        "step": "retrieve-2",
+        "operation": "retrieve",
+        "executor": "B"
+      },
+      {
+        "step": "delegate-1",
+        "operation": "delegate",
+        "executor": "B",
+        "delegated_leaves": [
+          "D"
+        ],
+        "budget_share": {
+          "max_requests": 51,
+          "max_bytes": 422943,
+          "max_hops": 2,
+          "max_probes": 4,
+          "deadline": "2026-10-04T10:37:55.662488Z"
+        }
+      },
+      {
+        "step": "fuse-1",
+        "operation": "fuse",
+        "executor": "A"
+      },
+      {
+        "step": "answer-1",
+        "operation": "answer",
+        "executor": "C2"
+      }
+    ],
+    "root_budget": {
+      "max_requests": 304,
+      "max_bytes": 1310720,
+      "max_hops": 8,
+      "deadline": "2026-10-04T10:37:55.662488Z",
+      "max_generation_tokens": 1024
+    },
+    "status": "succeeded",
+    "retrieval_completeness": "partial",
+    "answer": null,
+    "answer_reason": "insufficient_evidence",
+    "evidence": [],
+    "coverage": [
+      {
+        "origin": "B",
+        "state": "unreachable",
+        "reported_by": null,
+        "last_error": "peer_unavailable"
+      },
+      {
+        "origin": "A",
+        "state": "succeeded",
+        "reported_by": null,
+        "last_error": null
+      },
+      {
+        "origin": "D",
+        "state": "unreachable",
+        "reported_by": "B",
+        "last_error": "peer_unavailable"
+      }
+    ],
+    "used_budget": {
+      "requests": 60,
+      "bytes": 435166,
+      "generation_tokens": 0,
+      "hops": 6,
+      "discovery": 1,
+      "probes": 6,
+      "egress_bytes": 12223
+    },
+    "d_local_search": {
+      "status": 200,
+      "hits": 1,
+      "top": "Center D hierarchical federation drill The D-only cobalt observatory has 17 calibration beacons. Distinct identifier D-COBALT-20261004.",
+      "degraded": null
+    }
+  },
+  "failure_a_down": {
+    "root_task_id": "6e8a7ff233b947fbae93d631ed2bcf36",
+    "plan_steps": [
+      {
+        "step": "retrieve-1",
+        "operation": "retrieve",
+        "executor": "B"
+      },
+      {
+        "step": "retrieve-2",
+        "operation": "retrieve",
+        "executor": "D"
+      },
+      {
+        "step": "fuse-1",
+        "operation": "fuse",
+        "executor": "B"
+      }
+    ],
+    "root_budget": {
+      "max_requests": 236,
+      "max_bytes": 1245184,
+      "max_hops": 4,
+      "deadline": "2026-10-04T10:40:23.084859Z",
+      "max_generation_tokens": 0
+    },
+    "status": "succeeded",
+    "retrieval_completeness": "partial",
+    "answer": null,
+    "answer_reason": "local_model_missing",
+    "evidence": [
+      {
+        "origin": "B",
+        "authority": "B",
+        "relay_via": []
+      },
+      {
+        "origin": "D",
+        "authority": "D",
+        "relay_via": []
+      }
+    ],
+    "coverage": [
+      {
+        "origin": "B",
+        "state": "partial",
+        "reported_by": null,
+        "last_error": null
+      },
+      {
+        "origin": "D",
+        "state": "succeeded",
+        "reported_by": null,
+        "last_error": null
+      }
+    ],
+    "used_budget": {
+      "requests": 11,
+      "bytes": 7008,
+      "generation_tokens": 0,
+      "hops": 2,
+      "discovery": 2,
+      "probes": 2,
+      "egress_bytes": 4646
+    },
+    "scope": {
+      "enumeration_state": "sealed",
+      "targets": [
+        "B",
+        "D"
+      ],
+      "node_routes": [],
+      "unexpanded_subtrees": []
+    },
+    "d_local_search": {
+      "status": 200,
+      "hits": 1,
+      "top": "Center D hierarchical federation drill The D-only cobalt observatory has 17 calibration beacons. Distinct identifier D-COBALT-20261004.",
+      "degraded": null
+    }
+  },
+  "first_attempt_bug": {
+    "root_task_id": "3ee966223f7d441181e8ebbfe4ea5359",
+    "symptom": "D leaf failed budget_exhausted before any admission on B",
+    "cause": "delegate share carved from raw probe cap (16) after planning had used 2; reserve_share refused",
+    "fix": "befe421: shares carved from cap - used, split by leaf count"
+  },
+  "conclusions": [
+    "A reaches D only through B: A's scope lists D with node_routes D via [B]; B's subtree snapshot for A contains D only (A excluded as the caller in path); D's only admission for the task came from B.",
+    "The delegate step carries a budget share carved from A's remaining budget; A's ledger reserved the share once and recorded B's reported consumption, which stayed within the share.",
+    "D's evidence reaches A with origin and authority D and relay_via [B]; the coverage entry is reported_by B and completeness stays partial.",
+    "With B stopped, D still answers its own local search; A's task records B and the D subtree unreachable instead of empty and completes honestly.",
+    "With A stopped, B coordinates a task over its direct member D and D searches locally: the lower domain keeps working without the upper level."
+  ]
+}
