@@ -1,0 +1,70 @@
+{
+  "id": "desktop-suspend-drill",
+  "simulated": false,
+  "mode": "rtcwake -m mem: kernel suspend, logind not notified; App power handlers did not run",
+  "date": "2026-10-05",
+  "criterion": "T28: 本地任务停止/后台继续语义准确，恢复后不展示伪成功 (真实操作系统休眠, 在途本地解析 + 在途本地生成 + 在途远端计算)",
+  "source_revision": "1f28ce95188fe9f78fc2826e55ccb4d6f19bd6e2",
+  "inputs": {
+    "t28_dir": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28/run-kernel-20261005",
+    "started_json": ".dev-logs/acceptance-20261004/t28/run-kernel-20261005/started.json",
+    "after_resume_json": ".dev-logs/acceptance-20261004/t28/run-kernel-20261005/after-resume.json",
+    "timeline": ".dev-logs/acceptance-20261004/t28/run-kernel-20261005/timeline.jsonl",
+    "events_log": ".dev-logs/acceptance-20261004/t28/run-kernel-20261005/events.log",
+    "screenshots": [
+      "after-resume-models.png",
+      "after-resume-wiki.png"
+    ],
+    "workspace_db": ".dev-logs/acceptance-20261004/t28/run-kernel-20261005/workspace.sqlite3",
+    "remote_compute_id": "4e6c3c0ac5734c06aa3594a358285522"
+  },
+  "kernel": {
+    "entry": "2026-10-05T20:08:44+08:00",
+    "exit": "2026-10-05T20:10:44+08:00",
+    "gap_s": 120.0,
+    "lines": [
+      "2026-10-05T20:08:44+08:00 Minato kernel: PM: suspend entry (s2idle)",
+      "2026-10-05T20:10:44+08:00 Minato kernel: PM: suspend exit"
+    ],
+    "journal": ".dev-logs/acceptance-20261004/t28/run-kernel-20261005/journal.txt"
+  },
+  "inflight": {
+    "local_parse_task": "5b92a55229744866862ea5757c7fe892",
+    "wiki_titles": [
+      "T28 Aurora Validator stage survey"
+    ],
+    "remote_compute_id": "4e6c3c0ac5734c06aa3594a358285522"
+  },
+  "b_state": {
+    "status": "running",
+    "error": null
+  },
+  "db_error": null,
+  "clauses": {
+    "a": {
+      "passed": false,
+      "evidence": "no power suspend->resume pair in events.log (max consecutive-wall gap 121.8s over 381 rows); kernel PM suspend entry 2026-10-05T20:08:44+08:00 exit 2026-10-05T20:10:44+08:00 (120s)"
+    },
+    "b": {
+      "passed": true,
+      "evidence": "parse 5b92a552 in flight at suspend re-claimed and finished: parse succeeded, version ready, evidence_count=3500"
+    },
+    "c": {
+      "passed": true,
+      "evidence": "T28 Aurora Validator stage survey: task ca3fd991 succeeded, succeeded with durable output 41dd188d; runtime-stop: no powerMonitor suspend->resume; no execution_interrupted row in workspace"
+    },
+    "d": {
+      "passed": true,
+      "evidence": "App federation=uploading remote_compute=waiting_input vs B running [honest_pending] (compute 4e6c3c0a)"
+    },
+    "e": {
+      "passed": true,
+      "evidence": "snapshot matches DB on 22 tasks; task ca3fd991: succeeded with durable output 41dd188d; task 4f541708: succeeded with durable output ef6100f5; task cfd734a6: succeeded with durable output 4835b269"
+    },
+    "f": {
+      "passed": true,
+      "evidence": "App stayed alive in 381/381 timeline rows"
+    }
+  },
+  "verdict": "failed"
+}
