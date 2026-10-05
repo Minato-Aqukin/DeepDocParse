@@ -2517,6 +2517,8 @@ const (
 	DesktopErrorGpuOffloadUnverified DesktopError = "gpu_offload_unverified"
 	// 所选模型与运行包不兼容
 	DesktopErrorModelBackendIncompatible DesktopError = "model_backend_incompatible"
+	// 本机系统不满足本地运行包要求（例如系统库版本过低或非 glibc），本机无法启动该运行时
+	DesktopErrorRuntimeHostIncompatible DesktopError = "runtime_host_incompatible"
 	// 受管模型正在运行，先停止再切换模型或后端
 	DesktopErrorModelProcessBusy DesktopError = "model_process_busy"
 	// 中心拒绝了这次外发许可
@@ -2643,6 +2645,7 @@ var DesktopErrorValues = []DesktopError{
 	DesktopErrorGpuDeviceUnsupported,
 	DesktopErrorGpuOffloadUnverified,
 	DesktopErrorModelBackendIncompatible,
+	DesktopErrorRuntimeHostIncompatible,
 	DesktopErrorModelProcessBusy,
 	DesktopErrorEgressDenied,
 	DesktopErrorInvalidResponse,
@@ -2763,6 +2766,7 @@ var DesktopErrorMeta = map[DesktopError]EnumMeta{
 	DesktopErrorGpuDeviceUnsupported:       {Value: "gpu_device_unsupported", Label: "所选 Vulkan 设备是软件渲染器，未启动，也未自动退回 CPU。", Severity: SeverityError},
 	DesktopErrorGpuOffloadUnverified:       {Value: "gpu_offload_unverified", Label: "没有观测到物理 GPU 上的模型层卸载，已停止该进程。需要 CPU 时请明确选择 CPU 运行包。", Severity: SeverityError},
 	DesktopErrorModelBackendIncompatible:   {Value: "model_backend_incompatible", Label: "所选模型与运行包不兼容。", Severity: SeverityError},
+	DesktopErrorRuntimeHostIncompatible:    {Value: "runtime_host_incompatible", Label: "这台电脑的系统库版本低于本地运行包的要求，本机无法启动该运行时；请升级系统，或改用中心算力。", Severity: SeverityError},
 	DesktopErrorModelProcessBusy:           {Value: "model_process_busy", Label: "请先停止当前受管模型，再切换模型或后端。", Severity: SeverityWarn},
 	DesktopErrorEgressDenied:               {Value: "egress_denied", Label: "中心拒绝了这次外发许可。", Severity: SeverityError},
 	DesktopErrorInvalidResponse:            {Value: "invalid_response", Label: "中心返回的内容无法识别。", Severity: SeverityError},

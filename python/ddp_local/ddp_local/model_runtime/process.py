@@ -89,6 +89,68 @@ def extract_runtime(archive, destination, artifact):
     return executable
 
 
+def parse_libc_version(text):
+    """Parse a dotted libc version into comparable integers; None when unknown."""
+    match = re.fullmatch(r"\s*(\d+)\.(\d+)(?:\.(\d+))?\s*", text or "")
+    if not match:
+        return None
+    try:
+        return tuple(int(part) for part in match.groups() if part is not None)
+    except ValueError:
+        return None
+
+
+def host_libc_version():
+    """Host C library as (name, version); (None, None) when undetectable."""
+    try:
+        release = os.confstr("CS_GNU_LIBC_VERSION")
+    except (AttributeError, ValueError, OSError):
+        release = None
+    if isinstance(release, str):
+        name, _, version = release.partition(" ")
+        parsed = parse_libc_version(version)
+        if name.strip().lower() == "glibc" and parsed is not None:
+            return "glibc", parsed
+    try:
+        name, version = platform.libc_ver()
+    except (OSError, ValueError):
+        return None, None
+    if not isinstance(name, str) or not isinstance(version, str):
+        return None, None
+    parsed = parse_libc_version(version)
+    if name.strip().lower() != "glibc" or parsed is None:
+        return None, None
+    return "glibc", parsed
+
+
+def check_backend_abi(backend):
+    """Refuse a runtime whose declared C-library floor the host cannot meet.
+
+    A 2026-10 real-host incident: the catalog's llama.cpp b10809 binaries need
+    GLIBC_2.34, but an Ubuntu 20.04 host (glibc 2.31) passed the platform-only
+    check and died as a generic model_start_failed. This runs before any
+    verification, launch, or extraction so the failure stays explicit.
+    """
+    floor = backend.get("min_libc_version")
+    if not floor:
+        return
+    if not isinstance(floor, str) or parse_libc_version(floor) is None:
+        raise ApplicationError("model_manifest_invalid", "runtime C-library floor is not a version")
+    required = parse_libc_version(floor)
+    name, found = host_libc_version()
+    if name != "glibc" or found is None:
+        raise ApplicationError(
+            "runtime_host_incompatible",
+            f"runtime {backend.get('id')} needs glibc {floor}, "
+            "but no glibc was detected on this host (for example musl); it cannot start here",
+        )
+    if found < required:
+        have = ".".join(str(part) for part in found)
+        raise ApplicationError(
+            "runtime_host_incompatible",
+            f"runtime {backend.get('id')} needs glibc {floor}, but this host provides glibc {have}",
+        )
+
 def backend_evidence(log, backend):
     """Inspect startup, before any prompt can place generated text in the log."""
     if backend["device"] == "cpu":
@@ -159,6 +221,7 @@ class ModelProcess:
                     model.get("architecture") not in backend.get("architectures", []) or
                     backend.get("platform") != f"{sys.platform}-{platform.machine()}"):
                 raise ApplicationError("model_backend_incompatible", "model and installed backend are incompatible")
+            check_backend_abi(backend)
             await settled_io(self.installer.verify, identifier)
             await settled_io(self.installer.verify, backend["id"])
             self.stop_sync()

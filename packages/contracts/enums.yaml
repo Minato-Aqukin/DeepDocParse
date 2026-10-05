@@ -1581,6 +1581,10 @@ enums:
         summary: 所选模型与运行包不兼容
         label: 所选模型与运行包不兼容。
         severity: error
+      - value: runtime_host_incompatible
+        summary: 本机系统不满足本地运行包要求（例如系统库版本过低或非 glibc），本机无法启动该运行时
+        label: 这台电脑的系统库版本低于本地运行包的要求，本机无法启动该运行时；请升级系统，或改用中心算力。
+        severity: error
       - value: model_process_busy
         summary: 受管模型正在运行，先停止再切换模型或后端
         label: 请先停止当前受管模型，再切换模型或后端。

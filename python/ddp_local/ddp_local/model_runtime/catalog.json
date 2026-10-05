@@ -1,6 +1,6 @@
 {
   "schema": "ddp-model-catalog/1",
-  "revision": "2026-09-20.1",
+  "revision": "2026-10-06.1",
   "artifacts": [
     {
       "id": "qwen3-1.7b-q8_0",
@@ -45,6 +45,7 @@
       "device": "gpu",
       "gpu_api": "vulkan",
       "platform": "linux-x86_64",
+      "min_libc_version": "2.34",
       "architectures": [
         "qwen3"
       ],
@@ -72,6 +73,7 @@
       "backend": "llama.cpp",
       "device": "cpu",
       "platform": "linux-x86_64",
+      "min_libc_version": "2.34",
       "architectures": [
         "qwen3"
       ],

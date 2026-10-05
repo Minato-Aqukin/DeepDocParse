@@ -108,6 +108,34 @@ async def test_runtime_compatibility_and_missing_model_fail_before_process_launc
     assert missing.value.code == "model_not_installed" and owned.process is None
 
 
+async def test_glibc_floor_below_host_refuses_before_launch(installed, monkeypatch):
+    owned = ModelProcess(installed)
+    backend = installed.artifact("fixture-runtime")
+    backend["min_libc_version"] = "2.34"
+    monkeypatch.setattr("ddp_local.model_runtime.process.host_libc_version", lambda: ("glibc", (2, 31)))
+    with pytest.raises(ApplicationError) as old:
+        await owned.start("fixture-model")
+    assert old.value.code == "runtime_host_incompatible" and owned.process is None
+    assert "2.34" in str(old.value) and "2.31" in str(old.value)
+
+
+async def test_glibc_floor_met_starts_and_musl_fails_closed(installed, monkeypatch):
+    owned = ModelProcess(installed)
+    backend = installed.artifact("fixture-runtime")
+    backend["min_libc_version"] = "2.34"
+    monkeypatch.setattr("ddp_local.model_runtime.process.host_libc_version", lambda: ("glibc", (2, 35)))
+    try:
+        selection = await owned.start("fixture-model", timeout=5)
+        assert selection.location == "local"
+    finally:
+        await owned.stop()
+    monkeypatch.setattr("ddp_local.model_runtime.process.host_libc_version", lambda: (None, None))
+    with pytest.raises(ApplicationError) as musl:
+        await owned.start("fixture-model")
+    assert musl.value.code == "runtime_host_incompatible" and owned.process is None
+    assert "musl" in str(musl.value).lower() or "no glibc" in str(musl.value).lower()
+
+
 def install_gpu_fixture(installed, tmp_path, startup_log):
     """Supervisor protocol only; these messages are not hardware validation."""
     body = SERVER.replace(b"import http.server,json,sys\n",

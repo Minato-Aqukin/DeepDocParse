@@ -48,6 +48,11 @@ def validate_catalog(value):
             if (artifact.get("gpu_api") != "vulkan" or type(artifact.get("default_gpu_layers")) is not int
                     or not 1 <= artifact["default_gpu_layers"] <= 999):
                 raise ApplicationError("model_backend_unsupported", "GPU runtime requires an explicit Vulkan offload profile")
+        floor = artifact.get("min_libc_version")
+        # The floor is optional so older fixture catalogs still load; when present
+        # it must be a plain dotted version. Absence means check_backend_abi skips.
+        if floor is not None and (not isinstance(floor, str) or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", floor)):
+            raise ApplicationError("model_manifest_invalid", "runtime C-library floor must be a dotted version such as 2.34")
         if "runtime_ids" in artifact:
             allowed = artifact["runtime_ids"]
             if (artifact["kind"] != "model" or not isinstance(allowed, list) or not allowed
