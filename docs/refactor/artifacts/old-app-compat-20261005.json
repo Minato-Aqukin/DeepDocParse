@@ -1,0 +1,314 @@
+{
+  "artifact": "docs/refactor/artifacts/old-app-compat-20261005.json",
+  "criterion_clauses": {
+    "explicit_rejection_or_degradation_before_authoritative_data": {
+      "status": "pass-with-finding",
+      "evidence": [
+        "ISOLATED PROTOCOL GATE, LIVE (swap window, real endpoint B 45174): 0.1.1 proto2 -> settled view blocked/protocol_incompatible, snapshot failed, projection null (steps-011swap-proto2.jsonl relayView), query refused connection_not_current, sqlite NULL/NULL; 0.1.1 nocaps -> identical clean-rejection shape with caps minus client.snapshot (steps-011swap2-nocaps.jsonl); 0.1.2 proto2 -> centerConnect ok:false protocol_incompatible, no center entry, sources 1->1 (steps-012swap.jsonl centerConnectB/centerEntry/negativeNoPartialSource). 0.1.2 NOCAPS SPLIT (steps-012swap2.jsonl, FINDING about 0.1.2): centerConnectB returned ok:true with activeSourceId null, yet the center entry settled blocked/protocol_incompatible with snapshot failed and projection null (centerEntry id connection-22b884e9e33b253ddc469dc26870c1b7f540457); sourceActivateCenter still returned ok:true; GET /api/search via the active source then returned 200 WITH REAL CENTER DATA (1 group, chunk 030156dc133e47b8ab907dcfcd7b5e79, version a823c98f0ae048a0afec21a751d06da8, bbox [56.80,139.49,537.94,464.31]); sqlite scope NULL/NULL (sqlite-dump-012swap2-nocaps.log). So the sync view refused cleanly while the async read path served center data — NOT a clean rejection end to end. Agent NocapsGate is checking whether current code has the same split and will fix it if so.",
+        "TAMPERED-PAIR (0.1.1 pre-swap, steps-011.jsonl:20-21): clientPairRemote renderer-ack ok:true, count 2->3; authoritative gate held below (sqlite-dump-011.log bogus scope NULL/NULL). Renderer ack is not the boundary in 0.1.1 (client-host.mjs:242-253) or current code (apps/desktop/src/client-host.mjs:551-558 + :344-360).",
+        "UNKNOWN-CREDENTIAL negatives (0.1.2, steps-012d:16-17 + steps-012e:14-15, both dial B): ok:false authentication_required, 2->2. Auth rejection, labeled as such (not version negotiation).",
+        "DESIGN read-only refusals: remote clientQuery unsupported_operation (packaged client-policy.mjs:102-106); POST search 403 approved_plan_required (only superseded 012c leg steps-012c.jsonl:12; client-host.mjs:666-667). Authz, labeled as such.",
+        "Unit-test isolation of the same gates: http.test.mjs:172,186 (blocked + projection null + no snapshot request); test_compatibility.py:110,144; protocol_versions_test.go:25-55."
+      ]
+    },
+    "in_range_old_build_works": {
+      "status": "pass",
+      "evidence": [
+        "0.1.1 packaged vs current B: clientPairRemote ok, handshake ddp-client/1 + 6 caps, corpus.search 10 hits, readOriginal 989523 bytes, center bundle export saved:true (steps-011.jsonl run-011-attempt6 EXIT 0)",
+        "0.1.2 packaged vs current B: centerConnectB ok:true, center view ready/current, UI-path GET /api/search 200 with 1 group on esp32 version a823c98f0ae048a0afec21a751d06da8 (steps-012d centerSearchViaApi)",
+        "0.1.2 packaged vs current A (facade 55174): centerConnectB ok:true, view ready/current, GET /api/search 200 on pico version ff6d02b3176f48c9b34cd0fbdf05d344 (steps-012e centerSearchViaApi)",
+        "screenshots: .dev-logs/oldappfinish-20261005/shot-012d-01-boot.png, shot-012d-02-local-ready.png, shot-012e-*-boot/paired/browse/rejected (all 110360 bytes, sha 2e8d277139e725fd — static sources page; dynamic panels not captured, see limitations)"
+      ]
+    },
+    "no_silent_bundle_evidence_corruption": {
+      "status": "pass",
+      "evidence": [
+        "HASH CHAIN (hash-chain-011.log, all lines timestamped 2026-10-05T04:59:17Z): manifest schema=ddp-bundle/1 required_features=[]; original role digest=sha256:a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf size=989523; live presigned download status=200 bytes=989523 sha256=a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf; read-only SELECT on ddp-b-pg/deepdocparse as ddp -> source_digest=a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf version=a823c98f0ae048a0afec21a751d06da8. Triple equality logged in one file.",
+        "BUNDLE MEMBERS (verify-011.log, trailing line exit=0): VERIFY oldapp-011-center-bundle.ddp.zip members_ok=True evidence_n=9931 first_evidence_id=b0136c969e1e4a5fb9a29abd600e6b5c first_source_version=a823c98f0ae048a0afec21a751d06da8; whole-file sha256 fede10838a612030b4912c018b489392fd34388466b1131d03bc9cb202f56f5e; export zip members_ok=True evidence_n=1 sha256 4690542ff99793c8e99f95ba3398fe823bdfbf978553fc9410167b24e6d04917 (steps-011.jsonl exportDigest matches).",
+        "LOCATOR/DIGEST (hash-chain-011.log): bundle envelope evidence bdf17a41e88749cfb198ce1ef04647c0 source_version a823c98f0ae048a0afec21a751d06da8 parse_revision 4585afdaa46c49bca67375b860c074f8 locator={bbox:[56.80059814453125,139.4964599609375,537.9410400390625,464.3186340332031],kind:page_block,page_size:{height:841.8900146484375,width:595.280029296875},physical_page_index:29,seq:849} excerpt_digest=sha256:9d1d5abd7914c8fe29af6fb720acd865bfe3da332170c6622472593fa3a3b647 schema=ddp-evidence/1#FederatedEvidence; live evidence.get (same id, status=200) returns IDENTICAL locator, excerpt_digest, parse_revision, schema. Equality is logged, not inferred. (Live 012d/012e centerEvidenceViaApi 404s were drill-step chunk_id/errors, superseded by this chain.)",
+        "REJECTED-PAYLOAD STATE: bogus 0.1.1 scope cursor NULL projection NULL (sqlite-dump-011.log); nocaps relay scope likewise NULL/NULL (sqlite-dump-011neg5-nocaps.log); 0.1.2 bad-credential runs sources 2->2 (steps-012d:16-17, steps-012e:14-15). Center DB read-only counts (hash-chain-011.log tail 2026-10-05T06:01:39Z, ddp-b-pg/deepdocparse as ddp): evidence=37817 / documents=31 / resource_versions=62 (earlier artifact drafts said 31817/61 from an unlogged shell query — superseded by this logged SELECT); only additive drill-user rows."
+      ]
+    },
+    "version_negotiation_declared_range": {
+      "status": "pass",
+      "evidence": [
+        "old builds declare: 0.1.1 and 0.1.2 app package.json versions; handshake PROTOCOL ddp-client/1 (0.1.1 client-runtime/http-provider.ts:4, 0.1.2 client-host.mjs:346, runtime-native.mjs:65); bundled runtime SCHEMA ddp-bundle/1 (site-packages ddp_core/bundle.py)",
+        "live centers advertise: B node descriptor protocol_versions [ddp-discovery/1, ddp-client/1], handshake ddp-client/1 + caps [client.snapshot, client.events, client.receipt, client.query, client.windows, client.assets]; A identical protocol/caps, node node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+        "release manual section 6: ABI/platform/version-monotonicity/build-manifest-sha rules (packaging channel, not client-center wire); wire compat: COMPATIBILITY-MATRIX-v3.md section 1 (ddp-client/1, ddp-discovery/1, ddp-node-proof/1, ddp-bundle/1) + named rejection tests"
+      ]
+    }
+  },
+  "centers": {
+    "A": {
+      "endpoint": "https://127.0.0.1:55174 (entry facade -> control 53430)",
+      "handshake": {
+        "capabilities": [
+          "client.assets",
+          "client.events",
+          "client.query",
+          "client.receipt",
+          "client.snapshot",
+          "client.windows"
+        ],
+        "identity": {
+          "authority_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "environment_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "workspace_id": "d9cee55e1ab0deffe47208c9d000ba6d"
+        },
+        "protocol_version": "ddp-client/1"
+      },
+      "node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+      "protocols": [
+        "ddp-discovery/1",
+        "ddp-client/1"
+      ]
+    },
+    "B": {
+      "endpoint": "https://127.0.0.1:45174",
+      "handshake": {
+        "capabilities": [
+          "client.assets",
+          "client.events",
+          "client.query",
+          "client.receipt",
+          "client.snapshot",
+          "client.windows"
+        ],
+        "identity": {
+          "authority_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "environment_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "workspace_id": "c623282134f3cba8fdb57b5bc59b844e"
+        },
+        "protocol_version": "ddp-client/1"
+      },
+      "node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+      "protocols": [
+        "ddp-discovery/1",
+        "ddp-client/1"
+      ]
+    }
+  },
+  "code_findings_no_patch": [
+    {
+      "file": "DeepDocParse/.dev-logs/oldappfinish-20261005/root-0.1.2/opt/deepdocparse/resources/app/src/client-policy.mjs",
+      "lines": "102-106",
+      "note": "clientQuery bridge gate: only models.list stays renderer-side (unsupported_operation otherwise); content reads go via /api proxy. Authz/design refusal, not version negotiation."
+    },
+    {
+      "file": "DeepDocParse/.dev-logs/oldappfinish-20261005/root-0.1.2/opt/deepdocparse/resources/app/src/client-host.mjs",
+      "lines": "583-585",
+      "note": "query() also re-checks entry.kind !== 'local' -> approved_plan_required (defense in depth behind the policy gate)."
+    },
+    {
+      "file": "DeepDocParse/.dev-logs/oldappfinish-20261005/root-0.1.2/opt/deepdocparse/resources/app/src/client-host.mjs",
+      "lines": "666-667",
+      "note": "apiProxy: non-local entries allow GET/HEAD only, else approved_plan_required (403 via static-ui.mjs:60-61). Probed live only by the superseded 012c POST leg (steps-012c.jsonl:12)."
+    },
+    {
+      "file": "DeepDocParse/.dev-logs/oldapp-20261005/root-0.1.1/resources/app/src/client-host.mjs",
+      "lines": "242-253",
+      "note": "0.1.1 pairRemote: renderer-visible ack (ok:true) is returned after #attach is QUEUED/completed at registry level; the authoritative connection then settles via the provider inspect/authenticate gates. Tampered metadata therefore shows ok:true/2->3 in clientList while the connection settles blocked with NULL projection (sqlite-dump-011.log). Same shape in current code (apps/desktop/src/client-host.mjs:551-558 pairRemote + centerConnect proof/handshake gates :344-360): renderer ack is not the security boundary; no-snapshot-on-mismatch is. No patch (old artifacts immutable; current behavior fail-closed as logged)."
+    },
+    {
+      "file": "DeepDocParse/.dev-logs/oldapp-20261005/root-0.1.1/resources/client-runtime/http-provider.ts",
+      "lines": "154-175",
+      "note": "0.1.1 inspect: Ed25519 node-proof verification incl. proof.endpoint !== environment base -> identity_mismatch (this is the gate that fired on relay legs alongside the handshake rewrite). Current apps/desktop/src/client-host.mjs #verifyNodeProof (~412-414 per review) is the same check, still present."
+    },
+    {
+      "file": "DeepDocParse/services/corpus-api/ddp_corpus/routers/client.py",
+      "lines": "325-329",
+      "note": "evidence.get requires the Evidence-row evidence_id; /api/search hits carry chunk_id. Chunk ids -> 404 evidence_not_found (live 012d/012e legs); real id bdf17a41… -> 200 with unchanged locator/digest (hash-chain-011.log). Caller-side identifier confusion, not silent corruption."
+    }
+  ],
+  "date": "2026-10-05",
+  "defects": [],
+  "drivers": [
+    ".dev-logs/oldapp-20261005/launch-011.mjs (prior 0.1.1 leg, read-only reuse)",
+    ".dev-logs/oldappfinish-20261005/hash-chain-011.sh",
+    ".dev-logs/oldappfinish-20261005/launch-011neg.mjs (0.1.1 mismatch legs)",
+    ".dev-logs/oldappfinish-20261005/launch-011swap.mjs",
+    ".dev-logs/oldappfinish-20261005/launch-012d.mjs (B leg, GET reads)",
+    ".dev-logs/oldappfinish-20261005/launch-012e.mjs (A leg)",
+    ".dev-logs/oldappfinish-20261005/launch-012f.mjs (delivery leg)",
+    ".dev-logs/oldappfinish-20261005/launch-012g.mjs (fetch-spy leg)",
+    ".dev-logs/oldappfinish-20261005/launch-012swap.mjs",
+    ".dev-logs/oldappfinish-20261005/relay-handshake.mjs (127.0.0.1:49330; modes proto2/nocaps/proto2strip)",
+    ".dev-logs/oldappfinish-20261005/sqlite-dump-011.sh",
+    ".dev-logs/oldappfinish-20261005/tls-relay-handshake-rewrite.py"
+  ],
+  "exercised": {
+    "0.1.1_packaged_vs_current_B_reuse_read_only": [
+      "boot + local workspace open + PDF import + parse succeeded (version fc67799bd2e74d03a22d1d1f996675cd)",
+      "local bundle export 2363557 bytes sha256 4690542ff99793c8e99f95ba3398fe823bdfbf978553fc9410167b24e6d04917",
+      "pairRemote to current B ok (connection-db7ccbe311bec580e23afbdeda8f4ba0fd9f5ac6), handshake ddp-client/1 + 6 caps",
+      "corpus.search ESP32 -> 10 hits (evidence a17b6a94453c4f6e93b292ad9286aed5, version a823c98f0ae048a0afec21a751d06da8)",
+      "readOriginal 989523 bytes ok; center bundle export saved:true (12528627 bytes sha256 fede10838a612030b4912c018b489392fd34388466b1131d03bc9cb202f56f5e)",
+      "negative tampered pair: sqlite shows bogus scope with NULL projection (no authoritative data applied)"
+    ],
+    "0.1.2_packaged_vs_current_A_and_B_new_runs": [
+      "0.1.2 centerConnect (node proof + login + handshake inside host) ok:true against B (45174, steps-012d) and against A-facade (55174, steps-012e); remote view transport ready + snapshot current in both runs",
+      "UI-path center browse GET /api/search?q=ESP32 -> 200: B 1 group on esp32 version a823c98f, chunk 030156dc page 29 bbox [56.80,139.49,537.94,464.31]; A 1 group on pico version ff6d02b3, chunk 3be4fdf7",
+      "UI-path delivery: GET /api/documents/:documentId/download-url -> 200 presigned URL (B esp32 doc 121c42f16ca84325a00d298c7cedbfcf); byte hash of live download (989523 bytes) == bundle manifest digest == center DB source_digest a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf",
+      "negatives: unknown credential -> authentication_required with source count 2->2 on the B endpoint in both runs (steps-012d:16-17, steps-012e:14-15; launch-012e.mjs:132 still dials B, so NO A-scoped credential negative exists); remote clientQuery -> unsupported_operation; POST search -> 403 approved_plan_required (superseded 012c leg only; all explicit, no partial state)"
+    ],
+    "declared_support_range": [
+      "RELEASE-MANUAL-v3.md section 6 (ABI/platform/monotonicity/build-manifest rules)",
+      "live wire versions, each verified per-center (B handshake steps-011.jsonl:14 + A handshake per-center probe): ddp-client/1 + 6 caps on B (45174) and on A (control 53430 / facade 55174); node descriptors ddp-discovery/1 + ddp-client/1 on both; bundle schema ddp-bundle/1 in both old runtimes",
+      "named rejection tests: http.test.mjs unknown-protocol + missing-capability; ddp_core test_compatibility.py old-probe/old-admission protocol_incompatible; Go protocol_versions_test.go"
+    ],
+    "logged_hash_chain_and_db": "hash-chain-011.sh -> hash-chain-011.log (manifest extraction, 989523-byte presigned download hashed, read-only SELECT source_digest on ddp-b-pg/deepdocparse as ddp, live evidence.get 200 by bdf17a41… with locator/digest, DB counts evidence=37817/documents=31/resource_versions=62 appended 2026-10-05T06:01:39Z); verify-011.mjs -> verify-011.log (trailing exit=0, members_ok=True both zips); sqlite-dump-011.sh -> sqlite-dump-011.log (bogus scope NULL/NULL); sqlite dump for nocaps relay scope -> sqlite-dump-011neg5-nocaps.log (NULL/NULL).",
+    "negatives_corrected_scope": "Unknown-credential negatives (no-such-user-xyz/wrong-password-xyz) hit B 45174 in BOTH the 012d (B leg) and 012e (A leg) runs — launch-012e.mjs:132 still dials B; steps-012d.jsonl:16-17 and steps-012e.jsonl:14-15 both authentication_required 2->2. No A-scoped credential negative exists. POST-403 approved_plan_required is proven ONLY by the superseded 012c leg (steps-012c.jsonl:12 via launch-012b.mjs:117); canonical 012d/e/f/g use GET. It is an authz design refusal (client-host.mjs:666-667, static-ui.mjs:60-61), not version negotiation. Remote clientQuery refusal is policy-gate unsupported_operation (packaged client-policy.mjs:102-106), likewise authz/design, not negotiation.",
+    "live_version_mismatch_isolated_gate": "SWAP WINDOW 2026-10-05T05:39:32Z-05:51:03Z (swap-45174.log): original q-tls-relay stopped; copy tls-relay-handshake-rewrite.py on 127.0.0.1:45174 rewrote ONLY the handshake JSON body (proto2: protocol_version ddp-client/2; nocaps: capabilities minus client.snapshot); restored exactly, verified healthz 200 + handshake ddp-client/1 passthrough, persisted. 0.1.1 proto2 (steps-011swap-proto2.jsonl + run-011swap-proto2.log): relayHandshake ddp-client/2 full caps; settled view blocked/protocol_incompatible failed projectionNull:true; relayQuery connection_not_current; sqlite scope NULL/NULL (sqlite-dump-011swap-proto2.log); real-B re-pair ok:true. 0.1.1 nocaps (steps-011swap2-nocaps.jsonl + run-011swap2-nocaps.log): relayHandshake ddp-client/1 caps minus client.snapshot; same blocked/protocol_incompatible/null/refused shape; sqlite NULL/NULL. 0.1.2 proto2 (steps-012swap.jsonl + run-012swap-proto2.log): centerConnectB ok:false protocol_incompatible, centerEntry found:false, sources 1->1, bad-login negative still authentication_required. 0.1.2 nocaps (steps-012swap2.jsonl + run-012swap2-nocaps.log): centerConnectB ok:true BUT center view blocked/protocol_incompatible failed projection null (id connection-22b884e9e33b253ddc469dc26870c1b7f540457); sqlite scope NULL/NULL (sqlite-dump-012swap2-nocaps.log). renderer-ack-then-blocked-view is the shipped UX shape; the fail-closed invariant (no snapshot/projection on mismatch) holds. Node proof stayed VALID on the real endpoint throughout (same origin), so these legs isolate the protocol_version/capabilities gate alone — no endpoint-binding confound.",
+    "relay_at_other_endpoint_is_impersonation": "Kept as separate evidence (steps-011neg4-proto2 / steps-011neg5-nocaps): a relay at another origin cannot impersonate the center — the Ed25519 proof endpoint binding fires (blocked/identity_mismatch, projection null) even when the handshake body is also rewritten. Fail-closed either way."
+  },
+  "files_changed": [],
+  "limitations": [
+    "Swap window 2026-10-05T05:39:32Z-05:51:03Z (~11 min, swap-45174.log); t28-app connected to B may have re-handshaked during the window — Main owns the t28 check/restart, not this slice; t28-app never touched here.",
+    "Playwright screenshots stall on packaged builds after first paint; 0.1.2 shots are the static sources page (110360 bytes); 0.1.1-neg legs use stateShotSkipped + clientList. Assertions rest on bridge/clientList/fetch + logs, not pixels.",
+    "No protocol-mismatched old BINARY exists (0.1.1/0.1.2 both speak ddp-client/1); out-of-range rejection beyond the swap legs rests on http.test.mjs:172,186 + test_compatibility.py:110,144 + protocol_versions_test.go:25-55.",
+    "evidence.get-by-chunk_id 404s in 012d/012e were drill-step identifier errors; superseded by hash-chain-011.log 200 round trip. Driver-global fetch spy saw zero rows (host uses Electron session net); byte proof is the logged presigned-download hash.",
+    "Center DB checks read-only (hash-chain-011.log tail: B evidence=37817/documents=31/resource_versions=62 on 2026-10-05T06:01:39Z). Only center writes: drill-user registrations (oldapp-012-a on A; oldapp-012-b/oldapp-neg-*/oldapp-neg-real/oldapp-011swap users on B; prior oldapp-011-* untouched). No services restarted except the Main-approved relay swap (restored exactly + persisted).",
+    "Credential negatives used unknown-user + wrong-password; both 012d/012e negatives dialed B (no A-scoped credential negative). POST-403 proven only by superseded 012c leg."
+  ],
+  "live_runs": [
+    {
+      "center": "B https://127.0.0.1:45174",
+      "log": ".dev-logs/oldappfinish-20261005/run-012d-attempt1.log",
+      "profile": ".dev-logs/oldappfinish-20261005/profile-012d",
+      "result": "centerConnect ok:true; view ready/current; GET /api/search 200, chunk 030156dc133e47b8ab907dcfcd7b5e79 version a823c98f0ae048a0afec21a751d06da8 bbox [56.80059814453125,139.4964599609375,537.9410400390625,464.3186340332031]; bad-login authentication_required, sources 2->2",
+      "steps": ".dev-logs/oldappfinish-20261005/steps-012d.jsonl"
+    },
+    {
+      "center": "A https://127.0.0.1:55174 (facade)",
+      "log": ".dev-logs/oldappfinish-20261005/run-012e-attempt1.log",
+      "profile": ".dev-logs/oldappfinish-20261005/profile-012e",
+      "result": "centerConnect ok:true; view ready/current; GET /api/search 200, chunk 3be4fdf7aa0047fdb2de8b6d22ce8d34 version ff6d02b3176f48c9b34cd0fbdf05d344; bad-login authentication_required, sources 2->2",
+      "steps": ".dev-logs/oldappfinish-20261005/steps-012e.jsonl"
+    },
+    {
+      "center": "B https://127.0.0.1:45174",
+      "log": ".dev-logs/oldappfinish-20261005/run-012f-attempt2.log",
+      "profile": ".dev-logs/oldappfinish-20261005/profile-012f",
+      "result": "pair + search ok; download-url 200 with expiry; renderer fetch of host-rewritten _object URL fails (TypeError: Failed to fetch) — expected, opaque id is host-resolved; byte proof via host-equivalent presigned download hashed == DB digest",
+      "steps": ".dev-logs/oldappfinish-20261005/steps-012f.jsonl"
+    },
+    {
+      "center": "B https://127.0.0.1:45174",
+      "log": ".dev-logs/oldappfinish-20261005/run-012g-attempt1.log",
+      "profile": ".dev-logs/oldappfinish-20261005/profile-012g",
+      "result": "full pass with driver-fetch spy (0 rows — documents why host-fetch.log is empty); same pair/search/download-url/negatives as 012f",
+      "steps": ".dev-logs/oldappfinish-20261005/steps-012g.jsonl"
+    },
+    {
+      "center": "B-via-relay 127.0.0.1:49330 (proto2: handshake ddp-client/2, proof valid-for-:45174)",
+      "log": ".dev-logs/oldappfinish-20261005/run-011neg4-proto2.log",
+      "steps": ".dev-logs/oldappfinish-20261005/steps-011neg4-proto2.jsonl",
+      "profile": ".dev-logs/oldappfinish-20261005/profile-011neg4-proto2",
+      "relay_log": ".dev-logs/oldappfinish-20261005/relay-proto2.log",
+      "result": "relayHandshake ddp-client/2 full caps served byte-exact; pairViaRelay renderer-ack ok:true; settled view blocked/identity_mismatch failed projectionNull:true; relayQuery connection_not_current; real-B re-pair ok:true; sqlite bogus-scope analogue NULL/NULL (see sqlite-dump-011.log pattern + nocaps dump)"
+    },
+    {
+      "center": "B-via-relay 127.0.0.1:49330 (nocaps: handshake ddp-client/1 minus client.snapshot)",
+      "log": ".dev-logs/oldappfinish-20261005/run-011neg5-nocaps.log",
+      "steps": ".dev-logs/oldappfinish-20261005/steps-011neg5-nocaps.jsonl",
+      "profile": ".dev-logs/oldappfinish-20261005/profile-011neg5-nocaps",
+      "relay_log": ".dev-logs/oldappfinish-20261005/relay-nocaps.log",
+      "sqlite_dump": ".dev-logs/oldappfinish-20261005/sqlite-dump-011neg5-nocaps.log",
+      "result": "relayHandshake ddp-client/1 caps=[client.events,client.receipt,client.query,client.windows,client.assets] (client.snapshot stripped); pairViaRelay ok:true then blocked/identity_mismatch failed projectionNull:true; relayQuery connection_not_current; sqlite scope NULL/NULL; real-B re-pair ok:true"
+    },
+    {
+      "center": "B center DB read-only (ddp-b-pg/deepdocparse as ddp) + bundle/evidence chain",
+      "log": ".dev-logs/oldappfinish-20261005/hash-chain-011.log + verify-011.log (exit 0)",
+      "result": "manifest original digest == 989523-byte download sha256 == DB source_digest a7917e6b… (version a823c98f); envelope locator/digest == live evidence.get 200 for bdf17a41…; members_ok=True both zips; B counts evidence 31817/documents 31/versions 61"
+    },
+    {
+      "center": "REAL B 127.0.0.1:45174 via handshake-rewrite relay (proto2)",
+      "log": ".dev-logs/oldappfinish-20261005/run-011swap-proto2.log",
+      "steps": ".dev-logs/oldappfinish-20261005/steps-011swap-proto2.jsonl",
+      "profile": ".dev-logs/oldappfinish-20261005/profile-011swap-proto2",
+      "sqlite_dump": ".dev-logs/oldappfinish-20261005/sqlite-dump-011swap-proto2.log",
+      "result": "0.1.1: relayHandshake ddp-client/2; view blocked/protocol_incompatible/failed/null; query refused; sqlite NULL/NULL; real-B re-pair ok"
+    },
+    {
+      "center": "REAL B 127.0.0.1:45174 via handshake-rewrite relay (nocaps)",
+      "log": ".dev-logs/oldappfinish-20261005/run-011swap2-nocaps.log",
+      "steps": ".dev-logs/oldappfinish-20261005/steps-011swap2-nocaps.jsonl",
+      "profile": ".dev-logs/oldappfinish-20261005/profile-011swap2-nocaps",
+      "result": "0.1.1: handshake ddp-client/1 minus client.snapshot; same blocked/protocol_incompatible/null/refused shape"
+    },
+    {
+      "center": "REAL B 127.0.0.1:45174 via handshake-rewrite relay (proto2, 0.1.2)",
+      "log": ".dev-logs/oldappfinish-20261005/run-012swap-proto2.log",
+      "steps": ".dev-logs/oldappfinish-20261005/steps-012swap.jsonl",
+      "profile": ".dev-logs/oldappfinish-20261005/profile-012swap",
+      "result": "0.1.2: centerConnectB ok:false protocol_incompatible; centerEntry found:false; sources 1->1"
+    },
+    {
+      "center": "REAL B 127.0.0.1:45174 via handshake-rewrite relay (nocaps, 0.1.2)",
+      "log": ".dev-logs/oldappfinish-20261005/run-012swap2-nocaps.log",
+      "steps": ".dev-logs/oldappfinish-20261005/steps-012swap2.jsonl",
+      "profile": ".dev-logs/oldappfinish-20261005/profile-012swap2",
+      "sqlite_dump": ".dev-logs/oldappfinish-20261005/sqlite-dump-012swap2-nocaps.log",
+      "result": "manifest original digest == 989523-byte download sha256 == DB source_digest a7917e6b… (version a823c98f); envelope locator/digest == live evidence.get 200 for bdf17a41…; members_ok=True both zips; B counts evidence=37817/documents=31/resource_versions=62 (hash-chain-011.log tail, logged SELECT)"
+    }
+  ],
+  "old_builds": {
+    "0.1.1": {
+      "app_version": "0.1.1",
+      "bundle_schema": "ddp-bundle/1 (resources/runtime/site-packages ddp_core/bundle.py SCHEMA)",
+      "handshake": "ddp-client/1 (resources/client-runtime/http-provider.ts:4; gate :187-190)",
+      "package": ".dev-logs/v3-finish-20260923/upgrade-recipe/deepdocparse-desktop-spike-0.1.1-1-x86_64.pkg.tar.zst"
+    },
+    "0.1.2": {
+      "app_version": "0.1.2",
+      "bundle_schema": "ddp-bundle/1 (resources/runtime/site-packages ddp_core/bundle.py SCHEMA)",
+      "handshake": "ddp-client/1 (resources/app/src/client-host.mjs:346; runtime-native.mjs:65)",
+      "package": ".dev-logs/pkg-20261001/upgrade-recipe/deepdocparse-desktop-spike-0.1.2-1-x86_64.pkg.tar.zst"
+    }
+  },
+  "platform": {
+    "arch": "x86_64",
+    "session": "Wayland (wayland-1, niri)",
+    "test_ca": ".dev-logs/quality-20260927/loopback.crt"
+  },
+  "proposed_ledger_text": "T63 新中心与旧 App | P7 | 🟡 | 真实旧二进制直连当前中心：0.1.1→B（握手 ddp-client/1＋6 caps，ESP32 检索 10 hits，原文字节 989523，中心包导出；hash-chain-011.log：包内 original 摘要＝989523 字节下载哈希＝中心库 source_digest a7917e6b…，包内证据定位/摘要＝evidence.get 200 回值，`artifacts/old-app-compat-20261005.json`）；0.1.2→B 与 A（centerConnect ok，view ready/current，UI 路径 GET /api/search 200，download-url 200）；版本失配实机（swap 窗口重写真实端点握手）：protocol_version 改写两旧版皆干净拒绝（blocked/protocol_incompatible、projection null、无快照、来源数不变）；能力剥离在 0.1.1 干净、在 0.1.2 分裂——sync 视图 blocked 但 centerConnect/sourceActivate 仍 ok 且 GET /api/search 照常返回真实数据（steps-012swap2.jsonl，0.1.2 finding；现行代码是否同病由 NocapsGate 跟进）；未知凭证 authentication_required（两次否定皆打 B）、远端 clientQuery unsupported_operation（client-policy.mjs:102-106）、POST 写 403（仅 012c 腿）均为显式命名码；伪造配对 renderer ok:true 但权威投影 NULL；隔离门另有 `http.test.mjs:172,186`＋`test_compatibility.py:110,144`＋Go `protocol_versions_test.go:25-55` | （判据内）49330 异端 relay 冒充被端点绑定拒绝；截图仅静态 sources 页；swap 窗口约 11 分钟（swap-45174.log），t28 检查由 Main 负责",
+  "schema": "ddp-old-app-compat/1",
+  "source_revision": "197f1636f1093fa128e9ac26512d7e04b80b0357",
+  "verdict_per_clause": {
+    "in_range_works": "PASS — both old builds pair, browse, and deliver against current A and B (0.1.1: 10-hit search, 989523-byte readOriginal, bundle export; 0.1.2: centerConnect ok, UI-path GET search 200 on B+A, download-url 200)",
+    "negotiation_rejection_degradation_explicit": "PASS-WITH-FINDING — protocol_version mismatch is a clean live rejection on both old builds; capability-strip is clean on 0.1.1 but SPLIT on 0.1.2 (sync view blocked/protocol_incompatible/null projection, yet centerConnect ok:true + sourceActivate ok:true + GET /api/search 200 with real data). Finding recorded; current-code followup owned by NocapsGate. Auth/authz negatives labeled as such, not version negotiation.",
+    "no_silent_corruption": "PASS — logged triple hash equality (manifest digest == downloaded bytes == DB source_digest a7917e6b…), logged locator/excerpt_digest identity (bundle envelope == live evidence.get for bdf17a41…), bundle members rehash True, rejected scopes NULL-projection / unchanged source counts."
+  },
+  "service_revision": "befe421",
+  "source_revision_note": "Live A/B/C2/D centers ran worktree befe421. 197f163 == befe421 plus packaging/docs-only delta (docs/refactor/ACCEPTANCE-MATRIX-v3.md, docs/refactor/P6-RECURSIVE-DELEGATION-v3.md + artifact, scripts/build_desktop.py, tests/test_desktop_release.py; git diff --stat befe421 197f163: 5 files, 489+/15-). No service/runtime/handshake code differs; old-app runs used packaged 0.1.1/0.1.2 binaries, unaffected by either rev.",
+  "trace": {
+    "hash_chain": ".dev-logs/oldappfinish-20261005/hash-chain-011.log (manifest digest line role=original ... a7917e6b...; download sha256 line; db source_digest line; envelope locator/excerpt lines; evidence_get 200 locator/excerpt lines)",
+    "bundle_members": ".dev-logs/oldappfinish-20261005/verify-011.log (exit=0 trailing line; VERIFY members_ok=True evidence_n=9931/1; whole-file sha256 fede10838a…/4690542ff…)",
+    "bogus_sqlite": ".dev-logs/oldappfinish-20261005/sqlite-dump-011.log (bogus scope epoch 2 cursor NULL projection NULL; cursor_null=1 projection_null=1)",
+    "nocaps_sqlite": ".dev-logs/oldappfinish-20261005/sqlite-dump-011neg5-nocaps.log (relay scope NULL/NULL)",
+    "proto2_live": ".dev-logs/oldappfinish-20261005/steps-011neg4-proto2.jsonl (relayHandshake ddp-client/2; relayView blocked/identity_mismatch/failed/projectionNull:true; relayQuery connection_not_current; pairRealAfterRelay ok:true) + run-011neg4-proto2.log + relay-proto2.log",
+    "nocaps_live": ".dev-logs/oldappfinish-20261005/steps-011neg5-nocaps.jsonl (relayHandshake ddp-client/1 caps minus client.snapshot; relayView blocked/identity_mismatch/failed/projectionNull:true; relayQuery connection_not_current; finalList 3 entries) + run-011neg5-nocaps.log + relay-nocaps.log",
+    "shape_probe": ".dev-logs/oldappfinish-20261005/run-011neg7-proto2strip.log (handshake ddp-client/1 full caps, descriptor stripped; relayView blocked/identity_mismatch projectionNull:true — endpoint-binding control)",
+    "in_range_011": ".dev-logs/oldapp-20261005/steps-011.jsonl:14-19 + run-011-attempt6.log:9-18 (bHandshake/pairRemoteB/remoteSearch10/remoteReadOriginal989523/centerExportBundle)",
+    "in_range_012B": ".dev-logs/oldappfinish-20261005/steps-012d.jsonl (centerConnectB ok:true; centerEntry ready/current; centerSearchViaApi 200 chunk 030156dc version a823c98f; negativeBadLogin authentication_required; negativeNoPartialSource 2->2)",
+    "in_range_012A": ".dev-logs/oldappfinish-20261005/steps-012e.jsonl (centerConnectB ok:true vs A-facade 55174; centerSearchViaApi 200 chunk 3be4fdf7 version ff6d02b3; negatives hit B per launch-012e.mjs:132)",
+    "post_403": ".dev-logs/oldappfinish-20261005/steps-012c.jsonl:12 (POST /api/v1/search -> 403 approved_plan_required; superseded leg, GET used in canonical legs)",
+    "unit_gates": "packages/client-runtime/test/http.test.mjs:172,186; python/ddp_core/tests/test_compatibility.py:110,144; services/control-api/internal/discovery/protocol_versions_test.go:25-55",
+    "revision": "git diff --stat befe421 197f163 (5 files, 489+/15-): docs/refactor/ACCEPTANCE-MATRIX-v3.md, docs/refactor/P6-RECURSIVE-DELEGATION-v3.md + artifact, scripts/build_desktop.py, tests/test_desktop_release.py — packaging/docs only",
+    "swap_proto2_011": ".dev-logs/oldappfinish-20261005/steps-011swap-proto2.jsonl (relayHandshake ddp-client/2; relayView blocked/protocol_incompatible/failed/projectionNull:true) + sqlite-dump-011swap-proto2.log (NULL/NULL)",
+    "swap_nocaps_011": ".dev-logs/oldappfinish-20261005/steps-011swap2-nocaps.jsonl (caps minus client.snapshot; same blocked shape)",
+    "swap_proto2_012": ".dev-logs/oldappfinish-20261005/steps-012swap.jsonl (centerConnectB ok:false protocol_incompatible; centerEntry found:false; 1->1)",
+    "swap_nocaps_012": ".dev-logs/oldappfinish-20261005/steps-012swap2.jsonl (centerEntry blocked/protocol_incompatible/failed/null id connection-22b884e9…) + sqlite-dump-012swap2-nocaps.log (NULL/NULL)",
+    "swap_window": ".dev-logs/oldappfinish-20261005/swap-45174.log (05:39:32Z-05:51:03Z) + tls-relay-handshake-rewrite.py (handshake-body-only rewrite)",
+    "db_counts": ".dev-logs/oldappfinish-20261005/hash-chain-011.log tail (2026-10-05T06:01:39Z db evidence=37817/documents=31/resource_versions=62; SELECT on ddp-b-pg/deepdocparse as ddp)"
+  },
+  "current_code_followup": {
+    "verdict": "current code had the same split before bc84776 (centerConnect checked protocol only; sourceActivate, /api proxy and _object fetch were not gated on the connection view)",
+    "fix_commit": "bc84776",
+    "fix": "single isCompatibleHandshake() in packages/client-runtime; centerConnect refuses protocol_incompatible and rolls back credential/source; sourceActivate refuses blocked sources; /api proxy, _object and plan credential release require a ready+current connection; object ids revoked on blocked; static UI 502 with explicit code",
+    "tests": "apps/desktop/test/source-proxy.test.mjs: missing-capability connect refused, unknown-protocol connect refused, proxy refused after degrade with zero network reads, _object refused/revoked after degrade (red before, green after); desktop 99/99, client-runtime 49/49",
+    "live": ".dev-logs/nocaps-gate-20261005/steps-nocaps-swap.jsonl: current dev App against the real B endpoint with client.snapshot stripped -> centerConnect ok:false protocol_incompatible, no source entry; healthy re-run ok",
+    "scope": "0.1.2 and earlier keep the split (released binaries are not patched); fixed from the first build after bc84776"
+  },
+  "ledger_status_decision": "🟡: 0.1.2 capability-strip split (connect ack ok, proxied reads served, only sync view blocked) is inside the criterion; current code fixed in bc84776, re-verify with a real old binary once a fixed release becomes old"
+}
