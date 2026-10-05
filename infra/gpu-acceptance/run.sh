@@ -103,7 +103,7 @@ if ! flock -n 9; then
   exit 2
 fi
 
-find_by_name() {
+find_all_by_name() {
   GPU_ACCEPTANCE_NAME="$NAME" autodl list --json 2>/dev/null | python3 -c "
 import json,os,sys
 try:
@@ -115,8 +115,9 @@ want = os.environ.get('GPU_ACCEPTANCE_NAME', '')
 for it in items if isinstance(items, list) else []:
     if isinstance(it, dict) and it.get('name') == want and it.get('status') not in ('released', 'deleted'):
         print(it.get('uuid') or it.get('id') or '')
-" | head -1
+"
 }
+find_by_name() { find_all_by_name | head -1; }
 
 cleanup() {
   target="${INSTANCE:-}"
@@ -142,8 +143,11 @@ INSTANCE=""
 if [[ -n "${REUSE_INSTANCE:-}" ]]; then
   # Continue on an instance this kit already created (same name), e.g. after a
   # host fix; nothing new is created and the EXIT trap still releases it.
-  [[ "$(find_by_name || true)" == "$REUSE_INSTANCE" ]] || {
-    echo "REUSE_INSTANCE=$REUSE_INSTANCE is not the running $NAME instance; refusing." >&2; exit 2; }
+  if ! { find_all_by_name || true; } | grep -qx "$REUSE_INSTANCE"; then
+    echo "REUSE_INSTANCE=$REUSE_INSTANCE is not a live $NAME instance; refusing (nothing released)." >&2
+    trap - EXIT
+    exit 2
+  fi
   INSTANCE="$REUSE_INSTANCE"
   echo "[gpu-acceptance] reusing instance $INSTANCE (no new spend beyond its clock)"
 else
