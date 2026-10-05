@@ -43,11 +43,38 @@ NAME="${NAME:-ddp-gpu-acceptance}"
 ID_FILE=".dev-logs/gpu-acceptance/instance"
 DRY_RUN_LOCAL=0
 ASSUME_YES=0
+STAGE_ONLY=""
 for arg in "$@"; do case "$arg" in
   --dry-run-local) DRY_RUN_LOCAL=1 ;;
   --yes|-y) ASSUME_YES=1 ;;
-  *) echo "unknown flag: $arg (expected --dry-run-local or --yes)" >&2; exit 2 ;;
+  --stage-only=*) STAGE_ONLY="${arg#--stage-only=}" ;;
+  *) echo "unknown flag: $arg (expected --dry-run-local, --yes or --stage-only=DIR)" >&2; exit 2 ;;
 esac; done
+
+# Build exactly the tree that is pushed to the host: the kit's subset of
+# tracked HEAD plus REVISION. --stage-only=DIR runs this locally and exits
+# before any cloud call, so the staging path is checked before money is spent.
+stage_tree() {
+  local stage="$1"
+  git archive HEAD infra/gpu-acceptance scripts services/model-gateway \
+    services/corpus-api services/corpus-worker python/ddp_contracts \
+    python/ddp_core python/ddp_local docs/refactor \
+    tests packages/contracts -o "$stage/repo.tar"
+  mkdir -p "$stage/tree"
+  tar -xf "$stage/repo.tar" -C "$stage/tree"
+  rm -f "$stage/repo.tar"
+  git rev-parse HEAD > "$stage/tree/REVISION"
+  for required in REVISION infra/gpu-acceptance/gpu_acceptance_remote.py scripts/gpu_acceptance.py \
+                  python/ddp_local/ddp_local/model_runtime/catalog.json \
+                  packages/contracts/generated/schemas-resolved.json tests/ddp_bundle_fixture.py; do
+    [[ -f "$stage/tree/$required" ]] || { echo "staged tree is missing $required" >&2; return 1; }
+  done
+}
+if [[ -n "$STAGE_ONLY" ]]; then
+  mkdir -p "$STAGE_ONLY"
+  stage_tree "$STAGE_ONLY" && echo "[gpu-acceptance] staged $(find "$STAGE_ONLY/tree" -type f | wc -l) files at $STAGE_ONLY/tree"
+  exit $?
+fi
 
 if ! command -v autodl >/dev/null 2>&1; then
   echo "autodl CLI not found; install it or run scripts/gpu_acceptance.py --mode dry-run locally." >&2
@@ -173,11 +200,7 @@ echo "[gpu-acceptance] pushing kit subset of tracked HEAD (git archive)..."
 # (generated/schemas-resolved.json + openapi/federation-tasks-v1.yaml +
 # schemas/ddp-discovery/v1.json, read via parents[3]-relative paths).
 STAGE="$(mktemp -d)"
-git archive HEAD infra/gpu-acceptance scripts services/model-gateway \
-  services/corpus-api services/corpus-worker python/ddp_contracts \
-  python/ddp_core python/ddp_local docs/refactor \
-  tests packages/contracts -o "$STAGE/repo.tar"
-git rev-parse HEAD > "$STAGE/tree/REVISION"
+stage_tree "$STAGE"
 # One retry on transport failure (exit 8 = SSH per the CLI contract). A second
 # consecutive failure aborts to the EXIT trap, which still releases the instance.
 PUSH_RC=0
