@@ -226,15 +226,29 @@ done
 autodl exec "$INSTANCE" "rm -rf /root/gpu-acceptance && mkdir -p /root/gpu-acceptance && tar -xzf /root/kit.tar.gz -C /root/gpu-acceptance && cat /root/gpu-acceptance/REVISION"
 rm -rf "$STAGE"
 
-echo "[gpu-acceptance] running kit on the GPU host..."
+echo "[gpu-acceptance] running kit on the GPU host (detached; polled)..."
 autodl exec "$INSTANCE" 'nvidia-smi -L && python3 --version'
-# Remote command is one shell string; TTL is baked in by the local shell
-# (single quotes would prevent expansion — the old "$0" bug).
-REMOTE_RC=0
-autodl exec --timeout 120m "$INSTANCE" \
-  "cd /root/gpu-acceptance && python3 infra/gpu-acceptance/gpu_acceptance_remote.py --ttl $TTL" \
-  || REMOTE_RC=$?
+# The kit runs detached on the host and writes its exit code to /root/kit.rc,
+# so a dropped SSH session (it happened mid-apt on 2026-10-06) cannot kill it.
+# Short polls tolerate transport errors. TTL is baked in by the local shell.
+autodl exec "$INSTANCE" \
+  "cd /root/gpu-acceptance && rm -f /root/kit.rc && setsid nohup bash -c 'python3 infra/gpu-acceptance/gpu_acceptance_remote.py --ttl $TTL; echo \$? > /root/kit.rc' > /root/kit.log 2>&1 < /dev/null & echo started"
+POLL_DEADLINE=$(( $(date +%s) + ${POLL_MINUTES:-85} * 60 ))
+REMOTE_RC=""
+while [[ "$(date +%s)" -lt "$POLL_DEADLINE" ]]; do
+  sleep 30
+  STATUS="$(autodl exec "$INSTANCE" 'cat /root/kit.rc 2>/dev/null; echo ---; tail -n 2 /root/kit.log 2>/dev/null' 2>/dev/null || true)"
+  RC_LINE="$(printf '%s\n' "$STATUS" | head -n 1 | grep -E '^[0-9]+$' || true)"
+  printf '%s\n' "$STATUS" | awk 'seen {print "  [host] " $0} /^---$/ {seen=1}' | tail -n 2
+  if [[ -n "$RC_LINE" ]]; then REMOTE_RC="$RC_LINE"; break; fi
+done
+if [[ -z "$REMOTE_RC" ]]; then
+  echo "[gpu-acceptance] kit did not finish within the poll window" >&2
+  REMOTE_RC=124
+fi
 echo "[gpu-acceptance] remote kit exit: $REMOTE_RC"
+mkdir -p .dev-logs/gpu-acceptance
+autodl pull "$INSTANCE" /root/kit.log ".dev-logs/gpu-acceptance/host-kit-$(date +%Y%m%d-%H%M%S).log" || true
 
 echo "[gpu-acceptance] pulling artifact (even on failure)..."
 ARTIFACT="$(autodl exec "$INSTANCE" 'ls -t /root/gpu-acceptance/docs/refactor/artifacts/gpu-acceptance-*.json 2>/dev/null | head -1' || true)"
