@@ -17,6 +17,7 @@ import (
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/contracts"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/discovery"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/httpx"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/identity"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/store"
 )
 
@@ -106,35 +107,22 @@ func (s *Server) authenticatePeerRead(r *http.Request) error {
 	}
 	record, err := s.peerTrust().PeerTrust(r.Context(), s.defaultOrg, issuer)
 	if refusal := trustRefusal(record, err, http.StatusForbidden); refusal != nil {
+		// The issuer hint alone is unauthenticated, and an expired or
+		// claim-mismatched token must not mint persistent rows either: audit
+		// only when the credential passes every claim check the success path
+		// applies before consumption (verifyPeerReadClaims), so a captured or
+		// endlessly re-minted token cannot write audit rows forever. Any
+		// failed check keeps today's refusal with no audit row.
+		if err == nil && record != nil {
+			if _, cerr := s.verifyPeerReadClaims(r, token, issuer, record); cerr == nil {
+				s.auditPeerTrustRefusal(r, issuer, "", refusal)
+			}
+		}
 		return refusal
 	}
-	derived, err := discovery.NodeIDForPublicKey(record.PublicKey)
-	if err != nil || derived != issuer {
-		return apierr.Unauthorized("credential_invalid", "签发者身份与公钥不符")
-	}
-	claims, err := discovery.VerifyCredential(token, record.PublicKey)
+	claims, err := s.verifyPeerReadClaims(r, token, issuer, record)
 	if err != nil {
-		return apierr.Unauthorized("credential_invalid", "节点签名无效")
-	}
-	if claims.AudienceNodeID != s.nodeIdentity.NodeID() {
-		return apierr.Forbidden("credential_audience_mismatch", "凭据不是签给本节点")
-	}
-	now := s.clock().UTC().Unix()
-	if claims.ExpiresAt <= now || claims.IssuedAt > now+30 {
-		return apierr.Unauthorized("credential_expired", "节点凭据不在有效期内")
-	}
-	operation, err := peerReadOperation(r.URL.Path)
-	if err != nil || claims.Operation != operation {
-		return apierr.Forbidden("credential_operation_denied", "凭据未授权此目录操作")
-	}
-	if claims.Request.Method != r.Method || claims.Request.Path != r.URL.Path ||
-		claims.Request.BodyDigest != peerReadDigest("") || r.ContentLength != 0 ||
-		claims.Constraints.ScopeRef != peerReadDigest(r.URL.Query().Encode()) ||
-		claims.Actor.Kind != "service" || claims.Actor.Subject != "control-api" {
-		return apierr.Forbidden("credential_scope_denied", "凭据与请求或查询范围不符")
-	}
-	if target := r.Header.Get(discovery.HeaderPeerTarget); target != "" && target != s.nodeIdentity.NodeID() {
-		return apierr.Conflict("wrong_target", "请求指向另一个节点")
+		return err
 	}
 	if s.store == nil {
 		return apierr.New(503, apierr.TypeUpstream, "credential_store_unavailable", "重放保护存储不可用")
@@ -146,11 +134,86 @@ func (s *Server) authenticatePeerRead(r *http.Request) error {
 	if !consumed {
 		latest, lookupErr := s.peerTrust().PeerTrust(r.Context(), s.defaultOrg, issuer)
 		if refusal := trustRefusal(latest, lookupErr, http.StatusForbidden); refusal != nil {
+			s.auditPeerTrustRefusal(r, issuer, claims.JTI, refusal)
 			return refusal
 		}
 		return apierr.Unauthorized("credential_replayed", "节点凭据已使用")
 	}
 	return nil
+}
+
+// verifyPeerReadClaims applies every credential claim check the success path
+// requires before consumption: registered key derives the claimed issuer,
+// signature verifies, audience is this node, expiry/issued-at window,
+// operation matches the route, request method/path/body digest and scope
+// digest match, actor is the control-api service, and the peer target header
+// names this node. It returns the verified claims. Error values, statuses,
+// codes and messages are exactly the success path's — callers return them
+// unchanged.
+func (s *Server) verifyPeerReadClaims(r *http.Request, token, issuer string, record *store.PeerTrustRecord) (discovery.CredentialClaims, error) {
+	var none discovery.CredentialClaims
+	derived, err := discovery.NodeIDForPublicKey(record.PublicKey)
+	if err != nil || derived != issuer {
+		return none, apierr.Unauthorized("credential_invalid", "签发者身份与公钥不符")
+	}
+	claims, err := discovery.VerifyCredential(token, record.PublicKey)
+	if err != nil {
+		return none, apierr.Unauthorized("credential_invalid", "节点签名无效")
+	}
+	if claims.AudienceNodeID != s.nodeIdentity.NodeID() {
+		return none, apierr.Forbidden("credential_audience_mismatch", "凭据不是签给本节点")
+	}
+	now := s.clock().UTC().Unix()
+	if claims.ExpiresAt <= now || claims.IssuedAt > now+30 {
+		return none, apierr.Unauthorized("credential_expired", "节点凭据不在有效期内")
+	}
+	operation, err := peerReadOperation(r.URL.Path)
+	if err != nil || claims.Operation != operation {
+		return none, apierr.Forbidden("credential_operation_denied", "凭据未授权此目录操作")
+	}
+	if claims.Request.Method != r.Method || claims.Request.Path != r.URL.Path ||
+		claims.Request.BodyDigest != peerReadDigest("") || r.ContentLength != 0 ||
+		claims.Constraints.ScopeRef != peerReadDigest(r.URL.Query().Encode()) ||
+		claims.Actor.Kind != "service" || claims.Actor.Subject != "control-api" {
+		return none, apierr.Forbidden("credential_scope_denied", "凭据与请求或查询范围不符")
+	}
+	if target := r.Header.Get(discovery.HeaderPeerTarget); target != "" && target != s.nodeIdentity.NodeID() {
+		return none, apierr.Conflict("wrong_target", "请求指向另一个节点")
+	}
+	return claims, nil
+}
+
+// auditPeerTrustRefusal records the live issuer re-check when it DENIES a peer
+// directory read (issuer unknown/pending/revoked since the snapshot froze).
+// Callers must invoke it only for fully claim-verified requests (see
+// verifyPeerReadClaims): the unverified issuer hint, an expired token, or any
+// other claim mismatch must not mint a row attributed to the claimed node.
+// Writes are rate-limited to one row per (organization, issuer) per minute via
+// Store.AuditPeerDenialOnce, so a captured or re-minted token cannot fill
+// audit_events. Successful re-checks stay unaudited, like all other peer
+// directory/catalog reads today.
+func (s *Server) auditPeerTrustRefusal(r *http.Request, issuer, jti string, refusal error) {
+	if s.store == nil {
+		return
+	}
+	var refusalErr *apierr.Error
+	reason := "peer_trust_denied"
+	if errors.As(refusal, &refusalErr) && refusalErr.Code != "" {
+		reason = refusalErr.Code
+	}
+	detail := map[string]any{"issuer_node_id": issuer, "reason": reason}
+	if jti != "" {
+		detail["credential_jti"] = jti
+	}
+	if id := r.URL.Query().Get("snapshot_id"); id != "" {
+		detail["snapshot_id"] = id
+	}
+	target := r.URL.Query().Get("snapshot_id")
+	if target == "" {
+		target = issuer
+	}
+	s.store.AuditPeerDenialOnce(r.Context(), s.defaultOrg, issuer, "peer.credential_denied",
+		target, r.Header.Get(identity.HeaderRequestID), detail)
 }
 
 func peerPageError(err error) error {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/auth"
+	"github.com/jackc/pgx/v5"
 )
 
 // ---------------------------------------------------------- 文件访问凭证
@@ -169,6 +170,53 @@ func (s *Store) Audit(ctx context.Context, orgID, actorID, actorKind, action, ta
 		auth.NewID(), orgID, nullable(actorID), actorKind, action,
 		nullable(target), nullable(requestID), payload); err != nil {
 
+		s.auditFailed(ctx, action, target, requestID, err)
+	}
+}
+
+// AuditPeerDenialOnce records a peer credential denial attributed to issuer,
+// keeping snapshot_id, credential_jti and reason in detail, but at most one
+// row per (organization, issuer) per minute. The check+insert runs in one
+// short transaction that first takes pg_advisory_xact_lock over
+// ("peer-denial-audit", org, issuer) — the same hashtextextended key
+// convention the file-grant renewal path uses — so concurrent requests
+// serialize on the same predicate and exactly one wins even under READ
+// COMMITTED, where a bare INSERT ... WHERE NOT EXISTS would let two
+// transactions both see no row and both insert. The row's `at` and the window
+// cutoff both use statement_timestamp() of the INSERT issued after the lock:
+// the column default now() is the transaction start, which predates a lock
+// wait, and clock_timestamp() is volatile, so it cannot bound the
+// audit_org_at_idx range scan. No migration. Like Audit it is fire-and-forget
+// (write failures only log), so denials never fail because the audit write did.
+func (s *Store) AuditPeerDenialOnce(ctx context.Context, orgID, issuer, action, target,
+	requestID string, detail map[string]any) {
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	payload, err := json.Marshal(detail)
+	if err != nil {
+		payload = []byte(`{}`)
+	}
+	if err := s.InTx(ctx, func(tx pgx.Tx) error {
+		domain, _ := json.Marshal([]string{"peer-denial-audit", orgID, issuer})
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, string(domain)); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `
+			INSERT INTO control.audit_events
+			    (id, organization_id, at, actor_id, actor_kind, action, target, request_id, detail)
+			SELECT $1,$2,statement_timestamp(),$3,$4,$5,$6,$7,$8
+			WHERE NOT EXISTS (
+			    SELECT 1 FROM control.audit_events
+			    WHERE organization_id = $2
+			      AND action = $5
+			      AND actor_id = $3
+			      AND at > statement_timestamp() - make_interval(secs => 60)
+			)`,
+			auth.NewID(), orgID, nullable(issuer), string("service"), action,
+			nullable(target), nullable(requestID), payload)
+		return err
+	}); err != nil {
 		s.auditFailed(ctx, action, target, requestID, err)
 	}
 }
