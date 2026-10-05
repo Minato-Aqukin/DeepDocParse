@@ -201,15 +201,29 @@ echo "[gpu-acceptance] pushing kit subset of tracked HEAD (git archive)..."
 # schemas/ddp-discovery/v1.json, read via parents[3]-relative paths).
 STAGE="$(mktemp -d)"
 stage_tree "$STAGE"
-# One retry on transport failure (exit 8 = SSH per the CLI contract). A second
-# consecutive failure aborts to the EXIT trap, which still releases the instance.
-PUSH_RC=0
-autodl push "$INSTANCE" "$STAGE/tree" /root/gpu-acceptance 2>&1 | tail -3 || PUSH_RC=$?
-if [[ "$PUSH_RC" -ne 0 ]]; then
-  echo "[gpu-acceptance] first push failed (rc=$PUSH_RC); retrying once..." >&2
+# One file, not ~700: per-file SFTP sessions kept dropping ("SSH 连接已意外断开")
+# mid-push. Wait until SSH answers, push a single archive with retries, verify
+# its digest on the host, then unpack there. Any failure ends in the EXIT trap,
+# which releases the instance.
+tar -czf "$STAGE/kit.tar.gz" -C "$STAGE/tree" .
+KIT_SHA="$(sha256sum "$STAGE/kit.tar.gz" | cut -d' ' -f1)"
+ssh_ready=0
+for _ in $(seq 1 24); do
+  if autodl exec "$INSTANCE" true >/dev/null 2>&1; then ssh_ready=1; break; fi
+  sleep 5
+done
+[[ "$ssh_ready" == 1 ]] || { echo "[gpu-acceptance] SSH never became ready" >&2; exit 1; }
+pushed=0
+for attempt in 1 2 3 4 5; do
+  if autodl push "$INSTANCE" "$STAGE/kit.tar.gz" /root/kit.tar.gz 2>&1 | tail -2 \
+     && [[ "$(autodl exec "$INSTANCE" 'sha256sum /root/kit.tar.gz' 2>/dev/null | cut -d' ' -f1)" == "$KIT_SHA" ]]; then
+    pushed=1; break
+  fi
+  echo "[gpu-acceptance] push attempt $attempt failed; retrying in 10 s" >&2
   sleep 10
-  autodl push "$INSTANCE" "$STAGE/tree" /root/gpu-acceptance 2>&1 | tail -3
-fi
+done
+[[ "$pushed" == 1 ]] || { echo "[gpu-acceptance] could not push the kit archive" >&2; exit 1; }
+autodl exec "$INSTANCE" "rm -rf /root/gpu-acceptance && mkdir -p /root/gpu-acceptance && tar -xzf /root/kit.tar.gz -C /root/gpu-acceptance && cat /root/gpu-acceptance/REVISION"
 rm -rf "$STAGE"
 
 echo "[gpu-acceptance] running kit on the GPU host..."
