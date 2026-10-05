@@ -1,7 +1,15 @@
 import { ConnectionFault } from './index.ts'
 import type { Environment, Event, Identity, Json, Profile, Projection, Provider, Session } from './index.ts'
 
-const PROTOCOL = 'ddp-client/1'
+export const CLIENT_PROTOCOL = 'ddp-client/1'
+export const REQUIRED_CLIENT_CAPABILITIES = Object.freeze(['client.snapshot', 'client.events', 'client.receipt'])
+export function isCompatibleHandshake(value) {
+  const capabilities = value?.capabilities
+  return value?.protocol_version === CLIENT_PROTOCOL && Array.isArray(capabilities)
+    && capabilities.every(item => typeof item === 'string')
+    && REQUIRED_CLIENT_CAPABILITIES.every(item => capabilities.includes(item))
+}
+const PROTOCOL = CLIENT_PROTOCOL
 const MAX_RESPONSE = 4 * 1024 * 1024
 type ObjectValue = Record<string, unknown>
 function object(value: unknown): ObjectValue {
@@ -183,10 +191,7 @@ export class HttpProvider implements Provider {
       throw new ConnectionFault('authentication_required')
     const controller = new AbortController(), sessionSignal = AbortSignal.any([signal, controller.signal])
     const data = object(await this.request(environment, '/api/v1/client/handshake', sessionSignal, credential))
-    const capabilities = data.capabilities
-    if (data.protocol_version !== PROTOCOL || !Array.isArray(capabilities) ||
-        !capabilities.every(value => typeof value === 'string') ||
-        !['client.snapshot','client.events','client.receipt'].every(value => capabilities.includes(value)))
+    if (!isCompatibleHandshake(data))
       throw new ConnectionFault('protocol_incompatible')
     const actual = identity(data.identity), actor = object(data.profile)
     if (actual.environmentId !== environment.environmentId || actual.workspaceId !== environment.workspaceId ||
@@ -258,11 +263,12 @@ export class HttpProvider implements Provider {
       },
       async query(name,payload,abort) {
         const raw = object(payload)
+        const sessionCaps = Array.isArray(data.capabilities) ? data.capabilities : []
         if (!options.localCommands) {
-          if (!capabilities.includes('client.query') ||
+          if (!sessionCaps.includes('client.query') ||
               !['corpus.search','evidence.get','resource.page','task.page','wiki.list','wiki.get','wiki.revisions'].includes(name))
             throw new OperationFault('unsupported_operation')
-          if (['resource.page','task.page'].includes(name) && !capabilities.includes('client.windows'))
+          if (['resource.page','task.page'].includes(name) && !sessionCaps.includes('client.windows'))
             throw new OperationFault('unsupported_operation')
           return await request('/api/v1/client/query',abort,{name,payload}) as Json
         }

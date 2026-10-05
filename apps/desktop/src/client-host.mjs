@@ -6,7 +6,7 @@ import { HostError } from './policy.mjs'
 import { secureDirectory, secureFile } from './platform.mjs'
 import { uploadRemoteCompute } from './file-transfer.mjs'
 import { sourceArguments } from './source-policy.mjs'
-import { ConnectionRegistry, ConnectionFault, SqliteProjectionStore, HttpProvider, OperationFault } from './shared-client.mjs'
+import { ConnectionRegistry, ConnectionFault, SqliteProjectionStore, HttpProvider, OperationFault, isCompatibleHandshake } from './shared-client.mjs'
 const copy = value => structuredClone(value)
 const connectionId = (environment, profile) => 'connection-' + createHash('sha256')
   .update(JSON.stringify([environment.environmentId, profile.profileId])).digest('hex').slice(0, 40)
@@ -280,6 +280,16 @@ export class ClientHost {
   async sourceActivate({ sourceId }) {
     await this.#loadActiveSource()
     await this.#reconnectSource(this.#entry(sourceId))
+    // Fail closed: a blocked center must never become the active /api source,
+    // whatever the reason (protocol_incompatible keeps its specific code so
+    // the renderer can name it; every other blocked reason is an explicit
+    // connection_not_current). Transient states still activate so a restart
+    // can restore the source; the proxy gate refuses reads until current.
+    const settled = this.#entry(sourceId)
+    if (settled.kind !== 'local' && settled.view.transport === 'blocked') {
+      if (settled.view.reason === 'protocol_incompatible') throw new HostError('protocol_incompatible')
+      throw new HostError('connection_not_current')
+    }
     this.#activeSourceId = sourceId
     await this.#saveActiveSource()
     this.#emitSources()
@@ -351,7 +361,10 @@ export class ClientHost {
     if (!token) throw new HostError('authentication_required')
     const shake = await this.#centerJson(endpoint + '/api/v1/client/handshake', { timeoutMs: 15000,
       token })
-    if (shake?.protocol_version !== 'ddp-client/1' || !shake?.identity?.environment_id
+    // Fail closed on the single required-caps definition shared with the sync
+    // loop: a center that cannot snapshot (or speaks another protocol) must be
+    // refused here, before any credential is stored or source activated.
+    if (!isCompatibleHandshake(shake) || !shake?.identity?.environment_id
         || !shake?.identity?.workspace_id || !shake?.profile?.issuer || !shake?.profile?.subject) {
       throw new HostError('protocol_incompatible')
     }
@@ -371,12 +384,28 @@ export class ClientHost {
     try {
       summary = await this.pairRemote({ environment, profile, label,
         ...(storageOrigin === undefined ? {} : { uploadOrigin: storageOrigin }) })
+      return await this.sourceActivate({ sourceId: summary.connectionId })
     } catch (error) {
       await this.credentials.clear({ environmentId: environment.environmentId,
         profileId: profile.profileId }).catch(() => {})
+      // Fail closed without residue: a center that never became usable leaves
+      // no source entry behind (no silent unavailable source, no stale JWT).
+      if (summary) {
+        const stale = this.#entries.get(summary.connectionId)
+        if (stale) {
+          await this.disconnect({ connectionId: summary.connectionId }).catch(() => {})
+          await this.registry.remove(stale.environment, stale.profile).catch(() => {})
+          this.#entries.delete(summary.connectionId)
+          if (this.#activeSourceId === summary.connectionId) {
+            this.#activeSourceId = null
+            await this.#saveActiveSource().catch(() => {})
+          }
+          await this.#persist().catch(() => {})
+          this.#emitSources()
+        }
+      }
       throw error
     }
-    return this.sourceActivate({ sourceId: summary.connectionId })
   }
   async #centerJson(url, { method = 'GET', body, token, timeoutMs = 15000 } = {}) {
     const encoded = body === undefined ? undefined : JSON.stringify(body)
@@ -439,6 +468,14 @@ export class ClientHost {
   list() { return [...this.#entries.values()].map(entry => this.#summary(entry)) }
   #changed(entry, view) {
     entry.view = copy(view); entry.revision++
+    // A degraded center's previously issued presigned ids die with the
+    // connection: even the fail-closed gate below must never be the only
+    // thing standing between a blocked source and its old object bytes.
+    if (entry.kind !== 'local' && view.transport === 'blocked') {
+      for (const [id, record] of this.#objects) {
+        if (record.sourceId === entry.connectionId) this.#objects.delete(id)
+      }
+    }
     for (const [subscriptionId, listener] of this.#listeners) if (listener.id === entry.connectionId) {
       try { listener.send({ subscriptionId, connectionId: entry.connectionId, revision: entry.revision, view: copy(view) }) }
       catch { this.#listeners.delete(subscriptionId) }
@@ -487,8 +524,9 @@ export class ClientHost {
     if (remote.environment.authorityNodeId !== binding.recipientNodeId || remote.environment.workspaceId !== binding.workspaceId
         || remote.profile.issuer !== binding.issuer || remote.profile.subject !== binding.subject
         || remote.environment.endpoint !== binding.endpoint) throw new OperationFault('center_identity_changed')
-    // Ready means this generation proved the node's Ed25519 identity at this endpoint.
-    if (this.#closing || !remote.handle || remote.view.transport !== 'ready') throw new OperationFault('center_not_current')
+    // Ready means this generation proved the node's Ed25519 identity at this endpoint;
+    // current snapshot means the compat check passed. Same bar as the read gates.
+    if (this.#closing || !remote.handle || remote.view.transport !== 'ready' || remote.view.snapshot !== 'current') throw new OperationFault('center_not_current')
     const credential = await this.credentials.withCredential({ environmentId: remote.environment.environmentId,
       profileId: remote.profile.profileId }, secret => secret).catch(() => { throw new OperationFault('authentication_required') })
     return { endpoint: remote.environment.endpoint, credential }
@@ -673,6 +711,16 @@ export class ClientHost {
     }
     if (entry.kind !== 'local') {
       if (upper !== 'GET' && upper !== 'HEAD') throw new HostError('approved_plan_required')
+      // Fail closed: a center whose client connection is not current (blocked
+      // on protocol_incompatible, signed out, backing off, or never synced)
+      // serves no proxied reads. Activation alone never implies compatibility.
+      if (!entry.handle || entry.view.transport !== 'ready' || entry.view.snapshot !== 'current') {
+        const reason = entry.view.reason
+        if (entry.view.transport === 'blocked' && reason === 'protocol_incompatible') {
+          throw new HostError('protocol_incompatible')
+        }
+        throw new HostError('connection_not_current')
+      }
     } else if (localPrivate(normalized, upper)) {
       // The local runtime's private routes (plans, consents, models, client protocol)
       // stay behind the typed bridge: e.g. plan approval must go through the native
@@ -790,6 +838,16 @@ export class ClientHost {
     if (record.sourceId !== this.#activeSourceId) throw new HostError('source_changed')
     const entry = this.#entries.get(record.sourceId)
     if (!entry) throw new HostError('unknown_connection')
+    // Mirror the apiProxy gate: presigned object bytes are still authoritative
+    // center data. A degraded center serves none, even for ids issued healthy.
+    if (entry.kind !== 'local'
+        && (!entry.handle || entry.view.transport !== 'ready' || entry.view.snapshot !== 'current')) {
+      const reason = entry.view.reason
+      if (entry.view.transport === 'blocked' && reason === 'protocol_incompatible') {
+        throw new HostError('protocol_incompatible')
+      }
+      throw new HostError('connection_not_current')
+    }
     const allowed = [new URL(entry.environment.endpoint).origin,
       ...(entry.uploadOrigin ? [new URL(entry.uploadOrigin).origin] : [])]
     if (!allowed.includes(record.origin)) throw new HostError('identity_mismatch')
@@ -1100,6 +1158,7 @@ export class ClientHost {
     if (this.#closed) return
     this.#closing = true
     this.clearSubscriptions()
+    this.clearSourceListeners()
     await Promise.all([...this.#entries.values()].map(entry => this.disconnect({ connectionId: entry.connectionId })))
     await this.#save
     this.#closed = true

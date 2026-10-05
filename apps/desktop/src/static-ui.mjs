@@ -56,12 +56,14 @@ async function apiProxy(request, url, clients) {
     const messages = { no_active_source: '还没有选择数据源', approved_plan_required: '中心在桌面里只读；写操作请作为联邦任务发起并批准',
       source_signed_out: '登录已过期，请重新连接该中心', source_changed: '数据源已切换，此结果已丢弃',
       not_supported_locally: '本机工作区不支持这项功能', source_unavailable: '数据源不可用',
+      protocol_incompatible: '中心版本不兼容，已拒绝', connection_not_current: '中心连接未就绪，已拒绝',
       input_too_large: '请求过大', invalid_arguments: '非法请求' }
     const status = error.code === 'no_active_source' ? 503
       : error.code === 'approved_plan_required' ? 403
       : error.code === 'source_signed_out' ? 401
       : error.code === 'not_supported_locally' ? 404
-      : error.code === 'source_changed' ? 409 : 400
+      : error.code === 'source_changed' ? 409
+      : error.code === 'connection_not_current' ? 502 : 400
     return fail(status, error.code, messages[error.code] ?? '操作未完成')
   }
 }
@@ -101,7 +103,8 @@ async function objectFetch(request, url, clients) {
   } catch (error) {
     const code = error instanceof HostError ? error.code : 'host_operation_failed'
     const status = code === 'not_found' ? 404 : code === 'source_changed' ? 409
-      : code === 'source_signed_out' ? 401 : 400
+      : code === 'source_signed_out' ? 401
+      : code === 'connection_not_current' || code === 'protocol_incompatible' ? 502 : 400
     return new Response(JSON.stringify({ error: { code, message: '对象读取失败' } }),
       { status, headers: { ...errorHeaders, 'Content-Type': 'application/json' } })
   }

@@ -9,4 +9,4 @@ const directory = existsSync(path.join(packaged, 'index.ts')) ? packaged
 // Electron 44 embeds Node 24 with native type stripping; these files never enter the renderer.
 export const { ConnectionRegistry, ConnectionFault } = await import(pathToFileURL(path.join(directory, 'index.ts')))
 export const { SqliteProjectionStore } = await import(pathToFileURL(path.join(directory, 'sqlite-store.ts')))
-export const { HttpProvider, OperationFault } = await import(pathToFileURL(path.join(directory, 'http-provider.ts')))
+export const { HttpProvider, OperationFault, CLIENT_PROTOCOL, REQUIRED_CLIENT_CAPABILITIES, isCompatibleHandshake } = await import(pathToFileURL(path.join(directory, 'http-provider.ts')))

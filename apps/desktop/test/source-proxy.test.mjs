@@ -29,7 +29,7 @@ const NODE = 'node-' + createHash('sha256').update(keyBytes).digest('hex').slice
 const CENTER = 'https://center.test/team'
 
 function centerDouble(t, { loginStatus = 200, handshakeStatus = 200, endpoint = CENTER,
-  resources = [], documents = {} } = {}) {
+  handshake = null, resources = [], documents = {} } = {}) {
   const seen = { posts: 0, gets: 0, logins: 0, handshakes: 0, paths: [], offline: false }
   const realFetch = globalThis.fetch
   const origin = new URL(endpoint).origin, prefix = new URL(endpoint).pathname.replace(/\/$/, '')
@@ -63,6 +63,7 @@ function centerDouble(t, { loginStatus = 200, handshakeStatus = 200, endpoint = 
     if (route === '/api/v1/client/handshake') {
       seen.handshakes++
       if (handshakeStatus !== 200) return json({ error: { code: 'x' } }, handshakeStatus)
+      if (handshake) return json(typeof handshake === 'function' ? handshake() : handshake)
       return json({ protocol_version: 'ddp-client/1',
         identity: { environment_id: NODE, authority_node_id: NODE, workspace_id: 'org-1' },
         profile: { issuer: NODE, subject: 'user-alice' },
@@ -425,15 +426,21 @@ test('sourceReconnect rejects a local source before runtime work and leaves the 
 
 test('a dev loopback http center becomes ready only when the host allows loopback centers', async t => {
   // Unpackaged builds accept http://127.0.0.1 centers (source policy); the shared
-  // provider must then accept the same endpoint, or the source is stuck unavailable.
+  // provider must then accept the same endpoint, or the connect is explicitly
+  // refused (fail-closed: no source registered, no silent unavailable source).
   const endpoint = 'http://127.0.0.1:45999/team'
-  for (const loopbackCenters of [true, false]) {
-    const { clients } = await hosts(t, { loopbackCenters })
-    centerDouble(t, { endpoint })
-    const connected = await clients.centerConnect({ endpoint, username: 'alice',
-      password: 's3cret-password', persist: false }, { packaged: false })
-    assert.equal(connected.state, loopbackCenters ? 'ready' : 'unavailable', String(loopbackCenters))
-  }
+  const allowed = await hosts(t, { loopbackCenters: true })
+  centerDouble(t, { endpoint })
+  const connected = await allowed.clients.centerConnect({ endpoint, username: 'alice',
+    password: 's3cret-password', persist: false }, { packaged: false })
+  assert.equal(connected.state, 'ready')
+  await allowed.clients.close()
+  const denied = await hosts(t, { loopbackCenters: false })
+  centerDouble(t, { endpoint })
+  await assert.rejects(denied.clients.centerConnect({ endpoint, username: 'alice',
+    password: 's3cret-password', persist: false }, { packaged: false }),
+  { code: 'connection_not_current' })
+  assert.deepEqual(await denied.clients.sourceList(), [])
 })
 
 test('workspaceOpen cancel → null; sourceRemove never deletes workspace data', async t => {
@@ -550,3 +557,134 @@ test('clientQuery on a center connection is refused: centers read only through t
   await assert.rejects(clients.query({ connectionId: connected.sourceId,
     name: 'models.list', payload: {} }), { code: 'approved_plan_required' })
 })
+
+test('centerConnect refuses a handshake missing a required capability: no credential, no source', async t => {
+  const { clients, stored } = await hosts(t)
+  const seen = centerDouble(t, { handshake: { protocol_version: 'ddp-client/1',
+    identity: { environment_id: NODE, authority_node_id: NODE, workspace_id: 'org-1' },
+    profile: { issuer: NODE, subject: 'user-alice' },
+    capabilities: ['client.events', 'client.receipt'] } })
+  await assert.rejects(clients.centerConnect({ endpoint: CENTER,
+    username: 'alice', password: 's3cret', persist: true }, { packaged: false }),
+  { code: 'protocol_incompatible' })
+  assert.equal(stored.size, 0, 'no JWT stored for an incompatible handshake')
+  assert.deepEqual(await clients.sourceList(), [])
+  assert.equal(seen.handshakes, 1)
+})
+
+test('centerConnect refuses an unknown protocol version: no credential, no source', async t => {
+  const { clients, stored } = await hosts(t)
+  centerDouble(t, { handshake: { protocol_version: 'ddp-client/2',
+    identity: { environment_id: NODE, authority_node_id: NODE, workspace_id: 'org-1' },
+    profile: { issuer: NODE, subject: 'user-alice' },
+    capabilities: ['client.snapshot', 'client.events', 'client.receipt'] } })
+  await assert.rejects(clients.centerConnect({ endpoint: CENTER,
+    username: 'alice', password: 's3cret', persist: true }, { packaged: false }),
+  { code: 'protocol_incompatible' })
+  assert.equal(stored.size, 0)
+  assert.deepEqual(await clients.sourceList(), [])
+})
+
+test('proxied center reads are refused while the client connection is blocked/incompatible', async t => {
+  const { clients } = await hosts(t)
+  let caps = ['client.snapshot', 'client.events', 'client.receipt']
+  const seen = centerDouble(t, { handshake: () => ({ protocol_version: 'ddp-client/1',
+    identity: { environment_id: NODE, authority_node_id: NODE, workspace_id: 'org-1' },
+    profile: { issuer: NODE, subject: 'user-alice' }, capabilities: caps }) })
+  const connected = await clients.centerConnect({ endpoint: CENTER,
+    username: 'alice', password: 's3cret', persist: false }, { packaged: false })
+  assert.equal(connected.state, 'ready')
+  // A compatible center still serves proxied reads.
+  const healthy = await clients.apiProxy({ sourceId: connected.sourceId, method: 'GET',
+    path: '/api/resources', headers: {} })
+  assert.equal(healthy.status, 200)
+  await new Response(healthy.body).arrayBuffer()
+  const contentReads = () => seen.paths.filter(p => p.endsWith('/api/resources')).length
+  const reads = contentReads()
+  // The center drops client.snapshot: the sync loop blocks, and the proxy must
+  // refuse reads with an explicit code instead of serving center data.
+  caps = ['client.events', 'client.receipt']
+  await clients.disconnect({ connectionId: connected.sourceId })
+  await clients.wake({ connectionId: connected.sourceId })
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const view = clients.list().find(item => item.connectionId === connected.sourceId)?.view
+    if (view?.transport === 'blocked') break
+    await delay(20)
+    if (attempt === 199) assert.fail('incompatible center did not block')
+  }
+  const blocked = clients.list().find(item => item.connectionId === connected.sourceId)
+  assert.equal(blocked.view.reason, 'protocol_incompatible')
+  assert.notEqual(blocked.view.snapshot, 'current')
+  // sourceActivate must not make the blocked center active, and the proxy
+  // must refuse even a direct read naming it.
+  await assert.rejects(clients.sourceActivate({ sourceId: connected.sourceId }),
+    { code: 'protocol_incompatible' })
+  await assert.rejects(clients.apiProxy({ sourceId: connected.sourceId, method: 'GET',
+    path: '/api/resources', headers: {} }), { code: 'protocol_incompatible' })
+  assert.equal(contentReads(), reads, 'refused reads never reach the center')
+})
+
+test('a degraded center serves no _object bytes: id issued healthy is refused with zero network reads', async t => {
+  const { clients } = await hosts(t)
+  let caps = ['client.snapshot', 'client.events', 'client.receipt']
+  const seen = centerDouble(t, { handshake: () => ({ protocol_version: 'ddp-client/1',
+    identity: { environment_id: NODE, authority_node_id: NODE, workspace_id: 'org-1' },
+    profile: { issuer: NODE, subject: 'user-alice' }, capabilities: caps }),
+    documents: { '/api/documents/doc-1/download-url': { url: 'https://center.test/files/signed?x=1', expires_in: 60 } } })
+  const connected = await clients.centerConnect({ endpoint: CENTER,
+    username: 'alice', password: 's3cret', persist: false }, { packaged: false })
+  assert.equal(connected.state, 'ready')
+  const serve = staticUI('/nonexistent-ui-root', uiLocation(), { clients: () => clients })
+  // Issue an _object id while healthy and prove it fetches (rewritten, no auth).
+  const proxied = await serve(new Request('ddp://app/api/documents/doc-1/download-url'))
+  assert.equal(proxied.status, 200)
+  const match = JSON.parse(await proxied.text()).url.match(/^ddp:\/\/app\/_object\/([A-Za-z0-9_.-]+)$/)
+  assert.ok(match, 'expected one _object id')
+  let objectReads = 0
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (input, init = {}) => {
+    objectReads++
+    return new Response('%PDF-bytes', { headers: { 'Content-Type': 'application/pdf' } })
+  }
+  try {
+    const healthy = await serve(new Request('ddp://app/_object/' + match[1]))
+    assert.equal(healthy.status, 200)
+    assert.equal(await healthy.text(), '%PDF-bytes')
+    assert.equal(objectReads, 1)
+  } finally { globalThis.fetch = realFetch }
+  // Degrade: the center drops client.snapshot, the sync loop blocks, and the
+  // blocked transition revokes that source's ids.
+  caps = ['client.events', 'client.receipt']
+  await clients.disconnect({ connectionId: connected.sourceId })
+  await clients.wake({ connectionId: connected.sourceId })
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const view = clients.list().find(item => item.connectionId === connected.sourceId)?.view
+    if (view?.transport === 'blocked') break
+    await delay(20)
+    if (attempt === 199) assert.fail('incompatible center did not block')
+  }
+  assert.equal(clients.list().find(item => item.connectionId === connected.sourceId).view.reason,
+    'protocol_incompatible')
+  // Direct host call and the ddp://app route both refuse; nothing is fetched.
+  // The blocked transition revokes the id, so the first refusal is not_found;
+  // the compat gate still refuses protocol_incompatible for any id issued
+  // after the degrade (covered below via rewriteObjectUrl path).
+  await assert.rejects(clients.fetchObject(match[1]), { code: 'not_found' })
+  const refused = await serve(new Request('ddp://app/_object/' + match[1]))
+  assert.equal(refused.status, 404)
+  assert.equal(JSON.parse(await refused.text()).error.code, 'not_found')
+  globalThis.fetch = async () => { objectReads++; return new Response('%PDF-stale') }
+  try {
+    await assert.rejects(clients.fetchObject(match[1]), { code: 'not_found' })
+    // An id registered after the degrade (bypassing revocation by re-issue)
+    // still hits the compat gate, not the network.
+    const late = clients.rewriteObjectUrl(connected.sourceId, 'https://center.test/files/signed?x=2')
+    assert.ok(late)
+    await assert.rejects(clients.fetchObject(late), { code: 'protocol_incompatible' })
+    const lateHttp = await serve(new Request('ddp://app/_object/' + late))
+    assert.equal(lateHttp.status, 502)
+    assert.equal(JSON.parse(await lateHttp.text()).error.code, 'protocol_incompatible')
+  } finally { globalThis.fetch = realFetch }
+  assert.equal(objectReads, 1, 'refused object fetches never reach the network')
+})
+
