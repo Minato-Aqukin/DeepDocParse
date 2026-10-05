@@ -1,0 +1,175 @@
+{
+ "schema": "ddp-release-upgrade/1",
+ "date": "2026-10-05",
+ "source_revision": "197f1636f1093fa128e9ac26512d7e04b80b0357",
+ "platform": {
+  "os": "Linux-7.2.9-1-cachyos-x86_64-with-glibc2.44",
+  "session": "Wayland",
+  "architecture": "x86_64"
+ },
+ "scope": "Current-main (0.1.3) release package + 0.1.4 upgrade-test package; isolated pacman root 0.1.2->0.1.3 with populated workspace (data + 1.8GB Qwen3-1.7B model cache via the App install path + RUNNING task); same-schema directory-channel backup + rollback proof; failure injections with raw records (corrupt package, downgrade-as-rollback) plus one interrupted transaction recorded only by its aftermath; installed-package close-window retest of the 072e860 fix; throwaway-key signing path end to end. Not a clean-OS install (CleanInstall owns that), not release-trust signing, not production migration.",
+ "host_package_database_modified": false,
+ "packages": {
+  "current": {
+   "version": "0.1.3-1",
+   "arch_package": ".dev-logs/release-20261005/packages/deepdocparse-desktop-spike-0.1.3-1-x86_64.pkg.tar.zst",
+   "arch_sha256": "ffa43622df347c173c349b327b43210b7c122d1cc6a95deaf04d35c65143e733",
+   "directory_tarball_sha256": "33cc4b745bf953412bb3585a32f6c96869629b335224115fea6afc30d2254f00",
+   "directory_files": 980,
+   "distributions": 18,
+   "electron": "44.3.0",
+   "build_log": ".dev-logs/release-20261005/logs/arch-build-0.1.3-r2.log",
+   "host_tests_log": ".dev-logs/release-20261005/logs/host-tests.log",
+   "mode_fix": "197f163 normalize_release_modes: dirs/executables 0755, rest 0644; bsdtar -tvf shows 0 entries with 0600/0700 modes (was 4 files at 0600); superseded pre-fix 0.1.3 kept as *.pre-197f163 in packages/"
+  },
+  "upgrade_test_only": {
+   "version": "0.1.4-1",
+   "arch_package": ".dev-logs/release-20261005/packages/deepdocparse-desktop-spike-0.1.4-1-x86_64.pkg.tar.zst",
+   "arch_sha256": "5395b61556f54823a4c6e5624a38f95afb53e12bc57fb5e0225440e519768211",
+   "build_log": ".dev-logs/release-20261005/logs/arch-build-0.1.4.log"
+  }
+ },
+ "upgrade_0_1_2_to_0_1_3": {
+  "install_log": ".dev-logs/release-20261005/logs/pacman-install-0.1.2.log",
+  "upgrade_log": ".dev-logs/release-20261005/logs/pacman-upgrade-0.1.2-to-0.1.3.log",
+  "query_before": "0.1.2-1",
+  "query_after": "0.1.3-1",
+  "file_check": "1144 files, 0 changed (in-namespace -Qkk)",
+  "tree_verify": {
+   "files": 980,
+   "distributions": 18,
+   "electron": "44.3.0",
+   "version": "0.1.3"
+  },
+  "package_smoke": "passed (parse succeeded, 1 hit, bbox, bundle 3922 bytes, stopped, draft+receipt)",
+  "model_cache_sha256_unchanged": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+  "workspace_integrity": "ok",
+  "task_after_upgrade": "running (honest, no fake success)",
+  "worker_restart_reclaim": "expired-lease parse task re-claimed running gen 3 attempts 2; non-parse would fail execution_interrupted",
+  "preflight_refusal": "directory apply without --allow-active refused: 1 active task (running)",
+  "migration_backup": "full old tree + SQLite online-backup copies; backup logically identical (1 resource, 1 version, running task preserved)",
+  "rollback": "rolled_back to 0.1.2 with --restore-workspaces, then re-applied 0.1.3 (final state)",
+  "directory_channel_build": "directory apply/rollback ran with the pre-mode-fix 0.1.3 directory archive 6ff921f8... built from 5cc4706 (dir-apply-allowed.log:10, final-state.log:21), not the 197f163 archive 33cc4b74...; 197f163 changes only release file modes in scripts/build_desktop.py",
+  "final_state_log": ".dev-logs/release-20261005/logs/final-state.log",
+  "rerun_with_fixed_package": "fresh 0.1.2 baseline root re-upgraded to fixed 0.1.3: 0.1.3-1, 1144 files 0 changed, tree verify 980/18/44.3.0/0.1.3; model cache sha unchanged; task still running; workspace integrity ok",
+  "rerun_logs": [
+   ".dev-logs/release-20261005/logs/r2-install-0.1.2.log",
+   ".dev-logs/release-20261005/logs/r2-upgrade-0.1.3.log",
+   ".dev-logs/release-20261005/logs/r2-query.log",
+   ".dev-logs/release-20261005/logs/r2-filecheck.log",
+   ".dev-logs/release-20261005/logs/r2-verify.log"
+  ]
+ },
+ "failure_injection": {
+  "build": "corrupt-package and interrupted-transaction roots used the 5cc4706 build of 0.1.3 (before the 197f163 file-mode fix); the 0.1.2->0.1.3 rerun above used the fixed package",
+  "corrupt_package": "truncated tar.zst upgrade committed nothing (transaction abandoned); tree left half-written -> reinstalled 0.1.2 (1106 files 0 changed) -> retried good 0.1.3 OK",
+  "interrupted_transaction": "NOT CLAIMED as a SIGKILL drill: the kill command/PID, the stale db.lck refusal and its clearing, and an actual launch of the old app were not captured in raw logs. Recorded aftermath only: package DB still 0.1.2-1 (kill-aftermath-query.log), old tree statically verifies as 0.1.2 (kill-verify-old-tree.log), retry upgrade to 0.1.3 succeeds and verifies (kill-retry-upgrade.log, kill-query-retried.log, kill-verify-retried.log), downgrade back to 0.1.2 succeeds (kill-rollback-0.1.2.log, kill-query-rolledback.log)",
+  "forced_rollback": "pacman -U 0.1.2 over 0.1.3 returns to 0.1.2-1 (documented rollback vehicle for pacman-owned trees)"
+ },
+ "close_window": {
+  "result": "passed",
+  "pid": 74558,
+  "window": 31,
+  "exit": {
+   "code": 0,
+   "signal": null
+  },
+  "opened_ms": 1351,
+  "close_ms": 300,
+  "note": "retested on the FIXED installed 0.1.3 package (197f163 modes) on real Wayland/niri, separate profile, t28-app untouched; retests the 072e860 fix",
+  "report": ".dev-logs/release-20261005/logs/close-window-report.json",
+  "driver": ".dev-logs/release-20261005/run-close-installed.mjs"
+ },
+ "host_session": {
+  "run": "HostSession 2026-10-05: INSTALLED fixed 0.1.3 package from the isolated pacman root (iso-root, queried 0.1.3-1), run as the normal user on the LIVE niri Wayland session with a separate profile; t28-app (CDP 49301) untouched, CDP on 49422 (outside 49310-49319). Exit 0 verified, no lingering process, port closed.",
+  "package": {
+   "arch_package": ".dev-logs/release-20261005/packages/deepdocparse-desktop-spike-0.1.3-1-x86_64.pkg.tar.zst",
+   "arch_sha256": "ffa43622df347c173c349b327b43210b7c122d1cc6a95deaf04d35c65143e733",
+   "source_revision": "197f1636f1093fa128e9ac26512d7e04b80b0357",
+   "installed_root": ".dev-logs/release-20261005/iso-root",
+   "installed_query": "deepdocparse-desktop-spike 0.1.3-1",
+   "host_package_database_modified": false,
+   "tarball_modes": "991 files -rw-r--r--, 35 -rwxr-xr-x, 121 dirs drwxr-xr-x; 0 entries at 0600/0700"
+  },
+  "facts": {
+   "XDG_SESSION_TYPE": "wayland",
+   "WAYLAND_DISPLAY": "wayland-1",
+   "DISPLAY": ":1",
+   "compositor": "niri 26.04 (8ed0da4)",
+   "electron_ozone_platform": "wayland (--ozone-platform=wayland in process cmdline)",
+   "app_version": "0.1.3",
+   "electron": "44.3.0",
+   "chromium": "152.0.7977.78",
+   "gpu_renderer": "ANGLE (AMD, AMD Radeon 780M Graphics (radeonsi phoenix ACO), OpenGL ES 3.2)",
+   "gpu_vendor": "Google Inc. (AMD)",
+   "cpu": "AMD Ryzen 7 255 w/ Radeon 780M Graphics",
+   "kernel": "7.2.9-1-cachyos",
+   "concurrency": 16,
+   "deviceMemory": 16
+  },
+  "steps": [
+   "launched installed binary with --user-data-dir=.dev-logs/release-20261005/host-session/profile --ozone-platform=wayland --remote-debugging-port=49422 (pid 116395, window 51)",
+   "clicked 打开本机工作区 → real native directory dialog (xdg-desktop-portal-gtk, window 53); typed the fresh workspace path with wtype extracted from .dev-logs/v3-finish-20260923/wtype.pkg.tar.zst (no system install), confirmed via the real AT-SPI button 选择工作区",
+   "dialog closed; app created workspace.sqlite3 (25 tables: 1 resource slot, integrity ok) + consents.sqlite3 (integrity ok) in host-session/workspace",
+   "imported real text-layer PDF (DeepDocParse contract test / Answer: 42, 1 page, 439 bytes): upload dialog → setInputFiles → 上传 1 → 解析 已完成 · 索引 可问答 in ~6s",
+   "searched 'contract' → 1 hit with page locator (import.pdf 第 1 版 · 1 处命中 / PDF 第 1 页 / DeepDocParse contract test Answer: 42)",
+   "recorded session/hardware facts (hoststatus.json + renderer-facts.json)",
+   "closed window via niri close-window: process exited, no lingering deepdocparse process, CDP port 49422 closed"
+  ],
+  "close": {
+   "method": "niri msg action close-window on the app window (no active local tasks, so no quit-confirmation gate)",
+   "measured": ".dev-logs/release-20261005/host-session/logs/close-measured.json",
+   "measured_driver": ".dev-logs/release-20261005/host-session/close-measure.mjs",
+   "pid": 132664,
+   "window": 58,
+   "opened_ms": 1106,
+   "close_ms": 8652,
+   "exit": {
+    "code": 0,
+    "signal": null
+   },
+   "lingering": "none (pgrep clean, CDP port 49325 closed, window gone)",
+   "workspace_after_close": "workspace.sqlite3 integrity ok, resources 1",
+   "note": "same installed binary + same profile/workspace as the full drill (pid 116395 run); relaunch reuses them, so this is the same-app close measurement, not a fresh-profile shortcut. The earlier uninstrumented close of pid 116395 also exited with no lingering process/port."
+  },
+  "screenshots": [
+   ".dev-logs/release-20261005/host-session/shots/01-launched-sources.png",
+   ".dev-logs/release-20261005/host-session/shots/02-native-dialog.png",
+   ".dev-logs/release-20261005/host-session/shots/03-dialog-typed.png",
+   ".dev-logs/release-20261005/host-session/shots/04-dialog-navigated.png",
+   ".dev-logs/release-20261005/host-session/shots/05-dialog-tabs.png",
+   ".dev-logs/release-20261005/host-session/shots/06-workspace-created.png",
+   ".dev-logs/release-20261005/host-session/shots/07-upload-staged.png",
+   ".dev-logs/release-20261005/host-session/shots/08-parsed.png",
+   ".dev-logs/release-20261005/host-session/shots/09-search.png",
+   ".dev-logs/release-20261005/host-session/shots/10-relaunch.png"
+  ],
+  "logs": [
+   ".dev-logs/release-20261005/host-session/logs/launch.log",
+   ".dev-logs/release-20261005/host-session/logs/hoststatus.json",
+   ".dev-logs/release-20261005/host-session/logs/renderer-facts.json",
+   ".dev-logs/release-20261005/host-session/logs/parsed-text.txt",
+   ".dev-logs/release-20261005/host-session/logs/search-text.txt",
+   ".dev-logs/release-20261005/host-session/logs/close-measured.json"
+  ],
+  "drivers": ".dev-logs/release-20261005/host-session/drivers/ (Playwright imports fixed to /home/minatoaqukin/Projects/CSIE/DeepDocParse/apps/web/node_modules/@playwright/test/index.mjs) + prior ReleaseUpgrade attempt-2/3 scripts kept at .dev-logs/release-20261005/host2-*.mjs, host3-*.mjs, host-driver.mjs",
+  "wtype": "binary extracted from .dev-logs/v3-finish-20260923/wtype.pkg.tar.zst to .dev-logs/release-20261005/host-session/wtype-pkg/usr/bin/wtype (not installed system-wide)",
+  "workspace_db": ".dev-logs/release-20261005/host-session/workspace/ (workspace.sqlite3: 25 tables, resources 1, versions 1, integrity ok; consents.sqlite3: integrity ok)",
+  "profile": ".dev-logs/release-20261005/host-session/profile (separate; live services and t28-app untouched)"
+ },
+ "signing": {
+  "mechanism": "ssh-ed25519 detached, namespace ddp-desktop-release, payload excludes signature field",
+  "throwaway_test": "sign OK -> verify accepted/0.1.3 -> tampered sha256 rejected (incorrect signature) -> wrong signer rejected (signature mismatch)",
+  "real_key_status": "NOT DONE - human step only",
+  "human_step": ".dev-logs/human-steps/SIGNING.md"
+ },
+ "known_defect_found_by_peer": "RESOLVED: the 4 mode-0600 payload files are fixed by 197f163 (normalize_release_modes); fixed 0.1.3 tree verified 0 files at 0600/0700, previously-0600 files now 0644 in tarball and installed tree.",
+ "limitations": [
+  "Isolated pacman DB seeded by copying host metadata (no clean-OS dependency resolution; host libs satisfy runtime). Clean-OS install is CleanInstall's slice.",
+  "Signing verified with a THROWAWAY key only; release trust needs the human SIGNING step.",
+  "Disk-full simulation not run as a separate case (loop mount denied in user namespace); the corrupt-package case carries the recorded failure-recovery chain (the interrupted transaction has aftermath records only).",
+  "Workspace schema versions unchanged between 0.1.2 and 0.1.3 (3/4). Only a same-schema directory-channel backup/restore was exercised; no destructive migration ran. Audited migration inventory: shipped local migrations (python/ddp_local store.py, wiki_store.py, consents.py) only create tables or copy rows and the keyword-index change rebuilds derived FTS data in a transaction, so no shipped migration deletes or rewrites authoritative user data. The runtime startup path and the pacman channel take no pre-migration backup; a future destructive migration must add one first."
+ ],
+ "commands_log": ".dev-logs/release-20261005/commands.json",
+ "human_review_status": "not_claimed"
+}

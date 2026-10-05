@@ -1,0 +1,295 @@
+{
+  "schema": "ddp-clean-install-verification/1",
+  "date": "2026-10-05",
+  "source_revision": "197f1636f1093fa128e9ac26512d7e04b80b0357",
+  "platform": {
+    "os": "Arch Linux (archlinux:latest container)",
+    "architecture": "x86_64",
+    "sessions": {
+      "x11": "Xvfb :99 1280x800x24",
+      "wayland": "weston --backend=headless 1280x800"
+    }
+  },
+  "scope": "Genuinely clean Arch userland (137 base packages) + official-repo deps only: root pacman -U the ReleaseUpgrade 0.1.3 package, ordinary user ddpuser runs the installed App in real graphical sessions (Xvfb X11 + headless weston Wayland), creates a workspace, imports a real text-layer PDF, sees it parsed and searchable. No PostgreSQL/Redis/MinIO/docker in the clean environment. Covers the clean-environment part of T88 and the T20 install half; real-hardware host Wayland session still needs the T88-SESSION human step.",
+  "package": {
+    "path": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/release-20261005/packages/deepdocparse-desktop-spike-0.1.3-1-x86_64.pkg.tar.zst",
+    "sha256": "ffa43622df347c173c349b327b43210b7c122d1cc6a95deaf04d35c65143e733",
+    "version": "0.1.3-1"
+  },
+  "clean_base": {
+    "package_count": 137,
+    "record": ".dev-logs/clean-install-20261005/base-qlist.txt",
+    "image_digest": "sha256:b21322c663be387c0ed9cbc7bbbfe18e41633ad4e7b7c77cfad45f128be20040"
+  },
+  "resolved_dependencies": {
+    "count_from_pacman": 96,
+    "record": ".dev-logs/clean-install-20261005/resolved-deps.txt",
+    "note": "96 = line count of resolved-deps.txt, the dependency snapshot taken right after the package install (incl. the package itself) and before the test-only Xvfb/node/weston additions; the retained final-qlist.txt includes those later additions, so comm -13 base-qlist final-qlist is larger and is not this count"
+  },
+  "absence": {
+    "postgresql_redis_minio_docker_podman": "pacman -Q: all 'was not found'; no matching processes; ss shows no listeners",
+    "record": ".dev-logs/clean-install-20261005/absence-proof.log"
+  },
+  "ordinary_user_flow": {
+    "user": "ddpuser (uid 1000)",
+    "init_upload_parse_search": {
+      "passed": true,
+      "display": ":99",
+      "transport": "ready",
+      "snapshot": "current",
+      "taskStatus": "succeeded",
+      "hits": 1,
+      "bbox": [
+        60.167999267578125,
+        43.156005859375,
+        394.4159240722656,
+        574.6280059814453
+      ],
+      "workspaceId": "9e089214-da5e-4898-952e-eb8e7bf4e6c0",
+      "versionId": "cb4cef6dee4c4715a6352b7ccb70c541",
+      "searchText": "PURCHASE AGREEMENT\nContract No.: NW-2026-0817 Date of signature: 2026-03-14\nBuye"
+    },
+    "driver": ".dev-logs/clean-install-20261005/gui-session-test.mjs"
+  },
+  "electron_smoke": {
+    "limits": "Both packaged runs pass --no-sandbox (container without a user-namespace sandbox), so the reports' webPreferences sandbox:true is the renderer setting, not proof that the Chromium OS sandbox ran. Workspace directory and PDF come from DDP_DESKTOP_SMOKE_* (no native chooser). The default smoke flow creates a workspace, uploads and parses and renders the PDF but does not search; search hit + bbox is recorded only by the X11 driver in ordinary_user_flow.",
+    "x11": {
+      "application": {
+        "version": "0.1.3",
+        "packaged": true
+      },
+      "localRuntime": {
+        "state": "ready",
+        "reason": null
+      },
+      "fileResults": {
+        "resourceId": "676fe3a4b28346bca1ce96fe2eaa7798",
+        "versionId": "ecd9ba506236488694d659d7110fd02c",
+        "status": "succeeded",
+        "pageCount": 2,
+        "appendedVersion": "56c03da79dc54b9c974a7fb3a3d30b5e"
+      },
+      "pdfRendered": true,
+      "tokenAudit": {
+        "meKeys": [
+          "id",
+          "username",
+          "email",
+          "role",
+          "organization_id",
+          "created_at"
+        ],
+        "capabilitiesKeys": [
+          "workspace_id",
+          "environment_id",
+          "kind",
+          "accounts",
+          "content_features",
+          "identity",
+          "profile",
+          "parse",
+          "retrieval",
+          "generation",
+          "degraded"
+        ],
+        "methods": [
+          "clientList",
+          "clientCommand",
+          "clientQuery",
+          "clientReceipt",
+          "clientReadDraft",
+          "clientSaveDraft",
+          "clientPlanPropose",
+          "clientPlanProposeFile",
+          "clientPlanList",
+          "clientPlanGet",
+          "clientPlanReviewCenter",
+          "clientPlanApprove",
+          "clientPlanRevoke",
+          "clientPlanCancel",
+          "clientPlanDispatch",
+          "clientPlanResume",
+          "clientPlanReconcile",
+          "clientPlanFetchDelivery",
+          "clientPlanConfirmDelivery",
+          "sourceList",
+          "sourceActivate",
+          "sourceReconnect",
+          "sourceRemove",
+          "workspaceOpen",
+          "centerConnect",
+          "onSourceChange",
+          "hostStatus",
+          "selectWorkspace",
+          "startLocal",
+          "stopLocal",
+          "runtimeStatus",
+          "setCredential",
+          "credentialStatus",
+          "clearCredential"
+        ]
+      },
+      "webPreferences": {
+        "sandbox": true,
+        "contextIsolation": true,
+        "nodeIntegration": false
+      },
+      "fonts": [
+        {
+          "font": "16px Inter",
+          "loaded": true
+        },
+        {
+          "font": "16px \"IBM Plex Mono\"",
+          "loaded": true
+        },
+        {
+          "font": "16px \"Noto Sans SC\"",
+          "loaded": true
+        }
+      ],
+      "display": {
+        "wayland": null,
+        "x11": ":99"
+      },
+      "stopped": {
+        "workspaceId": "022fbd61-3db1-44a8-a061-38fda3283cc8",
+        "state": "stopped",
+        "generation": 2,
+        "reason": "host_quit",
+        "identity": {
+          "environment_id": "local-2475cb8e0c00499bbc0c732faf098f0a",
+          "workspace_id": "a5d4f17be1ec4df7b1c27c5d57e5e8a7",
+          "authority_node_id": "local-2475cb8e0c00499bbc0c732faf098f0a"
+        }
+      }
+    },
+    "wayland": {
+      "application": {
+        "version": "0.1.3",
+        "packaged": true
+      },
+      "localRuntime": {
+        "state": "ready",
+        "reason": null
+      },
+      "fileResults": {
+        "resourceId": "2f4d027e7dbf404194db387cf0a24005",
+        "versionId": "e7bcd935ff6744adbdb885434e2be5b1",
+        "status": "succeeded",
+        "pageCount": 2,
+        "appendedVersion": "53188eaea9d4430bbe09f1be4804e4c1"
+      },
+      "pdfRendered": true,
+      "tokenAudit": {
+        "meKeys": [
+          "id",
+          "username",
+          "email",
+          "role",
+          "organization_id",
+          "created_at"
+        ],
+        "capabilitiesKeys": [
+          "workspace_id",
+          "environment_id",
+          "kind",
+          "accounts",
+          "content_features",
+          "identity",
+          "profile",
+          "parse",
+          "retrieval",
+          "generation",
+          "degraded"
+        ],
+        "methods": [
+          "clientList",
+          "clientCommand",
+          "clientQuery",
+          "clientReceipt",
+          "clientReadDraft",
+          "clientSaveDraft",
+          "clientPlanPropose",
+          "clientPlanProposeFile",
+          "clientPlanList",
+          "clientPlanGet",
+          "clientPlanReviewCenter",
+          "clientPlanApprove",
+          "clientPlanRevoke",
+          "clientPlanCancel",
+          "clientPlanDispatch",
+          "clientPlanResume",
+          "clientPlanReconcile",
+          "clientPlanFetchDelivery",
+          "clientPlanConfirmDelivery",
+          "sourceList",
+          "sourceActivate",
+          "sourceReconnect",
+          "sourceRemove",
+          "workspaceOpen",
+          "centerConnect",
+          "onSourceChange",
+          "hostStatus",
+          "selectWorkspace",
+          "startLocal",
+          "stopLocal",
+          "runtimeStatus",
+          "setCredential",
+          "credentialStatus",
+          "clearCredential"
+        ]
+      },
+      "webPreferences": {
+        "sandbox": true,
+        "contextIsolation": true,
+        "nodeIntegration": false
+      },
+      "fonts": [
+        {
+          "font": "16px Inter",
+          "loaded": true
+        },
+        {
+          "font": "16px \"IBM Plex Mono\"",
+          "loaded": true
+        },
+        {
+          "font": "16px \"Noto Sans SC\"",
+          "loaded": true
+        }
+      ],
+      "display": {
+        "wayland": "wayland-clean",
+        "x11": null
+      },
+      "stopped": {
+        "workspaceId": "040ea17c-e86c-4862-aaf9-ed183c823d4f",
+        "state": "stopped",
+        "generation": 2,
+        "reason": "host_quit",
+        "identity": {
+          "environment_id": "local-130bc22914754ae98858dc9d6563098e",
+          "workspace_id": "7183c3b22057468383fa21d67fc0952f",
+          "authority_node_id": "local-130bc22914754ae98858dc9d6563098e"
+        }
+      }
+    },
+    "screenshots": [
+      ".dev-logs/clean-install-20261005/electron-smoke-desktop.png",
+      ".dev-logs/clean-install-20261005/electron-smoke-wayland.png"
+    ],
+    "reports": [
+      ".dev-logs/clean-install-20261005/electron-smoke-report.json",
+      ".dev-logs/clean-install-20261005/electron-smoke-wayland-report.json"
+    ]
+  },
+  "defect": {
+    "id": "PACKAGING-0600",
+    "status": "fixed_in_197f163_and_reverified",
+    "summary": "First drill (source rev 5cc4706, package af2885fe) found 4 payload files shipping mode 0600, unreadable by an ordinary user under a root-owned /opt install. Fixed by 197f163 (normalize_release_modes + release_tarinfo; regression test test_release_stage_and_archive_modes_ignore_builder_checkout_and_umask). This rerun (source rev 197f163, package ffa43622, fresh container ddp-clean-arch2, NO chmod workaround): find /opt/deepdocparse ! -perm -o=r prints NOTHING; ordinary-user GUI + both Electron smokes pass. First-drill as-shipped record kept at .dev-logs/clean-install-20261005/unreadable-as-shipped.log.",
+    "recheck": ".dev-logs/clean-install-20261005/unreadable-recheck.log (empty = no unreadable files)"
+  },
+  "container": "ddp-clean-arch2",
+  "human_review_status": "not_claimed"
+}
