@@ -1,0 +1,629 @@
+{
+  "drill": "recovery-pitr",
+  "date": "20261005",
+  "scale": {
+    "generated_docs": 30,
+    "pre_target_docs": 5,
+    "post_target_docs": 2,
+    "seed_users": 3,
+    "seed_chunks": 90,
+    "seed_evidence": 90,
+    "b_copy": {
+      "public.documents": 31,
+      "public.parse_jobs": 58,
+      "public.resources": 51,
+      "public.resource_versions": 62,
+      "public.chunks": 28438,
+      "public.evidence": 37817,
+      "public.citations": 132,
+      "public.wikis": 19,
+      "public.wiki_revisions": 39,
+      "public.wiki_pages": 41,
+      "public.wiki_dependencies": 434,
+      "public.upload_events": 62,
+      "public.federation_requests": 1,
+      "public.coverage_ledgers": 1,
+      "public.coverage_entries": 2,
+      "public.collections": 2,
+      "public.collection_members": 2,
+      "control.organizations": 1,
+      "control.users": 11,
+      "_db_size": "415 MB"
+    },
+    "note": "consistent copy of live center B (PG pg_dump + MinIO mc mirror, read-only) enlarged by generated docs to the stated scale"
+  },
+  "pitr_target": "2026-10-05 06:27:34.271207+00",
+  "wal": {
+    "archive_timeout_s": 30,
+    "archive_command": "cp %p wal-archive/%f",
+    "archived_segments": 3,
+    "base_lsn": "0/1A000060"
+  },
+  "ports": {
+    "src_pg": 15495,
+    "pitr_target_pg": 15496,
+    "latest_pg": 15503,
+    "crash_pg": 15498,
+    "src_minio": 15511,
+    "src_minio_console": 15512,
+    "dst_minio": 15521,
+    "dst_minio_console": 15522,
+    "note": "latest on 15503 because another session's ddp-subtree-audit-pg2 owns 15497 (do not touch); all ports pre-gated incl. consoles"
+  },
+  "rto_seconds": {
+    "copy_b": 17.4,
+    "build_source": 30.9,
+    "base_backup": 281.5,
+    "pre_and_post_writes_with_archive_waits": 89.7,
+    "restore_to_target": 17.5,
+    "restore_to_latest": 7.7,
+    "rpo_crash_probe": 8.5,
+    "identity": 0.6
+  },
+  "rpo": {
+    "wal_archive_cadence_s": 30,
+    "target_restore_loss": "zero at target time (selectivity PASS: pre-target tasks present, post-target tasks absent)",
+    "latest_restore_loss": "zero (full replay; noloss PASS)",
+    "crash_probe": {
+      "probe_task": "probe-pitr20261005-0a72a3aa",
+      "rows_in_crash_restore": 0,
+      "lost": true,
+      "meaning": "unarchived tail write lost on crash-restore: RPO bound proven"
+    },
+    "loss_window_s": 30
+  },
+  "selectivity": {
+    "target": {
+      "pre_tasks": [
+        "task-pitr-pitr20261005-pre-0-22222222",
+        "task-pitr-pitr20261005-pre-1-22222222",
+        "task-pitr-pitr20261005-pre-2-22222222",
+        "task-pitr-pitr20261005-pre-3-22222222",
+        "task-pitr-pitr20261005-pre-4-22222222"
+      ],
+      "postt_tasks": [
+        "task-pitr-pitr20261005-postt-0-22222222",
+        "task-pitr-pitr20261005-postt-1-22222222"
+      ],
+      "pre_present": [
+        "task-pitr-pitr20261005-pre-0-22222222",
+        "task-pitr-pitr20261005-pre-1-22222222",
+        "task-pitr-pitr20261005-pre-2-22222222",
+        "task-pitr-pitr20261005-pre-3-22222222",
+        "task-pitr-pitr20261005-pre-4-22222222"
+      ],
+      "pre_absent": [],
+      "postt_present": [],
+      "postt_absent": [
+        "task-pitr-pitr20261005-postt-0-22222222",
+        "task-pitr-pitr20261005-postt-1-22222222"
+      ],
+      "selective": true
+    },
+    "latest": {
+      "pre_present": [
+        "task-pitr-pitr20261005-pre-0-22222222",
+        "task-pitr-pitr20261005-pre-1-22222222",
+        "task-pitr-pitr20261005-pre-2-22222222",
+        "task-pitr-pitr20261005-pre-3-22222222",
+        "task-pitr-pitr20261005-pre-4-22222222"
+      ],
+      "pre_absent": [],
+      "postt_present": [
+        "task-pitr-pitr20261005-postt-0-22222222",
+        "task-pitr-pitr20261005-postt-1-22222222"
+      ],
+      "postt_absent": [],
+      "complete": true
+    }
+  },
+  "source_counts": {
+    "public.documents": 68,
+    "public.parse_jobs": 95,
+    "public.resources": 88,
+    "public.resource_versions": 99,
+    "public.chunks": 28528,
+    "public.evidence": 37907,
+    "public.citations": 133,
+    "public.wikis": 20,
+    "public.wiki_revisions": 42,
+    "public.wiki_pages": 44,
+    "public.wiki_dependencies": 435,
+    "public.upload_events": 99,
+    "public.document_uploads": 75,
+    "public.federation_requests": 9,
+    "public.coverage_ledgers": 2,
+    "public.coverage_entries": 3,
+    "public.collections": 3,
+    "public.collection_members": 3,
+    "control.organizations": 2,
+    "control.users": 14,
+    "control.memberships": 14
+  },
+  "reconciliation": {
+    "source": {
+      "checks": [
+        {
+          "name": "fk:versions->resources",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:versions->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:jobs->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:chunks->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:chunks->jobs",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:evidence->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:evidence->jobs",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:citations->evidence",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:deps->versions",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:deps->evidence",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:members->versions",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:uploads->versions",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:docuploads->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:entries->ledgers",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "bind:version.source_digest==document.doc_id",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "bind:evidence.content_digest==digest(evidence.content)",
+          "ok": true,
+          "detail": "mismatches=0 pages=8"
+        },
+        {
+          "name": "meta:live versions resolve to stored objects",
+          "ok": true,
+          "detail": "unresolved=0"
+        },
+        {
+          "name": "bind:wiki_deps==version(source_digest,document)",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "bind:collection_members==version(source_digest,document)",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "meta:every live document has an uploader",
+          "ok": true,
+          "detail": "missing=0"
+        },
+        {
+          "name": "bind:drill authority id survives restore (clone with different id fails here)",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "bind:drill origin id survives restore",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "obj:every live document object exists",
+          "ok": true,
+          "detail": "missing=0"
+        },
+        {
+          "name": "obj:every live document digest matches",
+          "ok": true,
+          "detail": "mismatched=0"
+        },
+        {
+          "name": "obj:result prefixes without objects are only deleted docs",
+          "ok": true,
+          "detail": "explained_deleted=13 unexplained=0"
+        },
+        {
+          "name": "obj:no unexplained bucket extras",
+          "ok": true,
+          "detail": "extras=0"
+        }
+      ],
+      "orphans": {
+        "version_without_object": [],
+        "missing_objects": [],
+        "digest_mismatches": [],
+        "empty_result_prefixes": [],
+        "bucket_extras": []
+      },
+      "mismatches": [],
+      "ok": true,
+      "doc_count": 54
+    },
+    "pitr_target": {
+      "checks": [
+        {
+          "name": "fk:versions->resources",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:versions->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:jobs->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:chunks->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:chunks->jobs",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:evidence->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:evidence->jobs",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:citations->evidence",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:deps->versions",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:deps->evidence",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:members->versions",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:uploads->versions",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:docuploads->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:entries->ledgers",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "bind:version.source_digest==document.doc_id",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "bind:evidence.content_digest==digest(evidence.content)",
+          "ok": true,
+          "detail": "mismatches=0 pages=8"
+        },
+        {
+          "name": "meta:live versions resolve to stored objects",
+          "ok": true,
+          "detail": "unresolved=0"
+        },
+        {
+          "name": "bind:wiki_deps==version(source_digest,document)",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "bind:collection_members==version(source_digest,document)",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "meta:every live document has an uploader",
+          "ok": true,
+          "detail": "missing=0"
+        },
+        {
+          "name": "bind:drill authority id survives restore (clone with different id fails here)",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "bind:drill origin id survives restore",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "obj:every live document object exists",
+          "ok": true,
+          "detail": "missing=0"
+        },
+        {
+          "name": "obj:every live document digest matches",
+          "ok": true,
+          "detail": "mismatched=0"
+        },
+        {
+          "name": "obj:result prefixes without objects are only deleted docs",
+          "ok": true,
+          "detail": "explained_deleted=13 unexplained=0"
+        },
+        {
+          "name": "obj:no unexplained bucket extras",
+          "ok": true,
+          "detail": "extras=0"
+        }
+      ],
+      "orphans": {
+        "version_without_object": [],
+        "missing_objects": [],
+        "digest_mismatches": [],
+        "empty_result_prefixes": [],
+        "bucket_extras": []
+      },
+      "mismatches": [],
+      "ok": true,
+      "doc_count": 54
+    },
+    "latest": {
+      "checks": [
+        {
+          "name": "fk:versions->resources",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:versions->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:jobs->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:chunks->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:chunks->jobs",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:evidence->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:evidence->jobs",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:citations->evidence",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:deps->versions",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:deps->evidence",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:members->versions",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:uploads->versions",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:docuploads->documents",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "fk:entries->ledgers",
+          "ok": true,
+          "detail": "violations=0"
+        },
+        {
+          "name": "bind:version.source_digest==document.doc_id",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "bind:evidence.content_digest==digest(evidence.content)",
+          "ok": true,
+          "detail": "mismatches=0 pages=8"
+        },
+        {
+          "name": "meta:live versions resolve to stored objects",
+          "ok": true,
+          "detail": "unresolved=0"
+        },
+        {
+          "name": "bind:wiki_deps==version(source_digest,document)",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "bind:collection_members==version(source_digest,document)",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "meta:every live document has an uploader",
+          "ok": true,
+          "detail": "missing=0"
+        },
+        {
+          "name": "bind:drill authority id survives restore (clone with different id fails here)",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "bind:drill origin id survives restore",
+          "ok": true,
+          "detail": "mismatches=0"
+        },
+        {
+          "name": "obj:every live document object exists",
+          "ok": true,
+          "detail": "missing=0"
+        },
+        {
+          "name": "obj:every live document digest matches",
+          "ok": true,
+          "detail": "mismatched=0"
+        },
+        {
+          "name": "obj:result prefixes without objects are only deleted docs",
+          "ok": true,
+          "detail": "explained_deleted=13 unexplained=0"
+        },
+        {
+          "name": "obj:no unexplained bucket extras",
+          "ok": true,
+          "detail": "extras=0"
+        }
+      ],
+      "orphans": {
+        "version_without_object": [],
+        "missing_objects": [],
+        "digest_mismatches": [],
+        "empty_result_prefixes": [],
+        "bucket_extras": []
+      },
+      "mismatches": [],
+      "ok": true,
+      "doc_count": 56
+    }
+  },
+  "noloss_latest_vs_source": {
+    "source": {
+      "public.documents": 68,
+      "public.parse_jobs": 95,
+      "public.resources": 88,
+      "public.resource_versions": 99,
+      "public.chunks": 28528,
+      "public.evidence": 37907,
+      "public.citations": 133,
+      "public.wikis": 20,
+      "public.wiki_revisions": 42,
+      "public.wiki_pages": 44,
+      "public.wiki_dependencies": 435,
+      "public.upload_events": 99,
+      "public.document_uploads": 75,
+      "public.federation_requests": 9,
+      "public.coverage_ledgers": 2,
+      "public.coverage_entries": 3,
+      "public.collections": 3,
+      "public.collection_members": 3,
+      "control.organizations": 2,
+      "control.users": 14,
+      "control.memberships": 14
+    },
+    "latest": {
+      "public.documents": 68,
+      "public.parse_jobs": 95,
+      "public.resources": 88,
+      "public.resource_versions": 99,
+      "public.chunks": 28528,
+      "public.evidence": 37907,
+      "public.citations": 133,
+      "public.wikis": 20,
+      "public.wiki_revisions": 42,
+      "public.wiki_pages": 44,
+      "public.wiki_dependencies": 435,
+      "public.upload_events": 99,
+      "public.document_uploads": 75,
+      "public.federation_requests": 9,
+      "public.coverage_ledgers": 2,
+      "public.coverage_entries": 3,
+      "public.collections": 3,
+      "public.collection_members": 3,
+      "control.organizations": 2,
+      "control.users": 14
+    },
+    "diff": {},
+    "noloss": true
+  },
+  "identity": "=== RUN   TestNodeIdentityBackupRestoreDrill\n    identity_drill_test.go:35: authority node id=node-f62697d5af111d339c4e15f0d4b6f172547a4f396ff0bb69 fingerprint=sha256:f62697d5af111d339c4e15f0d4b6f172547a4f396ff0bb697f56ee5a8bdd171c\n    identity_drill_test.go:58: restored same authority: node id=node-f62697d5af111d339c4e15f0d4b6f172547a4f396ff0bb69 fingerprint=sha256:f62697d5af111d339c4e15f0d4b6f172547a4f396ff0bb697f56ee5a8bdd171c\n    identity_drill_test.go:99: clone node id=node-888e163f2132f4ab1dbbb3e0ea7011db4cdf533a6c214c59 differs; missing seed refused; create/read paths exercised\n--- PASS: TestNodeIdentityBackupRestoreDrill (0.00s)\nPASS\nok  \tgithub.com/Minato-Aqukin/deepdocparse/services/control-api/internal/discovery\t0.005s\n",
+  "peer_clone_rejection": "=== RUN   TestCredentialSigningRefusesForeignIssuerAndInvalidClaims\n--- PASS: TestCredentialSigningRefusesForeignIssuerAndInvalidClaims (0.00s)\n=== RUN   TestNodeIDForPublicKeyValidatesCanonicalEncoding\n--- PASS: TestNodeIDForPublicKeyValidatesCanonicalEncoding (0.00s)\nPASS\nok  \tgithub.com/Minato-Aqukin/deepdocparse/services/control-api/internal/discovery\t0.005s\n",
+  "repro": "bash scripts/recovery_drill.sh"
+}
