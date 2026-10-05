@@ -3,9 +3,10 @@ import type { Environment, Event, Identity, Json, Profile, Projection, Provider,
 
 export const CLIENT_PROTOCOL = 'ddp-client/1'
 export const REQUIRED_CLIENT_CAPABILITIES = Object.freeze(['client.snapshot', 'client.events', 'client.receipt'])
-export function isCompatibleHandshake(value) {
-  const capabilities = value?.capabilities
-  return value?.protocol_version === CLIENT_PROTOCOL && Array.isArray(capabilities)
+export function isCompatibleHandshake(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const { protocol_version: protocol, capabilities } = value as Record<string, unknown>
+  return protocol === CLIENT_PROTOCOL && Array.isArray(capabilities)
     && capabilities.every(item => typeof item === 'string')
     && REQUIRED_CLIENT_CAPABILITIES.every(item => capabilities.includes(item))
 }
