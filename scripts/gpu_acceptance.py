@@ -129,7 +129,7 @@ def package_version(name):
 def host_facts():
     from ddp_local.model_runtime.catalog import catalog
     data = catalog()
-    return {
+    facts = {
         "python": platform.python_version(),
         "platform": f"{sys.platform}-{platform.machine()}",
         "catalog_revision": data["revision"],
@@ -138,6 +138,16 @@ def host_facts():
         "packages": {name: package_version(name) for name in
                      ("fastapi", "uvicorn", "httpx", "sqlalchemy", "pydantic")},
     }
+    # Before/after package versions recorded by the remote kit's jammy
+    # toolchain upgrade (infra/gpu-acceptance/gpu_acceptance_remote.py);
+    # absent on dry-run hosts that never ran the remote step.
+    marker = Path("/root/gpu-acceptance/.toolchain-upgraded.json")
+    if marker.is_file():
+        try:
+            facts["toolchain_upgrade"] = json.loads(marker.read_text())
+        except Exception:
+            facts["toolchain_upgrade"] = {"marker": "unreadable"}
+    return facts
 
 
 def _glibc_version():

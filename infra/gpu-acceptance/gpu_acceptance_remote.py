@@ -35,6 +35,19 @@ def run(*args, cwd=ROOT):
     subprocess.run(args, cwd=cwd, check=True)
 
 
+def dpkg_version(name):
+    """Installed version of a dpkg package; ``None`` when not installed."""
+    try:
+        out = subprocess.run(
+            ["dpkg-query", "-W", "-f=${Version}", name],
+            capture_output=True, text=True)
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    return (out.stdout or "").strip() or None
+
+
 def glibc_version():
     """System glibc ``(major, minor)``; ``None`` when it cannot be read."""
     import platform as _platform
@@ -180,6 +193,86 @@ def provision_nvidia_icd():
     return marker
 
 
+# Only these ever come from jammy (verified 2026-10-06 in a local
+# ubuntu:20.04 container against the real b10809 tarballs: after this step
+# `ldd llama-server` shows nothing missing for both builds,
+# `llama-server --version` prints 0.4.0-dev build 10809, and the real
+# ModelProcess CPU path starts Qwen3-1.7B and answers a completion).
+# libc6/libc-bin provide GLIBC_2.32-2.34; libstdc++6 provides
+# GLIBCXX_3.4.29/3.4.30 + CXXABI_1.3.13; libgomp1/libssl3 are the other two
+# `not found` sonames on focal; libvulkan1 is what the Vulkan build
+# dlopens plus what provision_nvidia_icd installs. gcc-12-base arrives as
+# an automatic dependency of libgcc-s1; --no-install-recommends keeps out
+# mesa-vulkan-drivers/libllvm15/python3.10 (recommends of libvulkan1),
+# which would otherwise replace system python3 and break python3-venv.
+TOOLCHAIN_PKGS = ["libc6", "libc-bin", "libstdc++6", "libgomp1",
+                   "libgcc-s1", "libssl3", "libvulkan1"]
+
+# Reachable jammy mirror for the AutoDL host (apt mirrors
+# repo.huaweicloud.com there; huaweicloud carries jammy/jammy-updates AND
+# jammy-security, verified 2026-10-06 from inside ubuntu:20.04).
+TOOLCHAIN_MIRROR = "http://repo.huaweicloud.com/ubuntu"
+
+
+def upgrade_toolchain_from_jammy():
+    """Bring in just enough Ubuntu 22.04 userland for the b10809 binaries.
+
+    Idempotent: when glibc already meets the llama.cpp floor (2.34), only
+    records ``/root/gpu-acceptance/.toolchain-upgraded.json`` (still with
+    before/after versions) and returns. Otherwise adds jammy sources with
+    a priority-100 pin (focal stays the default for everything else),
+    installs ONLY ``TOOLCHAIN_PKGS`` with ``--no-install-recommends`` from
+    jammy-updates — except libvulkan1, which installs from jammy proper
+    (under ``-t jammy-updates`` it resolves to 1.2.131.2-1; jammy proper
+    has 1.3.204.1-2), and records the before/after versions in the marker
+    for the artifact's host facts. Any failure here leaves the old glibc
+    in place, so the preflight below still fails as host_incompatible.
+    """
+    import json as _json
+    marker = ROOT / ".toolchain-upgraded.json"
+    before = {name: dpkg_version(name) for name in TOOLCHAIN_PKGS + ["gcc-12-base"]}
+    have = glibc_version()
+    if have is not None and have >= (2, 34):
+        print(f"[gpu-acceptance-remote] glibc {have[0]}.{have[1]} already meets "
+              "the llama.cpp floor; skipping jammy toolchain upgrade", flush=True)
+        keep = False
+        if marker.is_file():
+            try:
+                keep = _json.loads(marker.read_text()).get("upgraded_by_kit") is True
+            except Exception:
+                keep = False
+        if not keep:
+            marker.write_text(_json.dumps(
+                {"upgraded_by_kit": False, "mirror": None,
+                 "before": before, "after": before}, indent=2))
+        return None
+    print("[gpu-acceptance-remote] focal glibc below the llama.cpp floor; "
+          f"upgrading {', '.join(TOOLCHAIN_PKGS)} from jammy", flush=True)
+    mirror = TOOLCHAIN_MIRROR
+    Path("/etc/apt/sources.list.d/jammy-toolchain.list").write_text(
+        f"deb {mirror} jammy main restricted universe\n"
+        f"deb {mirror} jammy-updates main restricted universe\n"
+        f"deb {mirror} jammy-security main restricted universe\n")
+    Path("/etc/apt/preferences.d/jammy-toolchain").write_text(
+        "Package: *\nPin: release n=jammy*\nPin-Priority: 100\n")
+    run("apt-get", "update")
+    # libvulkan1 rides its own `-t jammy` line on purpose (see docstring):
+    # folding it into the updates line would land 1.2.131.2-1 first and
+    # need an immediate upgrade, so each line converges in one step.
+    run("apt-get", "install", "-y", "--no-install-recommends",
+        "-t", "jammy-updates",
+        *(name for name in TOOLCHAIN_PKGS if name != "libvulkan1"))
+    run("apt-get", "install", "-y", "--no-install-recommends",
+        "-t", "jammy", "libvulkan1")
+    after = {name: dpkg_version(name) for name in TOOLCHAIN_PKGS + ["gcc-12-base"]}
+    marker.write_text(_json.dumps(
+        {"upgraded_by_kit": True, "mirror": mirror,
+         "before": before, "after": after}, indent=2))
+    print("[gpu-acceptance-remote] toolchain now: "
+          + ", ".join(f"{name}={after.get(name)}" for name in TOOLCHAIN_PKGS),
+          flush=True)
+    return marker
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -200,6 +293,11 @@ def main():
     run("apt-get", "update")
     run("apt-get", "install", "-y", "python3-venv", "vulkan-tools", "curl", "ca-certificates",
         "libvulkan1")
+    # The catalog's llama.cpp b10809 binaries need GLIBC_2.34 (Ubuntu
+    # 22.04+); focal ships 2.31. Upgrade just the toolchain libraries from
+    # jammy first — the host_incompatible preflight below still fires when
+    # the upgrade fails.
+    upgrade_toolchain_from_jammy()
     # Fail fast BEFORE any download: the catalog's llama.cpp b10809 binaries
     # need GLIBC_2.34 (Ubuntu 22.04+); focal ships 2.31, so every model start
     # would die as model_start_failed. Exit 3 with host_incompatible instead.
