@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# GPU acceptance on a fresh NVIDIA Linux host (AutoDL 4090D-class target).
+# One command for the human (after exporting AUTODL_TOKEN); everything else
+# is prompted, guarded, and auto-shut down.
+#
+#   export AUTODL_TOKEN=...; bash infra/gpu-acceptance/run.sh [--dry-run-local]
+#
+# Cost (attested): infra/autodl/README.md 2026-08-25 run took ~115 min on 4090D;
+# SINGLE-CENTER-WEB-PLAN §4F + artifacts/core-f-gpu-retest-20260925.json record
+# ¥1.88/h with ~32 min costing ¥0.96. ESTIMATE for this kit: 60-90 min,
+# roughly ¥1.9-2.8 at that rate. Without AUTODL_TOKEN only the local dry-run
+# runs (no spending). CLI surface verified against `autodl <cmd> --help` and
+# /home/minatoaqukin/Projects/AutoDL-cli/src (commands/ssh.ts push/pull/exec,
+# commands/instances.ts create/list/stop/release, guard ttl; GPU names resolve
+# case-insensitively, e.g. 4090D == 4090d).
+set -euo pipefail
+KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$KIT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
+
+GPU="${GPU:-4090D}"
+TTL="${TTL:-90m}"
+DISK="${DISK:-50}"
+NAME="${NAME:-ddp-gpu-acceptance}"
+ID_FILE=".dev-logs/gpu-acceptance/instance"
+DRY_RUN_LOCAL=0
+for arg in "$@"; do case "$arg" in --dry-run-local) DRY_RUN_LOCAL=1 ;; esac; done
+
+if ! command -v autodl >/dev/null 2>&1; then
+  echo "autodl CLI not found; install it or run scripts/gpu_acceptance.py --mode dry-run locally." >&2
+  exit 2
+fi
+
+if [[ -z "${AUTODL_TOKEN:-}" ]] || [[ "$DRY_RUN_LOCAL" == 1 ]]; then
+  echo "[gpu-acceptance] no token (or --dry-run-local): local dry-run only, no spending."
+  exec .venv/bin/python scripts/gpu_acceptance.py --mode dry-run
+fi
+
+find_by_name() {
+  GPU_ACCEPTANCE_NAME="$NAME" autodl list --json 2>/dev/null | python3 -c "
+import json,os,sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+items = data if isinstance(data, list) else data.get('data', data.get('instances', []))
+want = os.environ.get('GPU_ACCEPTANCE_NAME', '')
+for it in items if isinstance(items, list) else []:
+    if isinstance(it, dict) and it.get('name') == want and it.get('status') not in ('released', 'deleted'):
+        print(it.get('uuid') or it.get('id') or '')
+" | head -1
+}
+
+cleanup() {
+  target="${INSTANCE:-}"
+  if [[ -z "$target" && -f "$ID_FILE" ]]; then target="$(cat "$ID_FILE")"; fi
+  if [[ -z "$target" ]]; then target="$(find_by_name || true)"; fi
+  if [[ -n "$target" ]]; then
+    echo "[gpu-acceptance] releasing $target ..."
+    autodl stop "$target" || true
+    # Verified semantics (AutoDL-cli src/commands/instances.ts): release refuses
+    # a running instance unless --force (which powers off and waits for
+    # shutdown first); -y skips the confirm. Both flags exist in --help.
+    autodl release -y --force "$target" || true
+    rm -f "$ID_FILE"
+  fi
+}
+trap cleanup EXIT
+
+echo "=== GPU acceptance: paid cloud GPU ahead ==="
+echo "GPU=$GPU TTL=$TTL DISK=${DISK}G NAME=$NAME"
+echo "ESTIMATE (not measured): 60-90 min on 4090D-class, roughly ¥1.9-2.8 at the attested ¥1.88/h."
+autodl balance || true
+EXISTING="$(find_by_name || true)"
+if [[ -n "$EXISTING" ]]; then
+  echo "An instance named $NAME already exists ($EXISTING); refusing to create a duplicate." >&2
+  echo "Re-run after releasing it, or set NAME= to use a different name." >&2
+  exit 2
+fi
+read -r -p "Create the instance and spend this money? [yes/NO] " answer
+if [[ "$answer" != "yes" ]]; then echo "aborted; nothing created."; exit 0; fi
+
+INSTANCE=""
+echo "[gpu-acceptance] creating instance (ttl $TTL auto-shutdown)..."
+CREATE_OUT=""
+CREATE_RC=0
+CREATE_OUT="$(autodl create --json --gpu "$GPU" --disk "$DISK" --ttl "$TTL" --wait --name "$NAME")" \
+  || CREATE_RC=$?
+if [[ $CREATE_RC -ne 0 ]]; then
+  echo "$CREATE_OUT" >&2
+  INSTANCE="$(find_by_name || true)"
+  echo "create failed; the EXIT trap releases '${INSTANCE:-nothing found by name}'." >&2
+  exit 1
+fi
+echo "$CREATE_OUT"
+INSTANCE="$(printf '%s' "$CREATE_OUT" | python3 -c "
+import json,sys
+try:
+    data = json.loads(sys.stdin.read())
+except Exception:
+    data = None
+inner = (data or {}).get('data', data) if isinstance(data, dict) else data
+if isinstance(inner, dict):
+    print(inner.get('uuid') or inner.get('id') or '')
+" || true)"
+if [[ -z "$INSTANCE" ]]; then
+  INSTANCE="$(printf '%s' "$CREATE_OUT" | grep -oE 'pro-[a-z0-9]+' | head -1)"
+fi
+if [[ -z "$INSTANCE" ]]; then
+  INSTANCE="$(find_by_name || true)"
+fi
+if [[ -z "$INSTANCE" ]]; then
+  echo "create reported success but no instance id found; refusing to continue." >&2
+  exit 1
+fi
+mkdir -p "$(dirname "$ID_FILE")"
+printf '%s' "$INSTANCE" > "$ID_FILE"
+autodl guard ttl "$INSTANCE" "$TTL" || true
+
+echo "[gpu-acceptance] pushing tracked HEAD (git archive)..."
+STAGE="$(mktemp -d)"
+git archive HEAD -o "$STAGE/repo.tar"
+mkdir -p "$STAGE/tree" && tar -xf "$STAGE/repo.tar" -C "$STAGE/tree"
+git rev-parse HEAD > "$STAGE/tree/REVISION"
+autodl push "$INSTANCE" "$STAGE/tree" /root/gpu-acceptance 2>&1 | tail -3
+rm -rf "$STAGE"
+
+echo "[gpu-acceptance] running kit on the GPU host..."
+autodl exec "$INSTANCE" 'nvidia-smi -L && python3 --version'
+# Remote command is one shell string; TTL is baked in by the local shell
+# (single quotes would prevent expansion — the old "$0" bug).
+REMOTE_RC=0
+autodl exec --timeout 120m "$INSTANCE" \
+  "cd /root/gpu-acceptance && python3 infra/gpu-acceptance/gpu_acceptance_remote.py --ttl $TTL" \
+  || REMOTE_RC=$?
+echo "[gpu-acceptance] remote kit exit: $REMOTE_RC"
+
+echo "[gpu-acceptance] pulling artifact (even on failure)..."
+ARTIFACT="$(autodl exec "$INSTANCE" 'ls -t /root/gpu-acceptance/docs/refactor/artifacts/gpu-acceptance-*.json 2>/dev/null | head -1' || true)"
+if [[ -n "$ARTIFACT" ]]; then
+  mkdir -p docs/refactor/artifacts
+  if autodl pull "$INSTANCE" "$ARTIFACT" docs/refactor/artifacts/; then
+    .venv/bin/python scripts/gpu_acceptance.py --summarize "docs/refactor/artifacts/$(basename "$ARTIFACT")" || true
+  else
+    echo "artifact pull failed: $ARTIFACT" >&2
+    [[ "$REMOTE_RC" -eq 0 ]] && REMOTE_RC=1
+  fi
+else
+  echo "no artifact found on host." >&2
+  [[ "$REMOTE_RC" -eq 0 ]] && REMOTE_RC=1
+fi
+exit "$REMOTE_RC"
