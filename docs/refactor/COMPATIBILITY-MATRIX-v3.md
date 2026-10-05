@@ -26,7 +26,7 @@ T85 那一族事故 —— 收下看不懂的东西再"尽力执行"，最后表
 | 层 | 版本 / 标识 | 定义处 | 兼容策略 |
 |---|---|---|---|
 | UI（Web） | `0.1.0`（package.json） | `apps/web/package.json` | 只消费下面这些契约版本 |
-| Desktop（Electron 宿主） | `0.1.0`（package.json） | `apps/desktop/package.json` | 与本地运行时握手 `ddp-client/1`；Windows 宿主 Tier A 直连中心、Tier C 经 WSL2 桥，握手协议相同（真机 ⬜，见 §4） |
+| Desktop（Electron 宿主） | `0.1.0`（package.json） | `apps/desktop/package.json` | 与本地运行时握手 `ddp-client/1`；Windows 宿主 Tier A 直连中心、Tier C 经 WSL2 桥，握手协议相同（真机 ⬜，见 §5） |
 | client-runtime | `0.1.0`，协议 `ddp-client/1` | `packages/client-runtime/` | 未知协议版本 / 缺必需能力 → `protocol_incompatible`，**在 snapshot 之前**；Windows 宿主复用同一实现（真机 ⬜） |
 | 本地运行时 handshake | `ddp-client/1` + 能力清单 | `ddp_local/runtime.py:client_handshake`、`/api/v1/client/handshake` | 与 client-runtime 同一份判据；Windows 本地模式由 WSL2 内的同一运行时提供（垫片 + 真 tarball 在 Linux 全链，真 WSL ⬜） |
 | 节点握手（center） | `ddp-discovery/1`、`ddp-client/1` | `control-api handleFederationNode` | 公开广播；注册校验必须含 `ddp-discovery/1` |
@@ -72,7 +72,19 @@ T85 那一族事故 —— 收下看不懂的东西再"尽力执行"，最后表
 | 模型输出无引用/引用越界 | `unsupported_generation`，绑定为空，证据保留 | `test_federation_answer.py` + `test_federation_injection.py`（本轮新增） |
 | 关键词检索路 | 中文分词软依赖缺失时 `backend()` 如实上报 | `test_tokenize*` |
 
-## 4. ⬜ 未验证的平台格
+## 4. 本地模型运行时：实测平台
+
+运行包是目录里 digest 钉住的 llama.cpp b10809（CPU 与 Vulkan 两个构建），本地运行时每次启动都从校验过的归档重新解压、原样执行；
+目录为两者声明 `min_libc_version: 2.34`，启动前对比宿主 glibc，低于或识别不到即 `runtime_host_incompatible`，不启动进程（`ce1884b`）。
+
+| 平台 | 运行包 | 结果 | 证据 |
+|---|---|---|---|
+| Arch Linux x86_64（glibc 2.44）、Ryzen 7 255 CPU | `llama-cpp-cpu-linux-x64` | ✅ 真实启动、问答、OOM 可见与显式重启恢复 | `P3-LOCAL-MODEL-VALIDATION-v3.md`；`test_model_process.py::test_owned_runtime_oom_is_visible_and_explicit_restart_can_recover` |
+| AutoDL RTX 4090 D 24 GB，驱动 580.105.08；Ubuntu 20.04 容器由验收套件从 jammy 补装 libc6 2.35、libstdc++6/libgcc-s1 12.3、libgomp1、libssl3、libvulkan1 1.3；容器只注入了驱动库和一份无效的 GLX ICD 清单，套件为注入的 libEGL_nvidia 补写 EGL ICD 清单 | `llama-cpp-vulkan-linux-x64` | ✅ 运行时解析自身日志得到 29/29 层卸载到 RTX 4090 D；上下文按显存 1.5 倍申请时如实 `out_of_memory`；网关并发上限与生成预算在这台 GPU 引擎上生效；CPU 包同机真实启动 | `artifacts/gpu-acceptance-20261005.json`（`infra/gpu-acceptance/run.sh`，代码 `230495e`） |
+| glibc 低于 2.34 的宿主（例如未补运行库的 Ubuntu 20.04） | 两个包 | 🚫 `runtime_host_incompatible`，进程不启动 | 单测（模拟宿主 glibc 2.31）`test_model_process.py::test_glibc_floor_below_host_refuses_before_launch`；补检查前，同类 AutoDL 主机上实机报的是泛化的 `model_start_failed` |
+| 其他 GPU 厂商（AMD/Intel 独显）、Windows/macOS 原生 | — | ⬜ | 未跑 |
+
+## 5. ⬜ 未验证的平台格
 
 以下格子**没有**被本切片验证，切换前不要当成兼容：
 
@@ -98,7 +110,7 @@ T85 那一族事故 —— 收下看不懂的东西再"尽力执行"，最后表
 - ⬜ **旧客户端（真的旧二进制）连新中心**：本切片只测了"缺能力/版本不符的
   握手被拒"，没有旧版客户端产物可跑。
 
-## 5. 已知缺口（本轮发现，未修）
+## 6. 已知缺口（本轮发现，未修）
 
 - `source_revoked` 只有状态映射（`federation._STATUS_BY_CODE`），**没有任何
   生产者**（`grep source_revoked services python` 只命中该映射行）。当前
@@ -108,9 +120,9 @@ T85 那一族事故 —— 收下看不懂的东西再"尽力执行"，最后表
   能读到别人的探测回执。~~ **已失效（2026-09-14 更正）**：`federation.get_probe`
   早已按 `organization_id + actor_id == acting_actor(actor)` 双重过滤（越权与
   不存在同形 404）；同轮复核把 `require_execution` 也收紧到受理行的 actor 绑定
-  （原查询只比 organization_id，见 §6）。
+  （原查询只比 organization_id，见 §7）。
 
-## 6. 第二轮独立复核修复（2026-09-14）
+## 7. 第二轮独立复核修复（2026-09-14）
 
 - **`federation_error` 新增 `task_cancelled`**（`enums.yaml` 三语言生成物 +
   `federation-tasks-v1.yaml` 的 `FederatedError` 枚举）：对已取消任务调用

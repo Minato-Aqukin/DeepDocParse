@@ -1,0 +1,453 @@
+{
+  "schema": "ddp-gpu-acceptance/1",
+  "mode": "gpu",
+  "generated_at": "2026-10-05T20:12:32+00:00",
+  "host": {
+    "python": "3.12.15",
+    "platform": "linux-x86_64",
+    "catalog_revision": "2026-10-06.1",
+    "catalog_artifacts": {
+      "qwen3-1.7b-q8_0": "061b54daade076b5",
+      "llama-cpp-vulkan-linux-x64": "07f029cef440c82c",
+      "llama-cpp-cpu-linux-x64": "5e34434ddc6d03cd"
+    },
+    "repo_rev": "230495ed1939b8b14d903e37d46caff2c4f655af",
+    "packages": {
+      "fastapi": "0.141.1",
+      "uvicorn": "0.52.4",
+      "httpx": "0.28.1",
+      "sqlalchemy": "2.0.52",
+      "pydantic": "2.13.5"
+    },
+    "toolchain_upgrade": {
+      "upgraded_by_kit": true,
+      "mirror": "http://repo.huaweicloud.com/ubuntu",
+      "before": {
+        "libc6": "2.31-0ubuntu9.9",
+        "libc-bin": "2.31-0ubuntu9.9",
+        "libstdc++6": "10.3.0-1ubuntu1~20.04",
+        "libgomp1": "10.3.0-1ubuntu1~20.04",
+        "libgcc-s1": "10.3.0-1ubuntu1~20.04",
+        "libssl3": null,
+        "libvulkan1": "1.2.131.2-1",
+        "gcc-12-base": null
+      },
+      "after": {
+        "libc6": "2.35-0ubuntu3.15",
+        "libc-bin": "2.35-0ubuntu3.15",
+        "libstdc++6": "12.3.0-1ubuntu1~22.04.3",
+        "libgomp1": "12.3.0-1ubuntu1~22.04.3",
+        "libgcc-s1": "12.3.0-1ubuntu1~22.04.3",
+        "libssl3": "3.0.2-0ubuntu1.30",
+        "libvulkan1": "1.3.204.1-2",
+        "gcc-12-base": "12.3.0-1ubuntu1~22.04.3"
+      }
+    },
+    "revision_file": "230495ed1939b8b14d903e37d46caff2c4f655af"
+  },
+  "gpu": {
+    "present": true,
+    "driver": "580.105.08",
+    "cuda": "13.0",
+    "devices": [
+      {
+        "name": "NVIDIA GeForce RTX 4090 D",
+        "memory_total_mib": "24564",
+        "memory_free_mib": "24081",
+        "driver": "580.105.08"
+      }
+    ],
+    "vulkan_icds": [
+      "nvidia_egl_icd.json"
+    ],
+    "nvidia_smi": "ok",
+    "icd_provisioned_by_kit": {
+      "provisioned_by_kit": true,
+      "method": "egl_icd_for_injected_libs",
+      "driver_version": "580.105.08",
+      "vulkan_device": "NVIDIA GeForce RTX 4090 D"
+    }
+  },
+  "checks": [
+    {
+      "id": "t19-backend-unsupported",
+      "row": "T19",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "unknown_runtime_code": "model_backend_incompatible",
+        "unknown_model_code": "model_not_found",
+        "process_launched": false,
+        "selection": null
+      }
+    },
+    {
+      "id": "t19-oom-visible",
+      "row": "T19",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "code": "out_of_memory",
+        "status": "failed",
+        "error": "out_of_memory",
+        "selection": null
+      }
+    },
+    {
+      "id": "t19-explicit-cpu-recovery",
+      "row": "T19",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "device": "cpu",
+        "model_id": "qwen3-1.7b-q8_0",
+        "runtime_id": "llama-cpp-cpu-linux-x64",
+        "real_hardware": true
+      }
+    },
+    {
+      "id": "t19-gpu-oom",
+      "row": "T19",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "code": "out_of_memory",
+        "status": "failed",
+        "error": "out_of_memory",
+        "context_tokens": 336878,
+        "vram_mib": 24564,
+        "kv_bytes_per_token": 114688,
+        "selection": null,
+        "free_mib_before": "24081",
+        "free_mib_after": "24081"
+      }
+    },
+    {
+      "id": "t19-gpu-offload-evidence",
+      "row": "T19",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "device": "gpu",
+        "gpu_devices": [
+          "NVIDIA GeForce RTX 4090 D"
+        ],
+        "offloaded_layers": 29,
+        "total_layers": 29,
+        "gpu_model_buffer_mib": 1743.77,
+        "runtime_id": "llama-cpp-vulkan-linux-x64",
+        "log_tail": "\n0.04.417.822 D args_end: ''\n0.04.417.822 D arg_name_prefix: ''\n0.04.417.822 D arg_name_suffix: ''\n0.04.417.823 D arg_value_prefix: ''\n0.04.417.823 D arg_value_suffix: ''\n0.04.417.823 D name_field: 'name'\n0.04.417.824 D args_field: 'arguments'\n0.04.417.824 D id_field: ''\n0.04.417.824 D gen_id_field: ''\n0.04.417.825 D parameter_order: 'name, arguments'\n0.04.417.825 D \u001b[1m\u001b[38;5;126m=== Differential analysis complete ===\n\u001b[0m0.04.418.610 D common_chat_templates_apply_jinja: generated parser:\nSequence(Literal(<|im_start|>assistant\n), Space, Repetition(Sequence(Epsilon, Literal(<think>), Repetition(Literal(\n), 0, 1), Tag(reasoning, Until(</think>)), Epsilon, Repetition(Literal(\n), 0, 1), Literal(</think>), Repetition(Literal(\n), 0, 1), Repetition(Literal(\n), 0, 1)), 0, 1), Tag(content, Until()), End)\n\nparser generation prompt: <|im_start|>assistant\n\n0.04.418.618 I srv          init: init: chat template, thinking = 1\n0.04.418.628 I srv          init: preserve_reasoning kwarg: not supported by template\n0.04.418.673 I srv  llama_server: model loaded\n0.04.418.680 I srv  llama_server: listening on http://127.0.0.1:51519\n0.04.418.788 D que    start_loop: processing new tasks\n0.04.418.791 D que    start_loop: update slots\n0.04.418.793 I srv  update_slots: all slots are idle\n0.04.418.794 D que    start_loop: waiting for new tasks\n0.04.446.460 D srv          stop: all tasks already finished, no need to cancel\n0.04.450.262 D srv          stop: all tasks already finished, no need to cancel\n"
+      }
+    },
+    {
+      "id": "t59-gateway-concurrency",
+      "row": "T59",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "parallel": 8,
+        "vqa_cap": 2,
+        "outcomes": {
+          "200/ok": 2,
+          "429/vqa_overloaded": 6
+        }
+      }
+    },
+    {
+      "id": "t59-generation-budget",
+      "row": "T59",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "over_budget_code": "generation_budget_exceeded",
+        "within_budget_output": "fine."
+      }
+    },
+    {
+      "id": "t59-queue-and-field-caps",
+      "row": "T59",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "too_many_fields": [
+          400,
+          "too_many_fields"
+        ],
+        "queue_full": [
+          429,
+          "queue_full"
+        ]
+      }
+    },
+    {
+      "id": "t59-upload-search-caps",
+      "row": "T59",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "oversize_upload": [
+          400,
+          "input_too_large"
+        ],
+        "small_upload": 202,
+        "over_limit_search": 422,
+        "normal_search": 200,
+        "unknown_model": [
+          404,
+          "model_not_found"
+        ],
+        "bad_backend": [
+          400,
+          "model_backend_incompatible"
+        ],
+        "pending_leftovers": []
+      }
+    },
+    {
+      "id": "t59-cache-caps-gc",
+      "row": "T59",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "returncode": 0,
+        "seconds": 9.3,
+        "tail": "............                                                             [100%]\n12 passed, 25 deselected in 5.80s\n"
+      }
+    },
+    {
+      "id": "t59-federated-budget",
+      "row": "T59",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "returncode": 0,
+        "seconds": 3.5,
+        "tail": "..                                                                       [100%]\n2 passed in 1.63s\n"
+      }
+    },
+    {
+      "id": "t59-gpu-concurrency",
+      "row": "T59",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "parallel": 6,
+        "vqa_cap": 2,
+        "owned_engine": true,
+        "provenance": {
+          "model_id": "qwen3-1.7b-q8_0",
+          "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+          "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+          "runtime_id": "llama-cpp-vulkan-linux-x64",
+          "runtime_revision": "b10809",
+          "runtime_sha256": "07f029cef440c82c3cff5310641eb6347e5cbcd865a5d88990215058aa049e93",
+          "device": "gpu",
+          "gpu_api": "vulkan",
+          "gpu_devices": [
+            "NVIDIA GeForce RTX 4090 D"
+          ],
+          "offloaded_layers": 29,
+          "total_layers": 29,
+          "gpu_model_buffer_mib": 1743.77,
+          "context_tokens": 8192
+        },
+        "outcomes": {
+          "200/ok": 2,
+          "429/vqa_overloaded": 4
+        }
+      }
+    },
+    {
+      "id": "t59-gpu-generation-budget",
+      "row": "T59",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "owned_engine": true,
+        "code": "generation_budget_exceeded",
+        "provenance": {
+          "model_id": "qwen3-1.7b-q8_0",
+          "model_revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+          "model_sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+          "runtime_id": "llama-cpp-vulkan-linux-x64",
+          "runtime_revision": "b10809",
+          "runtime_sha256": "07f029cef440c82c3cff5310641eb6347e5cbcd865a5d88990215058aa049e93",
+          "device": "gpu",
+          "gpu_api": "vulkan",
+          "gpu_devices": [
+            "NVIDIA GeForce RTX 4090 D"
+          ],
+          "offloaded_layers": 29,
+          "total_layers": 29,
+          "gpu_model_buffer_mib": 1743.77,
+          "context_tokens": 8192
+        }
+      }
+    },
+    {
+      "id": "t60-model-checksums",
+      "row": "T60",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "import_good": "installed",
+        "tamper_code": "model_digest_mismatch",
+        "after_tamper": "verification_required",
+        "real_artifacts": {
+          "qwen3-1.7b-q8_0": {
+            "status": "installed",
+            "digest_matches_catalog": true,
+            "bytes": 1834426016
+          },
+          "llama-cpp-vulkan-linux-x64": {
+            "status": "installed",
+            "digest_matches_catalog": true,
+            "bytes": 33799345
+          },
+          "llama-cpp-cpu-linux-x64": {
+            "status": "installed",
+            "digest_matches_catalog": true,
+            "bytes": 16734586
+          }
+        }
+      }
+    },
+    {
+      "id": "t60-release-verify",
+      "row": "T60",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "good_rc": 0,
+        "tampered_rc": 1,
+        "tampered_says_checksum": true,
+        "abi_rc": 1,
+        "abi_says_abi": true,
+        "platform_rc": 1
+      }
+    },
+    {
+      "id": "t60-host-report",
+      "row": "T60",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "host": {
+          "python": "3.12.15",
+          "platform": "linux-x86_64",
+          "catalog_revision": "2026-10-06.1",
+          "catalog_artifacts": {
+            "qwen3-1.7b-q8_0": "061b54daade076b5",
+            "llama-cpp-vulkan-linux-x64": "07f029cef440c82c",
+            "llama-cpp-cpu-linux-x64": "5e34434ddc6d03cd"
+          },
+          "repo_rev": "230495ed1939b8b14d903e37d46caff2c4f655af",
+          "packages": {
+            "fastapi": "0.141.1",
+            "uvicorn": "0.52.4",
+            "httpx": "0.28.1",
+            "sqlalchemy": "2.0.52",
+            "pydantic": "2.13.5"
+          },
+          "toolchain_upgrade": {
+            "upgraded_by_kit": true,
+            "mirror": "http://repo.huaweicloud.com/ubuntu",
+            "before": {
+              "libc6": "2.31-0ubuntu9.9",
+              "libc-bin": "2.31-0ubuntu9.9",
+              "libstdc++6": "10.3.0-1ubuntu1~20.04",
+              "libgomp1": "10.3.0-1ubuntu1~20.04",
+              "libgcc-s1": "10.3.0-1ubuntu1~20.04",
+              "libssl3": null,
+              "libvulkan1": "1.2.131.2-1",
+              "gcc-12-base": null
+            },
+            "after": {
+              "libc6": "2.35-0ubuntu3.15",
+              "libc-bin": "2.35-0ubuntu3.15",
+              "libstdc++6": "12.3.0-1ubuntu1~22.04.3",
+              "libgomp1": "12.3.0-1ubuntu1~22.04.3",
+              "libgcc-s1": "12.3.0-1ubuntu1~22.04.3",
+              "libssl3": "3.0.2-0ubuntu1.30",
+              "libvulkan1": "1.3.204.1-2",
+              "gcc-12-base": "12.3.0-1ubuntu1~22.04.3"
+            }
+          },
+          "revision_file": "230495ed1939b8b14d903e37d46caff2c4f655af"
+        },
+        "gpu": {
+          "present": true,
+          "driver": "580.105.08",
+          "cuda": "13.0",
+          "devices": [
+            {
+              "name": "NVIDIA GeForce RTX 4090 D",
+              "memory_total_mib": "24564",
+              "memory_free_mib": "24081",
+              "driver": "580.105.08"
+            }
+          ],
+          "vulkan_icds": [
+            "nvidia_egl_icd.json"
+          ],
+          "nvidia_smi": "ok",
+          "icd_provisioned_by_kit": {
+            "provisioned_by_kit": true,
+            "method": "egl_icd_for_injected_libs",
+            "driver_version": "580.105.08",
+            "vulkan_device": "NVIDIA GeForce RTX 4090 D"
+          }
+        },
+        "compat_row_md": "| 路径 | 结果 |\n|---|---|\n| CPU (linux-x86_64, py3.12.15) | local runtime profile, checksum/ABI matrix in-artifact |\n| GPU (NVIDIA GeForce RTX 4090 D) | offload evidence in-artifact |\n"
+      }
+    }
+  ],
+  "rows": {
+    "T19": {
+      "pass": true,
+      "checks": [
+        "t19-backend-unsupported=pass",
+        "t19-oom-visible=pass",
+        "t19-explicit-cpu-recovery=pass",
+        "t19-gpu-oom=pass",
+        "t19-gpu-offload-evidence=pass"
+      ],
+      "skipped": [],
+      "failed": []
+    },
+    "T59": {
+      "pass": true,
+      "checks": [
+        "t59-gateway-concurrency=pass",
+        "t59-generation-budget=pass",
+        "t59-queue-and-field-caps=pass",
+        "t59-upload-search-caps=pass",
+        "t59-cache-caps-gc=pass",
+        "t59-federated-budget=pass",
+        "t59-gpu-concurrency=pass",
+        "t59-gpu-generation-budget=pass"
+      ],
+      "skipped": [],
+      "failed": []
+    },
+    "T60": {
+      "pass": true,
+      "checks": [
+        "t60-model-checksums=pass",
+        "t60-release-verify=pass",
+        "t60-host-report=pass"
+      ],
+      "skipped": [],
+      "failed": []
+    }
+  },
+  "artifact_sources": {
+    "qwen3-1.7b-q8_0": "mirror:modelscope.cn",
+    "llama-cpp-vulkan-linux-x64": "mirror:ghfast.top",
+    "llama-cpp-cpu-linux-x64": "mirror:ghfast.top"
+  },
+  "notes": [
+    "skipped checks never count as pass; any skipped check makes its row NOT pass.",
+    "gpu mode: ran on a real NVIDIA Linux host; see host/gpu facts."
+  ]
+}
