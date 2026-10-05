@@ -1514,10 +1514,10 @@ async def test_execute_unknown_write_conflict_is_retryable_conflict(
     # 务，但 UPDATE 的 SQL 仍未发送。此时用独立会话真实提交赢家的 seq=4 ——
     # 单连接夹具下，赢家的提交只能带走连接上已有的 SQL，输家的 UPDATE 还在
     # ORM 里，带不走（这正是生产 PG 的形状：赢家的提交与输家的事务互不相
-    # 干）。恢复 autoflush 后放行：生产代码自己的 `session.flush()`（受理写
-    # 入先刷、再排队列，免得 `queue.enqueue` 的 SAVEPOINT 把事件行的冲突当
-    # 成 dedupe 吞掉）把输家的挂起写入发出去，事件 INSERT 真实撞上
-    # `uq_federation_task_events_seq`，以裸 `IntegrityError` 抛在 try 内。
+    # 干）。恢复 autoflush 后放行：`queue.enqueue` 在进入自己的 SAVEPOINT 之前
+    # 先把调用方的挂起写入刷出去（不让事件行的冲突被当成 dedupe 吞掉），输家
+    # 的事件 INSERT 真实撞上 `uq_federation_task_events_seq`，以裸
+    # `IntegrityError` 抛在 execute_task 的 try 内。
     # 这个包裹只做穿插（关 autoflush + 赢家的真实提交），不伪造序号、不 mock
     # 任何内部函数的返回值，碰撞走的完全是生产路径。
     real_append = federation_tasks._append_event
@@ -1622,6 +1622,71 @@ async def test_execute_non_integrity_db_failure_is_not_a_conflict(
     row = await session.get(FederationRequest, root, populate_existing=True)
     assert row.status == "queued"
     assert row.idempotency_key is None
+
+
+async def test_resume_lost_event_race_is_retryable_conflict(actor_client, session, monkeypatch):
+    """resume 写 `task_resumed` 事件时输了 `(root_task_id, seq)` 竞态：409，不是 500。
+
+    与受理同一个穿插手法：输家关 autoflush 算好序号、把事件挂进会话后，赢家
+    用同一序号真实提交。输家的冲突在入队前刷出时以 IntegrityError 出现，必须
+    回滚并回 409 `idempotency_conflict`（调用方原样重试）；任务不被留在
+    running，赢家行保留，重试 resume 按下一个序号正常受理。
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from ddp_corpus import db as db_module
+
+    _, version, _, _, _ = await indexed_source(session)
+    await publish_collection(actor_client, version)
+    consent = exploration(egress="local_only", recipients=(), payload=(),
+                          budget={"max_probe_requests": 0, "max_egress_bytes": 0})
+    intent = await create_intent(actor_client, spec=task_spec(scope="site_public", mode="fast"),
+                                 consent=consent)
+    root = intent["root_task_id"]
+    plan_body = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan_body)
+    done = await submit_task(actor_client, root, plan_body["plan_digest"], "resume-race-run")
+    assert done.json()["status"] == "succeeded", done.text
+    await session.commit()
+    session.expunge_all()
+
+    real_append = federation_tasks._append_event
+
+    async def _racing_append(sess, root_task_id, type_, payload, *, now):
+        sess.autoflush = False
+        try:
+            await real_append(sess, root_task_id, type_, payload, now=now)
+        finally:
+            sess.autoflush = True
+        if type_ == "task_resumed" and root_task_id == root:
+            seq = next(item.seq for item in sess.new if isinstance(item, FederationTaskEvent)
+                       and item.root_task_id == root and item.type == type_)
+            winner = db_module.get_sessionmaker()()
+            try:
+                winner.add(FederationTaskEvent(id=new_id(), root_task_id=root, seq=seq,
+                                               type="task_resumed", payload={},
+                                               created_at=utcnow()))
+                await winner.commit()
+            except IntegrityError:
+                pass
+            finally:
+                await winner.close()
+
+    monkeypatch.setattr(federation_tasks, "_append_event", _racing_append)
+    lost = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert lost.status_code == 409, lost.text
+    assert lost.json()["error"]["code"] == "idempotency_conflict"
+    session.expunge_all()
+    row = await session.get(FederationRequest, root, populate_existing=True)
+    assert row.status == "succeeded"
+
+    monkeypatch.setattr(federation_tasks, "_append_event", real_append)
+    retried = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert retried.status_code == 202, retried.text
+    await drain_tasks(corpus_app.state)
+    resumed = await session.scalar(select(func.count()).select_from(FederationTaskEvent).where(
+        FederationTaskEvent.root_task_id == root, FederationTaskEvent.type == "task_resumed"))
+    assert resumed == 2
 
 
 async def test_resume_reruns_only_incomplete_targets(actor_client, session, monkeypatch):

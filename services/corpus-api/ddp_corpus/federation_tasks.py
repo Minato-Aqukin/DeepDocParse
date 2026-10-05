@@ -557,6 +557,11 @@ async def _append_event(session: AsyncSession, root_task_id: str, type_: str,
                                     payload=payload, created_at=now))
 
 
+def _concurrent_write() -> APIError:
+    return APIError(409, "concurrent write for the same task", "invalid_request_error",
+                    "idempotency_conflict")
+
+
 async def _commit(session: AsyncSession) -> None:
     """提交协调者写路径；唯一约束冲突映射成 409，而不是裸 500。
 
@@ -567,8 +572,7 @@ async def _commit(session: AsyncSession) -> None:
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        raise APIError(409, "concurrent write for the same task", "invalid_request_error",
-                       "idempotency_conflict") from None
+        raise _concurrent_write() from None
 
 
 def _intent_output(row: FederationRequest) -> dict:
@@ -3494,12 +3498,6 @@ async def execute_task(session: AsyncSession, actor: Actor, root_task_id: str, *
         # 否则同键异任务时唯一约束在事件追加处就炸成 500，409 分支永远到不了。
         await _append_event(session, row.root_task_id, _EVENT_STARTED, {
             "plan_digest": plan_digest, "generation": row.delegation_generation}, now=now)
-        # 先把受理写入显式刷出去，再排队列：`queue.enqueue` 用 SAVEPOINT 吃
-        # 掉自己的 dedupe 冲突（返回 None）；事件 INSERT 若留到那时才刷，撞上
-        # 的唯一约束会被 enqueue 当成"队列里已有任务"吞掉，会话随后在 commit
-        # 处以 PendingRollbackError 炸成 500。这里先刷，事件行的冲突以裸
-        # IntegrityError 抛在 try 内，走下面的 409 仲裁。
-        await session.flush()
         if not settings.federation_execution_inline:
             # **状态行与队列任务同一个事务**：两个半截状态（running 没任务、
             # 任务没 running）都不可能出现。dedupe 键取 root —— 同一 root
@@ -3645,15 +3643,21 @@ async def resume(session: AsyncSession, actor: Actor, root_task_id: str, *, now:
     row.delegation_generation = int(row.delegation_generation or 0) + 1
     row.status = "running"
     row.updated_at = now
-    await _append_event(session, row.root_task_id, _EVENT_RESUMED, {
-        "generation": row.delegation_generation}, now=now)
-    if not settings.federation_execution_inline:
-        await queue.enqueue(
-            session, kind="federation_plan",
-            payload={"root_task_id": root_task_id, "retry_only": True,
-                     "actor": federation.actor_binding(actor)},
-            organization_id=actor.organization_id,
-            dedupe_key=f"federation-request:{root_task_id}")
+    try:
+        # 事件序号的并发冲突在 enqueue 刷出挂起写入时就会出现，比 commit 早：
+        # 同样回滚并回 409，任务不留在 running。
+        await _append_event(session, row.root_task_id, _EVENT_RESUMED, {
+            "generation": row.delegation_generation}, now=now)
+        if not settings.federation_execution_inline:
+            await queue.enqueue(
+                session, kind="federation_plan",
+                payload={"root_task_id": root_task_id, "retry_only": True,
+                         "actor": federation.actor_binding(actor)},
+                organization_id=actor.organization_id,
+                dedupe_key=f"federation-request:{root_task_id}")
+    except IntegrityError:
+        await session.rollback()
+        raise _concurrent_write() from None
     await _commit(session)
     if not settings.federation_execution_inline:
         return await _status_output(session, row)

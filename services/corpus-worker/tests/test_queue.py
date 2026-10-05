@@ -7,8 +7,9 @@
 from datetime import timedelta
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
-from ddp_corpus.models import Task, as_aware, utcnow
+from ddp_corpus.models import Task, as_aware, new_id, utcnow
 from ddp_corpus.queue import (
     StaleGeneration, backlog, claim, enqueue, fail, heartbeat, succeed,
 )
@@ -25,6 +26,30 @@ async def test_enqueue_is_idempotent_by_dedupe_key(session):
 
     assert first is not None
     assert second is None, "同 dedupe_key 的任务不该排第二次"
+
+
+async def test_enqueue_never_mistakes_a_callers_conflict_for_its_own_dedupe(session):
+    """调用方自己待写的行撞了约束，必须以 IntegrityError 回到调用方。
+
+    enqueue 若把它当成"同 dedupe_key 已在队列里"返回 None，调用方会以为
+    任务排上了；会话其实已被毒化，commit 时才炸成 PendingRollbackError
+    （HTTP 500），调用方自己的冲突仲裁分支永远到不了。
+    """
+    await enqueue(session, kind="index", payload={"document_id": "d1"}, dedupe_key="index:d1")
+    await session.commit()
+    # 调用方自己的待写行：与已排队任务同 dedupe_key，flush 时撞唯一约束。
+    session.add(Task(id=new_id(), kind="index", payload={"document_id": "d1"},
+                     organization_id="", dedupe_key="index:d1", max_attempts=3,
+                     run_after=utcnow()))
+    try:
+        with pytest.raises(IntegrityError):
+            await enqueue(session, kind="index", payload={"document_id": "d2"},
+                          dedupe_key="index:d2")
+    finally:
+        await session.rollback()
+    # 真正的同键去重照旧返回 None。
+    assert await enqueue(session, kind="index", payload={"document_id": "d1"},
+                         dedupe_key="index:d1") is None
 
 
 async def test_unknown_kind_is_rejected_at_enqueue(session):

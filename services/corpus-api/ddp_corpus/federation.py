@@ -1303,14 +1303,6 @@ async def _create_admission(session: AsyncSession, actor: Actor, request: dict,
             created_at=now, updated_at=now)
         session.add(execution)
         if not settings.federation_execution_inline:
-            # **先 flush 受理/执行行再进 enqueue 的 SAVEPOINT**：`begin_nested`
-            # 提交 savepoint 时会 flush 会话里**所有**待写行，受理行的
-            # `uq_federation_admissions_org_idempotency` 冲突会在 savepoint 里
-            # 炸，然后被 `enqueue` 当作"任务 dedupe 冲突"吞掉 —— 会话被毒成
-            # PendingRollbackError，`admit` 的并发同键仲裁分支永远到不了
-            # （真 PG 上预检查双漏才会触发；SQLite 单连接串行，测不出来）。
-            # 先 flush 让唯一约束的冲突以 IntegrityError 出现在 admit 层。
-            await session.flush()
             # **受理事实、执行行、队列任务必须在同一个事务里提交**：任何
             # "先 commit 再补任务"的写法，都会在两步之间崩溃时留下一个
             # 永远 queued 的执行（企业边界 7）。dedupe 键就是执行 id ——

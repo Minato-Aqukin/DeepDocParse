@@ -57,6 +57,12 @@ async def enqueue(session: AsyncSession, *, kind: str, payload: dict,
                 organization_id=organization_id, dedupe_key=dedupe_key,
                 max_attempts=max_attempts,
                 run_after=utcnow() + timedelta(seconds=delay_seconds))
+    # 调用方自己的待写行先在 try 外刷出去：`begin_nested` 进入前会自动 flush
+    # 会话里**全部**待写行，那一刷若落在下面的 try 里，调用方撞上的唯一约束
+    # （受理行、事件序号……）会被当成"同 dedupe_key 已在队列里"返回 None，
+    # 会话随后在 commit 处变成 PendingRollbackError。这里的 IntegrityError
+    # 原样回到调用方，由它自己的冲突仲裁处理。
+    await session.flush()
     try:
         async with session.begin_nested():
             session.add(task)

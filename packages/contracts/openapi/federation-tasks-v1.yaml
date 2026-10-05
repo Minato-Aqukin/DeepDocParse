@@ -349,7 +349,7 @@ paths:
         '202': {description: '已受理并排入持久队列（status=running，result=null）；可用 GET /api/v1/tasks/{root_task_id} 对账', content: {application/json: {schema: {$ref: '#/components/schemas/TaskStatus'}}}}
         '403': {description: 'egress_denied：执行许可的接收方集合没有覆盖所有数据边（含 relay）', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '404': {description: 未知 root_task_id}
-        '409': {description: 'idempotency_conflict（同键异摘要）、plan_changed（计划修订与许可不一致）或 task_cancelled（任务已被显式取消，终态不得复活）', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: 'idempotency_conflict（同键异摘要，或受理写入与并发写撞了唯一约束、已回滚，同键重试即可）、plan_changed（计划修订与许可不一致）或 task_cancelled（任务已被显式取消，终态不得复活）', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   /api/v1/tasks/{root_task_id}:
     parameters: [{$ref: '#/components/parameters/RootTaskId'}]
     get:
@@ -390,7 +390,7 @@ paths:
         '202': {description: '恢复已受理；planning_state=ready 时须先批准新修订再 resume，否则未完成目标已入队', content: {application/json: {schema: {$ref: '#/components/schemas/TaskStatus'}}}}
         '403': {description: 'egress_denied：重新判权未通过或超出原外发边界', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '404': {description: 未知 root_task_id 或对调用者不可见}
-        '409': {description: 'task_cancelled：任务已被显式取消，终态不得被 resume 复活；任务状态原样不动', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: 'task_cancelled：任务已被显式取消，终态不得被 resume 复活；任务状态原样不动。idempotency_conflict：恢复写入与并发写撞了唯一约束，已回滚、任务状态不变，原样重试即可', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '410': {description: 'scope_expired：范围已过期，需重新枚举而不是拿旧授权补做'}
   /api/v1/tasks/{root_task_id}/cancel:
     parameters: [{$ref: '#/components/parameters/RootTaskId'}]

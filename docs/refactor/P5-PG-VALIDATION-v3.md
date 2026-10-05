@@ -154,11 +154,22 @@ override 模式），生产 `PgVectorIndex`，真实发布集合。显式 manife
 **失败用例已先行**：修前 `test_admission_same_key_race_one_row_replay_and_conflict`
 红在 `PendingRollbackError`；修后绿。
 
+**2026-10-05 修复上移**：同一个吞掉模式还挡在 `execute_task`（提交时事件
+`(root_task_id, seq)` 撞序号）和 resume 的入队之前，`federation.py` 的局部
+flush 只护住了受理这一处。现在由 `queue.enqueue` 在进入 SAVEPOINT 之前先
+flush 调用方的挂起写入（`queue.py`），调用方自己的约束冲突原样以
+`IntegrityError` 回到调用方：受理（`admit`）走既有的重放/409 仲裁，
+`execute_task` 与 resume 回滚后回 409 `idempotency_conflict`
+（`test_execute_unknown_write_conflict_is_retryable_conflict`、
+`test_resume_lost_event_race_is_retryable_conflict`）。`federation.py` 与
+`execute_task` 的局部 flush 随之删除。守卫：`corpus-worker/tests/test_queue.py::test_enqueue_never_mistakes_a_callers_conflict_for_its_own_dedupe`
+与本文件的真 PG 用例。
+
 ## 4. 变异确认（改掉被守的行 → 必须红 → 还原并核对哈希）
 
 | # | 变异 | 结果 |
 |---|---|---|
-| M1 | `federation.py` 删掉 enqueue 前的 `await session.flush()` | **RED**（PendingRollbackError，即上述缺陷） |
+| M1 | 2026-09 原版：`federation.py` 删掉 enqueue 前的 `await session.flush()`；2026-10-05 起该 flush 在 `queue.enqueue` 里，等价变异是删掉 `enqueue` 进 SAVEPOINT 前的 `await session.flush()` | **RED**（PendingRollbackError，即上述缺陷） |
 | M2 | `cache.py` `_lock` 的 PG 分支改成 `if False:` | **RED**（并发后条目/字节超上限） |
 | M3 | `queue.succeed` 的状态守卫放宽到包含 `cancelled` | **RED**（拿取消后的当前代次写成功） |
 | M4 | `queue.claim` 去掉 `FOR UPDATE SKIP LOCKED` | **RED**（持锁行被等锁 → 5s 超时） |
