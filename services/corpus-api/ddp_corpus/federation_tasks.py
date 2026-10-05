@@ -1685,9 +1685,18 @@ async def create_plan(session: AsyncSession, actor: Actor, root_task_id: str, *,
                     # Room for the coordinator's own generation request and hops; plan_steps
                     # carves shares from the REMAINING ledger (cap − used below), because
                     # planning probes/discovery/bytes were already spent above.
+                    # The delegated generation admission spends its hops on this
+                    # ledger too: 1 for an answer edge (evidence A→generator only;
+                    # the answer returns inside the status poll), 2 for a wiki
+                    # round trip (evidence out, draft back). Reserving 2 for an
+                    # answer over-charges the child shares by one hop: with a
+                    # direct remote sibling plus a two-deep delegated leaf the
+                    # share comes out 4 instead of the 5 the relay's depth gate
+                    # needs (strict: len(path) < max_hops).
                     "max_requests": max(0, budget["max_requests"]
                                         - int(wants_generation and (generation_ready or delegated is not None))),
-                    "max_hops": budget["max_hops"] - 2 * int(wants_generation and delegated is not None),
+                    "max_hops": budget["max_hops"] - (2 if wants_wiki else 1)
+                    * int(wants_generation and delegated is not None),
                     "used_requests": root_budget.used()["requests"],
                     "used_bytes": root_budget.used()["bytes"],
                     "used_probes": root_budget.used()["probes"],
