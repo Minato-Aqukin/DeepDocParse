@@ -55,6 +55,20 @@ if [[ "$DRY_RUN_LOCAL" == 1 ]] || { [[ -z "${AUTODL_TOKEN:-}" ]] && [[ "$CLI_AUT
   exec .venv/bin/python scripts/gpu_acceptance.py --mode dry-run
 fi
 
+# Exclusive local lock for the whole paid run. The name guard below is
+# check-then-create: two local invocations racing it both see "no instance"
+# and both create (this happened with two background loops on 2026-10-05,
+# billing two instances at once). flock serializes that window; the second
+# invocation fails fast instead of spending. The lock releases on exit, so a
+# later re-run is unaffected.
+LOCK_FILE=".dev-logs/gpu-acceptance/run.lock"
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "[gpu-acceptance] another run.sh holds $LOCK_FILE; refusing a concurrent paid run." >&2
+  exit 2
+fi
+
 find_by_name() {
   GPU_ACCEPTANCE_NAME="$NAME" autodl list --json 2>/dev/null | python3 -c "
 import json,os,sys

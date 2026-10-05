@@ -79,8 +79,14 @@ def main():
     run("bash", "-c", "export PATH=\"$HOME/.local/bin:$PATH\" && "
         "VIRTUAL_ENV=/root/gpu-acceptance/.venv uv pip install --index-url "
         "https://mirrors.aliyun.com/pypi/simple " + " ".join(PINS))
-    proc = subprocess.run([".venv/bin/python", "scripts/gpu_acceptance.py", "--mode", "gpu"],
-                          cwd=ROOT)
+    # Model/runtime downloads come from huggingface.co + github releases, both
+    # proxy-covered: source network_turbo so the kit's proxy-aware downloader
+    # rides it. (Apt/pip steps above stay direct — the proxy slows them.)
+    proc = subprocess.run(
+        ["bash", "-c",
+         "if [ -f /etc/network_turbo ]; then source /etc/network_turbo >/dev/null 2>&1; fi; "
+         "exec .venv/bin/python scripts/gpu_acceptance.py --mode gpu"],
+        cwd=ROOT)
     print(f"[gpu-acceptance-remote] done rc={proc.returncode} "
           f"(instance ttl {args.ttl}); pull the artifact, then release.", flush=True)
     sys.exit(proc.returncode)

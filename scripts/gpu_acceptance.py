@@ -1219,20 +1219,63 @@ async def _real_cpu_recovery(workdir, installer, model_id, cpu_rt):
 
 
 def ensure_gpu_downloads(workspace):
-    """Download the real catalog artifacts on the GPU host (network needed)."""
+    """Download the real catalog artifacts on the GPU host (network needed).
+
+    Honors the ``*_PROXY`` environment (e.g. AutoDL's academic proxy from
+    ``source /etc/network_turbo``, which covers huggingface.co and github
+    releases): the installer builds its HTTP client with ``trust_env=False``,
+    so pass an explicitly proxy-configured client. Retries each artifact
+    (resuming the partial file) because transient cloud-link drops are
+    routine on these hosts.
+    """
     import asyncio as _asyncio
+    import httpx as _httpx
     from ddp_local.model_runtime.install import ModelInstaller
     installer = ModelInstaller(workspace / "models")
     ids = ["qwen3-1.7b-q8_0", "llama-cpp-vulkan-linux-x64", "llama-cpp-cpu-linux-x64"]
 
     async def download_all():
-        for identifier in ids:
-            state = installer.status(identifier)
-            print(f"[gpu-acceptance] {identifier}: {state['status']} "
-                  f"{state.get('downloaded_bytes', 0)} bytes", flush=True)
-            if state["status"] != "installed":
-                result = await installer.download(identifier)
-                print(f"[gpu-acceptance] {identifier} -> {result['status']}", flush=True)
+        # AutoDL's academic proxy MITMs TLS with its own CA
+        # (/usr/local/share/ca-certificates/autodl-signed.crt): the uv-built
+        # venv's certifi bundle lacks it, so verify must point at the proxy
+        # CA when a proxy is configured. REQUESTS_CA_BUNDLE/SSL_CERT_FILE
+        # (set by /etc/network_turbo) or the well-known path are honored;
+        # without a proxy the default bundle is used untouched.
+        proxy = (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+                 or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy"))
+        verify: object = True
+        if proxy:
+            from pathlib import Path as _Path
+            ca_hint = (os.environ.get("REQUESTS_CA_BUNDLE")
+                       or os.environ.get("SSL_CERT_FILE")
+                       or "/usr/local/share/ca-certificates/autodl-signed.crt")
+            if ca_hint and _Path(ca_hint).is_file():
+                verify = ca_hint
+        async with _httpx.AsyncClient(trust_env=False, follow_redirects=False,
+                                      timeout=60, proxy=proxy or None,
+                                      verify=verify) as client:
+            for identifier in ids:
+                state = installer.status(identifier)
+                print(f"[gpu-acceptance] {identifier}: {state['status']} "
+                      f"{state.get('downloaded_bytes', 0)} bytes"
+                      + (" (via proxy)" if proxy else " (direct)"), flush=True)
+                if state["status"] == "installed":
+                    continue
+                last = None
+                for attempt in range(1, 5):
+                    try:
+                        result = await installer.download(identifier, client=client)
+                    except Exception as exc:
+                        last = exc
+                        print(f"[gpu-acceptance] {identifier} attempt {attempt}/4: "
+                              f"{getattr(exc, 'code', type(exc).__name__)}; retrying",
+                              flush=True)
+                        continue
+                    print(f"[gpu-acceptance] {identifier} -> {result['status']}", flush=True)
+                    last = None
+                    break
+                if last is not None:
+                    raise last
     _asyncio.run(download_all())
     return installer
 
