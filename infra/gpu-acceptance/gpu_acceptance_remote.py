@@ -137,6 +137,35 @@ def provision_nvidia_icd():
         sys.exit(3)
     print(f"[gpu-acceptance-remote] no NVIDIA ICD; provisioning for driver {driver}",
           flush=True)
+    libdir = Path("/usr/lib/x86_64-linux-gnu")
+    # File names carry the host's driver version (the lists above are written
+    # for 580.105.08, the version seen on AutoDL 4090 D hosts).
+    icd_libs = [name.replace("580.105.08", driver) for name in ICD_LIBS]
+    icd_sonames = {name.replace("580.105.08", driver): links
+                   for name, links in ICD_SONAMES.items()}
+    # The container runtime may already inject the driver's GL/Vulkan
+    # libraries (bind-mounted, read-only: seen 2026-10-06 on a 4090 D) and only
+    # the loader manifest is missing. Then write the manifest and use them as
+    # they are; the driver package is only needed when they are absent.
+    if all((libdir / name).exists() for name in icd_libs):
+        icd_dir.mkdir(parents=True, exist_ok=True)
+        (icd_dir / "nvidia_icd.json").write_text(_json.dumps(
+            {"file_format_version": "1.0.1",
+             "ICD": {"library_path": "libGLX_nvidia.so.0", "api_version": "1.3.0"}},
+            indent=2) + "\n")
+        subprocess.run(["ldconfig"], check=True)
+        info = subprocess.run(["vulkaninfo", "--summary"], capture_output=True, text=True)
+        if info.returncode == 0 and "NVIDIA" in (info.stdout or ""):
+            device = next((line.strip() for line in info.stdout.splitlines()
+                           if "NVIDIA" in line), "unknown")
+            marker = {"provisioned_by_kit": True, "method": "manifest_for_injected_libs",
+                      "driver_version": driver, "vulkan_device": device}
+            (ROOT / ".icd-provisioned.json").write_text(_json.dumps(marker, indent=2))
+            print(f"[gpu-acceptance-remote] ICD manifest written for injected driver "
+                  f"{driver} libraries: {device}", flush=True)
+            return marker
+        print("[gpu-acceptance-remote] injected libraries present but vulkaninfo "
+              "lists no NVIDIA device; falling back to the driver package", flush=True)
     tmp = Path(_tempfile.mkdtemp(prefix="nvidia-driver-"))
     pkg = tmp / f"NVIDIA-Linux-x86_64-{driver}.run"
     fetched = False
@@ -165,15 +194,17 @@ def provision_nvidia_icd():
         print(f"host_incompatible: driver package failed integrity check: "
               f"{(proc.stdout + proc.stderr)[-200:]}", file=sys.stderr)
         sys.exit(3)
-    libdir = Path("/usr/lib/x86_64-linux-gnu")
-    for name in ICD_LIBS:
+    for name in icd_libs:
         src = extract / name
         if not src.is_file():
             print(f"host_incompatible: driver package {driver} has no {name}; "
                   "cannot provision the Vulkan ICD", file=sys.stderr)
             sys.exit(3)
+        if (libdir / name).exists():
+            # Injected by the container runtime (often read-only); keep it.
+            continue
         subprocess.run(["install", "-m", "0755", str(src), str(libdir / name)], check=True)
-        for link in ICD_SONAMES.get(name, []):
+        for link in icd_sonames.get(name, []):
             link_path = libdir / link
             if link_path.is_symlink() or link_path.exists():
                 link_path.unlink()
