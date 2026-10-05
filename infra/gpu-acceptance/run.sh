@@ -3,7 +3,14 @@
 # One command for the human (after exporting AUTODL_TOKEN); everything else
 # is prompted, guarded, and auto-shut down.
 #
-#   export AUTODL_TOKEN=...; bash infra/gpu-acceptance/run.sh [--dry-run-local]
+#   export AUTODL_TOKEN=...; bash infra/gpu-acceptance/run.sh [--dry-run-local] [--yes]
+#
+# Auth: AUTODL_TOKEN is optional. When it is unset, the script probes
+# `autodl balance --json`: if the CLI authenticates from its own config file,
+# the paid run continues (the token value itself is never printed). Only when
+# the CLI has no working auth does the script fall back to the local dry-run.
+# --yes skips the interactive spend confirmation for non-interactive runs;
+# without it the prompt stays the default.
 #
 # Cost (attested): infra/autodl/README.md 2026-08-25 run took ~115 min on 4090D;
 # SINGLE-CENTER-WEB-PLAN §4F + artifacts/core-f-gpu-retest-20260925.json record
@@ -19,20 +26,32 @@ REPO_ROOT="$(cd "$KIT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
 GPU="${GPU:-4090D}"
+# 4090D 24G is the kit's target class on purpose: the T19 OOM probe sizes ctx
+# for ~30 GiB KV that must NOT fit. A 48G card could fit it and would flip a
+# real verdict, so do not "upgrade" past 24G without resizing that probe.
+IMAGE="${IMAGE:-base-image-l2t43iu6uk}"  # cuda11.8/devel/ubuntu20.04; CLI default.
 TTL="${TTL:-90m}"
 DISK="${DISK:-50}"
 NAME="${NAME:-ddp-gpu-acceptance}"
 ID_FILE=".dev-logs/gpu-acceptance/instance"
 DRY_RUN_LOCAL=0
-for arg in "$@"; do case "$arg" in --dry-run-local) DRY_RUN_LOCAL=1 ;; esac; done
+ASSUME_YES=0
+for arg in "$@"; do case "$arg" in
+  --dry-run-local) DRY_RUN_LOCAL=1 ;;
+  --yes|-y) ASSUME_YES=1 ;;
+  *) echo "unknown flag: $arg (expected --dry-run-local or --yes)" >&2; exit 2 ;;
+esac; done
 
 if ! command -v autodl >/dev/null 2>&1; then
   echo "autodl CLI not found; install it or run scripts/gpu_acceptance.py --mode dry-run locally." >&2
   exit 2
 fi
 
-if [[ -z "${AUTODL_TOKEN:-}" ]] || [[ "$DRY_RUN_LOCAL" == 1 ]]; then
-  echo "[gpu-acceptance] no token (or --dry-run-local): local dry-run only, no spending."
+CLI_AUTH_OK=0
+if autodl balance --json >/dev/null 2>&1; then CLI_AUTH_OK=1; fi
+
+if [[ "$DRY_RUN_LOCAL" == 1 ]] || { [[ -z "${AUTODL_TOKEN:-}" ]] && [[ "$CLI_AUTH_OK" == 0 ]]; }; then
+  echo "[gpu-acceptance] no working CLI auth (and/or --dry-run-local): local dry-run only, no spending."
   exec .venv/bin/python scripts/gpu_acceptance.py --mode dry-run
 fi
 
@@ -68,7 +87,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "=== GPU acceptance: paid cloud GPU ahead ==="
-echo "GPU=$GPU TTL=$TTL DISK=${DISK}G NAME=$NAME"
+echo "GPU=$GPU IMAGE=$IMAGE TTL=$TTL DISK=${DISK}G NAME=$NAME"
 echo "ESTIMATE (not measured): 60-90 min on 4090D-class, roughly ¥1.9-2.8 at the attested ¥1.88/h."
 autodl balance || true
 EXISTING="$(find_by_name || true)"
@@ -77,14 +96,18 @@ if [[ -n "$EXISTING" ]]; then
   echo "Re-run after releasing it, or set NAME= to use a different name." >&2
   exit 2
 fi
-read -r -p "Create the instance and spend this money? [yes/NO] " answer
-if [[ "$answer" != "yes" ]]; then echo "aborted; nothing created."; exit 0; fi
+if [[ "$ASSUME_YES" == 1 ]]; then
+  echo "[gpu-acceptance] --yes: proceeding without an interactive prompt."
+else
+  read -r -p "Create the instance and spend this money? [yes/NO] " answer
+  if [[ "$answer" != "yes" ]]; then echo "aborted; nothing created."; exit 0; fi
+fi
 
 INSTANCE=""
-echo "[gpu-acceptance] creating instance (ttl $TTL auto-shutdown)..."
+echo "[gpu-acceptance] creating instance (gpu $GPU, image $IMAGE, ttl $TTL auto-shutdown)..."
 CREATE_OUT=""
 CREATE_RC=0
-CREATE_OUT="$(autodl create --json --gpu "$GPU" --disk "$DISK" --ttl "$TTL" --wait --name "$NAME")" \
+CREATE_OUT="$(autodl create --json --gpu "$GPU" --image "$IMAGE" --disk "$DISK" --ttl "$TTL" --wait --name "$NAME")" \
   || CREATE_RC=$?
 if [[ $CREATE_RC -ne 0 ]]; then
   echo "$CREATE_OUT" >&2

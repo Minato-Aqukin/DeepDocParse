@@ -42,15 +42,25 @@ def main():
         print("no NVIDIA GPU visible; refusing to run gpu mode", file=sys.stderr)
         sys.exit(2)
     print(out.stdout.strip(), flush=True)
+    # Base images ship system Python 3.8, but every repo package needs >=3.11.
+    # Same answer as infra/autodl: uv fetches its own CPython 3.12 without
+    # touching system Python or conda. pip comes from the Aliyun mirror
+    # (uv ignores /etc/pip.conf and PIP_INDEX_URL, so pass --index-url
+    # explicitly each time); HF downloads ride HF_ENDPOINT when set.
     run("apt-get", "update")
-    run("apt-get", "install", "-y", "python3-venv", "vulkan-tools")
-    if not (ROOT / ".venv").exists():
-        run("python3", "-m", "venv", ".venv")
-    run(".venv/bin/pip", "install", "-q", "-e", "python/ddp_contracts",
-        "-e", "python/ddp_core", "-e", "python/ddp_local",
-        "-e", "services/model-gateway", "-e", "services/corpus-api",
-        "-e", "services/corpus-worker")
-    run(".venv/bin/pip", "install", "-q", *PINS)
+    run("apt-get", "install", "-y", "python3-venv", "vulkan-tools", "curl", "ca-certificates")
+    run("bash", "-c", "command -v uv >/dev/null || curl -fsSL https://astral.sh/uv/install.sh | sh")
+    run("bash", "-c", "export PATH=\"$HOME/.local/bin:$PATH\" && "
+        "uv python install 3.12 && uv venv --python 3.12 /root/gpu-acceptance/.venv")
+    run(".venv/bin/python", "--version")
+    run("bash", "-c", "export PATH=\"$HOME/.local/bin:$PATH\" && "
+        "VIRTUAL_ENV=/root/gpu-acceptance/.venv uv pip install --index-url "
+        "https://mirrors.aliyun.com/pypi/simple "
+        "-e python/ddp_contracts -e python/ddp_core -e python/ddp_local "
+        "-e services/model-gateway -e services/corpus-api -e services/corpus-worker")
+    run("bash", "-c", "export PATH=\"$HOME/.local/bin:$PATH\" && "
+        "VIRTUAL_ENV=/root/gpu-acceptance/.venv uv pip install --index-url "
+        "https://mirrors.aliyun.com/pypi/simple " + " ".join(PINS))
     proc = subprocess.run([".venv/bin/python", "scripts/gpu_acceptance.py", "--mode", "gpu"],
                           cwd=ROOT)
     print(f"[gpu-acceptance-remote] done rc={proc.returncode} "
