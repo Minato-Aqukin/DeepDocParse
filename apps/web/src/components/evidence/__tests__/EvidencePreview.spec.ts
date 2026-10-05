@@ -70,6 +70,31 @@ describe('EvidencePreview locator gaps are explicit', () => {
     wrapper.unmount()
   })
 
+  it('no bbox with a printed label: fallback shows the labelled locator', async () => {
+    loadEvidence.mockResolvedValue({ data: {
+      ...evidence('r', 'labelled.pdf'), bbox: null, page_idx: 3, printed_page_label: 'iv',
+    } })
+    const wrapper = mount(EvidencePreview, { props: { evidenceId: 'shared-evidence' } })
+    await flushPromises()
+    const empty = wrapper.find('el-empty').attributes('description') ?? ''
+    expect(empty).toContain('印刷页 iv · PDF 第 4 页')
+    expect(empty).toContain('没有区域坐标')
+    expect(empty).toContain('不能当作区域精确的出处')
+    wrapper.unmount()
+  })
+
+  it('no bbox without a label: fallback stays physical-only', async () => {
+    loadEvidence.mockResolvedValue({ data: {
+      ...evidence('r', 'manual.pdf'), bbox: null, page_idx: 3, printed_page_label: null,
+    } })
+    const wrapper = mount(EvidencePreview, { props: { evidenceId: 'shared-evidence' } })
+    await flushPromises()
+    const empty = wrapper.find('el-empty').attributes('description') ?? ''
+    expect(empty).toContain('PDF 第 4 页')
+    expect(empty).not.toContain('印刷页')
+    wrapper.unmount()
+  })
+
   it('evidence no longer in the current index is labelled historical, current one is not', async () => {
     loadEvidence.mockResolvedValue({ data: { ...evidence('r', 'manual.pdf'), chunk_id: null } })
     const historical = mount(EvidencePreview, { props: { evidenceId: 'shared-evidence' } })

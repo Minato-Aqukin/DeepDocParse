@@ -152,7 +152,7 @@ onBeforeUnmount(() => {
         <div class="crop-scroll">
           <img v-if="cropObjectUrl" :src="cropObjectUrl" alt="证据原子 1:1 裁图" />
           <el-empty v-else-if="!detail.bbox"
-                    :description="`这条证据没有区域坐标（bbox 缺失），只能定位到 PDF 第 ${detail.page_idx + 1} 页，不能当作区域精确的出处`" />
+                    :description="`这条证据没有区域坐标（bbox 缺失），只能定位到 ${formatPageLocator(detail.page_idx, detail.printed_page_label, 'PDF 第')}，不能当作区域精确的出处`" />
           <el-empty v-else description="没有可用裁图；可打开固定版本原文，按上面的 bbox 在该页定位" />
         </div>
       </section>
