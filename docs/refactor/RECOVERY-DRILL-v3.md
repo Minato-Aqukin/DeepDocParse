@@ -241,8 +241,9 @@ base LSN `0/1A000060`，PITR target `2026-10-05 06:27:34.271207+00`。
   kill -9、只用 kill 前已归档 WAL 恢复——该行不在恢复里，
   `rpo-proof.json`: `lost=true`）。`--resume` 不做 RPO  verdict（SRC 已死，无真杀可做）。
 - target/latest 恢复本身零丢失（selectivity + noloss 双门）。
-- 提案（判据外，待 human 定）：RTO ≤ 30 min / RPO ≤ 30 s，
-  见 `.dev-logs/human-steps/RTO-RPO.md`。
+- 目标（2026-10-05 用户确认）：**RTO ≤ 30 min / RPO ≤ 30 s**。RTO 指单中心恢复到可用
+  （promote 完成且对账通过）；RPO 由 WAL 归档节拍 `archive_timeout=30s` 保证。
+  实测恢复段约 18 s／8 s、基础备份约 4.7 min，均在目标内。
 
 ### 演练抓到的真 bug（脚本侧，已修）
 
@@ -282,9 +283,8 @@ bash scripts/backup_restore_drill.sh --keep     # 保留容器/卷/工作目录
   10687 对象逐一存在性 + 摘要对账 + 桶外物门。
   未验：桶级版本控制/生命周期策略（保留）。
 - **secret 轮换**：仍然没验（保留）——恢复出的是旧凭据的快照。
-- ~~**RTO/RPO**：没有计时目标~~ → **§6 已实测，目标待定**：
-  恢复段 target 17.6 s / latest 7.7 s，RPO 窗 30 s（crash probe 实证），
-  提案 RTO ≤ 30 min / RPO ≤ 30 s 待 human 一字回复
-  （`.dev-logs/human-steps/RTO-RPO.md`；判据外）。
+- ~~**RTO/RPO**：没有计时目标~~ → **§6 已实测并定目标**：
+  恢复段 target 17.6 s / latest 7.7 s，RPO 窗 30 s（crash probe 实证）；
+  目标 RTO ≤ 30 min / RPO ≤ 30 s（2026-10-05 用户确认）。
 - **迁移的 downgrade**：仍然只跑 `upgrade head`（保留）；双向可跑由
   `.github/workflows/python.yml` 的 `upgrade → downgrade base → upgrade` 覆盖。
