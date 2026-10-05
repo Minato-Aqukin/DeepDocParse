@@ -1469,6 +1469,161 @@ async def test_commit_maps_unique_violation_to_conflict(session):
     assert exc.value.code == "idempotency_conflict"
 
 
+async def test_execute_unknown_write_conflict_is_retryable_conflict(
+        actor_client, session, monkeypatch):
+    """受理事务里撞上非幂等键唯一约束（并发写输了竞态）必须回 409，而不是 500。
+
+    红灯：受理事务的 commit 在 `(root_task_id, seq)` 唯一约束上失败，而幂等
+    键在别处没有持有者 —— 老分支裸 `raise`，直接调 `execute_task` 时就是裸
+    `IntegrityError` 透出（HTTP 层兜成 500 `internal_error`）。
+    绿灯：409 `APIError`（`idempotency_conflict`，与 `_commit` 的
+    concurrent-write 同码，调用方同键重试即可），行不留在 running、键不被
+    占住；约束解除后同键重试（HTTP 层）正常受理并跑完。
+
+    触发手段：受理事务按 `max(seq)+1` 算好序号（approve 之后末尾是 seq=3，
+    所以是 seq=4）之后、commit 落库之前，赢家用同一序号先提交。生产 PG 上
+    这是两个并发事务的真竞态；SQLite 测试夹具是单连接串行，所以穿插点选在
+    `execute_task` 内部的 `_append_event`：先关输家会话的 autoflush 让序号
+    计算只看到已提交真相（seq=3 → seq=4），输家的请求行 UPDATE 以 ORM 脏状
+    态留在会话里（SQL 未发送），再用独立会话真实提交赢家的 seq=4 —— 单连接
+    下赢家的提交带不走输家还没发送的 UPDATE（这正是生产 PG 的形状：两边事
+    务互不相干）。输家 commit 时真实撞上 `uq_federation_task_events_seq`。
+    赢家的提交是真实落库；`_append_event` 的包裹只做穿插，不伪造序号。
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from ddp_corpus import db as db_module
+    from ddp_corpus.deps import Actor
+    from ddp_corpus.models import utcnow as _utcnow
+
+    _, version, _, _, _ = await indexed_source(session)
+    await publish_collection(actor_client, version)
+    consent = exploration(egress="local_only", recipients=(), payload=(),
+                          budget={"max_probe_requests": 0, "max_egress_bytes": 0})
+    intent = await create_intent(actor_client, spec=task_spec(scope="site_public", mode="fast"),
+                                 consent=consent)
+    root = intent["root_task_id"]
+    plan_body = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan_body)
+    await session.commit()
+    session.expunge_all()
+
+    # 在 `_append_event` 里拦一次：先关掉输家会话的 autoflush 再算序号。
+    # 输家的请求行 UPDATE 此时还是 ORM 脏状态（SQL 尚未发到连接上），`SELECT
+    # max` 看到的是已提交真相 seq=3，于是输家算出 seq=4 并把 INSERT 挂进事
+    # 务，但 UPDATE 的 SQL 仍未发送。此时用独立会话真实提交赢家的 seq=4 ——
+    # 单连接夹具下，赢家的提交只能带走连接上已有的 SQL，输家的 UPDATE 还在
+    # ORM 里，带不走（这正是生产 PG 的形状：赢家的提交与输家的事务互不相
+    # 干）。恢复 autoflush 后放行：生产代码自己的 `session.flush()`（受理写
+    # 入先刷、再排队列，免得 `queue.enqueue` 的 SAVEPOINT 把事件行的冲突当
+    # 成 dedupe 吞掉）把输家的挂起写入发出去，事件 INSERT 真实撞上
+    # `uq_federation_task_events_seq`，以裸 `IntegrityError` 抛在 try 内。
+    # 这个包裹只做穿插（关 autoflush + 赢家的真实提交），不伪造序号、不 mock
+    # 任何内部函数的返回值，碰撞走的完全是生产路径。
+    real_append = federation_tasks._append_event
+
+    async def _racing_append(sess, root_task_id, type_, payload, *, now):
+        sess.autoflush = False
+        try:
+            await real_append(sess, root_task_id, type_, payload, now=now)
+        finally:
+            sess.autoflush = True
+        if type_ == "execution_started" and root_task_id == root:
+            winner = db_module.get_sessionmaker()()
+            try:
+                winner.add(FederationTaskEvent(id=new_id(), root_task_id=root, seq=4,
+                                               type="execution_started", payload={},
+                                               created_at=utcnow()))
+                await winner.commit()
+            except IntegrityError:
+                pass
+            finally:
+                await winner.close()
+
+    monkeypatch.setattr(federation_tasks, "_append_event", _racing_append)
+
+    actor = Actor(id=ACTOR, kind="user", organization_id=ORG, role="contributor")
+    # 红灯（HEAD）：未知 IntegrityError 未被映射成 409 —— 直接调
+    # `execute_task` 时以裸 `IntegrityError` 透出（HTTP 层兜成 500
+    # `internal_error`）；绿灯：409 `APIError`（`idempotency_conflict`）。
+    # 红灯下这个 `raises` 按不住 409（抛的是裸异常），测试红；绿灯下按住
+    # 409，继续往下证回滚。
+    with pytest.raises(APIError) as green:
+        await federation_tasks.execute_task(
+            session, actor, root, plan_digest=plan_body["plan_digest"],
+            idempotency_key="race-loser-key", now=_utcnow(), http=None, index=None)
+    assert green.value.status_code == 409
+    assert green.value.code == "idempotency_conflict"
+
+    # 回滚已经发生（except 分支先 `rollback` 再映射 409）：数据库里的行不
+    # 在 running、键没有被占住。`session.get` 会命中同一会话 identity-map 里
+    # 尚未过期的内存对象（它的字段还是回滚前的 running），所以先 expunge 再
+    # 读 —— 读到的是数据库真相。
+    session.expunge_all()
+    row = await session.get(FederationRequest, root, populate_existing=True)
+    assert row.status == "queued"
+    assert row.idempotency_key is None
+
+    # 赢家的 seq=4 行保留：同键重试（HTTP 层）按 `max(seq)+1` 算出 seq=5，
+    # 正常受理并跑完 —— 这正是"输了竞态的客户端原样重试即可"的语义。先只撤销
+    # 穿插补丁（`undo` 会连 autouse 的联邦配置一起撤掉，导致节点身份丢失，
+    # 不要用），否则重试也会被再插一个赢家行撞掉。
+    monkeypatch.setattr(federation_tasks, "_append_event", real_append)
+    retried = await submit_task(actor_client, root, plan_body["plan_digest"], "race-loser-key")
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["status"] == "succeeded"
+    started = await session.scalar(select(func.count()).select_from(FederationTaskEvent).where(
+        FederationTaskEvent.root_task_id == root,
+        FederationTaskEvent.type == "execution_started"))
+    assert started == 2
+
+
+async def test_execute_non_integrity_db_failure_is_not_a_conflict(
+        actor_client, session, monkeypatch):
+    """受理事务里非 `IntegrityError` 的数据库故障不许被翻译成 409 冲突。
+
+    连接丢失、超时这类 `DBAPIError`（非完整性错误）是基础设施故障，必须以
+    5xx 可见（不变式 2），调用方据此走重试/告警，而不是收到"换个键重试"
+    的 409 `idempotency_conflict`。这里让受理事务 commit 时抛一个真实的
+    `OperationalError`（连接级故障的代表），断言它原样透出、不被 409 收编，
+    行也不被意外复活成可用态。
+    """
+    from sqlalchemy.exc import OperationalError
+
+    _, version, _, _, _ = await indexed_source(session)
+    await publish_collection(actor_client, version)
+    consent = exploration(egress="local_only", recipients=(), payload=(),
+                          budget={"max_probe_requests": 0, "max_egress_bytes": 0})
+    intent = await create_intent(actor_client, spec=task_spec(scope="site_public", mode="fast"),
+                                 consent=consent)
+    root = intent["root_task_id"]
+    plan_body = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan_body)
+    await session.commit()
+    session.expunge_all()
+
+    real_commit = session.commit
+
+    async def _failing_commit():
+        raise OperationalError("SELECT 1", {}, Exception("connection lost"))
+
+    monkeypatch.setattr(session, "commit", _failing_commit)
+
+    actor = Actor(id=ACTOR, kind="user", organization_id=ORG, role="contributor")
+    with pytest.raises(OperationalError):
+        await federation_tasks.execute_task(
+            session, actor, root, plan_digest=plan_body["plan_digest"],
+            idempotency_key="infra-failure-key", now=utcnow(), http=None, index=None)
+
+    monkeypatch.setattr(session, "commit", real_commit)
+    await session.rollback()
+    # 故障没有落下任何受理效果：行仍是 queued，键没有被占住。
+    session.expunge_all()
+    row = await session.get(FederationRequest, root, populate_existing=True)
+    assert row.status == "queued"
+    assert row.idempotency_key is None
+
+
 async def test_resume_reruns_only_incomplete_targets(actor_client, session, monkeypatch):
     peer = StubPeer(fail_admit_step="retrieve-2")
     install_peer(monkeypatch, peer)

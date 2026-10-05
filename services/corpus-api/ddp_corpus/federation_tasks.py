@@ -3485,6 +3485,12 @@ async def execute_task(session: AsyncSession, actor: Actor, root_task_id: str, *
         # 否则同键异任务时唯一约束在事件追加处就炸成 500，409 分支永远到不了。
         await _append_event(session, row.root_task_id, _EVENT_STARTED, {
             "plan_digest": plan_digest, "generation": row.delegation_generation}, now=now)
+        # 先把受理写入显式刷出去，再排队列：`queue.enqueue` 用 SAVEPOINT 吃
+        # 掉自己的 dedupe 冲突（返回 None）；事件 INSERT 若留到那时才刷，撞上
+        # 的唯一约束会被 enqueue 当成"队列里已有任务"吞掉，会话随后在 commit
+        # 处以 PendingRollbackError 炸成 500。这里先刷，事件行的冲突以裸
+        # IntegrityError 抛在 try 内，走下面的 409 仲裁。
+        await session.flush()
         if not settings.federation_execution_inline:
             # **状态行与队列任务同一个事务**：两个半截状态（running 没任务、
             # 任务没 running）都不可能出现。dedupe 键取 root —— 同一 root
@@ -3498,6 +3504,12 @@ async def execute_task(session: AsyncSession, actor: Actor, root_task_id: str, *
         await session.commit()
     except IntegrityError:
         # 同一个幂等键已经用去受理了另一个 root task；唯一约束替我们仲裁。
+        # 兜底：未知约束冲突（并发写输了竞态，如事件 `(root_task_id, seq)` 撞
+        # 序号）同样是"客户端可原样重试"的 409，而不是 500 —— 与 `_commit`
+        # 的 concurrent-write 同码（`idempotency_conflict` 已在 POST /tasks
+        # 的 409 契约里）。回滚先发生：行不留在 running，键不被占住。
+        # 只接 `IntegrityError`：连接丢失、超时这类 `DBAPIError` 是基础设施
+        # 故障，必须继续以 5xx 可见（不变式 2），不许被翻译成客户端冲突。
         await session.rollback()
         existing = await session.scalar(select(FederationRequest).where(
             FederationRequest.organization_id == actor.organization_id,
@@ -3506,7 +3518,8 @@ async def execute_task(session: AsyncSession, actor: Actor, root_task_id: str, *
         if existing is not None and existing.root_task_id != root_task_id:
             raise APIError(409, "idempotency key already accepted for another task",
                            "invalid_request_error", "idempotency_conflict") from None
-        raise
+        raise APIError(409, "concurrent write for the same task; retry the same key",
+                       "invalid_request_error", "idempotency_conflict") from None
     if not settings.federation_execution_inline:
         return await _status_output(session, row), True
     try:
