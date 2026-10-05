@@ -16,13 +16,18 @@ from pathlib import Path
 ROOT = Path("/root/gpu-acceptance")
 
 # Pinned to the repo venv at the pushed REVISION (refresh with
-# `.venv/bin/pip list` when the repo's floors move).
+# `.venv/bin/pip list` when the repo's floors move). The tail entries feed
+# the T59 corpus regression subsets (worker handlers, respx/jsonschema per
+# services/corpus-api pyproject dev deps).
 PINS = [
     "fastapi==0.141.1", "uvicorn==0.52.4", "httpx==0.28.1",
     "fakeredis==2.37.1", "redis==5.3.1",
     "sqlalchemy[asyncio]==2.0.52", "aiosqlite==0.22.1",
     "pydantic==2.13.5", "pydantic-settings==2.15.0", "pyyaml==6.0.3",
     "pytest==9.1.1", "pytest-asyncio==1.4.0",
+    "asyncpg==0.31.0", "alembic==1.19.1", "minio==7.2.20",
+    "prometheus-fastapi-instrumentator==8.1.0",
+    "respx==0.23.1", "jsonschema==4.26.0",
 ]
 
 

@@ -140,12 +140,28 @@ mkdir -p "$(dirname "$ID_FILE")"
 printf '%s' "$INSTANCE" > "$ID_FILE"
 autodl guard ttl "$INSTANCE" "$TTL" || true
 
-echo "[gpu-acceptance] pushing tracked HEAD (git archive)..."
+echo "[gpu-acceptance] pushing kit subset of tracked HEAD (git archive)..."
+# Subset, not the whole tree: the full archive is ~36MB/1400 files and the
+# first attempt died mid-push at file ~295/1245 on a dropped SSH session.
+# This subset (~10MB/550 files) is everything the remote kit imports: the kit
+# scripts, the three python packages, the three services the kit installs and
+# runs (gateway + corpus-api/corpus-worker for the T59 regression subsets),
+# and the matrix docs dir the artifact path lives under.
 STAGE="$(mktemp -d)"
-git archive HEAD -o "$STAGE/repo.tar"
+git archive HEAD infra/gpu-acceptance scripts services/model-gateway \
+  services/corpus-api services/corpus-worker python/ddp_contracts \
+  python/ddp_core python/ddp_local docs/refactor -o "$STAGE/repo.tar"
 mkdir -p "$STAGE/tree" && tar -xf "$STAGE/repo.tar" -C "$STAGE/tree"
 git rev-parse HEAD > "$STAGE/tree/REVISION"
-autodl push "$INSTANCE" "$STAGE/tree" /root/gpu-acceptance 2>&1 | tail -3
+# One retry on transport failure (exit 8 = SSH per the CLI contract). A second
+# consecutive failure aborts to the EXIT trap, which still releases the instance.
+PUSH_RC=0
+autodl push "$INSTANCE" "$STAGE/tree" /root/gpu-acceptance 2>&1 | tail -3 || PUSH_RC=$?
+if [[ "$PUSH_RC" -ne 0 ]]; then
+  echo "[gpu-acceptance] first push failed (rc=$PUSH_RC); retrying once..." >&2
+  sleep 10
+  autodl push "$INSTANCE" "$STAGE/tree" /root/gpu-acceptance 2>&1 | tail -3
+fi
 rm -rf "$STAGE"
 
 echo "[gpu-acceptance] running kit on the GPU host..."
