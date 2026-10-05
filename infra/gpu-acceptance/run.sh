@@ -29,7 +29,14 @@ GPU="${GPU:-4090D}"
 # 4090D 24G is the kit's target class on purpose: the T19 OOM probe sizes ctx
 # for ~30 GiB KV that must NOT fit. A 48G card could fit it and would flip a
 # real verdict, so do not "upgrade" past 24G without resizing that probe.
-IMAGE="${IMAGE:-base-image-l2t43iu6uk}"  # cuda11.8/devel/ubuntu20.04; CLI default.
+IMAGE="${IMAGE:-base-image-l2t43iu6uk}"
+# No 22.04+ public base image exists: `autodl images --base` (2026-10-06)
+# lists 13 images, all Ubuntu 16.04/18.04/20.04 (newest glibc 2.31), and the
+# CLI catalog (AutoDL-cli src/core/catalog.ts) bakes in the same 13. The
+# create API takes only a UUID, so the kit keeps the CLI default and relies
+# on the host_incompatible preflight (remote script + kit) to fail fast
+# instead of reporting model_start_failed. Re-check with
+# `autodl images --base --json` before changing this default.
 TTL="${TTL:-90m}"
 DISK="${DISK:-50}"
 NAME="${NAME:-ddp-gpu-acceptance}"
@@ -157,15 +164,19 @@ autodl guard ttl "$INSTANCE" "$TTL" || true
 echo "[gpu-acceptance] pushing kit subset of tracked HEAD (git archive)..."
 # Subset, not the whole tree: the full archive is ~36MB/1400 files and the
 # first attempt died mid-push at file ~295/1245 on a dropped SSH session.
-# This subset (~10MB/550 files) is everything the remote kit imports: the kit
-# scripts, the three python packages, the three services the kit installs and
-# runs (gateway + corpus-api/corpus-worker for the T59 regression subsets),
-# and the matrix docs dir the artifact path lives under.
+# This subset is everything the remote kit imports: the kit scripts, the
+# three python packages, the three services the kit installs and runs
+# (gateway + corpus-api/corpus-worker for the T59 regression subsets),
+# the matrix docs dir the artifact path lives under, plus the two outside
+# trees the T59 subsets read: tests/ (ddp_bundle_fixture.py + ddp_paths.py,
+# resolved via each service's pyproject pythonpath) and packages/contracts
+# (generated/schemas-resolved.json + openapi/federation-tasks-v1.yaml +
+# schemas/ddp-discovery/v1.json, read via parents[3]-relative paths).
 STAGE="$(mktemp -d)"
 git archive HEAD infra/gpu-acceptance scripts services/model-gateway \
   services/corpus-api services/corpus-worker python/ddp_contracts \
-  python/ddp_core python/ddp_local docs/refactor -o "$STAGE/repo.tar"
-mkdir -p "$STAGE/tree" && tar -xf "$STAGE/repo.tar" -C "$STAGE/tree"
+  python/ddp_core python/ddp_local docs/refactor \
+  tests packages/contracts -o "$STAGE/repo.tar"
 git rev-parse HEAD > "$STAGE/tree/REVISION"
 # One retry on transport failure (exit 8 = SSH per the CLI contract). A second
 # consecutive failure aborts to the EXIT trap, which still releases the instance.

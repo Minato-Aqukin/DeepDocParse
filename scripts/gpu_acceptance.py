@@ -140,6 +140,74 @@ def host_facts():
     }
 
 
+def _glibc_version():
+    """System glibc ``(major, minor)``; ``None`` when it cannot be read."""
+    try:
+        name, version = platform.libc_ver()
+    except Exception:
+        return None
+    if name != "glibc" or not version:
+        return None
+    try:
+        major, _, minor = version.partition(".")[0], ".", version.partition(".")[2]
+        return (int(major), int(minor.split(".")[0]))
+    except (ValueError, IndexError):
+        return None
+
+
+def _llama_server_missing_libs(runtime_dir):
+    """Libraries ``ldd`` reports missing for the extracted ``llama-server``.
+
+    Returns the sorted missing sonames, or ``None`` when the binary or
+    ``ldd`` itself is unavailable (the caller then skips, not fails).
+    """
+    server = Path(runtime_dir) / "llama-server"
+    if not server.is_file() or shutil.which("ldd") is None:
+        return None
+    try:
+        out = subprocess.run(["ldd", str(server)], capture_output=True,
+                             text=True, timeout=60)
+    except Exception:
+        return None
+    missing = sorted({line.split("=>")[0].strip() for line in out.stdout.splitlines()
+                      if "not found" in line})
+    return missing
+
+
+def preflight_host(installer, *, runtime_id="llama-cpp-vulkan-linux-x64"):
+    """Fail fast with ``host_incompatible`` before any model start.
+
+    Two checks, both BEFORE the T19/T59 GPU legs launch anything: (a) the
+    system glibc must satisfy what the catalog's llama.cpp b10809 binaries
+    need (GLIBC_2.34, i.e. Ubuntu 22.04+; focal ships 2.31), and (b) ``ldd``
+    on the extracted ``llama-server`` must show no missing libraries.
+    Either failure raises ``ApplicationError("host_incompatible", ...)`` so
+    the artifact records an explicit reason instead of a misleading
+    ``model_start_failed`` on every GPU check.
+    """
+    from ddp_core.application.ports import ApplicationError as _ApplicationError
+    floor = (2, 34)
+    have = _glibc_version()
+    if have is not None and have < floor:
+        raise _ApplicationError(
+            "host_incompatible",
+            f"system glibc {have[0]}.{have[1]} is below the llama.cpp floor "
+            f"{floor[0]}.{floor[1]} (needs Ubuntu 22.04+); refusing to start models")
+    try:
+        state = installer.status(runtime_id)
+    except Exception:
+        return None
+    if state.get("status") != "installed":
+        return None
+    missing = _llama_server_missing_libs(installer.path(installer.artifact(runtime_id)))
+    if missing:
+        raise _ApplicationError(
+            "host_incompatible",
+            f"llama-server links against missing libraries: {', '.join(missing)}; "
+            "refusing to start models")
+    return None
+
+
 def gpu_facts():
     """Best-effort NVIDIA/Vulkan facts; None fields mean 'not observed'."""
     facts = {"present": False, "driver": None, "cuda": None,
@@ -171,6 +239,15 @@ def gpu_facts():
     icd = Path("/usr/share/vulkan/icd.d")
     if icd.is_dir():
         facts["vulkan_icds"] = sorted(p.name for p in icd.glob("*.json"))
+    # The remote kit provisions the NVIDIA ICD when the base image ships
+    # none (see gpu_acceptance_remote.py); record that provenance plus the
+    # Vulkan device name so the artifact shows the GPU path was real.
+    marker = Path("/root/gpu-acceptance/.icd-provisioned.json")
+    if marker.is_file():
+        try:
+            facts["icd_provisioned_by_kit"] = json.loads(marker.read_text())
+        except Exception:
+            facts["icd_provisioned_by_kit"] = {"marker": "unreadable"}
     return facts
 
 
@@ -1247,12 +1324,29 @@ MIRROR_URLS = {
 }
 
 
+def _curl_supports_retry_all_errors():
+    """Detect ``curl --retry-all-errors`` (absent in focal's curl 7.68).
+
+    The 2026-10-05 focal host failed every mirror attempt with rc=2
+    (``curl: try 'curl --help'``) because the flag was passed blindly;
+    probing ``curl --help all`` keeps resume (``-C -``) while dropping only
+    the unsupported flag.
+    """
+    try:
+        out = subprocess.run(["curl", "--help", "all"], capture_output=True,
+                             text=True, timeout=15)
+    except Exception:
+        return False
+    return out.returncode == 0 and "--retry-all-errors" in (out.stdout or "")
+
+
 def prestage_artifact(installer, identifier, filename, *, source_url, attempts=40):
     """Fetch one catalog artifact from a mirror, verify it, import it.
 
     Shells out to ``curl -fL -C -``: ``-C -`` resumes the partial file with
     a ``Range`` request the mirror CDN answers with 206, ``-L`` follows the
-    CDN redirects, and ``--retry 10 --retry-all-errors`` covers transient
+    CDN redirects, and ``--retry 10`` (plus ``--retry-all-errors`` when the
+    host curl supports it, probed via ``curl --help all``) covers transient
     drops inside one attempt while the outer attempts loop keeps resuming.
     (The 2026-10-05 host failure was connection drops at ~118 MB per attempt
     through the academic proxy -- 4 attempts could move only ~472 MB of
@@ -1272,9 +1366,11 @@ def prestage_artifact(installer, identifier, filename, *, source_url, attempts=4
     if shutil.which("curl") is None:
         raise _ApplicationError("model_download_failed",
                                 "curl is required to pre-stage catalog artifacts")
-    command = ["curl", "-fL", "-C", "-", "--retry", "10", "--retry-all-errors",
+    command = ["curl", "-fL", "-C", "-", "--retry", "10",
                "--connect-timeout", "30", "--speed-time", "60", "--speed-limit", "10240",
                "--noproxy", "*", "-o", str(staged), source_url]
+    if _curl_supports_retry_all_errors():
+        command[6:6] = ["--retry-all-errors"]
     for attempt in range(1, attempts + 1):
         if staged.is_file() and staged.stat().st_size == artifact["bytes"]:
             break
@@ -1391,6 +1487,13 @@ def ensure_gpu_downloads(workspace, *, stage_dir=None):
     _asyncio.run(download_all())
     print("[gpu-acceptance] artifact sources: "
           + json.dumps(installer.artifact_sources, sort_keys=True), flush=True)
+    # Fail fast BEFORE any model start: a glibc or missing-library mismatch
+    # would otherwise surface as model_start_failed on every GPU check.
+    try:
+        preflight_host(installer)
+    except Exception as exc:
+        code = getattr(exc, "code", type(exc).__name__)
+        raise type(exc)(code, f"host preflight refused: {exc}") from exc
     return installer
 
 

@@ -30,10 +30,155 @@ PINS = [
     "respx==0.23.1", "jsonschema==4.26.0",
 ]
 
-
 def run(*args, cwd=ROOT):
     print(f"+ {' '.join(args)}", flush=True)
     subprocess.run(args, cwd=cwd, check=True)
+
+
+def glibc_version():
+    """System glibc ``(major, minor)``; ``None`` when it cannot be read."""
+    import platform as _platform
+    try:
+        name, version = _platform.libc_ver()
+    except Exception:
+        return None
+    if name != "glibc" or not version:
+        return None
+    try:
+        major, _, rest = version.partition(".")
+        return (int(major), int(rest.split(".")[0]))
+    except (ValueError, IndexError):
+        return None
+
+
+# User-space libraries the NVIDIA Vulkan ICD loads (verified 2026-10-06 by
+# extracting NVIDIA-Linux-x86_64-580.105.08.run and reading NEEDED with
+# objdump: libGLX_nvidia needs glsi+tls+glcore; glcore needs tls+gpucomp).
+# libcuda/libnvidia-ml are intentionally NOT here: the host kernel driver
+# provides them, and overwriting them from the .run would risk a
+# user/kernel version skew.
+ICD_LIBS = [
+    "libGLX_nvidia.so.580.105.08",
+    "libnvidia-glcore.so.580.105.08",
+    "libnvidia-glvkspirv.so.580.105.08",
+    "libnvidia-gpucomp.so.580.105.08",
+    "libnvidia-glsi.so.580.105.08",
+    "libnvidia-tls.so.580.105.08",
+    "libnvidia-allocator.so.580.105.08",
+]
+
+# Soname links the loader resolves (libGLX_nvidia.so.0 is what the ICD
+# template names; the rest are NEEDED entries of the ICD closure).
+ICD_SONAMES = {
+    "libGLX_nvidia.so.580.105.08": ["libGLX_nvidia.so.0"],
+    "libnvidia-glcore.so.580.105.08": ["libnvidia-glcore.so"],
+    "libnvidia-glvkspirv.so.580.105.08": ["libnvidia-glvkspirv.so"],
+    "libnvidia-gpucomp.so.580.105.08": ["libnvidia-gpucomp.so"],
+    "libnvidia-glsi.so.580.105.08": ["libnvidia-glsi.so.580.105.08".replace(".580.105.08", "")],
+    "libnvidia-tls.so.580.105.08": ["libnvidia-tls.so.580.105.08".replace(".580.105.08", "")],
+    "libnvidia-allocator.so.580.105.08": ["libnvidia-allocator.so.1", "libnvidia-allocator.so"],
+}
+
+DRIVER_URLS = [
+    "https://cn.download.nvidia.com/XFree86/Linux-x86_64/{ver}/NVIDIA-Linux-x86_64-{ver}.run",
+    "https://download.nvidia.com/XFree86/Linux-x86_64/{ver}/NVIDIA-Linux-x86_64-{ver}.run",
+]
+
+
+def provision_nvidia_icd():
+    """Install the NVIDIA Vulkan ICD from the matching driver .run.
+
+    Only when ``/usr/share/vulkan/icd.d`` has no NVIDIA ICD: reads the
+    driver version from ``nvidia-smi``, fetches
+    ``NVIDIA-Linux-x86_64-<ver>.run`` (China mirror first, both verified
+    2026-10-06 for 580.105.08: HTTP 200, 396635119 bytes), extracts with
+    ``--extract-only`` into a temp dir, copies ONLY the user-space
+    GL/Vulkan libraries the ICD loads (never the kernel module, never
+    libcuda), creates the soname symlinks, installs ``libvulkan1`` from
+    apt, writes ``nvidia_icd.json`` from the package template, and
+    verifies with ``vulkaninfo --summary`` that an NVIDIA device is
+    listed. Writes ``/root/gpu-acceptance/.icd-provisioned.json`` for the
+    artifact. Any failure exits 3 with an explicit reason (fail fast,
+    never a silent ``model_start_failed`` later).
+    """
+    import json as _json
+    import tempfile as _tempfile
+    icd_dir = Path("/usr/share/vulkan/icd.d")
+    if any(icd_dir.glob("*nvidia*.json")):
+        print("[gpu-acceptance-remote] NVIDIA ICD already present; skipping provision",
+              flush=True)
+        return None
+    smi = subprocess.run(
+        ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader,nounits"],
+        capture_output=True, text=True)
+    driver = (smi.stdout.strip().splitlines() or [""])[0].strip()
+    if smi.returncode != 0 or not driver:
+        print("host_incompatible: nvidia-smi did not report a driver version; "
+              "cannot provision the Vulkan ICD", file=sys.stderr)
+        sys.exit(3)
+    print(f"[gpu-acceptance-remote] no NVIDIA ICD; provisioning for driver {driver}",
+          flush=True)
+    tmp = Path(_tempfile.mkdtemp(prefix="nvidia-driver-"))
+    pkg = tmp / f"NVIDIA-Linux-x86_64-{driver}.run"
+    fetched = False
+    for template in DRIVER_URLS:
+        url = template.format(ver=driver)
+        print(f"[gpu-acceptance-remote] fetching {url}", flush=True)
+        proc = subprocess.run(
+            ["curl", "-fL", "-C", "-", "--retry", "10",
+             "--connect-timeout", "30", "--speed-time", "60", "--speed-limit", "10240",
+             "-o", str(pkg), url], capture_output=True, text=True)
+        if proc.returncode == 0 and pkg.is_file():
+            fetched = True
+            break
+        print(f"[gpu-acceptance-remote] driver fetch failed rc={proc.returncode}: "
+              f"{(proc.stderr.strip().splitlines() or [''])[-1][:160]}", flush=True)
+    if not fetched:
+        print(f"host_incompatible: could not fetch NVIDIA driver {driver} "
+              "from download.nvidia.com or the .cn mirror; cannot provision "
+              "the Vulkan ICD", file=sys.stderr)
+        sys.exit(3)
+    extract = tmp / "pkg"
+    proc = subprocess.run(
+        ["sh", str(pkg), "--extract-only", "--target", str(extract)],
+        capture_output=True, text=True)
+    if proc.returncode != 0:
+        print(f"host_incompatible: driver package failed integrity check: "
+              f"{(proc.stdout + proc.stderr)[-200:]}", file=sys.stderr)
+        sys.exit(3)
+    libdir = Path("/usr/lib/x86_64-linux-gnu")
+    for name in ICD_LIBS:
+        src = extract / name
+        if not src.is_file():
+            print(f"host_incompatible: driver package {driver} has no {name}; "
+                  "cannot provision the Vulkan ICD", file=sys.stderr)
+            sys.exit(3)
+        subprocess.run(["install", "-m", "0755", str(src), str(libdir / name)], check=True)
+        for link in ICD_SONAMES.get(name, []):
+            link_path = libdir / link
+            if link_path.is_symlink() or link_path.exists():
+                link_path.unlink()
+            link_path.symlink_to(name)
+    subprocess.run(["ldconfig"], check=True)
+    subprocess.run(["apt-get", "install", "-y", "libvulkan1"], cwd=ROOT, check=True)
+    template = (extract / "nvidia_icd.json").read_text()
+    icd_dir.mkdir(parents=True, exist_ok=True)
+    (icd_dir / "nvidia_icd.json").write_text(template)
+    info = subprocess.run(["vulkaninfo", "--summary"], capture_output=True, text=True)
+    if info.returncode != 0 or "NVIDIA" not in (info.stdout or ""):
+        print("host_incompatible: vulkaninfo --summary lists no NVIDIA device "
+              "after ICD provisioning; refusing to run gpu mode", file=sys.stderr)
+        print((info.stdout + info.stderr)[-2000:], file=sys.stderr)
+        sys.exit(3)
+    device = next((line.strip() for line in info.stdout.splitlines()
+                   if "NVIDIA" in line), "unknown")
+    marker = {"provisioned_by_kit": True, "driver_version": driver,
+              "vulkan_device": device}
+    (ROOT / ".icd-provisioned.json").write_text(_json.dumps(marker, indent=2))
+    print(f"[gpu-acceptance-remote] ICD provisioned for driver {driver}: {device}",
+          flush=True)
+    return marker
+
 
 
 def main():
@@ -53,7 +198,18 @@ def main():
     # (uv ignores /etc/pip.conf and PIP_INDEX_URL, so pass --index-url
     # explicitly each time).
     run("apt-get", "update")
-    run("apt-get", "install", "-y", "python3-venv", "vulkan-tools", "curl", "ca-certificates")
+    run("apt-get", "install", "-y", "python3-venv", "vulkan-tools", "curl", "ca-certificates",
+        "libvulkan1")
+    # Fail fast BEFORE any download: the catalog's llama.cpp b10809 binaries
+    # need GLIBC_2.34 (Ubuntu 22.04+); focal ships 2.31, so every model start
+    # would die as model_start_failed. Exit 3 with host_incompatible instead.
+    have = glibc_version()
+    if have is not None and have < (2, 34):
+        print(f"host_incompatible: system glibc {have[0]}.{have[1]} is below "
+              "the llama.cpp floor 2.34 (needs Ubuntu 22.04+); refusing to run "
+              "gpu mode", file=sys.stderr)
+        sys.exit(3)
+    provision_nvidia_icd()
     # uv itself: system pip + Aliyun mirror first (infra/autodl/bootstrap.bash
     # pattern; astral.sh is outside the academic-proxy host list, so the
     # astral install script is only a fallback). `uv python install` pulls
