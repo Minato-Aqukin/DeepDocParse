@@ -1,0 +1,1088 @@
+{
+  "drill": "legacy-migration",
+  "date": "20261005",
+  "sources": {
+    "web": {
+      "volume": "ddp-web_pgdata",
+      "legacy_revision": "0012",
+      "note": "DeepDocParse-Web era, full in-chain upgrade 0012->0042"
+    },
+    "e2e": {
+      "volume": "docker_pgdata",
+      "legacy_revision": "0003",
+      "note": "predates合仓 chain at 0005 (DuplicateTableError); supported path is migrate.py read-only scan, dry-run proven"
+    },
+    "cit": {
+      "volume": "ddp-web_pgdata (second copy)",
+      "legacy_revision": "0012+seeded",
+      "note": "0012-era copy advanced to 0013 for the org column, then seeded: 1 synthetic unambiguous doc (sentinel org c17seedorg…0001, NOT real snapshot data) + 1 ambiguous doc (second uploader) + 10 borndigital chunks + 3 era-shape citations; full in-chain upgrade to 0042; old backend not executed (needs retired gateway+models)"
+    }
+  },
+  "snapshot": {
+    "web": ".dev-logs/legacy-migration-20261005/web-snapshot.dump",
+    "e2e": ".dev-logs/legacy-migration-20261005/e2e-snapshot.dump",
+    "cit": ".dev-logs/legacy-migration-20261005/cit-snapshot.dump"
+  },
+  "cit_seed": {
+    "seeded_at": "2026-10-05T05:41:03.963198+00:00",
+    "pdf": "tests/fixtures/long-doc.pdf",
+    "doc_sha256": "5c698661e58360069e75be2a0233e20fa5b1a344d8f5314684808a489579bd43",
+    "unambiguous_document_id": "5954e3c6922b73f454c85d956c1f14ee",
+    "unambiguous_owner": "e046bb6c3b7e4d6faab9730f72f11dcb",
+    "unambiguous_org": "c17seedorg0000000000000000000001",
+    "ambiguous_document_id": "bd3ff90413084d10a7830c15da209af5",
+    "ambiguous_second_uploader": "93b339c059f047c7a1943fa6f73ba63c",
+    "document_id": "bd3ff90413084d10a7830c15da209af5",
+    "parse_job_id": "68a6c5055c84a1f54d1caaf6a529e0a4",
+    "conversation_id": "1050b4e33d7ec7bb844abcc16865c7bb",
+    "message_id": "edb5adf35b83521bccec3de10dd0393f",
+    "chunks": 10,
+    "legacy_citations": 3,
+    "matching": 2,
+    "mismatching": 1,
+    "note": "unambiguous doc stamped with a real recorded org; ambiguous doc gains a second uploader with no recorded org; adversarial citation seeded with empty digest and no pre-existing row (backfill must classify it unanchored)"
+  },
+  "shadow_reads": {
+    "started_at": "2026-10-05T05:41:15.321084+00:00",
+    "ok": true,
+    "datasets": {
+      "web": {
+        "alembic_head": "0042",
+        "current_revision": "0042",
+        "known_legacy_revision": "0012",
+        "legacy_counts": {
+          "documents": 6,
+          "users": 8
+        },
+        "owner_column": "uploaded_by(0006+)"
+      },
+      "e2e": {
+        "alembic_head": "0042",
+        "current_revision": "0003",
+        "known_legacy_revision": "0003",
+        "legacy_counts": {
+          "documents": 5,
+          "users": 4
+        },
+        "owner_column": "user_id(pre-0006, no supported in-chain path)"
+      },
+      "cit": {
+        "alembic_head": "0042",
+        "current_revision": "0042",
+        "known_legacy_revision": "0012+seeded",
+        "legacy_counts": {
+          "documents": 7,
+          "users": 8
+        },
+        "owner_column": "uploaded_by(0006+)"
+      }
+    },
+    "counts": {
+      "web": {
+        "documents": 6,
+        "document_uploads": 13,
+        "resources": 13,
+        "resource_versions": 13,
+        "org_kept": 0,
+        "org_quarantined": 13,
+        "visibility_users": 9,
+        "visibility_stranger_new": 0,
+        "new_citations": 0
+      },
+      "e2e": {
+        "documents": 5,
+        "document_uploads": 0,
+        "resources": 0,
+        "resource_versions": 0
+      },
+      "cit": {
+        "documents": 7,
+        "document_uploads": 14,
+        "resources": 14,
+        "resource_versions": 14,
+        "org_kept": 1,
+        "org_quarantined": 13,
+        "visibility_users": 9,
+        "visibility_stranger_new": 0,
+        "new_citations": 2
+      }
+    },
+    "checks": [
+      {
+        "dataset": "web",
+        "name": "ownership: every resource owner is a recorded uploader (no guessed owners)",
+        "passed": true,
+        "detail": "13 resources, 0 with no historical binding"
+      },
+      {
+        "dataset": "web",
+        "name": "ownership: backfilled resource ids match deterministic re-derivation",
+        "passed": true,
+        "detail": "13 rows re-derived, 0 drifted"
+      },
+      {
+        "dataset": "web",
+        "name": "ownership: no shared resource row across distinct owners",
+        "passed": true,
+        "detail": "each resource row binds one (document, owner)"
+      },
+      {
+        "dataset": "web",
+        "name": "ownership: unambiguous fixtures keep recorded org; ambiguous are quarantined, never guess",
+        "passed": true,
+        "detail": "kept=0 quarantined=13 violations=[]"
+      },
+      {
+        "dataset": "web",
+        "name": "permissions: no backfilled resource widened past private",
+        "passed": true,
+        "detail": "all 13 private"
+      },
+      {
+        "dataset": "web",
+        "name": "permissions: owners keep >= 1 read path and no user's set grew (snapshot old rule vs real predicate)",
+        "passed": true,
+        "detail": "users=9 (incl. stranger); sizes(old,new)={'755524a1': (6, 1), '7f2aab42': (6, 2), '80173a3d': (6, 2), '8495c1c7': (6, 1), '93b339c0': (6, 1), 'e046bb6c': (6, 2), 'ec7eef4b': (6, 2), 'f7b23ee4': (6, 2), 'ffffffff': (6, 0)}; grown=[]"
+      },
+      {
+        "dataset": "web",
+        "name": "permissions: stranger sees zero documents",
+        "passed": true,
+        "detail": "stranger_new=0"
+      },
+      {
+        "dataset": "web",
+        "name": "permissions: each user's readable set stays within their own/shared-org documents",
+        "passed": true,
+        "detail": "leaked=[]"
+      },
+      {
+        "dataset": "web",
+        "name": "permissions-negative-control: deliberately widened copy reports grown (check is falsifiable)",
+        "passed": true,
+        "detail": "widened-doc readers=['7f2aab42', '80173a3d', '8495c1c7', '93b339c0']"
+      },
+      {
+        "dataset": "web",
+        "name": "citations: every migrated citation matches its pre-snapshot text+page+bbox (no drift)",
+        "passed": true,
+        "detail": "0 citations: 0 anchored (digest==chunk), 0 unanchored (empty digest, legacy rule); drifted ranks=[]"
+      },
+      {
+        "dataset": "web",
+        "name": "idempotency: re-running resource backfills adds zero rows",
+        "passed": true,
+        "detail": "before=(13, 13) after=(13, 13)"
+      },
+      {
+        "dataset": "e2e",
+        "name": "ownership: pre-resource-layer snapshot exposes recorded uploaders, none guessed",
+        "passed": true,
+        "detail": "5 documents, 5 recorded bindings, owner column user_id(pre-0006, no supported in-chain path)"
+      },
+      {
+        "dataset": "e2e",
+        "name": "permissions: pre-resource-layer snapshot widens nothing (no resource rows exist)",
+        "passed": true,
+        "detail": "zero resource rows to widen; legacy reads unchanged"
+      },
+      {
+        "dataset": "e2e",
+        "name": "citations: pre-resource-layer snapshot preserves legacy rows (none backfilled)",
+        "passed": true,
+        "detail": "no backfill ran; snapshot restore is the rollback path"
+      },
+      {
+        "dataset": "cit",
+        "name": "ownership: every resource owner is a recorded uploader (no guessed owners)",
+        "passed": true,
+        "detail": "14 resources, 0 with no historical binding"
+      },
+      {
+        "dataset": "cit",
+        "name": "ownership: backfilled resource ids match deterministic re-derivation",
+        "passed": true,
+        "detail": "14 rows re-derived, 0 drifted"
+      },
+      {
+        "dataset": "cit",
+        "name": "ownership: no shared resource row across distinct owners",
+        "passed": true,
+        "detail": "each resource row binds one (document, owner)"
+      },
+      {
+        "dataset": "cit",
+        "name": "ownership: unambiguous fixtures keep recorded org; ambiguous are quarantined, never guess",
+        "passed": true,
+        "detail": "kept=1 quarantined=13 violations=[]"
+      },
+      {
+        "dataset": "cit",
+        "name": "permissions: no backfilled resource widened past private",
+        "passed": true,
+        "detail": "all 14 private"
+      },
+      {
+        "dataset": "cit",
+        "name": "permissions: owners keep >= 1 read path and no user's set grew (snapshot old rule vs real predicate)",
+        "passed": true,
+        "detail": "users=9 (incl. stranger); sizes(old,new)={'755524a1': (7, 1), '7f2aab42': (7, 2), '80173a3d': (7, 2), '8495c1c7': (7, 1), '93b339c0': (7, 1), 'e046bb6c': (7, 1), 'ec7eef4b': (7, 2), 'f7b23ee4': (7, 2), 'ffffffff': (7, 0)}; grown=[]"
+      },
+      {
+        "dataset": "cit",
+        "name": "permissions: stranger sees zero documents",
+        "passed": true,
+        "detail": "stranger_new=0"
+      },
+      {
+        "dataset": "cit",
+        "name": "permissions: each user's readable set stays within their own/shared-org documents",
+        "passed": true,
+        "detail": "leaked=[]"
+      },
+      {
+        "dataset": "cit",
+        "name": "permissions-negative-control: deliberately widened copy reports grown (check is falsifiable)",
+        "passed": true,
+        "detail": "widened-doc readers=['7f2aab42', '80173a3d', '8495c1c7', '93b339c0']"
+      },
+      {
+        "dataset": "cit",
+        "name": "citations: every migrated citation matches its pre-snapshot text+page+bbox (no drift)",
+        "passed": true,
+        "detail": "2 citations: 2 anchored (digest==chunk), 0 unanchored (empty digest, legacy rule); drifted ranks=[]"
+      },
+      {
+        "dataset": "cit",
+        "name": "idempotency: re-running resource backfills adds zero rows",
+        "passed": true,
+        "detail": "before=(14, 14) after=(14, 14)"
+      },
+      {
+        "dataset": "cit",
+        "name": "citations: real backfill balances with unanchored>=1 (adversarial row, temp input)",
+        "passed": true,
+        "detail": "total=3 anchored=2 unanchored=1 skipped_loc=0 skipped_job=0 already=0 created=1"
+      },
+      {
+        "dataset": "cit",
+        "name": "idempotency: real backfill re-run adds zero rows",
+        "passed": true,
+        "detail": "evidence 3->3 citations 5->5"
+      }
+    ],
+    "_pre_orgs": {
+      "web": {
+        "documents": {
+          "ff0b76249b0542fbbeaac588650ed055": "",
+          "de3340542daa43ebae5696a75046ca76": "",
+          "bcbcd0f54154420bb73d3c3ce179871b": "",
+          "cdbec441553f40c58cc4be6117c98ff5": "",
+          "1ebbc5800f4c45c5ad33ced7bf9f4801": "",
+          "bd3ff90413084d10a7830c15da209af5": ""
+        },
+        "users": {
+          "e046bb6c3b7e4d6faab9730f72f11dcb": "",
+          "93b339c059f047c7a1943fa6f73ba63c": "",
+          "ec7eef4b811e4ba79bb79aa984c4df2a": "",
+          "755524a1669e47b5a33f6c9c73fc7cc1": "",
+          "7f2aab42dd824818af179bcadc59803a": "",
+          "8495c1c7c06242779c0cf4e5d89467e6": "",
+          "80173a3dbd4340158c7ba8e5965c6360": "",
+          "f7b23ee4237c44d1b633f15f9b81c818": ""
+        },
+        "default_org": ""
+      },
+      "e2e": {
+        "documents": {
+          "76425c3ad6b54a0f9476ba1a4af5bdc3": "",
+          "76b9aabd3d7648abb628f601e89db2b1": "",
+          "560d48207acb46e9b61ce629c4c88c04": "",
+          "ad36fb831bf0414e99027eb00842089b": "",
+          "3e79bfafd94b4192862c1174f25f4686": ""
+        },
+        "users": {
+          "0fbc008f1dda40fd818d2be79d3a349c": "",
+          "36c18cbbce9d479688396ddb9d9b3cfc": "",
+          "2796580d83ca423abd4866a91ea12e56": "",
+          "799e305ca5124a51b5e7dc6606c47de2": ""
+        },
+        "default_org": ""
+      },
+      "cit": {
+        "documents": {
+          "ff0b76249b0542fbbeaac588650ed055": "",
+          "de3340542daa43ebae5696a75046ca76": "",
+          "bcbcd0f54154420bb73d3c3ce179871b": "",
+          "cdbec441553f40c58cc4be6117c98ff5": "",
+          "1ebbc5800f4c45c5ad33ced7bf9f4801": "",
+          "bd3ff90413084d10a7830c15da209af5": "",
+          "5954e3c6922b73f454c85d956c1f14ee": "c17seedorg0000000000000000000001"
+        },
+        "users": {
+          "e046bb6c3b7e4d6faab9730f72f11dcb": "",
+          "93b339c059f047c7a1943fa6f73ba63c": "",
+          "ec7eef4b811e4ba79bb79aa984c4df2a": "",
+          "755524a1669e47b5a33f6c9c73fc7cc1": "",
+          "7f2aab42dd824818af179bcadc59803a": "",
+          "8495c1c7c06242779c0cf4e5d89467e6": "",
+          "80173a3dbd4340158c7ba8e5965c6360": "",
+          "f7b23ee4237c44d1b633f15f9b81c818": ""
+        },
+        "default_org": ""
+      }
+    },
+    "_pre_dsn": {
+      "web": "127.0.0.1:15505/deepdocparse_preweb",
+      "e2e": "127.0.0.1:15506/deepdocparse_pree2e",
+      "cit": "127.0.0.1:15509/deepdocparse_precit"
+    },
+    "_backfill": {
+      "cit": {
+        "total": 3,
+        "anchored": 2,
+        "unanchored": 1,
+        "skipped_no_locator": 0,
+        "skipped_no_job": 0,
+        "already_present": 0,
+        "evidence_created": 1
+      }
+    }
+  },
+  "migrate_dryrun": {
+    "started_at": "2026-10-05T05:41:12.701305+00:00",
+    "finished_at": "2026-10-05T05:41:12.831589+00:00",
+    "source": "…@127.0.0.1:15505/deepdocparse",
+    "dry_run": true,
+    "ok": true,
+    "steps": [
+      {
+        "name": "organizations",
+        "read": 0,
+        "written": 0,
+        "skipped": 0,
+        "notes": [
+          "dry-run：会新建默认组织"
+        ]
+      },
+      {
+        "name": "users",
+        "read": 8,
+        "written": 8,
+        "skipped": 0,
+        "notes": [
+          "其中 1 人是管理员"
+        ]
+      },
+      {
+        "name": "api_keys",
+        "read": 9,
+        "written": 9,
+        "skipped": 0,
+        "notes": [
+          "存量 key 一律给全部作用域 —— 旧系统没有 scope，给空数组等于把它们静默作废"
+        ]
+      },
+      {
+        "name": "usage_ledger",
+        "read": 40,
+        "written": 40,
+        "skipped": 0,
+        "notes": []
+      },
+      {
+        "name": "file_grants",
+        "read": 8,
+        "written": 8,
+        "skipped": 0,
+        "notes": [
+          "token 原样保留 —— 换 token 等于换文档身份，历史解析缓存与向量索引全部失效"
+        ]
+      },
+      {
+        "name": "organization_id 回填",
+        "read": 6,
+        "written": 0,
+        "skipped": 0,
+        "notes": [
+          "dry-run 只做源侧预检；行数与回填对账要 --apply 之后才有意义"
+        ]
+      }
+    ],
+    "checks": [
+      {
+        "name": "源库：citations 的 evidence 都在",
+        "passed": true,
+        "detail": "0 条悬空引用"
+      },
+      {
+        "name": "源库：每个用户都有密码哈希",
+        "passed": true,
+        "detail": "0 个用户没有密码哈希 —— 搬过去会违反 users_has_credential 约束"
+      },
+      {
+        "name": "源库：file token 不重复",
+        "passed": true,
+        "detail": "0 个重复 token"
+      },
+      {
+        "name": "源库：file token 都指向存在的文档",
+        "passed": true,
+        "detail": "0 个凭证指向不存在的文档（搬过去会丢）"
+      },
+      {
+        "name": "对象存在性抽样（3 个）",
+        "passed": true,
+        "detail": "缺失 0 个：[]"
+      }
+    ]
+  },
+  "migrate_apply": {
+    "started_at": "2026-10-05T05:41:12.937225+00:00",
+    "finished_at": "2026-10-05T05:41:13.352582+00:00",
+    "source": "…@127.0.0.1:15505/deepdocparse",
+    "dry_run": false,
+    "ok": true,
+    "steps": [
+      {
+        "name": "organizations",
+        "read": 0,
+        "written": 1,
+        "skipped": 0,
+        "notes": []
+      },
+      {
+        "name": "users",
+        "read": 8,
+        "written": 8,
+        "skipped": 0,
+        "notes": [
+          "其中 1 人是管理员"
+        ]
+      },
+      {
+        "name": "api_keys",
+        "read": 9,
+        "written": 9,
+        "skipped": 0,
+        "notes": [
+          "存量 key 一律给全部作用域 —— 旧系统没有 scope，给空数组等于把它们静默作废"
+        ]
+      },
+      {
+        "name": "usage_ledger",
+        "read": 40,
+        "written": 40,
+        "skipped": 0,
+        "notes": []
+      },
+      {
+        "name": "file_grants",
+        "read": 8,
+        "written": 8,
+        "skipped": 0,
+        "notes": [
+          "token 原样保留 —— 换 token 等于换文档身份，历史解析缓存与向量索引全部失效"
+        ]
+      },
+      {
+        "name": "organization_id 回填",
+        "read": 6,
+        "written": 6,
+        "skipped": 0,
+        "notes": []
+      }
+    ],
+    "checks": [
+      {
+        "name": "行数 users -> control.users",
+        "passed": true,
+        "detail": "8 -> 8"
+      },
+      {
+        "name": "行数 api_keys -> control.api_keys",
+        "passed": true,
+        "detail": "9 -> 9"
+      },
+      {
+        "name": "行数 usage_records -> control.usage_ledger",
+        "passed": true,
+        "detail": "40 -> 40"
+      },
+      {
+        "name": "行数 file_tokens -> control.file_grants",
+        "passed": true,
+        "detail": "8 -> 8"
+      },
+      {
+        "name": "每个用户都在组织里",
+        "passed": true,
+        "detail": "0 个用户没有 membership"
+      },
+      {
+        "name": "组织有管理员",
+        "passed": true,
+        "detail": "8 个用户 / 1 个 admin"
+      },
+      {
+        "name": "documents.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "conversations.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "extraction_templates.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "extraction_runs.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "citations 的 evidence 都在",
+        "passed": true,
+        "detail": "0 条悬空引用"
+      },
+      {
+        "name": "对象存在性抽样（3 个）",
+        "passed": true,
+        "detail": "缺失 0 个：[]"
+      }
+    ]
+  },
+  "migrate_rerun": {
+    "started_at": "2026-10-05T05:41:13.455129+00:00",
+    "finished_at": "2026-10-05T05:41:13.589945+00:00",
+    "source": "…@127.0.0.1:15505/deepdocparse",
+    "dry_run": false,
+    "ok": true,
+    "steps": [
+      {
+        "name": "organizations",
+        "read": 0,
+        "written": 0,
+        "skipped": 1,
+        "notes": [
+          "默认组织已存在，复用"
+        ]
+      },
+      {
+        "name": "users",
+        "read": 8,
+        "written": 0,
+        "skipped": 8,
+        "notes": [
+          "其中 1 人是管理员"
+        ]
+      },
+      {
+        "name": "api_keys",
+        "read": 9,
+        "written": 0,
+        "skipped": 9,
+        "notes": [
+          "存量 key 一律给全部作用域 —— 旧系统没有 scope，给空数组等于把它们静默作废"
+        ]
+      },
+      {
+        "name": "usage_ledger",
+        "read": 40,
+        "written": 0,
+        "skipped": 40,
+        "notes": []
+      },
+      {
+        "name": "file_grants",
+        "read": 8,
+        "written": 0,
+        "skipped": 8,
+        "notes": [
+          "token 原样保留 —— 换 token 等于换文档身份，历史解析缓存与向量索引全部失效"
+        ]
+      },
+      {
+        "name": "organization_id 回填",
+        "read": 0,
+        "written": 0,
+        "skipped": 0,
+        "notes": []
+      }
+    ],
+    "checks": [
+      {
+        "name": "行数 users -> control.users",
+        "passed": true,
+        "detail": "8 -> 8"
+      },
+      {
+        "name": "行数 api_keys -> control.api_keys",
+        "passed": true,
+        "detail": "9 -> 9"
+      },
+      {
+        "name": "行数 usage_records -> control.usage_ledger",
+        "passed": true,
+        "detail": "40 -> 40"
+      },
+      {
+        "name": "行数 file_tokens -> control.file_grants",
+        "passed": true,
+        "detail": "8 -> 8"
+      },
+      {
+        "name": "每个用户都在组织里",
+        "passed": true,
+        "detail": "0 个用户没有 membership"
+      },
+      {
+        "name": "组织有管理员",
+        "passed": true,
+        "detail": "8 个用户 / 1 个 admin"
+      },
+      {
+        "name": "documents.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "conversations.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "extraction_templates.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "extraction_runs.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "citations 的 evidence 都在",
+        "passed": true,
+        "detail": "0 条悬空引用"
+      },
+      {
+        "name": "对象存在性抽样（3 个）",
+        "passed": true,
+        "detail": "缺失 0 个：[]"
+      }
+    ]
+  },
+  "cit_migrate_apply": {
+    "started_at": "2026-10-05T05:41:13.699392+00:00",
+    "finished_at": "2026-10-05T05:41:14.121546+00:00",
+    "source": "…@127.0.0.1:15509/deepdocparse",
+    "dry_run": false,
+    "ok": true,
+    "steps": [
+      {
+        "name": "organizations",
+        "read": 0,
+        "written": 1,
+        "skipped": 0,
+        "notes": []
+      },
+      {
+        "name": "users",
+        "read": 8,
+        "written": 8,
+        "skipped": 0,
+        "notes": [
+          "其中 1 人是管理员"
+        ]
+      },
+      {
+        "name": "api_keys",
+        "read": 9,
+        "written": 9,
+        "skipped": 0,
+        "notes": [
+          "存量 key 一律给全部作用域 —— 旧系统没有 scope，给空数组等于把它们静默作废"
+        ]
+      },
+      {
+        "name": "usage_ledger",
+        "read": 40,
+        "written": 40,
+        "skipped": 0,
+        "notes": []
+      },
+      {
+        "name": "file_grants",
+        "read": 8,
+        "written": 8,
+        "skipped": 0,
+        "notes": [
+          "token 原样保留 —— 换 token 等于换文档身份，历史解析缓存与向量索引全部失效"
+        ]
+      },
+      {
+        "name": "organization_id 回填",
+        "read": 7,
+        "written": 7,
+        "skipped": 0,
+        "notes": []
+      }
+    ],
+    "checks": [
+      {
+        "name": "行数 users -> control.users",
+        "passed": true,
+        "detail": "8 -> 8"
+      },
+      {
+        "name": "行数 api_keys -> control.api_keys",
+        "passed": true,
+        "detail": "9 -> 9"
+      },
+      {
+        "name": "行数 usage_records -> control.usage_ledger",
+        "passed": true,
+        "detail": "40 -> 40"
+      },
+      {
+        "name": "行数 file_tokens -> control.file_grants",
+        "passed": true,
+        "detail": "8 -> 8"
+      },
+      {
+        "name": "每个用户都在组织里",
+        "passed": true,
+        "detail": "0 个用户没有 membership"
+      },
+      {
+        "name": "组织有管理员",
+        "passed": true,
+        "detail": "8 个用户 / 1 个 admin"
+      },
+      {
+        "name": "documents.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "conversations.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "extraction_templates.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "extraction_runs.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "citations 的 evidence 都在",
+        "passed": true,
+        "detail": "0 条悬空引用"
+      },
+      {
+        "name": "对象存在性抽样（3 个）",
+        "passed": true,
+        "detail": "缺失 0 个：[]"
+      }
+    ]
+  },
+  "cit_migrate_rerun": {
+    "started_at": "2026-10-05T05:41:14.228355+00:00",
+    "finished_at": "2026-10-05T05:41:14.360069+00:00",
+    "source": "…@127.0.0.1:15509/deepdocparse",
+    "dry_run": false,
+    "ok": true,
+    "steps": [
+      {
+        "name": "organizations",
+        "read": 0,
+        "written": 0,
+        "skipped": 1,
+        "notes": [
+          "默认组织已存在，复用"
+        ]
+      },
+      {
+        "name": "users",
+        "read": 8,
+        "written": 0,
+        "skipped": 8,
+        "notes": [
+          "其中 1 人是管理员"
+        ]
+      },
+      {
+        "name": "api_keys",
+        "read": 9,
+        "written": 0,
+        "skipped": 9,
+        "notes": [
+          "存量 key 一律给全部作用域 —— 旧系统没有 scope，给空数组等于把它们静默作废"
+        ]
+      },
+      {
+        "name": "usage_ledger",
+        "read": 40,
+        "written": 0,
+        "skipped": 40,
+        "notes": []
+      },
+      {
+        "name": "file_grants",
+        "read": 8,
+        "written": 0,
+        "skipped": 8,
+        "notes": [
+          "token 原样保留 —— 换 token 等于换文档身份，历史解析缓存与向量索引全部失效"
+        ]
+      },
+      {
+        "name": "organization_id 回填",
+        "read": 0,
+        "written": 0,
+        "skipped": 0,
+        "notes": []
+      }
+    ],
+    "checks": [
+      {
+        "name": "行数 users -> control.users",
+        "passed": true,
+        "detail": "8 -> 8"
+      },
+      {
+        "name": "行数 api_keys -> control.api_keys",
+        "passed": true,
+        "detail": "9 -> 9"
+      },
+      {
+        "name": "行数 usage_records -> control.usage_ledger",
+        "passed": true,
+        "detail": "40 -> 40"
+      },
+      {
+        "name": "行数 file_tokens -> control.file_grants",
+        "passed": true,
+        "detail": "8 -> 8"
+      },
+      {
+        "name": "每个用户都在组织里",
+        "passed": true,
+        "detail": "0 个用户没有 membership"
+      },
+      {
+        "name": "组织有管理员",
+        "passed": true,
+        "detail": "8 个用户 / 1 个 admin"
+      },
+      {
+        "name": "documents.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "conversations.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "extraction_templates.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "extraction_runs.organization_id 已回填",
+        "passed": true,
+        "detail": "0 行仍为空"
+      },
+      {
+        "name": "citations 的 evidence 都在",
+        "passed": true,
+        "detail": "0 条悬空引用"
+      },
+      {
+        "name": "对象存在性抽样（3 个）",
+        "passed": true,
+        "detail": "缺失 0 个：[]"
+      }
+    ]
+  },
+  "e2e_source_precheck": "users=4 documents=5 no_hash=0 dup_tokens=0 orphan_tokens=0\nPRECHECK-SOURCE-ONLY: PASS",
+  "pre_orgs": {
+    "web": {
+      "documents": {
+        "ff0b76249b0542fbbeaac588650ed055": "",
+        "de3340542daa43ebae5696a75046ca76": "",
+        "bcbcd0f54154420bb73d3c3ce179871b": "",
+        "cdbec441553f40c58cc4be6117c98ff5": "",
+        "1ebbc5800f4c45c5ad33ced7bf9f4801": "",
+        "bd3ff90413084d10a7830c15da209af5": ""
+      },
+      "users": {
+        "e046bb6c3b7e4d6faab9730f72f11dcb": "",
+        "93b339c059f047c7a1943fa6f73ba63c": "",
+        "ec7eef4b811e4ba79bb79aa984c4df2a": "",
+        "755524a1669e47b5a33f6c9c73fc7cc1": "",
+        "7f2aab42dd824818af179bcadc59803a": "",
+        "8495c1c7c06242779c0cf4e5d89467e6": "",
+        "80173a3dbd4340158c7ba8e5965c6360": "",
+        "f7b23ee4237c44d1b633f15f9b81c818": ""
+      },
+      "default_org": ""
+    },
+    "e2e": {
+      "documents": {
+        "76425c3ad6b54a0f9476ba1a4af5bdc3": "",
+        "76b9aabd3d7648abb628f601e89db2b1": "",
+        "560d48207acb46e9b61ce629c4c88c04": "",
+        "ad36fb831bf0414e99027eb00842089b": "",
+        "3e79bfafd94b4192862c1174f25f4686": ""
+      },
+      "users": {
+        "0fbc008f1dda40fd818d2be79d3a349c": "",
+        "36c18cbbce9d479688396ddb9d9b3cfc": "",
+        "2796580d83ca423abd4866a91ea12e56": "",
+        "799e305ca5124a51b5e7dc6606c47de2": ""
+      },
+      "default_org": ""
+    },
+    "cit": {
+      "documents": {
+        "ff0b76249b0542fbbeaac588650ed055": "",
+        "de3340542daa43ebae5696a75046ca76": "",
+        "bcbcd0f54154420bb73d3c3ce179871b": "",
+        "cdbec441553f40c58cc4be6117c98ff5": "",
+        "1ebbc5800f4c45c5ad33ced7bf9f4801": "",
+        "bd3ff90413084d10a7830c15da209af5": "",
+        "5954e3c6922b73f454c85d956c1f14ee": "c17seedorg0000000000000000000001"
+      },
+      "users": {
+        "e046bb6c3b7e4d6faab9730f72f11dcb": "",
+        "93b339c059f047c7a1943fa6f73ba63c": "",
+        "ec7eef4b811e4ba79bb79aa984c4df2a": "",
+        "755524a1669e47b5a33f6c9c73fc7cc1": "",
+        "7f2aab42dd824818af179bcadc59803a": "",
+        "8495c1c7c06242779c0cf4e5d89467e6": "",
+        "80173a3dbd4340158c7ba8e5965c6360": "",
+        "f7b23ee4237c44d1b633f15f9b81c818": ""
+      },
+      "default_org": ""
+    }
+  },
+  "control_migrate": {
+    "note": "tail only (4 lines); full logs at $WORK/{web,cit}-control-migrate.log",
+    "web_tail": [
+      "已应用 0013_upload_resource_handoff",
+      "已应用 0014_discovery_renewal",
+      "已应用 0015_upload_reclamation",
+      "已应用 0016_subtree_snapshots"
+    ],
+    "cit_tail": [
+      "已应用 0013_upload_resource_handoff",
+      "已应用 0014_discovery_renewal",
+      "已应用 0015_upload_reclamation",
+      "已应用 0016_subtree_snapshots"
+    ],
+    "web_full": [
+      "已应用 0001_control_schema",
+      "已应用 0002_roles",
+      "已应用 0003_grant_filename",
+      "已应用 0004_grant_subject",
+      "已应用 0005_discovery",
+      "已应用 0006_discovery_scoped_revision",
+      "已应用 0007_scope_manifests",
+      "已应用 0008_scope_revocations",
+      "已应用 0009_upload_creation_reconciliation",
+      "已应用 0010_scope_remote_expansion",
+      "已应用 0011_peer_credentials",
+      "已应用 0012_remote_compute_upload_purpose",
+      "已应用 0013_upload_resource_handoff",
+      "已应用 0014_discovery_renewal",
+      "已应用 0015_upload_reclamation",
+      "已应用 0016_subtree_snapshots"
+    ],
+    "cit_full": [
+      "已应用 0001_control_schema",
+      "已应用 0002_roles",
+      "已应用 0003_grant_filename",
+      "已应用 0004_grant_subject",
+      "已应用 0005_discovery",
+      "已应用 0006_discovery_scoped_revision",
+      "已应用 0007_scope_manifests",
+      "已应用 0008_scope_revocations",
+      "已应用 0009_upload_creation_reconciliation",
+      "已应用 0010_scope_remote_expansion",
+      "已应用 0011_peer_credentials",
+      "已应用 0012_remote_compute_upload_purpose",
+      "已应用 0013_upload_resource_handoff",
+      "已应用 0014_discovery_renewal",
+      "已应用 0015_upload_reclamation",
+      "已应用 0016_subtree_snapshots"
+    ]
+  },
+  "grants": {
+    "web": [
+      "GRANT",
+      "GRANT",
+      "GRANT",
+      "ALTER DEFAULT PRIVILEGES",
+      "ALTER DEFAULT PRIVILEGES",
+      "GRANT",
+      "REVOKE",
+      "REVOKE",
+      "ALTER DEFAULT PRIVILEGES"
+    ],
+    "cit": [
+      "GRANT",
+      "GRANT",
+      "GRANT",
+      "ALTER DEFAULT PRIVILEGES",
+      "ALTER DEFAULT PRIVILEGES",
+      "GRANT",
+      "REVOKE",
+      "REVOKE",
+      "ALTER DEFAULT PRIVILEGES"
+    ]
+  },
+  "rollback": {
+    "corpus_downgrade_minus1_then_up": "web + cit shadows 0042->0041->0042",
+    "control": "no downgrade by design; snapshot restore proven on e2e shadow",
+    "web_predowngrade_counts": [
+      "pre_documents=6",
+      "pre_resources=13",
+      "pre_citations=0"
+    ],
+    "web_downgraded_revision": "0041",
+    "web_reupgraded_reads": [
+      "revision=0042",
+      "post_documents=6",
+      "post_resources=13",
+      "post_citations=0",
+      "post_evidence=0"
+    ],
+    "cit_predowngrade_counts": [
+      "pre_documents=7",
+      "pre_resources=14",
+      "pre_citations=2"
+    ],
+    "cit_downgraded_revision": "0041",
+    "cit_reupgraded_reads": [
+      "revision=0042",
+      "post_documents=7",
+      "post_resources=14",
+      "post_citations=2",
+      "post_evidence=2"
+    ],
+    "e2e_restored_reads": "0003\n5\n4"
+  }
+}
