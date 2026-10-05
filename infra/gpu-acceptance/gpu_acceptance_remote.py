@@ -139,10 +139,13 @@ def provision_nvidia_icd():
     import json as _json
     import tempfile as _tempfile
     icd_dir = Path("/usr/share/vulkan/icd.d")
-    if any(icd_dir.glob("*nvidia*.json")):
-        print("[gpu-acceptance-remote] NVIDIA ICD already present; skipping provision",
-              flush=True)
-        return None
+    devices, _ = nvidia_vulkan_devices()
+    if devices:
+        marker = {"provisioned_by_kit": False, "method": "already_working",
+                  "vulkan_device": devices[0]}
+        (ROOT / ".icd-provisioned.json").write_text(_json.dumps(marker, indent=2))
+        print(f"[gpu-acceptance-remote] Vulkan already sees {devices[0]}", flush=True)
+        return marker
     smi = subprocess.run(
         ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader,nounits"],
         capture_output=True, text=True)
@@ -159,28 +162,30 @@ def provision_nvidia_icd():
     icd_libs = [name.replace("580.105.08", driver) for name in ICD_LIBS]
     icd_sonames = {name.replace("580.105.08", driver): links
                    for name, links in ICD_SONAMES.items()}
-    # The container runtime may already inject the driver's GL/Vulkan
-    # libraries (bind-mounted, read-only: seen 2026-10-06 on a 4090 D) and only
-    # the loader manifest is missing. Then write the manifest and use them as
-    # they are; the driver package is only needed when they are absent.
-    if all((libdir / name).exists() for name in icd_libs):
+    # The container runtime injects the driver's GL/Vulkan libraries
+    # (bind-mounted, read-only) and an ICD manifest naming libGLX_nvidia.so.0.
+    # Headless, that ICD returns no vkCreateInstance (seen 2026-10-06 on a
+    # 4090 D: "Could not get 'vkCreateInstance' via vk_icdGetInstanceProcAddr"),
+    # while the same driver's libEGL_nvidia.so.0 works (vulkaninfo then lists
+    # the RTX 4090 D). Add an EGL manifest; the loader skips the broken one.
+    egl = libdir / "libEGL_nvidia.so.0"
+    if egl.exists():
         icd_dir.mkdir(parents=True, exist_ok=True)
-        (icd_dir / "nvidia_icd.json").write_text(_json.dumps(
+        (icd_dir / "nvidia_egl_icd.json").write_text(_json.dumps(
             {"file_format_version": "1.0.1",
-             "ICD": {"library_path": "libGLX_nvidia.so.0", "api_version": "1.3.0"}},
+             "ICD": {"library_path": "libEGL_nvidia.so.0", "api_version": "1.3.0"}},
             indent=2) + "\n")
-        subprocess.run(["ldconfig"], check=True)
         devices, _ = nvidia_vulkan_devices()
         if devices:
             device = devices[0]
-            marker = {"provisioned_by_kit": True, "method": "manifest_for_injected_libs",
+            marker = {"provisioned_by_kit": True, "method": "egl_icd_for_injected_libs",
                       "driver_version": driver, "vulkan_device": device}
             (ROOT / ".icd-provisioned.json").write_text(_json.dumps(marker, indent=2))
-            print(f"[gpu-acceptance-remote] ICD manifest written for injected driver "
+            print(f"[gpu-acceptance-remote] EGL ICD manifest for injected driver "
                   f"{driver} libraries: {device}", flush=True)
             return marker
-        print("[gpu-acceptance-remote] injected libraries present but vulkaninfo "
-              "lists no NVIDIA device; falling back to the driver package", flush=True)
+        print("[gpu-acceptance-remote] EGL ICD for the injected libraries lists no "
+              "NVIDIA device; falling back to the driver package", flush=True)
     tmp = Path(_tempfile.mkdtemp(prefix="nvidia-driver-"))
     pkg = tmp / f"NVIDIA-Linux-x86_64-{driver}.run"
     fetched = False

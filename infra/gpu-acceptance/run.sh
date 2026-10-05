@@ -138,10 +138,19 @@ echo "=== GPU acceptance: paid cloud GPU ahead ==="
 echo "GPU=$GPU IMAGE=$IMAGE TTL=$TTL DISK=${DISK}G NAME=$NAME"
 echo "ESTIMATE (not measured): 60-90 min on 4090D-class, roughly ¥1.9-2.8 at the attested ¥1.88/h."
 autodl balance || true
+INSTANCE=""
+if [[ -n "${REUSE_INSTANCE:-}" ]]; then
+  # Continue on an instance this kit already created (same name), e.g. after a
+  # host fix; nothing new is created and the EXIT trap still releases it.
+  [[ "$(find_by_name || true)" == "$REUSE_INSTANCE" ]] || {
+    echo "REUSE_INSTANCE=$REUSE_INSTANCE is not the running $NAME instance; refusing." >&2; exit 2; }
+  INSTANCE="$REUSE_INSTANCE"
+  echo "[gpu-acceptance] reusing instance $INSTANCE (no new spend beyond its clock)"
+else
 EXISTING="$(find_by_name || true)"
 if [[ -n "$EXISTING" ]]; then
   echo "An instance named $NAME already exists ($EXISTING); refusing to create a duplicate." >&2
-  echo "Re-run after releasing it, or set NAME= to use a different name." >&2
+  echo "Re-run after releasing it, set REUSE_INSTANCE=$EXISTING to continue on it, or set NAME=." >&2
   exit 2
 fi
 if [[ "$ASSUME_YES" == 1 ]]; then
@@ -151,7 +160,6 @@ else
   if [[ "$answer" != "yes" ]]; then echo "aborted; nothing created."; exit 0; fi
 fi
 
-INSTANCE=""
 echo "[gpu-acceptance] creating instance (gpu $GPU, image $IMAGE, ttl $TTL auto-shutdown)..."
 CREATE_OUT=""
 CREATE_RC=0
@@ -183,6 +191,7 @@ fi
 if [[ -z "$INSTANCE" ]]; then
   echo "create reported success but no instance id found; refusing to continue." >&2
   exit 1
+fi
 fi
 mkdir -p "$(dirname "$ID_FILE")"
 printf '%s' "$INSTANCE" > "$ID_FILE"
