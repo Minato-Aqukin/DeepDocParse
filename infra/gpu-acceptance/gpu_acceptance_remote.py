@@ -46,11 +46,24 @@ def main():
     # Same answer as infra/autodl: uv fetches its own CPython 3.12 without
     # touching system Python or conda. pip comes from the Aliyun mirror
     # (uv ignores /etc/pip.conf and PIP_INDEX_URL, so pass --index-url
-    # explicitly each time); HF downloads ride HF_ENDPOINT when set.
+    # explicitly each time).
     run("apt-get", "update")
     run("apt-get", "install", "-y", "python3-venv", "vulkan-tools", "curl", "ca-certificates")
-    run("bash", "-c", "command -v uv >/dev/null || curl -fsSL https://astral.sh/uv/install.sh | sh")
-    run("bash", "-c", "export PATH=\"$HOME/.local/bin:$PATH\" && "
+    # uv itself: system pip + Aliyun mirror first (infra/autodl/bootstrap.bash
+    # pattern; astral.sh is outside the academic-proxy host list, so the
+    # astral install script is only a fallback). `uv python install` pulls
+    # CPython from GitHub releases, which IS proxy-covered, so that step
+    # sources /etc/network_turbo when present (guarded: a missing file must
+    # not abort the install). Aliyun pip steps stay direct.
+    run("bash", "-c",
+        "command -v uv >/dev/null || python3 -m pip install -q "
+        "--index-url https://mirrors.aliyun.com/pypi/simple "
+        "--trusted-host mirrors.aliyun.com uv || "
+        "curl -fsSL https://astral.sh/uv/install.sh | sh")
+    run("bash", "-c",
+        "export PATH=\"$HOME/.local/bin:$PATH\"; "
+        "if [ -f /etc/network_turbo ]; then source /etc/network_turbo >/dev/null 2>&1; fi; "
+        "command -v uv >/dev/null || { echo 'uv install failed' >&2; exit 1; }; "
         "uv python install 3.12 && uv venv --python 3.12 /root/gpu-acceptance/.venv")
     run(".venv/bin/python", "--version")
     run("bash", "-c", "export PATH=\"$HOME/.local/bin:$PATH\" && "
