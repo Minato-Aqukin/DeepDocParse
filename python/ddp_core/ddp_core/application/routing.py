@@ -286,12 +286,74 @@ def _probe_fresh(probe, now, ttl_seconds=_PROBE_TTL_SECONDS):
         return False
 
 
+def _shortest_routes(node_routes) -> dict:
+    """每个来源节点只留一条路由：最短，同长按字典序（确定、只执行一次）。"""
+    routes = {}
+    for route in node_routes or []:
+        via = route["via_node_ids"]
+        previous = routes.get(route["node_id"])
+        if previous is None or (len(via), tuple(via)) < (len(previous), tuple(previous)):
+            routes[route["node_id"]] = list(via)
+    return routes
+
+
+def _work_hops(executor, assigned, path_length) -> int:
+    """`executor` 自己要花的跳数：每个直连远端检索 2，每个下级委托受理 2 加它的份额。
+
+    `assigned` 是 `(来源节点, executor 之后的 via)`；`path_length` 是 executor
+    被受理时带的委托路径长度（根为 0）。与 `plan_steps` 在 executor 上的切法一致。
+    """
+    own_remote = 0
+    children: dict[str, list] = {}
+    for origin, via in assigned:
+        if via:
+            children.setdefault(via[0], []).append((origin, via[1:]))
+        elif origin != executor:
+            own_remote += 1
+    return 2 * own_remote + sum(2 + _share_hops(child, items, path_length + 1)
+                                for child, items in children.items())
+
+
+def _transmission_hops(executor, assigned) -> int:
+    """`plans.validate_plan` 给 executor 这份计划记的传输跳数。
+
+    每个远端叶目标两条边（问题去、证据回），每条按 1 + 中继数计；executor
+    自己的本地目标不出边。按叶计，所以同一中继背后叶子越多需要越多。
+    """
+    return sum(2 * (1 + len(via)) for origin, via in assigned if via or origin != executor)
+
+
+def _share_hops(executor, assigned, path_length) -> int:
+    """委托份额至少要多少跳：够它自己的活，够它那份子计划的传输校验，
+    也过得了受理深度闸（路径长度 < 份额）。"""
+    return max(path_length + 1, _work_hops(executor, assigned, path_length),
+               _transmission_hops(executor, assigned))
+
+
+def hop_need(*, targets, coordinator_node_id, node_routes=None, delegation_depth=0) -> int:
+    """协调者的检索与委托在整条路由上需要的跳数（不含生成）。
+
+    两条下限取大：一是要花的——直连远端目标 2 跳（问题去、证据回），按第一跳
+    聚合的每个委托 2 跳受理加一份够下游逐级走完、且每一级都过得了严格深度闸
+    的份额；二是 `plans.validate_plan` 按叶记的全部传输（含中继）。根预算按它
+    定额，`plan_steps` 也按同一规则给各委托分跳数，多级路由不会在下游被深度闸
+    或计划校验拒掉。
+    """
+    routes = _shortest_routes(node_routes)
+    assigned = [(member["origin_node_id"], routes.get(member["origin_node_id"], []))
+                for member in _dedup_sorted(targets)]
+    return max(_work_hops(coordinator_node_id, assigned, delegation_depth),
+               _transmission_hops(coordinator_node_id, assigned))
+
+
 def plan_steps(*, targets, probes, local_node_id, coordinator_node_id, query, now,
-               node_routes=None, budget=None) -> tuple[list[dict], list[dict]]:
+               node_routes=None, budget=None, delegation_depth=0) -> tuple[list[dict], list[dict]]:
     """生成最小步骤图：每个目标一个 retrieve，协调者上 fuse，能生成就再 answer。
 
     跨节点依赖必须带类型化数据边；同节点不产生边。返回的边都是单跳，
     调用方据此为 `max_hops` 留出至少 `len(data_edges)` 的额度。
+    `delegation_depth` 是协调者自己被受理时的委托路径长度（根为 0），
+    下级委托的深度闸按它往下算。
     """
     _string(local_node_id, node=True, name="local node")
     _string(coordinator_node_id, node=True, name="coordinator node")
@@ -306,12 +368,7 @@ def plan_steps(*, targets, probes, local_node_id, coordinator_node_id, query, no
         reject(message="a task plan needs at least one retrieval target")
     steps, edges = [], []
     retrieve_ids = []
-    routes = {}
-    for route in node_routes or []:
-        via = route["via_node_ids"]
-        previous = routes.get(route["node_id"])
-        if previous is None or (len(via), tuple(via)) < (len(previous), tuple(previous)):
-            routes[route["node_id"]] = list(via)
+    routes = _shortest_routes(node_routes)
     groups = {}
     for index, member in enumerate(members, 1):
         origin = member["origin_node_id"]
@@ -369,13 +426,24 @@ def plan_steps(*, targets, probes, local_node_id, coordinator_node_id, query, no
         # The coordinator's own work keeps its proportion plus its fixed costs:
         # one admission attempt per delegate, and per direct target the same
         # per-target allowance a share leaf gets. Requests/bytes/probes split
-        # by leaf count (floor); hops keep today's even split among groups —
-        # all from the remaining allowance, not the raw caps.
+        # by leaf count (floor), all from the remaining allowance, not the raw
+        # caps. Hops follow route depth instead: each delegate first gets what
+        # its route needs to reach every leaf through strict depth gates, the
+        # rest is split evenly; a pool short of that is refused here, at
+        # planning, rather than by a downstream relay at execution.
         total_leaves = sum(len(step["delegated_targets"]) for step in groups.values()) + own_targets
         requests = max(0, remaining_requests - 8 * count - 68 * own_targets)
         byte_cap = max(0, remaining_bytes - 32768 * count - 4096 * own_targets)
         hops = max(0, remaining_hops - 2 * count - 2 * own_remote)
         probe_cap = min(requests, remaining_probes)
+        hop_needs = [_share_hops(step["executor_node_id"],
+                                 [(item["target_key"]["origin_node_id"], item["via_node_ids"])
+                                  for item in step["delegated_targets"]],
+                                 delegation_depth + 1)
+                     for step in groups.values()]
+        if hops < sum(hop_needs):
+            reject("budget_exceeded", "hop shares cannot reach the delegated route depth")
+        spare_hops = hops - sum(hop_needs)
         for position, step in enumerate(groups.values()):
             leaves = len(step["delegated_targets"])
             def portion(value, _leaves=leaves):
@@ -385,13 +453,12 @@ def plan_steps(*, targets, probes, local_node_id, coordinator_node_id, query, no
                 if not total_leaves:
                     return 0
                 return max(0, (value * _leaves) // total_leaves)
-            def hop_portion(value, _position=position):
-                return value // count + int(_position < value % count)
-            if hop_portion(hops) < 1:
-                reject("budget_exceeded", "no hop share remains for delegation")
+            def hop_portion(_position=position):
+                return (hop_needs[_position] + spare_hops // count
+                        + int(_position < spare_hops % count))
             step["budget_share"] = {
                 "max_requests": portion(requests), "max_bytes": portion(byte_cap),
-                "max_hops": hop_portion(hops), "max_probes": portion(probe_cap),
+                "max_hops": hop_portion(), "max_probes": portion(probe_cap),
                 "deadline": budget["deadline"]}
     steps.append({"step_id": "fuse-1", "operation": "fuse", "executor_node_id": coordinator_node_id,
                   "depends_on": retrieve_ids})

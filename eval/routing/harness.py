@@ -254,14 +254,14 @@ def run_question(dataset: dict, question: dict, mode: str, *, executor=None,
     task_spec = _task_spec(question, mode, consent["consent_id"], manifest, local_node_id)
     consent = coordinator.validate_exploration_consent(consent, task_spec, now=now)
     selected = coordinator._select_targets(all_targets, task_spec, local_node_id, manifest=manifest)
-    remote_count = sum(1 for target in selected
-                       if target["origin_node_id"] != local_node_id)
+    # Same hop sizing as the coordinator's intent budget (the harness plans no routes).
+    route_hops = routing.hop_need(targets=selected, coordinator_node_id=local_node_id)
     valid_until = min(plans.instant(manifest["valid_until"]),
                       plans.instant(consent["valid_until"]),
                       now.timestamp() + coordinator.SCOPE_TTL_SECONDS)
     deadline = plans.utc_instant(valid_until)
     budget_body = coordinator._root_budget(
-        consent, target_count=len(selected), remote_count=remote_count,
+        consent, target_count=len(selected), route_hops=route_hops,
         deadline=deadline, generation_ready=False)
     budget = routing.RootBudget(budget_body, now=now.timestamp())
     task_spec_digest = plans.task_spec_digest(task_spec)

@@ -317,11 +317,16 @@ def validate_plan(plan, spec, *, local_node_id, now):
         edges.add(edge["edge_id"])
     # Conservatively reserve every planned transmission, including relay hops,
     # against the root cap. Parallel branches do not acquire free hop budgets.
+    # A delegate's child plan (final writer != its coordinator) does not pay for
+    # its final-recipient edge, for edges no executor of it touches, or for the
+    # upstream copies of the approved root's edges leaving the final writer
+    # (kept for onward-transfer checks; the root plan already reserved them).
     executing_nodes = {step["executor_node_id"] for step in steps.values()}
     transmissions = [edge for edge in plan["data_edges"] if not (
         plan["final_result_writer"] != plan["root_coordinator_node_id"]
         and ((edge["from_node_id"] == plan["root_coordinator_node_id"]
               and edge["to_node_id"] == plan["final_result_writer"])
+             or edge["from_node_id"] == plan["final_result_writer"]
              or not ({edge["from_node_id"], edge["to_node_id"]} & executing_nodes)))]
     if sum(1 + len(edge.get("relay_via", [])) for edge in transmissions) > budget["max_hops"]:
         reject("budget_exceeded", "total planned transmissions exceed the root hop budget")

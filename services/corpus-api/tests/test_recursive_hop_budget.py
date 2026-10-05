@@ -4,18 +4,17 @@ Shape under test (the live P6 drill shape, one level deeper on the delegated
 branch): root A, direct remote retrieval target B, delegated leaf D reached
 via P then R (A -> P -> R -> D), generation delegated to the remote generator
 B. The stub relay P emulates production's sub-delegation faithfully: it
-carves R's sub-share with the REAL ``routing.plan_steps`` and enforces the
-REAL ``admission.validate_delegation_path`` depth gate, so a too-small share
-fails exactly where a real R would refuse it (``budget_exceeded``).
+carves R's sub-share with the REAL ``routing.plan_steps`` (at its own
+delegation depth) and enforces the REAL ``admission.validate_delegation_path``
+depth gate, so a too-small share fails exactly where a real R would refuse it
+(``budget_exceeded``).
 
-Derived need (hop ledger): B admission 2 + P share reservation S + P
-admission 2 + B answer admission 1 = 5 + S on the root ledger, with S = 5
-(P admission 2 + R sub-share 3; R needs sub-share 3 because its admission
-depth check is strict: len([A, P]) = 2 < sub-share). Root need = 10, which
-the intent budget already provides (2*remote + 2*generation + 2*via =
-4 + 2 + 4). The bug is only the carve-time reservation for the delegated
-generation edge: ``create_plan`` subtracts 2, but an answer admission spends
-1 hop, so the carved share is 4 instead of 5 and R's depth check refuses it.
+Derived need (hop ledger): B admission 2 + P admission 2 + P share S, with
+S >= 5 (R's admission 2 + R's sub-share 3; R's depth check is strict:
+len([A, P]) = 2 < sub-share). The intent budget is that route need, 9, plus
+the generation allowance 2; ``create_plan`` holds back the 1 hop a delegated
+answer admission spends, so P's share carves from 10 - 2 - 2 = 6 >= 5.
+Before the fixes the carve input was 8 and the share 4, which R refuses.
 """
 import json
 
@@ -34,7 +33,6 @@ from node_credentials_fixture import LocalControlSigner
 from test_federation_answer_delegation import mock_gateway_not_ready
 from test_federation_probes import NODE, configure_federation
 from test_federation_tasks import (
-    EXPIRY,
     PEER_NODE,
     StubPeer,
     approve_task,
@@ -139,6 +137,7 @@ class RelayStubPeer(StubPeer):
             coordinator_node_id=FIRST_HOP_NODE,
             query="federation keyword", now=0, node_routes=[{
                 "node_id": leaf["origin_node_id"], "via_node_ids": rest}],
+            delegation_depth=len(path),
             budget={**caps, "used_requests": 0, "used_bytes": 0,
                     "used_probes": 0, "used_hops": 0})
         sub_share = next(item["budget_share"] for item in sub_steps
@@ -202,40 +201,41 @@ def _task_spec():
     return spec
 
 
-def test_carve_leaves_five_hops_for_sibling_plus_two_deep_leaf():
-    """Routing-seam characterization for the same shape (not the red guard).
+@respx.mock
+async def test_leaves_sharing_a_relay_keep_every_relayed_transmission_in_budget(
+        actor_client, session, monkeypatch):
+    """Three leaf collections behind the same relay P still plan.
 
-    Pins what `plan_steps` carves from each input: 8 gives the relay 4 hops,
-    9 gives the 5 its strict depth gate needs (the literal from the module
-    docstring). 9 is the fixed allowance: ledger 10 minus the 1 hop the
-    delegated answer admission spends. `plan_steps` itself is unchanged, so
-    this passes before and after the fix; the HTTP test is the red guard.
+    Hand-derived: the plan validator reserves both edges of every leaf with its
+    relay hop, 3 * 2 * (1 + 1) = 12, more than P's admission 2 plus P's three
+    retrievals 6. The intent budget must hold 12 plus the answer allowance 2;
+    sized from admissions and retrievals alone (8 + 2) the plan is refused.
     """
-    targets = [
-        {"origin_node_id": PEER_NODE, "collection_id": "peer-collection-b",
-         "operation": "corpus.retrieve"},
-        {"origin_node_id": LEAF_NODE, "collection_id": "leaf-collection-d",
-         "operation": "corpus.retrieve"},
-    ]
-    routes = [{"node_id": LEAF_NODE,
-               "via_node_ids": [FIRST_HOP_NODE, RELAY_NODE]}]
-    for carve_input, expected in ((8, 4), (9, 5)):
-        steps, _ = routing.plan_steps(
-            targets=targets, probes=[], local_node_id=NODE,
-            coordinator_node_id=NODE, query="federation keyword", now=0,
-            node_routes=routes,
-            budget={"max_requests": 304, "max_bytes": 1 << 20,
-                    "max_hops": carve_input, "max_probe_requests": 16,
-                    "deadline": EXPIRY})
-        share = next(step["budget_share"]["max_hops"] for step in steps
-                     if step.get("operation") == "delegate")
-        assert share == expected, (carve_input, share)
+    configure_federation(monkeypatch)
+    monkeypatch.setattr(settings, "federation_allow_loopback", False)
+    mock_gateway_not_ready()
+    install_chain(monkeypatch, StubPeer(), RelayStubPeer())
+    leaves = [{"origin_node_id": LEAF_NODE, "collection_id": f"leaf-collection-{index}",
+               "operation": "corpus.retrieve"} for index in range(3)]
+    manifest = scope_manifest(leaves, revisions=[(NODE, 1), (FIRST_HOP_NODE, 1), (LEAF_NODE, 1)])
+    manifest["scope_id"] = "scope-hop-budget"
+    manifest["node_routes"] = [{"node_id": LEAF_NODE, "via_node_ids": [FIRST_HOP_NODE]}]
+    manifest["manifest_digest"] = plans.digest({
+        key: value for key, value in manifest.items() if key != "manifest_digest"})
+    intent = await create_intent(actor_client, spec=_task_spec(),
+                                 consent=exploration(recipients=(FIRST_HOP_NODE, LEAF_NODE)),
+                                 manifest=manifest)
+    plan = await plan_task(actor_client, intent["root_task_id"])
+    assert plan["budget"]["max_hops"] == 14, plan["budget"]
+    delegate = next(step for step in plan["steps"] if step["operation"] == "delegate")
+    assert len(delegate["delegated_targets"]) == 3
+    assert delegate["budget_share"]["max_hops"] >= 6, delegate
 
 
 @respx.mock
-async def test_remote_sibling_plus_two_deep_leaf_gets_a_five_hop_share(
+async def test_remote_sibling_plus_two_deep_leaf_share_reaches_the_leaf(
         actor_client, session, monkeypatch):
-    """The delegate share for [P, R]-routed D next to direct B must be 5 hops.
+    """The delegate share for [P, R]-routed D next to direct B reaches D.
 
     Literal 5 from the derivation in the module docstring, not recomputed
     from the carve formula: the relay needs 2 (its admission) + 3 (R's
@@ -287,7 +287,7 @@ async def test_remote_sibling_plus_two_deep_leaf_gets_a_five_hop_share(
     delegates = [step for step in plan["steps"] if step["operation"] == "delegate"]
     assert len(delegates) == 1, plan
     assert delegates[0]["executor_node_id"] == FIRST_HOP_NODE, plan
-    assert delegates[0]["budget_share"]["max_hops"] == 5, plan
+    assert delegates[0]["budget_share"]["max_hops"] >= 5, plan
 
     await approve_task(actor_client, root, plan,
                        recipients=(NODE, PEER_NODE, FIRST_HOP_NODE, RELAY_NODE, LEAF_NODE))

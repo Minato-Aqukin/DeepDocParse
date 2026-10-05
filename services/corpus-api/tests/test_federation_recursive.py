@@ -23,9 +23,12 @@ async def recursive_nodes(tmp_path, monkeypatch, app_state, request):
         await fixture.stop()
 
 
-def recursive_manifest(fixture, leaf):
-    target = member(fixture.nodes[leaf].seed.collection_id, leaf)
-    manifest = scope_manifest([target])
+def recursive_manifest(fixture, leaf, *, direct_relay=False):
+    targets = [member(fixture.nodes[leaf].seed.collection_id, leaf)]
+    if direct_relay:
+        # P's own collection as a direct target next to the routed leaf.
+        targets.insert(0, member(fixture.nodes[NODE_P].seed.collection_id, NODE_P))
+    manifest = scope_manifest(targets)
     manifest["scope_id"] = "scope-recursive"
     manifest["registry_revision_vector"] = [
         {"node_id": node, "registry_revision": 1, "fetched_at": "2026-01-01T00:00:00Z"}
@@ -37,16 +40,17 @@ def recursive_manifest(fixture, leaf):
     return manifest
 
 
-async def recursive_plan(client, fixture, *, leaf=NODE_S, recipients=None):
+async def recursive_plan(client, fixture, *, leaf=NODE_S, recipients=None,
+                         direct_relay=False, max_hops=8, max_requests=96):
     spec = task_spec(coordinator=NODE_A)
     spec["operation"] = "corpus.retrieve"
     spec["resource_scope"]["scope_ref"] = "scope-recursive"
     consent = exploration(recipients=(NODE_P, NODE_R, NODE_S) if recipients is None else recipients,
                           budget={"max_probe_requests": 16, "max_egress_bytes": 16 << 20})
     body = {"task_spec": spec, "exploration_consent": consent,
-            "scope_manifest": recursive_manifest(fixture, leaf),
-            "budget": {"max_requests": 96, "max_bytes": 16 << 20,
-                       "max_hops": 8, "deadline": EXPIRY}}
+            "scope_manifest": recursive_manifest(fixture, leaf, direct_relay=direct_relay),
+            "budget": {"max_requests": max_requests, "max_bytes": 16 << 20,
+                       "max_hops": max_hops, "deadline": EXPIRY}}
     response = await client.post("/api/v1/task-intents", json=body,
                                  headers={"Idempotency-Key": plans.digest(body)})
     assert response.status_code == 201, response.text
@@ -116,6 +120,39 @@ async def test_recursive_retrieval_preserves_leaf_origin_over_real_http(
     if leaf == NODE_S:
         relay_admission = next(call["body"] for call in recursive_nodes.nodes[NODE_R].calls("/admissions"))
         assert relay_admission["delegation_path"] == [NODE_A, NODE_P]
+
+
+async def test_direct_relay_target_plus_two_relay_leaf_reaches_the_leaf_over_real_http(
+        actor_client, recursive_nodes):
+    """A retrieves P's own collection directly and S via [P, R] in one plan.
+
+    Hop need (hand-derived): direct P 2 + P's admission 2 + P's share 5, where
+    P's share is R's admission 2 + R's share 3 and R's share must beat its
+    strict depth gate len([A, P]) = 2. The root budget must be 9 and P's share
+    at least 5; with 8 the real R refuses P's sub-delegation (budget_exceeded).
+    The caller's request/byte caps are generous so the server caps decide.
+    """
+    root, plan = await recursive_plan(actor_client, recursive_nodes,
+                                      direct_relay=True, max_hops=16, max_requests=4096)
+    assert plan["budget"]["max_hops"] == 9, plan["budget"]
+    delegate = next(step for step in plan["steps"] if step["operation"] == "delegate")
+    assert delegate["executor_node_id"] == NODE_P
+    assert delegate["budget_share"]["max_hops"] >= 5, delegate
+    await approve_task(actor_client, root, plan)
+    response = await submit_task(actor_client, root, plan["plan_digest"], "recursive-direct-plus-deep")
+    assert response.status_code == 200, response.text
+    status = response.json()
+    assert status["status"] == "succeeded", status
+    coverage = await coverage_of(actor_client, root)
+    assert entry_for(coverage, NODE_P)["state"] == "succeeded", coverage
+    leaf = entry_for(coverage, NODE_S)
+    assert leaf["state"] == "succeeded", (leaf.get("last_error"), leaf)
+    assert leaf["reported_by"] == NODE_P
+    origins = {item["origin_node_id"] for item in status["result"]["evidence"]}
+    assert origins == {NODE_P, NODE_S}, status
+    relay_admission = next(call["body"] for call in recursive_nodes.nodes[NODE_R].calls("/admissions"))
+    assert relay_admission["delegation_path"] == [NODE_A, NODE_P]
+    assert_adjacent_traffic(recursive_nodes)
 
 
 async def test_unavailable_parent_keeps_recursive_leaf_unreachable(

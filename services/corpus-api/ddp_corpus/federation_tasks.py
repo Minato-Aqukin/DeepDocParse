@@ -1317,7 +1317,7 @@ async def _probe_targets(session: AsyncSession, actor: Actor, row: FederationReq
 # 规划
 # ---------------------------------------------------------------------------
 
-def _root_budget(consent: dict, *, target_count: int, remote_count: int,
+def _root_budget(consent: dict, *, target_count: int, route_hops: int,
                  deadline: str, generation_ready: bool = False) -> dict:
     """Freeze a bounded allowance before the first planning request.
 
@@ -1333,7 +1333,7 @@ def _root_budget(consent: dict, *, target_count: int, remote_count: int,
         "max_bytes": min(2**63 - 1, max(
             4096, int(consent["budget"]["max_egress_bytes"])
             + executions * EVIDENCE_BYTES_PER_TARGET)),
-        "max_hops": max(1, 2 * remote_count + 2 * int(generation_ready)),
+        "max_hops": max(1, route_hops + 2 * int(generation_ready)),
         "deadline": deadline,
         "max_generation_tokens": GENERATION_TOKEN_BUDGET if generation_ready else 0,
         "max_probe_requests": probes,
@@ -1348,16 +1348,17 @@ def _intent_budget(task_spec, manifest, consent, *, now):
     deadline = min(plans.instant(consent["valid_until"]), _ts(now) + SCOPE_TTL_SECONDS)
     if manifest is not None:
         deadline = min(deadline, plans.instant(manifest["valid_until"]))
+    node_routes = (manifest or {}).get("node_routes", [])
     budget = _root_budget(
         consent, target_count=len(targets),
-        remote_count=sum(target["origin_node_id"] != node for target in targets),
+        # Direct remote targets plus, per first-hop delegate, its admission and a
+        # share deep enough for every relay's strict depth gate (routing.hop_need);
+        # the same rule plan_steps uses to hand out hop shares.
+        route_hops=routing.hop_need(targets=targets, coordinator_node_id=node,
+                                    node_routes=node_routes),
         deadline=plans.utc_instant(deadline),
         generation_ready=task_spec["operation"] in GENERATION_OPERATIONS)
-    routes = {route["node_id"]: route["via_node_ids"]
-              for route in (manifest or {}).get("node_routes", [])}
-    budget["max_hops"] += sum(2 * len(routes.get(target["origin_node_id"], []))
-                              for target in targets)
-    if routes:
+    if node_routes:
         budget["max_hops"] = max(8, budget["max_hops"])
     if task_spec["operation"] == WIKI_OPERATION:
         # Wiki's planner/writer/optional relations share this kernel allowance.
@@ -4111,7 +4112,9 @@ async def execute_delegation(session, actor, spec, *, execution_id, now, http, i
             routes.append({"node_id": item["target_key"]["origin_node_id"], "via_node_ids": rest})
     steps, edges = routing.plan_steps(targets=targets, probes=[], local_node_id=node,
                                      coordinator_node_id=node, query=request["task_spec"].get("query") or "",
-                                     now=_ts(now), node_routes=routes, budget={
+                                     now=_ts(now), node_routes=routes,
+                                     # Sub-delegates are admitted one level deeper than this node.
+                                     delegation_depth=len(request["delegation_path"]), budget={
                                          **budget_caps,
                                          # The delegate already spent part of its
                                          # share (lookups, local steps) before

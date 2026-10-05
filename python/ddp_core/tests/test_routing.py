@@ -200,6 +200,36 @@ def test_plan_steps_build_a_plan_that_passes_validate_plan():
     assert len(local_edges) == 2
 
 
+def test_relay_child_plan_does_not_pay_root_funded_upstream_edges():
+    """Q relays T for root A and is also A's answer generator.
+
+    Q's child plan carries the approved A->Q evidence edge as an upstream copy
+    (so onward transfer is checked against the root's consent). Q never sends
+    on that edge and the root plan already reserved its hop, so Q's two-hop
+    share must still cover Q->T and T->Q instead of being refused for three.
+    """
+    steps, edges = plan_steps(targets=[target("node-t", "t:robotics")], probes=[],
+                              local_node_id="node-q", coordinator_node_id="node-q",
+                              query="which page has the evidence?", now=NOW)
+    edges.append({"edge_id": "edge-final-recipient", "from_node_id": "node-q",
+                  "to_node_id": "node-a", "relay_via": [], "payload_kind": "evidence_excerpts",
+                  "retention": "temporary", "authorised_by": "relay:node-q"})
+    edges.append({"edge_id": "upstream-edge-answer-1", "from_node_id": "node-a",
+                  "to_node_id": "node-q", "payload_kind": "evidence_excerpts",
+                  "retention": "temporary", "authorised_by": "relay:node-a"})
+    spec = task_spec()
+    plan = {"schema": "ddp-plan-admission/1#TaskPlan", "plan_id": "child-q", "revision": 1,
+            "task_spec_digest": task_spec_digest(spec), "root_coordinator_node_id": "node-q",
+            "final_result_writer": "node-a", "planning_state": "approved",
+            "execution_consent_ref": "consent-exec-1", "steps": steps, "data_edges": edges,
+            "budget": {"max_requests": 10, "max_bytes": 100000, "max_hops": 2,
+                       "deadline": EXPIRY},
+            "valid_until": EXPIRY}
+    plan["plan_digest"] = task_plan_digest(plan)
+    plans.validate_plan(plan, spec, local_node_id="node-q", now=NOW)
+
+
+
 def test_plan_steps_without_generation_omits_answer():
     steps, edges = plan_steps(
         targets=[target("node-b", "b:robotics"), target("node-c", "c:robotics")],
