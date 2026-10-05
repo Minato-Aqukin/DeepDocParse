@@ -1,0 +1,287 @@
+{
+  "annotator": "model-annotator-1",
+  "annotator_kind": "model",
+  "claim_set_digest": "sha256:2f98c9fb9df4c891dcab843c9d12ee706d1dd5badb18fe9a406fa45d3d8f8c20",
+  "complete": true,
+  "conflict_reports": [
+    {
+      "note": "Answer states both years with per-filing attribution (2019 first, 2023 second), showing the disagreement.",
+      "question_id": "q17",
+      "reported": true
+    },
+    {
+      "note": "Answer states both counts with per-filing attribution (9 second, 6 first), showing the disagreement.",
+      "question_id": "q18",
+      "reported": true
+    },
+    {
+      "note": "Answer explicitly says the two memos disagree and gives each side's year and array count.",
+      "question_id": "q19",
+      "reported": true
+    },
+    {
+      "note": "Answer states both counts with per-center attribution (12 Center A, 19 Center B), showing the disagreement.",
+      "question_id": "q20",
+      "reported": true
+    },
+    {
+      "note": "Answer states both diameters with per-center attribution (2.4 m Center A, 3.1 m Center B), showing the disagreement.",
+      "question_id": "q21",
+      "reported": true
+    },
+    {
+      "note": "Answer explicitly says Center A and Center B disagree and gives each side's beacon count and diameter.",
+      "question_id": "q22",
+      "reported": true
+    }
+  ],
+  "labels": [
+    {
+      "claim_id": "q01-c1",
+      "label": "supports",
+      "note": "Both excerpts state verbatim that the Pico exposes 26 multi-function GPIOs."
+    },
+    {
+      "claim_id": "q01-c2",
+      "label": "partially_supports",
+      "note": "Excerpts establish 23 digital-only, 3 ADC-capable, and GPIO 26-28 dual-use, but none states GPIO 26-29 are all usable as ADC inputs."
+    },
+    {
+      "claim_id": "q02-c1",
+      "label": "supports",
+      "note": "Excerpt states Dual-core Cortex-M0+ at up to 133 MHz verbatim."
+    },
+    {
+      "claim_id": "q03-c1",
+      "label": "supports",
+      "note": "Excerpts state the on-board 2 MB QSPI Flash and 2 MB Flash verbatim."
+    },
+    {
+      "claim_id": "q03-c2",
+      "label": "does_not_support",
+      "note": "Excerpts name the Winbond W25Q16JV chip but never state its size, and the ESP32 ordering-code excerpt is off-topic."
+    },
+    {
+      "claim_id": "q04-c1",
+      "label": "supports",
+      "note": "Excerpt states 12-bit 500 ksps ADC verbatim."
+    },
+    {
+      "claim_id": "q05-c1",
+      "label": "supports",
+      "note": "Excerpts state the VSYS range 1.8 V to 5.5 V verbatim."
+    },
+    {
+      "claim_id": "q05-c2",
+      "label": "supports",
+      "note": "Excerpts state the ~1.8 to 5.5 V range and that the buck-boost SMPS generates fixed 3.3 V output."
+    },
+    {
+      "claim_id": "q06-c1",
+      "label": "supports",
+      "note": "Excerpt states 2 PIO blocks and 8 state machines total verbatim."
+    },
+    {
+      "claim_id": "q07-c1",
+      "label": "supports",
+      "note": "Excerpt states single-sided 51x21 mm 1 mm thick PCB verbatim."
+    },
+    {
+      "claim_id": "q08-c1",
+      "label": "supports",
+      "note": "Excerpts together establish BOOTSEL USB bootloader via micro-USB and TP6-shorted-low-at-power-up trigger."
+    },
+    {
+      "claim_id": "q08-c2",
+      "label": "supports",
+      "note": "Excerpt states measurements used a Raspberry Pi 4 as host verbatim."
+    },
+    {
+      "claim_id": "q09-c1",
+      "label": "supports",
+      "note": "Both excerpts state the Pico exposes 26 multi-function GPIOs."
+    },
+    {
+      "claim_id": "q09-c2",
+      "label": "supports",
+      "note": "Both excerpts state the ESP32 has 34 GPIOs verbatim."
+    },
+    {
+      "claim_id": "q09-c3",
+      "label": "partially_supports",
+      "note": "Excerpts support 34 programmable ESP32 GPIOs with multiplexing, but none states the Pico exposes 26 of 30."
+    },
+    {
+      "claim_id": "q10-c1",
+      "label": "partially_supports",
+      "note": "Excerpts support 3 ADC-capable pins GPIO 26-28 with software selection but never state 12-bit resolution."
+    },
+    {
+      "claim_id": "q10-c2",
+      "label": "partially_supports",
+      "note": "Excerpts support 802.11b/g/n, 150 Mbps, and 20.5 dBm, but none states Bluetooth version 4.2."
+    },
+    {
+      "claim_id": "q10-c3",
+      "label": "supports",
+      "note": "Excerpt states two 12-bit SAR ADCs with 18 channels verbatim."
+    },
+    {
+      "claim_id": "q11-c1",
+      "label": "does_not_support",
+      "note": "Degraded placeholder with no excerpts, so nothing establishes any claim."
+    },
+    {
+      "claim_id": "q12-c1",
+      "label": "supports",
+      "note": "Excerpt states dual-core Cortex-M0+ at up to 133 MHz verbatim."
+    },
+    {
+      "claim_id": "q12-c2",
+      "label": "supports",
+      "note": "Excerpts state one or two Xtensa 32-bit LX6 processors at up to 240 MHz."
+    },
+    {
+      "claim_id": "q13-c1",
+      "label": "supports",
+      "note": "Excerpt lists 2 x UART among RP2040 peripherals verbatim."
+    },
+    {
+      "claim_id": "q13-c2",
+      "label": "supports",
+      "note": "Excerpt states ESP32 has three UART interfaces verbatim."
+    },
+    {
+      "claim_id": "q14-c1",
+      "label": "supports",
+      "note": "Excerpts state the VSYS range 1.8 V to 5.5 V verbatim."
+    },
+    {
+      "claim_id": "q14-c2",
+      "label": "supports",
+      "note": "Excerpt states ESP32 operating voltage ranges from 2.3 V to 3.6 V verbatim."
+    },
+    {
+      "claim_id": "q15-c1",
+      "label": "supports",
+      "note": "Excerpt states 802.11b/g/n with up to 150 Mbps data rate verbatim."
+    },
+    {
+      "claim_id": "q15-c2",
+      "label": "supports",
+      "note": "Excerpts state Micro-USB B port for power and data and the standard micro-USB port."
+    },
+    {
+      "claim_id": "q16-c1",
+      "label": "supports",
+      "note": "Excerpts state 2 MB Flash and on-board 2 MB QSPI Flash verbatim."
+    },
+    {
+      "claim_id": "q16-c2",
+      "label": "supports",
+      "note": "Excerpt states 264 kB multi-bank SRAM verbatim."
+    },
+    {
+      "claim_id": "q16-c3",
+      "label": "supports",
+      "note": "Excerpt states 448 KB of ROM for booting and core functions verbatim."
+    },
+    {
+      "claim_id": "q16-c4",
+      "label": "supports",
+      "note": "Both excerpts state 520 KB SRAM verbatim."
+    },
+    {
+      "claim_id": "q16-c5",
+      "label": "supports",
+      "note": "Excerpt states up to 16 MB of external flash mappable verbatim."
+    },
+    {
+      "claim_id": "q16-c6",
+      "label": "supports",
+      "note": "Excerpt states SPI/Quad SPI can connect to external flash and SRAM."
+    },
+    {
+      "claim_id": "q17-c1",
+      "label": "supports",
+      "note": "Excerpt states the first filing commissioned the annex in 2019 verbatim."
+    },
+    {
+      "claim_id": "q17-c2",
+      "label": "supports",
+      "note": "Excerpt states the second filing commissioned the annex in 2023 verbatim."
+    },
+    {
+      "claim_id": "q18-c1",
+      "label": "supports",
+      "note": "Excerpt states the second filing houses 9 receiver arrays verbatim."
+    },
+    {
+      "claim_id": "q18-c2",
+      "label": "supports",
+      "note": "Excerpt states the first filing houses 6 receiver arrays verbatim."
+    },
+    {
+      "claim_id": "q19-c1",
+      "label": "supports",
+      "note": "The two excerpts together establish 2019 in one memo and 2023 in the other."
+    },
+    {
+      "claim_id": "q19-c2",
+      "label": "supports",
+      "note": "The two excerpts together establish 6 arrays in one memo and 9 in the other."
+    },
+    {
+      "claim_id": "q20-c1",
+      "label": "supports",
+      "note": "Excerpt states Center A copy operates 12 calibration beacons verbatim."
+    },
+    {
+      "claim_id": "q20-c2",
+      "label": "supports",
+      "note": "Excerpt states Center B copy operates 19 calibration beacons verbatim."
+    },
+    {
+      "claim_id": "q21-c1",
+      "label": "supports",
+      "note": "Excerpt states Center A reflector is 2.4 meters verbatim."
+    },
+    {
+      "claim_id": "q21-c2",
+      "label": "supports",
+      "note": "Excerpt states Center B reflector is 3.1 meters verbatim."
+    },
+    {
+      "claim_id": "q22-c1",
+      "label": "supports",
+      "note": "The two excerpts together establish 12 beacons per Center A and 19 per Center B."
+    },
+    {
+      "claim_id": "q22-c2",
+      "label": "supports",
+      "note": "The two excerpts together establish 2.4 m per Center A and 3.1 m per Center B."
+    },
+    {
+      "claim_id": "q23-c1",
+      "label": "supports",
+      "note": "Excerpt states the Center A copy reflector is 2.4 meters verbatim."
+    },
+    {
+      "claim_id": "q24-c1",
+      "label": "supports",
+      "note": "Excerpt states the first filing commissioned the annex in 2019 verbatim."
+    },
+    {
+      "claim_id": "q25-c1",
+      "label": "supports",
+      "note": "Excerpt states the second filing houses 9 receiver arrays verbatim."
+    },
+    {
+      "claim_id": "q26-c1",
+      "label": "does_not_support",
+      "note": "Degraded placeholder with no excerpts, so nothing establishes any claim."
+    }
+  ],
+  "n_claims": 49,
+  "n_judged": 49
+}

@@ -23,6 +23,7 @@ from pathlib import Path
 
 LABEL_VALUES = ("supports", "partially_supports", "does_not_support",
                 "contradicted", "cannot_tell")
+ANNOTATOR_KINDS = ("human", "model")
 LABEL_WEIGHT = {"supports": 1.0, "partially_supports": 0.5,
                 "does_not_support": 0.0, "contradicted": 0.0,
                 "cannot_tell": None}
@@ -58,7 +59,11 @@ def load_annotations(path: Path) -> dict:
         labels[entry["claim_id"]] = label
     conflicts = {entry["question_id"]: bool(entry.get("reported"))
                  for entry in payload.get("conflict_reports", [])}
+    kind = payload.get("annotator_kind", "human")
+    if kind not in ANNOTATOR_KINDS:
+        raise ValueError(f"bad annotator_kind {kind!r} in {path} (expected one of {ANNOTATOR_KINDS})")
     return {"annotator": payload.get("annotator", path.stem),
+            "annotator_kind": kind,
             "claim_set_digest": payload.get("claim_set_digest", ""),
             "labels": labels, "conflicts": conflicts,
             "complete": payload.get("complete", True),
@@ -169,6 +174,9 @@ def score(claim_set: dict, annotations: list[dict]) -> dict:
         "n_claims": len(claims), "n_questions": len(questions),
         "n_annotators": len(annotations),
         "annotators": [a["annotator"] for a in annotations],
+        "annotator_kinds": {a["annotator"]: a.get("annotator_kind", "human") for a in annotations},
+        # Plan §14.3 asks for human review; a model judge is reported, never relabelled as human.
+        "human_review": all(a.get("annotator_kind", "human") == "human" for a in annotations),
         "n_judged": overall["n_judged"],
         "support_rate": overall["support_rate"],
         "full_support_rate": overall["full_support_rate"],
@@ -196,8 +204,10 @@ def ledger_text(result: dict, artifact_name: str) -> str:
     groups = ", ".join(f"{name} {pct(info['support_rate'])} (n={info['n_judged']}/{info['n']})"
                        for name, info in sorted(result["groups"].items()))
     kappa = "n/a (single annotator)" if result["kappa"] is None else f"{result['kappa']:.2f}"
+    review = ("T47人工主张支持度" if result.get("human_review", True)
+              else "T47主张支持度（模型评审，非人工；判据要求的人工评审仍缺）")
     return (
-        f"T47人工主张支持度（`{artifact_name}`，{result['n_annotators']} 标注人 "
+        f"{review}（`{artifact_name}`，{result['n_annotators']} 标注人 "
         f"{'/'.join(result['annotators'])}，claim set `{result['claim_set_digest'][:19]}…`）："
         f"支持度 {pct(result['support_rate'])}（部分支持计 0.5；完全支持 "
         f"{pct(result['full_support_rate'])}；n={result['n_judged']}/{result['n_claims']}，无法判断已剔除）；分组：{groups}；"
@@ -224,6 +234,7 @@ def main() -> int:
                          "annotations": list(args.annotations)}
     name = f"claim-support-review-{date.today().isoformat()}.json"
     out = Path(args.out_dir) / name
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     print()

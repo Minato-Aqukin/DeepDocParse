@@ -1,0 +1,2289 @@
+{
+  "claims": [
+    {
+      "claim_id": "q01-c1",
+      "question_id": "q01",
+      "question_no": 1,
+      "group": "single",
+      "question": "How many multi-function GPIOs does the Raspberry Pi Pico expose?",
+      "claim_text": "The Raspberry Pi Pico exposes 26 multi-function GPIOs.",
+      "evidence_refs": [
+        "cdfd6ccff60f49389429376688680402",
+        "23577fcb5bdc4d6b98bd63d178fbd7e3"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:183c14cf6d232cde5039725078e0ddb301fe0a1b19f882ade8bb1c3e07089e20"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "cdfd6ccff60f49389429376688680402",
+          "excerpt": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for RP2040, with the following key features: RP2040 microcontroller with 2 MB Flash Micro-USB B port for power and data (and for reprogramming the Flash) 40 pin 21×51 ‘DIP’ style 1 mm thick PCB with 0.1″ through-hole pins also with edge castellations Exposes 26 multi-function 3.3 V General Purpose I/O (GPIO) 23 GPIO are digital-only and 3 are ADC capable Can be surface mounted as a module 3-pin ARM Serial Wire Debug (SWD) port Simple yet highly flexible power supply architecture Various options for easily powering the unit from micro-USB, external supplies or batteries High quality, low cost, high availability Comprehensive SDK, software examples and documentation For full details of the RP2040",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 3,
+          "seq": 26,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:31989d68b2e2943cad52968f593c6dfd8c40a7af8c353e0f9f8c4857205e7fa3"
+        },
+        {
+          "evidence_id": "23577fcb5bdc4d6b98bd63d178fbd7e3",
+          "excerpt": "The Raspberry Pi Pico’s GPIO is powered from the on-board 3.3 V rail and is therefore fixed at 3.3 V. The Pico exposes 26 of the 30 possible RP2040 GPIO pins by routing them straight out to Pico header pins. GPIO0 to GPIO22 are digital only and GPIO 26-28 are able to be used either as digital GPIO or as ADC inputs (software selectable). One thing to note is that the ADC capable GPIO26-29 have an internal reverse diode to the IOVDD (3V3) rail and so the input voltage must not exceed IOVDD plus about 300 mV. Also, if the RP2040 is unpowered, applying a voltage to these GPIO pins will ‘leak’ through the diode into the IOVDD rail. Normal digital GPIO pins 0-25 (and also the debug pins) do not have this restriction and therefore voltage can safely be applied to these pins when RP2040 is",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 19,
+          "seq": 87,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:8cc451b59336c8f42ad951531c1c0f418ad20ea5aed3bae377815e81403cf8d1"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q01-c2",
+      "question_id": "q01",
+      "question_no": 1,
+      "group": "single",
+      "question": "How many multi-function GPIOs does the Raspberry Pi Pico expose?",
+      "claim_text": "Of these, 23 are digital-only and 3 (GPIO 26–28) are ADC capable, with GPIO 26–29 being able to be used as either digital GPIO or ADC inputs.",
+      "evidence_refs": [
+        "cdfd6ccff60f49389429376688680402",
+        "23577fcb5bdc4d6b98bd63d178fbd7e3"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:183c14cf6d232cde5039725078e0ddb301fe0a1b19f882ade8bb1c3e07089e20"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "cdfd6ccff60f49389429376688680402",
+          "excerpt": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for RP2040, with the following key features: RP2040 microcontroller with 2 MB Flash Micro-USB B port for power and data (and for reprogramming the Flash) 40 pin 21×51 ‘DIP’ style 1 mm thick PCB with 0.1″ through-hole pins also with edge castellations Exposes 26 multi-function 3.3 V General Purpose I/O (GPIO) 23 GPIO are digital-only and 3 are ADC capable Can be surface mounted as a module 3-pin ARM Serial Wire Debug (SWD) port Simple yet highly flexible power supply architecture Various options for easily powering the unit from micro-USB, external supplies or batteries High quality, low cost, high availability Comprehensive SDK, software examples and documentation For full details of the RP2040",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 3,
+          "seq": 26,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:31989d68b2e2943cad52968f593c6dfd8c40a7af8c353e0f9f8c4857205e7fa3"
+        },
+        {
+          "evidence_id": "23577fcb5bdc4d6b98bd63d178fbd7e3",
+          "excerpt": "The Raspberry Pi Pico’s GPIO is powered from the on-board 3.3 V rail and is therefore fixed at 3.3 V. The Pico exposes 26 of the 30 possible RP2040 GPIO pins by routing them straight out to Pico header pins. GPIO0 to GPIO22 are digital only and GPIO 26-28 are able to be used either as digital GPIO or as ADC inputs (software selectable). One thing to note is that the ADC capable GPIO26-29 have an internal reverse diode to the IOVDD (3V3) rail and so the input voltage must not exceed IOVDD plus about 300 mV. Also, if the RP2040 is unpowered, applying a voltage to these GPIO pins will ‘leak’ through the diode into the IOVDD rail. Normal digital GPIO pins 0-25 (and also the debug pins) do not have this restriction and therefore voltage can safely be applied to these pins when RP2040 is",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 19,
+          "seq": 87,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:8cc451b59336c8f42ad951531c1c0f418ad20ea5aed3bae377815e81403cf8d1"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q02-c1",
+      "question_id": "q02",
+      "question_no": 2,
+      "group": "single",
+      "question": "What is the maximum Cortex-M0+ clock frequency of the RP2040 as stated in the Pico datasheet?",
+      "claim_text": "The maximum Cortex-M0+ clock frequency of the RP2040 is 133 MHz.",
+      "evidence_refs": [
+        "cd4151b4fd264b1aa3fbab0ae8b0c428"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:3da6a3e38148fca20c0f4ffa43cf9e359080d38d314dade8d126054f3d4516c6"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "cd4151b4fd264b1aa3fbab0ae8b0c428",
+          "excerpt": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequency 264 kB multi-bank high performance SRAM External Quad-SPI Flash with eXecute In Place (XIP) and 16 kB on-chip cache High performance full-crossbar bus fabric On-board USB1.1 (device or host) 30 multi-function General Purpose IO (4 can be used for ADC) 1.8-3.3 V IO Voltage (NOTE Pico IO voltage is fixed at 3.3 V)",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 3,
+          "seq": 27,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:6653053a812037814bf8c5864e159d971fa89870935b12eca908de397cc19e1b"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q03-c1",
+      "question_id": "q03",
+      "question_no": 3,
+      "group": "single",
+      "question": "How much on-board QSPI Flash does the Raspberry Pi Pico have?",
+      "claim_text": "The Raspberry Pi Pico has 2 MB of on-board QSPI Flash.",
+      "evidence_refs": [
+        "3c9156800268457eb7cee55c3dd18a2d",
+        "cdfd6ccff60f49389429376688680402",
+        "becac41ce83741208fe819b3c9875090"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:398996e479671b5b0fca8de05a27f022afb509e787440753c231fe8e973d85e4"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "3c9156800268457eb7cee55c3dd18a2d",
+          "excerpt": "4. Applications information\n4.1. Programming the flash\nThe on-board 2 MB QSPI Flash can be (re)programmed either using the Serial Wire Debug port or by the special USB Mass Storage Device mode. The simplest way to reprogram the Pico’s Flash is to use the USB mode. To do this, depower the board, then hold the BOOTSEL button down during board power-up (e.g. hold BOOTSEL down while connecting the USB). The Pico will then appear as a USB Mass Storage Device. Dragging a special ‘.uf2’ file onto the disk will write this file to the Flash and restart the Pico. The USB boot code is stored in ROM on RP2040, so can not be accidentally overwritten. To get started using the SWD port see the Debugging with SWD section of Getting started with Raspberry Pi Pico-series..\n4.2. General purpose I/O",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 19,
+          "seq": 86,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:cf0a286c809c93f7fc1ca43621621b8b41ddee96d7ab75e1bf7c3241a231f2e6"
+        },
+        {
+          "evidence_id": "cdfd6ccff60f49389429376688680402",
+          "excerpt": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for RP2040, with the following key features: RP2040 microcontroller with 2 MB Flash Micro-USB B port for power and data (and for reprogramming the Flash) 40 pin 21×51 ‘DIP’ style 1 mm thick PCB with 0.1″ through-hole pins also with edge castellations Exposes 26 multi-function 3.3 V General Purpose I/O (GPIO) 23 GPIO are digital-only and 3 are ADC capable Can be surface mounted as a module 3-pin ARM Serial Wire Debug (SWD) port Simple yet highly flexible power supply architecture Various options for easily powering the unit from micro-USB, external supplies or batteries High quality, low cost, high availability Comprehensive SDK, software examples and documentation For full details of the RP2040",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 3,
+          "seq": 26,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:31989d68b2e2943cad52968f593c6dfd8c40a7af8c353e0f9f8c4857205e7fa3"
+        },
+        {
+          "evidence_id": "becac41ce83741208fe819b3c9875090",
+          "excerpt": "12-bit 500 ksps Analogue to Digital Converter (ADC) Various digital peripherals 2 × UART, 2 × I2C, 2 × SPI, 16 × PWM channels 1 × Timer with 4 alarms, 1 × Real Time Counter 2 × Programmable IO (PIO) blocks, 8 state machines total Flexible, user-programmable high-speed IO Can emulate interfaces such as SD Card and VGA Pico provides minimal (yet flexible) external circuitry to support the RP2040 chip: flash (Winbond W25Q16JV), crystal (Abracon ABM8-272-T3), power supplies and decoupling, and USB connector. The majority of the RP2040 microcontroller pins are brought to the user IO pins on the left and right edge of the board. Four RP2040 IO are used for internal functions - driving an LED, on-board Switched Mode Power Supply (SMPS) power control and sensing the system voltages. Pico has been",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 4,
+          "seq": 28,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:15e107d0e8103b4a88c67c9bff4688e8d2e87e350a684c5b5f681ed3aeb289f4"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q03-c2",
+      "question_id": "q03",
+      "question_no": 3,
+      "group": "single",
+      "question": "How much on-board QSPI Flash does the Raspberry Pi Pico have?",
+      "claim_text": "The on-board flash in the Raspberry Pi Pico is specified as 2 MB, as confirmed by the mention of the Winbond W25Q16JV flash chip which is a 2 MB QSPI flash.",
+      "evidence_refs": [
+        "becac41ce83741208fe819b3c9875090",
+        "8c1ca2fbac8e47f0b9a2297c10785a20"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:398996e479671b5b0fca8de05a27f022afb509e787440753c231fe8e973d85e4",
+        "sha256:7342cf8c7960d6492b9e0b32f3629ac548391924ea57b0481b89615a24263e33"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "becac41ce83741208fe819b3c9875090",
+          "excerpt": "12-bit 500 ksps Analogue to Digital Converter (ADC) Various digital peripherals 2 × UART, 2 × I2C, 2 × SPI, 16 × PWM channels 1 × Timer with 4 alarms, 1 × Real Time Counter 2 × Programmable IO (PIO) blocks, 8 state machines total Flexible, user-programmable high-speed IO Can emulate interfaces such as SD Card and VGA Pico provides minimal (yet flexible) external circuitry to support the RP2040 chip: flash (Winbond W25Q16JV), crystal (Abracon ABM8-272-T3), power supplies and decoupling, and USB connector. The majority of the RP2040 microcontroller pins are brought to the user IO pins on the left and right edge of the board. Four RP2040 IO are used for internal functions - driving an LED, on-board Switched Mode Power Supply (SMPS) power control and sensing the system voltages. Pico has been",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 4,
+          "seq": 28,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:15e107d0e8103b4a88c67c9bff4688e8d2e87e350a684c5b5f681ed3aeb289f4"
+        },
+        {
+          "evidence_id": "8c1ca2fbac8e47f0b9a2297c10785a20",
+          "excerpt": "Chip revision v3.0 or newer Package Q6: QFN 6*6 N/A: QFN 5*5 High temperature In-package PSRAM R2: 2 MB PSRAM Connection WD: Wi-Fi b/g/n + Bluetooth/Bluetooth LE dual mode In-package flash 0: No in-package flash 2: 2 MB flash 4: 4 MB flash Core D/U: Dual core S: Single core Chip Series",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 10,
+          "seq": 62,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:9cc77edcbec3429bfada840179739bef085e2038d308a39bc6c08bf146e895c2"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q04-c1",
+      "question_id": "q04",
+      "question_no": 4,
+      "group": "single",
+      "question": "What ADC resolution and sampling rate does the Pico datasheet state?",
+      "claim_text": "The Raspberry Pi Pico datasheet states that the ADC has a 12-bit resolution and a sampling rate of 500 ksps.",
+      "evidence_refs": [
+        "becac41ce83741208fe819b3c9875090"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:a671699eef7506a43c92fbce7b4bfa83abdd08e04668531fa9c68792e7f18440"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "becac41ce83741208fe819b3c9875090",
+          "excerpt": "12-bit 500 ksps Analogue to Digital Converter (ADC) Various digital peripherals 2 × UART, 2 × I2C, 2 × SPI, 16 × PWM channels 1 × Timer with 4 alarms, 1 × Real Time Counter 2 × Programmable IO (PIO) blocks, 8 state machines total Flexible, user-programmable high-speed IO Can emulate interfaces such as SD Card and VGA Pico provides minimal (yet flexible) external circuitry to support the RP2040 chip: flash (Winbond W25Q16JV), crystal (Abracon ABM8-272-T3), power supplies and decoupling, and USB connector. The majority of the RP2040 microcontroller pins are brought to the user IO pins on the left and right edge of the board. Four RP2040 IO are used for internal functions - driving an LED, on-board Switched Mode Power Supply (SMPS) power control and sensing the system voltages. Pico has been",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 4,
+          "seq": 28,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:15e107d0e8103b4a88c67c9bff4688e8d2e87e350a684c5b5f681ed3aeb289f4"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q05-c1",
+      "question_id": "q05",
+      "question_no": 5,
+      "group": "single",
+      "question": "What are the minimum and maximum VSYS input voltages for the Raspberry Pi Pico?",
+      "claim_text": "The minimum and maximum VSYS input voltages for the Raspberry Pi Pico are 1.8 V to 5.5 V.",
+      "evidence_refs": [
+        "2f976bda8d6e4c168b4d3f6c37824de1",
+        "cb7009375e314aaaa025f4774f75ebd4",
+        "24f6141b68c043e9925a9ab08c18a0d5"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:b84fbe35eb45d6da9ddf33221c65b68cc884887a1e1c161f3f5ac2e38050280a"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "2f976bda8d6e4c168b4d3f6c37824de1",
+          "excerpt": "VBUS is the 5 V input from the micro-USB port, which is fed through a Schottky diode to generate VSYS. The VBUS to VSYS diode (D1) adds flexibility by allowing power ORing of different supplies into VSYS. VSYS is the main system ‘input voltage’ and feeds the RT6150 buck-boost SMPS, which generates a fixed 3.3 V output for the RP2040 device and its IO (and can be used to power external circuitry). VSYS is R-C filtered and divided by 3 (by R5, R6 and C3 in the Pico schematic) and can be monitored on ADC channel 3. This can be used for example as a crude battery voltage monitor. The buck-boost SMPS, as its name implies, can seamlessly switch from buck to boost mode, and therefore can maintain an output voltage of 3.3 V from a wide range of input voltages, ~1.8 V to 5.5 V, which allows a lot",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 20,
+          "seq": 95,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:293f1fd68917026b0dd6098e525b974098e385a017e00dd81a3511ee42a93762"
+        },
+        {
+          "evidence_id": "cb7009375e314aaaa025f4774f75ebd4",
+          "excerpt": "Note The RP2040 has an on-chip linear regulator (LDO) that powers the digital core at 1.1 V (nominal) from the 3.3 V supply, which is not shown in Figure 15.\n4.5. Powering Pico\nThe simplest way to power Pico is to plug in the micro-USB, which will power VSYS (and therefore the system) from the 5 V USB VBUS voltage, via D1 (so VSYS becomes VBUS minus the Schottky diode drop). If the USB port is the only power source, VSYS and VBUS can be safely shorted together to eliminate the Schottky diode drop (which improves efficiency and reduces ripple on VSYS). If the USB port is not going to be used, it is safe to power Pico by connecting VSYS to your preferred power source (in the range 1.8 V to 5.5 V).",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 20,
+          "seq": 99,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:0795b673a305e92960644c33c2895f8805fecf1a8b0da38b01732a74f1956774"
+        },
+        {
+          "evidence_id": "24f6141b68c043e9925a9ab08c18a0d5",
+          "excerpt": "PIN30 RUN VBUS is the micro-USB input voltage, connected to micro-USB port pin 1. This is nominally 5 V (or 0 V if the USB is not connected or not powered). VSYS is the main system input voltage, which can vary in the allowed range 1.8 V to 5.5 V, and is used by the on-board SMPS to generate the 3.3 V for the RP2040 and its GPIO. 3V3_EN connects to the on-board SMPS enable pin, and is pulled high (to VSYS) via a 100 kΩ resistor. To disable the 3.3 V (which also de-powers the RP2040), short this pin low. 3V3 is the main 3.3 V supply to RP2040 and its I/O, generated by the on-board SMPS. This pin can be used to power external circuitry (maximum output current will depend on RP2040 load and VSYS voltage, it is recommended to keep the load on this pin less than 300 mA). ADC_VREF is the ADC",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 8,
+          "seq": 41,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:2ec9c58926b758d680d12765bf16c23a48a4c6e687da52f7c8927ae4c0de775a"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q05-c2",
+      "question_id": "q05",
+      "question_no": 5,
+      "group": "single",
+      "question": "What are the minimum and maximum VSYS input voltages for the Raspberry Pi Pico?",
+      "claim_text": "The VSYS input voltage range is specified as ~1.8 V to 5.5 V, allowing the on-board buck-boost SMPS to maintain a stable 3.3 V output for the RP2040.",
+      "evidence_refs": [
+        "2f976bda8d6e4c168b4d3f6c37824de1",
+        "e6315aae8bef4c72b4c03dbded84a165",
+        "24f6141b68c043e9925a9ab08c18a0d5"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:b84fbe35eb45d6da9ddf33221c65b68cc884887a1e1c161f3f5ac2e38050280a"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "2f976bda8d6e4c168b4d3f6c37824de1",
+          "excerpt": "VBUS is the 5 V input from the micro-USB port, which is fed through a Schottky diode to generate VSYS. The VBUS to VSYS diode (D1) adds flexibility by allowing power ORing of different supplies into VSYS. VSYS is the main system ‘input voltage’ and feeds the RT6150 buck-boost SMPS, which generates a fixed 3.3 V output for the RP2040 device and its IO (and can be used to power external circuitry). VSYS is R-C filtered and divided by 3 (by R5, R6 and C3 in the Pico schematic) and can be monitored on ADC channel 3. This can be used for example as a crude battery voltage monitor. The buck-boost SMPS, as its name implies, can seamlessly switch from buck to boost mode, and therefore can maintain an output voltage of 3.3 V from a wide range of input voltages, ~1.8 V to 5.5 V, which allows a lot",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 20,
+          "seq": 95,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:293f1fd68917026b0dd6098e525b974098e385a017e00dd81a3511ee42a93762"
+        },
+        {
+          "evidence_id": "e6315aae8bef4c72b4c03dbded84a165",
+          "excerpt": "Pico uses an on-board buck-boost SMPS which is able to generate the required 3.3 V (to power RP2040 and external circuitry) from a wide range of input voltages (~1.8 to 5.5 V). This allows significant flexibility in powering the unit from various sources such as a single Lithium-Ion cell, or 3 AA cells in series. Battery chargers can also be very easily integrated with the Pico powerchain. Reprogramming the Pico Flash can be done using USB (simply drag and drop a file onto the Pico which appears as a mass storage device), or the standard Serial Wire Debug (SWD) port can reset the system and load and run code without any button presses. The SWD port can also be used to interactively debug code running on the RP2040. Tip The Getting started with Raspberry Pi Pico-series book walks through",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 4,
+          "seq": 31,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:3c787ca0327c1629660b4a4fdb34db33bbd029f365b87c3b0475d3fdc6e419f4"
+        },
+        {
+          "evidence_id": "24f6141b68c043e9925a9ab08c18a0d5",
+          "excerpt": "PIN30 RUN VBUS is the micro-USB input voltage, connected to micro-USB port pin 1. This is nominally 5 V (or 0 V if the USB is not connected or not powered). VSYS is the main system input voltage, which can vary in the allowed range 1.8 V to 5.5 V, and is used by the on-board SMPS to generate the 3.3 V for the RP2040 and its GPIO. 3V3_EN connects to the on-board SMPS enable pin, and is pulled high (to VSYS) via a 100 kΩ resistor. To disable the 3.3 V (which also de-powers the RP2040), short this pin low. 3V3 is the main 3.3 V supply to RP2040 and its I/O, generated by the on-board SMPS. This pin can be used to power external circuitry (maximum output current will depend on RP2040 load and VSYS voltage, it is recommended to keep the load on this pin less than 300 mA). ADC_VREF is the ADC",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 8,
+          "seq": 41,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:2ec9c58926b758d680d12765bf16c23a48a4c6e687da52f7c8927ae4c0de775a"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q06-c1",
+      "question_id": "q06",
+      "question_no": 6,
+      "group": "single",
+      "question": "How many Programmable IO (PIO) blocks and state machines does the RP2040 have?",
+      "claim_text": "The RP2040 has 2 Programmable IO (PIO) blocks and 8 state machines.",
+      "evidence_refs": [
+        "becac41ce83741208fe819b3c9875090"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:6e75d7bc6786d47d0c47623d48c33b489e5e7ea45ab12c0216c95dba9917e4c0"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "becac41ce83741208fe819b3c9875090",
+          "excerpt": "12-bit 500 ksps Analogue to Digital Converter (ADC) Various digital peripherals 2 × UART, 2 × I2C, 2 × SPI, 16 × PWM channels 1 × Timer with 4 alarms, 1 × Real Time Counter 2 × Programmable IO (PIO) blocks, 8 state machines total Flexible, user-programmable high-speed IO Can emulate interfaces such as SD Card and VGA Pico provides minimal (yet flexible) external circuitry to support the RP2040 chip: flash (Winbond W25Q16JV), crystal (Abracon ABM8-272-T3), power supplies and decoupling, and USB connector. The majority of the RP2040 microcontroller pins are brought to the user IO pins on the left and right edge of the board. Four RP2040 IO are used for internal functions - driving an LED, on-board Switched Mode Power Supply (SMPS) power control and sensing the system voltages. Pico has been",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 4,
+          "seq": 28,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:15e107d0e8103b4a88c67c9bff4688e8d2e87e350a684c5b5f681ed3aeb289f4"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q07-c1",
+      "question_id": "q07",
+      "question_no": 7,
+      "group": "single",
+      "question": "What are the Pico board dimensions and thickness?",
+      "claim_text": "The Raspberry Pi Pico board has dimensions of 51×21 mm and a thickness of 1 mm.",
+      "evidence_refs": [
+        "236f8821238c4837a84d96981dc6ed9b"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:911a9a747dc3222e89ef0b7c0ee38118c296d3a074fb6e438703007fafeaec29"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "236f8821238c4837a84d96981dc6ed9b",
+          "excerpt": "2. Mechanical specification\nThe Raspberry Pi Pico is a single sided 51×21 mm 1 mm thick PCB with a micro-USB port overhanging the top edge and dual castellated/through-hole pins around the remaining edges. Pico is designed to be usable as a surface mount module as well as being in Dual Inline Package (DIP) type format, with the 40 main user pins on a 2.54 mm (0.1″) pitch grid with 1 mm holes and hence compatible with veroboard and breadboard. Pico also has 4× 2.1 mm (± 0.05 mm) drilled mounting holes to provide for mechanical fixing, see Figure 3.\nFigure 3. The dimensions of the Raspberry Pi Pico Rev3 board.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 6,
+          "seq": 37,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:bdaff40847c2f6f803d8a6f8c9a6914e41daeb0ddb3e41dae1d083705b94babd"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q08-c1",
+      "question_id": "q08",
+      "question_no": 8,
+      "group": "single",
+      "question": "What does BOOTSEL mode on the RP2040 do, and which host was used for its current measurements?",
+      "claim_text": "BOOTSEL mode on the RP2040 allows the board to enter a USB bootloader state, accessible via the micro-USB port, and can be triggered by shorting TP6 low at power-up.",
+      "evidence_refs": [
+        "dcca8dad242c4c10ba6ff6d5718c1b1b",
+        "47d191b0a4934731b31edd89f92867fb"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:6ba5ee5680657e1d0e705a21ed08e906b5cbfa154bcd496cee4add0c123d4e36"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "dcca8dad242c4c10ba6ff6d5718c1b1b",
+          "excerpt": "TP6\nBOOTSEL TP1, TP2 and TP3 can be used to access the USB signals instead of using the micro-USB port. TP6 can be used to drive the system into mass-storage USB programming mode (by shorting it low at power-up). Note that TP4 is not intended to be used externally, and TP5 is not really recommended to be used as it will only swing from 0 V to the LED forward voltage (and hence can only really be used as an output with special care).\n2.2. Surface-mount footprint\nThe following footprint (Figure 5) is recommended for systems which will be reflow-soldering Pico units as modules.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 8,
+          "seq": 52,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:8b19b33cc41522cab532f087bca437e53a7682cc037bc134cb2aaa354df9574d"
+        },
+        {
+          "evidence_id": "47d191b0a4934731b31edd89f92867fb",
+          "excerpt": "4.7. USB\nRP2040 has an integrated USB1.1 PHY and controller which can be used in both Device and Host mode. Pico adds the two required 27 Ω external resistors and brings this interface to a standard micro-USB port. The USB port can be used to access the USB bootloader (BOOTSEL mode) stored in the RP2040 boot ROM. It can also be used by user code, to access an external USB device or host.\n4.8. Debugging\nRaspberry Pi Pico brings the RP2040 Serial Wire Debug (SWD) interface to a 3 pin debug header on the lower edge of the board. To get started using the debug port see the Debugging with SWD section of Getting started with Raspberry Pi Pico-series..\nNote The RP2040 chip has internal pull up resistors on the SWDIO and SWCLK pins, both nominally 60 kΩ.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 23,
+          "seq": 108,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:b3ad8cd7dab042bdd5ebd28e892fde10454e27f98479b9a6503ae979fa1991c3"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q08-c2",
+      "question_id": "q08",
+      "question_no": 8,
+      "group": "single",
+      "question": "What does BOOTSEL mode on the RP2040 do, and which host was used for its current measurements?",
+      "claim_text": "The host used for the current measurements of BOOTSEL mode is a Raspberry Pi 4.",
+      "evidence_refs": [
+        "3a74d836ea0e4ae9b5b924557e6ae8bc"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:6ba5ee5680657e1d0e705a21ed08e906b5cbfa154bcd496cee4add0c123d4e36"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "3a74d836ea0e4ae9b5b924557e6ae8bc",
+          "excerpt": "3.1.2. BOOTSEL mode\nTable 3 describes the BOOTSEL mode of RP2040. These measurements are made both with and without USB activity on the bus, using a Raspberry Pi 4 as a host.\nTable 3. BOOTSEL mode Pico board\nUSB idle VBUS current @5V (mA) USB active VBUS current @5V (mA) Temperature (°C) Temperature (°C) 25 25 85 −25 25 85 1 9.05 8.50 8.87 10.19 9.66 10.00 2 9.58 9.12 9.20 10.64 10.35 10.36 3 9.45 8.63 8.99 10.75 9.81 10.08 Mean 9.4 8.7 9.0 10.5 9.9 10.1",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 15,
+          "seq": 75,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:49b2cdf2e54f6b2124efcf4f6723cf75cfbdcd1745e32dfafecb24fdc202505f"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q09-c1",
+      "question_id": "q09",
+      "question_no": 9,
+      "group": "cross-doc",
+      "question": "How many multi-function GPIOs does Raspberry Pi Pico expose, how many programmable GPIOs does ESP32 have, and what is the difference?",
+      "claim_text": "The Raspberry Pi Pico exposes 26 multi-function GPIOs.",
+      "evidence_refs": [
+        "cdfd6ccff60f49389429376688680402",
+        "23577fcb5bdc4d6b98bd63d178fbd7e3"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:f85ce60a95bec6012dacc78f1710189680904575ade1edf804be3b972bb8c2a3"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "cdfd6ccff60f49389429376688680402",
+          "excerpt": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for RP2040, with the following key features: RP2040 microcontroller with 2 MB Flash Micro-USB B port for power and data (and for reprogramming the Flash) 40 pin 21×51 ‘DIP’ style 1 mm thick PCB with 0.1″ through-hole pins also with edge castellations Exposes 26 multi-function 3.3 V General Purpose I/O (GPIO) 23 GPIO are digital-only and 3 are ADC capable Can be surface mounted as a module 3-pin ARM Serial Wire Debug (SWD) port Simple yet highly flexible power supply architecture Various options for easily powering the unit from micro-USB, external supplies or batteries High quality, low cost, high availability Comprehensive SDK, software examples and documentation For full details of the RP2040",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 3,
+          "seq": 26,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:31989d68b2e2943cad52968f593c6dfd8c40a7af8c353e0f9f8c4857205e7fa3"
+        },
+        {
+          "evidence_id": "23577fcb5bdc4d6b98bd63d178fbd7e3",
+          "excerpt": "The Raspberry Pi Pico’s GPIO is powered from the on-board 3.3 V rail and is therefore fixed at 3.3 V. The Pico exposes 26 of the 30 possible RP2040 GPIO pins by routing them straight out to Pico header pins. GPIO0 to GPIO22 are digital only and GPIO 26-28 are able to be used either as digital GPIO or as ADC inputs (software selectable). One thing to note is that the ADC capable GPIO26-29 have an internal reverse diode to the IOVDD (3V3) rail and so the input voltage must not exceed IOVDD plus about 300 mV. Also, if the RP2040 is unpowered, applying a voltage to these GPIO pins will ‘leak’ through the diode into the IOVDD rail. Normal digital GPIO pins 0-25 (and also the debug pins) do not have this restriction and therefore voltage can safely be applied to these pins when RP2040 is",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 19,
+          "seq": 87,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:8cc451b59336c8f42ad951531c1c0f418ad20ea5aed3bae377815e81403cf8d1"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q09-c2",
+      "question_id": "q09",
+      "question_no": 9,
+      "group": "cross-doc",
+      "question": "How many multi-function GPIOs does Raspberry Pi Pico expose, how many programmable GPIOs does ESP32 have, and what is the difference?",
+      "claim_text": "The ESP32 has 34 programmable GPIOs.",
+      "evidence_refs": [
+        "2b1e8fac17154bb2ae4211570894b40d",
+        "02c9cb10b3d44adda75098371eca3c01"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:9a9cef1e52e81511773604751d3f878c1f08c39ce7020bc94ae226b6c9964a40"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "2b1e8fac17154bb2ae4211570894b40d",
+          "excerpt": "2 cores at 240 MHz: 1079.96 CoreMark; 4.50 CoreMark/MHz\n• 448 KB ROM\n• 520 KB SRAM\n• 16 KB SRAM in RTC\n• QSPI supports multiple flash/SRAM chips\nClocks and Timers\n• Internal 8 MHz oscillator with calibration\n• Internal RC oscillator with calibration\n• External 2 MHz ~ 60 MHz crystal oscillator (40 MHz only for Wi-Fi/Bluetooth functionality) • External 32 kHz crystal oscillator for RTC with calibration • Two timer groups, including 2 × 64-bit timers and 1 × main watchdog in each group • One RTC timer\n• RTC watchdog\nAdvanced Peripheral Interfaces\n• 34 programmable GPIOs Five strapping GPIOs Six input-only GPIOs Six GPIOs needed for in-package flash (ESP32-U4WDH) and in-package PSRAM (ESP32-D0WDRH2-V3)\n• 12-bit SAR ADC up to 18 channels • Two 8-bit DAC\n• 10 touch sensors\n• Four SPI interfaces",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 3,
+          "seq": 36,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:e40607bd54b4f41b43ef2a0ebf8d32f34197112ec81402c623abf6d63af5c23d"
+        },
+        {
+          "evidence_id": "02c9cb10b3d44adda75098371eca3c01",
+          "excerpt": "4.8 Digital Peripherals 4.8.1 General Purpose Input / Output Interface (GPIO) ESP32 has 34 GPIO pins which can be assigned various functions by programming the appropriate registers. There are several kinds of GPIOs: digital-only, analog-enabled, capacitive-touch-enabled, etc. Analog-enabled GPIOs and Capacitive-touch-enabled GPIOs can be configured as digital GPIOs. Most of the digital GPIOs can be configured as internal pull-up or pull-down, or set to high impedance. When configured as an input, the input value can be read through the register. The input can also be set to edge-trigger or level-trigger to generate CPU interrupts. Most of the digital IO pins are bi-directional, non-inverting and tristate, including input and output buffers with tristate control. These pins can be",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 35,
+          "seq": 880,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:42d7ae2925e1e6e462d992d6d461c5f5630df8c956479fe81c027afc17f097c2"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q09-c3",
+      "question_id": "q09",
+      "question_no": 9,
+      "group": "cross-doc",
+      "question": "How many multi-function GPIOs does Raspberry Pi Pico expose, how many programmable GPIOs does ESP32 have, and what is the difference?",
+      "claim_text": "The difference between the Raspberry Pi Pico and ESP32 GPIOs is that the Pico exposes 26 of 30 multi-function GPIOs, while the ESP32 has 34 programmable GPIOs that can be assigned various functions including digital, analog, and capacitive touch, with more flexibility in configuration and function multiplexing.",
+      "evidence_refs": [
+        "cd4151b4fd264b1aa3fbab0ae8b0c428",
+        "2b1e8fac17154bb2ae4211570894b40d",
+        "02c9cb10b3d44adda75098371eca3c01",
+        "253e12c2281a4ad7b9309115d4a156e3"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:9a9cef1e52e81511773604751d3f878c1f08c39ce7020bc94ae226b6c9964a40",
+        "sha256:f85ce60a95bec6012dacc78f1710189680904575ade1edf804be3b972bb8c2a3"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "cd4151b4fd264b1aa3fbab0ae8b0c428",
+          "excerpt": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequency 264 kB multi-bank high performance SRAM External Quad-SPI Flash with eXecute In Place (XIP) and 16 kB on-chip cache High performance full-crossbar bus fabric On-board USB1.1 (device or host) 30 multi-function General Purpose IO (4 can be used for ADC) 1.8-3.3 V IO Voltage (NOTE Pico IO voltage is fixed at 3.3 V)",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 3,
+          "seq": 27,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:6653053a812037814bf8c5864e159d971fa89870935b12eca908de397cc19e1b"
+        },
+        {
+          "evidence_id": "2b1e8fac17154bb2ae4211570894b40d",
+          "excerpt": "2 cores at 240 MHz: 1079.96 CoreMark; 4.50 CoreMark/MHz\n• 448 KB ROM\n• 520 KB SRAM\n• 16 KB SRAM in RTC\n• QSPI supports multiple flash/SRAM chips\nClocks and Timers\n• Internal 8 MHz oscillator with calibration\n• Internal RC oscillator with calibration\n• External 2 MHz ~ 60 MHz crystal oscillator (40 MHz only for Wi-Fi/Bluetooth functionality) • External 32 kHz crystal oscillator for RTC with calibration • Two timer groups, including 2 × 64-bit timers and 1 × main watchdog in each group • One RTC timer\n• RTC watchdog\nAdvanced Peripheral Interfaces\n• 34 programmable GPIOs Five strapping GPIOs Six input-only GPIOs Six GPIOs needed for in-package flash (ESP32-U4WDH) and in-package PSRAM (ESP32-D0WDRH2-V3)\n• 12-bit SAR ADC up to 18 channels • Two 8-bit DAC\n• 10 touch sensors\n• Four SPI interfaces",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 3,
+          "seq": 36,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:e40607bd54b4f41b43ef2a0ebf8d32f34197112ec81402c623abf6d63af5c23d"
+        },
+        {
+          "evidence_id": "02c9cb10b3d44adda75098371eca3c01",
+          "excerpt": "4.8 Digital Peripherals 4.8.1 General Purpose Input / Output Interface (GPIO) ESP32 has 34 GPIO pins which can be assigned various functions by programming the appropriate registers. There are several kinds of GPIOs: digital-only, analog-enabled, capacitive-touch-enabled, etc. Analog-enabled GPIOs and Capacitive-touch-enabled GPIOs can be configured as digital GPIOs. Most of the digital GPIOs can be configured as internal pull-up or pull-down, or set to high impedance. When configured as an input, the input value can be read through the register. The input can also be set to edge-trigger or level-trigger to generate CPU interrupts. Most of the digital IO pins are bi-directional, non-inverting and tristate, including input and output buffers with tristate control. These pins can be",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 35,
+          "seq": 880,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:42d7ae2925e1e6e462d992d6d461c5f5630df8c956479fe81c027afc17f097c2"
+        },
+        {
+          "evidence_id": "253e12c2281a4ad7b9309115d4a156e3",
+          "excerpt": "multiplexed with other functions, such as the SDIO, UART, SPI, etc. (More details can be found in the Appendix, Table IO_MUX. ) For low-power operations, the GPIOs can be set to hold their states. For details, see Section 4.10 Peripheral Pin Configurations, Appendix A –ESP32 Pin Lists and ESP32 Technical Reference Manual > Chapter IO_MUX and GPIO Matrix.",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 35,
+          "seq": 881,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:d4673f82562a94773d1a12cd804e240bf529002a5279eda0db62d9e33571ba6c"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q10-c1",
+      "question_id": "q10",
+      "question_no": 10,
+      "group": "cross-doc",
+      "question": "Compare the Pico's ADC with the ESP32's wireless connectivity: what ADC does Pico have and what Wi-Fi/Bluetooth versions does ESP32 support?",
+      "claim_text": "The Pico has a 12-bit ADC with 3 ADC-capable GPIO pins (GPIO 26–28), which can be used as analog inputs with software selection.",
+      "evidence_refs": [
+        "23577fcb5bdc4d6b98bd63d178fbd7e3",
+        "cdfd6ccff60f49389429376688680402"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:9ca19d255a1fcc767dd5d1dea6914d371d1cb0111c4ce512602d88a02b8215e6"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "23577fcb5bdc4d6b98bd63d178fbd7e3",
+          "excerpt": "The Raspberry Pi Pico’s GPIO is powered from the on-board 3.3 V rail and is therefore fixed at 3.3 V. The Pico exposes 26 of the 30 possible RP2040 GPIO pins by routing them straight out to Pico header pins. GPIO0 to GPIO22 are digital only and GPIO 26-28 are able to be used either as digital GPIO or as ADC inputs (software selectable). One thing to note is that the ADC capable GPIO26-29 have an internal reverse diode to the IOVDD (3V3) rail and so the input voltage must not exceed IOVDD plus about 300 mV. Also, if the RP2040 is unpowered, applying a voltage to these GPIO pins will ‘leak’ through the diode into the IOVDD rail. Normal digital GPIO pins 0-25 (and also the debug pins) do not have this restriction and therefore voltage can safely be applied to these pins when RP2040 is",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 19,
+          "seq": 87,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:8cc451b59336c8f42ad951531c1c0f418ad20ea5aed3bae377815e81403cf8d1"
+        },
+        {
+          "evidence_id": "cdfd6ccff60f49389429376688680402",
+          "excerpt": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for RP2040, with the following key features: RP2040 microcontroller with 2 MB Flash Micro-USB B port for power and data (and for reprogramming the Flash) 40 pin 21×51 ‘DIP’ style 1 mm thick PCB with 0.1″ through-hole pins also with edge castellations Exposes 26 multi-function 3.3 V General Purpose I/O (GPIO) 23 GPIO are digital-only and 3 are ADC capable Can be surface mounted as a module 3-pin ARM Serial Wire Debug (SWD) port Simple yet highly flexible power supply architecture Various options for easily powering the unit from micro-USB, external supplies or batteries High quality, low cost, high availability Comprehensive SDK, software examples and documentation For full details of the RP2040",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 3,
+          "seq": 26,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:31989d68b2e2943cad52968f593c6dfd8c40a7af8c353e0f9f8c4857205e7fa3"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q10-c2",
+      "question_id": "q10",
+      "question_no": 10,
+      "group": "cross-doc",
+      "question": "Compare the Pico's ADC with the ESP32's wireless connectivity: what ADC does Pico have and what Wi-Fi/Bluetooth versions does ESP32 support?",
+      "claim_text": "The ESP32 supports Wi-Fi 802.11b/g/n and Bluetooth 4.2 (Bluetooth LE) with up to 150 Mbps data rate and up to 20.5 dBm transmitting power.",
+      "evidence_refs": [
+        "588258c29ebd439d9d06391bb78b72ea",
+        "f4fe2bb8bea84e56bea3b3696318a33e",
+        "b0136c969e1e4a5fb9a29abd600e6b5c"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:898956d1604b7bf12777ca5c273ab46f537f98f22cea57b90063ede67a03fb9b"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "588258c29ebd439d9d06391bb78b72ea",
+          "excerpt": "Features\nWi-Fi\n• 802.11b/g/n • 802.11n (2.4 GHz), up to 150 Mbps • WMM • TX/RX A-MPDU, RX A-MSDU • Immediate Block ACK • Defragmentation • Automatic Beacon monitoring (hardware TSF) • Four virtual Wi-Fi interfaces • Simultaneous support for Infrastructure Station, SoftAP, and Promiscuous modes Note that when ESP32 is in Station mode, performing a scan, the SoftAP channel will be changed. • Antenna diversity\nBluetooth®",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 2,
+          "seq": 34,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:d522d889742a480483b72bc719b6876bd2e6f7a8bbd73cc47bf1c6e12dd1797b"
+        },
+        {
+          "evidence_id": "f4fe2bb8bea84e56bea3b3696318a33e",
+          "excerpt": "4.6.4 Wi-Fi Radio and Baseband ESP32 implements a TCP/IP and full 802.11 b/g/n Wi-Fi MAC protocol. It supports the Basic Service Set (BSS) STA and SoftAP operations under the Distributed Control Function (DCF). Power management is handled with minimal host interaction to minimize the active-duty period. The ESP32 Wi-Fi Radio and Baseband support the following features: • 802.11b/g/n • 802.11n MCS0-7 in both 20 MHz and 40 MHz bandwidth • 802.11n MCS32 (RX) • 802.11n 0.4 µs guard-interval • up to 150 Mbps of data rate • Receiving STBC 2×1 • Up to 20.5 dBm of transmitting power • Adjustable transmitting power • Antenna diversity ESP32 supports antenna diversity with an external RF switch. One or more GPIOs control the RF switch and selects the best antenna to minimize the effects of channel",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 32,
+          "seq": 872,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:4f054b762f8a21b1447622c4e8cd9b3b22378405aa0670a869d647172e1a7b74"
+        },
+        {
+          "evidence_id": "b0136c969e1e4a5fb9a29abd600e6b5c",
+          "excerpt": "ESP32 Series Datasheet Version 5.3\n2.4 GHz Wi-Fi + Bluetooth® + Bluetooth LE SoC",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 0,
+          "seq": 0,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:f12306d042bcff8cf24e021ad25732c915f8c7111cdbc622bca73a29b79fe165"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q10-c3",
+      "question_id": "q10",
+      "question_no": 10,
+      "group": "cross-doc",
+      "question": "Compare the Pico's ADC with the ESP32's wireless connectivity: what ADC does Pico have and what Wi-Fi/Bluetooth versions does ESP32 support?",
+      "claim_text": "The ESP32 integrates two 12-bit SAR ADCs and supports measurements on 18 channels.",
+      "evidence_refs": [
+        "775aca1cffa346e2ba32ff1020daed61"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:898956d1604b7bf12777ca5c273ab46f537f98f22cea57b90063ede67a03fb9b"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "775aca1cffa346e2ba32ff1020daed61",
+          "excerpt": "For information about the pin assignment of Ethernet MAC Interface, see Section 4.10 Peripheral Pin Configurations and ESP32 Technical Reference Manual > Chapter IO_MUX and GPIO Matrix.\n4.9 Analog Peripherals 4.9.1 Analog-to-Digital Converter (ADC) ESP32 integrates two 12-bit SAR ADCs and supports measurements on 18 channels (analog-enabled pins). The ULP coprocessor in ESP32 is also designed to measure voltage, while operating in the sleep mode, which enables low-power consumption. The CPU can be woken up by a threshold setting and/or via other triggers. Table 4-3 describes the ADC characteristics.\nTable 4-3. ADC Characteristics",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 42,
+          "seq": 903,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:8b782a7cc6e6f6792d590ddbcf4400cd524282f2dcf030f06019d393c20ceb18"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q11-c1",
+      "question_id": "q11",
+      "question_no": 11,
+      "group": "cross-doc",
+      "question": "Which has more SRAM: the RP2040's on-chip SRAM or the ESP32's SRAM, and by how much?",
+      "claim_text": "[degraded] 该题未产出带引用证据的主张 (status=succeeded, reason=insufficient_evidence)，答案不可评为支持。",
+      "evidence_refs": [],
+      "structural_validation": null,
+      "semantic_review": null,
+      "support_refs": [],
+      "excerpts": [],
+      "task_conflicts": [],
+      "expects_conflict": false,
+      "degraded": true,
+      "degraded_reason": "insufficient_evidence"
+    },
+    {
+      "claim_id": "q12-c1",
+      "question_id": "q12",
+      "question_no": 12,
+      "group": "cross-doc",
+      "question": "Compare processor cores: what CPU does the RP2040 use at what speed versus the ESP32's cores?",
+      "claim_text": "The RP2040 uses a dual-core Cortex-M0+ processor running at up to 133 MHz.",
+      "evidence_refs": [
+        "cd4151b4fd264b1aa3fbab0ae8b0c428"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:d9e89214a855af3f23342f8f503d7319bcc5e7589770fbccfcb6e40845ed4018"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "cd4151b4fd264b1aa3fbab0ae8b0c428",
+          "excerpt": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequency 264 kB multi-bank high performance SRAM External Quad-SPI Flash with eXecute In Place (XIP) and 16 kB on-chip cache High performance full-crossbar bus fabric On-board USB1.1 (device or host) 30 multi-function General Purpose IO (4 can be used for ADC) 1.8-3.3 V IO Voltage (NOTE Pico IO voltage is fixed at 3.3 V)",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 3,
+          "seq": 27,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:6653053a812037814bf8c5864e159d971fa89870935b12eca908de397cc19e1b"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q12-c2",
+      "question_id": "q12",
+      "question_no": 12,
+      "group": "cross-doc",
+      "question": "Compare processor cores: what CPU does the RP2040 use at what speed versus the ESP32's cores?",
+      "claim_text": "The ESP32 uses one or two Xtensa LX6 32-bit processors running at up to 240 MHz.",
+      "evidence_refs": [
+        "834034a85de64587bbd1c2fe8f771754",
+        "207f7f0665a943e5a3a08a74743ba685"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:e6b54fe40a7b1a052b22f7e8ed36157a95f7586055061389bbc15f2bff265afe"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "834034a85de64587bbd1c2fe8f771754",
+          "excerpt": "4.1 CPU and Memory 4.1.1 CPU ESP32 contains one or two low-power Xtensa® 32-bit LX6 microprocessor(s) with the following features: • 7-stage pipeline to support the clock frequency of up to 240 MHz (160 MHz for ESP32-S0WD (NRND)) • 16/24-bit Instruction Set provides high code-density • Support for Floating Point Unit • Support for DSP instructions, such as a 32-bit multiplier, a 32-bit divider, and a 40-bit MAC • Support for 32 interrupt vectors from about 70 interrupt sources The single-/dual-CPU interfaces include: • Xtensa RAM/ROM Interface for instructions and data • Xtensa Local Memory Interface for fast peripheral register access • External and internal interrupt sources • JTAG for debugging For information about the Xtensa® Instruction Set Architecture, please refer to Xtensa®",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 25,
+          "seq": 806,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:8a1e360dc74f2f361469336b8978ba8c4f9f16dd3e6fd8c0200bbfd6f394143c"
+        },
+        {
+          "evidence_id": "207f7f0665a943e5a3a08a74743ba685",
+          "excerpt": "Power off CHIP\n• * Among the ESP32 series of SoCs, ESP32-D0WD-V3, ESP32-D0WDRH2-V3, ESP32-U4WDH, ESP32-D0WD (NRND), ESP32-D0WDQ6 (NRND), and ESP32-D0WDQ6-V3 (NRND) have a maximum CPU frequency of 240 MHz,",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 29,
+          "seq": 861,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:2e01610149ce4c741ce01a9e4a35686b0aba3157aca6108799a5ce3523e0b2c5"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q13-c1",
+      "question_id": "q13",
+      "question_no": 13,
+      "group": "cross-doc",
+      "question": "How many UART interfaces does each board's chip provide: RP2040 (via Pico) versus ESP32?",
+      "claim_text": "The RP2040 (via Pico) provides 2 UART interfaces.",
+      "evidence_refs": [
+        "becac41ce83741208fe819b3c9875090"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:1875007aff4d863352cd6d395c87116b292139d4a6f49334fd0bfec070d58034"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "becac41ce83741208fe819b3c9875090",
+          "excerpt": "12-bit 500 ksps Analogue to Digital Converter (ADC) Various digital peripherals 2 × UART, 2 × I2C, 2 × SPI, 16 × PWM channels 1 × Timer with 4 alarms, 1 × Real Time Counter 2 × Programmable IO (PIO) blocks, 8 state machines total Flexible, user-programmable high-speed IO Can emulate interfaces such as SD Card and VGA Pico provides minimal (yet flexible) external circuitry to support the RP2040 chip: flash (Winbond W25Q16JV), crystal (Abracon ABM8-272-T3), power supplies and decoupling, and USB connector. The majority of the RP2040 microcontroller pins are brought to the user IO pins on the left and right edge of the board. Four RP2040 IO are used for internal functions - driving an LED, on-board Switched Mode Power Supply (SMPS) power control and sensing the system voltages. Pico has been",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 4,
+          "seq": 28,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:15e107d0e8103b4a88c67c9bff4688e8d2e87e350a684c5b5f681ed3aeb289f4"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q13-c2",
+      "question_id": "q13",
+      "question_no": 13,
+      "group": "cross-doc",
+      "question": "How many UART interfaces does each board's chip provide: RP2040 (via Pico) versus ESP32?",
+      "claim_text": "The ESP32 provides 3 UART interfaces.",
+      "evidence_refs": [
+        "20b08c476b7a4091ba8eafc2414ebe2d",
+        "a40bf3a914ab4343a5659d179e5a3be5"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:56b0111463c3c4a951e3418a3cfb640456f41b99ba5c90df97b13baafbffc8e9"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "20b08c476b7a4091ba8eafc2414ebe2d",
+          "excerpt": "For SPI, the pins are multiplexed with GPIO6 ~ GPIO11 via the IO MUX. For HSPI, the pins are multiplexed with GPIO2, GPIO4, GPIO12 ~ GPIO15 via the IO MUX. For VSPI, the pins are multiplexed with GPIO5, GPIO18 ~ GPIO19, GPIO21 ~ GPIO23 via the IO MUX. For more information about the pin assignment, see Section 4.10 Peripheral Pin Configurations and ESP32 Technical Reference Manual > Chapter IO_MUX and GPIO Matrix.\n4.8.3 Universal Asynchronous Receiver Transmitter (UART) ESP32 has three UART interfaces that facilitate the transmission and reception of asynchronous serial data between the chip and external UART devices.",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 35,
+          "seq": 883,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:108223492160043e63cb12332d905747406b5f902226f982b42078f7619ce623"
+        },
+        {
+          "evidence_id": "a40bf3a914ab4343a5659d179e5a3be5",
+          "excerpt": "• Programmable baud rates up to 5 MBaud • RAM shared by TX FIFOs and RX FIFOs • Supports input baud rate self-check • Support for various lengths of data bits and stop bits • Parity bit support • Asynchronous communication (RS232 and RS485) and IrDA support • Supports DMA to communicate data in high speed • Supports UART wake-up • Supports both software and hardware flow control For details, see ESP32 Technical Reference Manual > Chapter UART Controller.\nPin Assignment\nThe pins for UART can be chosen from any GPIOs via the GPIO Matrix. For more information about the pin assignment, see Section 4.10 Peripheral Pin Configurations and ESP32 Technical Reference Manual > Chapter IO_MUX and GPIO Matrix.",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 36,
+          "seq": 884,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:e455b8f48a5a5382e55b0969124fe04d39dcce783d9fc976c20b5d05535de755"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q14-c1",
+      "question_id": "q14",
+      "question_no": 14,
+      "group": "cross-center",
+      "question": "What power-supply facts do the Pico datasheet (Center A) and ESP32 datasheet (Center B) state: Pico VSYS range and ESP32 operating voltage range?",
+      "claim_text": "The Pico VSYS range is 1.8 V to 5.5 V.",
+      "evidence_refs": [
+        "2f976bda8d6e4c168b4d3f6c37824de1",
+        "cb7009375e314aaaa025f4774f75ebd4"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:3a440c36bf571522e40b63f91f9f0d56cac26f3f0ab2a3467c39f5f26b04898c"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "2f976bda8d6e4c168b4d3f6c37824de1",
+          "excerpt": "VBUS is the 5 V input from the micro-USB port, which is fed through a Schottky diode to generate VSYS. The VBUS to VSYS diode (D1) adds flexibility by allowing power ORing of different supplies into VSYS. VSYS is the main system ‘input voltage’ and feeds the RT6150 buck-boost SMPS, which generates a fixed 3.3 V output for the RP2040 device and its IO (and can be used to power external circuitry). VSYS is R-C filtered and divided by 3 (by R5, R6 and C3 in the Pico schematic) and can be monitored on ADC channel 3. This can be used for example as a crude battery voltage monitor. The buck-boost SMPS, as its name implies, can seamlessly switch from buck to boost mode, and therefore can maintain an output voltage of 3.3 V from a wide range of input voltages, ~1.8 V to 5.5 V, which allows a lot",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 20,
+          "seq": 95,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:293f1fd68917026b0dd6098e525b974098e385a017e00dd81a3511ee42a93762"
+        },
+        {
+          "evidence_id": "cb7009375e314aaaa025f4774f75ebd4",
+          "excerpt": "Note The RP2040 has an on-chip linear regulator (LDO) that powers the digital core at 1.1 V (nominal) from the 3.3 V supply, which is not shown in Figure 15.\n4.5. Powering Pico\nThe simplest way to power Pico is to plug in the micro-USB, which will power VSYS (and therefore the system) from the 5 V USB VBUS voltage, via D1 (so VSYS becomes VBUS minus the Schottky diode drop). If the USB port is the only power source, VSYS and VBUS can be safely shorted together to eliminate the Schottky diode drop (which improves efficiency and reduces ripple on VSYS). If the USB port is not going to be used, it is safe to power Pico by connecting VSYS to your preferred power source (in the range 1.8 V to 5.5 V).",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 20,
+          "seq": 99,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:0795b673a305e92960644c33c2895f8805fecf1a8b0da38b01732a74f1956774"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q14-c2",
+      "question_id": "q14",
+      "question_no": 14,
+      "group": "cross-center",
+      "question": "What power-supply facts do the Pico datasheet (Center A) and ESP32 datasheet (Center B) state: Pico VSYS range and ESP32 operating voltage range?",
+      "claim_text": "The ESP32 operating voltage range is 2.3 V to 3.6 V.",
+      "evidence_refs": [
+        "d9f9686f69f244feb6f8b9a1d363aee9"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:95396135bb06b56eda015b85d2e8919608d4558f929bade8f050f4a9fadf86c8"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "d9f9686f69f244feb6f8b9a1d363aee9",
+          "excerpt": "2.3 V. Notes on power supply: • The operating voltage of ESP32 ranges from 2.3 V to 3.6 V. When using a single-power supply, the recommended voltage of the power supply is 3.3 V, and its recommended output current is 500 mA or more. • PSRAM and flash both are powered by VDD_SDIO. If the chip has an in-package flash, the voltage of SDIO is determined by the operating voltage of the in-package flash. If the chip also connects to an external PSRAM, the operating voltage of external PSRAM must match that of the in-package flash. This also applies if the chip has an in-package PSRAM but also connects to an external flash.",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 18,
+          "seq": 744,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:b6ddc0675194fc844a50972b2cd09727ea9b00d865731516abe25dc56bf0c89d"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q15-c1",
+      "question_id": "q15",
+      "question_no": 15,
+      "group": "cross-center",
+      "question": "Which Wi-Fi standard and maximum rate does the ESP32 support, and which USB port does the Pico use for power and data?",
+      "claim_text": "The ESP32 supports the 802.11b/g/n Wi-Fi standard with a maximum data rate of up to 150 Mbps.",
+      "evidence_refs": [
+        "f4fe2bb8bea84e56bea3b3696318a33e"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:a87edde6b282ce9708c1e1b52608a80cf1b73fc8ffa3b176be3ddd00302f80ac"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "f4fe2bb8bea84e56bea3b3696318a33e",
+          "excerpt": "4.6.4 Wi-Fi Radio and Baseband ESP32 implements a TCP/IP and full 802.11 b/g/n Wi-Fi MAC protocol. It supports the Basic Service Set (BSS) STA and SoftAP operations under the Distributed Control Function (DCF). Power management is handled with minimal host interaction to minimize the active-duty period. The ESP32 Wi-Fi Radio and Baseband support the following features: • 802.11b/g/n • 802.11n MCS0-7 in both 20 MHz and 40 MHz bandwidth • 802.11n MCS32 (RX) • 802.11n 0.4 µs guard-interval • up to 150 Mbps of data rate • Receiving STBC 2×1 • Up to 20.5 dBm of transmitting power • Adjustable transmitting power • Antenna diversity ESP32 supports antenna diversity with an external RF switch. One or more GPIOs control the RF switch and selects the best antenna to minimize the effects of channel",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 32,
+          "seq": 872,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:4f054b762f8a21b1447622c4e8cd9b3b22378405aa0670a869d647172e1a7b74"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q15-c2",
+      "question_id": "q15",
+      "question_no": 15,
+      "group": "cross-center",
+      "question": "Which Wi-Fi standard and maximum rate does the ESP32 support, and which USB port does the Pico use for power and data?",
+      "claim_text": "The Raspberry Pi Pico uses a micro-USB port for power and data.",
+      "evidence_refs": [
+        "cdfd6ccff60f49389429376688680402",
+        "2f976bda8d6e4c168b4d3f6c37824de1",
+        "47d191b0a4934731b31edd89f92867fb"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:a84a69aa3c1abcccc61ca223bb980eaec4c272834fb9d0d7a765622a6cbc78dc"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "cdfd6ccff60f49389429376688680402",
+          "excerpt": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for RP2040, with the following key features: RP2040 microcontroller with 2 MB Flash Micro-USB B port for power and data (and for reprogramming the Flash) 40 pin 21×51 ‘DIP’ style 1 mm thick PCB with 0.1″ through-hole pins also with edge castellations Exposes 26 multi-function 3.3 V General Purpose I/O (GPIO) 23 GPIO are digital-only and 3 are ADC capable Can be surface mounted as a module 3-pin ARM Serial Wire Debug (SWD) port Simple yet highly flexible power supply architecture Various options for easily powering the unit from micro-USB, external supplies or batteries High quality, low cost, high availability Comprehensive SDK, software examples and documentation For full details of the RP2040",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 3,
+          "seq": 26,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:31989d68b2e2943cad52968f593c6dfd8c40a7af8c353e0f9f8c4857205e7fa3"
+        },
+        {
+          "evidence_id": "2f976bda8d6e4c168b4d3f6c37824de1",
+          "excerpt": "VBUS is the 5 V input from the micro-USB port, which is fed through a Schottky diode to generate VSYS. The VBUS to VSYS diode (D1) adds flexibility by allowing power ORing of different supplies into VSYS. VSYS is the main system ‘input voltage’ and feeds the RT6150 buck-boost SMPS, which generates a fixed 3.3 V output for the RP2040 device and its IO (and can be used to power external circuitry). VSYS is R-C filtered and divided by 3 (by R5, R6 and C3 in the Pico schematic) and can be monitored on ADC channel 3. This can be used for example as a crude battery voltage monitor. The buck-boost SMPS, as its name implies, can seamlessly switch from buck to boost mode, and therefore can maintain an output voltage of 3.3 V from a wide range of input voltages, ~1.8 V to 5.5 V, which allows a lot",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 20,
+          "seq": 95,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:293f1fd68917026b0dd6098e525b974098e385a017e00dd81a3511ee42a93762"
+        },
+        {
+          "evidence_id": "47d191b0a4934731b31edd89f92867fb",
+          "excerpt": "4.7. USB\nRP2040 has an integrated USB1.1 PHY and controller which can be used in both Device and Host mode. Pico adds the two required 27 Ω external resistors and brings this interface to a standard micro-USB port. The USB port can be used to access the USB bootloader (BOOTSEL mode) stored in the RP2040 boot ROM. It can also be used by user code, to access an external USB device or host.\n4.8. Debugging\nRaspberry Pi Pico brings the RP2040 Serial Wire Debug (SWD) interface to a 3 pin debug header on the lower edge of the board. To get started using the debug port see the Debugging with SWD section of Getting started with Raspberry Pi Pico-series..\nNote The RP2040 chip has internal pull up resistors on the SWDIO and SWCLK pins, both nominally 60 kΩ.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 23,
+          "seq": 108,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:b3ad8cd7dab042bdd5ebd28e892fde10454e27f98479b9a6503ae979fa1991c3"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q16-c1",
+      "question_id": "q16",
+      "question_no": 16,
+      "group": "cross-center",
+      "question": "How much Flash and SRAM does each platform report: Pico on-board Flash versus ESP32 ROM and SRAM sizes?",
+      "claim_text": "The Raspberry Pi Pico reports 2 MB of on-board Flash memory.",
+      "evidence_refs": [
+        "cdfd6ccff60f49389429376688680402",
+        "3c9156800268457eb7cee55c3dd18a2d",
+        "becac41ce83741208fe819b3c9875090"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:3dff769de1aa420204b6298bf891b1ef268e23601e14d045656c587e9da1d75f"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "cdfd6ccff60f49389429376688680402",
+          "excerpt": "Raspberry Pi Pico has been designed to be a low cost yet flexible development platform for RP2040, with the following key features: RP2040 microcontroller with 2 MB Flash Micro-USB B port for power and data (and for reprogramming the Flash) 40 pin 21×51 ‘DIP’ style 1 mm thick PCB with 0.1″ through-hole pins also with edge castellations Exposes 26 multi-function 3.3 V General Purpose I/O (GPIO) 23 GPIO are digital-only and 3 are ADC capable Can be surface mounted as a module 3-pin ARM Serial Wire Debug (SWD) port Simple yet highly flexible power supply architecture Various options for easily powering the unit from micro-USB, external supplies or batteries High quality, low cost, high availability Comprehensive SDK, software examples and documentation For full details of the RP2040",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 3,
+          "seq": 26,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:31989d68b2e2943cad52968f593c6dfd8c40a7af8c353e0f9f8c4857205e7fa3"
+        },
+        {
+          "evidence_id": "3c9156800268457eb7cee55c3dd18a2d",
+          "excerpt": "4. Applications information\n4.1. Programming the flash\nThe on-board 2 MB QSPI Flash can be (re)programmed either using the Serial Wire Debug port or by the special USB Mass Storage Device mode. The simplest way to reprogram the Pico’s Flash is to use the USB mode. To do this, depower the board, then hold the BOOTSEL button down during board power-up (e.g. hold BOOTSEL down while connecting the USB). The Pico will then appear as a USB Mass Storage Device. Dragging a special ‘.uf2’ file onto the disk will write this file to the Flash and restart the Pico. The USB boot code is stored in ROM on RP2040, so can not be accidentally overwritten. To get started using the SWD port see the Debugging with SWD section of Getting started with Raspberry Pi Pico-series..\n4.2. General purpose I/O",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 19,
+          "seq": 86,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:cf0a286c809c93f7fc1ca43621621b8b41ddee96d7ab75e1bf7c3241a231f2e6"
+        },
+        {
+          "evidence_id": "becac41ce83741208fe819b3c9875090",
+          "excerpt": "12-bit 500 ksps Analogue to Digital Converter (ADC) Various digital peripherals 2 × UART, 2 × I2C, 2 × SPI, 16 × PWM channels 1 × Timer with 4 alarms, 1 × Real Time Counter 2 × Programmable IO (PIO) blocks, 8 state machines total Flexible, user-programmable high-speed IO Can emulate interfaces such as SD Card and VGA Pico provides minimal (yet flexible) external circuitry to support the RP2040 chip: flash (Winbond W25Q16JV), crystal (Abracon ABM8-272-T3), power supplies and decoupling, and USB connector. The majority of the RP2040 microcontroller pins are brought to the user IO pins on the left and right edge of the board. Four RP2040 IO are used for internal functions - driving an LED, on-board Switched Mode Power Supply (SMPS) power control and sensing the system voltages. Pico has been",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 4,
+          "seq": 28,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:15e107d0e8103b4a88c67c9bff4688e8d2e87e350a684c5b5f681ed3aeb289f4"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q16-c2",
+      "question_id": "q16",
+      "question_no": 16,
+      "group": "cross-center",
+      "question": "How much Flash and SRAM does each platform report: Pico on-board Flash versus ESP32 ROM and SRAM sizes?",
+      "claim_text": "The Raspberry Pi Pico has 264 kB of on-chip SRAM.",
+      "evidence_refs": [
+        "cd4151b4fd264b1aa3fbab0ae8b0c428"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:3dff769de1aa420204b6298bf891b1ef268e23601e14d045656c587e9da1d75f"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "cd4151b4fd264b1aa3fbab0ae8b0c428",
+          "excerpt": "microcontroller please see the RP2040 Datasheet, however the headline features are: Dual-core cortex M0+ at up to 133 MHz On-chip PLL allows variable core frequency 264 kB multi-bank high performance SRAM External Quad-SPI Flash with eXecute In Place (XIP) and 16 kB on-chip cache High performance full-crossbar bus fabric On-board USB1.1 (device or host) 30 multi-function General Purpose IO (4 can be used for ADC) 1.8-3.3 V IO Voltage (NOTE Pico IO voltage is fixed at 3.3 V)",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 3,
+          "seq": 27,
+          "resource": "eb458c2f",
+          "resource_id": "eb458c2f08e1415782c2e0306ad0c17c",
+          "source_version_id": "ff6d02b3176f48c9b34cd0fbdf05d344",
+          "excerpt_digest": "sha256:6653053a812037814bf8c5864e159d971fa89870935b12eca908de397cc19e1b"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q16-c3",
+      "question_id": "q16",
+      "question_no": 16,
+      "group": "cross-center",
+      "question": "How much Flash and SRAM does each platform report: Pico on-board Flash versus ESP32 ROM and SRAM sizes?",
+      "claim_text": "The ESP32 has 448 KB of ROM for booting and core functions.",
+      "evidence_refs": [
+        "590e0e2e9f4c410196970a80820c1207"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:f07d96189e1efdd160946c835f9b6135464353281bdf139948b688776c42d565"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "590e0e2e9f4c410196970a80820c1207",
+          "excerpt": "4.1.2 Internal Memory ESP32’s internal memory includes: • 448 KB of ROM for booting and core functions • 520 KB of on-chip SRAM for data and instructions • 8 KB of SRAM in RTC, which is called RTC FAST Memory and can be used for data storage; it is accessed by the main CPU during RTC Boot from the Deep-sleep mode. • 8 KB of SRAM in RTC, which is called RTC SLOW Memory and can be accessed by the ULP coprocessor during the Deep-sleep mode. • 1 Kbit of eFuse: 256 bits are used for the system (MAC address and chip configuration) and the remaining 768 bits are reserved for customer applications, including flash-encryption and chip-ID. • In-package flash or PSRAM",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 25,
+          "seq": 808,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:05589dd7ef222d1cd89fbd3c0449979877e4dfa083044464843e2827ca76f0b4"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q16-c4",
+      "question_id": "q16",
+      "question_no": 16,
+      "group": "cross-center",
+      "question": "How much Flash and SRAM does each platform report: Pico on-board Flash versus ESP32 ROM and SRAM sizes?",
+      "claim_text": "The ESP32 has 520 KB of on-chip SRAM for data and instructions.",
+      "evidence_refs": [
+        "590e0e2e9f4c410196970a80820c1207",
+        "2b1e8fac17154bb2ae4211570894b40d"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:f07d96189e1efdd160946c835f9b6135464353281bdf139948b688776c42d565"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "590e0e2e9f4c410196970a80820c1207",
+          "excerpt": "4.1.2 Internal Memory ESP32’s internal memory includes: • 448 KB of ROM for booting and core functions • 520 KB of on-chip SRAM for data and instructions • 8 KB of SRAM in RTC, which is called RTC FAST Memory and can be used for data storage; it is accessed by the main CPU during RTC Boot from the Deep-sleep mode. • 8 KB of SRAM in RTC, which is called RTC SLOW Memory and can be accessed by the ULP coprocessor during the Deep-sleep mode. • 1 Kbit of eFuse: 256 bits are used for the system (MAC address and chip configuration) and the remaining 768 bits are reserved for customer applications, including flash-encryption and chip-ID. • In-package flash or PSRAM",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 25,
+          "seq": 808,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:05589dd7ef222d1cd89fbd3c0449979877e4dfa083044464843e2827ca76f0b4"
+        },
+        {
+          "evidence_id": "2b1e8fac17154bb2ae4211570894b40d",
+          "excerpt": "2 cores at 240 MHz: 1079.96 CoreMark; 4.50 CoreMark/MHz\n• 448 KB ROM\n• 520 KB SRAM\n• 16 KB SRAM in RTC\n• QSPI supports multiple flash/SRAM chips\nClocks and Timers\n• Internal 8 MHz oscillator with calibration\n• Internal RC oscillator with calibration\n• External 2 MHz ~ 60 MHz crystal oscillator (40 MHz only for Wi-Fi/Bluetooth functionality) • External 32 kHz crystal oscillator for RTC with calibration • Two timer groups, including 2 × 64-bit timers and 1 × main watchdog in each group • One RTC timer\n• RTC watchdog\nAdvanced Peripheral Interfaces\n• 34 programmable GPIOs Five strapping GPIOs Six input-only GPIOs Six GPIOs needed for in-package flash (ESP32-U4WDH) and in-package PSRAM (ESP32-D0WDRH2-V3)\n• 12-bit SAR ADC up to 18 channels • Two 8-bit DAC\n• 10 touch sensors\n• Four SPI interfaces",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 3,
+          "seq": 36,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:e40607bd54b4f41b43ef2a0ebf8d32f34197112ec81402c623abf6d63af5c23d"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q16-c5",
+      "question_id": "q16",
+      "question_no": 16,
+      "group": "cross-center",
+      "question": "How much Flash and SRAM does each platform report: Pico on-board Flash versus ESP32 ROM and SRAM sizes?",
+      "claim_text": "The ESP32 supports up to 16 MB of external QSPI flash memory.",
+      "evidence_refs": [
+        "9fb97c7efe294d3aae9132a813b31ec8"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:f07d96189e1efdd160946c835f9b6135464353281bdf139948b688776c42d565"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "9fb97c7efe294d3aae9132a813b31ec8",
+          "excerpt": "4.1.3 External Flash and RAM ESP32 supports multiple external QSPI flash and external RAM (SRAM) chips. More details can be found in ESP32 Technical Reference Manual > Chapter SPI Controller. ESP32 also supports hardware encryption/decryption based on AES to protect developers’ programs and data in flash. ESP32 can access the external QSPI flash and SRAM through high-speed caches. • Up to 16 MB of external flash can be mapped into CPU instruction memory space and read-only memory space simultaneously. When external flash is mapped into CPU instruction memory space, up to 11 MB + 248 KB can be mapped at a time. Note that if more than 3 MB + 248 KB are mapped, cache performance will be reduced due to speculative reads by the CPU. When external flash is mapped into read-only data memory",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 26,
+          "seq": 810,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:7446a5d6487bb4dd22e4bfd25d261d7eab5e52d4cc6e0dd4c2cf9f0a323461a6"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q16-c6",
+      "question_id": "q16",
+      "question_no": 16,
+      "group": "cross-center",
+      "question": "How much Flash and SRAM does each platform report: Pico on-board Flash versus ESP32 ROM and SRAM sizes?",
+      "claim_text": "The ESP32 supports external SRAM (PSRAM) through its QSPI interface.",
+      "evidence_refs": [
+        "4c8594da65ff4a9b8f7a4c9f9e8e8a3d"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:f07d96189e1efdd160946c835f9b6135464353281bdf139948b688776c42d565"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "4c8594da65ff4a9b8f7a4c9f9e8e8a3d",
+          "excerpt": "Supports Standard SPI, Dual SPI, and Quad SPI that can be connected to the external flash and SRAM",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 48,
+          "seq": 1035,
+          "resource": "b7a444b0",
+          "resource_id": "b7a444b0eb324fc59fea207015c61d98",
+          "source_version_id": "a823c98f0ae048a0afec21a751d06da8",
+          "excerpt_digest": "sha256:06c99a56cb3b49af3a12abfa4d8382cf05523ba35b1f7eafd508b5a565628036"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q17-c1",
+      "question_id": "q17",
+      "question_no": 17,
+      "group": "contradiction",
+      "question": "In which year was the Harbor Signal Annex commissioned: 2019 or 2023? Report both filings.",
+      "claim_text": "The Harbor Signal Annex was commissioned in 2019, as stated in the first filing.",
+      "evidence_refs": [
+        "c10f6da8fef34b3e91dabd50b6f25bce"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:605f5cd73ea4f8d1be93335cb848b6c10be8a2dcfa998c1f4510f8e45dcad4b6"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "c10f6da8fef34b3e91dabd50b6f25bce",
+          "excerpt": "Harbor Signal Annex commissioning memo, first filing. The Harbor Signal Annex was commissioned in 2019. The annex houses 6 receiver arrays. Distinct identifier HARBOR-20261005-1.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "824399f7",
+          "resource_id": "824399f76c2e48fa883c0fbbcd77a8ed",
+          "source_version_id": "d9e32c92a07d4d26af8b903791a38efb",
+          "excerpt_digest": "sha256:e09f7380ded7527c56aa5c079b1f05802ad20f1999b133f88a35d77bd58834b5"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": true
+    },
+    {
+      "claim_id": "q17-c2",
+      "question_id": "q17",
+      "question_no": 17,
+      "group": "contradiction",
+      "question": "In which year was the Harbor Signal Annex commissioned: 2019 or 2023? Report both filings.",
+      "claim_text": "The Harbor Signal Annex was commissioned in 2023, as stated in the second filing.",
+      "evidence_refs": [
+        "3451eb9da7104639b1758cd63ca93d93"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:8ac60ac481c869c1228cf455caeb03c793b6cbd78a2e30228488a59e9c013e1f"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "3451eb9da7104639b1758cd63ca93d93",
+          "excerpt": "Harbor Signal Annex commissioning memo, second filing. The Harbor Signal Annex was commissioned in 2023. The annex houses 9 receiver arrays. Distinct identifier HARBOR-20261005-2.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "90cfff5f",
+          "resource_id": "90cfff5f9b8041958fbeb0b347cfafb9",
+          "source_version_id": "719d1a3c41864410853fa98e3e474041",
+          "excerpt_digest": "sha256:36b1a6975da295e12bab6e9c7b3bab32b857a2a3ff5baae915c97c7a1b67d2a4"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": true
+    },
+    {
+      "claim_id": "q18-c1",
+      "question_id": "q18",
+      "question_no": 18,
+      "group": "contradiction",
+      "question": "How many receiver arrays does the Harbor Signal Annex house: 6 or 9? Report both filings.",
+      "claim_text": "The Harbor Signal Annex houses 9 receiver arrays according to the second filing.",
+      "evidence_refs": [
+        "3451eb9da7104639b1758cd63ca93d93"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:8ac60ac481c869c1228cf455caeb03c793b6cbd78a2e30228488a59e9c013e1f"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "3451eb9da7104639b1758cd63ca93d93",
+          "excerpt": "Harbor Signal Annex commissioning memo, second filing. The Harbor Signal Annex was commissioned in 2023. The annex houses 9 receiver arrays. Distinct identifier HARBOR-20261005-2.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "90cfff5f",
+          "resource_id": "90cfff5f9b8041958fbeb0b347cfafb9",
+          "source_version_id": "719d1a3c41864410853fa98e3e474041",
+          "excerpt_digest": "sha256:36b1a6975da295e12bab6e9c7b3bab32b857a2a3ff5baae915c97c7a1b67d2a4"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": true
+    },
+    {
+      "claim_id": "q18-c2",
+      "question_id": "q18",
+      "question_no": 18,
+      "group": "contradiction",
+      "question": "How many receiver arrays does the Harbor Signal Annex house: 6 or 9? Report both filings.",
+      "claim_text": "The Harbor Signal Annex houses 6 receiver arrays according to the first filing.",
+      "evidence_refs": [
+        "c10f6da8fef34b3e91dabd50b6f25bce"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:605f5cd73ea4f8d1be93335cb848b6c10be8a2dcfa998c1f4510f8e45dcad4b6"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "c10f6da8fef34b3e91dabd50b6f25bce",
+          "excerpt": "Harbor Signal Annex commissioning memo, first filing. The Harbor Signal Annex was commissioned in 2019. The annex houses 6 receiver arrays. Distinct identifier HARBOR-20261005-1.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "824399f7",
+          "resource_id": "824399f76c2e48fa883c0fbbcd77a8ed",
+          "source_version_id": "d9e32c92a07d4d26af8b903791a38efb",
+          "excerpt_digest": "sha256:e09f7380ded7527c56aa5c079b1f05802ad20f1999b133f88a35d77bd58834b5"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": true
+    },
+    {
+      "claim_id": "q19-c1",
+      "question_id": "q19",
+      "question_no": 19,
+      "group": "contradiction",
+      "question": "Summarize what the two Harbor Signal Annex commissioning memos disagree about.",
+      "claim_text": "The two commissioning memos disagree on the commissioning year of the Harbor Signal Annex, with one stating 2019 and the other stating 2023.",
+      "evidence_refs": [
+        "c10f6da8fef34b3e91dabd50b6f25bce",
+        "3451eb9da7104639b1758cd63ca93d93"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:605f5cd73ea4f8d1be93335cb848b6c10be8a2dcfa998c1f4510f8e45dcad4b6",
+        "sha256:8ac60ac481c869c1228cf455caeb03c793b6cbd78a2e30228488a59e9c013e1f"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "c10f6da8fef34b3e91dabd50b6f25bce",
+          "excerpt": "Harbor Signal Annex commissioning memo, first filing. The Harbor Signal Annex was commissioned in 2019. The annex houses 6 receiver arrays. Distinct identifier HARBOR-20261005-1.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "824399f7",
+          "resource_id": "824399f76c2e48fa883c0fbbcd77a8ed",
+          "source_version_id": "d9e32c92a07d4d26af8b903791a38efb",
+          "excerpt_digest": "sha256:e09f7380ded7527c56aa5c079b1f05802ad20f1999b133f88a35d77bd58834b5"
+        },
+        {
+          "evidence_id": "3451eb9da7104639b1758cd63ca93d93",
+          "excerpt": "Harbor Signal Annex commissioning memo, second filing. The Harbor Signal Annex was commissioned in 2023. The annex houses 9 receiver arrays. Distinct identifier HARBOR-20261005-2.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "90cfff5f",
+          "resource_id": "90cfff5f9b8041958fbeb0b347cfafb9",
+          "source_version_id": "719d1a3c41864410853fa98e3e474041",
+          "excerpt_digest": "sha256:36b1a6975da295e12bab6e9c7b3bab32b857a2a3ff5baae915c97c7a1b67d2a4"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": true
+    },
+    {
+      "claim_id": "q19-c2",
+      "question_id": "q19",
+      "question_no": 19,
+      "group": "contradiction",
+      "question": "Summarize what the two Harbor Signal Annex commissioning memos disagree about.",
+      "claim_text": "The two commissioning memos disagree on the number of receiver arrays in the Harbor Signal Annex, with one stating 6 and the other stating 9.",
+      "evidence_refs": [
+        "c10f6da8fef34b3e91dabd50b6f25bce",
+        "3451eb9da7104639b1758cd63ca93d93"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:605f5cd73ea4f8d1be93335cb848b6c10be8a2dcfa998c1f4510f8e45dcad4b6",
+        "sha256:8ac60ac481c869c1228cf455caeb03c793b6cbd78a2e30228488a59e9c013e1f"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "c10f6da8fef34b3e91dabd50b6f25bce",
+          "excerpt": "Harbor Signal Annex commissioning memo, first filing. The Harbor Signal Annex was commissioned in 2019. The annex houses 6 receiver arrays. Distinct identifier HARBOR-20261005-1.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "824399f7",
+          "resource_id": "824399f76c2e48fa883c0fbbcd77a8ed",
+          "source_version_id": "d9e32c92a07d4d26af8b903791a38efb",
+          "excerpt_digest": "sha256:e09f7380ded7527c56aa5c079b1f05802ad20f1999b133f88a35d77bd58834b5"
+        },
+        {
+          "evidence_id": "3451eb9da7104639b1758cd63ca93d93",
+          "excerpt": "Harbor Signal Annex commissioning memo, second filing. The Harbor Signal Annex was commissioned in 2023. The annex houses 9 receiver arrays. Distinct identifier HARBOR-20261005-2.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "90cfff5f",
+          "resource_id": "90cfff5f9b8041958fbeb0b347cfafb9",
+          "source_version_id": "719d1a3c41864410853fa98e3e474041",
+          "excerpt_digest": "sha256:36b1a6975da295e12bab6e9c7b3bab32b857a2a3ff5baae915c97c7a1b67d2a4"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": true
+    },
+    {
+      "claim_id": "q20-c1",
+      "question_id": "q20",
+      "question_no": 20,
+      "group": "contradiction",
+      "question": "How many calibration beacons does the Kestrel Ridge Observatory operate: 12 or 19? Report both centers.",
+      "claim_text": "The Kestrel Ridge Observatory operates 12 calibration beacons according to Center A's record.",
+      "evidence_refs": [
+        "c024092dfcb44998acc0c549fa6a7597"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:aedeea769b421c5c2816d53567ad20715be5a2240a7ccea9d60847b86f854fcb"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "c024092dfcb44998acc0c549fa6a7597",
+          "excerpt": "Kestrel Ridge Observatory calibration record, Center A copy. The Kestrel Ridge Observatory operates 12 calibration beacons. Its primary reflector is 2.4 meters in diameter. Distinct identifier KESTREL-20261005-A.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "db70fd00",
+          "resource_id": "db70fd008b5a4d85abcf60b34c31f82f",
+          "source_version_id": "715122fcc8b5423485a58b94a9f7077f",
+          "excerpt_digest": "sha256:10387ca042142450ab1576e953a2603b1e2820630c9f1ca0e5aa57423e5bc239"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": true
+    },
+    {
+      "claim_id": "q20-c2",
+      "question_id": "q20",
+      "question_no": 20,
+      "group": "contradiction",
+      "question": "How many calibration beacons does the Kestrel Ridge Observatory operate: 12 or 19? Report both centers.",
+      "claim_text": "The Kestrel Ridge Observatory operates 19 calibration beacons according to Center B's record.",
+      "evidence_refs": [
+        "66125dc4092c40bf9cd67ab58551e1e8"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:fb39af824fbd06829307ead94eb80f8c49895918e37c70c79b7513c15f1c9467"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "66125dc4092c40bf9cd67ab58551e1e8",
+          "excerpt": "Kestrel Ridge Observatory calibration record, Center B copy. The Kestrel Ridge Observatory operates 19 calibration beacons. Its primary reflector is 3.1 meters in diameter. Distinct identifier KESTREL-20261005-B.",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 0,
+          "seq": 0,
+          "resource": "6095fdea",
+          "resource_id": "6095fdead95e44f0a0105380c7e739a4",
+          "source_version_id": "b89104f97e054835a6a5597bfbada5b7",
+          "excerpt_digest": "sha256:c740c5cf4a33101ccd1d3e46115bbe8e5e80323aba063e679d2a9a2a16b71d14"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": true
+    },
+    {
+      "claim_id": "q21-c1",
+      "question_id": "q21",
+      "question_no": 21,
+      "group": "contradiction",
+      "question": "What is the Kestrel Ridge Observatory primary reflector diameter: 2.4 or 3.1 meters? Report both centers.",
+      "claim_text": "The Kestrel Ridge Observatory primary reflector diameter is 2.4 meters, as stated in the calibration record from Center A.",
+      "evidence_refs": [
+        "c024092dfcb44998acc0c549fa6a7597"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:aedeea769b421c5c2816d53567ad20715be5a2240a7ccea9d60847b86f854fcb"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "c024092dfcb44998acc0c549fa6a7597",
+          "excerpt": "Kestrel Ridge Observatory calibration record, Center A copy. The Kestrel Ridge Observatory operates 12 calibration beacons. Its primary reflector is 2.4 meters in diameter. Distinct identifier KESTREL-20261005-A.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "db70fd00",
+          "resource_id": "db70fd008b5a4d85abcf60b34c31f82f",
+          "source_version_id": "715122fcc8b5423485a58b94a9f7077f",
+          "excerpt_digest": "sha256:10387ca042142450ab1576e953a2603b1e2820630c9f1ca0e5aa57423e5bc239"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": true
+    },
+    {
+      "claim_id": "q21-c2",
+      "question_id": "q21",
+      "question_no": 21,
+      "group": "contradiction",
+      "question": "What is the Kestrel Ridge Observatory primary reflector diameter: 2.4 or 3.1 meters? Report both centers.",
+      "claim_text": "The Kestrel Ridge Observatory primary reflector diameter is 3.1 meters, as stated in the calibration record from Center B.",
+      "evidence_refs": [
+        "66125dc4092c40bf9cd67ab58551e1e8"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:fb39af824fbd06829307ead94eb80f8c49895918e37c70c79b7513c15f1c9467"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "66125dc4092c40bf9cd67ab58551e1e8",
+          "excerpt": "Kestrel Ridge Observatory calibration record, Center B copy. The Kestrel Ridge Observatory operates 19 calibration beacons. Its primary reflector is 3.1 meters in diameter. Distinct identifier KESTREL-20261005-B.",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 0,
+          "seq": 0,
+          "resource": "6095fdea",
+          "resource_id": "6095fdead95e44f0a0105380c7e739a4",
+          "source_version_id": "b89104f97e054835a6a5597bfbada5b7",
+          "excerpt_digest": "sha256:c740c5cf4a33101ccd1d3e46115bbe8e5e80323aba063e679d2a9a2a16b71d14"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": true
+    },
+    {
+      "claim_id": "q22-c1",
+      "question_id": "q22",
+      "question_no": 22,
+      "group": "contradiction",
+      "question": "Summarize what Center A and Center B disagree about regarding the Kestrel Ridge Observatory.",
+      "claim_text": "Center A and Center B disagree on the number of calibration beacons operated by the Kestrel Ridge Observatory, with Center A stating 12 and Center B stating 19.",
+      "evidence_refs": [
+        "c024092dfcb44998acc0c549fa6a7597",
+        "66125dc4092c40bf9cd67ab58551e1e8"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:aedeea769b421c5c2816d53567ad20715be5a2240a7ccea9d60847b86f854fcb",
+        "sha256:fb39af824fbd06829307ead94eb80f8c49895918e37c70c79b7513c15f1c9467"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "c024092dfcb44998acc0c549fa6a7597",
+          "excerpt": "Kestrel Ridge Observatory calibration record, Center A copy. The Kestrel Ridge Observatory operates 12 calibration beacons. Its primary reflector is 2.4 meters in diameter. Distinct identifier KESTREL-20261005-A.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "db70fd00",
+          "resource_id": "db70fd008b5a4d85abcf60b34c31f82f",
+          "source_version_id": "715122fcc8b5423485a58b94a9f7077f",
+          "excerpt_digest": "sha256:10387ca042142450ab1576e953a2603b1e2820630c9f1ca0e5aa57423e5bc239"
+        },
+        {
+          "evidence_id": "66125dc4092c40bf9cd67ab58551e1e8",
+          "excerpt": "Kestrel Ridge Observatory calibration record, Center B copy. The Kestrel Ridge Observatory operates 19 calibration beacons. Its primary reflector is 3.1 meters in diameter. Distinct identifier KESTREL-20261005-B.",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 0,
+          "seq": 0,
+          "resource": "6095fdea",
+          "resource_id": "6095fdead95e44f0a0105380c7e739a4",
+          "source_version_id": "b89104f97e054835a6a5597bfbada5b7",
+          "excerpt_digest": "sha256:c740c5cf4a33101ccd1d3e46115bbe8e5e80323aba063e679d2a9a2a16b71d14"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": true
+    },
+    {
+      "claim_id": "q22-c2",
+      "question_id": "q22",
+      "question_no": 22,
+      "group": "contradiction",
+      "question": "Summarize what Center A and Center B disagree about regarding the Kestrel Ridge Observatory.",
+      "claim_text": "Center A and Center B disagree on the diameter of the primary reflector of the Kestrel Ridge Observatory, with Center A reporting 2.4 meters and Center B reporting 3.1 meters.",
+      "evidence_refs": [
+        "c024092dfcb44998acc0c549fa6a7597",
+        "66125dc4092c40bf9cd67ab58551e1e8"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:aedeea769b421c5c2816d53567ad20715be5a2240a7ccea9d60847b86f854fcb",
+        "sha256:fb39af824fbd06829307ead94eb80f8c49895918e37c70c79b7513c15f1c9467"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "c024092dfcb44998acc0c549fa6a7597",
+          "excerpt": "Kestrel Ridge Observatory calibration record, Center A copy. The Kestrel Ridge Observatory operates 12 calibration beacons. Its primary reflector is 2.4 meters in diameter. Distinct identifier KESTREL-20261005-A.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "db70fd00",
+          "resource_id": "db70fd008b5a4d85abcf60b34c31f82f",
+          "source_version_id": "715122fcc8b5423485a58b94a9f7077f",
+          "excerpt_digest": "sha256:10387ca042142450ab1576e953a2603b1e2820630c9f1ca0e5aa57423e5bc239"
+        },
+        {
+          "evidence_id": "66125dc4092c40bf9cd67ab58551e1e8",
+          "excerpt": "Kestrel Ridge Observatory calibration record, Center B copy. The Kestrel Ridge Observatory operates 19 calibration beacons. Its primary reflector is 3.1 meters in diameter. Distinct identifier KESTREL-20261005-B.",
+          "origin": "B",
+          "origin_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+          "page": 0,
+          "seq": 0,
+          "resource": "6095fdea",
+          "resource_id": "6095fdead95e44f0a0105380c7e739a4",
+          "source_version_id": "b89104f97e054835a6a5597bfbada5b7",
+          "excerpt_digest": "sha256:c740c5cf4a33101ccd1d3e46115bbe8e5e80323aba063e679d2a9a2a16b71d14"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": true
+    },
+    {
+      "claim_id": "q23-c1",
+      "question_id": "q23",
+      "question_no": 23,
+      "group": "single",
+      "question": "What is the primary reflector diameter stated in the Center A copy of the Kestrel Ridge record?",
+      "claim_text": "The primary reflector diameter stated in the Center A copy of the Kestrel Ridge record is 2.4 meters.",
+      "evidence_refs": [
+        "c024092dfcb44998acc0c549fa6a7597"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:aedeea769b421c5c2816d53567ad20715be5a2240a7ccea9d60847b86f854fcb"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "c024092dfcb44998acc0c549fa6a7597",
+          "excerpt": "Kestrel Ridge Observatory calibration record, Center A copy. The Kestrel Ridge Observatory operates 12 calibration beacons. Its primary reflector is 2.4 meters in diameter. Distinct identifier KESTREL-20261005-A.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "db70fd00",
+          "resource_id": "db70fd008b5a4d85abcf60b34c31f82f",
+          "source_version_id": "715122fcc8b5423485a58b94a9f7077f",
+          "excerpt_digest": "sha256:10387ca042142450ab1576e953a2603b1e2820630c9f1ca0e5aa57423e5bc239"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q24-c1",
+      "question_id": "q24",
+      "question_no": 24,
+      "group": "single",
+      "question": "In which year was the Harbor Signal Annex commissioned according to the first filing?",
+      "claim_text": "The Harbor Signal Annex was commissioned in 2019 according to the first filing.",
+      "evidence_refs": [
+        "c10f6da8fef34b3e91dabd50b6f25bce"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:605f5cd73ea4f8d1be93335cb848b6c10be8a2dcfa998c1f4510f8e45dcad4b6"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "c10f6da8fef34b3e91dabd50b6f25bce",
+          "excerpt": "Harbor Signal Annex commissioning memo, first filing. The Harbor Signal Annex was commissioned in 2019. The annex houses 6 receiver arrays. Distinct identifier HARBOR-20261005-1.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "824399f7",
+          "resource_id": "824399f76c2e48fa883c0fbbcd77a8ed",
+          "source_version_id": "d9e32c92a07d4d26af8b903791a38efb",
+          "excerpt_digest": "sha256:e09f7380ded7527c56aa5c079b1f05802ad20f1999b133f88a35d77bd58834b5"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q25-c1",
+      "question_id": "q25",
+      "question_no": 25,
+      "group": "single",
+      "question": "How many receiver arrays does the second Harbor filing state?",
+      "claim_text": "The second Harbor filing states that the Harbor Signal Annex houses 9 receiver arrays.",
+      "evidence_refs": [
+        "3451eb9da7104639b1758cd63ca93d93"
+      ],
+      "structural_validation": "passed",
+      "semantic_review": "needs_review",
+      "support_refs": [
+        "sha256:8ac60ac481c869c1228cf455caeb03c793b6cbd78a2e30228488a59e9c013e1f"
+      ],
+      "excerpts": [
+        {
+          "evidence_id": "3451eb9da7104639b1758cd63ca93d93",
+          "excerpt": "Harbor Signal Annex commissioning memo, second filing. The Harbor Signal Annex was commissioned in 2023. The annex houses 9 receiver arrays. Distinct identifier HARBOR-20261005-2.",
+          "origin": "A",
+          "origin_node_id": "node-900cecbd24f44003169141a7f0835963ca715b8c7b6ea97a",
+          "page": 0,
+          "seq": 0,
+          "resource": "90cfff5f",
+          "resource_id": "90cfff5f9b8041958fbeb0b347cfafb9",
+          "source_version_id": "719d1a3c41864410853fa98e3e474041",
+          "excerpt_digest": "sha256:36b1a6975da295e12bab6e9c7b3bab32b857a2a3ff5baae915c97c7a1b67d2a4"
+        }
+      ],
+      "task_conflicts": [],
+      "expects_conflict": false
+    },
+    {
+      "claim_id": "q26-c1",
+      "question_id": "q26",
+      "question_no": 26,
+      "group": "single",
+      "question": "What is the Deep Space Array budget for 2031?",
+      "claim_text": "[degraded] 该题未产出带引用证据的主张 (status=succeeded, reason=insufficient_evidence)，答案不可评为支持。",
+      "evidence_refs": [],
+      "structural_validation": null,
+      "semantic_review": null,
+      "support_refs": [],
+      "excerpts": [],
+      "task_conflicts": [],
+      "expects_conflict": false,
+      "degraded": true,
+      "degraded_reason": "insufficient_evidence"
+    }
+  ],
+  "questions": [
+    {
+      "question_id": "q01",
+      "question_no": 1,
+      "group": "single",
+      "question": "How many multi-function GPIOs does the Raspberry Pi Pico expose?",
+      "root_task_id": "688ea036fcb245219b000acbef073835",
+      "status": "succeeded",
+      "answer": "The Raspberry Pi Pico exposes 26 multi-function GPIOs. [1][3] Of these, 23 are digital-only and 3 (GPIO 26–28) are ADC capable, with GPIO 26–29 being able to be used as either digital GPIO or ADC inputs. [1][3]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q02",
+      "question_no": 2,
+      "group": "single",
+      "question": "What is the maximum Cortex-M0+ clock frequency of the RP2040 as stated in the Pico datasheet?",
+      "root_task_id": "d67eac8ff2c0400d8941e3874d53450b",
+      "status": "succeeded",
+      "answer": "The maximum Cortex-M0+ clock frequency of the RP2040 is 133 MHz. [1]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 1
+    },
+    {
+      "question_id": "q03",
+      "question_no": 3,
+      "group": "single",
+      "question": "How much on-board QSPI Flash does the Raspberry Pi Pico have?",
+      "root_task_id": "f4868a30510c4addb487e4c422ad9cf6",
+      "status": "succeeded",
+      "answer": "The Raspberry Pi Pico has 2 MB of on-board QSPI Flash. [1][2][5] The on-board flash in the Raspberry Pi Pico is specified as 2 MB, as confirmed by the mention of the Winbond W25Q16JV flash chip which is a 2 MB QSPI flash. [5][15]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q04",
+      "question_no": 4,
+      "group": "single",
+      "question": "What ADC resolution and sampling rate does the Pico datasheet state?",
+      "root_task_id": "6499282068024d0c8cf9779b45a8a413",
+      "status": "succeeded",
+      "answer": "The Raspberry Pi Pico datasheet states that the ADC has a 12-bit resolution and a sampling rate of 500 ksps. [4]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 1
+    },
+    {
+      "question_id": "q05",
+      "question_no": 5,
+      "group": "single",
+      "question": "What are the minimum and maximum VSYS input voltages for the Raspberry Pi Pico?",
+      "root_task_id": "fbd23e8bcca3465d87d3d982b53ae39b",
+      "status": "succeeded",
+      "answer": "The minimum and maximum VSYS input voltages for the Raspberry Pi Pico are 1.8 V to 5.5 V. [3][5][7] The VSYS input voltage range is specified as ~1.8 V to 5.5 V, allowing the on-board buck-boost SMPS to maintain a stable 3.3 V output for the RP2040. [3][4][7]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q06",
+      "question_no": 6,
+      "group": "single",
+      "question": "How many Programmable IO (PIO) blocks and state machines does the RP2040 have?",
+      "root_task_id": "3babb2598beb4182bbd4ee8adfab8825",
+      "status": "succeeded",
+      "answer": "The RP2040 has 2 Programmable IO (PIO) blocks and 8 state machines. [1]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 1
+    },
+    {
+      "question_id": "q07",
+      "question_no": 7,
+      "group": "single",
+      "question": "What are the Pico board dimensions and thickness?",
+      "root_task_id": "4dee77812ef64a4f8a95db3bce878467",
+      "status": "succeeded",
+      "answer": "The Raspberry Pi Pico board has dimensions of 51×21 mm and a thickness of 1 mm. [1]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 1
+    },
+    {
+      "question_id": "q08",
+      "question_no": 8,
+      "group": "single",
+      "question": "What does BOOTSEL mode on the RP2040 do, and which host was used for its current measurements?",
+      "root_task_id": "e6426107b81a493eb57587a409b08b71",
+      "status": "succeeded",
+      "answer": "BOOTSEL mode on the RP2040 allows the board to enter a USB bootloader state, accessible via the micro-USB port, and can be triggered by shorting TP6 low at power-up. [6][2] The host used for the current measurements of BOOTSEL mode is a Raspberry Pi 4. [1]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q09",
+      "question_no": 9,
+      "group": "cross-doc",
+      "question": "How many multi-function GPIOs does Raspberry Pi Pico expose, how many programmable GPIOs does ESP32 have, and what is the difference?",
+      "root_task_id": "3ef168a81bfe4378ba83a8148d01855b",
+      "status": "succeeded",
+      "answer": "The Raspberry Pi Pico exposes 26 multi-function GPIOs. [1][5] The ESP32 has 34 programmable GPIOs. [14][15] The difference between the Raspberry Pi Pico and ESP32 GPIOs is that the Pico exposes 26 of 30 multi-function GPIOs, while the ESP32 has 34 programmable GPIOs that can be assigned various functions including digital, analog, and capacitive touch, with more flexibility in configuration and function multiplexing. [4][14][15][12]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 3
+    },
+    {
+      "question_id": "q10",
+      "question_no": 10,
+      "group": "cross-doc",
+      "question": "Compare the Pico's ADC with the ESP32's wireless connectivity: what ADC does Pico have and what Wi-Fi/Bluetooth versions does ESP32 support?",
+      "root_task_id": "ba6b859568d047bfa7a6d4c259f900d1",
+      "status": "succeeded",
+      "answer": "The Pico has a 12-bit ADC with 3 ADC-capable GPIO pins (GPIO 26–28), which can be used as analog inputs with software selection. [2][8] The ESP32 supports Wi-Fi 802.11b/g/n and Bluetooth 4.2 (Bluetooth LE) with up to 150 Mbps data rate and up to 20.5 dBm transmitting power. [9][15][16] The ESP32 integrates two 12-bit SAR ADCs and supports measurements on 18 channels. [10]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 3
+    },
+    {
+      "question_id": "q11",
+      "question_no": 11,
+      "group": "cross-doc",
+      "question": "Which has more SRAM: the RP2040's on-chip SRAM or the ESP32's SRAM, and by how much?",
+      "root_task_id": "733d2edd275e4292a1d7eebc408b71c5",
+      "status": "succeeded",
+      "answer": null,
+      "answer_reason": "insufficient_evidence",
+      "conflicts": [],
+      "expects_conflict": false,
+      "degraded": true,
+      "degraded_reason": "insufficient_evidence",
+      "n_claims": 1
+    },
+    {
+      "question_id": "q12",
+      "question_no": 12,
+      "group": "cross-doc",
+      "question": "Compare processor cores: what CPU does the RP2040 use at what speed versus the ESP32's cores?",
+      "root_task_id": "2e4bc38cd8e74d29a68e2f16cb1decf6",
+      "status": "succeeded",
+      "answer": "The RP2040 uses a dual-core Cortex-M0+ processor running at up to 133 MHz. [8] The ESP32 uses one or two Xtensa LX6 32-bit processors running at up to 240 MHz. [12][15]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q13",
+      "question_no": 13,
+      "group": "cross-doc",
+      "question": "How many UART interfaces does each board's chip provide: RP2040 (via Pico) versus ESP32?",
+      "root_task_id": "157069f14ee5420c8dc09e794ade7f40",
+      "status": "succeeded",
+      "answer": "The RP2040 (via Pico) provides 2 UART interfaces. [1] The ESP32 provides 3 UART interfaces. [9][10]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q14",
+      "question_no": 14,
+      "group": "cross-center",
+      "question": "What power-supply facts do the Pico datasheet (Center A) and ESP32 datasheet (Center B) state: Pico VSYS range and ESP32 operating voltage range?",
+      "root_task_id": "3eeb38152f784950b0ee97ff8b135ec0",
+      "status": "succeeded",
+      "answer": "The Pico VSYS range is 1.8 V to 5.5 V. [4][1] The ESP32 operating voltage range is 2.3 V to 3.6 V. [9]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q15",
+      "question_no": 15,
+      "group": "cross-center",
+      "question": "Which Wi-Fi standard and maximum rate does the ESP32 support, and which USB port does the Pico use for power and data?",
+      "root_task_id": "a245b0e1c8e04eda88a3404c10bd064d",
+      "status": "succeeded",
+      "answer": "The ESP32 supports the 802.11b/g/n Wi-Fi standard with a maximum data rate of up to 150 Mbps. [9] The Raspberry Pi Pico uses a micro-USB port for power and data. [4][6][7]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q16",
+      "question_no": 16,
+      "group": "cross-center",
+      "question": "How much Flash and SRAM does each platform report: Pico on-board Flash versus ESP32 ROM and SRAM sizes?",
+      "root_task_id": "99cf5d145170474c83813ca1c622f156",
+      "status": "succeeded",
+      "answer": "The Raspberry Pi Pico reports 2 MB of on-board Flash memory. [1][2][5] The Raspberry Pi Pico has 264 kB of on-chip SRAM. [7] The ESP32 has 448 KB of ROM for booting and core functions. [10] The ESP32 has 520 KB of on-chip SRAM for data and instructions. [10][12] The ESP32 supports up to 16 MB of external QSPI flash memory. [9] The ESP32 supports external SRAM (PSRAM) through its QSPI interface. [15]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 6
+    },
+    {
+      "question_id": "q17",
+      "question_no": 17,
+      "group": "contradiction",
+      "question": "In which year was the Harbor Signal Annex commissioned: 2019 or 2023? Report both filings.",
+      "root_task_id": "ca31794f4c704c6f812d00d26e144861",
+      "status": "succeeded",
+      "answer": "The Harbor Signal Annex was commissioned in 2019, as stated in the first filing. [2] The Harbor Signal Annex was commissioned in 2023, as stated in the second filing. [1]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": true,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q18",
+      "question_no": 18,
+      "group": "contradiction",
+      "question": "How many receiver arrays does the Harbor Signal Annex house: 6 or 9? Report both filings.",
+      "root_task_id": "4469481d71374f3abf5be7eeb4ddf317",
+      "status": "succeeded",
+      "answer": "The Harbor Signal Annex houses 9 receiver arrays according to the second filing. [1] The Harbor Signal Annex houses 6 receiver arrays according to the first filing. [2]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": true,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q19",
+      "question_no": 19,
+      "group": "contradiction",
+      "question": "Summarize what the two Harbor Signal Annex commissioning memos disagree about.",
+      "root_task_id": "b8b588fbc1f9416fb5bf0c543043048e",
+      "status": "succeeded",
+      "answer": "The two commissioning memos disagree on the commissioning year of the Harbor Signal Annex, with one stating 2019 and the other stating 2023. [2][1] The two commissioning memos disagree on the number of receiver arrays in the Harbor Signal Annex, with one stating 6 and the other stating 9. [2][1]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": true,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q20",
+      "question_no": 20,
+      "group": "contradiction",
+      "question": "How many calibration beacons does the Kestrel Ridge Observatory operate: 12 or 19? Report both centers.",
+      "root_task_id": "41613f4ae7ab4360835bf736ffab88fb",
+      "status": "succeeded",
+      "answer": "The Kestrel Ridge Observatory operates 12 calibration beacons according to Center A's record. [1] The Kestrel Ridge Observatory operates 19 calibration beacons according to Center B's record. [6]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": true,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q21",
+      "question_no": 21,
+      "group": "contradiction",
+      "question": "What is the Kestrel Ridge Observatory primary reflector diameter: 2.4 or 3.1 meters? Report both centers.",
+      "root_task_id": "864ffe329faf47c7a4b0123da49145dd",
+      "status": "succeeded",
+      "answer": "The Kestrel Ridge Observatory primary reflector diameter is 2.4 meters, as stated in the calibration record from Center A. [1] The Kestrel Ridge Observatory primary reflector diameter is 3.1 meters, as stated in the calibration record from Center B. [12]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": true,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q22",
+      "question_no": 22,
+      "group": "contradiction",
+      "question": "Summarize what Center A and Center B disagree about regarding the Kestrel Ridge Observatory.",
+      "root_task_id": "0e1599c4cec04ccd96cbfd865a4786fc",
+      "status": "succeeded",
+      "answer": "Center A and Center B disagree on the number of calibration beacons operated by the Kestrel Ridge Observatory, with Center A stating 12 and Center B stating 19. [1][2] Center A and Center B disagree on the diameter of the primary reflector of the Kestrel Ridge Observatory, with Center A reporting 2.4 meters and Center B reporting 3.1 meters. [1][2]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": true,
+      "n_claims": 2
+    },
+    {
+      "question_id": "q23",
+      "question_no": 23,
+      "group": "single",
+      "question": "What is the primary reflector diameter stated in the Center A copy of the Kestrel Ridge record?",
+      "root_task_id": "b92f023a8e0341588fc89bf9cbd95eec",
+      "status": "succeeded",
+      "answer": "The primary reflector diameter stated in the Center A copy of the Kestrel Ridge record is 2.4 meters. [1]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 1
+    },
+    {
+      "question_id": "q24",
+      "question_no": 24,
+      "group": "single",
+      "question": "In which year was the Harbor Signal Annex commissioned according to the first filing?",
+      "root_task_id": "8503bdfbfb78436ead9079e57d157bfd",
+      "status": "succeeded",
+      "answer": "The Harbor Signal Annex was commissioned in 2019 according to the first filing. [1]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 1
+    },
+    {
+      "question_id": "q25",
+      "question_no": 25,
+      "group": "single",
+      "question": "How many receiver arrays does the second Harbor filing state?",
+      "root_task_id": "f9b409deceb44ad6903fd9c84582b417",
+      "status": "succeeded",
+      "answer": "The second Harbor filing states that the Harbor Signal Annex houses 9 receiver arrays. [1]",
+      "answer_reason": null,
+      "conflicts": [],
+      "expects_conflict": false,
+      "n_claims": 1
+    },
+    {
+      "question_id": "q26",
+      "question_no": 26,
+      "group": "single",
+      "question": "What is the Deep Space Array budget for 2031?",
+      "root_task_id": "78c8d59f160c43bcbdb35299ba9dd628",
+      "status": "succeeded",
+      "answer": null,
+      "answer_reason": "insufficient_evidence",
+      "conflicts": [],
+      "expects_conflict": false,
+      "degraded": true,
+      "degraded_reason": "insufficient_evidence",
+      "n_claims": 1
+    }
+  ],
+  "metadata": {
+    "built_at": "2026-10-05T04:27:10.772587+00:00",
+    "b_index_ready": true,
+    "fixture_pair": "A-vs-B (Kestrel-B doc a2941a14 index_status=ready on B, published in T47 Kestrel B copy 562761c4; true cross-node contradiction pair)",
+    "note": "B Kestrel-B backlog cleared after the stack restart; the A-vs-D fallback (drill4/t47-q20) was superseded by real federated runs on the true A-vs-B pair."
+  },
+  "claim_set_digest": "sha256:2f98c9fb9df4c891dcab843c9d12ee706d1dd5badb18fe9a406fa45d3d8f8c20"
+}

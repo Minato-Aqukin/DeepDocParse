@@ -19,6 +19,7 @@ from claims.score import (  # noqa: E402
     LABEL_VALUES,
     cohen_kappa,
     load_annotations,
+    ledger_text,
     load_claim_set,
     score,
 )
@@ -257,3 +258,32 @@ def test_label_values_cover_five_buttons():
     assert sorted(LABEL_VALUES) == sorted(["supports", "partially_supports",
                                            "does_not_support", "contradicted",
                                            "cannot_tell"])
+
+
+def test_model_annotators_are_never_reported_as_human_review(tmp_path):
+    claims = _claims()
+    cs = load_claim_set(_claim_set(tmp_path, claims))
+    labels = {"c1": "supports", "c2": "supports", "c3": "supports"}
+    human = load_annotations(_ann_file(tmp_path, "h.json", labels, {"q2": True},
+                                       digest=cs["claim_set_digest"], annotator="h1"))
+    model_path = tmp_path / "m.json"
+    payload = json.loads(_ann_file(tmp_path, "m0.json", labels, {"q2": True},
+                                   digest=cs["claim_set_digest"], annotator="m1").read_text())
+    payload["annotator_kind"] = "model"
+    model_path.write_text(json.dumps(payload))
+    model = load_annotations(model_path)
+
+    only_human = score(cs, [human])
+    assert only_human["human_review"] is True
+    assert ledger_text(only_human, "x.json").startswith("T47人工主张支持度")
+
+    mixed = score(cs, [human, model])
+    assert mixed["human_review"] is False
+    assert mixed["annotator_kinds"] == {"h1": "human", "m1": "model"}
+    assert "模型评审，非人工" in ledger_text(mixed, "x.json")
+    assert "T47人工主张支持度" not in ledger_text(mixed, "x.json")
+
+    payload["annotator_kind"] = "robot"
+    model_path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="annotator_kind"):
+        load_annotations(model_path)
