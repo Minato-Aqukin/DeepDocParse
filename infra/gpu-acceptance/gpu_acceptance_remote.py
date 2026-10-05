@@ -104,6 +104,22 @@ DRIVER_URLS = [
 ]
 
 
+def nvidia_vulkan_devices():
+    """``deviceName`` values of NVIDIA Vulkan devices, plus the raw output.
+
+    Plain ``vulkaninfo``: focal's vulkan-tools 1.2.131 has no ``--summary``
+    (it prints usage), which made an earlier check fail on a working ICD.
+    """
+    info = subprocess.run(["vulkaninfo"], capture_output=True, text=True)
+    text = (info.stdout or "") + (info.stderr or "")
+    names = []
+    for line in text.splitlines():
+        key, sep, value = line.strip().partition("=")
+        if sep and key.strip() == "deviceName" and "NVIDIA" in value:
+            names.append(value.strip())
+    return sorted(set(names)), text
+
+
 def provision_nvidia_icd():
     """Install the NVIDIA Vulkan ICD from the matching driver .run.
 
@@ -115,7 +131,7 @@ def provision_nvidia_icd():
     GL/Vulkan libraries the ICD loads (never the kernel module, never
     libcuda), creates the soname symlinks, installs ``libvulkan1`` from
     apt, writes ``nvidia_icd.json`` from the package template, and
-    verifies with ``vulkaninfo --summary`` that an NVIDIA device is
+    verifies with ``vulkaninfo`` that an NVIDIA device is
     listed. Writes ``/root/gpu-acceptance/.icd-provisioned.json`` for the
     artifact. Any failure exits 3 with an explicit reason (fail fast,
     never a silent ``model_start_failed`` later).
@@ -154,10 +170,9 @@ def provision_nvidia_icd():
              "ICD": {"library_path": "libGLX_nvidia.so.0", "api_version": "1.3.0"}},
             indent=2) + "\n")
         subprocess.run(["ldconfig"], check=True)
-        info = subprocess.run(["vulkaninfo", "--summary"], capture_output=True, text=True)
-        if info.returncode == 0 and "NVIDIA" in (info.stdout or ""):
-            device = next((line.strip() for line in info.stdout.splitlines()
-                           if "NVIDIA" in line), "unknown")
+        devices, _ = nvidia_vulkan_devices()
+        if devices:
+            device = devices[0]
             marker = {"provisioned_by_kit": True, "method": "manifest_for_injected_libs",
                       "driver_version": driver, "vulkan_device": device}
             (ROOT / ".icd-provisioned.json").write_text(_json.dumps(marker, indent=2))
@@ -214,14 +229,13 @@ def provision_nvidia_icd():
     template = (extract / "nvidia_icd.json").read_text()
     icd_dir.mkdir(parents=True, exist_ok=True)
     (icd_dir / "nvidia_icd.json").write_text(template)
-    info = subprocess.run(["vulkaninfo", "--summary"], capture_output=True, text=True)
-    if info.returncode != 0 or "NVIDIA" not in (info.stdout or ""):
-        print("host_incompatible: vulkaninfo --summary lists no NVIDIA device "
+    devices, text = nvidia_vulkan_devices()
+    if not devices:
+        print("host_incompatible: vulkaninfo lists no NVIDIA device "
               "after ICD provisioning; refusing to run gpu mode", file=sys.stderr)
-        print((info.stdout + info.stderr)[-2000:], file=sys.stderr)
+        print(text[-2000:], file=sys.stderr)
         sys.exit(3)
-    device = next((line.strip() for line in info.stdout.splitlines()
-                   if "NVIDIA" in line), "unknown")
+    device = devices[0]
     marker = {"provisioned_by_kit": True, "driver_version": driver,
               "vulkan_device": device}
     (ROOT / ".icd-provisioned.json").write_text(_json.dumps(marker, indent=2))
