@@ -297,6 +297,39 @@ def _shortest_routes(node_routes) -> dict:
     return routes
 
 
+#: One execution's request allowance: admission, lookup, evidence read and up to
+#: 64 status polls. Each direct target and each delegated leaf gets it.
+_EXECUTION_REQUESTS = 68
+#: Admission attempts a parent keeps per delegate (outside the delegate's share).
+_ADMISSION_REQUESTS = 8
+
+
+def _work_requests(executor, assigned) -> int:
+    """`executor` 这一份要的请求数：每个自己检索的目标一次执行额度，每个下级委托
+    受理额度加它那份。与 `plan_steps` 在 executor 上留给自己的固定额度一致。"""
+    own = 0
+    children: dict[str, list] = {}
+    for origin, via in assigned:
+        if via:
+            children.setdefault(via[0], []).append((origin, via[1:]))
+        else:
+            own += 1
+    return _EXECUTION_REQUESTS * own + sum(_ADMISSION_REQUESTS + _work_requests(child, items)
+                                           for child, items in children.items())
+
+
+def request_need(*, targets, coordinator_node_id, node_routes=None) -> int:
+    """协调者的检索与委托需要的请求数（不含探测、发现与生成）。
+
+    直连目标与经委托的叶目标一样各有一次执行额度；路由上每一级受理再加
+    受理额度。根预算按它定额，`plan_steps` 先给各委托这份需要再分余数。
+    """
+    routes = _shortest_routes(node_routes)
+    assigned = [(member["origin_node_id"], routes.get(member["origin_node_id"], []))
+                for member in _dedup_sorted(targets)]
+    return _work_requests(coordinator_node_id, assigned)
+
+
 def _work_hops(executor, assigned, path_length) -> int:
     """`executor` 自己要花的跳数：每个直连远端检索 2，每个下级委托受理 2 加它的份额。
 
@@ -423,42 +456,57 @@ def plan_steps(*, targets, probes, local_node_id, coordinator_node_id, query, no
         own_remote = sum(1 for step in steps
                          if step["operation"] == "retrieve"
                          and step["executor_node_id"] != coordinator_node_id)
-        # The coordinator's own work keeps its proportion plus its fixed costs:
-        # one admission attempt per delegate, and per direct target the same
-        # per-target allowance a share leaf gets. Requests/bytes/probes split
-        # by leaf count (floor), all from the remaining allowance, not the raw
-        # caps. Hops follow route depth instead: each delegate first gets what
-        # its route needs to reach every leaf through strict depth gates, the
-        # rest is split evenly; a pool short of that is refused here, at
-        # planning, rather than by a downstream relay at execution.
+        # The coordinator's own work keeps its fixed costs: one admission
+        # allowance per delegate, and per direct target the same execution
+        # allowance a delegated leaf gets. Requests go to each delegate's need
+        # first (its leaves' execution allowances plus every admission on its
+        # routes) and the rest by delegated leaf count; a caller budget too
+        # tight for those needs is split by delegated leaf count, best effort.
+        # Bytes/probes split by leaf count over all leaves (floor), all from the
+        # remaining allowance, not the raw caps. Hops follow route depth: each
+        # delegate first gets what its route needs to reach every leaf through
+        # strict depth gates, the rest is split evenly; a pool short of that is
+        # refused here, at planning, rather than by a downstream relay.
         total_leaves = sum(len(step["delegated_targets"]) for step in groups.values()) + own_targets
-        requests = max(0, remaining_requests - 8 * count - 68 * own_targets)
+        delegated_leaves = total_leaves - own_targets
+        requests = max(0, remaining_requests - _ADMISSION_REQUESTS * count
+                       - _EXECUTION_REQUESTS * own_targets)
         byte_cap = max(0, remaining_bytes - 32768 * count - 4096 * own_targets)
         hops = max(0, remaining_hops - 2 * count - 2 * own_remote)
         probe_cap = min(requests, remaining_probes)
-        hop_needs = [_share_hops(step["executor_node_id"],
-                                 [(item["target_key"]["origin_node_id"], item["via_node_ids"])
-                                  for item in step["delegated_targets"]],
-                                 delegation_depth + 1)
-                     for step in groups.values()]
+        assigned = [[(item["target_key"]["origin_node_id"], item["via_node_ids"])
+                     for item in step["delegated_targets"]] for step in groups.values()]
+        hop_needs = [_share_hops(step["executor_node_id"], items, delegation_depth + 1)
+                     for step, items in zip(groups.values(), assigned)]
         if hops < sum(hop_needs):
             reject("budget_exceeded", "hop shares cannot reach the delegated route depth")
         spare_hops = hops - sum(hop_needs)
+        request_needs = [_work_requests(step["executor_node_id"], items)
+                         for step, items in zip(groups.values(), assigned)]
+        needs_fit = requests >= sum(request_needs)
+        spare_requests = requests - sum(request_needs) if needs_fit else requests
         for position, step in enumerate(groups.values()):
             leaves = len(step["delegated_targets"])
             def portion(value, _leaves=leaves):
-                # Leaf-proportional floor; the coordinator's own targets already
-                # hold their share outside `requests`, so floors here can never
-                # exceed the pool they came from.
+                # Leaf-proportional floor over every leaf: the coordinator's own
+                # targets keep their proportion of bytes and probes.
                 if not total_leaves:
                     return 0
                 return max(0, (value * _leaves) // total_leaves)
+            def request_portion(_position=position, _leaves=leaves):
+                # Own targets already hold their allowance outside `requests`,
+                # so only delegated leaves divide what is left; floors never
+                # exceed the pool.
+                share = (spare_requests * _leaves) // delegated_leaves
+                return share + (request_needs[_position] if needs_fit else 0)
             def hop_portion(_position=position):
                 return (hop_needs[_position] + spare_hops // count
                         + int(_position < spare_hops % count))
+            request_share = request_portion()
             step["budget_share"] = {
-                "max_requests": portion(requests), "max_bytes": portion(byte_cap),
-                "max_hops": hop_portion(), "max_probes": portion(probe_cap),
+                "max_requests": request_share, "max_bytes": portion(byte_cap),
+                # Probes are requests: never above the share's own request cap.
+                "max_hops": hop_portion(), "max_probes": min(portion(probe_cap), request_share),
                 "deadline": budget["deadline"]}
     steps.append({"step_id": "fuse-1", "operation": "fuse", "executor_node_id": coordinator_node_id,
                   "depends_on": retrieve_ids})

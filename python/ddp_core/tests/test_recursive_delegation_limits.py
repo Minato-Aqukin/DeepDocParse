@@ -193,6 +193,59 @@ def test_relay_carves_sub_shares_for_its_own_delegation_depth():
                                        issuer_node_id="node-p", max_hops=share["max_hops"])
 
 
+@pytest.mark.parametrize("members,routes,need", [
+    # A leaf behind P: P's admission 8 + P's own retrieval 68.
+    ([("node-s", ())], [("node-s", ("node-p",))], 76),
+    # Behind [P, R]: each admission level adds 8 before R's retrieval 68.
+    ([("node-s", ())], [("node-s", ("node-p", "node-r"))], 84),
+    # Five direct targets 5 * 68 beside the [P, R] leaf.
+    ([(f"node-d{i}", ()) for i in range(5)] + [("node-s", ())],
+     [("node-s", ("node-p", "node-r"))], 5 * 68 + 84),
+], ids=["one-relay", "two-relays", "five-direct-plus-two-relays"])
+def test_request_need_gives_every_leaf_its_execution_allowance(members, routes, need):
+    assert routing.request_need(
+        targets=[target(node) for node, _ in members], coordinator_node_id="node-a",
+        node_routes=[{"node_id": node, "via_node_ids": list(via)} for node, via in routes]) == need
+
+
+def test_deep_leaf_beside_direct_targets_keeps_its_request_allowance():
+    """Five direct targets plus S via [P, R], sized as the server sizes it.
+
+    Each direct target keeps 68 requests outside the pool, and so must the leaf
+    behind the relays: P needs 8 to admit R plus R's 68. Counting the direct
+    targets again in the split left P 11 and R 3 (admission, one poll, one read).
+    """
+    members = [target(f"node-d{i}") for i in range(5)] + [target("node-s")]
+    routes = [{"node_id": "node-s", "via_node_ids": ["node-p", "node-r"]}]
+    cap = 16 + 5 * 68 + 84  # probes + direct targets + the [P, R] leaf's need
+    steps, _ = plan(members, routes, max_requests=cap, max_hops=40, used_requests=5)
+    share = next(step["budget_share"] for step in steps if step["operation"] == "delegate")
+    assert share["max_requests"] >= 76, share
+    assert share["max_requests"] <= cap - 5 - 8 - 5 * 68
+    sub, _ = routing.plan_steps(
+        targets=[target("node-s")], probes=[], local_node_id="node-p", coordinator_node_id="node-p",
+        query="facts", now=0, node_routes=[{"node_id": "node-s", "via_node_ids": ["node-r"]}],
+        delegation_depth=1,
+        budget={"max_requests": share["max_requests"], "max_bytes": share["max_bytes"],
+                "max_hops": share["max_hops"], "max_probe_requests": share["max_probes"],
+                "deadline": DEADLINE})
+    relay = next(step["budget_share"] for step in sub if step["operation"] == "delegate")
+    assert relay["max_requests"] >= 68, relay
+
+
+def test_delegate_probe_allowance_never_exceeds_its_request_share():
+    """Probes are requests: a share whose probe sub-cap exceeds its request cap
+    fails plan validation. Mixed depths ([P] needs 68, [Q, R] needs 76) split
+    the request pool unevenly while probes still split evenly by leaf."""
+    members = [target("node-s"), target("node-t")]
+    routes = [{"node_id": "node-s", "via_node_ids": ["node-p"]},
+              {"node_id": "node-t", "via_node_ids": ["node-q", "node-r"]}]
+    steps, _ = plan(members, routes, max_requests=196, max_probe_requests=196)
+    shares = [step["budget_share"] for step in steps if step["operation"] == "delegate"]
+    assert len(shares) == 2
+    assert all(share["max_probes"] <= share["max_requests"] for share in shares), shares
+
+
 @pytest.mark.parametrize("state", ["succeeded", "unsupported"])
 def test_reported_leaf_never_upgrades_exhaustive_coverage_to_complete(state):
     entry = coverage.new_entry(target("node-r"), "scope-1", "sha256:" + "b" * 64)

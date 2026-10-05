@@ -88,6 +88,8 @@ class RootBudget:
     def used(self) -> dict
 def hop_need(*, targets, coordinator_node_id, node_routes=None,
              delegation_depth=0) -> int                    # 路由上检索与委托所需跳数（不含生成）
+def request_need(*, targets, coordinator_node_id,
+                 node_routes=None) -> int                  # 每叶一次执行额度 + 每级受理额度
 def plan_steps(*, targets, probes, local_node_id, coordinator_node_id,
                query, now, node_routes=None, budget=None,
                delegation_depth=0) -> tuple[list[dict], list[dict]]
@@ -108,7 +110,8 @@ def plan_steps(*, targets, probes, local_node_id, coordinator_node_id,
   通过 `plans.validate_plan`。`budget_share.max_hops` 先满足 `hop_need` 给该委托
   算出的需要（每一级份额大于其受理路径长度，且不少于该级计划按叶记的传输），余数平分，
   不够即 `budget_exceeded`；`delegation_depth` 是协调者自己被受理时的路径长度（根为 0，
-  委托者传其路径长度）。
+  委托者传其路径长度）。`budget_share.max_requests` 先给 `request_need` 算出的该委托需要，
+  余数按委托叶数分；调用方上限装不下时按委托叶数尽力分（不拒绝，执行中用尽照实记）。
 - `RootBudget` 是唯一账本：发现、probe、检索请求、字节、生成 token、hop 共用一份
   额度（计划 §7.5）。`reserve` 在超限时抛 `ApplicationError("budget_exhausted", ...)`，
   并记录已消耗，不允许每个子任务重新获得完整额度。

@@ -1317,19 +1317,22 @@ async def _probe_targets(session: AsyncSession, actor: Actor, row: FederationReq
 # 规划
 # ---------------------------------------------------------------------------
 
-def _root_budget(consent: dict, *, target_count: int, route_hops: int,
+def _root_budget(consent: dict, *, target_count: int, route_hops: int, route_requests: int,
                  deadline: str, generation_ready: bool = False) -> dict:
     """Freeze a bounded allowance before the first planning request.
 
     Admission, lookup, evidence reads and up to 64 status polls per execution
-    all need request capacity. Capability readiness controls the eventual
-    graph, not whether its root can ever allocate generation tokens.
+    all need request capacity — for every direct and every delegated leaf, plus
+    each admission along a route (`route_requests`, routing.request_need).
+    Capability readiness controls the eventual graph, not whether its root can
+    ever allocate generation tokens.
     """
     probes = int(consent["budget"]["max_probe_requests"])
     discovery = int(consent["budget"].get("max_discovery_requests", 0))
     executions = max(1, target_count) + int(generation_ready)
     return {
-        "max_requests": min(2**63 - 1, probes + discovery + 68 * executions),
+        "max_requests": min(2**63 - 1, probes + discovery + max(68, route_requests)
+                            + 68 * int(generation_ready)),
         "max_bytes": min(2**63 - 1, max(
             4096, int(consent["budget"]["max_egress_bytes"])
             + executions * EVIDENCE_BYTES_PER_TARGET)),
@@ -1353,9 +1356,10 @@ def _intent_budget(task_spec, manifest, consent, *, now):
         consent, target_count=len(targets),
         # Direct remote targets plus, per first-hop delegate, its admission and a
         # share deep enough for every relay's strict depth gate (routing.hop_need);
-        # the same rule plan_steps uses to hand out hop shares.
         route_hops=routing.hop_need(targets=targets, coordinator_node_id=node,
                                     node_routes=node_routes),
+        route_requests=routing.request_need(targets=targets, coordinator_node_id=node,
+                                            node_routes=node_routes),
         deadline=plans.utc_instant(deadline),
         generation_ready=task_spec["operation"] in GENERATION_OPERATIONS)
     if node_routes:

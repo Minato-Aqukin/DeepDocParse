@@ -130,11 +130,16 @@ async def test_direct_relay_target_plus_two_relay_leaf_reaches_the_leaf_over_rea
     P's share is R's admission 2 + R's share 3 and R's share must beat its
     strict depth gate len([A, P]) = 2. The root budget must be 9 and P's share
     at least 5; with 8 the real R refuses P's sub-delegation (budget_exceeded).
-    The caller's request/byte caps are generous so the server caps decide.
+    Requests (hand-derived): probes 16 + P's collection 68 + A admitting P 8 +
+    P admitting R 8 + S's retrieval at R 68 = 168, and R's share keeps a whole
+    execution allowance (68) instead of what was left after the direct target
+    took its cut a second time. The caller's caps are generous so the server
+    caps decide.
     """
     root, plan = await recursive_plan(actor_client, recursive_nodes,
                                       direct_relay=True, max_hops=16, max_requests=4096)
     assert plan["budget"]["max_hops"] == 9, plan["budget"]
+    assert plan["budget"]["max_requests"] == 168, plan["budget"]
     delegate = next(step for step in plan["steps"] if step["operation"] == "delegate")
     assert delegate["executor_node_id"] == NODE_P
     assert delegate["budget_share"]["max_hops"] >= 5, delegate
@@ -152,6 +157,9 @@ async def test_direct_relay_target_plus_two_relay_leaf_reaches_the_leaf_over_rea
     assert origins == {NODE_P, NODE_S}, status
     relay_admission = next(call["body"] for call in recursive_nodes.nodes[NODE_R].calls("/admissions"))
     assert relay_admission["delegation_path"] == [NODE_A, NODE_P]
+    relay_share = next(step["budget_share"] for step in relay_admission["plan"]["steps"]
+                       if step.get("operation") == "delegate")
+    assert relay_share["max_requests"] >= 68, relay_share
     assert_adjacent_traffic(recursive_nodes)
 
 
