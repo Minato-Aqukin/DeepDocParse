@@ -197,9 +197,21 @@ base LSN `0/1A000060`，PITR target `2026-10-05 06:27:34.271207+00`。
 - `tmp-remote-compute/` 允许列外：live B 自带的行（`remote_computes` 产物），
   非 drill 写入，reconcile 按 allowlist 放行并计数。
 
-### 克隆不能冒用权威节点（单元级 + 联立绑定）
+### 克隆不能冒用权威节点（LIVE 真拒 + 单元级 + 联立绑定）
 
-- 联立：reconcile 新增 2 项身份绑定（上节）——恢复出的 DB 行里 drill authority
+- **LIVE（真 peer 拒绝，对 live A 只读）**：从 PITR 恢复库读出 authority，
+  全新 clone key（从未见过 authority seed，id 必不同），
+  (a) 用 clone key 签名、却声称 issuer=B 的凭据（B 的真实节点 id 取自恢复库里目录快照的来源，
+  并与在线 B 核对；A 已批准 B）在 live A 拿 **401 `credential_invalid`**
+  （签名对不上 A 登记的 B 公钥）；
+  (b) clone 自签（自 id）在 live A（control 53430 → corpus 52430）peer
+  `POST /api/v1/federation/probes` 上拿 **401 `node_unknown`**
+  （`issuer node is not a registered member`；credential 格式+body 绑定正确，
+  只输在 A 从未批准该 id）；A 侧只读复核：`node_members` 无 clone 行（3 行不变），
+  `federation_credential_nonces` 无 clone 凭证行（0 行，未入库）。
+  (c) descriptor 端点绑定跳过：把 A 的 peer 客户端指向 clone 需要改 A 的
+  live 配置，不做。证据：artifact `live_clone_leg`（8/8 PASS）+ `clone-leg.json`。
+- 联立：reconcile 2 项身份绑定（上节）——恢复出的 DB 行里 drill authority
   `node-pitr` 双向一致，clone 改写即红。这是恢复流水线内的门，不是旁路测试。
 - 单元级（credential/lease 逻辑，无 live peer 握手集成）：
   `TestNodeIdentityBackupRestoreDrill` PASS：同 seed 恢复出同一 authority，
@@ -209,7 +221,7 @@ base LSN `0/1A000060`，PITR target `2026-10-05 06:27:34.271207+00`。
   clone 的 key 签不出 authority 的 credential，
   lease.go authority-id/key 不一致拒绝。
 
-### RTO / RPO（实测，disposable 硬件；全部出自 timing.json marks）
+### RTO / RPO（实测，disposable 硬件；出自 timing.json marks，crash probe 一格来自完整一轮，克隆补跑不重做它）
 
 > 本轮为一次完整 `bash scripts/recovery_drill.sh` 真跑（不再 `--resume` 拼凑），
 > 下表每个数字都是 `timing.json` 起止 mark 的差值，artifact `rto_seconds` 原样引用。
@@ -220,7 +232,7 @@ base LSN `0/1A000060`，PITR target `2026-10-05 06:27:34.271207+00`。
 | 建源（B 恢复 + 对象拷贝 + 30 篇 seed） | 30.9 s `build_source` |
 | base 备份（179M tar） | 281.5 s `base_backup` |
 | pre/post 写 + 两次归档等待 | 89.7 s |
-| 恢复到 target（含 promote + 对账） | 17.5 s |
+| 恢复到 target（含 promote + 对账） | 17.6 s |
 | 恢复到 latest（含对账 + noloss） | 7.7 s |
 | RPO crash probe（真写 + kill -9 + 冻结 WAL 恢复） | 8.5 s |
 | 身份演练 | 0.6 s |
@@ -271,7 +283,7 @@ bash scripts/backup_restore_drill.sh --keep     # 保留容器/卷/工作目录
   未验：桶级版本控制/生命周期策略（保留）。
 - **secret 轮换**：仍然没验（保留）——恢复出的是旧凭据的快照。
 - ~~**RTO/RPO**：没有计时目标~~ → **§6 已实测，目标待定**：
-  恢复段 target 17.5 s / latest 7.7 s，RPO 窗 30 s（crash probe 实证），
+  恢复段 target 17.6 s / latest 7.7 s，RPO 窗 30 s（crash probe 实证），
   提案 RTO ≤ 30 min / RPO ≤ 30 s 待 human 一字回复
   （`.dev-logs/human-steps/RTO-RPO.md`；判据外）。
 - **迁移的 downgrade**：仍然只跑 `upgrade head`（保留）；双向可跑由

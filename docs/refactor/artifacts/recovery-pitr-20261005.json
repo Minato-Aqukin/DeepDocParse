@@ -55,10 +55,11 @@
     "build_source": 30.9,
     "base_backup": 281.5,
     "pre_and_post_writes_with_archive_waits": 89.7,
-    "restore_to_target": 17.5,
+    "restore_to_target": 17.6,
     "restore_to_latest": 7.7,
     "rpo_crash_probe": 8.5,
-    "identity": 0.6
+    "identity": 0.9,
+    "rpo_crash_probe_note": "from the last full run (clone-only runs do not repeat the crash probe)"
   },
   "rpo": {
     "wal_archive_cadence_s": 30,
@@ -625,5 +626,90 @@
   },
   "identity": "=== RUN   TestNodeIdentityBackupRestoreDrill\n    identity_drill_test.go:35: authority node id=node-f62697d5af111d339c4e15f0d4b6f172547a4f396ff0bb69 fingerprint=sha256:f62697d5af111d339c4e15f0d4b6f172547a4f396ff0bb697f56ee5a8bdd171c\n    identity_drill_test.go:58: restored same authority: node id=node-f62697d5af111d339c4e15f0d4b6f172547a4f396ff0bb69 fingerprint=sha256:f62697d5af111d339c4e15f0d4b6f172547a4f396ff0bb697f56ee5a8bdd171c\n    identity_drill_test.go:99: clone node id=node-888e163f2132f4ab1dbbb3e0ea7011db4cdf533a6c214c59 differs; missing seed refused; create/read paths exercised\n--- PASS: TestNodeIdentityBackupRestoreDrill (0.00s)\nPASS\nok  \tgithub.com/Minato-Aqukin/deepdocparse/services/control-api/internal/discovery\t0.005s\n",
   "peer_clone_rejection": "=== RUN   TestCredentialSigningRefusesForeignIssuerAndInvalidClaims\n--- PASS: TestCredentialSigningRefusesForeignIssuerAndInvalidClaims (0.00s)\n=== RUN   TestNodeIDForPublicKeyValidatesCanonicalEncoding\n--- PASS: TestNodeIDForPublicKeyValidatesCanonicalEncoding (0.00s)\nPASS\nok  \tgithub.com/Minato-Aqukin/deepdocparse/services/control-api/internal/discovery\t0.005s\n",
+  "live_clone_leg": {
+    "checks": [
+      {
+        "name": "clone:restored DB carries drill authority id",
+        "ok": true,
+        "detail": "rows=435"
+      },
+      {
+        "name": "clone:restored DB is a copy of the source center (its node id is the catalog origin)",
+        "ok": true,
+        "detail": "source_node=node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002 catalog_rows=13"
+      },
+      {
+        "name": "clone:fresh clone id differs from the source center",
+        "ok": true,
+        "detail": "clone=node-11191ea452203cb27cd1c269aa3cd5c6a6a27e3e71dac918 source=node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002"
+      },
+      {
+        "name": "clone:A refuses a credential claiming issuer=B but signed by the clone key",
+        "ok": true,
+        "detail": "status=401 code={'message': 'credential signature does not verify', 'type': 'authentication_error', 'code': 'credential_invalid'}"
+      },
+      {
+        "name": "clone:A refuses clone-signed probe with 401/403",
+        "ok": true,
+        "detail": "status=401 code={'message': 'issuer node is not a registered member', 'type': 'authentication_error', 'code': 'node_unknown'}"
+      },
+      {
+        "name": "clone:A approves the impersonated source center (so the forgery targets real trust)",
+        "ok": true,
+        "detail": "source=node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002"
+      },
+      {
+        "name": "clone:A trust table has no clone row",
+        "ok": true,
+        "detail": "members=3"
+      },
+      {
+        "name": "clone:neither credential's nonce was admitted at A",
+        "ok": true,
+        "detail": "nonce_rows=0 (None = nonce table not found, which fails the check)"
+      }
+    ],
+    "clone_node_id": "node-11191ea452203cb27cd1c269aa3cd5c6a6a27e3e71dac918",
+    "authority_node_id": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+    "clone_public_key": "6F33tEm5vWpp2tZszabd7mCZEeup611aeWvTLB8YB+w=",
+    "forged_issuer_attempt": {
+      "issuer": "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+      "signer": "node-11191ea452203cb27cd1c269aa3cd5c6a6a27e3e71dac918",
+      "jti": "C6835e8c57f824a53beb0f",
+      "status": 401,
+      "code": {
+        "message": "credential signature does not verify",
+        "type": "authentication_error",
+        "code": "credential_invalid"
+      },
+      "body": "{\"error\":{\"message\":\"credential signature does not verify\",\"type\":\"authentication_error\",\"code\":\"credential_invalid\"}}"
+    },
+    "clone_credential_jti": "C849ab66cb2db447cb713c",
+    "probe_response": {
+      "status": 401,
+      "code": {
+        "message": "issuer node is not a registered member",
+        "type": "authentication_error",
+        "code": "node_unknown"
+      },
+      "body": "{\"error\":{\"message\":\"issuer node is not a registered member\",\"type\":\"authentication_error\",\"code\":\"node_unknown\"}}"
+    },
+    "a_members": [
+      [
+        "node-00bd4effc78276d080de112271f735b49f4b692fe68714b4",
+        "approved"
+      ],
+      [
+        "node-38f260609e6ec4a08f1c7c9f01ed6b6d815fa94bc7fc4f7c",
+        "revoked"
+      ],
+      [
+        "node-ea3288deebe69f9ec8d074e709da3c45afd4e2c09f525002",
+        "approved"
+      ]
+    ],
+    "a_nonce_rows_for_clone": 0,
+    "ok": true
+  },
   "repro": "bash scripts/recovery_drill.sh"
 }

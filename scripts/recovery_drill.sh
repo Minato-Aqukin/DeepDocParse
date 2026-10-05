@@ -480,6 +480,9 @@ mark t_latest_done
 # wal-archive-full predates the probe by construction, so the probe cannot
 # have been archived no matter how fast the archiver runs.
 say "5b/7 RPO crash probe (unarchived write + kill -9 + crash-restore)"
+if [ "${CLONE_ONLY:-0}" -eq 1 ]; then
+  say "5b/7 SKIPPED (clone-only): RPO proof already in artifact from the full run"
+else
 mark t_crash_start
 if [ "$RESUME" -eq 1 ]; then
   fail "--resume cannot prove RPO: the crash probe needs a live SRC PG (real write + kill -9). Run without --resume for an RPO verdict."
@@ -524,8 +527,28 @@ async def main():
 asyncio.run(main())
 PY
 mark t_crash_done
-
+fi
 # ---------------------------------------------------------------- 6) identity
+if [ "${CLONE_ONLY:-0}" -eq 1 ]; then
+  # Clone-only mode: rebuild JUST the latest restore from the frozen base+WAL
+  # (the full run's evidence is reused; only the clone leg needs a live DB).
+  say "6/7 CLONE-ONLY: rebuilding latest restore for the live clone leg"
+  WALDIR="$WORK/wal-archive-full"
+  docker rm -f "$LATEST_PG_C" >/dev/null 2>&1 || true
+  docker volume rm ddp-recovery-latest-pgdata >/dev/null 2>&1 || true
+  docker volume create ddp-recovery-latest-pgdata >/dev/null
+  docker run --rm -v ddp-recovery-latest-pgdata:/data -v "$WORK/base_tar:/base:ro" -v "$WORK/wal-archive-full:/wal:ro" "$PG_IMAGE" \
+    bash -c 'rm -rf /data/* && tar -xzf /base/base.tar.gz -C /data && touch /data/recovery.signal && echo "restore_command = '"'"'cp /wal/%f %p'"'"'" >> /data/postgresql.conf && chown -R 999:999 /data' \
+    || fail "base extract (clone-only latest) failed"
+  docker run -d --name "$LATEST_PG_C" -e POSTGRES_USER=ddp -e POSTGRES_PASSWORD="$LATEST_PW" \
+    -e POSTGRES_DB=deepdocparse -p "127.0.0.1:$LATEST_PG_PORT:5432" \
+    -v ddp-recovery-latest-pgdata:/var/lib/postgresql/data -v "$WALDIR:/wal:ro" "$PG_IMAGE" >/dev/null
+  ready=0; for _ in $(seq 1 120); do
+    docker exec "$LATEST_PG_C" pg_isready -U ddp -d deepdocparse >/dev/null 2>&1 && { ready=1; break; }; sleep 1; done
+  [ "$ready" -eq 1 ] || fail "clone-only latest restore PG not ready"
+  docker exec --user postgres "$LATEST_PG_C" psql -U ddp -d deepdocparse -Atc "ALTER ROLE ddp PASSWORD '${LATEST_PW//\'/\'\'}';" >/dev/null || fail "clone-only LATEST password reset failed"
+  LATEST_DSN="postgresql+asyncpg://ddp:${LATEST_PW}@127.0.0.1:${LATEST_PG_PORT}/deepdocparse"
+fi
 say "6/7 node identity: same-seed restore == authority; clone cannot impersonate"
 mark t_ident_start
 IDENTITY_ROOT="$WORK/identity"
@@ -542,8 +565,27 @@ grep -q "clone node id=.* differs" "$WORK/identity-drill.log" || fail "clone dif
 # does not verify under the issuer key; lease.go rejects authority-id/key
 # mismatch ("descriptor approved identity or key mismatch").
 (cd services/control-api && PATH="$HOME/.local/opt/go/bin:$PATH" go test ./internal/discovery -run 'TestCredentialSigningRefusesForeignIssuerAndInvalidClaims|TestNodeIDForPublicKey' -v -count=1 2>&1 | tail -6) | tee "$WORK/peer-reject.log" || fail "peer-layer clone rejection proof failed"
+# LIVE clone leg (real peer refusal, read-only toward live A):
+# a FRESH clone key (never the authority seed) mints credentials and fires
+# real peer requests at live center A (control 53430 -> corpus 52430).
+# (a) a credential claiming issuer=B but signed by the clone key is refused
+# by A against B's registered key;
+# (b) clone-signed own-id credential is refused by A with 401/403 (never
+# approved there); A-side read-only SELECTs prove no new trust row and no
+# admitted request. (c) descriptor-endpoint binding is SKIPPED: pointing A's
+# peer client at the clone would require changing A's live config.
+say "6b/7 LIVE clone leg vs center A (fresh key, real refusals, A read-only)"
+A_NODE="$(curl -fsS --max-time 10 "http://127.0.0.1:52430/readyz" | "$PY" -c "import json,sys; print(json.load(sys.stdin)['federation']['node_id'])")"
+[ -n "$A_NODE" ] || fail "live A corpus identity unavailable"
+A_PW="$(docker exec ddp-abc-a-pg printenv PGPASSWORD POSTGRES_PASSWORD 2>/dev/null | head -n 1)"
+[ -n "$A_PW" ] || fail "A PG password unavailable (read-only leg needs it)"
+A_DSN="postgresql+asyncpg://ddp:${A_PW}@127.0.0.1:55432/deepdocparse"
+B_NODE="$(curl -fsS --max-time 10 "http://127.0.0.1:42430/readyz" | "$PY" -c "import json,sys; print(json.load(sys.stdin)['federation']['node_id'])")"
+[ -n "$B_NODE" ] || fail "live B corpus identity unavailable"
+"$PY" scripts/recovery_drill_pitr.py clone --dsn "$LATEST_DSN" --a-dsn "$A_DSN" --source-node "$B_NODE" \
+  --audience "$A_NODE" --peer-url "http://127.0.0.1:53430" --out "$WORK/clone-leg.json" \
+  || fail "live clone leg failed"
 mark t_ident_done
-
 # ---------------------------------------------------------------- 7) artifact
 say "7/7 writing artifact + RTO/RPO table"
 "$PY" - "$WORK" "$ARTIFACT" "$DATE_TAG" "$N_DOCS" "$N_EXTRA" "$TARGET_TIME" <<'PY'
@@ -555,7 +597,9 @@ tgt = json.load(open(f"{work}/recon-target.json"))
 lat = json.load(open(f"{work}/recon-latest.json"))
 noloss = json.load(open(f"{work}/noloss.json"))
 state = json.load(open(f"{work}/pitr-state.json"))
-def dur(a, b): return round(tim[b] - tim[a], 1) if a in tim and b in tim else None
+def dur(a, b):
+    v = round(tim[b] - tim[a], 1) if a in tim and b in tim else None
+    return v if v is None or v >= 0 else None
 wal_segs = len(__import__("os").listdir(f"{work}/wal-archive-full")) if __import__("os").path.isdir(f"{work}/wal-archive-full") else None
 doc = {
   "drill": "recovery-pitr", "date": tag,
@@ -593,8 +637,16 @@ doc = {
   "noloss_latest_vs_source": noloss,
   "identity": open(f"{work}/identity-drill.log").read()[-2000:],
   "peer_clone_rejection": open(f"{work}/peer-reject.log").read()[-1500:],
+  "live_clone_leg": json.load(open(f"{work}/clone-leg.json")),
   "repro": "bash scripts/recovery_drill.sh",
 }
+# A clone-only run re-runs the restores and the clone leg but not the crash
+# probe; keep the full run's probe timing instead of losing it.
+if __import__("os").environ.get("CLONE_ONLY") == "1" and doc["rto_seconds"]["rpo_crash_probe"] is None:
+    prior = json.load(open(art)) if __import__("os").path.exists(art) else {}
+    carried = prior.get("rto_seconds", {}).get("rpo_crash_probe")
+    doc["rto_seconds"]["rpo_crash_probe"] = carried
+    doc["rto_seconds"]["rpo_crash_probe_note"] = "from the last full run (clone-only runs do not repeat the crash probe)"
 json.dump(doc, open(art, "w"), indent=2, ensure_ascii=False)
 print(f"artifact {art}")
 PY

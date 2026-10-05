@@ -501,6 +501,170 @@ def cmd_probe(a):
     print(f"probe OK: {probe_id} (NOT archived; kill the server now)")
 
 
+async def clone_leg(a) -> dict:
+    """LIVE clone leg: fresh key, forged/clone-signed credentials vs live A.
+
+    No servers are started here: the drill script restores the PITR DB into a
+    throwaway PG, reads B's authority node id from it, mints a FRESH clone key
+    (never the authority seed), and fires real peer requests at live center A
+    (control 53430 -> corpus 52430). Every impersonation attempt must be
+    refused; A-side read-only DB checks must show no new trust rows and no
+    admitted request. Returns the report dict (also written to --out)."""
+    import base64
+    import hashlib as _h
+    import time as _t
+    import urllib.request as _url
+    import uuid as _uuid
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import text
+    sys.path.insert(0, str(ROOT / "python" / "ddp_core"))
+    from ddp_core.application import node_credentials as nc
+    rep = {"checks": []}
+    def check(name, ok, detail=""):
+        rep["checks"].append({"name": name, "ok": bool(ok), "detail": detail})
+        print(f"{'OK ' if ok else 'FAIL'} {name} {detail}")
+    # 1) identities from the PITR-restored DB (read-only SELECTs): the drill's
+    # own authority rows, and the real node id of the center the copy came
+    # from (its collection catalog snapshots carry it as origin).
+    e = create_async_engine(a.dsn)
+    async with e.connect() as c:
+        auth_rows = (await c.execute(text(
+            "SELECT DISTINCT authority_node_id FROM public.wiki_dependencies "
+            "WHERE authority_node_id='node-pitr' LIMIT 5"))).all()
+        n_deps = int((await c.execute(text("SELECT count(*) FROM public.wiki_dependencies"))).scalar_one())
+        source_rows = int((await c.execute(text(
+            "SELECT count(*) FROM public.collection_catalog_snapshots WHERE origin_node_id=:b"),
+            {"b": a.source_node})).scalar_one())
+    await e.dispose()
+    check("clone:restored DB carries drill authority id", len(auth_rows) > 0, f"rows={n_deps}")
+    check("clone:restored DB is a copy of the source center (its node id is the catalog origin)",
+          source_rows > 0, f"source_node={a.source_node} catalog_rows={source_rows}")
+    authority_id = a.source_node
+    # 2) fresh clone key (throwaway; never the authority seed)
+    clone_priv = Ed25519PrivateKey.generate()
+    clone_pub = clone_priv.public_key().public_bytes_raw()
+    clone_id = "node-" + _h.sha256(clone_pub).hexdigest()[:48]
+    clone_pub_b64 = base64.b64encode(clone_pub).decode()
+    check("clone:fresh clone id differs from the source center", clone_id != authority_id,
+          f"clone={clone_id} source={authority_id}")
+    rep["clone_node_id"] = clone_id
+    rep["authority_node_id"] = authority_id
+    rep["clone_public_key"] = clone_pub_b64
+    # positive control: authority seed determinism is covered by the Go
+    # TestNodeIdentityBackupRestoreDrill (same seed == authority); here we
+    # only assert the clone is *different* — we never start a second live B.
+    # 3) two credentials, both sent to live A's peer probe endpoint:
+    # (a) a forgery — issuer=B, signed with the clone key (a clone cannot hold
+    #     B's seed); A must refuse it against B's registered key;
+    # (b) the clone's own credential (own id, never approved at A).
+    audience = a.audience
+    # The probe bytes FIRST: the credential's body_digest must cover these
+    # exact bytes (else A correctly answers credential_scope_denied for a
+    # rebound credential — a true refusal, but of the wrong leg). We want the
+    # trust leg: well-formed + well-bound, refused ONLY because A never
+    # approved the clone.
+    probe_body = json.dumps({"schema": "ddp-task-probe/1#ProbeRequest",
+                             "task_spec_digest": "sha256:" + "e" * 64,
+                             "consent_ref": "clone-leg-exploration-1",
+                             "probe_kind": "capability_input",
+                             "target_node_id": audience,
+                             "scope_ref": "scope-clone-leg",
+                             "operation": "rag.answer.cited"},
+                            sort_keys=True, separators=(",", ":")).encode()
+    body = probe_body
+    def mint(issuer, priv):
+        now = int(_t.time())
+        claims = {"schema": "ddp-node-credential/1#Claims", "alg": "Ed25519",
+                  "issuer_node_id": issuer, "audience_node_id": audience,
+                  "actor": {"organization_id": "org-pitr", "subject": "clone-leg", "kind": "user"},
+                  "operation": "probe_create",
+                  "constraints": {"root_task_id": f"clone-leg-{_uuid.uuid4().hex[:8]}",
+                                  "scope_ref": "scope-clone-leg",
+                                  "task_spec_digest": "sha256:" + "e" * 64},
+                  "request": {"method": "POST", "path": "/api/v1/federation/probes",
+                              "body_digest": nc.body_digest(body)},
+                  "issued_at": now, "expires_at": now + 60,
+                  "jti": "C" + _uuid.uuid4().hex[:21]}
+        nc.validate_claims(dict(claims))
+        payload = json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()
+        sig = priv.sign(b"ddp-node-credential/1\n" + payload)
+        return nc.encode(claims, sig), claims
+
+    def post_probe(token):
+        req = _url.Request(f"{a.peer_url}/api/v1/federation/probes", data=probe_body, method="POST",
+                           headers={"Content-Type": "application/json",
+                                    "X-DDP-Node-Credential": token,
+                                    "X-DDP-Target-Node": audience,
+                                    "Idempotency-Key": f"clone-leg-{_uuid.uuid4().hex[:8]}"})
+        try:
+            with _url.urlopen(req, timeout=15) as r:
+                status, payload = r.status, r.read()[:2000].decode("utf-8", "replace")
+        except Exception as ex:
+            # HTTPError carries the refusal body; read it instead of str(exc).
+            read = getattr(ex, "read", None)
+            try:
+                payload = read()[:2000].decode("utf-8", "replace") if callable(read) else str(ex)[:500]
+            except Exception:
+                payload = str(ex)[:500]
+            status = getattr(ex, "code", "ERR")
+        try:
+            parsed = json.loads(payload) if isinstance(payload, str) and payload.lstrip().startswith("{") else {}
+            code = parsed.get("code") or parsed.get("error") or payload[:160]
+        except Exception:
+            code = str(payload)[:160]
+        return status, code, payload
+
+    forged_token, forged_claims = mint(authority_id, clone_priv)
+    f_status, f_code, f_body = post_probe(forged_token)
+    check("clone:A refuses a credential claiming issuer=B but signed by the clone key",
+          f_status in (401, 403), f"status={f_status} code={f_code}")
+    rep["forged_issuer_attempt"] = {"issuer": authority_id, "signer": clone_id,
+                                    "jti": forged_claims["jti"], "status": f_status,
+                                    "code": f_code, "body": f_body[:1000]}
+    token, claims = mint(clone_id, clone_priv)
+    rep["clone_credential_jti"] = claims["jti"]
+    # (b) present the clone-signed credential (own id, never approved at A)
+    # to live A's peer probe endpoint; expect an explicit refusal.
+    status, code, payload = post_probe(token)
+    check("clone:A refuses clone-signed probe with 401/403", status in (401, 403),
+          f"status={status} code={code}")
+    rep["probe_response"] = {"status": status, "code": code, "body": payload[:1000]}
+    # 4) A-side read-only checks: no new trust row, no admitted request.
+    # Caller passes --a-dsn (A's PG, read-only SELECTs only).
+    ea = create_async_engine(a.a_dsn)
+    async with ea.connect() as c:
+        members = [dict(x) for x in (await c.execute(text(
+            "SELECT node_id, state FROM control.node_members ORDER BY node_id"))).mappings()]
+        has_nonce = int((await c.execute(text(
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='federation_credential_nonces'"))).scalar_one())
+        nonce = int((await c.execute(text(
+            "SELECT count(*) FROM public.federation_credential_nonces "
+            "WHERE issuer_node_id=:i OR jti IN (:forged, :own)"),
+            {"i": clone_id, "forged": forged_claims["jti"], "own": claims["jti"]})).scalar_one()) \
+            if has_nonce else None
+    await ea.dispose()
+    rep["a_members"] = [(m["node_id"], m["state"]) for m in members]
+    rep["a_nonce_rows_for_clone"] = nonce
+    check("clone:A approves the impersonated source center (so the forgery targets real trust)",
+          any(m["node_id"] == authority_id and m["state"] == "approved" for m in members),
+          f"source={authority_id}")
+    check("clone:A trust table has no clone row", all(m["node_id"] != clone_id for m in members),
+          f"members={len(members)}")
+    check("clone:neither credential's nonce was admitted at A", nonce == 0,
+          f"nonce_rows={nonce} (None = nonce table not found, which fails the check)")
+    rep["ok"] = all(c["ok"] for c in rep["checks"])
+    Path(a.out).write_text(json.dumps(rep, indent=2), encoding="utf-8")
+    print("CLONE-LEG", "PASS" if rep["ok"] else "FAIL")
+    if not rep["ok"]:
+        raise SystemExit(1)
+    return rep
+
+
+def cmd_clone(a):
+    asyncio.run(clone_leg(a))
+
+
 def cmd_reconcile(a):
     rep = asyncio.run(reconcile(a))
     Path(a.out).write_text(json.dumps(rep, indent=2), encoding="utf-8")
@@ -540,6 +704,14 @@ def main() -> int:
     s3.add_argument("--minio-secret-key", required=True); s3.add_argument("--bucket", required=True)
     s3.add_argument("--out", required=True)
     s3.set_defaults(f=cmd_reconcile)
+    s6 = sub.add_parser("clone")
+    s6.add_argument("--dsn", required=True, help="PITR-restored DB (read-only SELECTs)")
+    s6.add_argument("--a-dsn", required=True, help="live A PG (read-only SELECTs)")
+    s6.add_argument("--audience", required=True, help="live A node id (credential audience)")
+    s6.add_argument("--peer-url", required=True, help="live A peer base URL (no credentials)")
+    s6.add_argument("--source-node", required=True, help="node id of the center the restored DB was copied from (B)")
+    s6.add_argument("--out", required=True)
+    s6.set_defaults(f=cmd_clone)
     a = p.parse_args()
     a.f(a)
     return 0
