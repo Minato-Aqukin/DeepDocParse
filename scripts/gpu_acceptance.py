@@ -1218,21 +1218,112 @@ async def _real_cpu_recovery(workdir, installer, model_id, cpu_rt):
         await owned.stop()
 
 
-def ensure_gpu_downloads(workspace):
-    """Download the real catalog artifacts on the GPU host (network needed).
+# China-reachable mirrors for the GPU-leg artifacts (verified 2026-10-06:
+# each serves the identical bytes as the catalog URL -- same size and sha256
+# -- and honors HTTP Range resume). The host pre-stages from these first
+# because the 2026-10-05 host run through the academic proxy dropped the
+# 1.7 GB publisher download at ~118 MB on each of 4 attempts
+# (httpx.RemoteProtocolError; .dev-logs/gpu-acceptance/resume-run.log), so
+# 4 resume retries could not cover 1.7 GB. The publisher URL stays the
+# fallback. ghproxy.cn / mirror.ghproxy.com were probed and rejected
+# (HTML replies / HTTP 530).
+MIRROR_URLS = {
+    "qwen3-1.7b-q8_0": [
+        "https://modelscope.cn/models/Qwen/Qwen3-1.7B-GGUF/resolve/"
+        "dc80e1956e7551cd4aa5309c914e767b69188639/Qwen3-1.7B-Q8_0.gguf",
+    ],
+    "llama-cpp-vulkan-linux-x64": [
+        "https://ghfast.top/https://github.com/ggml-org/llama.cpp/releases/"
+        "download/b10809/llama-b10809-bin-ubuntu-vulkan-x64.tar.gz",
+        "https://gh-proxy.com/https://github.com/ggml-org/llama.cpp/releases/"
+        "download/b10809/llama-b10809-bin-ubuntu-vulkan-x64.tar.gz",
+    ],
+    "llama-cpp-cpu-linux-x64": [
+        "https://ghfast.top/https://github.com/ggml-org/llama.cpp/releases/"
+        "download/b10809/llama-b10809-bin-ubuntu-x64.tar.gz",
+        "https://gh-proxy.com/https://github.com/ggml-org/llama.cpp/releases/"
+        "download/b10809/llama-b10809-bin-ubuntu-x64.tar.gz",
+    ],
+}
 
-    Honors the ``*_PROXY`` environment (e.g. AutoDL's academic proxy from
-    ``source /etc/network_turbo``, which covers huggingface.co and github
-    releases): the installer builds its HTTP client with ``trust_env=False``,
-    so pass an explicitly proxy-configured client. Retries each artifact
-    (resuming the partial file) because transient cloud-link drops are
-    routine on these hosts.
+
+def prestage_artifact(installer, identifier, filename, *, source_url, attempts=40):
+    """Fetch one catalog artifact from a mirror, verify it, import it.
+
+    Shells out to ``curl -fL -C -``: ``-C -`` resumes the partial file with
+    a ``Range`` request the mirror CDN answers with 206, ``-L`` follows the
+    CDN redirects, and ``--retry 10 --retry-all-errors`` covers transient
+    drops inside one attempt while the outer attempts loop keeps resuming.
+    (The 2026-10-05 host failure was connection drops at ~118 MB per attempt
+    through the academic proxy -- 4 attempts could move only ~472 MB of
+    1.7 GB, whatever the resume logic; the mirrors below were picked because
+    they serve the identical bytes over resumable connections.) Size+sha256
+    are checked against the catalog BEFORE ``ModelInstaller.import_file``
+    (which verifies size+digest again on publish), so a bad mirror file can
+    never become installed. Returns the ``mirror:<host>`` source label.
+    """
+    from ddp_core.application.ports import ApplicationError as _ApplicationError
+    from urllib.parse import urlsplit as _urlsplit
+    artifact = installer.artifact(identifier)
+    staged = Path(filename)
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    if staged.is_file() and staged.stat().st_size > artifact["bytes"]:
+        staged.unlink()
+    if shutil.which("curl") is None:
+        raise _ApplicationError("model_download_failed",
+                                "curl is required to pre-stage catalog artifacts")
+    command = ["curl", "-fL", "-C", "-", "--retry", "10", "--retry-all-errors",
+               "--connect-timeout", "30", "--speed-time", "60", "--speed-limit", "10240",
+               "--noproxy", "*", "-o", str(staged), source_url]
+    for attempt in range(1, attempts + 1):
+        if staged.is_file() and staged.stat().st_size == artifact["bytes"]:
+            break
+        proc = subprocess.run(command, capture_output=True, text=True)
+        have = staged.stat().st_size if staged.is_file() else 0
+        detail = ""
+        if proc.returncode != 0 and proc.stderr.strip():
+            detail = f" {proc.stderr.strip().splitlines()[-1][:160]}"
+        print(f"[gpu-acceptance] {identifier} mirror attempt {attempt}/{attempts}: "
+              f"rc={proc.returncode} {have}/{artifact['bytes']} bytes{detail}", flush=True)
+    have = staged.stat().st_size if staged.is_file() else 0
+    if have != artifact["bytes"]:
+        raise _ApplicationError(
+            "model_download_failed",
+            f"mirror stalled at {have}/{artifact['bytes']} bytes after {attempts} attempts")
+    digest = hashlib.sha256()
+    with open(staged, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != artifact["sha256"]:
+        raise _ApplicationError("model_digest_mismatch",
+                                "mirror file SHA-256 differs from the catalog; refusing to import")
+    result = installer.import_file(identifier, staged)
+    host = _urlsplit(source_url).hostname or source_url
+    print(f"[gpu-acceptance] {identifier} pre-staged from {host} -> {result['status']}", flush=True)
+    return f"mirror:{host}"
+
+
+def ensure_gpu_downloads(workspace, *, stage_dir=None):
+    """Pre-stage the real catalog artifacts on the GPU host (network needed).
+
+    Tries each artifact's China-reachable ``MIRROR_URLS`` first via
+    ``prestage_artifact`` (resumable ``curl`` + size/sha256 check + the real
+    ``ModelInstaller.import_file`` path), and keeps the original publisher
+    download as the fallback. Honors the ``*_PROXY`` environment for that
+    fallback exactly as before (AutoDL's academic proxy from
+    ``source /etc/network_turbo`` covers huggingface.co and github
+    releases; the installer builds its HTTP client with ``trust_env=False``,
+    so the fallback uses an explicitly proxy-configured client). The
+    returned installer carries the per-artifact source in
+    ``installer.artifact_sources`` (``mirror:<host>`` or ``publisher``).
     """
     import asyncio as _asyncio
     import httpx as _httpx
     from ddp_local.model_runtime.install import ModelInstaller
     installer = ModelInstaller(workspace / "models")
+    installer.artifact_sources = {}
     ids = ["qwen3-1.7b-q8_0", "llama-cpp-vulkan-linux-x64", "llama-cpp-cpu-linux-x64"]
+    staging = Path(stage_dir) if stage_dir else workspace / "prestage"
 
     async def download_all():
         # AutoDL's academic proxy MITMs TLS with its own CA
@@ -1260,6 +1351,26 @@ def ensure_gpu_downloads(workspace):
                       f"{state.get('downloaded_bytes', 0)} bytes"
                       + (" (via proxy)" if proxy else " (direct)"), flush=True)
                 if state["status"] == "installed":
+                    installer.artifact_sources.setdefault(identifier, "preinstalled")
+                    continue
+                artifact = installer.artifact(identifier)
+                mirrors = MIRROR_URLS.get(identifier, [])
+                staged_path = staging / artifact["filename"]
+                for mirror in mirrors:
+                    try:
+                        source = prestage_artifact(installer, identifier, staged_path,
+                                                 source_url=mirror)
+                    except Exception as exc:
+                        print(f"[gpu-acceptance] {identifier} mirror {mirror} failed "
+                              f"({getattr(exc, 'code', type(exc).__name__)}); trying next",
+                              flush=True)
+                        continue
+                    installer.artifact_sources[identifier] = source
+                    break
+                else:
+                    print(f"[gpu-acceptance] {identifier} pre-stage failed; "
+                          "falling back to the publisher URL", flush=True)
+                if installer.status(identifier)["status"] == "installed":
                     continue
                 last = None
                 for attempt in range(1, 5):
@@ -1272,15 +1383,18 @@ def ensure_gpu_downloads(workspace):
                               flush=True)
                         continue
                     print(f"[gpu-acceptance] {identifier} -> {result['status']}", flush=True)
+                    installer.artifact_sources[identifier] = "publisher"
                     last = None
                     break
                 if last is not None:
                     raise last
     _asyncio.run(download_all())
+    print("[gpu-acceptance] artifact sources: "
+          + json.dumps(installer.artifact_sources, sort_keys=True), flush=True)
     return installer
 
 
-def build_artifact(mode, checks, host, gpu, out_path):
+def build_artifact(mode, checks, host, gpu, out_path, *, artifact_sources=None):
     by_id = {c["id"]: c for c in checks}
     rows = {}
     for row, ids in (("T19", CHECKS_T19), ("T59", CHECKS_T59), ("T60", CHECKS_T60)):
@@ -1298,6 +1412,7 @@ def build_artifact(mode, checks, host, gpu, out_path):
         "generated_at": utcnow(),
         "host": host, "gpu": gpu,
         "checks": checks, "rows": rows,
+        "artifact_sources": dict(artifact_sources or {}),
         "notes": [
             "skipped checks never count as pass; any skipped check makes its row NOT pass.",
             ("dry-run: GPU-required checks are skipped by design; non-GPU paths "
@@ -1383,7 +1498,10 @@ def main(argv=None):
             out_path = ROOT / f"docs/refactor/artifacts/gpu-acceptance-{stamp}.json"
         else:
             out_path = Path.cwd() / f"gpu-acceptance-dry-run-{stamp}.json"
-        artifact = build_artifact(args.mode, checks, host, gpu, out_path)
+        artifact = build_artifact(
+            args.mode, checks, host, gpu, out_path,
+            artifact_sources=(getattr(installer, "artifact_sources", {})
+                              if installer is not None else {}))
         for check in checks:
             print(f"[{check['status']:>7}] {check['id']} {check.get('reason', '')}")
         failed_rows = []
