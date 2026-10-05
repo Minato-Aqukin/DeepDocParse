@@ -151,16 +151,23 @@ def host_facts():
 
 
 def _glibc_version():
-    """System glibc ``(major, minor)``; ``None`` when it cannot be read."""
+    """System glibc ``(major, minor)``; ``None`` when it cannot be read.
+
+    ``getconf GNU_LIBC_VERSION`` reports the C library a new process (such as
+    llama-server) will load. ``platform.libc_ver()`` is not used: it reports
+    what the Python binary was linked against (uv's CPython targets an old
+    glibc on purpose), which says nothing about the system library.
+    """
     try:
-        name, version = platform.libc_ver()
-    except Exception:
+        out = subprocess.run(["getconf", "GNU_LIBC_VERSION"], capture_output=True,
+                             text=True, timeout=10).stdout.split()
+    except (OSError, subprocess.SubprocessError):
         return None
-    if name != "glibc" or not version:
+    if len(out) != 2 or out[0] != "glibc":
         return None
     try:
-        major, _, minor = version.partition(".")[0], ".", version.partition(".")[2]
-        return (int(major), int(minor.split(".")[0]))
+        major, _, rest = out[1].partition(".")
+        return (int(major), int(rest.split(".")[0]))
     except (ValueError, IndexError):
         return None
 

@@ -49,16 +49,22 @@ def dpkg_version(name):
 
 
 def glibc_version():
-    """System glibc ``(major, minor)``; ``None`` when it cannot be read."""
-    import platform as _platform
+    """System glibc ``(major, minor)``; ``None`` when it cannot be read.
+
+    Asks a fresh process (``getconf GNU_LIBC_VERSION``): this script may have
+    started before the jammy upgrade, so its own loaded libc is stale, and
+    ``platform.libc_ver()`` reports what the Python binary was linked against,
+    not the system C library.
+    """
     try:
-        name, version = _platform.libc_ver()
-    except Exception:
+        out = subprocess.run(["getconf", "GNU_LIBC_VERSION"], capture_output=True,
+                             text=True, timeout=10).stdout.split()
+    except (OSError, subprocess.SubprocessError):
         return None
-    if name != "glibc" or not version:
+    if len(out) != 2 or out[0] != "glibc":
         return None
     try:
-        major, _, rest = version.partition(".")
+        major, _, rest = out[1].partition(".")
         return (int(major), int(rest.split(".")[0]))
     except (ValueError, IndexError):
         return None
