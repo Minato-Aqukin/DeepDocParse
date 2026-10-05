@@ -317,25 +317,48 @@ async def check_t19_explicit_cpu_recovery(workdir):
 
 
 async def check_t19_gpu_oom(workdir, installer, model_id, gpu_runtime_id, *, free_before=None):
-    """Real GPU OOM: oversized ctx on the real Vulkan runtime must fail as OOM."""
+    """Real GPU OOM: a card-sized oversized ctx must fail as OOM, not a refusal.
+
+    The probe ctx is computed from the VRAM observed on the host
+    (``_total_mib``) and the model's per-token KV size (``_kv_bytes_per_token``,
+    read from the GGUF itself): ``ctx = ceil(1.5 * vram_bytes / kv_per_token)``.
+    1.5x keeps the verdict honest on any card — 24G or 96G alike must produce
+    a real ``out_of_memory``. A start refusal that is not an OOM (e.g. a ctx
+    above a hard cap, a bad argument, a missing device) fails the check with
+    its own code: it proves nothing about OOM surfacing.
+    """
     from ddp_core.application.ports import ApplicationError
     from ddp_local.model_runtime.process import ModelProcess
+    import math as _math
     artifact = installer.artifact(model_id)
     original_ctx = artifact.get("context_tokens")
-    artifact["context_tokens"] = 262144  # ~30 GiB KV on Qwen3-1.7B: must not fit 24G.
+    vram_mib = _total_mib()
+    if vram_mib is None:
+        return record("t19-gpu-oom", "fail", {"free_mib_before": free_before},
+                      "nvidia-smi did not report total VRAM; refusing to guess a probe size")
+    try:
+        kv_per_token = _kv_bytes_per_token(installer.path(artifact))
+    except Exception as exc:
+        return record("t19-gpu-oom", "fail",
+                      {"vram_mib": vram_mib, "error": f"{type(exc).__name__}: {exc}"},
+                      "could not read KV geometry from the model file")
+    probe_ctx = _math.ceil(1.5 * vram_mib * 2 ** 20 / kv_per_token)
+    artifact["context_tokens"] = probe_ctx
     owned = ModelProcess(installer)
     try:
         try:
             await owned.start(model_id, runtime_id=gpu_runtime_id, timeout=300)
             status = owned.status()
             return record("t19-gpu-oom", "fail",
-                          {"status": status, "context_tokens": 262144},
+                          {"status": status, "context_tokens": probe_ctx,
+                           "vram_mib": vram_mib, "kv_bytes_per_token": kv_per_token},
                           "oversized GPU context became ready; no OOM observed")
         except ApplicationError as exc:
             code = exc.code
         status = owned.status()
         evidence = {"code": code, "status": status["status"], "error": status["error"],
-                    "context_tokens": 262144, "selection": None,
+                    "context_tokens": probe_ctx, "vram_mib": vram_mib,
+                    "kv_bytes_per_token": kv_per_token, "selection": None,
                     "free_mib_before": free_before,
                     "free_mib_after": _free_mib()}
         if (code == "out_of_memory" and status["status"] == "failed"
@@ -343,12 +366,23 @@ async def check_t19_gpu_oom(workdir, installer, model_id, gpu_runtime_id, *, fre
             return record("t19-gpu-oom", "pass", evidence)
         evidence["code_note"] = (
             "visible failure is not enough: an OOM check passes only on "
-            "out_of_memory; extend process.py OOM markers if Vulkan logs differ")
+            "out_of_memory; a refusal (bad ctx cap, bad argument) fails. "
+            "Extend process.py OOM markers if Vulkan logs differ.")
         return record("t19-gpu-oom", "fail", evidence,
                       f"GPU failure code was {code}, not out_of_memory")
     finally:
         artifact["context_tokens"] = original_ctx
         await owned.stop()
+
+
+def _total_mib():
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=30)
+        return int(out.stdout.strip().splitlines()[0].strip()) if out.returncode == 0 else None
+    except Exception:
+        return None
 
 
 def _free_mib():
@@ -359,6 +393,69 @@ def _free_mib():
         return out.stdout.strip().splitlines()[0].strip() if out.returncode == 0 else None
     except Exception:
         return None
+
+
+def _gguf_u32_kv_params(path):
+    """Read Qwen3 KV-cache geometry straight from the GGUF metadata."""
+    import struct as _struct
+
+    def read_value(stream, vtype):
+        if vtype in (0, 1, 7):
+            return _struct.unpack("B", stream.read(1))[0]
+        if vtype in (2, 3):
+            return _struct.unpack("<H", stream.read(2))[0]
+        if vtype in (4, 5):
+            return _struct.unpack("<I", stream.read(4))[0]
+        if vtype == 6:
+            return _struct.unpack("<f", stream.read(4))[0]
+        if vtype == 8:
+            length = _struct.unpack("<Q", stream.read(8))[0]
+            return stream.read(length).decode()
+        if vtype in (10, 11):
+            return _struct.unpack("<Q", stream.read(8))[0]
+        if vtype == 12:
+            return _struct.unpack("<d", stream.read(8))[0]
+        if vtype == 9:
+            elem = _struct.unpack("<I", stream.read(4))[0]
+            return [read_value(stream, elem)
+                    for _ in range(_struct.unpack("<Q", stream.read(8))[0])]
+        raise ValueError(f"unknown GGUF metadata type {vtype}")
+
+    want = {"general.architecture", "qwen3.block_count",
+            "qwen3.attention.head_count_kv", "qwen3.attention.key_length",
+            "qwen3.attention.value_length"}
+    got: dict = {}
+    with open(path, "rb") as stream:
+        _magic, _ver = _struct.unpack("<II", stream.read(8))
+        _n_tensors, n_kv = _struct.unpack("<QQ", stream.read(16))
+        for _ in range(n_kv):
+            klen = _struct.unpack("<Q", stream.read(8))[0]
+            key = stream.read(klen).decode()
+            vtype = _struct.unpack("<I", stream.read(4))[0]
+            value = read_value(stream, vtype)
+            if key in want:
+                got[key] = value
+    missing = want - set(got)
+    if got.get("general.architecture") != "qwen3" or missing:
+        raise ValueError(f"GGUF at {path} is not a Qwen3 model "
+                         f"(architecture={got.get('general.architecture')!r}, missing={sorted(missing)})")
+    return {k: got[k] for k in sorted(want - {"general.architecture"})}
+
+
+def _kv_bytes_per_token(model_path):
+    """KV-cache bytes per context token for the Qwen3 GGUF at ``model_path``.
+
+    Derivation: each of ``block_count`` layers stores one key and one value
+    vector per token, each ``head_count_kv * key_length`` / ``* value_length``
+    fp16 elements (2 bytes). llama.cpp keeps the cache in the native
+    precision for these GGUFs, so ``layers * kv_heads * (k_len + v_len) * 2``.
+    For Qwen3-1.7B-Q8_0 that is ``28 * 8 * (128 + 128) * 2 = 114688``
+    bytes/token (0.109375 MiB). Geometry comes from the file itself, never
+    from a second constant that could drift from the pinned model.
+    """
+    params = _gguf_u32_kv_params(model_path)
+    return (params["qwen3.block_count"] * params["qwen3.attention.head_count_kv"]
+            * (params["qwen3.attention.key_length"] + params["qwen3.attention.value_length"]) * 2)
 
 
 async def check_t19_gpu_offload_evidence(workdir, installer, model_id, gpu_runtime_id):
