@@ -120,24 +120,27 @@ class _RowShim:
         self.task_spec_json = task_spec_json
 
 
-async def _pinned_probe_ids(session: AsyncSession, *, cutoff: datetime) -> set[str]:
-    """截止线之前仍可 resume 或 continuation 的任务引用的探针行 id。
+async def _pinned_probe_ids(session: AsyncSession, *, cutoff: datetime) -> set[tuple[str, str]]:
+    """截止线之前仍可 resume 或 continuation 的任务引用的探针行 `(组织, 行 id)`。
 
-    有界扫描：只看 probe 引用列与有效期列，不碰 evidence 载荷；
+    有界扫描：只看组织列、probe 引用列与有效期列，不碰 evidence 载荷；
     `cancelled` 直接排除（resume 明确拒绝复活它）。
+    pin 以 `(organization_id, probe_id)` 配对：任务只能 pin 住自己组织的
+    行，跨组织同名 id 只是字符串相同（不变量 8：每次查询都有组织边界）。
     """
     cutoff_ts = as_aware(cutoff).timestamp()
     rows = (await session.execute(select(
         FederationRequest.root_task_id,
+        FederationRequest.organization_id,
         FederationRequest.plan_json,
         FederationRequest.scope_manifest_json,
         FederationRequest.exploration_consent_json,
         FederationRequest.execution_consent_json,
         FederationRequest.task_spec_json,
     ).where(FederationRequest.status != "cancelled"))).all()
-    resumable_roots: set[str] = set()
-    plan_refs: set[str] = set()
-    for root_task_id, plan_json, manifest_json, exploration_json, execution_json, spec_json in rows:
+    resumable_org: dict[str, str] = {}
+    pinned: set[tuple[str, str]] = set()
+    for root_task_id, organization_id, plan_json, manifest_json, exploration_json, execution_json, spec_json in rows:
         shim = _RowShim(plan_json, manifest_json, exploration_json, execution_json, spec_json)
         resume_floor = _resume_floor(shim)
         continuation_floor = _continuation_floor(shim)
@@ -145,17 +148,21 @@ async def _pinned_probe_ids(session: AsyncSession, *, cutoff: datetime) -> set[s
         # (a)/(b) 是或关系：任一门还开着就 pin。用 max —— min 会要求两门同时开。
         if not floors or max(floors) < cutoff_ts:
             continue
-        resumable_roots.add(root_task_id)
-        plan_refs |= _plan_probe_refs(plan_json)
-    if resumable_roots:
+        resumable_org[root_task_id] = organization_id
+        pinned |= {(organization_id, ref) for ref in _plan_probe_refs(plan_json)}
+    if resumable_org:
         # 覆盖账本是第二引用源：续批 settled 目标的 carried receipts 落在这里。
-        # 只收仍走得动的任务的行，不把已死任务的引用算成 pin。
-        covered = (await session.execute(select(CoverageEntry.probe_refs_json).where(
-            CoverageEntry.root_task_id.in_(resumable_roots)))).scalars().all()
-        for refs in covered:
+        # 只收仍走得动的任务的行，不把已死任务的引用算成 pin。账本行没有
+        # 组织列，引用归属其 root 任务行的组织（账本随任务建）。
+        covered = (await session.execute(select(
+            CoverageEntry.root_task_id, CoverageEntry.probe_refs_json).where(
+            CoverageEntry.root_task_id.in_(list(resumable_org))))).all()
+        for root_task_id, refs in covered:
             if isinstance(refs, list):
-                plan_refs.update(ref for ref in refs if isinstance(ref, str) and ref)
-    return plan_refs
+                org = resumable_org[root_task_id]
+                pinned.update((org, ref) for ref in refs
+                              if isinstance(ref, str) and ref)
+    return pinned
 
 
 async def sweep_probe_evidence(session: AsyncSession, *, now: datetime,
@@ -163,7 +170,7 @@ async def sweep_probe_evidence(session: AsyncSession, *, now: datetime,
     """剥离"过期且其任务再也 resume/continuation 不了"的探针证据载荷。
 
     条件三选一缺一不可：`expires_at` 已过留存窗口（`now - retention`）、行里
-    真的有 `evidence` 载荷、没有任何截止线前仍走得动的非 cancelled 任务在
+    真的有 `evidence` 载荷、没有任何截止线前仍走得动的本组织非 cancelled 任务在
     plan `probe_refs` 或覆盖账本 `probe_refs_json` 里引用它。行主键/状态/
     摘要/幂等键与回执元数据保留 —— 覆盖账本引的是行 id，删行等于造空洞。
     """
@@ -178,7 +185,7 @@ async def sweep_probe_evidence(session: AsyncSession, *, now: datetime,
                ).limit(limit))).scalars().all()
     stripped = 0
     for row in expired:
-        if row.probe_id in pinned:
+        if (row.organization_id, row.probe_id) in pinned:
             continue
         stored = row.result_json or {}
         if not stored.get("evidence"):

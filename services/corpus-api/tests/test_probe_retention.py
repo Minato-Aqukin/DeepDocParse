@@ -23,12 +23,13 @@ from ddp_corpus.models import new_id, utcnow
 CALLER = Actor(id=ACTOR, kind="user", organization_id=ORG, role="contributor")
 
 
-def _probe(probe_id: str, *, expired: bool = True, with_evidence: bool = True) -> FederationProbe:
+def _probe(probe_id: str, *, expired: bool = True, with_evidence: bool = True,
+           org: str = ORG) -> FederationProbe:
     now = utcnow()
     evidence = [{"evidence_id": "e-1", "origin_node_id": "node-x",
                  "excerpt": "可重建的证据摘录", "_excerpt": "内部全文拷贝"}] if with_evidence else []
     return FederationProbe(
-        probe_id=probe_id, organization_id=ORG, actor_id=ACTOR,
+        probe_id=probe_id, organization_id=org, actor_id=ACTOR,
         target_node_id="node-x", task_spec_digest="sha256:" + "1" * 64,
         consent_ref="consent-1", probe_kind="evidence_retrieval",
         collection_id="col-1", query_digest="sha256:" + "2" * 64,
@@ -46,7 +47,8 @@ def _request(root_task_id: str, probe_id: str | None, *, status: str,
              manifest_valid_until: str = "2030-01-01T00:00:00Z",
              exploration_valid_until: str = "2030-01-01T00:00:00Z",
              execution_valid_until: str = "2030-01-01T00:00:00Z",
-             mode: str = "fast", scope_kind: str = "federation_public") -> FederationRequest:
+             mode: str = "fast", scope_kind: str = "federation_public",
+             org: str = ORG) -> FederationRequest:
     plan = None
     if probe_id is not None:
         plan = {"steps": [{"step_id": "retrieve-1", "operation": "retrieve",
@@ -55,7 +57,7 @@ def _request(root_task_id: str, probe_id: str | None, *, status: str,
                 "budget": {"deadline": plan_valid_until}}
     now = utcnow()
     return FederationRequest(
-        root_task_id=root_task_id, organization_id=ORG, actor_id=ACTOR,
+        root_task_id=root_task_id, organization_id=org, actor_id=ACTOR,
         task_spec_digest="sha256:" + "3" * 64, scope_id="scope-1",
         planning_state="approved", plan_revision=1, plan_digest="sha256:" + "4" * 64,
         status=status,
@@ -192,3 +194,42 @@ async def test_already_stripped_row_is_not_recounted(session):
 async def test_invalid_limit_is_rejected(session):
     with pytest.raises(ValueError):
         await probe_retention.sweep_probe_evidence(session, now=utcnow(), limit=0)
+
+
+async def test_cross_org_task_does_not_pin_other_org_probe(session):
+    # 不变量 8：pin 扫描必须有组织边界。org-x 的有效任务引用了 org-y 的
+    # 探针行 id —— 那只是字符串相同，org-y 的行必须照常剥离。
+    session.add(_probe("probe-y", org="org-y"))
+    session.add(_request("root-x", "probe-y", status="running", org="org-x"))
+    await session.commit()
+    assert await probe_retention.sweep_probe_evidence(session, now=utcnow()) == 1
+    row = await session.get(FederationProbe, "probe-y")
+    assert (row.result_json or {}).get("evidence") == []
+
+
+async def test_cross_org_task_does_not_pin_other_org_probe_via_coverage(session):
+    # 同上，但引用走覆盖账本：org-x 可续批任务的账本条目引用 org-y 的行。
+    session.add(_probe("probe-y-ledger", org="org-y"))
+    session.add(_request("root-x-ledger", "probe-x-ledger", status="succeeded",
+                         org="org-x"))
+    session.add(_probe("probe-x-ledger", org="org-x"))
+    session.add(CoverageLedger(
+        root_task_id="root-x-ledger", scope_ref="scope-1", search_mode="fast",
+        enumeration_state="sealed", retrieval_completeness="partial",
+        evidence_sufficiency="insufficient", counts_json={},
+        manifest_digest="sha256:" + "5" * 64))
+    await session.flush()
+    session.add(CoverageEntry(
+        root_task_id="root-x-ledger", target_digest="d" * 64,
+        target_key_json={"origin_node_id": "node-x", "collection_id": "col-1",
+                         "operation": "corpus.retrieve"},
+        query_digest="sha256:" + "2" * 64, state="succeeded",
+        probe_refs_json=["probe-y-ledger"], evidence_refs_json=["e-1"],
+        used_budget_json={}))
+    await session.commit()
+    assert await probe_retention.sweep_probe_evidence(session, now=utcnow()) == 1
+    row = await session.get(FederationProbe, "probe-y-ledger")
+    assert (row.result_json or {}).get("evidence") == []
+    own = await session.get(FederationProbe, "probe-x-ledger")
+    assert len((own.result_json or {})["evidence"]) == 1
+
