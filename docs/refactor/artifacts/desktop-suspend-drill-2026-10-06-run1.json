@@ -14,7 +14,7 @@
     "screenshots": [],
     "workspace_db": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28/workspace/workspace.sqlite3",
     "remote_compute_id": "70df9e3d3051445abf90c140d3e9a83b",
-    "archived_to": ".dev-logs/acceptance-20261004/t28/prev-<next run> (go.sh archives started.json/after-resume/timeline/events before the next run)"
+    "archived_to": ".dev-logs/acceptance-20261004/t28/prev-20261006-133310 (go.sh moved run1 started.json/after-resume.json and copied timeline.jsonl/events.log there before run2)"
   },
   "kernel": {
     "entry": "2026-10-06T12:28:32+08:00",

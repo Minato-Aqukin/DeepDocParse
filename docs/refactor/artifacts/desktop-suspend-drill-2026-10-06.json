@@ -1,0 +1,72 @@
+{
+  "id": "desktop-suspend-drill",
+  "simulated": false,
+  "mode": "systemctl suspend via logind (powerMonitor path); kernel PM entry/exit + power events required by clause (a)",
+  "date": "2026-10-06",
+  "criterion": "T28: 本地任务停止/后台继续语义准确，恢复后不展示伪成功 (真实操作系统休眠, 在途本地解析 + 在途本地生成 + 在途远端计算)",
+  "source_revision": "08634b4c3eff3685831d7f97ac8ad33496df98a3",
+  "inputs": {
+    "t28_dir": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28",
+    "started_json": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28/started.json",
+    "after_resume_json": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28/after-resume.json",
+    "timeline": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28/timeline.jsonl",
+    "events_log": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28/events.log",
+    "screenshots": [
+      "after-resume-documents.png",
+      "after-resume-plans.png",
+      "after-resume-resources.png"
+    ],
+    "workspace_db": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28/workspace/workspace.sqlite3",
+    "remote_compute_id": "bc31111bf156418ca9bff21f417a95ac"
+  },
+  "kernel": {
+    "entry": "2026-10-06T13:34:00+08:00",
+    "exit": "2026-10-06T13:36:31+08:00",
+    "gap_s": 151.0,
+    "lines": [
+      "2026-10-06T13:34:00+08:00 Minato kernel: PM: suspend entry (s2idle)",
+      "2026-10-06T13:36:31+08:00 Minato kernel: PM: suspend exit"
+    ]
+  },
+  "inflight": {
+    "local_parse_task": "78a033c1b5aa4251940f5e3a048b8db9",
+    "wiki_titles": [
+      "T28 Aurora Validator stage survey"
+    ],
+    "remote_compute_id": "bc31111bf156418ca9bff21f417a95ac"
+  },
+  "b_state": {
+    "status": "running",
+    "error": null
+  },
+  "db_error": null,
+  "clauses": {
+    "a": {
+      "passed": true,
+      "evidence": "suspend 2026-10-06T05:34:00.112000+00:00 -> resume 2026-10-06T05:36:31.975000+00:00; max consecutive-wall gap 152.9s over 61 rows; kernel PM suspend entry 2026-10-06T13:34:00+08:00 exit 2026-10-06T13:36:31+08:00 (151s)"
+    },
+    "b": {
+      "passed": true,
+      "evidence": "parse 78a033c1 in flight at suspend re-claimed and finished: parse succeeded, version ready, evidence_count=3500"
+    },
+    "c": {
+      "passed": true,
+      "evidence": "T28 Aurora Validator stage survey: task 62c20b89 interrupted honestly (runtime stop path); runtime-stop: powerMonitor suspend->resume seen; in-flight wiki ended execution_interrupted"
+    },
+    "d": {
+      "passed": true,
+      "evidence": "App federation=uploading remote_compute=waiting_input vs B running [honest_pending] (compute bc31111b)"
+    },
+    "e": {
+      "passed": true,
+      "evidence": "snapshot matches DB on 52 tasks; task 78a033c1: parse succeeded, version ready, evidence_count=3500; task e3da0f36: succeeded with durable output 51bb7427; task 70f28b1d: parse succeeded, version ready, evidence_count=3000"
+    },
+    "f": {
+      "passed": true,
+      "evidence": "App stayed alive in 62/62 timeline rows; after-resume local transport=ready"
+    }
+  },
+  "verdict": "passed",
+  "run": "2026-10-06 第二次 logind 路径运行（用户执行 go.sh），修复后",
+  "app_revision_note": "App 运行的是 08634b4 工作区加未提交的电源转换修复；该修复随后作为 02d2c3c 提交，提交版只多一行 power_transition_failed 的 stderr 日志。本轮 Electron 仍各发两次 suspend／resume （05:34:00.112／.132，05:36:31.975 ×2），修复后唤醒即恢复本机连接。"
+}
