@@ -1,0 +1,74 @@
+{
+  "id": "desktop-suspend-drill",
+  "simulated": false,
+  "mode": "systemctl suspend via logind (powerMonitor path); kernel PM entry/exit + power events required by clause (a)",
+  "date": "2026-10-06",
+  "criterion": "T28: 本地任务停止/后台继续语义准确，恢复后不展示伪成功 (真实操作系统休眠, 在途本地解析 + 在途本地生成 + 在途远端计算)",
+  "source_revision": "08634b4c3eff3685831d7f97ac8ad33496df98a3",
+  "inputs": {
+    "t28_dir": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28",
+    "started_json": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28/started.json",
+    "after_resume_json": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28/after-resume.json",
+    "timeline": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28/timeline.jsonl",
+    "events_log": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28/events.log",
+    "screenshots": [],
+    "workspace_db": "/home/minatoaqukin/Projects/CSIE/DeepDocParse/.dev-logs/acceptance-20261004/t28/workspace/workspace.sqlite3",
+    "remote_compute_id": "70df9e3d3051445abf90c140d3e9a83b",
+    "archived_to": ".dev-logs/acceptance-20261004/t28/prev-<next run> (go.sh archives started.json/after-resume/timeline/events before the next run)"
+  },
+  "kernel": {
+    "entry": "2026-10-06T12:28:32+08:00",
+    "exit": "2026-10-06T12:31:02+08:00",
+    "gap_s": 150.0,
+    "lines": [
+      "2026-10-06T12:28:32+08:00 Minato kernel: PM: suspend entry (s2idle)",
+      "2026-10-06T12:31:02+08:00 Minato kernel: PM: suspend exit"
+    ]
+  },
+  "inflight": {
+    "local_parse_task": "ff8618cf6e1148878ab238c54c52306a",
+    "wiki_titles": [
+      "T28 Aurora Validator stage survey"
+    ],
+    "remote_compute_id": "70df9e3d3051445abf90c140d3e9a83b"
+  },
+  "b_state": {
+    "status": "succeeded",
+    "error": null
+  },
+  "db_error": null,
+  "clauses": {
+    "a": {
+      "passed": true,
+      "evidence": "suspend 2026-10-06T04:28:32.587000+00:00 -> resume 2026-10-06T04:31:03.015000+00:00; max consecutive-wall gap 151.4s over 1162 rows; kernel PM suspend entry 2026-10-06T12:28:32+08:00 exit 2026-10-06T12:31:02+08:00 (150s)"
+    },
+    "b": {
+      "passed": false,
+      "evidence": "parse ff8618cf shows running but no worker holds it (lease expired 2026-10-06T04:31:48.039164+00:00)"
+    },
+    "c": {
+      "passed": false,
+      "evidence": "T28 Aurora Validator stage survey: task dfecfb97 still running but no worker holds it (lease expired); runtime-stop: powerMonitor suspend->resume seen; no execution_interrupted row in workspace"
+    },
+    "d": {
+      "passed": false,
+      "evidence": "no App-side plan view after resume (Error: page.evaluate: Target page, context or browser has been closed)"
+    },
+    "e": {
+      "passed": false,
+      "evidence": "no App task view after resume to compare with the DB"
+    },
+    "f": {
+      "passed": false,
+      "evidence": "App stayed alive in 1163/1163 timeline rows; after-resume local transport=None"
+    }
+  },
+  "verdict": "failed",
+  "run": "2026-10-06 第一次 logind 路径运行（用户执行 go.sh）",
+  "finding": {
+    "defect": "Electron 在 Linux 上每次 logind 休眠各发两次 suspend 与 resume（events.log 04:28:32.587/.611，04:31:03.015/.017）。main.mjs 的第二次 suspend 覆盖了第一次记下的“唤醒后要恢复”的集合（client-host resumeIds 与 runtime #suspended 都被重写成空），唤醒后本机工作区运行时没有重启、两个连接都停在 disconnected。",
+    "consequence": "在途解析 ff8618cf 与 Wiki dfecfb97 在库里一直是 running，租约 04:31:48Z 过期后无人认领；App 数据源显示本机 unavailable（没有伪成功，但“停止／后台继续”的语义不准确）。",
+    "harness": "Playwright 的 Electron 管道在休眠中断开，after-resume 快照只拿到 appError；初版判定脚本把缺失的 App 视图与无人持有的 running 当成通过（已改为失败）。",
+    "fix": "apps/desktop：电源转换串行执行；ClientHost.suspend 与 OwnedRuntimeManager.suspend 的恢复集合在多次通知间累加，resume 时一次取走。"
+  }
+}

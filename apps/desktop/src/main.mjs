@@ -286,9 +286,14 @@ app.whenReady().then(async () => {
       { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
     { label: '视图', submenu: [{ role: 'reload' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }] },
   ]))
-  let suspension = Promise.resolve()
-  powerMonitor.on('suspend', () => { suspension = clients.suspend().then(() => runtime.suspend()).catch(() => {}) })
-  powerMonitor.on('resume', () => { void suspension.then(() => runtime.resume()).then(() => clients.resume()) })
+  // logind sleeps arrive as two `suspend` and two `resume` events on Linux (T28 drill); each
+  // transition starts after the previous one finished, so a repeat finds nothing left to stop.
+  let power = Promise.resolve()
+  const transition = step => {
+    power = power.then(step).catch(error => { process.stderr.write(`DeepDocParse: power_transition_failed ${error?.code ?? ''}\n`) })
+  }
+  powerMonitor.on('suspend', () => transition(() => clients.suspend().then(() => runtime.suspend())))
+  powerMonitor.on('resume', () => transition(() => runtime.resume().then(() => clients.resume())))
   await window.loadURL(ui.href)
   window.show()
   // Test instrumentation is reachable only from this trusted development startup, never IPC.

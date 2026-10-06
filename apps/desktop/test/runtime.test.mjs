@@ -51,6 +51,19 @@ test('real owned runtime starts once, retains workspace identity across suspend,
   await assert.rejects(runtime.start(id), /host_closing/)
 })
 
+test('a repeated suspend notification still restarts the runtime on resume',
+  { skip: nativeRuntimeSkipReason() }, async t => {
+  // Electron on Linux delivered `suspend` twice per logind sleep (T28 drill, 24 ms apart).
+  const { runtime, id, children } = await manager(t)
+  await runtime.start(id)
+  await runtime.suspend()
+  await runtime.suspend()
+  assert.equal(runtime.status(id).state, 'stopped')
+  await runtime.resume()
+  assert.equal(runtime.status(id).state, 'ready')
+  assert.equal(children.length, 2)
+})
+
 test('stop while starting cannot leave an orphan runtime or publish stale ready state',
   { skip: nativeRuntimeSkipReason() }, async t => {
   const { runtime, id, children } = await manager(t)

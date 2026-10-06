@@ -134,8 +134,10 @@ export class OwnedRuntimeManager {
   }
   activeCount() { return [...this.#entries.values()].filter(x => ['ready', 'starting'].includes(x.state)).length }
   async suspend() {
-    this.#suspended = [...this.#entries].filter(([, x]) => ['ready', 'starting'].includes(x.state)).map(([id]) => id)
-    await Promise.all(this.#suspended.map(id => this.stop(id, 'system_suspended')))
+    // A sleep can be announced more than once; the restart set grows until `resume` takes it.
+    const active = [...this.#entries].filter(([, x]) => ['ready', 'starting'].includes(x.state)).map(([id]) => id)
+    this.#suspended = [...new Set([...this.#suspended, ...active])]
+    await Promise.all(active.map(id => this.stop(id, 'system_suspended')))
   }
   async resume() {
     const selected = this.#suspended; this.#suspended = []

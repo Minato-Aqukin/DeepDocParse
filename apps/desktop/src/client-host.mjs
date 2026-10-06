@@ -1150,8 +1150,10 @@ export class ClientHost {
       .map(entry => this.disconnect({ connectionId: entry.connectionId })))
   }
   async suspend() {
-    this.resumeIds = [...this.#entries.values()].filter(entry => entry.handle).map(entry => entry.connectionId)
-    await Promise.all(this.resumeIds.map(connectionId => this.disconnect({ connectionId })))
+    // A sleep can be announced more than once; the reconnect set grows until `resume` takes it.
+    const attached = [...this.#entries.values()].filter(entry => entry.handle).map(entry => entry.connectionId)
+    this.resumeIds = [...new Set([...(this.resumeIds ?? []), ...attached])]
+    await Promise.all(attached.map(connectionId => this.disconnect({ connectionId })))
   }
   async resume() { const ids = this.resumeIds ?? []; this.resumeIds = []; await Promise.allSettled(ids.map(connectionId => this.wake({ connectionId }))) }
   async close() {

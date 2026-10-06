@@ -106,6 +106,21 @@ test('real shared client persists scoped projection/draft and the source registr
   } finally { await restarted.close() }
 })
 
+test('a repeated suspend notification still reconnects the local workspace on resume',
+  { skip: nativeRuntimeSkipReason() }, async t => {
+  // Electron on Linux delivered `suspend` twice per logind sleep (T28 drill, 24 ms apart);
+  // the App's power handler runs each transition after the previous one finished.
+  const { clients, runtime, selected } = await fixture(t)
+  const local = await clients.connectLocal(selected)
+  await current(clients, local.connectionId)
+  await clients.suspend(); await runtime.suspend()
+  await clients.suspend(); await runtime.suspend()
+  assert.equal(clients.list().find(entry => entry.connectionId === local.connectionId).view.transport, 'disconnected')
+  await runtime.resume(); await clients.resume()
+  await current(clients, local.connectionId)
+  assert.equal(runtime.status(selected.workspaceId).state, 'ready')
+})
+
 test('a persisted WSL local connection rehydrates as a WSL workspace without client_configuration_invalid', async t => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'ddp-client-host-wsl-'))
   t.after(() => rm(temporary, { recursive: true, force: true }))
