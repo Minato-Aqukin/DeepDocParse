@@ -50,6 +50,7 @@ T85 那一族事故 —— 收下看不懂的东西再"尽力执行"，最后表
 |---|---|---|
 | 客户端握手返回未知 `protocol_version` | 连接 blocked，`protocol_incompatible`，**不发 snapshot** | `packages/client-runtime/test/http.test.mjs`（本轮新增）；桌面 `runtime.mjs` 同判据由 `apps/desktop/test/boundaries.test.mjs`（本轮新增）覆盖 |
 | 握手能力清单缺 `client.snapshot/events/receipt` 任一 | 同上，且在应用权威数据之前 | 同上 |
+| 中心撤回必需能力 | `ddp-client/1` 内不允许：必需能力只增不撤（与“冻结契约只许向后兼容新增”同一条），撤回 `client.snapshot/events/receipt` 任一必须升协议版本，旧 App 按未知协议明确拒绝；当前中心固定广播这三项（`ddp_corpus/routers/client.py` 的 `CAPABILITIES`） | 真实旧打包版改写握手复验 `artifacts/old-app-compat-20261005.json`、`artifacts/old-app-compat-20261006.json` |
 | 想用 chat-only 服务冒充完整 corpus API | 同上 | 既有用例 `a chat-only service cannot impersonate the complete corpus API` |
 | 节点注册描述符不含 `ddp-discovery/1` | `Validate` 报"unsupported discovery protocol" | `internal/discovery/protocol_versions_test.go`（本轮新增） |
 | 节点描述符带未知字段 | JSON 解码失败（`DisallowUnknownFields`），不静默丢弃 | 同上 |
@@ -107,8 +108,12 @@ T85 那一族事故 —— 收下看不懂的东西再"尽力执行"，最后表
   （见 `RECOVERY-DRILL-v3.md`），没有旧系统录制响应可对拍。
 - ⬜ **跨语言摘要**只对 Go `FinalizeScope` 的 `manifest_digest` 有冻结值
   （`test_go_produced_manifest_digest_is_accepted`）；其它跨语言字段未对拍。
-- ⬜ **旧客户端（真的旧二进制）连新中心**：本切片只测了"缺能力/版本不符的
-  握手被拒"，没有旧版客户端产物可跑。
+- ✅ **旧客户端（真的旧二进制）连新中心**（2026-10-05／06）：真实打包版 0.1.1、0.1.2 与含 `bc84776` 的
+  0.1.3（`53e9b04` 本地打包，非公开发行版）连当前 A、B，同协议同能力时检索、原文下载、中心包导出与
+  证据定位全部一致；在 B 真实端点把握手改成 `ddp-client/2` 时三版都明确拒绝。只撤回 `client.snapshot`
+  时 0.1.1、0.1.3 干净拒绝，0.1.2 分裂（连接回执 ok、读代理仍返回数据，只有同步视图阻断）；这种握手
+  只有违约的中心才会发出（见 §2），已发的 0.1.2 不再补丁。证据 `artifacts/old-app-compat-20261005.json`、
+  `artifacts/old-app-compat-20261006.json`。
 
 ## 6. 已知缺口（本轮发现，未修）
 
