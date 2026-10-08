@@ -77,12 +77,13 @@ def _installer_anchor_dirs(installer: Path, directory: Path) -> list[Path]:
 def check_installer_against_anchors(installer: Path, build_desktop, directory: Path) -> dict:
     """Fail closed unless the exe matches the release's recorded SHA256SUMS/sidecar.
 
-    `release_publication.py verify-package` (and the `write-receipt` build step
-    before it) records one SHA256SUMS line plus one `<name>.sha256` sidecar per
-    installer inside the real `windows/` package directory. A same-size
-    trojaned exe passes the payload floor, so the digest is compared against
-    those anchors — never trusted on its own — and any missing or mismatched
-    anchor refuses. `parse_sums`/`read_sidecar` raise `PublicationError` (not
+    The Windows build records one SHA256SUMS listing every installer plus one
+    `<name>.sha256` sidecar per installer next to the installers (the same
+    files `release_publication.py write-receipt`/`verify-package` read later).
+    A same-size trojaned exe passes the payload floor, so the digest is
+    compared against those anchors — never trusted on its own — and any
+    missing, mismatched, malformed or duplicated anchor refuses. The shared
+    `parse_hash_line`/`read_sidecar` raise `PublicationError` (not
     `SystemExit`), so only that failure type is translated into a closed
     refusal — unexpected errors still surface.
     """
@@ -90,7 +91,7 @@ def check_installer_against_anchors(installer: Path, build_desktop, directory: P
     sys.path.insert(0, str(scripts_dir))
     try:
         from release_publication import PublicationError as _PublicationError  # noqa: PLC0415
-        from release_publication import parse_sums as _parse_sums  # noqa: PLC0415
+        from release_publication import parse_hash_line as _parse_hash_line  # noqa: PLC0415
         from release_publication import read_sidecar as _read_sidecar  # noqa: PLC0415
     finally:
         sys.path.remove(str(scripts_dir))
@@ -107,16 +108,30 @@ def check_installer_against_anchors(installer: Path, build_desktop, directory: P
     for candidate in _installer_anchor_dirs(installer, Path(directory)):
         sums_path = candidate / "SHA256SUMS"
         if sums_path.is_file() and not sums_path.is_symlink():
+            # The build lists setup and portable in one SHA256SUMS while each
+            # installer is checked on its own call, so look up this exe's line
+            # instead of demanding exact coverage. A malformed or duplicated
+            # list is not an anchor anyone can trust: refuse rather than skip.
+            recorded: dict[str, str] = {}
             try:
-                covered = _parse_sums(sums_path, {installer.name})
-            except _PublicationError:
-                continue  # lists other installers; not this exe's anchor
-            if covered[installer.name] != actual:
+                for raw in sums_path.read_text(encoding="utf-8").splitlines():
+                    if not raw.strip():
+                        continue
+                    digest, name = _parse_hash_line(raw.strip(), sums_path.name)
+                    if name in recorded:
+                        raise SystemExit(
+                            f"SHA256SUMS in {candidate} lists {name} twice; refusing")
+                    recorded[name] = digest
+            except (OSError, _PublicationError) as exc:
                 raise SystemExit(
-                    f"installer {installer.name} sha256 {actual} does not match "
-                    f"SHA256SUMS {covered[installer.name]} in {candidate}; refusing")
-            anchors.append(f"{candidate.name}/SHA256SUMS" if anchor_dir else "SHA256SUMS")
-            anchor_dir = anchor_dir or candidate
+                    f"SHA256SUMS in {candidate} is unreadable: {exc}; refusing") from exc
+            if installer.name in recorded:
+                if recorded[installer.name] != actual:
+                    raise SystemExit(
+                        f"installer {installer.name} sha256 {actual} does not match "
+                        f"SHA256SUMS {recorded[installer.name]} in {candidate}; refusing")
+                anchors.append(f"{candidate.name}/SHA256SUMS" if anchor_dir else "SHA256SUMS")
+                anchor_dir = anchor_dir or candidate
         sidecar = candidate / (installer.name + ".sha256")
         if sidecar.is_file() and not sidecar.is_symlink():
             try:

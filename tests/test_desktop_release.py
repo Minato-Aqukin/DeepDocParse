@@ -1629,6 +1629,43 @@ def test_verify_windows_package_installer_without_anchor_fails_closed(tmp_path):
         verifier.main([str(package), "--wsl-lock", str(lock),
                        "--installer", str(portable)])
 
+
+def test_verify_windows_package_accepts_release_shaped_sums(tmp_path, capsys):
+    """The build writes one SHA256SUMS listing setup and portable plus a sidecar each.
+
+    Each installer is verified on its own call, so its SHA256SUMS line must be
+    found in a list that also names the other installer; a tampered exe still
+    fails against both records, and a list that names it twice is refused.
+    """
+    verifier = load("verify_windows_package")
+    package, lock = make_packaged_windows_dir(tmp_path)
+    windows = tmp_path / "windows"
+    setup = windows / "DeepDocParse-0.1.0-win-x64-setup.exe"
+    portable = windows / "DeepDocParse-0.1.0-win-x64-portable.exe"
+    setup.write_bytes(b"S" * (verifier.MIN_INSTALLER_BYTES + 1))
+    portable.write_bytes(b"P" * (verifier.MIN_INSTALLER_BYTES + 1))
+    lines = []
+    for installer in (setup, portable):
+        digest = hashlib.sha256(installer.read_bytes()).hexdigest()
+        (windows / (installer.name + ".sha256")).write_text(f"{digest}  {installer.name}\n")
+        lines.append(f"{digest}  {installer.name}")
+    (windows / "SHA256SUMS").write_text("\n".join(lines) + "\n")
+
+    assert verifier.main([str(package), "--wsl-lock", str(lock),
+                          "--installer", str(setup), "--installer", str(portable)]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert [sorted(item["anchors"]) for item in result["installers"]] == [
+        sorted(["SHA256SUMS", setup.name + ".sha256"]),
+        sorted(["SHA256SUMS", portable.name + ".sha256"])]
+
+    setup.write_bytes(b"T" * (verifier.MIN_INSTALLER_BYTES + 1))
+    with pytest.raises(SystemExit, match="does not match"):
+        verifier.main([str(package), "--wsl-lock", str(lock), "--installer", str(setup)])
+
+    (windows / "SHA256SUMS").write_text("\n".join([*lines, lines[1]]) + "\n")
+    with pytest.raises(SystemExit, match="SHA256SUMS"):
+        verifier.main([str(package), "--wsl-lock", str(lock), "--installer", str(portable)])
+
 # --------------------------------------------------------------- lifecycle
 #
 # update_check.py owns the install/upgrade/rollback/uninstall lifecycle for the

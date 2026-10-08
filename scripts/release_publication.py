@@ -568,7 +568,7 @@ def check_filenames(version: str, setup: Path, portable: Path, code: str) -> Non
         _fail(code, f"portable name {portable.name!r} does not match source version {version}")
 
 
-def _parse_hash_line(line: str, source: str) -> tuple[str, str]:
+def parse_hash_line(line: str, source: str) -> tuple[str, str]:
     """`<hex64><空白><文件名>`；文件名不许带目录、分隔符与穿越。"""
     parts = line.split()
     if len(parts) != 2:
@@ -662,7 +662,7 @@ def parse_sums(sums_path: Path, expected_names: set[str]) -> dict[str, str]:
         line = raw.strip()
         if not line:
             continue
-        digest, name = _parse_hash_line(line, sums_path.name)
+        digest, name = parse_hash_line(line, sums_path.name)
         if name in entries:
             _fail("SUMS_DUPLICATE", f"{sums_path.name} lists {name!r} twice")
         entries[name] = digest
@@ -678,7 +678,7 @@ def read_sidecar(sidecar: Path, expect_name: str) -> str:
         line = sidecar.read_text(encoding="utf-8").strip()
     except OSError as exc:
         _fail("PACKAGE_FILE_MISSING", f"cannot read {sidecar.name}: {exc}")
-    digest, name = _parse_hash_line(line, sidecar.name)
+    digest, name = parse_hash_line(line, sidecar.name)
     if name != expect_name:
         _fail("SIDECAR_NAME_MISMATCH", f"{sidecar.name} names {name!r}, expected {expect_name!r}")
     return digest
