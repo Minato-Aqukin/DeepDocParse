@@ -23,6 +23,7 @@ parse_engines:
   # mineru:
   #   endpoint: "http://mineru:8000"
   #   runtime: mineru-api
+  #   capabilities: [parse]
   #   options:
   #     backend: pipeline
 
@@ -32,7 +33,7 @@ parse_engines:
   # vlm-ocr:
   #   endpoint: "http://vqa-dsocr:8000"
   #   runtime: vlm-ocr
-  #   options: { model: deepseek-ocr-2, dialect: deepseek-ocr2 }
+  #   capabilities: [parse, vision]
 
 embedding_models:
   bge-m3:
@@ -48,6 +49,7 @@ embedding_models:
 #     endpoint: "http://rerank:8080"
 #     default: true
 #     runtime: tei
+#     capabilities: [rerank]
 
 # vqa_models: 故意留空 —— 见文件头。
 # 影响抽取平面：没有 vqa_models 时 /v1/extract 的字段抽值无处可调，会整体判 error。

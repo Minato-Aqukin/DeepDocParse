@@ -2,9 +2,11 @@
 
 gateway 不 import 任何模型代码——只认 models.yaml 里的 endpoint。
 """
+import os
 from pathlib import Path
 
 import yaml
+from ddp_core.fetch_policy import FetchPolicyConfig, is_trusted
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -81,9 +83,60 @@ class Settings(BaseSettings):
     #       --endpoint http://127.0.0.1:18001 --model deepseek-ocr-2 \
     #       --models-config models.autodl.yaml
     extract_mismatch_threshold: float = 0.55
+    # ---- 回调与出站抓取 ----
+    # 回调只发往这个基座（回调带服务凭据）。空 = 拒绝一切 callback_url（fail closed）；
+    # 根路径基座同样拒绝 —— 它会把整台主机的所有端点都交给带凭据的回调。
+    # corpus-api 内部 ingest 传 {public_base_url}/internal/parse-callback，
+    # compose/autodl 把它配成 corpus-api 的内网基座（如 http://corpus-api:8081/internal/）。
+    callback_allowed_base: str = ""
+    # mineru 转传的文件字节上限（Content-Length 见超即 413，一字节都不下载）。borndigital 的上限见 engines。
+    mineru_max_bytes: int = 200 * 1024 * 1024
+    # 出站抓取缺省不跟随重定向（防 SSRF 跳转到内网）。True = 手工逐跳、每跳重验
+    # 目的地策略、至多 3 跳，且永不转发 Authorization（gateway 的出站抓取本来就不带它）。
+    # 判据见 `ddp_core.fetch_policy`，这里只装配配置快照。
+    fetch_allow_redirects: bool = False
+    # 受信内部回源基座（防 SSRF，逗号分隔可配多个）。url 受信当且仅当
+    # scheme+host+port 一致、路径按段对齐落在基座路径之下；根路径基座不算受信。
+    # 受信不传染：重定向的每一跳也要落在登记的基座之下。稳定文件 URL 的链是
+    # /files/{token} -> 对象存储内网预签名，两站都要登记，例如
+    # http://control-api:8080/files/,http://minio:9000/deepdocparse/。
+    # 判据见 `ddp_core.fetch_policy`。
+    fetch_trusted_base: str = ""
 
     # 只有明确知道自己在做什么才打开（一次性容器、CI）。生产打开等于没有鉴权
     allow_insecure_defaults: bool = False
+
+    def callback_permitted(self, callback_url: str | None) -> bool:
+        """callback_url 是否落在 CALLBACK_ALLOWED_BASE 之下。
+
+        没传回调本来就不用发；空基座 = 全部拒绝；其余按 `is_trusted` 的同一判据：
+        带 userinfo、scheme+host+port 对不上、路径不在基座路径之下的一律拒绝。
+        """
+        if not callback_url:
+            return True
+        base = (self.callback_allowed_base or "").strip()
+        return bool(base) and is_trusted(callback_url, base)
+
+    def fetch_policy_config(self) -> FetchPolicyConfig:
+        """本服务的出站抓取配置快照：判据住在 `ddp_core.fetch_policy`，这里只装配。
+
+        直接读环境（`settings` 在 import 时建好，而测试会 monkeypatch 属性或
+        环境变量，两边都要当场生效）。
+        """
+        if "FETCH_TRUSTED_BASE" in os.environ:
+            bases = os.environ.get("FETCH_TRUSTED_BASE", "")
+        else:
+            bases = self.fetch_trusted_base or ""
+        if "FETCH_ALLOW_REDIRECTS" in os.environ:
+            allow = os.environ.get(
+                "FETCH_ALLOW_REDIRECTS", "").strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            allow = self.fetch_allow_redirects
+        return FetchPolicyConfig(
+            trusted_bases=tuple(
+                base.strip() for base in bases.split(",") if base.strip()),
+            allow_redirects=allow,
+        )
 
 
 class ModelEntry(BaseModel):
@@ -91,8 +144,9 @@ class ModelEntry(BaseModel):
 
     **能力曾经是靠段名隐含的**（vqa_models / parse_engines / embedding_models），
     这卡住两类未来：一个模型多种能力（bge-m3 的 dense/sparse/colbert 三个头）、
-    一个 endpoint 承载多个逻辑模型（LoRA adapter）。runtime / capabilities / adapter
-    把这些显式化 —— 全部可选，不填就按段名推断，老 models.yaml 一字不改照跑。
+    一个 endpoint 承载多个逻辑模型（LoRA adapter）。capabilities 把能力显式化 ——
+    留空按段名补缺省；runtime 把协议显式化 —— 解析引擎留空是配置错，
+    resolve 直接失败（此前缺省按 mineru 协议说话，错过一次，不再猜）。
     """
 
     endpoint: str
@@ -100,8 +154,8 @@ class ModelEntry(BaseModel):
     # 引擎级默认透传选项（如 mineru 的 backend=pipeline|vlm），请求方 options 可覆盖。
     # 放注册表而非代码：dev/prod 换后端 = 改一行配置（铁律 3）
     options: dict = {}
-    # 用哪个适配器/协议说话。解析引擎见 services/engines.py（mineru-api | borndigital）；
-    # 留空则按所在段推断，这就是"加引擎 = 加容器 + 一行配置"真正兑现的地方
+    # 用哪个适配器/协议说话。解析引擎见 services/engines.py（mineru-api | borndigital | vlm-ocr），
+    # 留空 = 配置错，resolve 直接 LookupError；vqa/embedding 段本轮不读它（探针只拿它纠正路径）
     runtime: str = ""
     # 显式声明能力。留空按段名推断（parse / vision / dense）。
     # 例：不支持流式的 VQA 写 [vision, no_stream]，取得到稀疏头的 embedding 写 [dense, sparse]。

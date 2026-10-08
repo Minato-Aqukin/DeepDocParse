@@ -38,8 +38,15 @@ IMAGE="${IMAGE:-base-image-l2t43iu6uk}"
 # instead of reporting model_start_failed. Re-check with
 # `autodl images --base --json` before changing this default.
 TTL="${TTL:-90m}"
+# TTL 进 `autodl create --ttl` 与远端 --ttl：只认纯数字分钟或数字+m/h 后缀。
+# 不校验的话，`TTL='90m; rm -rf ~'` 会一路进到 create argv 与远端 shell 插值里。
+[[ "$TTL" =~ ^[0-9]+[mh]?$ ]] || { echo "TTL 格式非法: $TTL（只要数字分钟或 90m / 2h 这类）" >&2; exit 2; }
+# DRIVER_SHA256：远端驱动 .run 落盘后、sh 解包前验 sha256（见
+# gpu_acceptance_remote.py 的 provision_nvidia_icd）。没有可信的网络哈希源，
+# 期望值只能由人从 NVIDIA 公布页抄过来再 export：
+#   export DRIVER_SHA256=<NVIDIA-Linux-x86_64-<ver>.run 的 sha256>
+# 为空 = 远端拒绝解包（fail closed），不静默放行。
 DISK="${DISK:-50}"
-NAME="${NAME:-ddp-gpu-acceptance}"
 ID_FILE=".dev-logs/gpu-acceptance/instance"
 DRY_RUN_LOCAL=0
 ASSUME_YES=0
@@ -245,7 +252,7 @@ autodl exec "$INSTANCE" 'nvidia-smi -L && python3 --version'
 # so a dropped SSH session (it happened mid-apt on 2026-10-06) cannot kill it.
 # Short polls tolerate transport errors. TTL is baked in by the local shell.
 autodl exec "$INSTANCE" \
-  "cd /root/gpu-acceptance && rm -f /root/kit.rc && setsid nohup bash -c 'python3 infra/gpu-acceptance/gpu_acceptance_remote.py --ttl $TTL; echo \$? > /root/kit.rc' > /root/kit.log 2>&1 < /dev/null & echo started"
+  "cd /root/gpu-acceptance && rm -f /root/kit.rc && setsid nohup env GPU_ACCEPTANCE_TTL=$(printf '%q' "$TTL") DRIVER_SHA256=$(printf '%q' "${DRIVER_SHA256:-}") bash -c 'python3 infra/gpu-acceptance/gpu_acceptance_remote.py --ttl \"$GPU_ACCEPTANCE_TTL\"; echo \$? > /root/kit.rc' > /root/kit.log 2>&1 < /dev/null & echo started"
 POLL_DEADLINE=$(( $(date +%s) + ${POLL_MINUTES:-85} * 60 ))
 REMOTE_RC=""
 while [[ "$(date +%s)" -lt "$POLL_DEADLINE" ]]; do

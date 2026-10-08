@@ -48,6 +48,8 @@ MINIO_PORT="${MINIO_PORT:-19000}"
 MINIO_CONSOLE_PORT="${MINIO_CONSOLE_PORT:-19001}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 CONTROL_PORT="${CONTROL_PORT:-8080}"
+# 控制面内网监听（只绑回环，不经 nginx 对外；corpus 回源走它）。
+CONTROL_INTERNAL_PORT="${CONTROL_INTERNAL_PORT:-8090}"
 CORPUS_PORT="${CORPUS_PORT:-8081}"
 GATEWAY_PORT="${GATEWAY_PORT:-9000}"
 MCP_PORT="${MCP_PORT:-9100}"
@@ -66,12 +68,10 @@ PUBLIC_SCHEME="${PUBLIC_SCHEME:-http}"            # 隧道 / 反代终结 TLS �
 MODELS_CONFIG="${MODELS_CONFIG:-$SRC/infra/registry/models.local.yaml}"
 DEFAULT_PARSE_ENGINE="${DEFAULT_PARSE_ENGINE:-borndigital}"
 REGISTRATION_MODE="${REGISTRATION_MODE:-open}"
-# **问答用哪个 chat 模型。留空是有风险的。**
-# 留空时 corpus-api 不带 model 字段，网关就取 vqa_models 段的 default ——
-# 而它**不按能力词筛**（抽值那条路筛 no_instruct，问答这条没有）。
-# 注册表里 default 是 OCR 专用模型时（models.autodl.yaml 就是），
-# 问答会被一个"只会抄字、不听指令"的模型接走，答出来的东西看着像答案。
-# 所以起了指令模型的部署要在这里点名它。
+# **问答用哪个 chat 模型。留空时网关在"会遵指令"的条目里挑 default**
+# （跳过 no_instruct 的 OCR 专用模型，有图时还要 vision；挑不到报 400 而不是硬答）。
+# 点名仍是更稳的选择：default 指向一漂移（注册表改了一行）问答就悄悄换了模型，
+# 而这里写死名字至少"改了就是改了"，对得上。
 CHAT_MODEL="${CHAT_MODEL:-}"
 OBJECT_BUCKET="${OBJECT_BUCKET:-deepdocparse}"
 
@@ -224,8 +224,14 @@ do_install() {
   wait_pg 30 && pass "PostgreSQL 起来了" || { fail "PostgreSQL 起不来"; return 1; }
   gen_env
   set -a; . "$STACK_ENV"; set +a
+  # 口令不进 argv：`su -p` 保留已导出的 POSTGRES_PASSWORD（`set -a` 那行导出的），
+  # SQL 经 heredoc 走 stdin 喂给 psql，由内层 shell 展开 —— 任何进程的命令行里都
+  # 看不到它。`psql -v pgpass=...` 不行：-v 的值就拼在 psql 自己的 argv 里，ps 可见。
+  # （gen 出来的口令是 token_urlsafe，无引号转义之虞。）
   su postgres -c "psql -p $PG_PORT -tAc \"SELECT 1 FROM pg_roles WHERE rolname='ddp'\"" 2>/dev/null | qgrep 1 \
-    || su postgres -c "psql -p $PG_PORT -c \"CREATE ROLE ddp LOGIN SUPERUSER PASSWORD '$POSTGRES_PASSWORD'\"" >/dev/null
+    || su -p postgres -c "psql -p $PG_PORT <<EOF >/dev/null
+CREATE ROLE ddp LOGIN SUPERUSER PASSWORD '\$POSTGRES_PASSWORD';
+EOF" >/dev/null
   su postgres -c "psql -p $PG_PORT -tAc \"SELECT 1 FROM pg_database WHERE datname='deepdocparse'\"" 2>/dev/null | qgrep 1 \
     || su postgres -c "psql -p $PG_PORT -c \"CREATE DATABASE deepdocparse OWNER ddp\"" >/dev/null
   su postgres -c "psql -p $PG_PORT -d deepdocparse -c 'CREATE EXTENSION IF NOT EXISTS vector'" >/dev/null 2>&1
@@ -294,16 +300,18 @@ do_migrate() {
   # 两个角色，而 corpus 侧的 grants.sql 要对它们授权 —— 角色不存在时那句
   # GRANT 直接失败。compose 里两个一次性容器都 depends_on postgres 而互不依赖，
   # 靠的是"总有一次会跑过"；裸进程只跑一遍，得把顺序钉死。
+  # control-migrate 的 -database 缺省就读 CONTROL_DATABASE_URL（见 cmd/control-migrate/main.go）：
+  # 显式传 -database 会把含口令的连接串留在进程 argv 里（ps 可见），用 env 则不会。
   CONTROL_DATABASE_URL="postgres://ddp:$POSTGRES_PASSWORD@127.0.0.1:$PG_PORT/deepdocparse" \
   CONTROL_DB_PASSWORD="$CONTROL_DB_PASSWORD" CORPUS_DB_PASSWORD="$CORPUS_DB_PASSWORD" \
-    "$BIN_DIR/control-migrate" -database "postgres://ddp:$POSTGRES_PASSWORD@127.0.0.1:$PG_PORT/deepdocparse" up \
+    "$BIN_DIR/control-migrate" up \
     > "$LOG_DIR/control-migrate.log" 2>&1 \
     && pass "control 迁移 + 角色口令" || fail "control 迁移失败（看 $LOG_DIR/control-migrate.log）"
 
   # 迁移用**属主身份**跑：建表要 DDL 权限，而长跑的服务恰恰不该有。
   # ALLOW_INSECURE_DEFAULTS：一次性动作，不需要真凭据（与 compose 同款逃生口）
   ( cd "$SRC/database/corpus" \
-    && env DATABASE_URL="postgresql+asyncpg://ddp:$POSTGRES_PASSWORD@127.0.0.1:$PG_PORT/deepdocparse" \
+    && export DATABASE_URL="postgresql+asyncpg://ddp:$POSTGRES_PASSWORD@127.0.0.1:$PG_PORT/deepdocparse" \
            ALLOW_INSECURE_DEFAULTS=true PATH="$VENV/bin:$PATH" \
        sh ./migrate.sh ) > "$LOG_DIR/corpus-migrate.log" 2>&1 \
     && pass "corpus 迁移 + 授权（$(grep -c 'Running upgrade' "$LOG_DIR/corpus-migrate.log") 步）" \
@@ -349,10 +357,16 @@ do_start() {
   local corpus_db="postgresql+asyncpg://ddp_corpus:$CORPUS_DB_PASSWORD@127.0.0.1:$PG_PORT/deepdocparse"
 
   # ---- model-gateway ----
+  gateway_env() {
+    export SERVICE_TOKEN="$SERVICE_TOKEN" \
+           REDIS_URL="redis://127.0.0.1:$REDIS_PORT/2" \
+           MODELS_CONFIG="$MODELS_CONFIG" \
+           CALLBACK_ALLOWED_BASE="http://127.0.0.1:$CORPUS_PORT/internal/" \
+           FETCH_ALLOW_REDIRECTS=false \
+           FETCH_TRUSTED_BASE="http://127.0.0.1:$CONTROL_PORT/files/,http://127.0.0.1:$MINIO_PORT/$OBJECT_BUCKET/"
+  }
   if ! alive "ddp_gateway.main:app"; then
-    ( export SERVICE_TOKEN="$SERVICE_TOKEN" \
-             REDIS_URL="redis://127.0.0.1:$REDIS_PORT/2" \
-             MODELS_CONFIG="$MODELS_CONFIG"
+    ( gateway_env
       start_bg model-gateway "$RUN_DIR" "$VENV/bin/uvicorn" ddp_gateway.main:app \
         --host 127.0.0.1 --port "$GATEWAY_PORT" )
   fi
@@ -364,9 +378,7 @@ do_start() {
   # 没有它的表现极难归因 —— 请求 200、状态查得到、error 是 null，
   # 只是那个 running 永远不变，看起来像"模型很慢"（合仓时漏掉过，F-21）。
   if ! alive "[a]rq ddp_gateway.worker"; then
-    ( export SERVICE_TOKEN="$SERVICE_TOKEN" \
-             REDIS_URL="redis://127.0.0.1:$REDIS_PORT/2" \
-             MODELS_CONFIG="$MODELS_CONFIG"
+    ( gateway_env
       start_bg gateway-worker "$RUN_DIR" "$VENV/bin/arq" ddp_gateway.worker.tasks.WorkerSettings )
     sleep 3
   fi
@@ -378,7 +390,7 @@ do_start() {
     export DATABASE_URL="$corpus_db" \
            SERVICE_TOKEN="$SERVICE_TOKEN" \
            SERVICE_URL="http://127.0.0.1:$GATEWAY_PORT" \
-           CONTROL_URL="http://127.0.0.1:$CONTROL_PORT" \
+           CONTROL_URL="http://127.0.0.1:$CONTROL_INTERNAL_PORT" \
            PUBLIC_BASE_URL="http://127.0.0.1:$CORPUS_PORT" \
            MINIO_INTERNAL_ENDPOINT="127.0.0.1:$MINIO_PORT" \
            MINIO_PUBLIC_ENDPOINT="$PUBLIC_HOST" \
@@ -420,6 +432,7 @@ do_start() {
   # ---- control-api（唯一直面公网的进程）----
   if ! alive "[c]ontrol-api"; then
     ( export CONTROL_ADDR="127.0.0.1:$CONTROL_PORT" \
+             CONTROL_INTERNAL_ADDR="127.0.0.1:$CONTROL_INTERNAL_PORT" \
              CONTROL_DATABASE_URL="postgres://ddp_control:$CONTROL_DB_PASSWORD@127.0.0.1:$PG_PORT/deepdocparse" \
              CONTROL_AUTO_MIGRATE=false NODE_IDENTITY_DIR="$NODE_IDENTITY_DIR" \
              JWT_SECRET="$JWT_SECRET" SERVICE_TOKEN="$SERVICE_TOKEN" \

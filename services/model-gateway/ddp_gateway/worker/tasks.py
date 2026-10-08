@@ -30,6 +30,7 @@ from ddp_gateway.config import load_registry, settings
 from ddp_gateway.services import extraction
 from ddp_core import extract_format
 from ddp_core.chunking import layout_to_chunks
+from ddp_core.fetch_policy import FetchNotAllowedError, FileTooLargeError
 from ddp_gateway.services.engines import resolve as resolve_engine
 from ddp_gateway.services.mineru_client import MineruClient, MineruTaskNotFound
 from ddp_gateway.services.task_store import TaskStore
@@ -40,7 +41,12 @@ async def _notify_callback(http: httpx.AsyncClient, task: dict, task_id: str, st
     callback_url = task.get("callback_url")
     if not callback_url:
         return
+    # 入队后基座可能已收紧：POST 前再验一次，不把 SERVICE_TOKEN 发往现已下线的地址。
+    if not settings.callback_permitted(callback_url):
+        print(f"[worker] callback skipped for {task_id}: not permitted by callback_allowed_base")
+        return
     try:
+        # 完整原文 POST（含 ?token= 这类查询串）：归一化/剥查询会把 backend 的验签搞坏。
         await http.post(
             callback_url,
             json={"task_id": task_id, "status": status},
@@ -113,6 +119,15 @@ async def poll_and_archive(ctx: dict, task_id: str) -> None:
         # 回源时 corpus 重启，错误里带出了完整的 /files/{token}）。
         await _finish(ctx, task_id, task, "failed",
                       f"取文件或解析结果失败：HTTP {exc.response.status_code}")
+        return
+    except FetchNotAllowedError:
+        # ValueError 子类：上面的 (RuntimeError, ..., httpx.HTTPError) 接不住，必须单列。
+        # 消息里嵌着完整 file_url（含下载凭证），一字不落进任务错误 —— 只留判据给运维。
+        await _finish(ctx, task_id, task, "failed", "fetch_not_allowed: 目的地策略拒绝抓取该文件")
+        return
+    except FileTooLargeError as exc:
+        # 超限消息只有兆字节数、不带 URL，回显无妨；前缀让运维一眼区分 SSRF 拒绝与超上限。
+        await _finish(ctx, task_id, task, "failed", f"file_too_large: {exc}")
         return
     except (RuntimeError, MineruTaskNotFound, httpx.HTTPError) as exc:
         await _finish(ctx, task_id, task, "failed", str(exc) or type(exc).__name__)
@@ -354,6 +369,11 @@ async def _parse_and_wait(ctx: dict, doc_hash: str, payload: dict) -> str | None
     try:
         engine = resolve_engine(entry, mineru_client=ctx["mineru_client"], http=ctx["http"])
         native_id = await engine.submit(entry.endpoint, payload["file_url"], dict(entry.options))
+    except FetchNotAllowedError:
+        # 同上：ValueError 子类，(LookupError, httpx.HTTPError, RuntimeError) 接不住。
+        return "fetch_not_allowed: 目的地策略拒绝抓取该文件"
+    except FileTooLargeError as exc:
+        return f"file_too_large: {exc}"
     except (LookupError, httpx.HTTPError, RuntimeError) as exc:
         return f"触发解析失败：{exc}"
 

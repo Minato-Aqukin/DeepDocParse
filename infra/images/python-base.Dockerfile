@@ -8,10 +8,12 @@
 # 构建：
 #   docker build -f infra/images/python-base.Dockerfile --target corpus-api .
 #   国内加 --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
-ARG PYTHON_VERSION=3.12
+ARG PYTHON_VERSION=3.12.15
 
 # ---------------------------------------------------------------- 依赖层
-FROM python:${PYTHON_VERSION}-slim AS deps
+# FROM 钉到补丁版：3.12-slim 是浮动 tag，重建时小版本会悄悄变。
+# 升级只改上面 PYTHON_VERSION 的缺省值；照样可用 --build-arg 整体覆盖。
+FROM python:${PYTHON_VERSION}-slim-bookworm AS deps
 
 ARG PIP_INDEX_URL=https://pypi.org/simple
 # 重试时换的那个源。**必须是另一家** —— 同一个坏镜像重试三次还是坏的。
@@ -70,16 +72,22 @@ COPY services/ services/
 COPY packages/contracts/ packages/contracts/
 
 # ------------------------------------------------------------ 模型网关
+# **不以 root 跑**：四个长跑目标共用这段（control-api 那边同款 uid 10001）。
+# pip 装包仍在 root 层做；这里只建用户并把运行时目录交出去。
 FROM source AS model-gateway
 # **不装 [db]**：网关是无状态适配层，一行 ORM 都不该有。
 # 失守的表现不是报错，而是镜像悄悄变大 —— CI 有一个 job 专门装最小集来钉这件事
 RUN --mount=type=cache,target=/root/.cache/pip pip-retry install ./python/ddp_contracts ./python/ddp_core ./services/model-gateway
+RUN useradd -u 10001 -m -s /usr/sbin/nologin ddp && mkdir -p /home/ddp/.cache && chown -R ddp:ddp /home/ddp /src
+USER ddp
 EXPOSE 9000
 CMD ["uvicorn", "ddp_gateway.main:app", "--host", "0.0.0.0", "--port", "9000"]
 
 # -------------------------------------------------------------- 语料 API
 FROM source AS corpus-api
 RUN --mount=type=cache,target=/root/.cache/pip pip-retry install ./python/ddp_contracts "./python/ddp_core[db,cjk]" ./services/corpus-api
+RUN useradd -u 10001 -m -s /usr/sbin/nologin ddp && mkdir -p /home/ddp/.cache && chown -R ddp:ddp /home/ddp /src
+USER ddp
 EXPOSE 8081
 CMD ["uvicorn", "ddp_corpus.main:app", "--host", "0.0.0.0", "--port", "8081"]
 
@@ -87,12 +95,16 @@ CMD ["uvicorn", "ddp_corpus.main:app", "--host", "0.0.0.0", "--port", "8081"]
 FROM source AS corpus-worker
 RUN --mount=type=cache,target=/root/.cache/pip pip-retry install ./python/ddp_contracts "./python/ddp_core[db,cjk]" \
                 ./services/corpus-api ./services/corpus-worker
+RUN useradd -u 10001 -m -s /usr/sbin/nologin ddp && mkdir -p /home/ddp/.cache && chown -R ddp:ddp /home/ddp /src
+USER ddp
 # 没有端口：worker 不监听任何东西，健康与水位看 /metrics 与 corpus.tasks
 CMD ["ddp-corpus-worker"]
 
 # ------------------------------------------------------------------ MCP
 FROM source AS mcp
 RUN --mount=type=cache,target=/root/.cache/pip pip-retry install ./python/ddp_contracts "./python/ddp_core[db,cjk]" ./services/mcp
+RUN useradd -u 10001 -m -s /usr/sbin/nologin ddp && mkdir -p /home/ddp/.cache && chown -R ddp:ddp /home/ddp /src
+USER ddp
 EXPOSE 9100
 CMD ["python", "-m", "ddp_mcp.server"]
 

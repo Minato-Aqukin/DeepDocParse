@@ -14,6 +14,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ddp_core.fetch_policy import fetch_bytes_capped
+
 # mineru 状态 -> openapi.yaml 契约四态
 _STATUS_MAP = {
     "pending": "pending",
@@ -40,9 +42,17 @@ class MineruClient:
         self._http = http
 
     async def submit(self, endpoint: str, file_url: str, options: dict) -> str:
-        """提交解析任务，返回 mineru 侧 task_id。"""
-        file_resp = await self._http.get(file_url, follow_redirects=True)
-        file_resp.raise_for_status()
+        """提交解析任务，返回 mineru 侧 task_id。
+
+        file_url 先过目的地策略（SSRF 封锁），再边下边计字节、超限即停
+        （MINERU_MAX_BYTES）—— 不等整个文件落进内存再判断。
+        内容走 multipart 转传：httpx 的 files 接受字节串，这里传的是已按
+        上限截断的完整缓冲（超限早在抓取时就拒了，不会走到这里）。
+        """
+        from ddp_gateway.config import settings
+
+        cfg = settings.fetch_policy_config()
+        file_bytes = await fetch_bytes_capped(self._http, file_url, cfg, settings.mineru_max_bytes)
         filename = PurePosixPath(urlparse(file_url).path).name or "document.pdf"
         mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
@@ -52,7 +62,7 @@ class MineruClient:
 
         resp = await self._http.post(
             f"{endpoint}/tasks",
-            files=[("files", (filename, file_resp.content, mime))],
+            files=[("files", (filename, file_bytes, mime))],
             data=data,
         )
         resp.raise_for_status()

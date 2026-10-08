@@ -302,12 +302,47 @@ async def test_failed_source_download_does_not_put_the_file_url_into_the_task_er
         client, worker_ctx, app_state, monkeypatch):
     """The source URL of an in-process engine is control's stable file URL; its path token is the
     credential for the original. A failed download used to store `str(HTTPStatusError)` — the
-    full URL — as the parse error that users see (2026-09-24, phase E)."""
+    full URL — as the parse error that users see (2026-09-24, phase E).
+
+    2026-10-07 起失败模式变了：`.example` 域名现实里解析不了（NXDOMAIN），
+    目的地策略在任何 HTTP 之前就拒了 —— 所以这里断言 `fetch_not_allowed`
+    而不是原来的 `502`。不泄露 token 这一半断言不变，仍是本用例的本意。
+    HTTP 状态码那条分支（`取文件或解析结果失败：HTTP ...`，同样不带 URL）
+    由下面的 `test_http_failure_hides_the_file_url` 覆盖。"""
+    import socket as _socket
+
     from ddp_gateway.config import settings as cfg
     from ddp_gateway.worker.tasks import poll_and_archive
 
     monkeypatch.setattr(cfg, "poll_initial_delay", 0.01)
+    # `.example` 现实里 NXDOMAIN —— 在这里显式钉死，与沙箱/CI 的 DNS 无关
+    # （本文件的 autouse _public_dns 会把它钉成公网 IP，那样测的就不是这条分支了）。
+    def _nxdomain(host, *args, **kwargs):
+        raise _socket.gaierror("deterministic NXDOMAIN for .example")
+    monkeypatch.setattr(_socket, "getaddrinfo", _nxdomain)
     file_url = "https://control.example/files/secret-grant-token-0123456789"
+    task_id = (await client.post("/v1/parse", json={
+        "file_url": file_url, "engine": "borndigital"})).json()["task_id"]
+    await poll_and_archive(worker_ctx, task_id)
+
+    status = (await client.get(f"/v1/parse/{task_id}")).json()
+    assert status["status"] == "failed"
+    assert "fetch_not_allowed" in status["error"] \
+        and "secret-grant-token" not in status["error"], status["error"]
+
+
+@respx.mock
+async def test_http_failure_hides_the_file_url(
+        client, worker_ctx, app_state, monkeypatch):
+    """目的地检查通过、但 HTTP 失败时，任务错误只留状态码，不带 URL/token。
+
+    与上一条互补：上一条测"抓之前就拒"，这条测"抓了但 HTTP 失败"。
+    （本文件的 autouse _public_dns 把测试域钉在公网 IP，HTTP 层仍由 respx 拦截。）"""
+    from ddp_gateway.config import settings as cfg
+    from ddp_gateway.worker.tasks import poll_and_archive
+
+    monkeypatch.setattr(cfg, "poll_initial_delay", 0.01)
+    file_url = "https://files.example.com/secret-grant-token-0123456789.pdf"
     respx.get(file_url).mock(return_value=Response(502))
     task_id = (await client.post("/v1/parse", json={
         "file_url": file_url, "engine": "borndigital"})).json()["task_id"]
@@ -1199,6 +1234,19 @@ def test_strip_tags_also_removes_half_a_tag():
 #   核对拿中文指令去问它  -> 每条出处被误判 parse_mismatch
 # 在这之前 conftest 只加载 models.yaml，另外三份**从没被任何测试碰过**，
 # 连能不能 parse 都没人验过。这一组补上那道网。
+
+# 与 test_contract.py / test_extract.py 同一钉子：目的地策略做真实 DNS，
+# 把测试域钉在公网 IP，不依赖沙箱/CI 的解析结果。HTTP 层仍由 respx 拦截。
+# 要断言 SSRF 拒绝的用例在自己体内再覆写 getaddrinfo。
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch):
+    import socket as _socket
+
+    monkeypatch.setattr(
+        _socket, "getaddrinfo",
+        lambda host, port, family=0, type=0, proto=0, flags=0:
+        [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))])
+
 
 REGISTRIES = sorted(REGISTRY.glob("models*.yaml"))
 

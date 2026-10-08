@@ -162,7 +162,7 @@ download_embedding() {
 }
 
 enable_embedding_registry() {
-  # web.bash 首次启动时会生成 .env，并把 MODELS_CONFIG 固定指向这个文件。
+  # stack.bash 首次启动时会生成 stack.env，并把 MODELS_CONFIG 固定指向这个文件。
   # 因此按项目 README 的既定做法启用模板末尾的 embedding 段。仅改服务器
   # checkout 的部署配置；检测顶层键后再写，重复执行不会追加第二份。
   local registry="$SERVICE_DIR/models.autodl.yaml"

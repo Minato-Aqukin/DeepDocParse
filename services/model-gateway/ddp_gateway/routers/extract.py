@@ -55,6 +55,11 @@ def _doc_hash(file_url: str, doc_id: str | None = None) -> str:
 
 @router.post("/extract", status_code=202)
 async def submit_extract(req: ExtractRequest, request: Request):
+    # 与解析平面同一道闸：回调只发往 CALLBACK_ALLOWED_BASE，空基座 = 全部拒绝
+    # （settings.callback_permitted 已 fail closed）。callback_url 原样落库（含 query）。
+    if req.callback_url and not settings.callback_permitted(req.callback_url):
+        raise APIError(400, "callback_url 不在允许的回调基座之下（CALLBACK_ALLOWED_BASE）",
+                       "invalid_request_error", "callback_not_allowed")
     state = request.app.state
 
     # schema 校验在请求路径上强制。坏 schema 当场 400 —— 跑完一轮抽取

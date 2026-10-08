@@ -18,10 +18,11 @@ x-python-build: &python-build
     PIP_FALLBACK_INDEX_URL: ${PIP_FALLBACK_INDEX_URL:-https://pypi.org/simple}
 
 x-corpus-env: &corpus-env
-  DATABASE_URL: postgresql+asyncpg://ddp_corpus:${CORPUS_DB_PASSWORD:-ddp}@postgres:5432/deepdocparse
+  DATABASE_URL: postgresql+asyncpg://ddp_corpus:${CORPUS_DB_PASSWORD:?CORPUS_DB_PASSWORD 必须显式设置}@postgres:5432/deepdocparse
   SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
   SERVICE_URL: http://model-gateway:9000
-  CONTROL_URL: http://control-api:8080
+  # 控制面内网监听（不映射端口，只在内网可达；改端口只改 CONTROL_INTERNAL_PORT）。
+  CONTROL_URL: http://control-api:${CONTROL_INTERNAL_PORT:-8090}
   PUBLIC_BASE_URL: http://corpus-api:8081
   MINIO_INTERNAL_ENDPOINT: minio:9000
   MINIO_PUBLIC_ENDPOINT: ${OBJECT_PUBLIC_ENDPOINT:-127.0.0.1:19000}
@@ -41,13 +42,18 @@ x-corpus-env: &corpus-env
 x-gateway-env: &gateway-env
   SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
   REDIS_URL: redis://redis:6379/2
+  # 解析回调只发往语料内网基座（空 = 全部拒绝）。
+  CALLBACK_ALLOWED_BASE: http://corpus-api:8081/internal/
+  # 出站抓取缺省不跟随重定向；受信基座走可信路径但照样限跳、逐跳重验。
+  # 稳定文件 URL 的链是 /files/{token} -> 内网 MinIO 预签名，两站都要登记。
+  FETCH_ALLOW_REDIRECTS: "false"
+  FETCH_TRUSTED_BASE: http://control-api:8080/files/,http://minio:9000/deepdocparse/
   # 无 GPU 档位：只注册 borndigital。换档位 = 换这一行，不改代码
   MODELS_CONFIG: /registry/${MODELS_CONFIG:-models.cpu.yaml}
-
 services:
   # ------------------------------------------------------------ 数据面
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:0.8.7-pg16
     environment:
       POSTGRES_USER: ddp
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ddp}
@@ -123,8 +129,8 @@ services:
       # 迁移只 `CREATE ROLE ... LOGIN`，不带口令 —— 口令是部署配置。
       # 漏了这两个变量，全新部署的表现是：迁移成功、容器 healthy，
       # 而服务进程连库时 InvalidPasswordError
-      CONTROL_DB_PASSWORD: ${CONTROL_DB_PASSWORD:-ddp}
-      CORPUS_DB_PASSWORD: ${CORPUS_DB_PASSWORD:-ddp}
+      CONTROL_DB_PASSWORD: ${CONTROL_DB_PASSWORD:?CONTROL_DB_PASSWORD 必须显式设置}
+      CORPUS_DB_PASSWORD: ${CORPUS_DB_PASSWORD:?CORPUS_DB_PASSWORD 必须显式设置}
     depends_on:
       postgres: {condition: service_healthy}
     restart: "no"
@@ -140,9 +146,12 @@ services:
       # **用受限角色连库，不是超级用户。** 企业边界 5 说"一个数据对象只能有
       # 一个写入所有者"，而那句话只有在数据库层面做得到才算数 ——
       # 用 ddp 连的话，Go 想 UPDATE 语料表随时可以，静态守卫只是自觉。
-      CONTROL_DATABASE_URL: postgres://ddp_control:${CONTROL_DB_PASSWORD:-ddp}@postgres:5432/deepdocparse
+      CONTROL_DATABASE_URL: postgres://ddp_control:${CONTROL_DB_PASSWORD:?CONTROL_DB_PASSWORD 必须显式设置}@postgres:5432/deepdocparse
       # 迁移交给 control-migrate 那个一次性容器（它用属主身份）
       CONTROL_AUTO_MIGRATE: "false"
+      # 内网服务面监听。corpus 回源（/internal/*）打这个端口，必须与上面的
+      # CONTROL_URL 同源（CONTROL_INTERNAL_PORT），否则改了旋钮两边对不上。
+      CONTROL_INTERNAL_ADDR: :${CONTROL_INTERNAL_PORT:-8090}
       NODE_IDENTITY_DIR: /var/lib/ddp/node-identity
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 必须显式设置且不短于 32 字节}
       SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN 必须显式设置}
@@ -188,6 +197,7 @@ services:
     # **不映射端口**：它只对内网开放。暴露出去等于任何人都能自称 admin
     expose: ["8081"]
     depends_on:
+      postgres: {condition: service_healthy}
       corpus-migrate: {condition: service_completed_successfully}
       minio: {condition: service_healthy}
     healthcheck:
@@ -203,6 +213,7 @@ services:
       target: corpus-worker
     environment: *corpus-env
     depends_on:
+      postgres: {condition: service_healthy}
       corpus-migrate: {condition: service_completed_successfully}
       minio: {condition: service_healthy}
     # 多副本安全：领取走 FOR UPDATE SKIP LOCKED，写结果比 generation
@@ -221,6 +232,12 @@ services:
     expose: ["9000"]
     depends_on:
       redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:9000/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   # 解析平面的 worker。**没有它，`POST /v1/parse` 会一直 202，
   # 任务永远停在 progress 0.5** —— 网关只负责受理与转发，真正去调
@@ -248,7 +265,7 @@ services:
       - ../registry:/registry:ro
     depends_on:
       redis: {condition: service_healthy}
-      model-gateway: {condition: service_started}
+      model-gateway: {condition: service_healthy}
 
   mcp:
     build:
@@ -263,7 +280,10 @@ services:
       REDIS_URL: redis://redis:6379/2
     expose: ["9100"]
     depends_on:
+      redis: {condition: service_healthy}
+      corpus-api: {condition: service_healthy}
       corpus-migrate: {condition: service_completed_successfully}
+      model-gateway: {condition: service_healthy}
 
 volumes:
   control_identity:

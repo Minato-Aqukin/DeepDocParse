@@ -24,6 +24,8 @@ from typing import Protocol
 
 import httpx
 
+from ddp_core.fetch_policy import check_destination, fetch_bytes_capped
+from ddp_gateway.config import settings
 from ddp_gateway.services import borndigital, layout, vlm_ocr
 from ddp_gateway.services.mineru_client import MineruClient
 
@@ -172,25 +174,21 @@ async def _download(http: httpx.AsyncClient, url: str) -> bytes:
 
     borndigital 与 vlm-ocr 共用：两者都跑在 worker 进程内、都要整份文件进内存，
     上限的理由一模一样，没必要各写一份（各写一份的下场是改了一处忘了另一处）。
+    抓取前先过目的地策略（SSRF 封锁，见 `ddp_core.fetch_policy`）。
     """
-    chunks: list[bytes] = []
-    total = 0
-    async with http.stream("GET", url, follow_redirects=True) as response:
-        response.raise_for_status()
-        async for chunk in response.aiter_bytes():
-            total += len(chunk)
-            if total > BORNDIGITAL_MAX_BYTES:
-                raise RuntimeError(
-                    f"文件超过进程内引擎的处理上限"
-                    f"（{BORNDIGITAL_MAX_BYTES // 1024 // 1024}MB）。"
-                    f"它跑在 worker 进程内、整份文件进内存，请改用 mineru 引擎")
-            chunks.append(chunk)
-    return b"".join(chunks)
+    cfg = settings.fetch_policy_config()
+    check_destination(url, cfg)
+    return await fetch_bytes_capped(http, url, cfg, BORNDIGITAL_MAX_BYTES)
 
 
 def runtime_of(entry) -> str:
-    """注册表条目用哪个 runtime。没写就按"解析引擎默认是 mineru 任务协议"推断。"""
-    return getattr(entry, "runtime", "") or MINERU_RUNTIME
+    """注册表条目用哪个 runtime。**没写就是配置错**：返回空，由 resolve 判失败。
+
+    此前缺省回 mineru-api：新引擎忘写 runtime 会静默按 mineru 协议说话，
+    borndigital-only 部署也会假设 mineru，因此未声明 runtime 即配置错误，直接失败。
+    存量注册表已全部显式声明 runtime（见 infra/registry/models*.yaml）。
+    """
+    return getattr(entry, "runtime", "") or ""
 
 
 def resolve(entry, *, mineru_client: MineruClient, http: httpx.AsyncClient) -> ParseEngine:
@@ -201,4 +199,8 @@ def resolve(entry, *, mineru_client: MineruClient, http: httpx.AsyncClient) -> P
         return VlmOcrEngine(http, entry)
     if runtime == MINERU_RUNTIME:
         return MineruEngine(mineru_client)
+    if not runtime:
+        raise LookupError(
+            "parse engine 缺少 runtime 声明（models.yaml parse_engines 条目必须写 "
+            "runtime: mineru-api | borndigital | vlm-ocr）")
     raise LookupError(f"unknown parse runtime: {runtime}")

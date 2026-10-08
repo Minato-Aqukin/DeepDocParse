@@ -42,7 +42,7 @@ mkdir -p "$LOG_DIR"
 CMD=("$VENV_DIR/bin/python" -m uvicorn embed_shim:app --host 127.0.0.1 --port "$EMBED_PORT")
 
 if [ "$DAEMON" = "1" ]; then
-  # setsid -f：nohup 会随 SSH 会话被回收（见 web.bash 里的同一条注释）
+  # setsid -f：nohup 会随 SSH 会话被回收（见 stack.bash 里 start_bg 的同一条注释）
   ( cd "$HERE" && EMBED_MODEL_DIR="$EMBED_MODEL_DIR" \
     setsid -f "${CMD[@]}" > "$LOG_DIR/embed.log" 2>&1 < /dev/null )
   echo "[embed] 后台启动 -> http://127.0.0.1:$EMBED_PORT，日志 $LOG_DIR/embed.log"

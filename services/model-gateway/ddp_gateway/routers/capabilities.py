@@ -127,8 +127,12 @@ _LIMITS = {
                                "max_candidates": settings.extract_candidates},
 }
 
-#: chat 反代的并发闸（routers/chat.py 的 vqa_semaphore）。语料侧的问答/编译/抽取
-#: 全从这道闸过，所以它是**通道**的限额，不是抽取平面的。
+#: chat 反代的并发闸（routers/chat.py 的 vqa_semaphore）。它只覆盖外部
+#: `/v1/chat/completions` 反向代理路径 —— API 与 worker 是不同进程，
+#: 一个 `asyncio.Semaphore` 不可能跨进程共享，所以抽取内部的
+#: extraction._chat / vlm_ocr 直调**不经过**这道闸，它们的并发由
+#: EXTRACT_CONCURRENCY / EXTRACT_MAX_FIELDS 与 vlm options.concurrency 约束。
+#: 因此它是**通道**的限额，不是抽取平面的。
 _CHANNEL_LIMITS = {
     "chat": lambda: {"max_concurrency": settings.vqa_max_concurrency},
 }

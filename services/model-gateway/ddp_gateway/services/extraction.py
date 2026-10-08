@@ -249,16 +249,31 @@ def _format_sources(hits: list[dict]) -> str:
 # ---------- 出处核对（沿用 A4 的做法） ----------
 
 async def _load_pdf(ctx: ExtractContext) -> bytes | None:
+    # 函数内导入：本文件只允许动这个函数，顶层 import 不碰。
+    # 上限常量只有 engines.BORNDIGITAL_MAX_BYTES 一份，不另起。
+    from ddp_core.fetch_policy import (
+        FetchNotAllowedError,
+        FileTooLargeError,
+        check_destination,
+        fetch_bytes_capped,
+    )
+    from ddp_gateway.services.engines import BORNDIGITAL_MAX_BYTES
     if ctx._pdf_tried:
         return ctx._pdf
     ctx._pdf_tried = True
     if not ctx.file_url:
         return None
     try:
-        resp = await ctx.http.get(ctx.file_url, follow_redirects=True)
-        resp.raise_for_status()
-        data = resp.content
+        # SSRF 封锁 + 200MB 上限：与 engines._download 同一条抓取循环。
+        from ddp_gateway.config import settings as _settings
+        cfg = _settings.fetch_policy_config()
+        check_destination(ctx.file_url, cfg)
+        data = await fetch_bytes_capped(ctx.http, ctx.file_url, cfg, BORNDIGITAL_MAX_BYTES)
         ctx._pdf = data if data.lstrip()[:5].startswith(b"%PDF") else None
+    except (FetchNotAllowedError, FileTooLargeError):
+        # 目的地拒绝 / 超上限：核对降级为"没测出来"（下游视 None 为
+        # vision_unavailable）。URL/token 绝不进错误或日志。
+        ctx._pdf = None
     except Exception:
         ctx._pdf = None
     return ctx._pdf

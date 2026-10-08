@@ -22,6 +22,29 @@ scripts/dev.sh logs corpus-api
 `services/corpus-api/ddp_corpus/deps.py`）。把它们暴露到公网等于
 任何人都能自称 admin。
 
+网关的解析回调只发往 `CALLBACK_ALLOWED_BASE`（compose 里是
+`http://corpus-api:8081/internal/`；空值等于拒绝一切回调）。
+出站抓取缺省不跟随重定向（`FETCH_ALLOW_REDIRECTS=false`），只有
+`FETCH_TRUSTED_BASE` 下的内部回源走可信路径（照样限跳，且永不转发
+Authorization）。**受信不传染**：每一跳都要落在登记的基座之下。稳定文件 URL
+的链是 `/files/{token}` → 对象存储内网预签名，所以两站都要登记 —— compose 里是
+`http://control-api:8080/files/,http://minio:9000/deepdocparse/`。漏登记对象存储
+那一站的表现是每次解析都 400 `fetch_not_allowed`。根路径基座（`http://host/`）
+不算受信。
+
+已知残留：校验与连接是两次独立的 DNS 解析（先 `getaddrinfo` 判目的地，
+再由 httpx 按主机名建连），恶意 DNS 可在两次解析间返回公网→私网的不同答案
+（DNS 重绑定）。语料转发时先验一次、网关抓取时再验一次，
+双层校验把窗口压窄了，但没有 IP 钉死的传输层就关不死它 ——
+受信内网回源请只登记可信的解析路径，不要把用户可控域名放进受信基座。
+
+控制面另有一个**内网监听**（`CONTROL_INTERNAL_ADDR`，缺省 `:8090`）：corpus
+回源（`/internal/*`）走它。8090 **不映射到宿主**，只在 compose 内网可达；
+`CONTROL_INTERNAL_PORT`（缺省 8090）是改端口的唯一旋钮：compose 里
+control-api 的 `CONTROL_INTERNAL_ADDR` 与 corpus 的
+`CONTROL_URL=http://control-api:${CONTROL_INTERNAL_PORT:-8090}` 都从它算，
+autodl（`stack.bash`）同理。
+
 无 GPU 档位注册的解析引擎是 `borndigital`（进程内抽 PDF 文字层与坐标，
 出处三件套一样齐全；不处理扫描件、表格结构与公式）。
 
@@ -130,7 +153,10 @@ bash infra/autodl/stack.bash doctor      # 别跳过
 
 配置全在脚本头部的 `${VAR:-默认值}`，外部 export 优先。**公网部署必须给的
 只有两个**：`PUBLIC_HOST` 与 `PUBLIC_SCHEME` —— 预签名 URL 的签名覆盖 host，
-稳定文件 URL 也要拼它。
+稳定文件 URL 也要拼它。网关回调/抓取基座与内网端口（`CALLBACK_ALLOWED_BASE` /
+`FETCH_TRUSTED_BASE` / `CONTROL_INTERNAL_PORT`）由 `stack.bash start` 按端口
+变量算好（control-api 另得 `CONTROL_INTERNAL_ADDR=127.0.0.1:$CONTROL_INTERNAL_PORT`），
+不用手配。
 
 ### 下载源：这类机器上什么能用、什么不能用
 
@@ -228,8 +254,8 @@ scripts/dev.sh migrate        # 两套一起跑
 
 # 或者分开
 docker compose ... run --rm corpus-migrate                      # alembic
-docker compose ... run --rm --entrypoint control-migrate control-api \
-    -database "$CONTROL_DATABASE_URL" up                        # Go
+docker compose ... run --rm --entrypoint control-migrate control-api up   # Go
+# control-migrate 从容器环境里的 CONTROL_DATABASE_URL 取连接串：口令不上 argv（ps 看得见）
 ```
 
 上线窗口应当把"改库"与"起服务"**分开做**：先迁移、看报告、再滚服务。
@@ -298,12 +324,13 @@ ResourceVersion、运行任务、待确认 compute、有效 Bundle 副本或引�
 |---|---|---|
 | 原件：MinIO `uploads/`、临时 compute input | 文档 GC 默认 `GC_GRACE_SECONDS=3600`，持久化精确 key 清单，claim 后重查引用；部分失败保留剩余 key 和 `documents.gc_error`，后续重试 | 正常删除资源/版本，等待最后引用释放与 worker GC；不要按桶前缀强删共享对象 |
 | 全文 / layout / 解析图片 / crops：`results/{parse}/`；固定快照：`bundles/{version}/` | 与原件同一个 reference-safe GC 清单；迁移 parse 的 `result_prefix` 与当前 job crop 前缀都覆盖；不删其它 job / 文档共用前缀 | 同上；列举失败或对象删除失败时不宣称回收完成 |
+| 可重建临时字节：MinIO `tmp-remote-compute/`（远端算力待输入） | **永不进备份**：恢复演练与运维备份的 `mc mirror` 一律带 `--exclude 'tmp-remote-compute/*'`，对账器只认"有 open `remote_computes` 行绑定"的临时 key，无绑定即孤儿。TTL：`WAITING_TTL_SECONDS=86400`（等待输入 24h 过期）+ 终态 `TERMINAL_GRACE_SECONDS=3600`（终态 1h 宽限），见 `ddp_corpus/routers/remote_compute.py:53-55`；GC 在引用全释放后回收 | 等 TTL/GC 自动回收；不要把临时前缀 mirror 进备份，也不要按桶前缀强删仍有 open compute 行的 key |
 | 检索 chunk 文本及 pgvector：`chunks.text/search_text/embedding` | 对象清单完全清空后删除该 Document 的 chunk 行；共享 Document 有活版本时原件、图片与向量都留存 | 同上；不是仅清向量而留下全文缓存 |
 | 上传拒绝 / 失败 / 过期：`control.upload_sessions` | housekeeping 每 5 分钟领取；从 expiry 与终态时间的较晚者起至少 1 小时，corpus 再独立执行自己的 GC 宽限；短事务以 `SKIP LOCKED` 领取并持久化 `reclaim_attempted_at` 的 5 分钟租约，提交后调用 corpus 检查所有原件引用并删除、abort 精确 key 的 multipart，网络调用不持有 control 事务或行锁；租约未过期时其它 collector 跳过，崩溃后到期可重试；第二个短事务仅在领取时间戳仍匹配且尚未回收时写入结果，旧 collector 不能覆盖新结果；`reclaimed_at/reclaim_error/reclaim_attempted_at` 可查，失败从结果写入起至少 5 分钟后重试 | 已知 receipt 的 `ready` 或尚未分配的 `pending` 可自动清理；`allocating/unknown` 保留并需先确认 S3 在途创建不会再完成，再按 upload-control 契约对账，不能凭超时强删 |
 | 证据原子 / citation / Wiki dependency / 审计 | **长期保留，无自动 TTL**。证据 `content` 可以保留原文片段，GC 不清除此内容；已绑定引用还可能保护整份原件。证据最终保留期限是尚未决策的产品事项，不以本次清理擅定 | 当前无受支持的按期限清除接口；需要完整离线销毁时应关闭服务、清除整个选定工作区/数据库及其所有备份，而非破坏引用外键或审计权限 |
 | 桌面模型文件：所选 runtime 工作区的 `models/`（部署也可显式指定 `--models DIR`） | 权重按 `artifact-id.sha256`，验证状态 `.state.json`、锁及中断下载 `.part` 同目录；**不属于文档派生数据，无自动 TTL**，文档 GC / 升级 / 默认卸载都保留，partial 留给显式续传 | 先停止该 runtime 与模型进程，删除所选模型对应的权重、状态、partial 与锁文件；或明确删除整个选定 `models/`。下次使用必须重新安装/校验，无隐式卸载按钮 |
 | 运行日志 | control JSON stdout、Python/桌面 stderr 由启动器/容器采集；Compose 未声明应用级轮转/TTL，遵循宿主 Docker logging driver；AutoDL 在 `${LOG_DIR:-$DDP_ROOT/logs}/*.log`，启动覆盖该进程日志但运行中无轮转；本机 drill 的 `.dev-logs/` 不自动过期 | 运维显式设置 Docker/logrotate 保留上限；文件日志停止对应写入进程后按选定路径删/截断；不要误删 node-identity、数据库或模型目录。保留多久由部署策略配置，仓库当前不承诺统一天数 |
-| 备份 / 旧版本 | 中心 `pg_dump -Fc`、MinIO/卷快照是运维管理；桌面 `<root>.previous`、指定 `--backup-dir` 的应用备份及 `<root>-<old-version>-workspaces/` 的 SQLite backup API 副本由 `UPDATE-STATE.json` 记录；**无自动 TTL**，恢复会恢复备份时仍存在的原文 | 校验新版本和恢复窗口后，显式删除选定离线备份/快照及外部副本；应用卸载可显式 `--remove-backups --backup-dir DIR` 清理其记录的备份，但默认保留工作区与模型。要求不可恢复删除时也必须清理备份、WAL/存储历史版本，不能只调用文档 DELETE |
+| 备份 / 旧版本 | 中心 `pg_dump -Fc`、MinIO/卷快照是运维管理；桌面 `<root>.previous`、指定 `--backup-dir` 的应用备份及 `<root>-<old-version>-workspaces/` 的 SQLite backup API 副本由 `UPDATE-STATE.json` 记录；**PG/卷快照无自动 TTL**（显式删除），但 `tmp-remote-compute/` 临时字节从不进备份（见上表临时行：`--exclude` + `WAITING_TTL_SECONDS=86400`/`TERMINAL_GRACE_SECONDS=3600` 自动过期），恢复不会恢复备份时已过期的临时输入 | 校验新版本和恢复窗口后，显式删除选定离线备份/快照及外部副本；应用卸载可显式 `--remove-backups --backup-dir DIR` 清理其记录的备份，但默认保留工作区与模型。要求不可恢复删除时也必须清理备份、WAL/存储历史版本，不能只调用文档 DELETE |
 
 一致性边界：文档 GC 只处理可重建的文档数据；模型、诊断日志、备份、证据审计有
 各自明确的保留所有者，**没有声称随文档一起销毁**。删除 API / GC 不承诺介质级安全

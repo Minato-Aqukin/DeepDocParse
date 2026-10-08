@@ -206,6 +206,29 @@ def provision_nvidia_icd():
               "from download.nvidia.com or the .cn mirror; cannot provision "
               "the Vulkan ICD", file=sys.stderr)
         sys.exit(3)
+    # The .run executes as root: verify its bytes before extraction. There is
+    # no network hash source for arbitrary driver versions, so the expected
+    # sha256 comes from DRIVER_SHA256 (export it in the run.sh environment;
+    # see the TTL-area comment there). Empty = refuse, never extract blind.
+    import hashlib as _hashlib
+    import os as _os
+    expected = _os.environ.get("DRIVER_SHA256", "").strip().lower()
+    if not expected:
+        print(f"host_incompatible: refusing to extract NVIDIA driver {driver} "
+              "without DRIVER_SHA256 (set it to the published sha256 of "
+              f"NVIDIA-Linux-x86_64-{driver}.run)", file=sys.stderr)
+        sys.exit(3)
+    digest = _hashlib.sha256()
+    with open(pkg, "rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    actual = digest.hexdigest()
+    if actual != expected:
+        print(f"host_incompatible: driver package sha256 mismatch "
+              f"(got {actual}, want {expected})", file=sys.stderr)
+        sys.exit(3)
+    print(f"[gpu-acceptance-remote] driver package sha256 ok: {actual[:16]}…",
+          flush=True)
     extract = tmp / "pkg"
     proc = subprocess.run(
         ["sh", str(pkg), "--extract-only", "--target", str(extract)],
@@ -365,20 +388,25 @@ def main():
         sys.exit(3)
     provision_nvidia_icd()
     # uv itself: system pip + Aliyun mirror first (infra/autodl/bootstrap.bash
-    # pattern; astral.sh is outside the academic-proxy host list, so the
-    # astral install script is only a fallback). `uv python install` pulls
-    # CPython from GitHub releases, which IS proxy-covered, so that step
-    # sources /etc/network_turbo when present (guarded: a missing file must
-    # not abort the install). Aliyun pip steps stay direct.
-    run("bash", "-c",
-        "command -v uv >/dev/null || python3 -m pip install -q "
-        "--index-url https://mirrors.aliyun.com/pypi/simple "
-        "--trusted-host mirrors.aliyun.com uv || "
-        "curl -fsSL https://astral.sh/uv/install.sh | sh")
+    # pattern). `uv python install` pulls CPython from GitHub releases, which
+    # IS proxy-covered, so that step sources /etc/network_turbo when present
+    # (guarded: a missing file must not abort the install). Aliyun pip steps
+    # stay direct. No curl|sh fallback: piping a network fetch straight into
+    # a shell hides what ran — fail fast with install instructions instead.
+    proc = subprocess.run(
+        ["bash", "-c",
+         "command -v uv >/dev/null || python3 -m pip install -q "
+         "--index-url https://mirrors.aliyun.com/pypi/simple "
+         "--trusted-host mirrors.aliyun.com uv"],
+        capture_output=True, text=True)
+    if proc.returncode != 0:
+        print("host_incompatible: uv is not installed and the pip install of uv "
+              "failed; install uv by hand (https://docs.astral.sh/uv/getting-started/installation/) "
+              "and re-run the kit", file=sys.stderr)
+        sys.exit(3)
     run("bash", "-c",
         "export PATH=\"$HOME/.local/bin:$PATH\"; "
         "if [ -f /etc/network_turbo ]; then source /etc/network_turbo >/dev/null 2>&1; fi; "
-        "command -v uv >/dev/null || { echo 'uv install failed' >&2; exit 1; }; "
         "uv python install 3.12 && uv venv --python 3.12 /root/gpu-acceptance/.venv")
     run(".venv/bin/python", "--version")
     run("bash", "-c", "export PATH=\"$HOME/.local/bin:$PATH\" && "

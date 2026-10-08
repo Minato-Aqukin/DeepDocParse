@@ -37,11 +37,11 @@ _RUNTIME_PROBE_PATH = {
 def _probe_path(entry, fallback: str) -> str:
     """**只在条目显式声明了 runtime 时才查表**，否则用段名的缺省路径。
 
-    不能用 engines.runtime_of()：那是**解析引擎**的助手，留空时默认返回
-    "mineru-api" —— 拿它去问 vqa/embedding 条目，会把它们的探针路径
-    全改成 /health，把一整排健康的 OpenAI 运行时报成 down。
-    段名的缺省值本来就是对的，只有"段名猜不准"的条目（vlm-ocr 挂在
-    parse_engines 段却说 OpenAI 协议）才需要 runtime 来纠正。
+    故意不用 engines.runtime_of()：那是**解析引擎**的选路助手，留空返回 ""、
+    由 resolve 判配置错 —— 它答的是"用哪个适配器说话"，不是"去哪个路径探活"。
+    探针路径按"段名缺省 + runtime 纠正"来：段名的缺省值本来就是对的，
+    只有"段名猜不准"的条目（vlm-ocr 挂在 parse_engines 段却说 OpenAI 协议）
+    才需要 runtime 来纠正。
     """
     runtime = getattr(entry, "runtime", "") or ""
     return _RUNTIME_PROBE_PATH.get(runtime, fallback)

@@ -31,7 +31,7 @@
 | `chat.bash` | 起通用指令模型（抽取线）。不起它 `/v1/extract` 用不了 |
 | `verify.bash` | **别跳过**。两分钟，专抓四处不会报错的失效 |
 | `e2e-llm.bash` | 真机全链路：解析 → 出处 bbox → 抽取 → 视觉核对 |
-| `web.bash` | **Web 侧全栈**（PG + MinIO + Redis + gateway + arq worker + 后端 + 前端）。`deploy/docker.bash` 要 docker，这里用不了 |
+| `stack.bash` | **应用侧全栈**（PG + MinIO + Redis + control-api + corpus-api/worker + gateway/worker + mcp + nginx）。取代合仓前的 `web.bash`（已删除；那份按两个仓库并列的旧布局写，已失效） |
 | `embed.bash` + `embed_shim.py` | bge-m3 的 CPU `/v1/embeddings`。**TEI 的替身，不是等价物** —— 不起它索引会失败、检索退 BM25（可见降级） |
 | `chat-template-deepseek-ocr2.jinja` | 模型自己没带 chat template，不给就每个请求 400 |
 | `../../models.autodl.yaml` | 配套注册表（endpoint 全是回环地址） |

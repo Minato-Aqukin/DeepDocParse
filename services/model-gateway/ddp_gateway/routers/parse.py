@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from ddp_gateway.auth import require_service_token
 from ddp_gateway.config import settings
 from ddp_gateway.errors import APIError
+from ddp_core.fetch_policy import FetchNotAllowedError, FileTooLargeError
 from ddp_gateway.services.engines import resolve as resolve_engine
 from ddp_gateway.services.mineru_client import MineruTaskNotFound
 
@@ -47,6 +48,12 @@ def _doc_hash(file_url: str, doc_id: str | None = None) -> str:
 
 @router.post("/parse", status_code=202)
 async def submit_parse(req: ParseRequest, request: Request):
+    # 回调只发往 CALLBACK_ALLOWED_BASE，空基座 = 全部拒绝
+    # （settings.callback_permitted 已 fail closed）。callback_url 原样落库（含 query），
+    # 不做归一化 —— 归一化会改签名参数，见 ddp_core.fetch_policy 的"query 不透明"约定。
+    if req.callback_url and not settings.callback_permitted(req.callback_url):
+        raise APIError(400, "callback_url 不在允许的回调基座之下（CALLBACK_ALLOWED_BASE）",
+                       "invalid_request_error", "callback_not_allowed")
     state = request.app.state
 
     engines = state.registry.parse_engines
@@ -89,6 +96,12 @@ async def submit_parse(req: ParseRequest, request: Request):
         raise APIError(500, str(exc), "upstream_error", "unknown_runtime")
     try:
         native_task_id = await engine.submit(entry.endpoint, req.file_url, merged_options)
+    except FetchNotAllowedError as exc:
+        # SSRF 封锁：file_url 不是公网可抓地址（私网/元数据/DNS 失败等）
+        raise APIError(400, str(exc), "invalid_request_error", "fetch_not_allowed")
+    except FileTooLargeError as exc:
+        # Content-Length 已超 mineru 上限时一字节都不下，直接 413
+        raise APIError(413, str(exc), "invalid_request_error", "file_too_large")
     except httpx.HTTPError as exc:
         raise APIError(502, f"parse engine unreachable: {exc}", "upstream_error", "engine_error")
 

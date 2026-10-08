@@ -21,7 +21,7 @@ COPY services/control-api/ ./
 RUN go build -trimpath -ldflags="-s -w" -o /out/control-api ./cmd/control-api && \
     go build -trimpath -ldflags="-s -w" -o /out/control-migrate ./cmd/control-migrate
 
-FROM alpine:3.21
+FROM alpine:3.21.8
 # 证书：OIDC 与对象存储都可能走 https
 RUN apk add --no-cache ca-certificates tzdata && \
     adduser -D -u 10001 ddp && \

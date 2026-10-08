@@ -15,6 +15,7 @@ from starlette.background import BackgroundTask
 from ddp_gateway.auth import require_service_token
 from ddp_gateway.config import chat_request_defaults
 from ddp_gateway.errors import APIError
+from ddp_gateway.services.extraction import NO_INSTRUCT, VISION
 
 router = APIRouter(tags=["vqa"], dependencies=[Depends(require_service_token)])
 
@@ -23,6 +24,52 @@ _HOP_BY_HOP = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
     "te", "trailers", "transfer-encoding", "upgrade", "content-length", "host",
 }
+
+
+def _request_has_images(body: dict) -> bool:
+    """OpenAI messages 里有没有 image_url 部件。有图就必须走看得见图的模型。"""
+    try:
+        for message in body.get("messages") or []:
+            content = (message or {}).get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "image_url":
+                        return True
+    except (AttributeError, TypeError):
+        return False
+    return False
+
+
+def _default_chat_model(registry, *, has_images: bool) -> str:
+    """按能力词挑问答缺省：跳过 no_instruct，有图时还要 vision。
+
+    挑不到会遵循指令的条目 -> 400 no_instruct_model（可见失败，不是 200 垃圾答案）。
+    有图却没有 vision 条目 -> 400 vision_unavailable。
+    """
+    section = registry.vqa_models
+    if not section:
+        raise APIError(404, "no VQA model registered (check models.yaml vqa_models)",
+                       "invalid_request_error", "model_not_found")
+    usable = {n: e for n, e in section.items()
+              if NO_INSTRUCT not in (e.capabilities or [])}
+    if not usable:
+        raise APIError(400,
+                       "no instruct-capable chat model registered "
+                       "(vqa_models 全是 no_instruct 的 OCR 专用模型)",
+                       "invalid_request_error", "no_instruct_model")
+    if has_images:
+        usable = {n: e for n, e in usable.items()
+                  if VISION in (e.capabilities or [])}
+        if not usable:
+            raise APIError(400,
+                           "no vision-capable chat model registered for image input",
+                           "invalid_request_error", "vision_unavailable")
+    try:
+        name, _ = registry.default_of(usable)
+    except LookupError:
+        raise APIError(404, "no VQA model registered (check models.yaml vqa_models)",
+                       "invalid_request_error", "model_not_found")
+    return name
 
 
 @router.post("/chat/completions")
@@ -39,11 +86,9 @@ async def chat_completions(request: Request):
 
     registry = state.registry
     model = body.get("model")
+    has_images = _request_has_images(body)
     if not model:
-        if not registry.vqa_models:
-            raise APIError(404, "no VQA model registered (check models.yaml vqa_models)",
-                           "invalid_request_error", "model_not_found")
-        model, _ = registry.default_of(registry.vqa_models)
+        model = _default_chat_model(registry, has_images=has_images)
         body["model"] = model
     entry = registry.vqa_models.get(model)
     if entry is None:
@@ -51,7 +96,9 @@ async def chat_completions(request: Request):
 
     body = {**chat_request_defaults(entry.options), **body}
 
-    # 并发上限：满载快速失败（挡洪峰；真正的推理排队在运行时自己的 batch 里）
+    # 并发上限：满载快速失败（挡洪峰；真正的推理排队在运行时自己的 batch 里）。
+    # locked() 与 acquire() 之间没有 await：asyncio 单线程里 locked() 为假时
+    # acquire() 走同步快路径立即拿到 permit，不存在竞态，也不会排队。
     sem: asyncio.Semaphore = state.vqa_semaphore
     if sem.locked():
         raise APIError(429, "VQA concurrency limit reached, retry later",

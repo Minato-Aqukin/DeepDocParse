@@ -42,19 +42,44 @@ services:
 
   # ---- 解析平面：router + N 个 vlm worker ----
   mineru-router:
-    image: mineru:3.4.4
+    # 新机器直接从 infra/images/mineru.Dockerfile 现编（版本钉在那一处）；
+    # image 名同时是本地构建缓存的 tag。
+    build:
+      context: ../..
+      dockerfile: infra/images/mineru.Dockerfile
+    image: ddp-mineru:3.4.4
     command: mineru-router --host 0.0.0.0 --port 8000   # TODO(M4b): worker 发现参数按官方文档，需服务器实测
     # models.yaml: parse_engines.mineru.endpoint -> http://mineru-router:8000
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10m
 
   mineru-worker-0:
-    image: mineru:3.4.4
+    build:
+      context: ../..
+      dockerfile: infra/images/mineru.Dockerfile
+    image: ddp-mineru:3.4.4
     command: mineru-api --host 0.0.0.0 --port 8000      # vlm 后端（vllm-engine）
     environment: { CUDA_VISIBLE_DEVICES: "0" }
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10m
     deploy: *gpu
 
   # 加卡 = 复制一段
   # mineru-worker-1:
-  #   image: mineru:3.4.4
+  #   build:
+  #     context: ../..
+  #     dockerfile: infra/images/mineru.Dockerfile
+  #   image: ddp-mineru:3.4.4
   #   command: mineru-api --host 0.0.0.0 --port 8000
   #   environment: { CUDA_VISIBLE_DEVICES: "1" }
   #   deploy: *gpu
@@ -179,6 +204,13 @@ services:
     environment:
       CUDA_VISIBLE_DEVICES: "0"
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30m
     deploy: *gpu
 
   # ---- v2 (M4)：embedding（models.yaml embedding_models 已启用） ----
@@ -192,6 +224,14 @@ services:
     volumes:
       - ../../models/bge-m3:/data/bge-m3:ro
     environment: { CUDA_VISIBLE_DEVICES: "0" }
+    healthcheck:
+      # TEI 的 /health 在模型加载完之前 503；start_period 给足 10 分钟下权重+加载。
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10m
     deploy: *gpu
 
   rerank:
@@ -209,6 +249,13 @@ services:
     volumes:
       - ../../models/bge-reranker-v2-m3:/data/bge-reranker-v2-m3:ro
     environment: { CUDA_VISIBLE_DEVICES: "0" }
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10m
     deploy: *gpu
 
 volumes:

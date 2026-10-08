@@ -46,3 +46,15 @@ async def test_models_vision_default_matches_extraction_and_hides_credentials(
         assert isinstance(entry["default"], bool)
         assert set(entry) <= {"id", "object", "owned_by", "capabilities", "default", "transcribe_prompt"}
     assert "private-" not in json.dumps(body)
+
+
+def test_empty_runtime_fails_fast():
+    """没写 runtime 就是配置错 —— resolve 直接 LookupError，不静默按 mineru 协议说话。"""
+    from ddp_gateway.services.engines import resolve, runtime_of
+
+    class Entry:
+        runtime = ""
+
+    assert runtime_of(Entry()) == ""
+    with pytest.raises(LookupError):
+        resolve(Entry(), mineru_client=None, http=None)

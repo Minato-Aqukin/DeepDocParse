@@ -58,6 +58,7 @@ parse_engines:
     endpoint: "http://mineru:8000"
     default: true
     runtime: mineru-api          # 用哪个适配器说话（见 gateway/app/services/engines.py）
+    capabilities: [parse]
     # 引擎默认选项（请求方 options 可覆盖）：
     # dev 镜像只内置 pipeline 模型（8GB 卡）；prod vlm 后端时改 backend 并删本行注释
     options:

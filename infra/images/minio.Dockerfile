@@ -24,7 +24,7 @@ RUN for i in 1 2 3; do \
       echo "go install 第 $i 次失败，重试"; sleep 5; \
     done && /out/minio --version
 
-FROM alpine:3.21
+FROM alpine:3.21.8
 RUN apk add --no-cache ca-certificates
 COPY --from=build /out/minio /usr/bin/minio
 # 以 root 跑，与原官方镜像一致：已有的 miniodata 卷是它按 root 写的

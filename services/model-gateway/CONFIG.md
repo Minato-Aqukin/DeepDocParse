@@ -18,7 +18,7 @@
 语料 API 的 `CHAT_URL` 留空、`CHAT_MODEL` 选对应注册表条目时，问答和联邦 Wiki
 共享此网关边界；显式直连 `CHAT_URL` 绕过注册表，模板策略须由所接运行时配置。
 
-共 **21** 项。
+共 **25** 项。
 
 ## 通用
 
@@ -49,6 +49,15 @@
 | `EXTRACT_CONCURRENCY` | `int` | `4` | 一次抽取里并发跑多少个字段。字段之间互不依赖，串行跑一个 30 字段的 schema 要等半分钟；但也不能敞开 —— 上游是同一个模型运行时，打满只会一起变慢 |
 | `EXTRACT_VERIFY` | `bool` | `False` | 出处一致性核对：裁出区域图让视觉模型原样抄一遍，与块文本比对（沿用问答平面 A4）。 请求方可用 options.verify 覆盖。没有 file_url 或未注册 VQA 模型时打 vision_unavailable |
 | `EXTRACT_MISMATCH_THRESHOLD` | `float` | `0.55` | 抄写相似度低于它判定解析与原图对不上。与 Web 层 qa_parse_mismatch_threshold 同源。  **2026-08-25 在 4090D + DeepSeek-OCR-2 上标定过**（此前是没有依据的 0.35）： 一致组（块图 vs 自己的文本）  n=10，全部 1.000 不一致组（块图 vs 别人的文本）n=90，p95=0.382，max=0.643 用旧的 0.35 会放过 5/90 个**该报的不一致**；脚本建议取两组中点 0.69。  这里取 **0.55** 而不是 0.69：标定用的是 tests/fixtures/contract.pdf —— born-digital、英文、单栏，是最容易的一类，一致组才会齐刷刷 1.000。 扫描件/中文/多栏上抄写保真度一定往下掉，阈值定太高会把好出处打成"存疑"， 而这两处的既定取向是**宁可漏报不要误报**（误报比不报更伤信任）。  换文档类型前重标一次： python scripts/calibrate_verify_threshold.py --pdf <你的文档> \ --endpoint http://127.0.0.1:18001 --model deepseek-ocr-2 \ --models-config models.autodl.yaml |
+
+## 回调与出站抓取
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `CALLBACK_ALLOWED_BASE` | `str` | `''` | 回调只发往这个基座（回调带服务凭据）。空 = 拒绝一切 callback_url（fail closed）； 根路径基座同样拒绝 —— 它会把整台主机的所有端点都交给带凭据的回调。 corpus-api 内部 ingest 传 {public_base_url}/internal/parse-callback， compose/autodl 把它配成 corpus-api 的内网基座（如 http://corpus-api:8081/internal/）。 |
+| `MINERU_MAX_BYTES` | `int` | `200 * 1024 * 1024` | mineru 转传的文件字节上限（Content-Length 见超即 413，一字节都不下载）。borndigital 的上限见 engines。 |
+| `FETCH_ALLOW_REDIRECTS` | `bool` | `False` | 出站抓取缺省不跟随重定向（防 SSRF 跳转到内网）。True = 手工逐跳、每跳重验 目的地策略、至多 3 跳，且永不转发 Authorization（gateway 的出站抓取本来就不带它）。 判据见 `ddp_core.fetch_policy`，这里只装配配置快照。 |
+| `FETCH_TRUSTED_BASE` | `str` | `''` | 受信内部回源基座（防 SSRF，逗号分隔可配多个）。url 受信当且仅当 scheme+host+port 一致、路径按段对齐落在基座路径之下；根路径基座不算受信。 受信不传染：重定向的每一跳也要落在登记的基座之下。稳定文件 URL 的链是 /files/{token} -> 对象存储内网预签名，两站都要登记，例如 http://control-api:8080/files/,http://minio:9000/deepdocparse/。 判据见 `ddp_core.fetch_policy`。 |
 | `ALLOW_INSECURE_DEFAULTS` | `bool` | `False` | 只有明确知道自己在做什么才打开（一次性容器、CI）。生产打开等于没有鉴权 |
 
 <!-- 由 scripts/gen_config_docs.py 生成，请勿手改 -->

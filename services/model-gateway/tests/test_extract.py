@@ -36,6 +36,20 @@ GOOD_SCHEMA = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch):
+    """与 test_contract.py 同一固定 DNS 映射：目的地策略做真实 DNS，测试域解析到公网 IP。
+
+    HTTP 层仍由 respx 拦截；要断言 SSRF 拒绝的用例自己再覆写 getaddrinfo。
+    """
+    import socket as _socket
+
+    monkeypatch.setattr(
+        _socket, "getaddrinfo",
+        lambda host, port, family=0, type=0, proto=0, flags=0:
+        [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))])
+
+
 # --------------------------------------------------------------------- schema 校验
 
 @pytest.mark.parametrize("schema, hint", [
@@ -69,6 +83,38 @@ async def test_submit_requires_a_document(client):
     resp = await client.post("/v1/extract", json={"schema": GOOD_SCHEMA})
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "missing_document"
+
+
+async def test_submit_rejects_callback_outside_allowlist(client, monkeypatch):
+    """抽取平面与解析平面同一道回调闸：callback_url 不在基座之下 -> 400。"""
+    from ddp_gateway.config import settings
+
+    monkeypatch.setattr(settings, "callback_allowed_base", "http://corpus-api:8081/internal/")
+    resp = await client.post("/v1/extract", json={
+        "schema": GOOD_SCHEMA, "doc_hash": "a" * 64,
+        "callback_url": "http://evil.example.com/hook"})
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"]["code"] == "callback_not_allowed"
+
+
+async def test_submit_empty_callback_base_denies_all(client, app_state, monkeypatch):
+    """空基座 = 拒绝一切 callback_url；query 原样落库。"""
+    from ddp_gateway.config import settings
+
+    monkeypatch.setattr(settings, "callback_allowed_base", "")
+    resp = await client.post("/v1/extract", json={
+        "schema": GOOD_SCHEMA, "doc_hash": "b" * 64,
+        "callback_url": "http://corpus-api:8081/internal/extract-callback"})
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "callback_not_allowed"
+
+    monkeypatch.setattr(settings, "callback_allowed_base", "http://corpus-api:8081/internal/")
+    cb = "http://corpus-api:8081/internal/extract-callback?task_id=abc&sig=x"
+    resp = await client.post("/v1/extract", json={
+        "schema": GOOD_SCHEMA, "doc_hash": "b" * 64, "callback_url": cb})
+    assert resp.status_code == 202, resp.text
+    task = await app_state.task_store.get_extract(resp.json()["task_id"])
+    assert task["callback_url"] == cb
 
 
 # --------------------------------------------------------------------- 值转换

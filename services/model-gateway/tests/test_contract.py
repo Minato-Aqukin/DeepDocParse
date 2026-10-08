@@ -67,12 +67,29 @@ def _mock_upstream() -> dict:
     return routes
 
 
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch):
+    """目的地策略做真实 DNS：把测试域钉在公网 IP，不依赖沙箱/CI 的解析结果。
+
+    HTTP 层仍由 respx 拦截。要断言 SSRF 拒绝的用例在自己体内再覆写 getaddrinfo
+    （测试体的 monkeypatch 后执行，会覆盖这里的固定 DNS 映射）。
+    """
+    import socket as _socket
+
+    monkeypatch.setattr(
+        _socket, "getaddrinfo",
+        lambda host, port, family=0, type=0, proto=0, flags=0:
+        [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))])
+
+
 @respx.mock
 async def test_parse_lifecycle(client, worker_ctx, app_state, monkeypatch):
     """提交 -> 202 + task_id -> 轮询至 succeeded -> result 含 markdown/layout_json/images。
     断言 layout_json 中块带页码与 bbox（ask_document 与 v2 索引依赖此结构）。"""
     monkeypatch.setattr(settings, "poll_initial_delay", 0.01)
     monkeypatch.setattr(settings, "poll_max_delay", 0.02)
+    # 回调基座默认是空（拒绝一切），本用例的回调要放行就显式配（基座必须带路径）
+    monkeypatch.setattr(settings, "callback_allowed_base", "http://backend/callback")
     routes = _mock_upstream()
 
     # 1. 受理（不传 options：backend=pipeline 应来自注册表引擎默认，验证合并逻辑）
@@ -300,9 +317,17 @@ SSE_BODY = (
 
 @respx.mock
 async def test_chat_completions_openai_compat(client, app_state):
-    """image_url + text 的标准 OpenAI 请求可用；流式 SSE 原样透传；未知 model -> 404。"""
-    endpoint = app_state.registry.vqa_models["deepseek-ocr-2"].endpoint  # 跟随 models.yaml
-    upstream = respx.post(f"{endpoint}/v1/chat/completions").mock(
+    """image_url + text 的标准 OpenAI 请求可用；流式 SSE 原样透传；未知 model -> 404。
+
+    省略 model 时按能力词挑缺省 —— 纯文本跳过 no_instruct 的 OCR 专用模型
+    （deepseek-ocr-2 是 default 但只会抄字），有图时还要 vision。
+    """
+    ocr_endpoint = app_state.registry.vqa_models["deepseek-ocr-2"].endpoint  # 跟随 models.yaml
+    instruct_endpoint = app_state.registry.vqa_models["qwen3-4b-instruct"].endpoint
+    ocr_upstream = respx.post(f"{ocr_endpoint}/v1/chat/completions").mock(
+        return_value=Response(200, content=SSE_BODY, headers={"content-type": "text/event-stream"})
+    )
+    instruct_upstream = respx.post(f"{instruct_endpoint}/v1/chat/completions").mock(
         return_value=Response(200, content=SSE_BODY, headers={"content-type": "text/event-stream"})
     )
 
@@ -320,21 +345,31 @@ async def test_chat_completions_openai_compat(client, app_state):
     assert resp.headers["content-type"] == "text/event-stream"
     assert resp.content == SSE_BODY
 
-    # 2. 省略 model -> 注入注册表 default 后转发
+    # 2. 纯文本省略 model -> 跳过 no_instruct 的 OCR 模型，落到指令模型
     resp = await client.post("/v1/chat/completions", json={"messages": []})
     assert resp.status_code == 200
-    forwarded = json.loads(upstream.calls.last.request.content)
-    assert forwarded["model"] == "deepseek-ocr-2"
+    forwarded = json.loads(instruct_upstream.calls.last.request.content)
+    assert forwarded["model"] == "qwen3-4b-instruct"
+
+    # 2b. 有图省略 model -> 注册表里没有 vision+instruct 的条目 -> 400 vision_unavailable
+    resp = await client.post("/v1/chat/completions", json={
+        "messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+            {"type": "text", "text": "图里写了什么？"},
+        ]}],
+    })
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "vision_unavailable"
 
     # 3. 未知 model -> OpenAI 风格 404，不打上游
-    before = upstream.call_count
+    before = ocr_upstream.call_count + instruct_upstream.call_count
     resp = await client.post("/v1/chat/completions", json={"model": "nope", "messages": []})
     assert resp.status_code == 404
     err = resp.json()["error"]
     assert err["type"] == "invalid_request_error" and err["code"] == "model_not_found"
-    assert upstream.call_count == before
+    assert ocr_upstream.call_count + instruct_upstream.call_count == before
 
-    # 4. 并发满载 -> 429 快速失败
+    # 4. 并发满载 -> 429 快速失败（locked() 预检 + 同步快路径 acquire，中间无 await 故无 TOCTOU）
     import asyncio
 
     from ddp_gateway.main import app as _app
@@ -346,6 +381,41 @@ async def test_chat_completions_openai_compat(client, app_state):
     resp = await client.get("/v1/models")
     assert resp.status_code == 200
     assert [m["id"] for m in resp.json()["data"]] == ["deepseek-ocr-2", "qwen3-4b-instruct"]
+
+
+@respx.mock
+async def test_chat_default_needs_vision_model_for_images(client, app_state):
+    """有图缺省需要 vision+instruct 条目：补一个通用视觉模型后同请求应 200 并落到它身上。"""
+    from ddp_gateway.config import ModelEntry
+
+    app_state.registry.vqa_models["qwen3-vl"] = ModelEntry(
+        endpoint="http://vqa-qwen:8000", capabilities=["vision", "instruct"])
+    route = respx.post("http://vqa-qwen:8000/v1/chat/completions").mock(
+        return_value=Response(200, content=SSE_BODY, headers={"content-type": "text/event-stream"})
+    )
+    resp = await client.post("/v1/chat/completions", json={
+        "messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+            {"type": "text", "text": "图里写了什么？"},
+        ]}],
+    })
+    assert resp.status_code == 200, resp.text
+    assert json.loads(route.calls.last.request.content)["model"] == "qwen3-vl"
+
+
+async def test_chat_default_all_no_instruct_is_400(client, app_state):
+    """注册表只剩 OCR 专用模型时，纯文本缺省如实 400 no_instruct_model，不拿它硬答。"""
+    from ddp_gateway.config import ModelEntry
+
+    app_state.registry.vqa_models.clear()
+    app_state.registry.vqa_models["ocr-only"] = ModelEntry(
+        endpoint="http://ocr:8000", capabilities=["vision", "no_instruct"])
+    resp = await client.post("/v1/chat/completions", json={"messages": []})
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"]["code"] == "no_instruct_model"
+    # 同一判据的单元形态：空段上 default_of 抛 LookupError（路由侧映射起点）
+    with pytest.raises(LookupError):
+        app_state.registry.default_of({})
 
 
 
@@ -738,3 +808,110 @@ async def test_parse_empty_registry_reports_unknown_engine(client, app_state):
     resp = await client.post("/v1/parse", json={"file_url": FILE_URL})
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "unknown_engine"
+
+
+@respx.mock
+async def test_parse_rejects_callback_outside_allowlist(client, app_state, monkeypatch):
+    """callback_url 不在 CALLBACK_ALLOWED_BASE 之下 -> 400。"""
+    monkeypatch.setattr(settings, "callback_allowed_base", "http://corpus-api:8081/internal/")
+    resp = await client.post("/v1/parse", json={
+        "file_url": FILE_URL, "callback_url": "http://evil.example.com/hook"})
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"]["code"] == "callback_not_allowed"
+
+
+@respx.mock
+async def test_parse_empty_callback_base_denies_all(client, app_state, monkeypatch):
+    """空基座 = 拒绝一切 callback_url（fail closed），但不传回调不受影响。"""
+    monkeypatch.setattr(settings, "callback_allowed_base", "")
+    resp = await client.post("/v1/parse", json={
+        "file_url": FILE_URL, "callback_url": "http://corpus-api:8081/internal/parse-callback"})
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "callback_not_allowed"
+    # 不传 callback_url 的受理不受影响（仍需 mock 上游下载；DNS 由文件头 autouse 固定映射保持在公网 IP）
+    _mock_upstream()
+    resp = await client.post("/v1/parse", json={"file_url": FILE_URL})
+    assert resp.status_code == 202, resp.text
+
+
+@respx.mock
+async def test_parse_root_callback_base_denies_all(client, app_state, monkeypatch):
+    """根路径基座会把整台主机（含它的管理端点）都交给带服务凭据的回调：一律拒绝。"""
+    monkeypatch.setattr(settings, "callback_allowed_base", "http://corpus-api:8081/")
+    resp = await client.post("/v1/parse", json={
+        "file_url": FILE_URL, "callback_url": "http://corpus-api:8081/internal/parse-callback"})
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "callback_not_allowed"
+
+
+@respx.mock
+async def test_parse_callback_query_string_preserved_verbatim(client, app_state, monkeypatch):
+    """callback_url 原样落库（含 query，不归一化）—— 验签参数不能被改写。"""
+    monkeypatch.setattr(settings, "callback_allowed_base", "http://corpus-api:8081/internal/")
+    _mock_upstream()
+    cb = "http://corpus-api:8081/internal/parse-callback?task_id=abc&sig=x"
+    resp = await client.post("/v1/parse", json={"file_url": FILE_URL, "callback_url": cb})
+    assert resp.status_code == 202, resp.text
+    task = await app_state.task_store.get(resp.json()["task_id"])
+    assert task["callback_url"] == cb
+
+
+async def test_worker_skips_callback_when_base_tightened(app_state):
+    """纵深防御：受理后基座收紧，worker 跳过回调（不发 SERVICE_TOKEN），只记日志。"""
+    import io
+    from contextlib import redirect_stdout
+
+    from ddp_gateway.config import settings as cfg
+    from ddp_gateway.worker.tasks import _notify_callback
+
+    old = cfg.callback_allowed_base
+    cfg.callback_allowed_base = "http://corpus-api:8081/internal/"
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            await _notify_callback(app_state.http,
+                                   {"callback_url": "http://evil.example.com/hook"},
+                                   "t-1", "succeeded")
+        assert "not permitted" in buf.getvalue()
+    finally:
+        cfg.callback_allowed_base = old
+
+
+@respx.mock
+async def test_parse_private_file_url_is_400_not_proxied(client, app_state, monkeypatch):
+    """SSRF：私网 file_url 在请求路径即 400 fetch_not_allowed，不打上游。
+
+    文件头 autouse 固定映射把测试域解析到公网 IP，这里再覆写成回环，断言目的地策略拒绝。
+    """
+    import socket as _socket
+
+    monkeypatch.setattr(
+        _socket, "getaddrinfo",
+        lambda host, port, family=0, type=0, proto=0, flags=0:
+        [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))])
+    resp = await client.post("/v1/parse", json={"file_url": FILE_URL})
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"]["code"] == "fetch_not_allowed"
+
+
+@respx.mock
+async def test_parse_oversized_upload_is_413_without_download(client, app_state, monkeypatch):
+    """Content-Length 超 mineru 上限 -> 413，一字节都不下载。
+
+    DNS 由文件头 autouse 固定映射解析到公网 IP（目的地检查照常执行并通过），HTTP 层由 respx 拦截。
+    """
+    from ddp_gateway.config import settings as cfg
+
+    monkeypatch.setattr(cfg, "mineru_max_bytes", 1024)
+    file_route = respx.get(FILE_URL).mock(
+        return_value=Response(200, content=b"%PDF-1.4 fake"))
+    submit_route = respx.post(f"{MINERU}/tasks").mock(
+        return_value=Response(202, json={"task_id": "m-1", "status": "pending"}))
+    # 声明 100MB 的响应：fetch_policy 见 Content-Length 即拒，不读 body
+    file_route.mock(return_value=Response(
+        200, content=b"%PDF-1.4 fake", headers={"Content-Length": str(100 * 1024 * 1024)}))
+    resp = await client.post("/v1/parse", json={"file_url": FILE_URL})
+    assert resp.status_code == 413, resp.text
+    assert resp.json()["error"]["code"] == "file_too_large"
+    assert file_route.call_count == 1, "必须发起请求才能看到 Content-Length"
+    assert not submit_route.called, "超限时不得再向 mineru 转传"
