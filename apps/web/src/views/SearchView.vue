@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { searchApi } from '@/api'
 import StatusTag from '@/components/common/StatusTag.vue'
-import { DEFAULT_WARN_BELOW, similarityText } from '@/constants/status'
+import { DEFAULT_WARN_BELOW, degradedLabelOf, similarityText } from '@/constants/status'
 import type { SearchHit, SearchResult } from '@/types/api'
 import { formatPageLocator } from '@/utils/page-locator'
 
@@ -21,12 +21,26 @@ const failed = ref(false)
 let generation = 0
 onBeforeUnmount(() => { generation++ })
 
+/**
+ * 命中直达工作台的稳定定位：(parse_job_id, seq) 不随 reindex 重铸，
+ * chunk_id 会。WorkbenchView 的 focusRequestedSource 优先用 seq 找块，
+ * 找不到（旧索引/块已变）再回退到 page。evidence_id 供将来直连证据详情。
+ */
 function target(group: SearchResult['groups'][number], hit?: SearchHit) {
-  return { name: 'workbench', params: { id: group.document_id }, query: {
-    resource_id: group.resource_id || undefined, version_id: group.source_version_id || undefined,
-    job: group.parse_revision, chunk: hit?.chunk_id,
-    page: hit ? String(hit.page_idx + 1) : undefined,
-  } }
+  const query: Record<string, string> = {
+    ...(group.resource_id ? { resource_id: group.resource_id } : {}),
+    ...(group.source_version_id ? { version_id: group.source_version_id } : {}),
+    ...(group.parse_revision ? { job: group.parse_revision } : {}),
+  }
+  if (hit) {
+    query.page = String(hit.page_idx + 1)
+    query.chunk = hit.chunk_id
+    if (hit.seq !== undefined && hit.seq !== null) query.seq = String(hit.seq)
+    if (hit.parse_job_id) query.parse_job = hit.parse_job_id
+    if (hit.evidence_id) query.evidence = hit.evidence_id
+    if (hit.page_size) query.page_size = hit.page_size.join('x')
+  }
+  return { name: 'workbench', params: { id: group.document_id }, query }
 }
 
 async function loadResults(query: string) {
@@ -73,7 +87,10 @@ watch(() => route.query.q, query => {
     <el-button type="primary" :loading="loading" @click="run">搜索</el-button>
   </div>
 
-  <!-- 降级要说出来：只走了关键词路却装作语义检索还在工作，就是静默降级 -->
+  <!-- 降级要说出来：只走了关键词路却装作语义检索还在工作，就是静默降级。
+    前两条是高频码，给定制文案；其余一切码（vision_unavailable、upstream_error、
+    keyword_unavailable……）走通用分支，用契约生成的 degradedLabelOf 渲染 ——
+    枚举加新值时这里不用改，未知值也有"未知取值（xxx）"兜底。 -->
   <el-alert
     v-if="degraded === 'embedding_unavailable'"
     type="warning"
@@ -84,6 +101,10 @@ watch(() => route.query.q, query => {
 
   <el-alert v-if="degraded === 'resource_index_unavailable'" type="warning" :closable="false"
     title="资源尚无可用的固定版本索引，请查看解析任务状态。" />
+
+  <el-alert v-if="degraded && degraded !== 'embedding_unavailable' && degraded !== 'resource_index_unavailable'"
+            type="warning" :closable="false" class="degraded"
+            :title="degradedLabelOf(degraded) ?? degraded" />
 
   <el-alert v-if="failed" type="error" :closable="false" title="检索失败，请重试。" />
   <el-empty v-if="!groups.length && !loading && !failed"

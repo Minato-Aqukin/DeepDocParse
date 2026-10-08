@@ -48,8 +48,11 @@ let panning = false
 let pointerStart = { x: 0, y: 0 }
 let transformStart = { x: 0, y: 0 }
 
-function css(name: string, fallback: string) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+/** dist 设计令牌直读：--ddp-cite/--ddp-line-2/--ddp-font/--ddp-panel/--ddp-ink/
+ * --ddp-ink-2 在 ddp-tokens.css 里都有定义，不写硬编码 fallback —— 写了就是
+ * "看起来有主题，实际走死色"，深色模式直接失效。 */
+function css(name: string) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 }
 
 function rebuild() {
@@ -116,7 +119,7 @@ function draw() {
     const active = !neighbors || neighbors.has((link.source as NodeDatum).id)
       && neighbors.has((link.target as NodeDatum).id)
     ctx.globalAlpha = active ? 0.72 : 0.08
-    ctx.strokeStyle = link.row.unsupported ? css('--ddp-cite', '#ad2f2f') : css('--ddp-line-strong', '#85817a')
+    ctx.strokeStyle = link.row.unsupported ? css('--ddp-cite') : css('--ddp-line-2')
     ctx.beginPath()
     ctx.moveTo(source.x, source.y)
     ctx.lineTo(target.x, target.y)
@@ -128,9 +131,9 @@ function draw() {
     const radius = node.id === props.selectedEntityId ? 7 : 5
     ctx.globalAlpha = active ? 1 : 0.12
     ctx.fillStyle = node.row.entity_merge_uncertain
-      ? css('--ddp-cite', '#ad2f2f') : css('--ddp-panel', '#fff')
+      ? css('--ddp-cite') : css('--ddp-panel')
     ctx.strokeStyle = node.row.entity_merge_uncertain
-      ? css('--ddp-cite', '#ad2f2f') : css('--ddp-ink', '#25231f')
+      ? css('--ddp-cite') : css('--ddp-ink')
     ctx.lineWidth = node.id === props.selectedEntityId ? 2 : 1
     ctx.beginPath()
     ctx.arc(p.x, p.y, radius, 0, Math.PI * 2)
@@ -138,8 +141,8 @@ function draw() {
     ctx.stroke()
     if (active && (nodes.length < 180 || hovered === node || node.id === props.selectedEntityId)) {
       ctx.globalAlpha = 0.92
-      ctx.fillStyle = css('--ddp-ink-2', '#504d47')
-      ctx.font = `12px ${css('--ddp-font-sans', 'sans-serif')}`
+      ctx.fillStyle = css('--ddp-ink-2')
+      ctx.font = `12px ${css('--ddp-font')}`
       ctx.fillText(node.row.canonical_name.slice(0, 30), p.x + 9, p.y + 4)
     }
   }
@@ -264,7 +267,7 @@ onBeforeUnmount(() => {
 .graph-host { position: relative; min-width: 0; overflow: hidden; border: 1px solid var(--ddp-line); background: var(--ddp-panel); }
 canvas { display: block; touch-action: none; outline: none; }
 canvas:focus-visible { outline: 2px solid var(--ddp-ink); outline-offset: -3px; }
-.reset { position: absolute; top: 10px; right: 10px; min-height: 36px; padding: 0 12px; border: 1px solid var(--ddp-line-strong); background: var(--ddp-panel); color: var(--ddp-ink); cursor: pointer; }
+.reset { position: absolute; top: 10px; right: 10px; min-height: 36px; padding: 0 12px; border: 1px solid var(--ddp-line-2); background: var(--ddp-panel); color: var(--ddp-ink); cursor: pointer; }
 .legend { position: absolute; left: 10px; bottom: 8px; margin: 0; padding: 4px 7px; background: color-mix(in srgb, var(--ddp-panel) 90%, transparent); color: var(--ddp-ink-3); font-size: 11px; }
 .legend span, .legend i { display: inline-block; width: 8px; height: 8px; margin-right: 3px; border: 1px solid var(--ddp-ink); border-radius: 50%; background: var(--ddp-panel); }
 .legend i { margin-left: 8px; border-color: var(--ddp-cite); background: var(--ddp-cite); }

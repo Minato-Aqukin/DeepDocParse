@@ -63,13 +63,14 @@ describe('来源校验', () => {
     expect(checkSourceResponse('anything')).toBe(true)
   })
 
-  it('桌面缺头时通过（旧宿主不带 X-DDP-Source）', () => {
+  it('桌面缺头时丢弃（fail closed：宿主必带 X-DDP-Source）', () => {
     setDesktop({})
     bootSource.value = {
       sourceId: 's1', kind: 'local', label: 'ws', state: 'ready',
       readOnly: false, features: [], active: true, reason: null,
     }
-    expect(checkSourceResponse(null)).toBe(true)
+    expect(checkSourceResponse(null)).toBe(false)
+    expect(checkSourceResponse(undefined)).toBe(false)
   })
 
   it('桌面下头与启动源一致才通过', () => {

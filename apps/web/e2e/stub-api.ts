@@ -18,54 +18,61 @@ export async function stubApi(page: Page): Promise<void> {
   // 而真正的原因只是打桩打得太宽。这一脚已经踩过一次了。
   const isApiCall = (url: URL) => url.pathname.startsWith('/api/')
 
+  // 桌面 fail-closed 来源围栏（`isCurrentSourceResponse` / `checkSourceResponse`）：
+  // 真宿主的每个 /api 响应都带 `X-DDP-Source: <当前源>`（client-host.mjs、
+  // static-ui.mjs 错误分支），缺头/错头一律按串源丢弃。打桩必须带上同一个头，
+  // 否则页面在 e2e 里永远读不到数据 —— 缺的是打桩形状，不是产品行为。
+  const SOURCE_HEADER = { 'X-DDP-Source': 'local-0' }
+
   await page.route(
     (url) => isApiCall(url),
     async (route) => {
       const url = new URL(route.request().url())
       const path = url.pathname
-
       // 顺序有讲究：更具体的路径要排在前面
       if (path.endsWith('/documents/stats/summary')) {
-        return route.fulfill({ json: { documents: 0, pages: 0, askable: 0 } })
+        return route.fulfill({ json: { documents: 0, pages: 0, askable: 0 }, headers: SOURCE_HEADER })
       }
       // 形状必须与 types/api.ts 的 UsageSummary 一致。给错形状的话组件会在
       // 渲染期抛 `Cannot read properties of undefined (reading 'length')` ——
       // 那种红看起来像"用量页坏了"，实际只是打桩形状对不上，一样会误导
       if (path.startsWith('/api/usage')) {
         return route.fulfill({
-          json: { daily: [], by_kind: [], total_pages: 0, total_requests: 0 },
+          json: { daily: [], by_kind: [], total_pages: 0, total_requests: 0 }, headers: SOURCE_HEADER,
         })
       }
       if (path === '/api/knowledge/graph') {
-        return route.fulfill({ json: { graph_version: 'ddp-graph/1', entities: [], edges: [] } })
+        return route.fulfill({ json: { graph_version: 'ddp-graph/1', entities: [], edges: [] }, headers: SOURCE_HEADER })
       }
       if (path === '/api/knowledge/entities') {
-        return route.fulfill({ json: { graph_version: 'ddp-graph/1', entities: [] } })
+        return route.fulfill({ json: { graph_version: 'ddp-graph/1', entities: [] }, headers: SOURCE_HEADER })
       }
-      if (path === '/api/reviews') return route.fulfill({ json: { items: [] } })
+      if (path === '/api/reviews') return route.fulfill({ json: { items: [] }, headers: SOURCE_HEADER })
       // 形状必须是 TaskListPage（federation-tasks-v1.yaml）：落到 `[]` 兜底会让列表页报"格式不兼容"
-      if (path === '/api/v1/tasks') return route.fulfill({ json: { items: [], next_cursor: null } })
-      if (path === '/api/v1/federation/generation-candidates') return route.fulfill({ json: { items: [] } })
-      if (path === '/api/resources') return route.fulfill({ json: { items: [], has_more: false } })
+      if (path === '/api/v1/tasks') return route.fulfill({ json: { items: [], next_cursor: null }, headers: SOURCE_HEADER })
+      if (path === '/api/v1/federation/generation-candidates') return route.fulfill({ json: { items: [] }, headers: SOURCE_HEADER })
+      if (path === '/api/resources') return route.fulfill({ json: { items: [], has_more: false }, headers: SOURCE_HEADER })
       // **形状必须是 SearchResult，不能落到下面那个 `[]` 兜底。** 落下去的话
       // `data.groups` 是 undefined，模板里 `!groups.length` 当场抛，
       // 而**只访问 /search 不搜索是发现不了的**（q 为空时 run() 直接 return）——
       // 一条静默降低覆盖的打桩，正是阶段 8 门禁要盯的那类。
       if (path === '/api/search') {
-        return route.fulfill({ json: { query: url.searchParams.get('q') || '', degraded: null, groups: [] } })
+        return route.fulfill({ json: { query: url.searchParams.get('q') || '', degraded: null, groups: [] }, headers: SOURCE_HEADER })
       }
-      if (path === '/api/wiki') return route.fulfill({ json: [] })
+      if (path === '/api/wiki') return route.fulfill({ json: [], headers: SOURCE_HEADER })
       if (/\/documents\/[^/]+\/result$/.test(path)) {
         return route.fulfill({
           json: {
             document_id: 'demo-id', job_id: 'job-1', filename: 'demo.pdf',
             page_count: 1, markdown: '# 示例\n\n正文', images: [],
           },
+          headers: SOURCE_HEADER,
         })
       }
       if (/\/documents\/[^/]+\/pages$/.test(path)) {
         return route.fulfill({
           json: { document_id: 'demo-id', job_id: 'job-1', page_count: 1, pages: [] },
+          headers: SOURCE_HEADER,
         })
       }
       // SourceUrl 要带 path/mime：WorkbenchView 读的是 `source.data.path`，
@@ -76,6 +83,7 @@ export async function stubApi(page: Page): Promise<void> {
             url: '/files/demo-token', path: '/files/demo-token',
             mime: 'application/pdf',
           },
+          headers: SOURCE_HEADER,
         })
       }
       // 形状照 types/api.ts 的 Profile 来。给错不会崩，但设置页会渲染出
@@ -91,6 +99,7 @@ export async function stubApi(page: Page): Promise<void> {
             role: 'admin', organization_id: 'org-1',
             created_at: new Date().toISOString(),
           },
+          headers: SOURCE_HEADER,
         })
       }
       if (path.endsWith('/api/org')) {
@@ -99,6 +108,7 @@ export async function stubApi(page: Page): Promise<void> {
             id: 'org-1', name: '默认组织', slug: 'default',
             created_at: new Date().toISOString(), member_count: 1,
           },
+          headers: SOURCE_HEADER,
         })
       }
       if (path.endsWith('/api/org/members')) {
@@ -107,9 +117,10 @@ export async function stubApi(page: Page): Promise<void> {
             user_id: 'u-1', username: 'e2e', email: 'e2e@example.com',
             role: 'admin', joined_at: new Date().toISOString(), last_seen_at: null,
           }],
+          headers: SOURCE_HEADER,
         })
       }
-      if (/\/documents\/[^/]+\/versions$/.test(path)) return route.fulfill({ json: [] })
+      if (/\/documents\/[^/]+\/versions$/.test(path)) return route.fulfill({ json: [], headers: SOURCE_HEADER })
       if (/\/documents\/[^/]+$/.test(path)) {
         return route.fulfill({
           json: {
@@ -125,10 +136,11 @@ export async function stubApi(page: Page): Promise<void> {
             // 但组件会走进"没人传过/不能删"的分支，静默把覆盖降下去
             uploaders: ['e2e'], can_delete: true,
           },
+          headers: SOURCE_HEADER,
         })
       }
       // 其余一律给一个空列表；有对象形状的接口必须在上面显式列出。
-      return route.fulfill({ json: [] })
+      return route.fulfill({ json: [], headers: SOURCE_HEADER })
     },
   )
 

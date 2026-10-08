@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 
 import CitationChip from '@/components/ask/CitationChip.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
-import { degradedLabelOf, fieldStatusOf, similarityText } from '@/constants/status'
+import { degradedLabelOf, fieldStatusOf, runStatusOf, similarityText } from '@/constants/status'
 import type { ExtractionItem, FieldResult } from '@/types/api'
 import { formatPageLocator } from '@/utils/page-locator'
 
@@ -69,8 +69,11 @@ function open(item: ExtractionItem, name: string) {
         <template #default="{ row }">
           <div class="doc-cell">
             <span class="filename" :title="row.filename">{{ row.filename }}</span>
-            <StatusTag v-if="row.status !== 'ok'" :label="row.status === 'partial' ? '部分' : '失败'"
-                       :type="row.status === 'partial' ? 'warning' : 'danger'" />
+            <!-- 行状态文案走契约生成的 RUN_STATUS_META（runStatusOf），不手写：
+              手写的"部分"已经跟契约的"部分完成"对不上了。
+              行级 'ok' 不在 run_status 枚举里（行级 ok/批级 succeeded 是两套词），
+              这里只渲染 partial/failed，本来就是 v-if 滤掉 ok 的分支。 -->
+            <StatusTag v-if="row.status !== 'ok'" :meta="runStatusOf(row.status as 'partial' | 'failed')" />
           </div>
           <div v-if="row.degraded" class="degraded">{{ degradedLabelOf(row.degraded) }}</div>
           <div v-if="row.error" class="degraded">{{ row.error }}</div>

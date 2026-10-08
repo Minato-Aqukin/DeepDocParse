@@ -12,7 +12,8 @@ const version = ref('正在读取…')
 const error = ref('')
 
 const updateCommand = 'scripts/update_check.py status --root <安装目录>'
-const applyCommand = 'scripts/update_check.py apply --root <安装目录> --manifest <发布清单> --archive <安装包>'
+const verifyCommand = 'scripts/update_check.py verify --root <安装目录> --manifest <发布清单> --archive <安装包> --allowed-signers <签名者名单>'
+const applyCommand = 'scripts/update_check.py apply --root <安装目录> --manifest <发布清单> --archive <安装包> --allowed-signers <签名者名单>'
 
 async function load() {
   const host = window.ddpDesktop as unknown as {
@@ -44,10 +45,13 @@ onMounted(() => {
     </el-card>
     <el-card shadow="never" class="block">
       <template #header>Linux 更新方式</template>
-      <p>桌面端在 Linux 上没有自动更新器：更新走软件包，先检查，再应用。</p>
+      <p>桌面端在 Linux 上没有自动更新器：更新走软件包，先检查，再校验签名，最后应用。</p>
       <p>检查更新前，请先确认没有进行中的任务（解析、索引、模型下载、联邦任务派发）。</p>
       <p>检查状态：<code class="ddp-mono">{{ updateCommand }}</code></p>
+      <p>校验签名：<code class="ddp-mono">{{ verifyCommand }}</code></p>
       <p>应用更新：<code class="ddp-mono">{{ applyCommand }}</code></p>
+      <p class="muted">--allowed-signers 指向随发布分发的签名者名单（发布锚）：先固定它，再校验、再应用；签名不对直接拒绝。</p>
+      <p class="muted">--allow-unsigned 只接受校验和、不做签名认证，仅限演练使用，正式更新绝不加它。</p>
       <p class="muted">应用更新会在工作区有排队/执行中任务、或模型有未下完的分片时拒绝（除非显式加 --allow-active）。</p>
     </el-card>
   </div>

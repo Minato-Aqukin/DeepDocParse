@@ -480,14 +480,21 @@ onMounted(loadList)
         <template v-if="page">
           <section v-for="(part, i) in page.generated_sections" :key="i" class="section">
             <h2>{{ part.heading }}</h2>
-            <button v-for="sentence in part.sentences" :key="sentence.id" type="button"
-                    class="sentence" :class="{ unsupported: sentence.unsupported }"
-                    @click="selectEvidence(sentence.evidence_ids[0] ?? '', sentence.text)">
+            <!-- 每个 evidence_id 一个按钮（FederatedWikiPanel 同款）：整句只有一个
+              click 位时第 2..N 条引用点不开，只能看不能核。 -->
+            <div v-for="sentence in part.sentences" :key="sentence.id"
+                 class="sentence" :class="{ unsupported: sentence.unsupported }">
               <span>{{ sentence.text }}</span>
+              <span class="cites">
+                <button v-for="(id, n) in sentence.evidence_ids" :key="id" type="button" class="cite"
+                        @click="selectEvidence(id, sentence.text)">
+                  出处 {{ n + 1 }}
+                </button>
+              </span>
               <small v-if="sentence.unsupported">unsupported · 无法指回 bbox</small>
               <small v-else>引用 {{ sentence.evidence_ids.length }} 条</small>
               <small v-if="sentence.conflict_group" class="conflict">冲突组 {{ sentence.conflict_group }} · 与同组说法并列</small>
-            </button>
+            </div>
           </section>
           <section class="section">
             <h2>人工补充 · 未核证</h2>
@@ -648,11 +655,14 @@ main header p, .hint { margin-top: 6px; color: var(--ddp-ink-3); }
 .revision-nav a { color: var(--ddp-ink-2); text-underline-offset: 3px; }
 .section { margin-top: 28px; }
 .section > h2 { margin-bottom: 12px; font-size: 18px; }
-.sentence { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 14px; width: 100%; min-height: 44px; padding: 9px 10px; border: 0; border-left: 2px solid var(--ddp-cite); background: transparent; color: var(--ddp-ink); text-align: left; cursor: pointer; }
-.sentence:hover { background: color-mix(in srgb, var(--ddp-cite) 6%, transparent); }
+.sentence { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 14px; width: 100%; min-height: 44px; padding: 9px 10px; border: 0; border-left: 2px solid var(--ddp-cite); background: transparent; color: var(--ddp-ink); text-align: left; }
 .sentence.unsupported { border-left-color: var(--ddp-danger); }
 .sentence small { color: var(--ddp-cite); white-space: nowrap; }
 .sentence.unsupported small { color: var(--ddp-danger); }
+/* 句内逐条出处按钮：出处红只许出现在这类元素上（准则一）。 */
+.sentence .cites { display: inline-flex; flex-wrap: wrap; gap: 2px 8px; }
+.sentence .cite { border: 0; background: transparent; padding: 0; color: var(--ddp-cite); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.sentence .cite:hover { text-decoration: underline; }
 .evidence { display: grid; align-content: start; gap: 14px; }
 .foreign { display: grid; align-content: start; gap: 12px; }
 .foreign .facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 0; }

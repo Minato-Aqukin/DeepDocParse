@@ -29,8 +29,4 @@ export const knowledgeApi = {
   ) => http.post(`/api/reviews/${targetKind}/${encodeURIComponent(targetId)}`, data),
   split: (entityId: string, alias: string) =>
     http.post<KnowledgeEntity>(`/api/knowledge/entities/${entityId}/split`, { alias }),
-  build: (evidenceIds: string[] = []) =>
-    http.post<{ status: string; entities: number; edges: number; relation_status: 'ok' | 'not_found'; wiki_entries: number }>(
-      '/api/knowledge/build', { evidence_ids: evidenceIds },
-    ),
 }

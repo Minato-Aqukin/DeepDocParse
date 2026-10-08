@@ -25,10 +25,14 @@ const auth = useAuthStore()
 const document = ref<DocumentInfo>()
 const jobs = ref<JobInfo[]>([])
 const loading = ref(false)
+/** 轮询中的 transient 失败落在这里行内展示，不杀死轮询。 */
+const errorText = ref('')
 const dialog = ref(false)
 const choice = ref<EngineChoice>(loadEnginePreference())
 const reparsing = ref(false)
 let loadGeneration = 0
+/** 至少成功加载过一次（失败重试时用"上次已知状态"决策要不要继续轮询）。 */
+let loadedOnce = false
 let pollTimer: number | undefined
 
 function stopPolling() {
@@ -46,6 +50,9 @@ async function load(quiet = false) {
     version_id: selectedVersion(url, location.hash),
   }
   if (!quiet) loading.value = true
+  // 单次失败也必须重排轮询：一次 500 就永久停掉，用户只能手动刷新。
+  // 错误落到 errorText 行内展示（loading 只在初次 load 时闪，不干扰轮询）。
+  let failed: unknown = null
   try {
     const [detail, history] = await Promise.all([
       documentsApi.get(id, context), documentsApi.listJobs(id, context),
@@ -53,11 +60,26 @@ async function load(quiet = false) {
     if (generation !== loadGeneration) return
     document.value = detail.data
     jobs.value = history.data
-    if (jobs.value.some(job => job.status === 'pending' || job.status === 'running')) {
-      pollTimer = window.setTimeout(() => { void load(true) }, 2000)
-    }
+  } catch (cause) {
+    if (generation !== loadGeneration) return
+    failed = cause
   } finally {
     if (generation === loadGeneration) loading.value = false
+  }
+  if (generation !== loadGeneration) return
+  if (failed) {
+    errorText.value = failed instanceof Error ? failed.message : String(failed)
+    // 失败时按"上次已知的状态"决定要不要继续：上次还在跑（或一次都没成功过、
+    // 状态未知）就继续轮询等恢复；已经落定的手动刷新失败不另起一个永久轮询。
+    // "还在动"以契约为准：archiving 也是 active，手写 pending/running 会漏掉它。
+    const active = !loadedOnce || jobs.value.some((job) => parseStatusOf(job.status).active)
+    if (active) pollTimer = window.setTimeout(() => { void load(true) }, 2000)
+    return
+  }
+  errorText.value = ''
+  loadedOnce = true
+  if (jobs.value.some((job) => parseStatusOf(job.status).active)) {
+    pollTimer = window.setTimeout(() => { void load(true) }, 2000)
   }
 }
 
@@ -96,6 +118,8 @@ watch(() => [route.params.id, route.query.resource_id, route.query.version_id], 
   document.value = undefined
   jobs.value = []
   dialog.value = false
+  errorText.value = ''
+  loadedOnce = false
   void load()
 }, { immediate: true })
 
@@ -119,7 +143,8 @@ onBeforeUnmount(() => {
                  @click="dialog = true">换参数重新解析</el-button>
     </div>
     <p v-if="onReadOnlySource" class="readonly-hint" role="note">{{ approvedPlanLabel() }}</p>
-
+    <el-alert v-if="errorText" type="warning" :closable="false" class="poll-error" role="status"
+              :title="`版本状态刷新失败，正在重试：${errorText}`" />
     <el-table :data="jobs" v-loading="loading">
       <el-table-column label="版本" width="200">
         <template #default="{ row }">
@@ -181,4 +206,5 @@ onBeforeUnmount(() => {
   margin-left: 6px;
 }
 .readonly-hint { color: var(--ddp-ink-3); font-size: 13px; }
+.poll-error { margin-bottom: 12px; }
 </style>

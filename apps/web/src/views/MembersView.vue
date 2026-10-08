@@ -166,7 +166,7 @@ h2 {
 
 .hint {
   margin: 0;
-  color: var(--ddp-text-muted, #888);
+  color: var(--ddp-ink-3);
   font-size: 13px;
   max-width: 60ch;
 }

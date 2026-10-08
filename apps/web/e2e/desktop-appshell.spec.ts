@@ -101,7 +101,8 @@ test('模型页仅查询状态，显式点击才发下载命令，结果未知�
 
   lose = true
   await page.getByRole('button', { name: '下载并校验', exact: true }).click()
-  await expect(page.getByRole('alert')).toBeVisible()
+  // AppShell 的 profile 横幅与本页的错误各占一个 alert：只断言本页这一个。
+  await expect(page.locator('.models').getByRole('alert')).toHaveText('连接暂不可用，已保留草稿。')
   const installs = fixture.calls.filter(call => call.name === 'clientCommand')
   expect(installs).toHaveLength(1)
   expect(installs[0]!.input).toMatchObject({ name: 'models.install', payload: { model_id: 'qwen3-1.7b-q8_0' } })
@@ -124,7 +125,8 @@ test('系统密钥库不可用时连接中心只用会话凭证，密码不进�
   await page.getByLabel('账号').fill('alice')
   await page.getByLabel('密码').fill(password)
   await page.getByRole('button', { name: '连接', exact: true }).click()
-  await expect(page.getByRole('alert')).toContainText('此身份需要重新认证。')
+  // AppShell 的 profile 横幅与连接表单的错误各占一个 alert：只断言表单这一个。
+  await expect(page.locator('.block').filter({ hasText: '连接中心' }).getByRole('alert')).toContainText('此身份需要重新认证。')
   const connect = fixture.calls.find(call => call.name === 'centerConnect')!
   expect(connect.input).toEqual({ endpoint: 'https://center.example/team', username: 'alice', password, persist: false })
   // The password goes to the host call only: not kept in the form, web storage or drafts.
@@ -154,7 +156,8 @@ test('固定证据打开真实 PDF 预览，生成文本不能触发外部资源
   }
   const answer = `工作温度见原文。![leak](https://outside.invalid/leak.png) <img src="https://outside.invalid/raw.png">`
   let asked = false
-  await page.route(url => url.pathname === '/api/search', route => route.fulfill({ json: {
+  const sourceHeaders = { 'X-DDP-Source': 'local-0' }
+  await page.route(url => url.pathname === '/api/search', route => route.fulfill({ headers: sourceHeaders, json: {
     query: 'bearing', degraded: null, groups: [{ document_id: document.id, resource_id: document.resource_id,
       source_version_id: document.source_version_id, parse_revision: document.current_job_id,
       filename: document.filename, hits: [{ chunk_id: 'local-2', page_idx: 1, bbox, snippet: text, score: 1, similarity: 0.9 }] }],
@@ -162,13 +165,13 @@ test('固定证据打开真实 PDF 预览，生成文本不能触发外部资源
   await page.route(url => url.pathname.startsWith('/api/documents/local-doc'), route => {
     const url = new URL(route.request().url())
     // Local runtime semantics: download-url is a same-origin relative path to the original bytes.
-    if (url.pathname.endsWith('/source')) return route.fulfill({ contentType: 'application/pdf', body: pdf })
-    if (url.pathname.endsWith('/download-url')) return route.fulfill({ json: { url: '/api/documents/local-doc/source' } })
-    if (url.pathname.endsWith('/conversations')) return route.fulfill({ json: { id: 'conv-1', title: '工作温度' } })
-    if (url.pathname === '/api/documents/local-doc') return route.fulfill({ json: document })
-    if (url.pathname.endsWith('/result')) return route.fulfill({ json: { document_id: document.id,
+    if (url.pathname.endsWith('/source')) return route.fulfill({ headers: sourceHeaders, contentType: 'application/pdf', body: pdf })
+    if (url.pathname.endsWith('/download-url')) return route.fulfill({ headers: sourceHeaders, json: { url: '/api/documents/local-doc/source' } })
+    if (url.pathname.endsWith('/conversations')) return route.fulfill({ headers: sourceHeaders, json: { id: 'conv-1', title: '工作温度' } })
+    if (url.pathname === '/api/documents/local-doc') return route.fulfill({ headers: sourceHeaders, json: document })
+    if (url.pathname.endsWith('/result')) return route.fulfill({ headers: sourceHeaders, json: { document_id: document.id,
       job_id: document.current_job_id, filename: document.filename, page_count: 2, markdown: text, images: [] } })
-    if (url.pathname.endsWith('/pages')) return route.fulfill({ json: { document_id: document.id,
+    if (url.pathname.endsWith('/pages')) return route.fulfill({ headers: sourceHeaders, json: { document_id: document.id,
       job_id: document.current_job_id, page_count: 2, pages: [{ page_idx: 0, page_size: pageSize, blocks: [] },
         { page_idx: 1, page_size: pageSize, blocks: [{ page_idx: 1, page_size: pageSize, bbox, seq: 1, type: 'text',
           text, chunk_id: 'local-2', evidence_id: 'local-evidence' }] }] } })
@@ -181,14 +184,14 @@ test('固定证据打开真实 PDF 预览，生成文本不能触发外部资源
       const frames = [['meta', { query_decision: { mode: 'answer', reason: '' }, retrieval: { chunk_ids: [], candidates: [] } }],
         ['delta', { text: answer }], ['citations', { citations: [] }], ['assertions', { assertions: [] }],
         ['done', { message_id: 'm-2', verified: false, degraded: null, confidence: 'low' }]]
-      return route.fulfill({ contentType: 'text/event-stream',
+      return route.fulfill({ headers: sourceHeaders, contentType: 'text/event-stream',
         body: frames.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('') })
     }
-    if (url.pathname === '/api/conversations/conv-1/messages') return route.fulfill({ json: asked ? [
+    if (url.pathname === '/api/conversations/conv-1/messages') return route.fulfill({ headers: sourceHeaders, json: asked ? [
       { id: 'm-1', role: 'user', content: '工作温度', citations: [], verified: false, degraded: null, created_at: '2026-01-01T00:00:00Z' },
       { id: 'm-2', role: 'assistant', content: answer, citations: [], verified: false, degraded: null, created_at: '2026-01-01T00:00:01Z' },
     ] : [] })
-    return route.fulfill({ json: [] })
+    return route.fulfill({ headers: sourceHeaders, json: [] })
   })
 
   await page.goto('/#/search')
@@ -260,7 +263,11 @@ test('中心源只读：文档表、会话与授权副本的写入口禁用并�
     code_detection: 'heuristic', current_job_id: 'center-parse', created_at: '2026-01-01T00:00:00Z',
     uploaders: ['alice'], can_delete: true,
   }
-  await page.route(url => url.pathname === '/api/documents', route => route.fulfill({ json: [document] }))
+  // 真宿主的每个 /api 响应都带 `X-DDP-Source: <当前源>`（fail closed 围栏）。
+  const centerHeaders = { 'X-DDP-Source': 'center-0' }
+  await page.route(url => url.pathname === '/api/documents', route => route.fulfill({ headers: centerHeaders, json: [document] }))
+  await page.route(url => url.pathname.endsWith('/documents/stats/summary'),
+    route => route.fulfill({ headers: centerHeaders, json: { documents: 1, pages: 1, askable: 1 } }))
   const label = '中心在桌面里只读；写操作请作为联邦任务发起并批准'
 
   await page.goto('/#/documents')
@@ -272,12 +279,12 @@ test('中心源只读：文档表、会话与授权副本的写入口禁用并�
   await expect(menu.getByText('重建索引')).toHaveCount(0)
   await expect(page.locator('.el-table__header .el-checkbox')).toHaveCount(0)
 
-  await page.route(url => url.pathname === '/api/resources', route => route.fulfill({ json: { has_more: false, items: [{
+  await page.route(url => url.pathname === '/api/resources', route => route.fulfill({ headers: centerHeaders, json: { has_more: false, items: [{
     id: 'center-resource', organization_id: 'org-1', owner_id: 'u-1', uploader_ref: { issuer: 'node-center', subject: 'alice' },
     display_name: '中心手册.pdf', publication: 'private', versions: [{ id: 'center-v1', resource_id: 'center-resource',
       version_no: 1, document_id: 'center-doc', source_digest: 'a'.repeat(64), filename: '中心手册.pdf', size_bytes: 2048,
       parse_job_id: 'center-parse', parse_status: 'succeeded', index_status: 'ready' }] }] } }))
-  await page.route(url => url.pathname.endsWith('/bundle/replicas'), route => route.fulfill({ json: {
+  await page.route(url => url.pathname.endsWith('/bundle/replicas'), route => route.fulfill({ headers: centerHeaders, json: {
     replicas: [{ replica_id: 'replica-1', availability: 'available' }] } }))
   await page.goto('/#/resources')
   await page.getByRole('button', { name: '授权副本' }).first().click()

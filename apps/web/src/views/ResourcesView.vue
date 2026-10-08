@@ -2,7 +2,7 @@
 import {
   INDEX_STATUS_META, PARSE_STATUS_META, bundleReplicaAvailabilityLabelOf, indexStatusLabelOf, parseStatusLabelOf,
 } from '@deepdocparse/contracts'
-import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { downloadAs } from '@/api/http'
@@ -42,17 +42,24 @@ async function load(quiet = false) {
   const current = ++generation
   if (!quiet) loading.value = true
   error.value = ''
+  // 世代对不上的是旧请求（被更新的刷新/切 scope 顶掉，或卸载后才回来）：
+  // 状态与轮询都不许碰 —— 尤其不许在卸载后建一个没人清的 interval
+  // （usePolling 的 onUnmounted 只停卸载时那个，之后再起的谁也停不掉）。
+  // 响应体校验不看世代：畸形响应走 error 通道，而不是静默丢弃。
+  let fresh = false
   try {
     const { data } = await resourcesApi.list(scope.value, offset.value)
-    if (current !== generation) return
     if (!Array.isArray(data.items) || typeof data.has_more !== 'boolean') {
       throw new Error('中心返回的资源列表格式不兼容')
     }
+    if (current !== generation) return
+    fresh = true
     resources.value = data.items
     more.value = data.has_more
   } catch (cause) {
     if (current === generation) error.value = `资源加载失败：${String(cause)}`
   } finally { if (current === generation) loading.value = false }
+  if (!fresh) return
   if (hasActive.value && !polling.running.value) polling.start()
 }
 
@@ -182,7 +189,7 @@ async function revokeReplica(resource: Resource, version: ResourceVersion, repli
 function page(delta: number) { offset.value = Math.max(0, offset.value + delta * 50); void load() }
 watch(scope, () => { offset.value = 0; resources.value = []; void load() })
 onMounted(load)
-onBeforeUnmount(() => { generation++ })
+onUnmounted(() => { generation++ })
 </script>
 
 <template>

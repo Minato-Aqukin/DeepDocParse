@@ -84,7 +84,7 @@ test('Wiki 逐句点回证据、unsupported 可见、反链四类齐全', async 
   await page.goto('/#/wiki')
   await expect(page.getByText('尚无来源的推断。')).toBeVisible()
   await expect(page.getByText('unsupported · 无法指回 bbox')).toBeVisible()
-  await page.getByText('系统使用 Qwen3-VL。').click()
+  await page.getByRole('button', { name: '出处 1' }).click()
   await expect(page.getByText('证据预览')).toBeVisible()
   await expect(page.locator('.evidence-preview').getByText('第 3 页')).toBeVisible()
   await expect(page.locator('.backlinks article')).toHaveCount(4)

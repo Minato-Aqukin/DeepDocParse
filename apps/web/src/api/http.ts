@@ -50,8 +50,10 @@ export function expireRejectedSession(authorization: unknown): void {
 }
 
 /**
- * 响应来源校验（桌面）：`X-DDP-Source` 与启动时的当前源不一致 → 丢弃。
- * 返回 true = 来源正确（或非桌面/缺头：缺头只在旧宿主或单测里出现，按正确处理）。
+ * 响应来源校验（桌面）：`X-DDP-Source` 缺失或与启动时的当前源不一致 → 丢弃。
+ * 返回 true = 来源正确。Fail closed：宿主的每个 /api 响应都带这个头（有当前
+ * 源时的错误响应也带），无头说明字节不是来自已启动源。无响应（网络失败，
+ * headers 不是对象）没有可围栏的字节，按正确处理走错误通道。
  */
 export function isCurrentSourceResponse(headers: unknown): boolean {
   if (!isDesktop()) return true
@@ -60,7 +62,7 @@ export function isCurrentSourceResponse(headers: unknown): boolean {
   if (!headers || typeof headers !== 'object') return true
   const record = headers as Record<string, unknown>
   const seen = record['x-ddp-source'] ?? record['X-DDP-Source']
-  if (seen == null) return true
+  if (seen == null) return false
   return String(seen) === boot
 }
 

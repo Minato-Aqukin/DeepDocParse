@@ -80,13 +80,17 @@ export interface CenterConnectInput {
   persist: boolean
   storageOrigin?: string
 }
+/** centerConnect 的实际落账：CredentialBroker 报的真实持久化模式（永远不要假定 persist:true 落盘了）。 */
+export interface CenterConnectResult extends SourceSummary {
+  credential?: { mode: 'persistent' | 'session' | 'absent'; reason: string | null }
+}
 export interface SourceBridge {
   sourceList(): Promise<Result<SourceSummary[]>>
   sourceActivate(input: { sourceId: string }): Promise<Result<SourceSummary>>
   sourceReconnect(input: { sourceId: string }): Promise<Result<SourceSummary>>
   sourceRemove(input: { sourceId: string }): Promise<Result<null>>
   workspaceOpen(): Promise<Result<SourceSummary | null>>
-  centerConnect(input: CenterConnectInput): Promise<Result<SourceSummary>>
+  centerConnect(input: CenterConnectInput): Promise<Result<CenterConnectResult>>
   onSourceChange(listener: (sources: SourceSummary[]) => void): () => void
   /** 断开但保留登记（宿主若未提供则不显示断开按钮）。 */
   sourceDisconnect?(input: { sourceId: string }): Promise<Result<SourceSummary[]>>
@@ -231,12 +235,15 @@ export function sourceErrorLabel(code: string | null | undefined): string {
 /**
  * 单值来源校验（fetch/SSE 那条不用 axios 的路）。
  * 浏览器永远 true；桌面下与 `isCurrentSourceResponse` 同一规则：
- * 缺头（旧宿主/单测）按正确处理，已知启动源且头不一致才丢弃。
+ * 已知启动源时，缺头/坏头/头不一致一律丢弃（fail closed）——宿主的每个 /api
+ * 响应都带 `X-DDP-Source`（有当前源时的错误响应也带），收不到它说明字节
+ * 不是来自已启动源（切换瞬间串源、去头路径），绝不在当前外发标签下显示。
  */
 export function checkSourceResponse(seen: string | null | undefined): boolean {
   if (!isDesktop()) return true
   const boot = getActiveSourceId()
-  if (!boot || seen == null) return true
+  if (!boot) return true
+  if (seen == null) return false
   return seen === boot
 }
 

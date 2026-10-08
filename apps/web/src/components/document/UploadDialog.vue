@@ -334,7 +334,7 @@ function resetOptions() {
   font-size: 12px;
 }
 .verifying {
-  color: var(--ddp-text-muted, #888);
+  color: var(--ddp-ink-3);
   font-size: 12px;
   white-space: nowrap;
 }

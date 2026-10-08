@@ -61,6 +61,31 @@ function focus(n: number) {
   document.getElementById(`evidence-${n}`)?.scrollIntoView({ block: 'nearest' })
 }
 
+/**
+ * 掉队的引用：模型写了但 result.evidence 里没有的 evidence_ref（冲突行/主张行），
+ * 以及答案里越界的 [n]。以前直接 filter 掉、无声渲染成纯文本 —— 缺失的 grounding
+ * 肉眼不可见。不变式 1 要求指不回去必须明确说明，所以每行旁边打引用缺失 tag。
+ */
+function missingRefs(refs: string[]): string[] {
+  return refs.filter((ref) => !index.value.has(ref))
+}
+
+function missingLabel(refs: string[]): string {
+  const missing = missingRefs(refs)
+  return `引用缺失：${missing.slice(0, 3).join('、')}${missing.length > 3 ? ` 等 ${missing.length} 条` : ''}没有对应的证据`
+}
+
+const answerDangling = computed(() => {
+  const out: number[] = []
+  for (const line of segments.value) {
+    for (const part of line) {
+      if (part.cite !== undefined && (part.cite < 1 || part.cite > props.result.evidence.length)
+        && !out.includes(part.cite)) out.push(part.cite)
+    }
+  }
+  return out.sort((a, b) => a - b)
+})
+
 function isLocal(item: FederatedEvidence) {
   return !!props.coordinatorNodeId && item.origin_node_id === props.coordinatorNodeId
 }
@@ -93,6 +118,7 @@ function locator(item: FederatedEvidence) {
             <button v-for="n in numbersOf(item.evidence_refs)" :key="n" type="button" class="cite" @click="focus(n)">[{{ n }}]</button>
           </span>
           <StatusTag :meta="metaOf(VALIDATION_STATE, item.semantic_review)" />
+          <StatusTag v-if="missingRefs(item.evidence_refs).length" :label="missingLabel(item.evidence_refs)" type="danger" />
         </li>
       </ul>
     </div>
@@ -119,10 +145,16 @@ function locator(item: FederatedEvidence) {
     <div v-else-if="result.answer" class="answer">
       <p v-for="(line, i) in segments" :key="i">
         <template v-for="(part, j) in line" :key="j">
-          <button v-if="part.cite && part.cite <= result.evidence.length" type="button" class="cite"
+          <button v-if="part.cite !== undefined && part.cite >= 1 && part.cite <= result.evidence.length" type="button" class="cite"
             :aria-label="`查看证据 ${part.cite}`" @click="focus(part.cite)">{{ part.text }}</button>
+          <!-- 越界的 [n]（含 [0]）：不再是可点的引用，也不再是无声纯文本 —— 红字标出来 -->
+          <span v-else-if="part.cite !== undefined" class="dangling" role="note"
+                :title="`引用 [${part.cite}] 没有对应的证据（共 ${result.evidence.length} 条）`">{{ part.text }}</span>
           <span v-else>{{ part.text }}</span>
         </template>
+      </p>
+      <p v-if="answerDangling.length" class="ddp-degraded" role="status">
+        引用缺失：{{ answerDangling.map((n) => `[${n}]`).join('、') }}没有对应的证据（共 {{ result.evidence.length }} 条），相关结论暂无出处支撑。
       </p>
       <p class="provenance">
         生成：<span class="ddp-mono">{{ result.provider?.model ?? '—' }}</span>
@@ -146,6 +178,7 @@ function locator(item: FederatedEvidence) {
             <button v-for="n in numbersOf(claim.evidence_refs)" :key="n" type="button" class="cite" @click="focus(n)">[{{ n }}]</button>
           </span>
           <span class="muted">语义支持 <StatusTag :meta="metaOf(VALIDATION_STATE, claim.semantic_review ?? 'needs_review')" /></span>
+          <StatusTag v-if="missingRefs(claim.evidence_refs).length" :label="missingLabel(claim.evidence_refs)" type="danger" />
         </li>
       </ol>
     </template>
@@ -197,7 +230,8 @@ p { margin: 0; }
   color: var(--ddp-cite); font-weight: 500; font-variant-numeric: tabular-nums; min-height: 24px;
 }
 .cite:hover { text-decoration: underline; }
-.refs { display: inline-flex; gap: 2px; }
+/* 越界的 [n]：引用红加粗删除线 —— 看得出"模型写了引用但没有证据"，而不是普通文本。 */
+.dangling { color: var(--ddp-danger); font-weight: 600; text-decoration: line-through; cursor: help; }
 .provenance { color: var(--ddp-ink-2); font-size: 13px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .muted { color: var(--ddp-ink-3); font-size: 13px; }
 .evidence li {

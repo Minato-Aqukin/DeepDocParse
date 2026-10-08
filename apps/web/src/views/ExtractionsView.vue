@@ -10,6 +10,7 @@ import SchemaEditor from '@/components/extract/SchemaEditor.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { RUN_STATUS, runStatusOf } from '@/constants/status'
 import type {
+  Citation,
   DocumentInfo,
   ExtractionItem,
   ExtractionRun,
@@ -121,10 +122,19 @@ function cropUrlOf(_documentId: string, cropUrl: string) {
   return cropUrls.value[cropUrl]
 }
 
-/** 点单元格的出处 -> 跳到那份文档的工作台并定位到该页。 */
+/** 点单元格的出处 -> 跳到那份文档的工作台并定位到该块/证据。
+ * 只传 page 会退化成整页，还丢了 bbox 高亮。Citation 自带稳定定位键
+ * (parse_job_id, seq) 与证据快照，按 SearchView.target() 同一套 query 形状传，
+ * WorkbenchView 按 evidence > seq > chunk > page 逐级定位。 */
 function locate(documentId: string, citation: unknown) {
-  const page = (citation as { page_idx?: number }).page_idx ?? 0
-  router.push({ name: 'workbench', params: { id: documentId }, query: { page: String(page + 1) } })
+  const cite = citation as Partial<Citation> & { page_idx?: number }
+  const query: Record<string, string> = { page: String((cite.page_idx ?? 0) + 1) }
+  if (typeof cite.chunk_id === 'string' && cite.chunk_id) query.chunk = cite.chunk_id
+  if (typeof cite.seq === 'number') query.seq = String(cite.seq)
+  if (typeof cite.parse_job_id === 'string' && cite.parse_job_id) query.parse_job = cite.parse_job_id
+  if (typeof cite.evidence_id === 'string' && cite.evidence_id) query.evidence = cite.evidence_id
+  if (Array.isArray(cite.page_size)) query.page_size = cite.page_size.join('x')
+  router.push({ name: 'workbench', params: { id: documentId }, query })
 }
 
 /* ---------- 模板 ---------- */

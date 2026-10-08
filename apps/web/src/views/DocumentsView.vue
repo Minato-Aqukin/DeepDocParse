@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { documentsApi, downloadAs, downloadViaSignedUrl } from '@/api'
@@ -28,8 +28,15 @@ const selected = ref<DocumentInfo[]>([])
 // 有任务在动才轮询，全落定就停（判断依据在 constants/status.ts 的 active 标记）
 const polling = usePolling(() => store.refresh(), () => store.hasActive)
 
+// reload 跨了 await：卸载发生在 await 飞行途中时，后面的 start 会建一个
+// 没人清的 interval（onUnmounted(stop) 那时还没 timer）。alive 挡掉它。
+let alive = true
+let reloadGeneration = 0
+
 async function reload() {
+  const mine = ++reloadGeneration
   await store.refresh()
+  if (!alive || mine !== reloadGeneration) return
   polling.start()
 }
 
@@ -93,6 +100,10 @@ async function onFilterChange(patch: Partial<Filters>) {
 }
 
 onMounted(reload)
+onUnmounted(() => {
+  alive = false
+  reloadGeneration++
+})
 </script>
 
 <template>

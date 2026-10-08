@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { documentsApi, downloadAs, downloadViaSignedUrl } from '@/api'
+import { conversationsApi, documentsApi, downloadAs, downloadViaSignedUrl } from '@/api'
 import { documentContext } from '@/api/resource-context'
 import AskPanel from '@/components/ask/AskPanel.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
@@ -44,8 +44,9 @@ const loading = ref(true)
 const loadError = ref(false)
 const sourceFocusError = ref(false)
 let loadGeneration = 0
+let reloadGeneration = 0
+let alive = true
 const validation = ref<IndexValidation>()
-let poller: number | undefined
 
 const pageSize = computed(
   () => pages.value.find((p) => p.page_idx === activePage.value)?.page_size ?? null,
@@ -123,7 +124,11 @@ const polling = usePolling(load, () => {
 })
 
 async function reload() {
+  const mine = ++reloadGeneration
   await load()
+  // load 跨了 await：卸载发生在飞行途中时后面的 start 会建一个没人清的
+  // interval（DocumentsView 同款竞态）。只有还活着且是最新一次 reload 才起轮询。
+  if (!alive || mine !== reloadGeneration) return
   polling.start()
 }
 
@@ -155,8 +160,54 @@ function selectBlock(block: Block) {
   }]
 }
 
+/**
+ * 外部跳进来的定位（检索命中 / 抽取引用的出处）。
+ *
+ * 优先级：evidence_id > (parse_job_id, seq) > chunk_id > page。
+ * 稳定定位键是后者。evidence_id 更进一步：连 bbox/page_size 都按
+ * 引用当时的快照拿，不拿当前版本的尺寸猜（猜错会把红框画到错误位置）。
+ */
 function focusRequestedSource() {
   sourceFocusError.value = false
+  const evidence = typeof route.query.evidence === 'string' && route.query.evidence
+    ? route.query.evidence : undefined
+  if (evidence) {
+    void focusEvidence(evidence)
+    return
+  }
+  focusBlockOrPage()
+}
+
+/** evidence/resolve 路径：按证据快照定位，失败回退到 chunk/page 参数。 */
+async function focusEvidence(evidenceId: string) {
+  const generation = loadGeneration
+  try {
+    const detail = (await conversationsApi.evidence(evidenceId)).data
+    if (generation !== loadGeneration) return
+    activePage.value = detail.page_idx
+    selectedChunkId.value = detail.chunk_id
+    selectedCitation.value = {
+      evidence_id: detail.id, source_type: detail.source_type, derived_from: detail.derived_from,
+      chunk_id: detail.chunk_id, parse_job_id: detail.parse_job_id, seq: detail.seq,
+      page_idx: detail.page_idx, printed_page_label: detail.printed_page_label,
+      bbox: detail.bbox, page_size: detail.page_size, crop_url: detail.crop_url,
+      snippet: detail.content.slice(0, 200), score: 0, similarity: null, resolved: true,
+    }
+    highlights.value = [{
+      pageIdx: detail.page_idx,
+      // 与 locate() 同一条规则：page_size 缺失时不猜当前版本，bbox 置空。
+      bbox: detail.page_size ? detail.bbox : null,
+      pageSize: detail.page_size,
+      kind: 'citation',
+      label: detail.content.slice(0, 80),
+    }]
+  } catch {
+    if (generation !== loadGeneration) return
+    focusBlockOrPage()
+  }
+}
+
+function focusBlockOrPage() {
   if (route.query.page !== undefined) {
     const page = typeof route.query.page === 'string' ? Number(route.query.page) : NaN
     if (Number.isSafeInteger(page) && page >= 1 && page <= (document.value?.page_count ?? 0)) {
@@ -165,8 +216,21 @@ function focusRequestedSource() {
       sourceFocusError.value = true
     }
   }
+  // seq 是稳定键（不随 reindex 重铸），优先于 chunk_id 匹配。
+  const seqRaw = route.query.seq
+  const seq = typeof seqRaw === 'string' && seqRaw !== '' ? Number(seqRaw) : NaN
   const chunk = route.query.chunk
-  if (chunk === undefined) return
+  if (seqRaw === undefined && chunk === undefined) return
+  if (Number.isSafeInteger(seq)) {
+    for (const page of pages.value) {
+      const block = page.blocks.find(candidate => candidate.seq === seq)
+      if (block) {
+        selectBlock(block)
+        sourceFocusError.value = false
+        return
+      }
+    }
+  }
   if (typeof chunk === 'string' && chunk) {
     for (const page of pages.value) {
       const block = page.blocks.find(candidate => candidate.chunk_id === chunk)
@@ -225,8 +289,13 @@ watch(
   { immediate: true },
 )
 
-watch(() => [route.query.chunk, route.query.page], () => {
+watch(() => [route.query.evidence, route.query.seq, route.query.chunk, route.query.page], () => {
   if (!loading.value && document.value?.status === 'succeeded') focusRequestedSource()
+})
+onUnmounted(() => {
+  alive = false
+  loadGeneration++
+  reloadGeneration++
 })
 </script>
 
@@ -371,13 +440,13 @@ watch(() => [route.query.chunk, route.query.page], () => {
   align-items: center;
   gap: 12px;
   min-height: 24px;
-  color: var(--ink-2);
+  color: var(--ddp-ink-2);
   font-size: 13px;
 }
 .compile-degraded {
-  border-left: 2px solid var(--warn);
+  border-left: 2px solid var(--ddp-warn);
   padding: 2px 10px;
-  color: var(--ink-2);
+  color: var(--ddp-ink-2);
   font-size: 13px;
 }
 .validation { margin-left: auto; }

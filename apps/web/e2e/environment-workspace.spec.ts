@@ -52,24 +52,26 @@ async function desktopFixture(page: Page, options: DesktopFixtureOptions = {}) {
     return { plan: planLedger.plans.get(id), federation, verification: { state: expected ? (planLedger.tamper ? 'failed' : 'passed') : 'unavailable',
       expected, actual: expected ? (planLedger.tamper ? 'sha256:' + 'e'.repeat(64) : expected) : null } }
   }
+  // 真宿主的每个 /api 响应都带 `X-DDP-Source: <当前源>`（fail closed 围栏）。
+  const sourceHeaders = { 'X-DDP-Source': options.center ? 'center-0' : 'local-0' }
   await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     const path = new URL(route.request().url()).pathname
     if (path.endsWith('/auth/me')) {
-      return route.fulfill({ json: { id: 'u-1', username: 'e2e', email: 'e2e@example.com',
+      return route.fulfill({ headers: sourceHeaders, json: { id: 'u-1', username: 'e2e', email: 'e2e@example.com',
         role: 'admin', organization_id: 'org-1', created_at: new Date().toISOString() } })
     }
-    if (path === '/api/v1/tasks') return route.fulfill({ json: { items: [], next_cursor: null } })
+    if (path === '/api/v1/tasks') return route.fulfill({ headers: sourceHeaders, json: { items: [], next_cursor: null } })
     // Lockable inputs come from the local source's center-shaped /api/resources (the host
     // proxies ddp://app/api/** to the runtime); the renderer no longer pages projections.
     if (path === '/api/resources') {
-      return route.fulfill({ json: { has_more: false, items: [{
+      return route.fulfill({ headers: sourceHeaders, json: { has_more: false, items: [{
         id: 'resource-0', organization_id: 'local', owner_id: 'owner', uploader_ref: { issuer: 'local-env-0', subject: 'owner' },
         display_name: '甲的技术手册.pdf', publication: 'private', versions: [{
           id: 'version-0', resource_id: 'resource-0', version_no: 1, document_id: 'version-0',
           source_digest: 'a'.repeat(64), filename: '甲的技术手册.pdf', size_bytes: 2048,
           parse_job_id: 'job-0', parse_status: 'succeeded', index_status: 'ready' }] }] } })
     }
-    return route.fulfill({ json: [] })
+    return route.fulfill({ headers: sourceHeaders, json: [] })
   })
   await page.exposeBinding('desktopTestCall', async (_source, { name, input = {} }) => {
     calls.push({ name, input })

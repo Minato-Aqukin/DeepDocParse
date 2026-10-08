@@ -67,22 +67,48 @@ const unanswered = computed(() => new Set(messages.value
     && !(streaming.value && i === messages.value.length - 1))
   .map((message) => message.id)))
 
+/** loadMessages 的代次：只有最新一次切换的结果才能落到 messages 上。
+ * 面板打开时 loadConversations 本来就会读一次，watch 再读一次就是双飞；
+ * 快速 A->B->A 切换时老响应晚到会把新会话的消息冲掉。 */
+let messagesGeneration = 0
+
 async function loadConversations() {
-  conversations.value = (await conversationsApi.list(props.document.id)).data
-  if (!conversations.value.length) return
-  activeId.value = conversations.value[0]!.id
+  const docId = props.document.id
+  const list = (await conversationsApi.list(docId)).data
+  // 文档在请求飞行途中又切走了：这是旧文档的会话列表，直接丢掉。
+  // 先检查再赋值 —— 先赋值会让旧文档的下拉在新文档上闪一下（A→B 慢 A 后到）。
+  if (docId !== props.document.id) return
+  conversations.value = list
+  if (!conversations.value.length) {
+    activeId.value = ''
+    return
+  }
+  const first = conversations.value[0]!.id
+  // loadConversations 自己把消息读了；activeId 变化时用 created 标记压住
+  // watcher 那一次重读 —— 否则面板每次打开都是两次 loadMessages。
+  // （已经在目标会话上时不碰 created：watcher 不会触发，残留的标记会把
+  // 用户下一次切回这个会话的重读误杀掉。）
+  if (activeId.value !== first) {
+    created = first
+    activeId.value = first
+  }
   await loadMessages()
 }
 
 async function loadMessages() {
   if (!activeId.value) return
-  messages.value = (await conversationsApi.messages(activeId.value)).data
-  await loadCrops()
+  const mine = ++messagesGeneration
+  const cid = activeId.value
+  const list = (await conversationsApi.messages(cid)).data
+  // 切走后到手的旧消息直接丢掉，不碰 messages/cropUrls。
+  if (mine !== messagesGeneration || cid !== activeId.value) return
+  messages.value = list
+  await loadCrops(mine)
   await scrollToEnd()
 }
 
 /** 出处缩略图受 JWT 保护，必须取回来换成 blob——直接绑到 src 上会 401。 */
-async function loadCrops() {
+async function loadCrops(mine?: number) {
   const pending = messages.value
     .flatMap((m) => [
       ...(m.citations || []),
@@ -94,8 +120,16 @@ async function loadCrops() {
       const objectUrl = await fetchAuthedImage(c.crop_url!)
       if (!objectUrl) return
       // 卸载后到手的 blob 当场回收：存进 cropUrls 的话 revokeCrops 已经跑过了
-      if (!alive) URL.revokeObjectURL(objectUrl)
-      else cropUrls.value[c.crop_url!] = objectUrl
+      if (!alive) {
+        URL.revokeObjectURL(objectUrl)
+        return
+      }
+      // 切走后到手的缩略图是旧会话的：当场回收，不塞进当前会话的 cropUrls。
+      if (mine !== undefined && mine !== messagesGeneration) {
+        URL.revokeObjectURL(objectUrl)
+        return
+      }
+      cropUrls.value[c.crop_url!] = objectUrl
     }),
   )
 }
@@ -138,6 +172,11 @@ async function newConversation() {
   if (readonlyHint.value) return
   const { data } = await conversationsApi.create(props.document.id)
   conversations.value.unshift({ id: data.id, title: data.title })
+  // 新会话经 created 标记切过去，watcher 那次重读被压住 —— 连带的 stopStream 也一起
+  // 被跳过。这里先掐掉旧流，不然它在服务端继续生成，streaming 标志还会粘住。
+  stopStream()
+  streaming.value = false
+  streamText.value = ''
   created = data.id
   activeId.value = data.id
   messages.value = []
@@ -148,7 +187,16 @@ async function removeConversation(cid: string) {
   await conversationsApi.remove(cid)
   conversations.value = conversations.value.filter((c) => c.id !== cid)
   if (activeId.value === cid) {
-    activeId.value = conversations.value[0]?.id ?? ''
+    const next = conversations.value[0]?.id ?? ''
+    // 同 newConversation：created 压住 watcher 时 stopStream 也被跳过，先掐掉旧流。
+    stopStream()
+    streaming.value = false
+    streamText.value = ''
+    // 同 loadConversations：自己读一次；只有真的换了 id 才用 created 压住 watcher。
+    if (activeId.value !== next) {
+      created = next
+      activeId.value = next
+    }
     await loadMessages()
   }
 }
@@ -178,23 +226,38 @@ async function send() {
   await scrollToEnd()
 
   let interrupted = false
-  abort = askStream(activeId.value, text, {
+  // 流归属的会话：切走后到手的 delta/done 一律丢掉，不许画到新会话下面。
+  const streamOwner = activeId.value
+  const myMessages = ++messagesGeneration
+  abort = askStream(streamOwner, text, {
     onDelta: (piece) => {
+      if (streamOwner !== activeId.value) return
       streamText.value += piece
       void scrollToEnd()
     },
     onError: ({ message, code }) => {
+      if (streamOwner !== activeId.value) return
       ElMessage.error(message)
       interrupted ||= code === 'stream_incomplete' || code === 'network_error'
     },
     onDone: async () => {
+      if (streamOwner !== activeId.value || myMessages !== messagesGeneration) return
       await loadMessages()
-      if (conversations.value.length) await loadConversations()
+      // loadMessages 已经把当前会话读新了；这里只补可能改名的会话标题，
+      // 不再整单重读会话列表（那会连 activeId 一起重置，制造新的竞态）。
+      // 两次 await 之间可能已经切走：刷新前再确认一次归属。
+      if (streamOwner !== activeId.value || myMessages !== messagesGeneration) return
+      const titles = (await conversationsApi.list(props.document.id)).data
+      // list 也跨了 await：切走后到手的旧标题不许写到新会话的下拉里。
+      if (streamOwner !== activeId.value || myMessages !== messagesGeneration) return
+      conversations.value = titles
     },
     // 复位必须挂 onSettled 而不是 onDone：限速 429、索引未就绪 409、断网等
     // 请求都建立不起来的情况根本走不到 done 帧，只在 onDone 里复位会让面板
     // 永久卡在"回答中"，用户只能手动点停止
     onSettled: () => {
+      // 被 supersede 的流只负责收尾自己的 abort，不许碰新会话的 streaming 状态。
+      if (streamOwner !== activeId.value) return
       streaming.value = false
       streamText.value = ''
       // 流在 done 之前断了：这一轮落没落库只有服务端知道，以会话记录为准重读。
@@ -206,6 +269,7 @@ async function send() {
 
 function stop() {
   abort?.()
+  abort = undefined
   // 服务端把这一轮落成 degraded=client_aborted（已产出的文字留着）。本地也立刻显示同一个
   // 状态：不这样做，停止后问题下面什么都没有，要刷新才看得到"回答被中断"（C 阶段浏览器实测）
   messages.value.push({
@@ -221,8 +285,18 @@ async function scrollToEnd() {
   if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight
 }
 
+function stopStream() {
+  abort?.()
+  abort = undefined
+}
+
 watch(() => props.document.id, async () => {
+  // 切文档先掐掉旧文档的流：不断的话旧 delta 会画到新文档的会话下面。
+  stopStream()
+  streaming.value = false
+  streamText.value = ''
   revokeCrops()
+  messages.value = []
   await loadConversations()
 }, { immediate: true })
 watch(activeId, (id) => {
@@ -230,11 +304,15 @@ watch(activeId, (id) => {
     created = ''
     return
   }
+  // 切会话先掐掉旧会话的流，同上。
+  stopStream()
+  streaming.value = false
+  streamText.value = ''
   void loadMessages()
 })
 onBeforeUnmount(() => {
   alive = false
-  abort?.()
+  stopStream()
   revokeCrops()
 })
 </script>
@@ -256,6 +334,13 @@ onBeforeUnmount(() => {
       <div v-for="message in messages" :key="message.id" class="bubble" :class="message.role">
         <div v-if="message.role !== 'assistant' || !message.assertions?.length" class="text">
           {{ message.content }}
+        </div>
+        <!-- 没有 assertions 的 assistant 消息（历史/降级/中断/本地回显）：整段按无逐条证据支持标出来，
+          不让没引用的自由文本读起来像有出处的回答。有 citations 的（旧 citations 形状）不标 ——
+          它的出处在下面的 CitationChip 列表里逐条可见。 -->
+        <div v-if="message.role === 'assistant' && !message.assertions?.length && !message.citations?.length"
+             class="meta">
+          <StatusTag label="无逐条证据支持" type="warning" />
         </div>
         <div v-else class="assertions">
           <section

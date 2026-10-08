@@ -229,6 +229,13 @@ async function connect() {
       centerError.value = problem(result.error?.code, '连接中心失败')
       return
     }
+    // 宿主报的真实落账：要求保存但只拿到会话凭证时绝不假装已持久化。
+    const credential = (result.value as { credential?: { mode?: string; reason?: string | null } } | undefined)?.credential
+    const wantedPersist = center.value.persist && persistAvailable.value
+    if (wantedPersist && credential && credential.mode !== 'persistent') {
+      centerError.value = '连接已成功，但系统密钥库不可用，登录只保留在本次会话（重启后需重新连接）'
+      return
+    }
     reloadAfterSwitch()
   } finally {
     centerBusy.value = false

@@ -39,23 +39,35 @@ export const useDocumentsStore = defineStore('documents', () => {
     ),
   )
 
+  /** 并发请求的代次：只有最新一次 fetchList 的结果才能落到 items 上。
+   * Typing + 轮询 tick 会让多次 fetchList 在飞，老响应晚到会把新筛选的结果冲掉。 */
+  let listGeneration = 0
+
   async function fetchList() {
+    // 请求发出前把参数快照下来：await 之后再读 filters 会读到新值，
+    // 而响应是按旧参数查的 —— 用新参数的后过滤套旧参数的行，结果是错的。
+    const mine = ++listGeneration
+    const params = {
+      q: filters.q || undefined,
+      status: filters.status || undefined,
+      limit: pageSize.value + 1,
+      offset: (page.value - 1) * pageSize.value,
+    }
+    const postFilter = filters.indexStatus
     loading.value = true
     try {
-      const { data } = await documentsApi.list({
-        q: filters.q || undefined,
-        status: filters.status || undefined,
-        limit: pageSize.value + 1,
-        offset: (page.value - 1) * pageSize.value,
-      })
+      const { data } = await documentsApi.list(params)
+      // 不是最新一次请求的结果：直接丢掉，不碰 items/loading 以外的状态。
+      // loading 由最新那次请求负责复位 —— 这里复位会让最新请求的加载态提前消失。
+      if (mine !== listGeneration) return
       hasMore.value = data.length > pageSize.value
       const rows = data.slice(0, pageSize.value)
       // 索引状态后端不支持过滤，在前端补上（数据量小，且能立刻可用）
-      items.value = filters.indexStatus
-        ? rows.filter((d) => d.index_status === filters.indexStatus)
+      items.value = postFilter
+        ? rows.filter((d) => d.index_status === postFilter)
         : rows
     } finally {
-      loading.value = false
+      if (mine === listGeneration) loading.value = false
     }
   }
 

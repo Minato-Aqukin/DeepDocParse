@@ -4,9 +4,10 @@ import { askStream } from '@/api/conversations'
 import { bootSource } from '@/platform/desktop'
 
 /** 一次把整段 SSE 文本交给 fetch 的应答体，读完即"干净"地结束。 */
-function answer(sse: string) {
+function answer(sse: string, source: string | null = null) {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(sse, {
-    status: 200, headers: { 'content-type': 'text/event-stream' },
+    status: 200, headers: { 'content-type': 'text/event-stream',
+      ...(source === null ? {} : { 'X-DDP-Source': source }) },
   })))
 }
 
@@ -59,6 +60,26 @@ describe('askStream 桌面数据源校验', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
       frame('delta', { text: '旧源的回答' }) + frame('done', { message_id: 'm1', verified: false, degraded: null }),
       { status: 200, headers: { 'content-type': 'text/event-stream', 'X-DDP-Source': 'local-0' } })))
+    const deltas: string[] = []
+    const errors: string[] = []
+    const settled = Promise.withResolvers<void>()
+    askStream('c1', '复位延时是多少？', {
+      onDelta: (text) => deltas.push(text),
+      onError: ({ code }) => errors.push(code),
+      onSettled: settled.resolve,
+    })
+    await settled.promise
+    expect(errors).toEqual(['source_changed'])
+    expect(deltas).toEqual([])
+  })
+
+  it('应答缺 X-DDP-Source：同样丢弃（fail closed），一个字都不显示', async () => {
+    Object.defineProperty(window, 'ddpDesktop', { value: {}, configurable: true, writable: true })
+    bootSource.value = { sourceId: 'local-1', kind: 'local', label: '乙', state: 'ready', readOnly: false,
+      features: [], active: true, reason: null } as never
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      frame('delta', { text: '无头应答' }) + frame('done', { message_id: 'm1', verified: false, degraded: null }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } })))
     const deltas: string[] = []
     const errors: string[] = []
     const settled = Promise.withResolvers<void>()

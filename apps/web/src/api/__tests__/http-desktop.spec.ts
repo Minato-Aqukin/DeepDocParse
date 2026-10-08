@@ -58,6 +58,37 @@ describe('桌面来源校验', () => {
     await expect(http.get('/api/resources')).rejects.toMatchObject({ code: 'source_changed' })
   })
 
+  it('桌面下响应缺头 → 同样丢弃（fail closed：宿主必带此头）', async () => {
+    setDesktop({})
+    bootSource.value = {
+      sourceId: 'boot-1', kind: 'local', label: 'ws', state: 'ready',
+      readOnly: false, features: [], active: true, reason: null,
+    }
+    expect(isCurrentSourceResponse({ 'content-type': 'application/json' })).toBe(false)
+    expect(isCurrentSourceResponse(new AxiosHeaders({}))).toBe(false)
+    http.defaults.adapter = async (config) => respond(config, {})
+    await expect(http.get('/api/resources')).rejects.toMatchObject({ code: 'source_changed' })
+  })
+
+  it('桌面下错误响应缺头 → 同样按串源丢弃，不走原错误通道', async () => {
+    setDesktop({})
+    bootSource.value = {
+      sourceId: 'boot-1', kind: 'local', label: 'ws', state: 'ready',
+      readOnly: false, features: [], active: true, reason: null,
+    }
+    http.defaults.adapter = async (config) => {
+      throw Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        config,
+        response: {
+          status: 500, data: { error: { code: 'x', message: 'm' } },
+          headers: new AxiosHeaders({}),
+        },
+      })
+    }
+    await expect(http.get('/api/documents')).rejects.toMatchObject({ code: 'source_changed' })
+  })
+
   it('桌面下响应头一致 → 放行', async () => {
     setDesktop({})
     bootSource.value = {
@@ -95,7 +126,11 @@ describe('桌面来源校验', () => {
     let seen: unknown
     http.defaults.adapter = async (config) => {
       seen = config.headers?.Authorization
-      return respond(config, {})
+      return respond(config, { 'x-ddp-source': 'boot-1' })
+    }
+    bootSource.value = {
+      sourceId: 'boot-1', kind: 'local', label: 'ws', state: 'ready',
+      readOnly: false, features: [], active: true, reason: null,
     }
     await http.get('/api/resources')
     expect(seen).toBeUndefined()
@@ -124,7 +159,7 @@ describe('桌面来源校验', () => {
         config,
         response: {
           status: 401, data: { error: { code: 'x', message: 'm' } },
-          headers: new AxiosHeaders({}),
+          headers: new AxiosHeaders({ 'x-ddp-source': 'boot-1' }),
         },
       })
     }

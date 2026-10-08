@@ -125,3 +125,28 @@ it('restores authenticated navigation after reconnecting the active center and r
   expect(route.query.reason).toBeUndefined()
   expect(sourceActivate).not.toHaveBeenCalled()
 })
+
+it('要求保存但宿主只给会话凭证时明示降级、不重载页面', async () => {
+  const centerConnect = vi.fn(async () => ({ ok: true,
+    value: { ...source('c1', { state: 'ready' }), credential: { mode: 'session', reason: 'session_only_test' } } }))
+  window.ddpDesktop = {
+    sourceList: vi.fn(async () => ({ ok: true, value: [] })),
+    hostStatus: vi.fn(async () => ({ ok: true,
+      value: { secrets: { backend: 'test', persistentAvailable: true } } })),
+    centerConnect,
+  } as never
+  const wrapper = mount(SourcesView, { global: { plugins: [ElementPlus] } })
+  await flushPromises()
+  const inputs = wrapper.findAll('input')
+  await inputs[0]!.setValue('https://center.test/team')
+  await inputs[1]!.setValue('alice')
+  await inputs[2]!.setValue('s3cret')
+  await wrapper.find('input[type="checkbox"]').setValue(true)
+  const reload = vi.fn()
+  Object.defineProperty(window, 'location', { value: { ...window.location, reload }, configurable: true })
+  await wrapper.find('form').trigger('submit')
+  await flushPromises()
+  expect(centerConnect).toHaveBeenCalledWith(expect.objectContaining({ persist: true }))
+  expect(wrapper.get('[role="alert"]').text()).toContain('只保留在本次会话')
+  expect(reload).not.toHaveBeenCalled()
+})

@@ -356,6 +356,14 @@ export interface SearchHit {
   /** 余弦相似度，"有多相关"看它 */
   similarity: number | null
   snippet: string
+  /**
+   * 稳定定位键（content-v1.yaml SearchHit）：chunk_id 每次 reindex 都会重铸，
+   * (parse_job_id, seq) 不会。后端没升级时这些字段缺失，前端按缺失处理。
+   */
+  parse_job_id?: string | null
+  seq?: number | null
+  evidence_id?: string | null
+  page_size?: [number, number] | null
 }
 
 export interface SearchResult {

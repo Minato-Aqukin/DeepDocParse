@@ -11,7 +11,6 @@ import { formatPageLocator } from '@/utils/page-locator'
 
 const graph = ref<KnowledgeGraph>({ graph_version: 'ddp-graph/1', entities: [], edges: [] })
 const loading = ref(false)
-const building = ref(false)
 const errorText = ref('')
 const entityType = ref('')
 const minimumConfidence = ref(0)
@@ -54,19 +53,6 @@ function selectEdgeById() {
   if (edge) selectEdge(edge)
 }
 
-async function build() {
-  building.value = true
-  try {
-    const result = (await knowledgeApi.build()).data
-    ElMessage.success(`已生成 ${result.entities} 个实体、${result.edges} 条边、${result.wiki_entries} 个 Wiki 条目`)
-    await load()
-  } catch (error) {
-    ElMessage.error(`知识生成失败：${String(error)}`)
-  } finally {
-    building.value = false
-  }
-}
-
 async function split() {
   if (!selectedEntity.value || !splitAlias.value) return
   try {
@@ -86,7 +72,6 @@ onMounted(load)
   <div class="page" v-loading="loading">
     <header class="page-head">
       <div><h2>实体关系图谱</h2><p>每条边都可以点回原文证据；红色只表示证据缺失或低置信合并。</p></div>
-      <el-button :loading="building" @click="build">从最新证据更新知识层</el-button>
     </header>
     <el-alert v-if="errorText" :title="errorText" type="error" :closable="false" />
 
@@ -156,7 +141,7 @@ h2, h3, p { margin: 0; }
 .toolbar { padding-block: 10px; border-block: 1px solid var(--ddp-line); }
 .toolbar label { display: grid; grid-template-columns: auto minmax(150px, 280px); align-items: center; gap: 12px; flex: 1; }
 .toolbar .edge-picker { grid-template-columns: auto minmax(110px, 180px); flex: none; }
-.edge-picker select { min-height: 36px; border: 1px solid var(--ddp-line-strong); background: var(--ddp-panel); color: var(--ddp-ink); }
+.edge-picker select { min-height: 36px; border: 1px solid var(--ddp-line-2); background: var(--ddp-panel); color: var(--ddp-ink); }
 .toolbar > span { color: var(--ddp-ink-3); font-family: var(--ddp-font-mono); font-size: 12px; }
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; min-height: 0; }
 aside { display: grid; align-content: start; gap: 14px; min-width: 0; padding-left: 14px; border-left: 1px solid var(--ddp-line); }
