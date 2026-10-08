@@ -9,27 +9,23 @@ import pytest
 
 @pytest.fixture
 def sqlite_sessionmaker():
-    """SQLite in-memory 的 async sessionmaker —— 建表用共用的 Base.metadata。
+    """SQLite in-memory 的 async sessionmaker，只建这些用例要的三张表。
 
-    Base 是跨包共享的 registry：ddp_core 的 AgentTurn/Assertion 引用了
-    corpus-api 才定义的 messages 表（ddp_corpus.models.Message）。建表时
-    必须先 import ddp_corpus.models 把那张表注册进来，否则 create_all
-    直接 NoReferencedTableError（test_search_degraded 首跑即踩中）。
+    Base 是跨包共享的 registry：ddp_core 里另有模型引用 corpus-api 才定义的
+    表（例如 messages）。整份 create_all 会要求 corpus-api 也装着，而 ddp_core
+    的 CI 作业只装 ddp_core 自己 —— 所以这里显式点名表，不让叶子包的测试
+    依赖上层服务包。
     """
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-    from ddp_core.models import Base
-
-    try:
-        import ddp_corpus.models  # noqa: F401 —— 注册 messages 等 corpus-api 表
-    except ImportError:
-        pass
+    from ddp_core.models import Base, Chunk, Document, ParseJob
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    tables = [Document.__table__, ParseJob.__table__, Chunk.__table__]
 
     async def _make():
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(Base.metadata.create_all, tables=tables)
         return async_sessionmaker(engine, expire_on_commit=False)
 
     return _make

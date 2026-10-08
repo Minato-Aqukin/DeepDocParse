@@ -273,15 +273,9 @@ jobs:
             --publish never \
             --win nsis portable --x64
 
-      # 打包后重算：win-unpacked 里的 WSL 运行时必须与 dist/wsl/wsl-runtime.json
-      # 逐字节一致，两个 exe 必须真的带负载（不是卸载器 stub）。
-      - name: 校验打包结果
-        shell: bash
-        run: |
-          python scripts/verify_windows_package.py dist/desktop/windows/win-unpacked \
-            --installer dist/desktop/windows/DeepDocParse-*-setup.exe \
-            --installer dist/desktop/windows/DeepDocParse-*-portable.exe
-
+      # 先记录 sidecar + SHA256SUMS：verify_windows_package.py 把安装包与这两处
+      # 记录逐字节比对，没有记录就拒绝（只看大小挡不住被替换的 exe）。
+      # release.yml 取回产物时用同一份记录做第二次核对。
       - name: 记录安装包 SHA256（逐文件 sidecar + SHA256SUMS）
         shell: bash
         run: |
@@ -304,6 +298,15 @@ jobs:
           (windows / "SHA256SUMS").write_text("\n".join(lines) + "\n")
           print("\n".join(lines))
           PY
+
+      # 打包后重算：win-unpacked 里的 WSL 运行时必须与 dist/wsl/wsl-runtime.json
+      # 逐字节一致，两个 exe 必须真的带负载（不是卸载器 stub）。
+      - name: 校验打包结果
+        shell: bash
+        run: |
+          python scripts/verify_windows_package.py dist/desktop/windows/win-unpacked \
+            --installer dist/desktop/windows/DeepDocParse-*-setup.exe \
+            --installer dist/desktop/windows/DeepDocParse-*-portable.exe
 
       # 计划决策 5：只做诊断。不装发行版、不碰 reboot/admin。continue-on-error，
       # 结果只进日志，不影响打包产物。

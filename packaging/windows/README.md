@@ -71,15 +71,22 @@ manifest. The shape floors raise the cost; they are not a signature and must
 not be described as one. The same inner + shape checks run when a packaged
 tree's embedded runtime is verified.
 
-After electron-builder runs, re-hash the packaged output before shipping:
+After electron-builder runs, record the installer checksums, then re-hash the
+packaged output before shipping:
 
 ```sh
 .venv/bin/python scripts/build_desktop.py --verify dist/desktop/windows/win-unpacked
-# the same checks, standalone, plus installer payload floors:
+# write <installer>.sha256 sidecars + SHA256SUMS next to the installers
+# (the "记录安装包 SHA256" step in .github/workflows/desktop-windows.yml), then
+# the same checks, standalone, plus installer payload floors and anchors:
 .venv/bin/python scripts/verify_windows_package.py dist/desktop/windows/win-unpacked \
   --installer dist/desktop/windows/DeepDocParse-0.1.0-win-x64-setup.exe \
   --installer dist/desktop/windows/DeepDocParse-0.1.0-win-x64-portable.exe
 ```
+
+Each installer must match both its sidecar and its SHA256SUMS line; without
+those records the verifier refuses, because a size floor alone cannot tell a
+swapped executable from the one that was built.
 
 This fails closed when `deepdocparse.exe`, the app sources (`resources/app/`
 `package.json` · `src/main.mjs` · `ui/index.html`, plus
