@@ -245,7 +245,7 @@ def test_v1_migration_is_atomic_and_preserves_existing_resources(tmp_path, monke
     monkeypatch.setattr(wiki_store, 'SCHEMA', original)
     runtime = LocalRuntime(directory)
     try:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 3
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 4
         assert db.execute('SELECT title FROM resources WHERE id=?', ('old-resource',)).fetchone()[0] == 'Old title'
     finally:
         runtime.close()
@@ -320,3 +320,84 @@ async def test_withdrawn_source_marks_stale_and_rebuild_keeps_human_text(ready):
     assert current['id'] == edited['revision']['id']
     assert current['pages'][0]['human_paragraphs'][0]['text'] == 'Manual note'
     assert current['stale']
+
+
+def test_v2_and_v3_workspace_migration_backfills_layout_facts(tmp_path):
+    import hashlib as _hashlib
+
+    from ddp_local.store import CONTENT_TABLES, DDL
+    from ddp_local import wiki_store
+
+    def _seed(version):
+        directory = tmp_path / f'legacy-v{version}'
+        directory.mkdir()
+        db = sqlite3.connect(directory / 'workspace.sqlite3', isolation_level=None)
+        db.executescript(DDL)
+        db.execute('PRAGMA user_version=1')
+        columns = {row[1] for row in db.execute('PRAGMA table_info(versions)')}
+        for column in ('page_count', 'layout_error'):
+            if column in columns:
+                db.execute(f'ALTER TABLE versions DROP COLUMN {column}')
+        schema = wiki_store.SCHEMA
+        if version == 3:
+            schema += CONTENT_TABLES
+        statement = ''
+        for line in schema.splitlines():
+            statement += line + '\n'
+            if sqlite3.complete_statement(statement):
+                if 'PRAGMA user_version' not in statement:
+                    db.execute(statement)
+                statement = ''
+        wrapped = json.dumps({'layout': {'pdf_info': [{'page_idx': 0}, {'page_idx': 1}],
+                                        'layout_version': 'v', 'code_detection': 'native'}}).encode()
+        blobs = directory / 'blobs'
+        blobs.mkdir(mode=0o700)
+        layout_key = _hashlib.sha256(wrapped).hexdigest()
+        (blobs / layout_key).write_bytes(wrapped)
+        (blobs / layout_key).chmod(0o600)
+        source_key = _hashlib.sha256(b'%PDF-seed').hexdigest()
+        (blobs / source_key).write_bytes(b'%PDF-seed')
+        (blobs / source_key).chmod(0o600)
+        db.execute('INSERT INTO resources VALUES(?,?,?)', ('legacy-resource', 'Legacy', 1))
+        db.execute(
+            'INSERT INTO versions(id,resource_id,filename,source_digest,size_bytes,blob_key,'
+            'parse_revision,state,layout_key,bundle_key,source_json,provider,degraded,error,'
+            'created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            ('legacy-version', 'legacy-resource', 'legacy.pdf', source_key, 9, source_key,
+             'rev-1', 'ready', layout_key, None, None, '{}', '[]', None, 1))
+        db.execute(f'PRAGMA user_version={version}')
+        db.close()
+        return directory
+
+    for version in (2, 3):
+        directory = _seed(version)
+        runtime = LocalRuntime(directory)
+        try:
+            assert runtime.store.db.execute('PRAGMA user_version').fetchone()[0] == 4
+            row = runtime.store.version('legacy-version')
+            assert row['page_count'] == 2, row
+            assert row['layout_error'] is None
+        finally:
+            runtime.close()
+
+
+def test_workspace_sidecar_symlinks_refuse_open_with_control(tmp_path):
+    control = tmp_path / 'clean-workspace'
+    runtime = LocalRuntime(control)
+    runtime.close()
+    assert not (control / 'workspace.sqlite3-wal').exists()
+
+    from ddp_core.application.ports import ApplicationError as _ApplicationError
+
+    import pytest as _pytest
+
+    for suffix in ('-wal', '-shm'):
+        directory = tmp_path / f'sidecar-{suffix[1:]}'
+        (directory / 'workspace.sqlite3').parent.mkdir(parents=True, exist_ok=True)
+        outside = tmp_path / f'outside{suffix}.db'
+        outside.write_bytes(b'outside')
+        (directory / ('workspace.sqlite3' + suffix)).symlink_to(outside)
+        with _pytest.raises(_ApplicationError) as refused:
+            LocalRuntime(directory)
+        assert refused.value.code == 'unsafe_path'
+        assert outside.read_bytes() == b'outside'

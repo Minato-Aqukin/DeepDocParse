@@ -64,7 +64,7 @@ export interface DesktopClientBridge {
     resultManifestDigest: string; idempotencyKey: string }): Promise<Result<Json>>
 }
 /**
- * Single active data source for the host /api proxy (DESKTOP-APPSHELL-PLAN wave 1).
+ * Single active data source for the host /api proxy.
  * sourceId IS the ConnectionSummary.connectionId verbatim. After a successful
  * sourceActivate/workspaceOpen/centerConnect the RENDERER calls location.reload();
  * the host only records the active source (persisted in userData).
@@ -85,12 +85,16 @@ export interface SourceSummary {
   environment: { environmentId: string; workspaceId: string; authorityNodeId: string }
   profile: Profile
 }
+export interface CenterConnectResult extends SourceSummary {
+  /** Actual credential persistence from CredentialBroker: never assume persist:true persisted. */
+  credential: { mode: 'persistent' | 'session' | 'absent'; reason: string | null }
+}
 export interface DesktopSourceBridge {
   sourceList(): Promise<Result<SourceSummary[]>>
   sourceActivate(input: { sourceId: string }): Promise<Result<SourceSummary>>
   sourceReconnect(input: { sourceId: string }): Promise<Result<SourceSummary>> // centers only; active source unchanged
   sourceRemove(input: { sourceId: string }): Promise<Result<null>>          // never deletes local workspace data (T65)
   workspaceOpen(): Promise<Result<SourceSummary | null>>                     // native directory dialog → start runtime → connect → activate; null = cancelled
-  centerConnect(input: { endpoint: string; username: string; password: string; persist: boolean; storageOrigin?: string }): Promise<Result<SourceSummary>>
+  centerConnect(input: { endpoint: string; username: string; password: string; persist: boolean; storageOrigin?: string }): Promise<Result<CenterConnectResult>>
   onSourceChange(listener: (sources: SourceSummary[]) => void): () => void
 }

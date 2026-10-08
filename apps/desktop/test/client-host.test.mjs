@@ -11,6 +11,7 @@ import { WorkspaceHandles } from '../src/workspaces.mjs'
 import { OwnedRuntimeManager } from '../src/runtime.mjs'
 import { ClientHost, clientFailure } from '../src/client-host.mjs'
 import { clientArguments } from '../src/client-policy.mjs'
+import { HostError } from '../src/policy.mjs'
 import { nativeRuntimeSkipReason } from './helpers/platform.mjs'
 
 test('renderer command IPC is local model management only; content writes cannot bypass the /api proxy', () => {
@@ -151,6 +152,107 @@ test('a persisted WSL local connection rehydrates as a WSL workspace without cli
   } finally { await restarted.close() }
 })
 
+test('connectLocal refuses the same virtual path from a different distro with identity_mismatch', async t => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'ddp-client-host-wsl-mismatch-'))
+  t.after(() => rm(temporary, { recursive: true, force: true }))
+  const workspaces = new WorkspaceHandles()
+  const directory = '~/.deepdocparse/workspaces/default'
+  const first = workspaces.selectedWsl({ directory, distro: 'Ubuntu-22.04' })
+  const second = workspaces.selectedWsl({ directory, distro: 'Debian' })
+  // One handshake for both handles: environment, binding and kind all match, so a
+  // distro difference alone must trigger the gate (client-host.mjs:591-598).
+  const url = 'http://127.0.0.1:1'
+  const runtime = { start: async () => ({ state: 'ready' }),
+    connection: () => ({ url, token: 'a'.repeat(64), handshake: { protocol_version: 'ddp-client/1',
+      identity: { environment_id: 'wsl-env', workspace_id: 'wsl-workspace', authority_node_id: 'wsl-node' },
+      profile: { issuer: 'wsl-node', subject: 'user-alice' } } }) }
+  const options = { workspaces, runtime, directory: path.join(temporary, 'client'),
+    credentials: { withCredential: () => assert.fail('local runtime must not use remote credentials') } }
+  const clients = await new ClientHost(options).initialize()
+  try {
+    await clients.connectLocal({ workspaceId: first.workspaceId })
+    await assert.rejects(clients.connectLocal({ workspaceId: second.workspaceId }), /identity_mismatch/)
+    const blocked = clients.list().find(entry => entry.workspaceId === first.workspaceId)
+    assert.equal(blocked.view.transport, 'blocked')
+    assert.equal(blocked.view.reason, 'identity_mismatch')
+  } finally { await clients.close() }
+})
+
+test('a pre-binding WSL entry adopts the current distro and re-persists it', async t => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'ddp-client-host-wsl-adopt-'))
+  t.after(() => rm(temporary, { recursive: true, force: true }))
+  const directory = '~/.deepdocparse/workspaces/default'
+  const distro = 'Ubuntu-22.04'
+  const url = 'http://127.0.0.1:1'
+  const handshake = { protocol_version: 'ddp-client/1',
+    identity: { environment_id: 'wsl-env', workspace_id: 'wsl-workspace', authority_node_id: 'wsl-node' },
+    profile: { issuer: 'wsl-node', subject: 'user-alice' } }
+  const makeRuntime = () => ({ start: async () => ({ state: 'ready' }),
+    connection: () => ({ url, token: 'a'.repeat(64), handshake }) })
+  const credentials = { withCredential: () => assert.fail('local runtime must not use remote credentials') }
+  const clientDir = path.join(temporary, 'client')
+  const firstWorkspaces = new WorkspaceHandles({ defaultWslDistro: distro })
+  const firstHandle = firstWorkspaces.selectedWsl({ directory })
+  assert.equal(firstWorkspaces.distro(firstHandle.workspaceId), distro)
+  const first = await new ClientHost({ workspaces: firstWorkspaces,
+    runtime: makeRuntime(), directory: clientDir, credentials }).initialize()
+  try {
+    await first.connectLocal({ workspaceId: firstHandle.workspaceId })
+  } finally { await first.close() }
+  const configuration = path.join(clientDir, 'connections.json')
+  const persisted = JSON.parse(await readFile(configuration, 'utf8'))
+  assert.equal(persisted[0].workspaceDistro, distro)
+  // Simulate a file written before distro binding existed.
+  delete persisted[0].workspaceDistro
+  assert.equal('workspaceDistro' in persisted[0], false)
+  await writeFile(configuration, JSON.stringify(persisted))
+  // Fresh handles + host, same startup default (main.mjs binds once at launch).
+  const workspaces = new WorkspaceHandles({ defaultWslDistro: distro })
+  const clients = await new ClientHost({ workspaces,
+    runtime: makeRuntime(), directory: clientDir, credentials }).initialize()
+  try {
+    const restored = clients.list()[0]
+    assert.ok(restored.workspaceId, 'the adopted entry must rehydrate a workspace handle')
+    assert.equal(workspaces.distro(restored.workspaceId), distro)
+    assert.notEqual(restored.view.reason, 'workspace_unavailable')
+    await clients.connectLocal({ workspaceId: restored.workspaceId })
+  } finally { await clients.close() }
+  assert.equal(JSON.parse(await readFile(configuration, 'utf8'))[0].workspaceDistro, distro,
+    'the next persist must record the adopted distro')
+})
+
+test('a tampered WSL handle whose directory re-resolve fails blocks connectLocal', async t => {
+  // WorkspaceHandles keeps entries private and canonicalizes at selection, so a real
+  // in-memory entry cannot become inconsistent via public API. Simulate the tamper
+  // signal (workspaces.mjs:87-91 throwing workspace_changed) with a double and pin
+  // that connectLocal fails closed on it instead of connecting with a stale path.
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'ddp-client-host-wsl-tamper-'))
+  t.after(() => rm(temporary, { recursive: true, force: true }))
+  const workspaceId = 'workspace-tampered'
+  const workspaces = {
+    defaultWslDistro: 'Ubuntu-22.04',
+    resolveWslDistro: explicit => explicit ?? 'Ubuntu-22.04',
+    selectedWsl: () => ({ workspaceId, name: 'default' }),
+    selectedByNativeDialog: async () => assert.fail('must not select a native handle'),
+    public: () => ({ workspaceId, name: 'default' }),
+    kind: () => 'wsl',
+    distro: () => 'Ubuntu-22.04',
+    directory: async () => { throw new HostError('workspace_changed') },
+  }
+  const url = 'http://127.0.0.1:1'
+  const runtime = { start: async () => ({ state: 'ready' }),
+    connection: () => ({ url, token: 'a'.repeat(64), handshake: { protocol_version: 'ddp-client/1',
+      identity: { environment_id: 'wsl-env', workspace_id: 'wsl-workspace', authority_node_id: 'wsl-node' },
+      profile: { issuer: 'wsl-node', subject: 'user-alice' } } }) }
+  const clients = await new ClientHost({ workspaces, runtime,
+    directory: path.join(temporary, 'client'),
+    credentials: { withCredential: () => assert.fail('local runtime must not use remote credentials') } }).initialize()
+  try {
+    await assert.rejects(clients.connectLocal({ workspaceId }), /workspace_changed/)
+    assert.equal(clients.list().length, 0, 'no source registered when the workspace re-resolve fails')
+  } finally { await clients.close() }
+})
+
 test('legacy local entries without a workspace kind keep the absolute native directory gate', async t => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'ddp-client-host-legacy-'))
   t.after(() => rm(temporary, { recursive: true, force: true }))
@@ -186,6 +288,18 @@ test('fixed client schema rejects scope/path/URL injection and writes with impli
   assert.deepEqual(clientFailure(new Error('private-token or URL')), { ok: false, error: { code: 'host_operation_failed' } })
 })
 
+test('draft IPC validates revision shape and value size before the store', () => {
+  const save = (expectedRevision, value) =>
+    clientArguments('clientSaveDraft', { connectionId: 'known', key: 'draft', expectedRevision, value })
+  assert.equal(save(0, { text: 'hi' }).expectedRevision, 0)
+  for (const revision of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, '0', null, NaN]) {
+    assert.throws(() => save(revision, {}), /invalid_arguments/, JSON.stringify(revision))
+  }
+  assert.throws(() => save(0, { blob: 'x'.repeat(1024 * 1024 + 1) }), /invalid_arguments/, 'over 1 MiB')
+  assert.throws(() => save(0, BigInt(1)), /invalid_arguments/, 'non-JSON value')
+  assert.throws(() => clientArguments('clientReadDraft', { connectionId: 'known', key: '../escape' }),
+    /invalid_arguments/, 'draft key still fenced')
+})
 
 test('native upload goes through the proxied content chain: session → parts → finalize → parse → source bytes', { skip: nativeRuntimeSkipReason() }, async t => {
   // Security intent of the deleted importFile/readOriginal/exportBundle IPC, kept via the

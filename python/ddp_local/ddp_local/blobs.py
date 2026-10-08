@@ -10,6 +10,7 @@ from pathlib import Path
 from ddp_core.application.ports import ApplicationError
 
 MAX_INPUT = 32 * 1024 * 1024
+STREAM_CHUNK = 65536
 
 
 class FileBlobStore:
@@ -29,6 +30,28 @@ class FileBlobStore:
     def path(self, key: str) -> str:
         # Linux profile: the pinned directory descriptor survives path/symlink replacement.
         return f"/proc/self/fd/{self.fd}/{self._key(key)}"
+
+    def open(self, key: str):
+        """Binary stream for one immutable blob; caller owns the descriptor.
+
+        Validates the pinned descriptor is a regular file, then returns a
+        binary file object the caller must close. Digest verification stays
+        with read()/put_stream(); streaming callers (upload finalize chains
+        part streams into put_stream, which re-hashes the concatenated bytes
+        and links the result under its digest) re-verify through the fixed
+        declared size/sha256 checks after transfer.
+        """
+        import stat as _stat
+
+        fd = os.open(self._key(key), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.fd)
+        try:
+            if not _stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ApplicationError("unsafe_path", "blob is not a regular file")
+            os.set_blocking(fd, True)
+            return os.fdopen(fd, "rb")
+        except BaseException:
+            os.close(fd)
+            raise
 
     def read(self, key: str, maximum: int) -> bytes:
         fd = os.open(self._key(key), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.fd)

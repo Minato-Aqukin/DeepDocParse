@@ -128,9 +128,15 @@ export function createNativeBackend(options) {
     async stop(child, { graceMs = shutdownMs } = {}) {
       if (!child || child.exitCode !== null || child.signalCode !== null) return
       const closed = new Promise(resolve => child.once('close', resolve))
-      child.kill('SIGTERM')
+      try { child.kill('SIGTERM') } catch { /* the child is already gone */ }
       await Promise.race([closed, delay(graceMs)])
-      if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await closed }
+      if (child.exitCode === null && child.signalCode === null) {
+        try { child.kill('SIGKILL') } catch { /* the child is already gone */ }
+        // A SIGKILLed child that never emits close (stuck stdio/D-state, wedged
+        // shim) must not hang shutdown forever: bound the wait the same way and
+        // continue shutdown on timeout; requestQuit always completes.
+        await Promise.race([closed, delay(graceMs)])
+      }
     },
     validateBundle: bundleValidator(spawnProcess, python, launcher, pythonPaths, cwd),
   }

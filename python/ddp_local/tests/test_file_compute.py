@@ -257,6 +257,40 @@ async def test_cancel_calls_center_and_saves_truth(runtime, center):
                                        offset=0, length=1)
     assert exc.value.code in ("consent_revoked", "consent_required")
 
+async def test_cancel_discards_only_its_own_partial_and_keeps_imported_versions(runtime, center):
+    import sys
+    sys.path.insert(0, "tests")
+    from ddp_bundle_fixture import sample_bundle
+    from pathlib import Path as _Path
+    payload = sample_bundle()
+    manifest_digest = content_digest(payload)
+    digest_hex = manifest_digest.removeprefix("sha256:")
+    plan_id, _ = await _propose(runtime)
+    cfg = config()
+    await module.dispatch_plan(runtime, plan_id, cfg, phase="exploration", operation_key="explore-cancel-partial")
+    _succeeded_record(center, manifest_digest)
+    center.payload, center.digest_hex = payload, digest_hex
+    center.tamper_next, center.fail_next, center.requests_ranges = 0, [], []
+    center.handler = RangeCenter.handler.__get__(center, RangeCenter)
+    out = await module.fetch_delivery(runtime, plan_id, cfg)
+    assert out["delivery"].get("verified") is True
+    stored = out["delivery"]["import_result"]
+    workspace = _Path(runtime.store.db.execute("PRAGMA database_list").fetchone()[2]).parent
+    partial = workspace / "delivery-partials" / filemod.partial_identity(plan_id, manifest_digest)
+    assert not partial.exists()
+    # A stale orphan for this transfer must die on cancel while the imported
+    # version bytes stay readable.
+    fd = filemod.partial_path(runtime, filemod.partial_identity(plan_id, manifest_digest))
+    import os as _os
+    _os.write(fd, b"stale-prefix")
+    _os.close(fd)
+    assert partial.exists()
+    out = await module.cancel_remote_compute(runtime, plan_id, cfg, operation_key="cancel-partial-1")
+    assert out["state"] == "cancelled"
+    assert not partial.exists()
+    version = runtime.store.version(stored["version_id"])
+    assert runtime.blobs.read(version["bundle_key"], 64 * 1024 * 1024) == payload
+
 
 async def test_output_bytes_must_hash_before_import():
     data = b"ZIPBYTES"
@@ -496,6 +530,7 @@ async def test_expired_output_never_shows_saved_and_cleans_only_partial(runtime,
     out = await module.fetch_delivery(runtime, plan_id, cfg)
     assert out["delivery"].get("verified") is not True
     assert out["delivery"]["reason"] == "delivery_expired"
+    assert out["delivery"]["state"] == "expired"
     assert "import_result" not in out["delivery"]
     with __import__("pytest").raises(ApplicationError) as exc:
         await module.confirm_delivery(runtime, plan_id, "rc-1", manifest_digest, cfg)
@@ -619,3 +654,64 @@ async def test_lost_ack_reply_stays_pending_and_reconfirms_with_a_new_key(runtim
     confirmed = await module.confirm_delivery(runtime, plan_id, "rc-1", manifest_digest, config(), operation_key="confirm-0002")
     assert confirmed["delivery"]["state"] == "confirmed"
     assert len([r for r in center.requests if r["path"].endswith("/ack")]) == 2
+
+
+async def test_cancel_with_malformed_persisted_digest_still_reaches_cancelled(runtime, center):
+    plan_id, _ = await _propose(runtime)
+    cfg = config()
+    await module.dispatch_plan(runtime, plan_id, cfg, phase="exploration",
+                               operation_key="explore-cancel-malformed")
+    identity = module.federation_identity(runtime)
+    state = module.load_federation_state(runtime, plan_id)
+    # A fetch persisted the center's malformed digest before noticing it.
+    state["delivery"] = {"id": "rc-1", "state": "pending",
+                         "result_manifest_digest": "sha256:xyz"}
+    module._save(runtime, identity, plan_id, state)
+    out = await module.cancel_remote_compute(runtime, plan_id, cfg,
+                                             operation_key="cancel-malformed-1")
+    assert out["state"] == "cancelled"
+    assert module.load_federation_state(runtime, plan_id)["state"] == "cancelled"
+    # Same-key replay reports the cancelled state without another center call.
+    sent = len(center.requests)
+    again = await module.cancel_remote_compute(runtime, plan_id, cfg,
+                                               operation_key="cancel-malformed-1")
+    assert again["state"] == "cancelled"
+    assert len(center.requests) == sent
+
+
+async def test_fetch_releases_store_lock_across_awaited_download(runtime, center, monkeypatch):
+    import asyncio
+
+    plan_id, payload, manifest_digest = await _ranged_plan(runtime, center, "explore-lock-free")
+    from ddp_local.federation_client import CenterFederationClient as _Client
+    real_download = _Client.download_range
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = {"n": 0}
+
+    async def blocking_download(self, compute_id, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            entered.set()
+            await asyncio.wait_for(release.wait(), timeout=10)
+        return await real_download(self, compute_id, **kwargs)
+
+    monkeypatch.setattr(_Client, "download_range", blocking_download)
+    fetch = asyncio.ensure_future(module.fetch_delivery(runtime, plan_id, config()))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=10)
+        # The first Range is blocked in the awaited download: the store
+        # lock must be free while it is stuck. A fetch that held the
+        # lock across the download would deadlock this contender.
+        def _contend():
+            got = runtime.store.lock.acquire(True, 10)
+            if got:
+                runtime.store.lock.release()
+            return got
+
+        contender = await asyncio.wait_for(asyncio.to_thread(_contend), timeout=15)
+        assert contender is True
+    finally:
+        release.set()
+    out = await asyncio.wait_for(fetch, timeout=10)
+    assert out["delivery"]["verified"] is True

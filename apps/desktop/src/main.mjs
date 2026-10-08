@@ -122,6 +122,12 @@ app.whenReady().then(async () => {
       orphanCleanupFailure = error instanceof HostError ? error : new HostError('wsl_backend_unavailable')
     }
   }
+  if (runtimeKind === 'wsl') {
+    // Bind WSL workspace handle identity to the resolved distribution before any
+    // handle is selected: the same virtual path on another distro is a different
+    // workspace. Falls back to the requested distro when detection never ran.
+    workspaces.defaultWslDistro = backend?.distro ?? configuration.distro ?? null
+  }
   runtime = new OwnedRuntimeManager({ workspaces, directory: runtimeDirectory, launcher,
     ...configuration, ...(backend ? { backend } : {}) })
   clients = await new ClientHost({ workspaces, runtime, credentials, directory: path.join(privateRoot, 'client'),

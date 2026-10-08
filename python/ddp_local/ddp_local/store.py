@@ -26,7 +26,8 @@ CREATE TABLE versions(id TEXT PRIMARY KEY, resource_id TEXT NOT NULL REFERENCES 
  filename TEXT NOT NULL, source_digest TEXT NOT NULL, size_bytes INTEGER NOT NULL,
  blob_key TEXT NOT NULL, parse_revision TEXT, state TEXT NOT NULL,
  layout_key TEXT, bundle_key TEXT, source_json TEXT, provider TEXT NOT NULL DEFAULT '{}',
- degraded TEXT NOT NULL DEFAULT '[]', error TEXT, created_at REAL NOT NULL);
+ degraded TEXT NOT NULL DEFAULT '[]', error TEXT, page_count INTEGER, layout_error TEXT,
+ created_at REAL NOT NULL);
 CREATE TABLE tasks(id TEXT PRIMARY KEY, kind TEXT NOT NULL, version_id TEXT REFERENCES versions(id),
  operation_key TEXT NOT NULL UNIQUE, request_digest TEXT NOT NULL, status TEXT NOT NULL,
  generation INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
@@ -44,6 +45,7 @@ PRAGMA user_version=1;
 """
 
 MAX_UPLOAD_PART = 8 * 1024 * 1024
+MAX_UPLOAD_PARTS = 8  # 8 x 8 MiB covers the 32 MiB local budget with bounded overhead.
 
 CONTENT_TABLES = """
 CREATE TABLE conversations(id TEXT PRIMARY KEY, document_id TEXT NOT NULL,
@@ -78,7 +80,7 @@ CREATE INDEX citation_evidence_lookup ON citations(evidence_id);
 CREATE INDEX upload_session_key ON upload_sessions(idempotency_key);
 CREATE INDEX upload_session_created ON upload_sessions(created_at);
 CREATE INDEX wiki_binding_evidence ON wiki_claim_bindings(evidence_id);
-PRAGMA user_version=3;
+PRAGMA user_version=4;
 """
 
 
@@ -94,12 +96,61 @@ def record(row):
     return value
 
 
+class _ChainedStreams:
+    """File-like chain over ordered part streams with incremental hashing.
+
+    ``put_stream`` pulls 64 KiB chunks, so only one chunk is ever in RAM.
+    The SHA-256 digest and the first five bytes (for the %PDF- peek) are
+    accumulated as bytes flow through; nothing is re-read afterwards.
+    """
+
+    def __init__(self, streams):
+        self._streams = list(streams)
+        self._index = 0
+        self._digest = hashlib.sha256()
+        self._head = b""
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            size = 65536
+        while self._index < len(self._streams):
+            data = self._streams[self._index].read(size)
+            if data:
+                self._digest.update(data)
+                if len(self._head) < 5:
+                    self._head += data[: 5 - len(self._head)]
+                return data
+            self._index += 1
+        return b""
+
+    def hexdigest(self):
+        return self._digest.hexdigest()
+
+    def head(self):
+        return self._head
+
+
+# Projected document status (parse_status values) back to stored version
+# states. Mirrors ``_version_state_to_parse`` in content_http: every stored
+# state not listed under pending/running/succeeded projects to failed
+# (withdrawn included), so the failed bucket carries the same rows the old
+# Python-side filter kept. ``unparsed`` is a stored state (imported sources
+# without a parse revision), hence its own pending bucket entry.
+_PARSE_STATUS_STATES = {
+    "pending": ("queued", "unparsed"),
+    "running": ("parsing",),
+    "succeeded": ("ready",),
+    "failed": ("failed", "withdrawn"),
+}
+
+
 class LocalStore:
     def __init__(self, directory: Path):
         self.lock = RLock()
         database = directory / "workspace.sqlite3"
-        if database.is_symlink():
-            raise ApplicationError("unsafe_path", "workspace database cannot be a symlink")
+        for suffix in ("", "-journal", "-wal", "-shm"):
+            if Path(str(database) + suffix).is_symlink():
+                raise ApplicationError("unsafe_path", "workspace database and sidecars cannot be symlinks")
         # Upgrades take the exclusive side of this lease. Checking task rows alone
         # cannot fence an idle runtime starting work after the updater's preflight.
         with ExitStack() as failed:
@@ -125,6 +176,8 @@ class LocalStore:
             with self.tx():
                 version = self.db.execute("PRAGMA user_version").fetchone()[0]
                 if version == 0:
+                    # Fresh DDL only carries the v1 baseline; the additive
+                    # migrations below stamp the current version.
                     for statement in DDL.split(";"):
                         if statement.strip():
                             self.db.execute(statement)
@@ -155,16 +208,46 @@ class LocalStore:
         wiki_claim_bindings foreign key. A version-2 workspace gets the
         additive migration here. The Wiki CAS triggers reference
         wiki_revisions only, so creating these tables never touches them.
+        Version 4 adds cached layout facts (page_count, layout_error) to
+        versions; fresh databases already carry them via DDL.
         """
         with self.tx():
             version = self.db.execute("PRAGMA user_version").fetchone()[0]
-            if version == 2:
+            if version in (1, 2):
+                # A version-1 database never ran the content migration: run the
+                # same center-content statements the version-2 path runs (minus
+                # the version stamp), then let the shared stamp below land on
+                # the current version. Splitting per complete statement keeps
+                # trigger bodies intact, as the Wiki migration does.
                 statement = ""
                 for line in CONTENT_TABLES.splitlines():
+                    if line.strip().startswith("PRAGMA user_version"):
+                        continue
                     statement += line + "\n"
                     if sqlite3.complete_statement(statement):
                         self.db.execute(statement)
                         statement = ""
+            current = self.db.execute("PRAGMA user_version").fetchone()[0]
+            if current in (0, 1, 2, 3):
+                columns = {row[1] for row in self.db.execute("PRAGMA table_info(versions)")}
+                if "page_count" not in columns:
+                    self.db.execute("ALTER TABLE versions ADD COLUMN page_count INTEGER")
+                if "layout_error" not in columns:
+                    self.db.execute("ALTER TABLE versions ADD COLUMN layout_error TEXT")
+                upgraded = current in (1, 2, 3)
+                self.db.execute("PRAGMA user_version=4")
+                if upgraded:
+                    stale = self.db.execute(
+                        "SELECT id,layout_key FROM versions "
+                        "WHERE layout_key IS NOT NULL AND page_count IS NULL "
+                        "AND layout_error IS NULL"
+                    ).fetchall()
+                    for row in stale:
+                        count, error, _meta = self._layout_facts(row["layout_key"])
+                        self.db.execute(
+                            "UPDATE versions SET page_count=?,layout_error=? WHERE id=?",
+                            (count, error, row["id"]),
+                        )
 
     def close(self):
         try:
@@ -253,11 +336,13 @@ class LocalStore:
             resource_id, version_id, revision_id, task_id = (new_id() for _ in range(4))
             now = time.time()
             ready = records is not None
+            page_count, layout_error, _meta = self._layout_facts(layout_key)
             self.db.execute("INSERT INTO resources VALUES(?,?,?)", (resource_id, filename, now))
             self.db.execute(
                 """INSERT INTO versions(id,resource_id,filename,source_digest,size_bytes,
-                blob_key,parse_revision,state,layout_key,bundle_key,source_json,created_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                blob_key,parse_revision,state,layout_key,bundle_key,source_json,page_count,
+                layout_error,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     version_id,
                     resource_id,
@@ -272,6 +357,8 @@ class LocalStore:
                     layout_key,
                     bundle_key,
                     json.dumps(source) if source else None,
+                    page_count,
+                    layout_error,
                     now,
                 ),
             )
@@ -341,10 +428,12 @@ class LocalStore:
             version_id, revision_id, task_id = (new_id() for _ in range(3))
             now = time.time()
             ready = records is not None
+            page_count, layout_error, _meta = self._layout_facts(layout_key)
             self.db.execute(
                 """INSERT INTO versions(id,resource_id,filename,source_digest,size_bytes,
-                blob_key,parse_revision,state,layout_key,bundle_key,source_json,created_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                blob_key,parse_revision,state,layout_key,bundle_key,source_json,page_count,
+                layout_error,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     version_id,
                     resource_id,
@@ -359,6 +448,8 @@ class LocalStore:
                     layout_key,
                     bundle_key,
                     json.dumps(source) if source else None,
+                    page_count,
+                    layout_error,
                     now,
                 ),
             )
@@ -405,13 +496,22 @@ class LocalStore:
                 )
             ]
 
-    def resource_command(self, action, target, *, operation_key):
-        """Resource mutation and its durable receipt commit in the same transaction."""
+    def resource_command(self, action, target, *, operation_key, blobs=None):
+        """Resource mutation and its durable receipt commit in the same transaction.
+
+        Delete commands reclaim unreferenced blob bytes when the caller passes
+        the blob store, but only after the delete and its receipt commit: the
+        sweep touches the filesystem, which cannot roll back with the row
+        delete, so it must not observe (or run inside) the uncommitted delete.
+        A refused sweep is reported as ``blob_gc: {error: code}`` alongside
+        the stored receipt rather than failing the delete.
+        """
         operations = {"version.withdraw": self.withdraw_version, "version.delete": self.delete_version,
                       "resource.delete": self.delete_resource}
         if action not in operations:
             raise ApplicationError("unsupported_operation", "unsupported local resource operation")
         failure = None
+        sweep = None
         with self.tx():
             task, created = self.begin_generation(action, {"target": target}, operation_key)
             if not created:
@@ -429,8 +529,16 @@ class LocalStore:
                 self.db.execute("UPDATE tasks SET status='succeeded',result=?,lease_until=NULL,updated_at=? WHERE id=?",
                                 (json.dumps({"output_id": output_id}), time.time(), task["id"]))
                 self.event("task.succeeded", task["id"], {"output_id": output_id})
+                sweep = action in {"version.delete", "resource.delete"} and blobs is not None
         if failure is not None:
             raise failure
+        if sweep:
+            result["blob_gc"] = self._sweep_after_delete(blobs)
+            with self.tx():
+                task = self.task(result["task_id"])
+                output_id = task["result"]["output_id"]
+                self.db.execute("UPDATE outputs SET body=? WHERE id=?",
+                                (json.dumps(result), output_id))
         return result
 
     def withdraw_version(self, version_id):
@@ -491,13 +599,30 @@ class LocalStore:
                 "source_in_use", "answered conversations retain this immutable evidence version"
             )
 
-    def delete_version(self, version_id):
+    def _sweep_after_delete(self, blobs):
+        """Best-effort post-commit blob sweep; a failure never un-deletes rows.
+
+        The delete transaction already committed before this runs, so a sweep
+        refusal (an unreadable upload session payload fails closed) is
+        reported inside the delete result instead of raising: raising here
+        would report failure for a delete that already happened.
+        """
+        try:
+            return self.sweep_unreferenced_blobs(blobs)
+        except ApplicationError as exc:
+            return {"error": exc.code}
+
+    def delete_version(self, version_id, *, blobs=None):
         """Physically remove one version that nothing retains.
 
         Refuses with ``source_in_use`` while any Wiki dependency manifest
         references the version, and with ``task_in_progress`` while a task is
-        still queued/running. Content-addressed blob bytes are left on disk:
-        they may be shared with other versions and are never trusted by name.
+        still queued/running. Content-addressed blob bytes outliving this
+        delete are reclaimed by ``sweep_unreferenced_blobs`` when the caller
+        passes the blob store; without it the bytes stay on disk (they may
+        be shared with other versions and are never trusted by name). The
+        sweep runs after the delete commits, so a sweep failure is reported
+        as ``blob_gc: {error: code}`` with ``deleted: True``, never raised.
         """
         with self.tx():
             version = self.version(version_id)
@@ -516,10 +641,21 @@ class LocalStore:
                 "version.deleted", None,
                 {"version_id": version_id, "resource_id": resource_id},
             )
-            return {"version_id": version_id, "resource_id": resource_id, "deleted": True}
+            result = {"version_id": version_id, "resource_id": resource_id, "deleted": True}
+        if blobs is not None:
+            result["blob_gc"] = self._sweep_after_delete(blobs)
+        return result
 
-    def delete_resource(self, resource_id):
-        """Remove a whole logical resource once no Wiki or active task retains it."""
+    def delete_resource(self, resource_id, *, blobs=None):
+        """Remove a whole logical resource once no Wiki or active task retains it.
+
+        Blob bytes outliving this delete are reclaimed by
+        ``sweep_unreferenced_blobs`` when the caller passes the blob store;
+        without it they stay on disk (shared with other rows or already
+        orphaned, but never trusted by name). The sweep runs after the delete
+        commits, so a sweep failure is reported as ``blob_gc: {error: code}``
+        with ``deleted: True``, never raised.
+        """
         with self.tx():
             self.resource(resource_id)
             version_ids = [
@@ -549,11 +685,14 @@ class LocalStore:
                 )
             self.db.execute("DELETE FROM resources WHERE id=?", (resource_id,))
             self.event("resource.deleted", None, {"resource_id": resource_id})
-            return {
+            result = {
                 "resource_id": resource_id,
                 "deleted": True,
                 "deleted_versions": sorted(version_ids),
             }
+        if blobs is not None:
+            result["blob_gc"] = self._sweep_after_delete(blobs)
+        return result
     # -- Center-content: conversations, answers, uploads ----------------------
     def _conversation_ids_for_versions(self, version_ids):
         placeholders = ",".join("?" for _ in version_ids)
@@ -886,13 +1025,17 @@ class LocalStore:
             return dict(row)
 
     def store_upload_part(self, session_id, part_number, key, size):
-        if type(part_number) is not int or part_number < 1 or part_number > 10000:
-            raise ApplicationError("invalid_part", "part_number must be within 1..10000")
+        if type(part_number) is not int or part_number < 1 or part_number > MAX_UPLOAD_PARTS:
+            raise ApplicationError("invalid_part", "part_number must be within 1..%d" % MAX_UPLOAD_PARTS)
+        if type(size) is not int or size < 1 or size > MAX_UPLOAD_PART:
+            raise ApplicationError("input_too_large", "upload part exceeds the 8 MiB part budget")
         with self.tx():
             session = self.upload_session(session_id)
             if session["status"] not in {"uploading", "created"}:
                 raise ApplicationError("upload_finalized", "this upload session already finalized")
             parts = json.loads(session["parts_json"])
+            if str(part_number) not in parts and len(parts) >= MAX_UPLOAD_PARTS:
+                raise ApplicationError("input_too_large", "upload exceeds the part-count budget")
             parts[str(part_number)] = {"blob_key": key, "size": size}
             self.db.execute(
                 "UPDATE upload_sessions SET parts_json=?,status='uploading',updated_at=? WHERE id=?",
@@ -900,101 +1043,170 @@ class LocalStore:
             )
             return parts[str(part_number)]
 
-    def finalize_upload_session(self, session_id, read_blob, write_bytes):
-        """Assemble buffered parts, verify size, and create the resource/version.
+    def finalize_upload_session(self, session_id, open_part_stream, put_stream):
+        """Stream part bytes through hash+concat, verify, and create the resource/version.
 
         Runs synchronously: the local runtime has no object-storage round trip
         to poll, so ingest_status is ready (or rejected) on return. The parsed
         content still needs the background parse task; that is the parse task
         row, not the upload session. Part bytes live in the content-addressed
         blob store; the session only keeps their keys.
+
+        Part streams are chained into ``put_stream`` (bounded at the 32 MiB
+        local budget), so peak memory is O(chunk): no part is ever fully
+        joined in RAM. Declared size, SHA-256 and the %PDF- magic are all
+        verified from the streamed bytes; the magic check only peeks at the
+        first five bytes of the first stream. Up to 8 x 8 MiB (64 MiB) may be
+        staged on disk, but the 32 MiB total is enforced during the streaming
+        concat, so finalize fails closed before memory grows.
+
+        The session snapshot is taken in a short transaction, byte streaming
+        runs outside any DB transaction, and verification plus the
+        resource/version commit in a fresh transaction. Rejection markers use
+        their own transaction so an outer rollback cannot undo the
+        failed-status UPDATE (otherwise ingest_status would stay pending).
+        A single part reuses its blob directly: its key already is its
+        SHA-256, so no second put_stream (which would hit FileExistsError and
+        re-verify via read); the bytes are still streamed once for size,
+        digest and magic.
         """
         from ddp_local.blobs import MAX_INPUT
 
-        with self.tx():
-            session = self.upload_session(session_id)
-            if session["status"] == "ready":
+        def _mark_failed(code):
+            with self.tx():
+                self.db.execute(
+                    "UPDATE upload_sessions SET status='failed',error=?,updated_at=? WHERE id=?",
+                    (code, time.time(), session_id),
+                )
+
+        try:
+            with self.tx():
+                session = self.upload_session(session_id)
+                if session["status"] == "ready":
+                    return dict(
+                        self.db.execute(
+                            "SELECT * FROM upload_sessions WHERE id=?", (session_id,)
+                        ).fetchone()
+                    )
+                if session["status"] not in {"uploading", "created"}:
+                    raise ApplicationError("upload_finalized", "this upload session already finalized")
+                parts = json.loads(session["parts_json"])
+                if not parts:
+                    raise ApplicationError("upload_incomplete", "no upload parts received yet")
+                if len(parts) > MAX_UPLOAD_PARTS:
+                    raise ApplicationError("input_too_large", "upload exceeds the part-count budget")
+                numbers = sorted(int(value) for value in parts)
+                keys = [parts[str(number)] for number in numbers]
+                if any(not isinstance(entry, dict) or not isinstance(entry.get("blob_key"), str)
+                       for entry in keys):
+                    raise ApplicationError("upload_incomplete", "upload parts are missing blob references")
+                snapshot = {
+                    "declared_size": session["declared_size"],
+                    "declared_sha256": session["declared_sha256"],
+                    "target_resource_id": session["target_resource_id"],
+                    "filename": session["filename"],
+                }
+        except ApplicationError as exc:
+            if exc.code == "input_too_large" or (
+                exc.code == "upload_incomplete" and "blob references" in str(exc)
+            ):
+                _mark_failed(exc.code)
+            raise
+
+        streams: list = []
+        try:
+            for entry in keys:
+                streams.append(open_part_stream(entry["blob_key"]))
+            chained = _ChainedStreams(streams)
+            if len(keys) == 1:
+                size = 0
+                while True:
+                    chunk = chained.read(65536)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > MAX_INPUT:
+                        _mark_failed("input_too_large")
+                        raise ApplicationError("input_too_large", "upload exceeds the 32 MiB local budget")
+                digest = chained.hexdigest()
+                head = chained.head()
+                blob_key = keys[0]["blob_key"]
+                if digest != blob_key:
+                    _mark_failed("blob_corrupt")
+                    raise ApplicationError("blob_corrupt", "stored upload part digest does not match")
+            else:
+                try:
+                    blob_key, size = put_stream(chained, maximum=MAX_INPUT)
+                except ApplicationError as exc:
+                    if exc.code == "input_too_large":
+                        _mark_failed("input_too_large")
+                    raise
+                digest = chained.hexdigest()
+                head = chained.head()
+        finally:
+            for stream in streams:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+
+        try:
+            with self.tx():
+                session = self.upload_session(session_id)
+                if session["status"] == "ready":
+                    return dict(
+                        self.db.execute(
+                            "SELECT * FROM upload_sessions WHERE id=?", (session_id,)
+                        ).fetchone()
+                    )
+                if session["status"] not in {"uploading", "created"}:
+                    raise ApplicationError("upload_finalized", "this upload session already finalized")
+                if size != snapshot["declared_size"]:
+                    raise ApplicationError("size_mismatch", "uploaded bytes differ from the declared size")
+                if not head.startswith(b"%PDF-"):
+                    raise ApplicationError("invalid_pdf", "local uploads accept PDF bytes only")
+                if snapshot["declared_sha256"] and digest != snapshot["declared_sha256"]:
+                    raise ApplicationError("digest_mismatch", "uploaded bytes differ from the declared digest")
+                self.db.execute(
+                    "UPDATE upload_sessions SET status='verifying',updated_at=? WHERE id=?",
+                    (time.time(), session_id),
+                )
+                if snapshot["target_resource_id"]:
+                    task = self.append_version(
+                        resource_id=snapshot["target_resource_id"], filename=snapshot["filename"],
+                        blob_key=blob_key, size=size,
+                        operation_key="upload:" + session_id,
+                        bundle_key=None, source=None, records=None, layout_key=None,
+                    )
+                    created_resource, created_version = snapshot["target_resource_id"], task["version_id"]
+                else:
+                    task = self.create_resource(
+                        filename=snapshot["filename"], blob_key=blob_key, size=size,
+                        operation_key="upload:" + session_id,
+                        bundle_key=None, source=None, records=None, layout_key=None,
+                    )
+                    created_resource = self.db.execute(
+                        "SELECT resource_id FROM versions WHERE id=?", (task["version_id"],)
+                    ).fetchone()["resource_id"]
+                    created_version = task["version_id"]
+                self.db.execute(
+                    "UPDATE upload_sessions SET status='ready',resource_id=?,version_id=?,"
+                    "updated_at=? WHERE id=?",
+                    (created_resource, created_version, time.time(), session_id),
+                )
                 return dict(
                     self.db.execute(
                         "SELECT * FROM upload_sessions WHERE id=?", (session_id,)
                     ).fetchone()
                 )
-            if session["status"] not in {"uploading", "created"}:
-                raise ApplicationError("upload_finalized", "this upload session already finalized")
-            parts = json.loads(session["parts_json"])
-            if not parts:
-                raise ApplicationError("upload_incomplete", "no upload parts received yet")
-            chunks = []
-            for number in sorted(int(value) for value in parts):
-                chunks.append(read_blob(parts[str(number)]["blob_key"], MAX_INPUT))
-            data = b"".join(chunks)
-            if len(data) > MAX_INPUT:
-                self.db.execute(
-                    "UPDATE upload_sessions SET status='failed',error='input_too_large',"
-                    "updated_at=? WHERE id=?",
-                    (time.time(), session_id),
-                )
-                raise ApplicationError("input_too_large", "upload exceeds the 32 MiB local budget")
-            if len(data) != session["declared_size"]:
-                self.db.execute(
-                    "UPDATE upload_sessions SET status='failed',error='size_mismatch',"
-                    "updated_at=? WHERE id=?",
-                    (time.time(), session_id),
-                )
-                raise ApplicationError(
-                    "size_mismatch", "uploaded bytes differ from the declared size"
-                )
-            if not data.startswith(b"%PDF-"):
-                self.db.execute(
-                    "UPDATE upload_sessions SET status='failed',error='invalid_pdf',"
-                    "updated_at=? WHERE id=?",
-                    (time.time(), session_id),
-                )
-                raise ApplicationError("invalid_pdf", "local uploads accept PDF bytes only")
-            if session["declared_sha256"] and (
-                hashlib.sha256(data).hexdigest() != session["declared_sha256"]
-            ):
-                self.db.execute(
-                    "UPDATE upload_sessions SET status='failed',error='digest_mismatch',"
-                    "updated_at=? WHERE id=?",
-                    (time.time(), session_id),
-                )
-                raise ApplicationError(
-                    "digest_mismatch", "uploaded bytes differ from the declared digest"
-                )
-            self.db.execute(
-                "UPDATE upload_sessions SET status='verifying',updated_at=? WHERE id=?",
-                (time.time(), session_id),
-            )
-            blob_key, size = write_bytes(data)
-            if session["target_resource_id"]:
-                task = self.append_version(
-                    resource_id=session["target_resource_id"], filename=session["filename"],
-                    blob_key=blob_key, size=size,
-                    operation_key="upload:" + session_id,
-                    bundle_key=None, source=None, records=None, layout_key=None,
-                )
-                created_resource, created_version = session["target_resource_id"], task["version_id"]
-            else:
-                task = self.create_resource(
-                    filename=session["filename"], blob_key=blob_key, size=size,
-                    operation_key="upload:" + session_id,
-                    bundle_key=None, source=None, records=None, layout_key=None,
-                )
-                created_resource = self.db.execute(
-                    "SELECT resource_id FROM versions WHERE id=?", (task["version_id"],)
-                ).fetchone()["resource_id"]
-                created_version = task["version_id"]
-            self.db.execute(
-                "UPDATE upload_sessions SET status='ready',resource_id=?,version_id=?,"
-                "updated_at=? WHERE id=?",
-                (created_resource, created_version, time.time(), session_id),
-            )
-            return dict(
-                self.db.execute(
-                    "SELECT * FROM upload_sessions WHERE id=?", (session_id,)
-                ).fetchone()
-            )
+        except ApplicationError as exc:
+            if exc.code in {"size_mismatch", "invalid_pdf", "digest_mismatch",
+                            "upload_incomplete", "input_too_large", "blob_corrupt"}:
+                try:
+                    _mark_failed(exc.code)
+                except ApplicationError:
+                    pass
+            raise
 
 
     def versions(self):
@@ -1003,6 +1215,62 @@ class LocalStore:
                 record(r)
                 for r in self.db.execute("SELECT * FROM versions ORDER BY created_at DESC")
             ]
+
+    def versions_page(self, *, filename_like="", statuses=(), limit=50, offset=0):
+        """Paginated version rows for list paths; never loads every version row.
+
+        ``filename_like`` is a caller-supplied substring matched with LIKE
+        (escaped, case-insensitive); ``statuses`` filters the projected
+        document status (parse_status values ``pending``/``running``/
+        ``succeeded``/``failed``, same projection ``_version_state_to_parse``
+        the list rows carry). Unknown statuses reject; unparseable stored
+        states surface under ``failed`` exactly as the projection maps them.
+        """
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ApplicationError("invalid_window", "offset/limit window is invalid")
+        if type(offset) is not int or offset < 0:
+            raise ApplicationError("invalid_window", "offset/limit window is invalid")
+        clauses, args = [], []
+        if filename_like:
+            escaped = "".join(
+                "\\" + c if c in ("\\", "%", "_") else c for c in filename_like
+            )
+            clauses.append("filename LIKE ? ESCAPE '\\' COLLATE NOCASE")
+            args.append("%" + escaped + "%")
+        wanted = [s for s in statuses if isinstance(s, str) and s]
+        if statuses and not wanted:
+            raise ApplicationError("invalid_status", "unknown document status filter")
+        if wanted:
+            known = {"pending", "running", "succeeded", "failed"}
+            unknown = sorted(set(wanted) - known)
+            if unknown:
+                raise ApplicationError("invalid_status", "unknown document status filter")
+            states: set[str] = set()
+            for status in wanted:
+                states.update(_PARSE_STATUS_STATES[status])
+            clauses.append("state IN (%s)" % ",".join("?" for _ in sorted(states)))
+            args.extend(sorted(states))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self.lock:
+            return [
+                record(r)
+                for r in self.db.execute(
+                    "SELECT * FROM versions" + where +
+                    " ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",
+                    (*args, limit, offset),
+                )
+            ]
+
+    def document_stats(self):
+        """Aggregate counts for the documents summary without layout-blob reads."""
+        with self.lock:
+            row = self.db.execute(
+                "SELECT COUNT(*) AS documents,"
+                " COALESCE(SUM(COALESCE(page_count, 0)), 0) AS pages,"
+                " COALESCE(SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), 0) AS askable"
+                " FROM versions"
+            ).fetchone()
+            return {"documents": row["documents"], "pages": row["pages"], "askable": row["askable"]}
 
     def version(self, version_id):
         with self.lock:
@@ -1212,21 +1480,88 @@ class LocalStore:
                 (local_id, version_id, chunk["text_tokenized"]),
             )
 
+    def _layout_facts(self, layout_key):
+        """Cached (page_count, layout_error, meta) for one layout blob, bounded read.
+
+        No layout yet means no facts (NULL/NULL/{}): the version simply has no
+        compiled pages. A layout that exists but cannot be parsed is visible
+        as layout_error instead of raising; list paths must never silently 0.
+        ``meta`` carries layout_version/code_detection so the projection needs
+        no layout-blob read; write paths merge it into the stored provider JSON.
+        Reads through this store's blob directory fd (never a second store
+        open, which would mkdir/chmod the directory mid-transaction).
+        """
+        import re as _re
+        import stat as _stat
+
+        empty = {"layout_version": "", "code_detection": "unavailable"}
+        if not isinstance(layout_key, str) or _re.fullmatch("[0-9a-f]{64}", layout_key) is None:
+            return None, "layout_unreadable", dict(empty)
+        blob_dir = Path(self.db.execute("PRAGMA database_list").fetchone()[2]).parent / "blobs"
+        try:
+            dir_fd = os.open(blob_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            return None, "layout_unreadable", dict(empty)
+        try:
+            fd = os.open(layout_key, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+        except OSError:
+            os.close(dir_fd)
+            return None, "layout_unreadable", dict(empty)
+        try:
+            if not _stat.S_ISREG(os.fstat(fd).st_mode):
+                return None, "layout_unreadable", dict(empty)
+            os.set_blocking(fd, True)
+            raw = b""
+            while len(raw) <= 2 * 1024 * 1024:
+                data = os.read(fd, min(65536, 2 * 1024 * 1024 + 1 - len(raw)))
+                if not data:
+                    break
+                raw += data
+            if len(raw) > 2 * 1024 * 1024:
+                return None, "layout_too_large", dict(empty)
+            wrapped = json.loads(raw.decode("utf-8"))
+        except Exception:
+            return None, "layout_unreadable", dict(empty)
+        finally:
+            os.close(fd)
+            os.close(dir_fd)
+        if not isinstance(wrapped, dict):
+            return None, "layout_unreadable", dict(empty)
+        layout = wrapped.get("layout", wrapped)
+        if layout is None:
+            if wrapped.get("state") == "missing":
+                return None, None, dict(empty)
+            return None, "layout_unreadable", dict(empty)
+        if not isinstance(layout, dict):
+            return None, "layout_unreadable", dict(empty)
+        pages = layout.get("pdf_info", [])
+        if not isinstance(pages, list):
+            return None, "layout_unreadable", dict(empty)
+        indices = {p.get("page_idx", i) for i, p in enumerate(pages) if isinstance(p, dict)}
+        meta = {"layout_version": str(layout.get("layout_version") or ""),
+                "code_detection": str(layout.get("code_detection") or "unavailable")}
+        return len(indices), None, meta
+
     def publish_parse(self, task, *, layout_key, bundle_key, records, provider, degraded):
         with self.tx():
             row = self.task(task["id"])
             if row["status"] != "running" or row["generation"] != task["generation"]:
                 return False
             self._index(task["version_id"], records)
+            page_count, layout_error, meta = self._layout_facts(layout_key)
+            stored_provider = {**(provider or {}), **meta}
             self.db.execute(
                 "UPDATE versions SET "
-                "state='ready',layout_key=?,bundle_key=?,provider=?,degraded=?,error=NULL "
+                "state='ready',layout_key=?,bundle_key=?,provider=?,degraded=?,error=NULL,"
+                "page_count=?,layout_error=? "
                 "WHERE id=?",
                 (
                     layout_key,
                     bundle_key,
-                    json.dumps(provider),
+                    json.dumps(stored_provider),
                     json.dumps(degraded),
+                    page_count,
+                    layout_error,
                     task["version_id"],
                 ),
             )
@@ -1237,6 +1572,25 @@ class LocalStore:
             )
             self.event("task.succeeded", task["id"], {"evidence_count": len(records)})
             return True
+
+    def mark_layout_error(self, version_id, code):
+        """Record a later-proven corrupt layout without touching parse state.
+
+        Called when a stored layout blob later proves unreadable on a detail
+        path (invariant 2: degradation visible). Proven corruption overwrites
+        the cached page count: a stale count would project as healthy pages
+        while hiding the outage. An already-recorded error keeps its code;
+        repeated corruption reports must not flip the first diagnosis.
+        """
+        if not isinstance(code, str) or not code or len(code) > 64:
+            raise ApplicationError("invalid_code", "layout error code must be 1..64 characters")
+        with self.tx():
+            self.version(version_id)
+            self.db.execute(
+                "UPDATE versions SET page_count=NULL,layout_error=? WHERE id=? "
+                "AND layout_error IS NULL",
+                (code, version_id),
+            )
 
     def evidence(self, evidence_id):
         with self.lock:
@@ -1363,3 +1717,89 @@ class LocalStore:
             return json.loads(
                 self.db.execute("SELECT body FROM outputs WHERE id=?", (identifier,)).fetchone()[0]
             )
+
+    def _live_blob_keys(self):
+        """Keys pinned by versions or staged upload parts. Caller holds the lock."""
+        live = set()
+        for row in self.db.execute(
+            "SELECT blob_key,layout_key,bundle_key FROM versions"
+        ).fetchall():
+            for key in (row["blob_key"], row["layout_key"], row["bundle_key"]):
+                if isinstance(key, str) and re.fullmatch("[0-9a-f]{64}", key):
+                    live.add(key)
+        for row in self.db.execute("SELECT parts_json FROM upload_sessions").fetchall():
+            raw = row["parts_json"] or "{}"
+            if not isinstance(raw, str) or len(raw) > 1024 * 1024:
+                raise ApplicationError(
+                    "upload_incomplete", "an upload session payload is unreadable; sweep stops")
+            try:
+                parts = json.loads(raw)
+            except Exception as exc:
+                raise ApplicationError(
+                    "upload_incomplete", "an upload session payload is unreadable; sweep stops") from exc
+            if not isinstance(parts, dict):
+                raise ApplicationError(
+                    "upload_incomplete", "an upload session payload is unreadable; sweep stops")
+            for entry in parts.values():
+                key = entry.get("blob_key") if isinstance(entry, dict) else None
+                if isinstance(key, str) and re.fullmatch("[0-9a-f]{64}", key):
+                    live.add(key)
+        return live
+
+    def sweep_unreferenced_blobs(self, blobs, *, grace_seconds=24 * 3600,
+                                 _after_snapshot=None):
+        """Mark-sweep unreferenced content-addressed blobs off the blob dir.
+
+        Live keys are versions(blob_key, layout_key, bundle_key) plus
+        upload_sessions.parts_json blob_keys. An unreadable or oversize
+        session payload fails the sweep closed instead of deleting out from
+        under a staged part. Only ``[0-9a-f]{64}`` files that are
+        unreferenced AND older (mtime) than the grace period are unlinked;
+        the grace window protects the crash gap between put_stream and
+        store_upload_part. Each unlink is claimed first: the key is
+        re-checked as still unreferenced under the store lock (iron rule 6),
+        so a version committed after the snapshot keeps its blob even when
+        put_stream hard-linked the bytes without touching mtime. Unlink goes
+        through the pinned directory fd, never follows symlinks, and never
+        touches non-hex names (including ``.pending-*``). Delivery partials
+        are out of scope: they live in ``<workspace>/delivery-partials/``
+        (see remote_compute.partial_path), not in the blob store.
+        """
+        if not isinstance(grace_seconds, (int, float)) or grace_seconds < 0:
+            raise ApplicationError("invalid_window", "grace period must be non-negative")
+        with self.lock:
+            live = self._live_blob_keys()
+        if _after_snapshot is not None:
+            _after_snapshot()
+        try:
+            names = os.listdir(blobs.fd)
+        except OSError as exc:
+            raise ApplicationError("blob_unreadable", "blob directory is unreadable") from exc
+        scanned, removed, freed = len(names), 0, 0
+        for name in names:
+            if not isinstance(name, str) or re.fullmatch("[0-9a-f]{64}", name) is None:
+                continue
+            if name in live:
+                continue
+            try:
+                info = os.stat(name, dir_fd=blobs.fd, follow_symlinks=False)
+            except OSError:
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            if time.time() - info.st_mtime < grace_seconds:
+                continue
+            with self.lock:
+                if name in self._live_blob_keys():
+                    continue
+                try:
+                    os.unlink(name, dir_fd=blobs.fd)
+                except OSError:
+                    continue
+            removed += 1
+            freed += info.st_size
+        try:
+            os.fsync(blobs.fd)
+        except OSError:
+            pass
+        return {"scanned": scanned, "live": len(live), "removed": removed, "bytes": freed}

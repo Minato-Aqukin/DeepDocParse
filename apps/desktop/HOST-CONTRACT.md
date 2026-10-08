@@ -26,13 +26,20 @@ Renderer draft saves use `saveDesktopDraft` in `apps/web/src/platform/desktop.ts
 the JSON content is copied to a plain snapshot before `clientSaveDraft` crosses IPC.
 This includes Vue-reactive selection arrays; edits must not send their proxies.
 Non-JSON values are rejected before IPC as `invalid_arguments`, not a disk/cache error.
-If Electron still reports a structured-clone failure, the preparation page displays
-an explicit draft-serialization failure and does not treat the message as an enum code.
+Host-side, `clientSaveDraft` additionally requires a non-negative safe-integer
+`expectedRevision` and caps the value at the 1 MiB store limit before touching the
+store — malformed saves fail as `invalid_arguments`, never as `cache_failure`.
 
 A single-instance lock keeps one host per application data directory.
 Closing the last window exits this first host and interrupts its owned local runtimes.
 There is no detached background mode. Before close/quit, a native dialog explains the
 interruption and restart reconciliation; it does not promise checkpoints or success.
+Shutdown waits are bounded: SIGTERM, then SIGKILL, then the host continues with or
+without the child's `close` event — a wedged runtime never blocks quit.
+Quitting (or stopping) during WSL startup, before the first bootstrap line, kills the
+relay AND reaps the inner Linux runtime by workspace argv, and a bootstrap line that
+arrives late is still recorded (pid file) and killed at once — no session is ever left
+without a reaping record for `cleanupOrphans`.
 Renderer refresh and a remote disconnection do not stop local runtimes or remote tasks.
 Suspend stops owned runtimes; resume may restart only those previously owned instances.
 
@@ -49,6 +56,14 @@ mode. `hostStatus.isolation` is `wsl_vm` only when the WSL local runtime was act
 constructed; `ntfs_acl` when it is unavailable, and `posix_mode` on POSIX hosts.
 Starting local mode without a WSL backend fails with `wsl_backend_unavailable` through
 the normal error channel while remote connections keep working.
+WSL workspace handles are virtual and distro-bound: the path is lexically
+canonicalized (duplicate slashes collapsed, `.`/`..` segments rejected so
+`~/a/../b` can never alias `~/b` into a second handle) and the handle identity is
+`wsl:<distro>:<canonical>` using the backend's resolved distribution. The same
+virtual path on another distro is a different workspace — connecting it against a
+registration bound to another distro fails closed (`identity_mismatch`), and the
+distro rides in `connections.json` (`workspaceDistro`; pre-binding entries adopt the
+current distribution once on load).
 
 ## Shared connection implementation (2026-09-13)
 
@@ -83,7 +98,7 @@ accessing CredentialBroker. Pairing keeps authority/workspace/actor bindings;
 changing an existing endpoint currently requires a separate explicit relocation
 flow, which is not implemented by this bridge. Saved local directory reuse cannot
 silently substitute a different runtime identity for the cached connection.
-## Source registry and Host /api proxy (DESKTOP-APPSHELL-PLAN wave 1)
+## Source registry and Host /api proxy
 
 The renderer calls same-origin `ddp://app/api/**` (GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS) and
 `ddp://app/_object/<opaque>` (GET). Web code builds URLs with `apiUrl(path)`;
@@ -94,11 +109,11 @@ CSP `connect-src` allows `ddp://app` (packaged and dev). `bridge.d.ts`
 | Method | Input | Result |
 | --- | --- | --- |
 | `sourceList` | none | All registered sources (local + centers) with state/features/active |
-| `sourceActivate` | `{sourceId}` | Reconnects/wakes that source and stays `connecting` until its snapshot is current or the connection gives up (20 s cap), then records it active (persisted) |
-| `sourceReconnect` | `{sourceId}` | Explicitly wakes a registered center with the same bounded readiness wait as activation (20 s cap), emits source updates and returns its summary without changing/persisting the active source; local sources reject with `invalid_arguments` |
+| `sourceActivate` | `{sourceId}` | Reconnects/wakes that source and stays `connecting` until its snapshot is current or the connection gives up (`blocked`, 20 s cap; `backoff` is still inside the retry budget and keeps waiting), then records it active (persisted) |
+| `sourceReconnect` | `{sourceId}` | Explicitly wakes a registered center with the same bounded readiness wait as activation (20 s cap, `backoff` keeps waiting), emits source updates and returns its summary without changing/persisting the active source; local sources reject with `invalid_arguments` |
 | `sourceRemove` | `{sourceId}` | Disconnects, deletes the registration, clears a stored center JWT; never deletes local workspace data (T65) |
 | `workspaceOpen` | none | Native directory dialog → start runtime → connect → activate; `null` = cancelled |
-| `centerConnect` | `{endpoint, username, password, persist, storageOrigin?}` | Node challenge proof → login → handshake → register → store JWT → activate |
+| `centerConnect` | `{endpoint, username, password, persist, storageOrigin?}` | Node challenge proof → login → handshake → register → store JWT → activate; returns the summary plus `credential: {mode, reason}` reporting the ACTUAL persistence (`persistent` vs `session`) so the UI never believes a session-only JWT was persisted |
 | `onSourceChange` | listener | Pushes the source list on activate/remove/`signed_out` transitions |
 
 After a successful `sourceActivate`/`workspaceOpen`/`centerConnect` the
@@ -113,24 +128,35 @@ authentication become ready again without switching sources or reloading.
 `hostStatus()` additionally returns `version: app.getVersion()`.
 
 Proxy rules: no active source → `503 no_active_source`. Local source: those
-methods, any path, query and body (streamed, 64 MiB cap, SSE flows incrementally)
+methods, path (capped 4096, `..`/decoded-escape rejected), query (capped 4096,
+control characters rejected as `invalid_arguments`) and body (streamed with an
+incremental 64 MiB cap — `Content-Length` pre-checked, then byte-counted while
+reading so a lying length cannot OOM the host; SSE flows incrementally)
 forwarded to the owned loopback runtime with its process Bearer token
 (renderer `Authorization`/`Cookie`/`Origin` stripped, Host set by the runtime).
 Center source: only GET/HEAD, else `403 approved_plan_required` with ZERO
 network I/O; `Authorization: Bearer <JWT from CredentialBroker>`,
 `redirect: 'error'`. Upstream 401 → marks the source `signed_out`, returns
 `401 source_signed_out`. Every proxied response carries
-`X-DDP-Source: <sourceId>`; `Set-Cookie` stripped; only safe headers forwarded
-(`content-type/-length/-disposition`, `cache-control`, `etag`,
-`last-modified`, `x-ddp-*`). Center JSON responses are parsed and every string
-value's absolute URL whose origin is the center endpoint origin or the
-registered storage origin (e.g. `GET /api/documents/{id}/download-url`) is
-rewritten to `ddp://app/_object/<opaque>`; the rewrite works on decoded strings,
-never raw text (Go writes `&` as `\u0026`, which would split a presigned URL),
-unparsable JSON fails closed, and the upstream `Content-Length` is dropped.
+`X-DDP-Source: <sourceId>` — including host error responses while a source is
+active, so the renderer's fail-closed fence (missing/mismatched header →
+`source_changed`, never rendered under the wrong egress label) still surfaces
+the real error for the current source; `Set-Cookie` stripped; only safe headers
+forwarded (`content-type/-length/-disposition`, `cache-control`, `etag`,
+`last-modified`, `x-ddp-*`). Success responses additionally carry the static
+`Content-Security-Policy` + `nosniff` + `no-store` posture. Center JSON
+responses are parsed and every string value's absolute URL whose origin is the
+center endpoint origin or the registered storage origin (e.g.
+`GET /api/documents/{id}/download-url`) is rewritten to
+`ddp://app/_object/<opaque>`; the rewrite works on decoded strings, never raw
+text (Go writes `&` as `\u0026`, which would split a presigned URL),
+unparsable JSON fails closed, rewrite input is capped at 16 MiB
+(`protocol_incompatible` above it — an unbounded center body never enters host
+memory), and the upstream `Content-Length` is dropped.
 `_object` streams the object from the allowed origin with no `Authorization`
 (presigned URLs are self-authenticating).
-Opaque ids are random, short-lived (10 min), per source, capped at 256.
+Opaque ids are 128-bit crypto-random (`crypto.randomBytes`), short-lived
+(10 min), per source, capped at 256.
 The renderer never receives any token (local process token, center JWT,
 presigned URLs).
 

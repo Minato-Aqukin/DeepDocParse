@@ -95,7 +95,9 @@ def test_dispatch_rechecks_exact_approved_boundary(ledger, change, code):
     elif change == "invalidated":
         args["current_plan"]["planning_state"] = "invalidated"
     else:
-        args["local_only"] = True
+        # The guard is derived (no caller flag): spec mode local_only with a
+        # remote recipient fires before any scope-digest comparison.
+        args["current_spec"]["execution_policy"] = {"mode": "local_only"}
     with pytest.raises(ApplicationError) as exc:
         ledger.authorize_dispatch(IDENTITY, "plan-1", **args)
     assert exc.value.code == code
@@ -170,17 +172,24 @@ async def test_http_fixed_prepare_approve_get_revoke(tmp_path):
 
 
 def test_workspace_local_only_policy_cannot_be_overridden_by_dispatch_flag(ledger):
+    # The guard is derived: spec mode local_only + remote recipient fires
+    # even with the persisted workspace flag off.
     prepared = approve(ledger)
-    ledger.set_local_only(True)
     args = dispatch_args(prepared)
-    args["local_only"] = False
+    args["current_spec"] = {**args["current_spec"], "execution_policy": {"mode": "local_only"}}
     with pytest.raises(ApplicationError) as exc:
         ledger.authorize_dispatch(IDENTITY, "plan-1", **args)
-    assert exc.value.code == "consent_revoked"
+    assert exc.value.code == "local_only"
+    assert ledger.db.execute("SELECT COUNT(*) FROM dispatches").fetchone()[0] == 0
+    # The persisted workspace flag revokes existing approvals; the derived
+    # local-only guard still fires first for a remote recipient, so the
+    # dispatch fails closed on local_only either way.
+    ledger.set_local_only(True)
+    assert ledger.get(IDENTITY, "plan-1")["planning_state"] == "invalidated"
+    with pytest.raises(ApplicationError) as exc:
+        ledger.authorize_dispatch(IDENTITY, "plan-1", **args)
+    assert exc.value.code == "local_only"
     ledger.set_local_only(False)
-    with pytest.raises(ApplicationError) as exc:
-        ledger.authorize_dispatch(IDENTITY, "plan-1", **args)
-    assert exc.value.code == "consent_revoked"
 
 
 def test_input_manifest_cannot_self_assert_content_existence(tmp_path):
@@ -296,5 +305,20 @@ def test_center_allocation_survives_reopen_and_cannot_be_spent_by_control(tmp_pa
         assert exc.value.code == "budget_exceeded"
         assert store.reserve_center_budget(IDENTITY, "plan-1", **allocation_args) == first
         assert store.cost_usage(store._owner(IDENTITY), "plan-1")["requests"] == 40
+    finally:
+        store.close()
+
+
+def test_consent_ledger_uses_wal_journal_mode(tmp_path):
+    store = ConsentStore(tmp_path, local_node_id="local-env", clock=lambda: NOW,
+                         input_resolver=lambda ref: b"approved file")
+    try:
+        assert store.db.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    finally:
+        store.close()
+    store = ConsentStore(tmp_path, local_node_id="local-env", clock=lambda: NOW,
+                         input_resolver=lambda ref: b"approved file")
+    try:
+        assert store.db.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
     finally:
         store.close()

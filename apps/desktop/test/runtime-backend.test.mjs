@@ -188,6 +188,23 @@ test('native stop is SIGTERM, one grace period, then SIGKILL', async () => {
   assert.deepEqual(exited.signals, [])
 })
 
+test('native stop returns within two grace periods when the child never emits close', async () => {
+  const backend = createNativeBackend({ python: '/opt/python', launcher: '/app/src/runtime-launcher.py',
+    pythonPaths: [], cwd: '/tmp', shutdownMs: 20, spawnProcess: () => assert.fail('stop must not spawn') })
+  // A SIGKILLed child stuck in D-state (or a wedged shim) never emits close. Shutdown
+  // must bound the post-SIGKILL wait the same way (runtime-native.mjs:138); a bare
+  // `await closed` would hang requestQuit forever. The race turns that hang into a
+  // failure instead of hanging the suite.
+  const wedged = new FakeChild(7)
+  const started = Date.now()
+  await Promise.race([
+    backend.stop(wedged, { graceMs: 20 }),
+    delay(2000).then(() => { throw new Error('stop() wedged on a child that never emits close') }),
+  ])
+  assert.ok(Date.now() - started < 2000, 'stop() must return within two grace periods, not hang on close')
+  assert.deepEqual(wedged.signals, ['SIGTERM', 'SIGKILL'])
+})
+
 test('stop while starting cancels a pending ready wait and never publishes ready', async t => {
   const child = new FakeChild(9, { closeOn: ['SIGTERM'] })
   let readyStarted = false

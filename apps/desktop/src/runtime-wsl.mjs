@@ -6,15 +6,14 @@ import path from 'node:path'
 import { Readable } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
 import { HostError } from './policy.mjs'
+import { WSL_DISTRO_PATTERN as DISTRO_PATTERN } from './workspaces.mjs'
 
 const SESSION_PID_FILE = 'wsl-pid'
 const INSTALLED_FILE = 'INSTALLED.json'
 const PATH_PATTERN = /^[A-Za-z0-9._~/-]+$/
-const DISTRO_PATTERN = /^[A-Za-z0-9._-]{1,64}$/
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,128}$/
 const SHA256_PATTERN = /^[0-9a-f]{64}$/
 const ABI_FIELDS = ['python_major_minor', 'cache_tag', 'soabi', 'machine']
-
 // Bare `wsl.exe` resolves against the child's PATH, which the Electron host
 // deliberately trims (runtimeEnvironment keeps only SystemRoot/SystemDrive/
 // TEMP/USERPROFILE/PATH). System32 is where Windows keeps it and is on the
@@ -181,9 +180,30 @@ export async function createWslBackend(options = {}) {
       { timeoutMs: killMs })
   }
 
+  // Reap an inner runtime whose bootstrap line never arrived (no pid file was
+  // ever written, so cleanupOrphans cannot find it). Matches our launcher path
+  // plus this spawn's --workspace argv; a previous leak for the same workspace
+  // is equally an orphan and equally reaped. Best effort: missing ps, an
+  // unknown HOME expansion, or a gone relay all resolve to "nothing to do".
+  async function sweepUnbootstrapped(workspace) {
+    const script = `root=${runtimeRoot}\nws="$1"\n`
+      + 'case "$ws" in "~"*) ws="$HOME/${ws#~/}";; esac\n'
+      + 'command -v ps >/dev/null 2>&1 || exit 0\n'
+      + 'for pid in $(ps -eo pid= 2>/dev/null); do\n'
+      + 'args=$(ps -o args= -p "$pid" 2>/dev/null) || continue\n'
+      + 'case "$args" in *"$root/app/src/runtime-launcher.py"*"--workspace $ws"*) '
+      + 'kill -KILL "$pid" 2>/dev/null && echo killed;; esac\n'
+      + 'done\nexit 0\n'
+    await invoke(inDistro(['bash', '-c', script, 'sweep', workspace]), { timeoutMs: killMs })
+      .catch(() => {})
+  }
+
   return {
     name: 'wsl',
     isolation: 'wsl_vm',
+    // The detected distribution serving local mode; main binds WSL workspace
+    // handle identity to it so one virtual path cannot alias across distros.
+    distro: selectedDistro,
     prepare,
     async spawn({ workspace, sessionDir } = {}) {
       if (typeof workspace !== 'string' || !PATH_PATTERN.test(workspace)) {
@@ -199,9 +219,15 @@ export async function createWslBackend(options = {}) {
         child = spawnProcess(wsl, inDistro(['bash', '-lc', script]),
           { shell: false, detached: false, stdio: ['ignore', 'pipe', 'ignore'], env: environment })
       } catch { throw new HostError('runtime_start_failed') }
-      const state = { pid: null }
+      const state = { pid: null, workspace, stopRequested: false }
       children.set(child, state)
-      child.once('close', () => { children.delete(child) })
+      child.once('close', () => {
+        children.delete(child)
+        // The relay died before the first bootstrap line and nobody asked for a
+        // stop: a crashed relay, not a quit. The inner Linux python may still be
+        // alive with no pid file behind it — sweep it by workspace argv.
+        if (!state.pid && !state.stopRequested) void sweepUnbootstrapped(workspace)
+      })
       child.once('error', () => { children.delete(child) })
       let settled = false
       let resolveReady, rejectReady
@@ -227,6 +253,16 @@ export async function createWslBackend(options = {}) {
           const value = parseBootstrapLine(line)
           if (!value) continue
           state.pid = value.pid
+          if (state.stopRequested) {
+            // stop() arrived before the first bootstrap line: this session is
+            // unwanted. Record the pid so cleanupOrphans can find it, reap the
+            // inner runtime now, and fail the pending ready with the stop code.
+            writeFile(path.join(sessionDir, SESSION_PID_FILE), String(value.pid), { mode: 0o600 })
+              .catch(() => {})
+            signalInner(value.pid, 'KILL').catch(() => {})
+            finish(new HostError('runtime_stopped'))
+            return
+          }
           writeFile(path.join(sessionDir, SESSION_PID_FILE), String(value.pid), { mode: 0o600 })
             .then(() => finish(null, { url: value.url, token: value.token }))
             .catch(() => finish(new HostError('wsl_pid_record_failed')))
@@ -247,11 +283,16 @@ export async function createWslBackend(options = {}) {
         if (child.exitCode !== null || child.signalCode !== null) return
         await signalInner(state.pid, 'KILL')
       } else {
+        // No bootstrap line yet: killing the relay alone would orphan the inner
+        // Linux python (no pid file ever written, cleanupOrphans blind). Flag
+        // the race for a late bootstrap line, then sweep by workspace argv.
+        if (state) state.stopRequested = true
         try { child.kill('SIGTERM') } catch { /* the relay is already gone */ }
         await Promise.race([closed, delay(graceMs)])
         if (child.exitCode === null && child.signalCode === null) {
           try { child.kill('SIGKILL') } catch { /* the relay is already gone */ }
         }
+        if (state && !state.pid) await sweepUnbootstrapped(state.workspace)
       }
       await Promise.race([closed, delay(graceMs)])
     },

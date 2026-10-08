@@ -41,6 +41,7 @@ class ConsentStore:
             os.close(fd)
         self.db = sqlite3.connect(path, timeout=10, isolation_level=None, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("PRAGMA foreign_keys=ON")
         with self.tx():
@@ -388,11 +389,10 @@ class ConsentStore:
                 )
                 self._command(owner, operation_key, request, {"plan_id": plan_id})
             return self._view(self._row(owner, plan_id))
-
     def authorize_dispatch(self, identity, plan_id, *, phase, payload_id, recipient_node_id,
                            payload: bytes, operation_key, confirmed_scope_digest,
                            current_spec, current_plan, input_bytes, output_location,
-                           retention, generation_tokens=None, discovery=False, local_only=False,
+                           retention, generation_tokens=None, discovery=False,
                            current_transport=None):
         """Revalidate permission/state for one payload; never charges budget.
 
@@ -407,6 +407,10 @@ recipient identity to its verified endpoint.
         self._key(operation_key)
         if (generation_tokens is not None and (type(generation_tokens) is not int or generation_tokens < 0)) or type(discovery) is not bool:
             reject("budget_exceeded", "invalid dispatch resource reservation")
+        local_only = (
+            self._local_only()
+            or current_spec.get("execution_policy", {}).get("mode") == "local_only"
+        )
         if local_only and recipient_node_id != self.local_node_id:
             reject("local_only", "current workspace policy forbids remote dispatch")
         actual_digest = content_digest(payload)

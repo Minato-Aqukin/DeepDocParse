@@ -65,7 +65,7 @@ small **self-consistent** forgery (a shell-stub interpreter, padding, the real
 in-repo lock copied in, and an inner manifest listing every member with the
 digest the archive actually contains) fails closed. These are
 **self-consistency checks against pinned public inputs, not cryptographic
-provenance**: v1 ships unsigned (plan decision 6), so a determined forger with
+provenance**: the first release ships unsigned, so a determined forger with
 build access can still fabricate a full-sized bundle whose bytes match its own
 manifest. The shape floors raise the cost; they are not a signature and must
 not be described as one. The same inner + shape checks run when a packaged
@@ -119,10 +119,9 @@ shipped a 205-byte placeholder here because no such check existed.
 ## Verified build (2026-09-14, this machine)
 
 The 11:55 build was `ac418ea0…` (128 592 559 bytes). The cli.py increment that
-added the stdout `pid` and `--token-file -` (decision 3 in
-`WINDOWS-AC-PLAN-v1.md`) changed the packaged `ddp_local` sources, so the
-runtime bundle was rebuilt at 13:22 and its pins changed — `dist/wsl` pins
-change with the source tree. The table below is that rebuild:
+added the stdout `pid` and `--token-file -` changed the packaged `ddp_local`
+sources, so the runtime bundle was rebuilt at 13:22 and its pins changed —
+`dist/wsl` pins change with the source tree. The table below is that rebuild:
 
 | | |
 |---|---|

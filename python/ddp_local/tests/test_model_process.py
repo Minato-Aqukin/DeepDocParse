@@ -1,5 +1,6 @@
 """Supervisor protocol fixtures. These tests do not run inference or satisfy T16/T51."""
 
+import asyncio
 import hashlib
 import io
 import json
@@ -10,6 +11,7 @@ import signal
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 
 import httpx
@@ -17,7 +19,15 @@ import pytest
 
 from ddp_core.application.ports import ApplicationError
 from ddp_local.model_runtime.install import ModelInstaller
-from ddp_local.model_runtime.process import ModelProcess, extract_runtime
+from ddp_local.model_runtime.process import (
+    LOG_CAP_BYTES,
+    LOG_DROPPED_MARKER,
+    BoundedLogPump,
+    ModelProcess,
+    extract_runtime,
+    sweep_orphan_runtimes,
+    tail_bytes,
+)
 
 
 SERVER = b'''#!/usr/bin/python3
@@ -305,3 +315,265 @@ def test_runtime_archive_bounds_member_metadata_before_materialization(tmp_path)
         extract_runtime(archive, target, {"executable": "runtime/server", "unpacked_bytes": 1024})
     assert unsafe.value.code == "runtime_archive_unsafe"
     assert not list(target.iterdir())
+
+
+def test_orphan_sweep_removes_only_exact_runtime_dirs(installed):
+    models = installed.directory
+    exact = models / (".runtime-" + "ab" * 16)
+    exact.mkdir(mode=0o700)
+    (exact / "api-key.txt").write_text("secret")
+    (exact / "model.log").write_bytes(b"stale")
+    (models / ".runtime-evil").mkdir()
+    (models / ".runtime-short").mkdir()
+    (models / (".runtime-" + "zz" * 16)).mkdir()
+    regular = models / (".runtime-" + "cd" * 16)
+    regular.write_bytes(b"keep me")
+    target = models / "sweep-target"
+    target.mkdir()
+    link = models / (".runtime-" + "ef" * 16)
+    link.symlink_to(target, target_is_directory=True)
+    try:
+        assert sweep_orphan_runtimes(installed) == 1
+        assert not exact.exists()
+        assert (models / ".runtime-evil").is_dir()
+        assert (models / ".runtime-short").is_dir()
+        assert (models / (".runtime-" + "zz" * 16)).is_dir()
+        assert regular.read_bytes() == b"keep me"
+        assert link.is_symlink() and target.is_dir()
+    finally:
+        for leftover in models.iterdir():
+            if leftover.is_symlink() or leftover.is_file():
+                leftover.unlink()
+            else:
+                import shutil
+                shutil.rmtree(leftover, ignore_errors=True)
+        for identifier in ("fixture-model", "fixture-runtime"):
+            source = models.parent / identifier
+            installed.import_file(identifier, source)
+
+
+def test_tail_bytes_returns_last_bytes_without_loading_all(tmp_path):
+    log = tmp_path / "model.log"
+    with open(log, "wb") as output:
+        output.truncate(5 * 1024 * 1024)
+        output.seek(0)
+        output.write(b"A" * 1024)
+        output.seek(5 * 1024 * 1024 - 7)
+        output.write(b"TAILEND")
+    assert tail_bytes(log, 7) == b"TAILEND"
+    assert tail_bytes(log, 16384)[-7:] == b"TAILEND"
+
+
+def test_bounded_pump_caps_file_and_rotates_with_marker(tmp_path):
+    log = tmp_path / "model.log"
+    cap = len(LOG_DROPPED_MARKER) + 96
+    pump = BoundedLogPump(log, cap=cap)
+    pump.write(b"x" * 96)
+    pump.write(b"y" * 96)
+    assert pump.dropped == 1
+    previous = tmp_path / "model.log.prev"
+    assert previous.exists() and previous.stat().st_size == cap
+    body = log.read_bytes()
+    assert len(body) <= cap and body.startswith(LOG_DROPPED_MARKER)
+    assert body.endswith(b"y" * 32)
+
+
+def test_bounded_pump_thread_joins_on_stop(tmp_path):
+    log = tmp_path / "model.log"
+    pump = BoundedLogPump(log, cap=LOG_CAP_BYTES)
+    reader, writer = os.pipe()
+    stream = os.fdopen(reader, "rb")
+    thread = pump.start(stream)
+
+    def close_on_stop():
+        if pump._stop.wait(timeout=5):
+            time.sleep(0.2)
+            try:
+                os.close(writer)
+            except OSError:
+                pass
+
+    closer = threading.Thread(target=close_on_stop, daemon=True)
+    closer.start()
+    try:
+        os.write(writer, b"hello")
+        deadline = time.monotonic() + 5
+        while log.read_bytes() != b"hello":
+            assert time.monotonic() < deadline, "pump did not drain the pipe"
+            time.sleep(0.01)
+        assert thread.is_alive()
+        pump.join(timeout=5)
+        assert not thread.is_alive()
+        assert pump._thread is None
+        assert log.read_bytes() == b"hello"
+    finally:
+        try:
+            os.close(writer)
+        except OSError:
+            pass
+        pump._stop.set()
+        pump.join(timeout=5)
+        closer.join(timeout=5)
+    assert not [t for t in threading.enumerate() if t.name == "ddp-model-log" and t.is_alive()]
+
+
+async def test_failed_start_reads_bounded_tail_and_drops_pump_thread(installed, tmp_path, monkeypatch):
+    backend = installed.artifact("fixture-runtime")
+    original = dict(backend)
+    original_archive = (installed.directory / installed.name(backend)).read_bytes()
+    failing = archive_bytes(b"#!/bin/sh\necho boom >&2\nexit 1\n")
+    backend.update(bytes=len(failing), sha256=hashlib.sha256(failing).hexdigest())
+    source = tmp_path / "failing-runtime.tar.gz"
+    source.write_bytes(failing)
+    installed.import_file(backend["id"], source)
+    calls = []
+    real_tail = tail_bytes
+
+    def spy(path, limit=16384):
+        calls.append((str(path), limit))
+        return real_tail(path, limit)
+
+    joins = []
+    joined_threads = []
+    real_join = BoundedLogPump.join
+
+    def join_spy(self, timeout=5):
+        joins.append(self)
+        joined_threads.append(self._thread)
+        return real_join(self, timeout=timeout)
+
+    monkeypatch.setattr("ddp_local.model_runtime.process.tail_bytes", spy)
+    monkeypatch.setattr(BoundedLogPump, "join", join_spy)
+    owned = ModelProcess(installed)
+    try:
+        with pytest.raises(ApplicationError) as failure:
+            await owned.start("fixture-model", timeout=5)
+        assert failure.value.code == "model_start_failed"
+        assert calls, "failure path must bound the log read through tail_bytes"
+        assert all(name.endswith("model.log") for name, _ in calls)
+        assert calls[0][1] <= 16384
+        assert joins, "failed start must join the log pump"
+        joined_threads[0].join(timeout=5)
+        assert not joined_threads[0].is_alive()
+        assert owned.process is None and owned.workdir is None
+        assert owned.log_pump is None
+        assert not [t for t in threading.enumerate() if t.name == "ddp-model-log" and t.is_alive()]
+    finally:
+        backend.clear()
+        backend.update(original)
+        source.write_bytes(original_archive)
+        installed.import_file(backend["id"], source)
+        await owned.stop()
+        assert owned.log_pump is None
+        assert not [t for t in threading.enumerate() if t.name == "ddp-model-log" and t.is_alive()]
+
+
+async def test_stop_joins_pump_and_clears_thread_after_successful_start(installed, monkeypatch):
+    joins = []
+    real_join = BoundedLogPump.join
+
+    def join_spy(self, timeout=5):
+        joins.append(self)
+        return real_join(self, timeout=timeout)
+
+    monkeypatch.setattr(BoundedLogPump, "join", join_spy)
+    owned = ModelProcess(installed)
+    try:
+        assert (await owned.start("fixture-model", timeout=5)).location == "local"
+        assert owned.log_pump is not None
+        thread = owned.log_pump._thread
+        assert thread is not None and thread.is_alive()
+        pump = owned.log_pump
+        await owned.stop()
+        assert pump in joins
+        assert not thread.is_alive()
+        assert owned.log_pump is None
+        assert not [t for t in threading.enumerate() if t.name == "ddp-model-log" and t.is_alive()]
+    finally:
+        await owned.stop()
+        assert owned.log_pump is None
+        assert not [t for t in threading.enumerate() if t.name == "ddp-model-log" and t.is_alive()]
+
+
+async def test_stop_interrupts_a_start_waiting_on_readiness(installed, monkeypatch):
+    owned = ModelProcess(installed)
+    entered = threading.Event()
+    release = threading.Event()
+    real_extract = extract_runtime
+
+    def slow_extract(archive, destination, artifact):
+        entered.set()
+        assert release.wait(15)
+        return real_extract(archive, destination, artifact)
+
+    monkeypatch.setattr("ddp_local.model_runtime.process.extract_runtime", slow_extract)
+    task = asyncio.create_task(owned.start("fixture-model", timeout=60))
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        before = time.monotonic()
+        result = await owned.stop()
+        with pytest.raises(ApplicationError) as cancelled:
+            await asyncio.wait_for(task, timeout=15)
+        assert cancelled.value.code == "model_start_cancelled"
+        assert time.monotonic() - before < 30
+        assert owned.process is None and owned.workdir is None and owned.log_pump is None
+        assert result["status"] == "stopped"
+        assert owned.status()["status"] == "stopped"
+    finally:
+        release.set()
+        try:
+            await asyncio.wait_for(task, timeout=15)
+        except ApplicationError:
+            pass
+        await owned.stop()
+
+
+async def test_second_start_while_starting_reports_busy(installed, monkeypatch):
+    owned = ModelProcess(installed)
+    entered = threading.Event()
+    release = threading.Event()
+    real_extract = extract_runtime
+
+    def slow_extract(archive, destination, artifact):
+        entered.set()
+        assert release.wait(15)
+        return real_extract(archive, destination, artifact)
+
+    monkeypatch.setattr("ddp_local.model_runtime.process.extract_runtime", slow_extract)
+    task = asyncio.create_task(owned.start("fixture-model", timeout=60))
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        with pytest.raises(ApplicationError) as busy:
+            await owned.start("fixture-model", timeout=5)
+        assert busy.value.code == "model_process_busy"
+    finally:
+        release.set()
+        try:
+            await asyncio.wait_for(task, timeout=15)
+        except ApplicationError:
+            pass
+        await owned.stop()
+
+
+async def test_low_memory_refuses_start(installed, monkeypatch):
+    installed.artifact("fixture-model")["minimum_memory_bytes"] = 100 * 1024**3
+    monkeypatch.setattr("ddp_local.model_runtime.install.host_free_bytes", lambda: 1024)
+    owned = ModelProcess(installed)
+    try:
+        with pytest.raises(ApplicationError) as refused:
+            await owned.start("fixture-model", timeout=5)
+        assert refused.value.code == "out_of_memory"
+        assert owned.process is None
+    finally:
+        del installed.artifact("fixture-model")["minimum_memory_bytes"]
+        await owned.stop()
+
+
+async def test_ample_memory_starts_without_warning(installed, monkeypatch):
+    monkeypatch.setattr(
+        "ddp_local.model_runtime.install.host_free_bytes", lambda: 256 * 1024**3)
+    owned = ModelProcess(installed)
+    try:
+        assert (await owned.start("fixture-model", timeout=5)).location == "local"
+    finally:
+        await owned.stop()

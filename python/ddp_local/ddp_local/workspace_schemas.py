@@ -11,12 +11,12 @@ it, so it is listed here and in the release marker.
 """
 
 WORKSPACE_SCHEMA_VERSIONS = {
-    "workspace.sqlite3": (0, 1, 2, 3),
+    "workspace.sqlite3": (0, 1, 2, 3, 4),
     "consents.sqlite3": (0, 1, 2, 3, 4),
 }
 
 WORKSPACE_CURRENT_VERSIONS = {
-    "workspace.sqlite3": 3,
+    "workspace.sqlite3": 4,
     "consents.sqlite3": 4,
 }
 

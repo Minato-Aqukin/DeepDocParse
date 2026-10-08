@@ -512,11 +512,13 @@ async def test_version_append_withdraw_delete_boundary(runtime, tmp_path):
     finally:
         reopened.close()
     removed = runtime.delete_version(second["id"])
-    assert removed == {"version_id": second["id"], "resource_id": resource_id, "deleted": True}
+    assert removed["version_id"] == second["id"] and removed["resource_id"] == resource_id
+    assert removed["deleted"] is True and removed["blob_gc"]["removed"] == 0
     with pytest.raises(ApplicationError):
         runtime.store.version(second["id"])
     gone = runtime.delete_resource(resource_id)
     assert gone["resource_id"] == resource_id and gone["deleted"] is True
+    assert gone["blob_gc"]["removed"] == 0
     with pytest.raises(ApplicationError):
         runtime.store.resource(resource_id)
 
@@ -642,3 +644,94 @@ async def test_keyword_cache_migration_waits_for_other_runtime_and_preserves_sou
         assert current.source_bytes(task["version_id"]) == (FIXTURES / "sample.pdf").read_bytes()
     finally:
         current.close()
+
+
+@pytest.mark.asyncio
+async def test_version_bundle_streams_chunks_and_refuses_corrupt_blob(runtime, monkeypatch):
+    import hashlib as _hashlib
+    import io as _io
+    import json as _json
+
+    from ddp_bundle_fixture import sample_parts as _sample_parts
+    from ddp_core.bundle import build_bundle as _build_bundle
+    from ddp_core.bundle import json_bytes as _json_bytes
+    from ddp_local.blobs import STREAM_CHUNK as _CHUNK
+
+    source, files = _sample_parts()
+    filling = b"v" * (3 * _CHUNK + 123)
+    assert b"\n" not in filling
+    source_digest = "sha256:" + _hashlib.sha256(filling).hexdigest()
+    source = {**source, "source_digest": source_digest}
+    evidence = _json.loads(files["evidence.json"])
+    for record in evidence:
+        record["evidence"]["source_digest"] = source_digest
+    files = {**files, "source.bin": filling, "evidence.json": _json_bytes(evidence)}
+    imported = runtime.import_bundle(_io.BytesIO(_build_bundle(source, files)),
+                                     operation_key="stream-bundle-fat")
+    version_id = imported["version_id"]
+    token = "s" * 48
+    app = create_app(runtime, session_token=token, allowed_hosts={"127.0.0.1:18763"}, start_worker=False)
+    version = runtime.store.version(version_id)
+    expected = runtime.export_bundle(version_id)
+    assert len(expected) > 3 * _CHUNK, len(expected)
+    assert b"\n" not in filling
+    # Same server-side body-iterator spy as the source route: the emitted
+    # chunk sizes are the property under test, and neither the pre-hash
+    # os.read calls nor the client's re-chunked view can observe them.
+    from starlette.responses import StreamingResponse as _StreamingResponse
+
+    sizes = []
+    original_init = _StreamingResponse.__init__
+
+    def _spy_init(self, content, *args, **kwargs):
+        original_init(self, content, *args, **kwargs)
+        inner = self.body_iterator
+
+        async def _recorded():
+            async for piece in inner:
+                sizes.append(len(piece))
+                yield piece
+
+        self.body_iterator = _recorded()
+
+    monkeypatch.setattr(_StreamingResponse, "__init__", _spy_init)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:18763",
+        headers={"Authorization": "Bearer " + token},
+    ) as client:
+        bundle = await client.get(f"/api/v1/versions/{version_id}/bundle")
+        assert bundle.status_code == 200, bundle.text
+        assert bundle.headers["content-type"] == "application/zip"
+        assert bundle.content == expected
+        assert len(sizes) >= 3, sizes
+        assert max(sizes) <= _CHUNK, sizes
+        assert sum(sizes) == len(expected)
+
+        stored = runtime.blobs.directory / version["bundle_key"]
+        with stored.open("r+b") as tampered:
+            tampered.seek(len(expected) - 1)
+            tail = expected[-1:]
+            tampered.write(b"\x00" if tail != b"\x00" else b"\x01")
+        corrupt = await client.get(f"/api/v1/versions/{version_id}/bundle")
+        assert corrupt.status_code != 200, corrupt.content[:64]
+        assert corrupt.json()["error"]["code"] == "blob_corrupt"
+        assert _hashlib.sha256(corrupt.content).hexdigest() != version["bundle_key"]
+
+
+@pytest.mark.asyncio
+async def test_version_source_refuses_corrupt_blob(runtime):
+    task = await parsed(runtime)
+    token = "t" * 48
+    app = create_app(runtime, session_token=token, allowed_hosts={"127.0.0.1:18763"}, start_worker=False)
+    version = runtime.store.version(task["version_id"])
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:18763",
+        headers={"Authorization": "Bearer " + token},
+    ) as client:
+        stored = runtime.blobs.directory / version["blob_key"]
+        with stored.open("r+b") as tampered:
+            tampered.seek(0)
+            tampered.write(b"\x00")
+        corrupt = await client.get(f"/api/v1/versions/{task['version_id']}/source")
+        assert corrupt.status_code != 200, corrupt.content[:64]
+        assert corrupt.json()["error"]["code"] == "blob_corrupt"

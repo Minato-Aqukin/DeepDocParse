@@ -538,5 +538,421 @@ async def test_wiki_app_dependencies_rebuild_fixed_source_and_locate_original(cl
             {"resource_id": dependency["resource_id"],
              "source_version_id": dependency["source_version_id"]}]},
         headers={"Idempotency-Key": "app-dependency-rebuild"})
-    assert rebuilt.status_code == 201, rebuilt.text
     assert rebuilt.json()["revision"]["base_revision_id"] == revision_id
+
+
+async def _upload_session(handle, key, data, sha=True):
+    import hashlib as _hashlib
+
+    body = {"filename": "sample.pdf", "size": len(data), "mime": "application/pdf"}
+    if sha:
+        body["sha256"] = _hashlib.sha256(data).hexdigest()
+    created = await handle.post("/api/uploads", json=body,
+                                headers={"Idempotency-Key": key})
+    assert created.status_code == 201, created.text
+    return created.json()
+
+
+async def _put_part(handle, session_id, number, data):
+    put = await handle.put(f"/api/uploads/{session_id}/parts/{number}", content=data)
+    assert put.status_code == 200, put.text
+    return put.json()
+
+
+async def test_finalize_rejects_oversize_part_and_ninth_part(client):
+    handle, _ = client
+    session = await _upload_session(handle, "cap-part", b"%PDF-tiny")
+    big = await handle.put(f"/api/uploads/{session['id']}/parts/1", content=b"x" * (8 * 1024 * 1024 + 1))
+    assert big.status_code == 400, big.text
+    assert big.json()["error"]["code"] == "input_too_large"
+    for number in range(1, 9):
+        await _put_part(handle, session["id"], number, b"%PDF-" + bytes([number]))
+    extra = await handle.put(f"/api/uploads/{session['id']}/parts/9", content=b"%PDF-9")
+    assert extra.status_code == 400, extra.text
+    assert extra.json()["error"]["code"] == "invalid_part"
+
+
+async def test_finalize_rejects_total_over_budget_size_sha_magic(client):
+    import hashlib as _hashlib
+
+    handle, _ = client
+    part = b"%PDF-" + b"a" * (8 * 1024 * 1024 - 5)
+    created = await handle.post("/api/uploads",
+                                json={"filename": "sample.pdf", "size": 32 * 1024 * 1024,
+                                      "mime": "application/pdf"},
+                                headers={"Idempotency-Key": "cap-total"})
+    assert created.status_code == 201, created.text
+    session = created.json()
+    for number in range(1, 9):
+        await handle.put(f"/api/uploads/{session['id']}/parts/{number}", content=part)
+    finalized = await handle.post(f"/api/uploads/{session['id']}/finalize")
+    assert finalized.status_code == 400, finalized.text
+    assert finalized.json()["error"]["code"] == "input_too_large"
+    assert (await handle.get(f"/api/uploads/{session['id']}")).json()["ingest_status"] == "rejected"
+
+    data = b"%PDF-ok"
+    session = await _upload_session(handle, "cap-size", data)
+    await _put_part(handle, session["id"], 1, data + b"trailing")
+    finalized = await handle.post(f"/api/uploads/{session['id']}/finalize")
+    assert finalized.status_code == 400, finalized.text
+    assert finalized.json()["error"]["code"] == "size_mismatch"
+
+    session = await _upload_session(handle, "cap-sha", data)
+    await _put_part(handle, session["id"], 1, data)
+    runtime_session = (await handle.get(f"/api/uploads/{session['id']}")).json()
+    assert runtime_session["ingest_status"] == "pending"
+    tampered = await handle.post("/api/uploads", json={
+        "filename": "sample.pdf", "size": len(data), "mime": "application/pdf",
+        "sha256": "0" * 64}, headers={"Idempotency-Key": "cap-sha-tampered"})
+    assert tampered.status_code in (200, 201)
+    tampered_id = tampered.json()["id"]
+    await _put_part(handle, tampered_id, 1, data)
+    finalized = await handle.post(f"/api/uploads/{tampered_id}/finalize")
+    assert finalized.status_code == 400, finalized.text
+    assert finalized.json()["error"]["code"] == "digest_mismatch"
+    assert _hashlib.sha256(data).hexdigest() != "0" * 64
+
+    session = await _upload_session(handle, "cap-magic", b"NOTPDF!!", sha=False)
+    await _put_part(handle, session["id"], 1, b"NOTPDF!!")
+    finalized = await handle.post(f"/api/uploads/{session['id']}/finalize")
+    assert finalized.status_code == 400, finalized.text
+    assert finalized.json()["error"]["code"] == "invalid_pdf"
+
+
+async def test_finalize_streams_without_full_join(client, monkeypatch):
+    handle, runtime = client
+    data = (FIXTURES / "sample.pdf").read_bytes()
+    session = await _upload_session(handle, "stream-ok", data)
+
+    def _spy_read(key, maximum):
+        raise AssertionError("streaming finalize must not call read_blob per part")
+
+    monkeypatch.setattr(runtime.blobs, "read", _spy_read)
+    part = await handle.put(f"/api/uploads/{session['id']}/parts/1", content=data)
+    assert part.status_code == 200, part.text
+    finalized = await handle.post(f"/api/uploads/{session['id']}/finalize")
+    assert finalized.status_code == 200, finalized.text
+    assert finalized.json()["ingest_status"] == "ready"
+
+
+async def test_finalize_store_level_streams_parts_without_join(tmp_path):
+    import hashlib as _hashlib
+    import io as _io
+
+    from ddp_local.runtime import LocalRuntime as _Runtime
+
+    runtime = _Runtime(tmp_path / "workspace")
+    try:
+        payload = b"%PDF-" + b"0123456789abcdef" * 64
+        session = runtime.store.create_upload_session(
+            filename="sample.pdf", mime="application/pdf", declared_size=len(payload),
+            declared_sha256=_hashlib.sha256(payload).hexdigest(),
+            target_resource_id=None, idempotency_key="store-stream")
+        key, size = runtime.blobs.put_stream(_io.BytesIO(payload),
+                                             maximum=8 * 1024 * 1024)
+        runtime.store.store_upload_part(session["id"], 1, key, size)
+        opened = []
+
+        def _limited_open(blob_key):
+            stream = runtime.blobs.open(blob_key)
+            opened.append(stream)
+            original = stream.read
+
+            def _bounded(size=-1):
+                return original(16) if size is None or size < 0 else original(min(size, 16))
+
+            stream.read = _bounded
+            return stream
+
+        done = runtime.store.finalize_upload_session(
+            session["id"], _limited_open, runtime.blobs.put_stream)
+        assert done["status"] == "ready", done
+        assert opened and all(getattr(stream, "closed", True) for stream in opened)
+        stored = runtime.blobs.read(runtime.store.version(
+            done["version_id"])["blob_key"], 32 * 1024 * 1024)
+        assert stored == payload
+    finally:
+        runtime.close()
+
+
+async def test_documents_list_uses_columns_and_surfaces_corruption(client, monkeypatch):
+
+    handle, runtime = client
+    version_id, _ = await _ready_version(handle, runtime)
+    listed = await handle.get("/api/documents")
+    assert listed.status_code == 200, listed.text
+    info = next(item for item in listed.json() if item["id"] == version_id)
+    assert info["page_count"] >= 1
+    assert "layout_unavailable" not in info["compile_degraded"]
+
+    calls = []
+    original_read = runtime.blobs.read
+    original_open = runtime.blobs.open
+
+    def _spy_read(key, maximum):
+        calls.append(("read", key))
+        return original_read(key, maximum)
+
+    def _spy_open(key):
+        calls.append(("open", key))
+        return original_open(key)
+
+    monkeypatch.setattr(runtime.blobs, "read", _spy_read)
+    monkeypatch.setattr(runtime.blobs, "open", _spy_open)
+    listed = await handle.get("/api/documents")
+    assert listed.status_code == 200, listed.text
+    assert (await handle.get("/api/documents/stats/summary")).json()["pages"] >= 1
+    assert calls == [], f"list/stats must not touch layout blobs: {calls}"
+
+    corrupt = runtime.blobs.write(b"not a layout")
+    runtime.store.db.execute(
+        "UPDATE versions SET layout_key=?,page_count=NULL,layout_error='layout_unreadable' "
+        "WHERE id=?", (corrupt, version_id))
+    runtime.store.db.commit()
+    listed = await handle.get("/api/documents")
+    assert listed.status_code == 200, listed.text
+    info = next(item for item in listed.json() if item["id"] == version_id)
+    assert info["page_count"] == 0
+    assert "layout_unavailable" in info["compile_degraded"]
+    assert info["compile_status"] == "failed"
+    assert calls == [], f"corrupt list must stay column-only: {calls}"
+    detail = await handle.get(f"/api/documents/{version_id}")
+    assert detail.status_code == 200, detail.text
+    assert "layout_unavailable" in detail.json()["compile_degraded"]
+
+
+async def test_uploads_create_rejects_duplicate_idempotency_key(client):
+    handle, _ = client
+    body = {"filename": "sample.pdf", "size": 8, "mime": "application/pdf"}
+    duplicated = await handle.post(
+        "/api/uploads", json=body,
+        headers=[("Idempotency-Key", "dup-first"), ("Idempotency-Key", "dup-second")])
+    assert duplicated.status_code == 400, duplicated.text
+    assert duplicated.json()["error"]["code"] == "invalid_key"
+    single = await handle.post("/api/uploads", json=body, headers={"Idempotency-Key": "dup-first"})
+    assert single.status_code == 201, single.text
+    missing = await handle.post("/api/uploads", json={**body, "size": 9})
+    assert missing.status_code == 201, missing.text
+
+
+async def test_content_key_rejects_duplicate_idempotency_key(client):
+    handle, runtime = client
+    _, resource_id = await _ready_version(handle, runtime, key="dup-key-chain")
+    duplicated = await handle.request(
+        "DELETE", f"/api/resources/{resource_id}",
+        headers=[("Idempotency-Key", "dup-first"), ("Idempotency-Key", "dup-second")])
+    assert duplicated.status_code == 400, duplicated.text
+    assert duplicated.json()["error"]["code"] == "invalid_key"
+    removed = await handle.request(
+        "DELETE", f"/api/resources/{resource_id}", headers={"Idempotency-Key": "dup-single"})
+    assert removed.status_code == 204, removed.text
+
+
+async def test_body_budget_rejects_over_64kib_conversations_ask(client):
+    handle, runtime = client
+    version_id, _ = await _ready_version(handle, runtime, key="tier-ask-chain")
+    cid = (await handle.post(f"/api/documents/{version_id}/conversations")).json()["id"]
+    big = await handle.post(
+        f"/api/conversations/{cid}/ask", content=b"x" * (65536 + 1),
+        headers={"Content-Type": "application/json"})
+    assert big.status_code == 400, big.text
+    assert big.json()["error"]["code"] == "input_too_large"
+
+
+async def test_body_budget_rejects_over_64kib_model_start(client):
+    handle, _ = client
+    big = await handle.post(
+        "/api/v1/models/fixture/start", content=b"x" * (65536 + 1),
+        headers={"Content-Type": "application/json", "Idempotency-Key": "tier-model-start"})
+    assert big.status_code == 400, big.text
+    assert big.json()["error"]["code"] == "input_too_large"
+
+
+async def test_part_spool_raises_before_consuming_the_tail():
+    from ddp_core.application.ports import ApplicationError as _ApplicationError
+    from ddp_local.content_http import _part_spool as _spool
+    from ddp_local.store import MAX_UPLOAD_PART as _PART_CAP
+
+    pulled = []
+
+    class _Stream:
+        async def stream(self):
+            for chunk in (b"a" * _PART_CAP, b"b", b"c"):
+                pulled.append(chunk)
+                yield chunk
+
+    with pytest.raises(_ApplicationError) as rejected:
+        await _spool(_Stream())
+    assert rejected.value.code == "input_too_large"
+    assert pulled == [b"a" * _PART_CAP, b"b"]
+
+    class _Exact:
+        async def stream(self):
+            yield b"a" * _PART_CAP
+
+    with await _spool(_Exact()) as kept:
+        assert kept.read() == b"a" * _PART_CAP
+
+
+def test_center_file_scope_rejects_zero_and_two_inputs():
+    import time as _time
+
+    from ddp_core.application.ports import ApplicationError as _ApplicationError
+    from ddp_local.plan_templates import center_file_scope as _file_scope
+
+    center = {"recipient_node_id": "center", "environment_id": "center", "workspace_id": "org-1",
+              "profile_id": "profile-alice", "issuer": "center", "subject": "user-alice",
+              "endpoint": "https://center.invalid"}
+    one = {"ref": "v-1", "digest": "sha256:" + "0" * 64, "size_bytes": 8}
+    base = {"center": center, "filename": "manual.pdf", "retention": "temporary",
+            "valid_seconds": 3600}
+    now = _time.time()
+    ok = _file_scope({**base, "inputs": [one]},
+                     local_node_id="local", workspace_id="ws", now=now)
+    assert ok["input_manifest"] == [one]
+    for inputs in ([], [one, dict(one, ref="v-2")]):
+        with pytest.raises(_ApplicationError) as rejected:
+            _file_scope({**base, "inputs": inputs},
+                        local_node_id="local", workspace_id="ws", now=now)
+        assert rejected.value.code == "invalid_plan"
+
+
+async def test_documents_source_streams_chunks_and_refuses_corrupt_blob(client, monkeypatch):
+    import hashlib as _hashlib
+    import io as _io
+
+    from ddp_local.blobs import STREAM_CHUNK as _CHUNK
+
+    handle, runtime = client
+    payload = b"%PDF-" + bytes(((index * 251 + 17) % 245) + 11 for index in range(3 * _CHUNK))
+    assert b"\n" not in payload
+    key, _ = runtime.blobs.put_stream(_io.BytesIO(payload))
+    created = runtime.store.create_resource(
+        filename="padded.pdf", blob_key=key, size=len(payload),
+        operation_key="stream-chunk-chain", records=[], layout_key=None)
+    version_id = created["version_id"]
+    # The emitted body chunks are the property under test: a server-side spy
+    # wraps the StreamingResponse body iterator, so every yielded piece is
+    # sized exactly as delivered. Spying os.read instead only records the
+    # pre-hash pass, and the HTTP client re-chunks whatever the server sent,
+    # so neither can see a generator that yields whole lines.
+    from starlette.responses import StreamingResponse as _StreamingResponse
+
+    sizes = []
+    original_init = _StreamingResponse.__init__
+
+    def _spy_init(self, content, *args, **kwargs):
+        original_init(self, content, *args, **kwargs)
+        inner = self.body_iterator
+
+        async def _recorded():
+            async for piece in inner:
+                sizes.append(len(piece))
+                yield piece
+
+        self.body_iterator = _recorded()
+
+    monkeypatch.setattr(_StreamingResponse, "__init__", _spy_init)
+    response = await handle.get(f"/api/documents/{version_id}/source")
+    assert response.status_code == 200, response.text
+    assert response.content == payload
+    assert len(sizes) >= 3, sizes
+    assert max(sizes) <= _CHUNK, sizes
+    assert sum(sizes) == len(payload)
+
+    pieces, total = [], 0
+    async with handle.stream("GET", f"/api/documents/{version_id}/source") as streamed:
+        assert streamed.status_code == 200, await streamed.aread()
+        async for piece in streamed.aiter_bytes(chunk_size=_CHUNK):
+            pieces.append(piece)
+            total += len(piece)
+            if total >= _CHUNK:
+                break
+    assert pieces and pieces[0] == payload[:len(pieces[0])]
+    assert total <= 2 * _CHUNK
+
+    stored = runtime.blobs.directory / key
+    with stored.open("r+b") as tampered:
+        tampered.seek(len(payload) - 1)
+        tampered.write(b"\x00" if payload[-1:] != b"\x00" else b"\x01")
+    corrupt = await handle.get(f"/api/documents/{version_id}/source")
+    assert corrupt.status_code != 200, corrupt.content[:64]
+    assert corrupt.json()["error"]["code"] == "blob_corrupt"
+    assert _hashlib.sha256(corrupt.content).hexdigest() != key
+
+
+async def test_documents_source_rejects_non_pdf_magic(client):
+    import io as _io
+
+    handle, runtime = client
+    key, _ = runtime.blobs.put_stream(_io.BytesIO(b"NOTPD" + b"x" * 64))
+    created = runtime.store.create_resource(
+        filename="fake.pdf", blob_key=key, size=69,
+        operation_key="stream-magic-chain", records=[], layout_key=None)
+    rejected = await handle.get(f"/api/documents/{created['version_id']}/source")
+    assert rejected.status_code != 200, rejected.content[:64]
+    assert rejected.json()["error"]["code"] == "source_invalid"
+
+
+async def test_proven_layout_corruption_overwrites_cached_count(client):
+    handle, runtime = client
+    version_id, _ = await _ready_version(handle, runtime, key="mark-corrupt-chain")
+    before = runtime.store.version(version_id)
+    assert before["page_count"] and not before["layout_error"]
+    stored = runtime.blobs.directory / before["layout_key"]
+    with stored.open("r+b") as tampered:
+        tampered.seek(0)
+        tampered.write(b"\x00")
+    detail = await handle.get(f"/api/documents/{version_id}/layout")
+    assert detail.status_code != 200, detail.content[:64]
+    assert detail.json()["error"]["code"] == "result_not_ready"
+    after = runtime.store.version(version_id)
+    assert after["page_count"] is None
+    assert after["layout_error"] == "layout_unreadable"
+    listed = await handle.get("/api/documents")
+    assert listed.status_code == 200, listed.text
+    info = next(item for item in listed.json() if item["id"] == version_id)
+    assert info["page_count"] == 0
+    assert "layout_unavailable" in info["compile_degraded"]
+    assert info["compile_status"] == "failed"
+    runtime.store.mark_layout_error(version_id, "layout_too_large")
+    assert runtime.store.version(version_id)["layout_error"] == "layout_unreadable"
+
+
+async def test_finalize_closes_opened_parts_when_a_later_open_fails(tmp_path):
+    import hashlib as _hashlib
+    import io as _io
+
+    from ddp_core.application.ports import ApplicationError as _ApplicationError
+
+    runtime = LocalRuntime(tmp_path / "workspace")
+    try:
+        first = b"%PDF-" + b"a" * 64
+        second = b"b" * 64
+        first_key, _ = runtime.blobs.put_stream(_io.BytesIO(first))
+        second_key, _ = runtime.blobs.put_stream(_io.BytesIO(second))
+        session = runtime.store.create_upload_session(
+            filename="two.pdf", mime="application/pdf",
+            declared_size=len(first) + len(second),
+            declared_sha256=_hashlib.sha256(first + second).hexdigest(),
+            target_resource_id=None, idempotency_key="finalize-leak")
+        runtime.store.store_upload_part(session["id"], 1, first_key, len(first))
+        runtime.store.store_upload_part(session["id"], 2, second_key, len(second))
+        opened = []
+
+        def _flaky_open(blob_key):
+            if blob_key == second_key:
+                raise _ApplicationError("blob_unreadable", "boom")
+            stream = runtime.blobs.open(blob_key)
+            opened.append(stream)
+            return stream
+
+        import pytest as _pytest
+
+        with _pytest.raises(_ApplicationError) as failed:
+            runtime.store.finalize_upload_session(
+                session["id"], _flaky_open, runtime.blobs.put_stream)
+        assert failed.value.code == "blob_unreadable"
+        assert opened and all(stream.closed for stream in opened)
+    finally:
+        runtime.close()

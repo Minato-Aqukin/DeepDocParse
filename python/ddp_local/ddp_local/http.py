@@ -14,6 +14,19 @@ from ddp_local.blobs import MAX_INPUT
 from ddp_local.model_runtime.install import settled_io
 
 
+class _BudgetExceeded(ApplicationError):
+    """Internal over-budget signal; the exception handler answers 400 itself."""
+
+    def __init__(self):
+        super().__init__("input_too_large", "request body exceeds the byte budget")
+
+
+try:
+    from fastapi import HTTPException as _FastAPIBodyError
+except ImportError:  # pragma: no cover — http extra is required to serve
+    _FastAPIBodyError = ()
+
+
 class RequestBodyBudget:
     def __init__(self, app):
         self.app = app
@@ -21,27 +34,62 @@ class RequestBodyBudget:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
+        path, method = scope.get("path", ""), scope.get("method", "")
         maximum = (
             65536
-            if scope.get("path") in {"/api/v1/search", "/api/v1/answer"} or scope.get("path", "").startswith(("/api/v1/wikis", "/api/v1/plans"))
+            if path in {"/api/v1/search", "/api/v1/answer", "/api/search",
+                        "/api/uploads", "/api/wikis"}
+            or path.startswith(("/api/v1/wikis", "/api/v1/plans"))
+            or (method == "POST" and (
+                path.startswith(("/api/documents/", "/api/conversations/"))
+                or path.startswith("/api/wikis/") and (
+                    path.endswith("/revisions") or path.endswith("/publish"))
+                or path.startswith("/api/resources/") and not path.endswith("/parts")
+                or path.startswith("/api/v1/models/")))
+            or (method in {"PATCH", "PUT"} and (
+                path.startswith(("/api/wikis/", "/api/resources/"))))
             else 8 * 1024 * 1024
-            if scope.get("path", "").startswith("/api/uploads/") and scope.get("path", "").endswith("/finalize") is False and scope.get("method") == "PUT"
+            if path.startswith("/api/uploads/") and not path.endswith("/finalize") and method == "PUT"
             else MAX_ARCHIVE
         )
-        total = 0
+        # Reads past the budget are cut off and the over-budget response is
+        # substituted for whatever the app was about to send, so an oversize
+        # body always reports input_too_large instead of the route's own
+        # verdict on a truncated body.
+        state = {"total": 0, "hit": False, "sent": False}
 
         async def bounded_receive():
-            nonlocal total
             message = await receive()
             if message["type"] == "http.request":
-                total += len(message.get("body", b""))
-                if total > maximum:
-                    raise ApplicationError(
-                        "input_too_large", "request body exceeds the byte budget"
-                    )
+                state["total"] += len(message.get("body", b""))
+                if state["total"] > maximum:
+                    state["hit"] = True
+                    return {"type": "http.request", "body": b"", "more_body": False}
             return message
 
-        return await self.app(scope, bounded_receive, send)
+        async def gated_send(message):
+            if state["sent"] and message["type"] == "http.response.body":
+                return
+            if message["type"] != "http.response.start":
+                await send(message)
+                return
+            if state["hit"]:
+                state["sent"] = True
+                from fastapi.responses import JSONResponse as _BudgetResponse
+
+                rejection = _BudgetResponse(
+                    {"error": {"code": "input_too_large",
+                               "message": "request body exceeds the byte budget"}}, 400)
+                await rejection(scope, receive, send)
+                return
+            await send(message)
+
+        try:
+            await self.app(scope, bounded_receive, gated_send)
+        except BaseException as exc:
+            if state["hit"] and isinstance(exc, _FastAPIBodyError):
+                raise _BudgetExceeded() from exc
+            raise
 
 
 def create_app(
@@ -54,7 +102,7 @@ def create_app(
     on_shutdown=None,
 ):
     from fastapi import FastAPI, Request
-    from fastapi.responses import JSONResponse, Response
+    from fastapi.responses import JSONResponse
     from pydantic import BaseModel, ConfigDict, Field
 
     # Request resolves through globals when FastAPI inspects annotations.
@@ -237,10 +285,10 @@ def create_app(
             raise
 
     def operation_key(request):
-        key = request.headers.get("idempotency-key")
-        if not key:
-            raise ApplicationError("invalid_key", "Idempotency-Key is required")
-        return key
+        keys = request.headers.getlist("idempotency-key")
+        if len(keys) != 1:
+            raise ApplicationError("invalid_key", "one unambiguous Idempotency-Key is required")
+        return keys[0]
 
     def upload_filename(request):
         raw = request.headers.getlist("x-filename")
@@ -330,7 +378,9 @@ def create_app(
 
     @app.delete("/api/v1/resources/{resource_id}", status_code=200)
     async def delete_resource(resource_id: str, request: Request):
-        return runtime.store.resource_command("resource.delete", resource_id, operation_key=operation_key(request))
+        return runtime.store.resource_command(
+            "resource.delete", resource_id,
+            operation_key=operation_key(request), blobs=runtime.blobs)
 
     @app.get("/api/v1/tasks")
     async def tasks():
@@ -365,19 +415,11 @@ def create_app(
 
     @app.get("/api/v1/versions/{version_id}/bundle")
     async def export(version_id: str):
-        return Response(
-            runtime.export_bundle(version_id),
-            media_type="application/zip",
-            headers={"Content-Disposition": 'attachment; filename="document.ddp.zip"'},
-        )
+        return await asyncio.to_thread(runtime.download_bundle_response, version_id)
 
     @app.get("/api/v1/versions/{version_id}/source")
     async def original_source(version_id: str):
-        return Response(
-            await asyncio.to_thread(runtime.source_bytes, version_id),
-            media_type="application/pdf",
-            headers={"Content-Disposition": 'inline; filename="document.pdf"'},
-        )
+        return await asyncio.to_thread(runtime.download_source_response, version_id)
 
     @app.post("/api/v1/versions/{version_id}/withdraw", status_code=200)
     async def withdraw_version(version_id: str, request: Request):
@@ -385,7 +427,9 @@ def create_app(
 
     @app.delete("/api/v1/versions/{version_id}", status_code=200)
     async def delete_version(version_id: str, request: Request):
-        return runtime.store.resource_command("version.delete", version_id, operation_key=operation_key(request))
+        return runtime.store.resource_command(
+            "version.delete", version_id,
+            operation_key=operation_key(request), blobs=runtime.blobs)
 
     @app.post("/api/v1/bundles/import", status_code=201)
     async def import_bundle(request: Request):
@@ -395,8 +439,11 @@ def create_app(
 
     @app.post("/api/v1/answer")
     async def answer(body: GenerationInput, request: Request):
+        keys = request.headers.getlist("idempotency-key")
+        if len(keys) > 1:
+            raise ApplicationError("invalid_key", "one unambiguous Idempotency-Key is required")
         return await runtime.answer(
-            **body.model_dump(), operation_key=request.headers.get("idempotency-key")
+            **body.model_dump(), operation_key=keys[0] if keys else None
         )
 
     @app.get("/api/v1/wikis")

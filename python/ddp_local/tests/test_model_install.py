@@ -171,3 +171,44 @@ async def test_cancelled_download_waits_for_verifier_before_closing_descriptor(i
         with pytest.raises(asyncio.CancelledError):
             await task
     assert installer.status("test-model")["status"] == "installed"
+
+async def test_download_warns_when_host_memory_is_below_floor(installer, monkeypatch):
+    installer.artifact("test-model")["minimum_memory_bytes"] = 100 * 1024**3
+    monkeypatch.setattr("ddp_local.model_runtime.install.host_free_bytes", lambda: 1024)
+    seen = []
+    installer.progress = seen.append
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, content=PAYLOAD))) as client:
+            assert (await installer.download("test-model", client=client))["status"] == "installed"
+        assert seen and all(item["memory_warning"] for item in seen)
+        state = installer._read_json(installer.name(installer.artifact("test-model")) + ".state.json")
+        assert state["memory_warning"]
+    finally:
+        del installer.artifact("test-model")["minimum_memory_bytes"]
+        installer.progress = None
+
+
+async def test_download_has_no_warning_with_ample_memory(installer, monkeypatch):
+    installer.artifact("test-model")["minimum_memory_bytes"] = 1024
+    monkeypatch.setattr("ddp_local.model_runtime.install.host_free_bytes", lambda: 256 * 1024**3)
+    seen = []
+    installer.progress = seen.append
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, content=PAYLOAD))) as client:
+            assert (await installer.download("test-model", client=client))["status"] == "installed"
+        assert seen and all(item["memory_warning"] is None for item in seen)
+    finally:
+        del installer.artifact("test-model")["minimum_memory_bytes"]
+        installer.progress = None
+
+
+async def test_download_without_floor_has_no_warning(installer, monkeypatch):
+    monkeypatch.setattr("ddp_local.model_runtime.install.host_free_bytes", lambda: 1024)
+    seen = []
+    installer.progress = seen.append
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, content=PAYLOAD))) as client:
+            assert (await installer.download("test-model", client=client))["status"] == "installed"
+        assert seen and all(item["memory_warning"] is None for item in seen)
+    finally:
+        installer.progress = None

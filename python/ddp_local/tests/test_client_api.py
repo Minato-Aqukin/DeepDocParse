@@ -113,6 +113,28 @@ def test_real_http_reconnect_snapshot_ack_cross_workspace_and_receipt(tmp_path):
         assert client.get("/api/v1/client/events", params={"after": event["cursor"]}).status_code == 410
         assert client.get("/api/v1/client/receipts/upload%2Freconnect").status_code == 404
 
+def test_handshake_advertises_generation_gated_ops_only_when_model_ready(tmp_path):
+    from ddp_local.providers import ModelSelection
+    bare = LocalRuntime(tmp_path / "bare")
+    try:
+        caps = bare.client_handshake()["capabilities"]
+        for gated in ("rag.answer.cited", "wiki.create", "wiki.rebuild", "wiki.edit"):
+            assert gated not in caps
+        for always in ("corpus.retrieve", "evidence.read", "wiki.read",
+                       "client.receipt", "plan.prepare"):
+            assert always in caps
+    finally:
+        bare.close()
+    selected = LocalRuntime(tmp_path / "model", model=ModelSelection(
+        endpoint="http://127.0.0.1:11434", model="test-model"))
+    try:
+        caps = selected.client_handshake()["capabilities"]
+        for gated in ("rag.answer.cited", "wiki.create", "wiki.rebuild", "wiki.edit"):
+            assert gated in caps
+        assert "client.receipt" in caps
+    finally:
+        selected.close()
+
 
 def test_snapshot_resources_tasks_and_cursor_use_one_wal_read_transaction(tmp_path, monkeypatch):
     reader, writer = LocalRuntime(tmp_path / "workspace"), LocalRuntime(tmp_path / "workspace")
@@ -158,3 +180,18 @@ def test_pruned_history_requires_snapshot_and_preserves_highwater(tmp_path):
             assert rejected.value.code == "cursor_expired"
     finally:
         runtime.close()
+
+
+def test_runtime_seam_aliases_are_the_documented_adapters():
+    import ddp_local.runtime as local_runtime
+
+    from ddp_local.blobs import FileBlobStore
+    from ddp_local.providers import LocalExecutionProvider
+    from ddp_local.store import LocalStore
+
+    assert local_runtime.CorpusStore is LocalStore
+    assert local_runtime.SearchIndex is LocalStore
+    assert local_runtime.TaskStore is LocalStore
+    assert local_runtime.BlobStore is FileBlobStore
+    assert local_runtime.ExecutionProvider is LocalExecutionProvider
+    assert local_runtime.PolicyService is LocalStore

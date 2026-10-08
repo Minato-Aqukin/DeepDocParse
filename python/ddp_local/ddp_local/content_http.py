@@ -15,20 +15,18 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
-
 from ddp_contracts.enums import COMPILE_DEGRADED_VALUES, source_error_label
 from ddp_core.application.ports import ApplicationError
+from ddp_local.store import MAX_UPLOAD_PART
 
-MIME_ALLOWLIST = {
+PART_SIZE = 5 * 1024 * 1024
+MIME_ALLOWLIST = frozenset({
     "application/pdf",
     "application/octet-stream",
     "application/zip",
-}
-
-PART_SIZE = 5 * 1024 * 1024
+})
 SESSION_TTL = 24 * 3600
 DOWNLOAD_TTL = 3600
-
 
 def _iso(epoch):
     return datetime.fromtimestamp(epoch, timezone.utc).isoformat().replace("+00:00", "Z")
@@ -54,15 +52,17 @@ def _version_state_to_index(version):
 
 
 def _page_count(runtime, version):
-    if not version.get("layout_key"):
+    """Cached page count from the versions row; never re-parses layout blobs.
+
+    ``None`` (no layout yet, or an unreadably large layout) projects as 0
+    pages, but a corrupt layout stays visible through the document's
+    ``compile_degraded`` flag (``layout_unavailable``) instead of a silent 0.
+    """
+    if version.get("layout_error"):
         return 0
-    try:
-        layout = json.loads(runtime.blobs.read(version["layout_key"], 32 * 1024 * 1024))
-    except Exception:
+    if version.get("page_count") is None:
         return 0
-    pages = layout.get("layout", layout).get("pdf_info", []) if isinstance(layout, dict) else []
-    indices = {p.get("page_idx", i) for i, p in enumerate(pages) if isinstance(p, dict)}
-    return len(indices)
+    return version["page_count"]
 
 
 def _resource_out(runtime, resource_id):
@@ -102,16 +102,19 @@ def _document_out(runtime, version, version_no=None):
     # compile degradations (content-v1 types this field as the compile_degraded enum) —
     # the keyword-only search reports embedding_unavailable on its own `degraded` field.
     degraded = [item for item in version.get("degraded") or [] if item in COMPILE_DEGRADED_VALUES]
+    # A corrupt layout is never a silent 0: it degrades visibly through the existing
+    # content-v1 `compile_degraded` flag (`layout_unavailable`, same value the center
+    # uses for missing/invalid layouts) and forces compile_status off ready.
+    layout_corrupt = bool(version.get("layout_error"))
+    if layout_corrupt and "layout_unavailable" not in degraded:
+        degraded = [*degraded, "layout_unavailable"]
     layout_key = version.get("layout_key")
-    layout_version, code_detection = "", "unavailable"
-    if layout_key:
-        try:
-            raw = json.loads(runtime.blobs.read(layout_key, 32 * 1024 * 1024))
-            layout = raw.get("layout", raw) if isinstance(raw, dict) else {}
-            layout_version = str(layout.get("layout_version") or "")
-            code_detection = str(layout.get("code_detection") or "unavailable")
-        except Exception:
-            pass
+    # Layout facts come from the versions row (page_count/layout_error columns);
+    # the projection reads no layout blob on the list path. Detail-time
+    # corruption discovered via _require_layout is recorded on the row, so a
+    # later list shows it through compile_degraded without re-reading bytes.
+    layout_version = str(provider.get("layout_version") or "")
+    code_detection = str(provider.get("code_detection") or "unavailable")
     from ddp_core.compilation import fingerprint as _fingerprint
 
     compile_fingerprint = _fingerprint({
@@ -127,6 +130,8 @@ def _document_out(runtime, version, version_no=None):
     }) if layout_key else ""
     compile_status = {"ready": "ready", "parsing": "compiling", "queued": "pending",
                       "failed": "failed"}.get(version["state"], "pending")
+    if layout_corrupt and compile_status == "ready":
+        compile_status = "failed"
     status = _version_state_to_parse(version)
     return {
         "id": version["id"], "resource_id": version["resource_id"],
@@ -153,39 +158,60 @@ def _chunk_row(runtime, evidence_id):
     return row, json.loads(raw)
 
 
+def _has_wire_page(row):
+    locator = ((row.get("evidence") or {}).get("locator") or {}) if isinstance(row, dict) else {}
+    return isinstance(locator, dict) and "physical_page_index" in locator
+
+
 def _citation_out(runtime, version, evidence_id, *, rank=0, score=None, similarity=None):
     row, chunk = _chunk_row(runtime, evidence_id)
-    bbox = chunk.get("bbox")
-    page_size = chunk.get("page_size")
-    return {
+    out = {
         "evidence_id": evidence_id, "source_type": "source", "derived_from": None,
         "chunk_id": evidence_id, "parse_job_id": version["parse_revision"],
-        "seq": chunk.get("seq"), "page_idx": chunk.get("page_idx", 0),
+        "seq": chunk.get("seq"),
         "printed_page_label": chunk.get("printed_page_label"),
-        "bbox": bbox, "page_size": page_size, "crop_url": None,
+        "crop_url": None,
         "snippet": " ".join((row["excerpt"] or "").split())[:200],
         "score": score if score is not None else 0.0, "similarity": similarity,
         "resolved": True,
     }
+    if _has_wire_page(row):
+        out["page_idx"] = chunk.get("page_idx", 0)
+        out["bbox"] = chunk.get("bbox")
+        out["page_size"] = chunk.get("page_size")
+    else:
+        if chunk.get("bbox") is not None:
+            out["bbox"] = chunk["bbox"]
+        if chunk.get("page_size") is not None:
+            out["page_size"] = chunk["page_size"]
+    return out
 
 
 def _evidence_detail_out(runtime, version, evidence_id):
     row, chunk = _chunk_row(runtime, evidence_id)
-    bbox = chunk.get("bbox")
-    page_size = chunk.get("page_size")
-    return {
+    out = {
         "id": evidence_id, "resource_id": version["resource_id"],
         "source_version_id": version["id"], "source_digest": version["source_digest"],
         "parse_revision": version["parse_revision"],
         "document": {"id": version["id"], "filename": version["filename"]},
-        "page_idx": chunk.get("page_idx", 0), "seq": chunk.get("seq", 0),
+        "seq": chunk.get("seq", 0),
         "printed_page_label": chunk.get("printed_page_label"),
         "parse_job_id": version["parse_revision"], "doc_version": 1,
-        "bbox": bbox, "page_size": page_size, "kind": chunk.get("block_type", "text"),
+        "kind": chunk.get("block_type", "text"),
         "content": row["excerpt"], "source_type": "source", "derived_from": None,
         "crop_url": None, "review_state": "unreviewed", "chunk_id": evidence_id,
         "verifications": [],
     }
+    if _has_wire_page(row):
+        out["page_idx"] = chunk.get("page_idx", 0)
+        out["bbox"] = chunk.get("bbox")
+        out["page_size"] = chunk.get("page_size")
+    else:
+        if chunk.get("bbox") is not None:
+            out["bbox"] = chunk["bbox"]
+        if chunk.get("page_size") is not None:
+            out["page_size"] = chunk["page_size"]
+    return out
 
 
 def _message_out(runtime, message):
@@ -269,6 +295,31 @@ def _sse(event, payload):
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
 
 
+async def _part_spool(request):
+    # Mid-stream bound: the exception escapes before the remaining chunks are
+    # read. Memory behavior itself (one chunk resident at a time) cannot be
+    # observed from a unit test, so the regression test pins the observable
+    # structure instead — unconsumed tail on oversize — rather than measuring
+    # resident bytes, which would stay green on any implementation.
+    import tempfile as _tempfile
+
+    stream = _tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
+    total = 0
+    try:
+        async for part in request.stream():
+            total += len(part)
+            if total > MAX_UPLOAD_PART:
+                raise ApplicationError(
+                    "input_too_large", "upload part exceeds the 8 MiB part budget"
+                )
+            stream.write(part)
+        stream.seek(0)
+        return stream
+    except BaseException:
+        stream.close()
+        raise
+
+
 def content_router(runtime):
     router = APIRouter()
 
@@ -312,10 +363,10 @@ def content_router(runtime):
         paragraphs: list[HumanParagraph] = Field(max_length=100)
 
     def content_key(request):
-        key = request.headers.get("idempotency-key")
-        if not key:
-            raise ApplicationError("invalid_key", "Idempotency-Key is required")
-        return key
+        keys = request.headers.getlist("idempotency-key")
+        if len(keys) != 1:
+            raise ApplicationError("invalid_key", "one unambiguous Idempotency-Key is required")
+        return keys[0]
 
     def version_number(version_id):
         versions = runtime.store.resource_versions(
@@ -357,11 +408,15 @@ def content_router(runtime):
     @router.delete("/api/resources/{resource_id}", status_code=204)
     async def resources_delete(resource_id: str, request: Request):
         runtime.store.resource_command(
-            "resource.delete", resource_id, operation_key=content_key(request))
+            "resource.delete", resource_id, operation_key=content_key(request),
+            blobs=runtime.blobs)
         return Response(status_code=204)
 
     @router.post("/api/uploads", status_code=201)
     async def uploads_create(body: CreateUpload, request: Request):
+        keys = request.headers.getlist("idempotency-key")
+        if len(keys) > 1:
+            raise ApplicationError("invalid_key", "one unambiguous Idempotency-Key is required")
         if body.mime not in MIME_ALLOWLIST:
             raise ApplicationError("unsupported_mime", "local uploads accept PDF, octet-stream or zip")
         if body.size > 32 * 1024 * 1024:
@@ -370,7 +425,7 @@ def content_router(runtime):
             filename=runtime.filename(body.filename), mime=body.mime,
             declared_size=body.size, declared_sha256=body.sha256,
             target_resource_id=body.target_resource_id,
-            idempotency_key=request.headers.get("idempotency-key"))
+            idempotency_key=keys[0] if keys else None)
         created = session["created_at"] == session["updated_at"]
         return JSONResponse(_session_out(session), 201 if created else 200)
 
@@ -380,38 +435,30 @@ def content_router(runtime):
 
     @router.put("/api/uploads/{upload_id}/parts/{part_number}")
     async def uploads_part(upload_id: str, part_number: int, request: Request):
-        body = await request.body()
-        if len(body) > 8 * 1024 * 1024:
-            raise ApplicationError("input_too_large", "upload part exceeds the 8 MiB part budget")
-        key, size = runtime.blobs.put_bytes(body)
+        with await _part_spool(request) as stream:
+            key, size = runtime.blobs.put_stream(stream, maximum=MAX_UPLOAD_PART)
         runtime.store.store_upload_part(upload_id, part_number, key, size)
         return {"part_number": part_number, "etag": key, "size": size}
 
     @router.post("/api/uploads/{upload_id}/finalize")
     async def uploads_finalize(upload_id: str):
         session = runtime.store.finalize_upload_session(
-            upload_id, runtime.blobs.read, runtime.blobs.put_bytes)
+            upload_id, runtime.blobs.open, runtime.blobs.put_stream)
         return _session_out(session)
 
     @router.get("/api/documents")
     async def documents_list(q: str = "", status: str = "", limit: int = 50, offset: int = 0):
-        versions = runtime.store.versions()
-        rows = []
-        for version in versions:
-            info = _document_out(runtime, version, version_number(version["id"]))
-            if q and q.lower() not in info["filename"].lower():
-                continue
-            if status and info["status"] != status:
-                continue
-            rows.append(info)
-        return rows[max(0, offset):max(0, offset) + max(1, min(limit, 200))]
+        # Status filters the projected document status (parse_status values), like the
+        # center list filters its projected job status; SQL-side so pagination holds.
+        versions = runtime.store.versions_page(
+            filename_like=q, statuses=[status] if status else (),
+            limit=max(1, min(limit, 200)), offset=max(0, offset))
+        return [_document_out(runtime, version, version_number(version["id"]))
+                for version in versions]
 
     @router.get("/api/documents/stats/summary")
     async def documents_stats():
-        versions = runtime.store.versions()
-        pages = sum(_page_count(runtime, v) for v in versions)
-        askable = sum(1 for v in versions if v["state"] == "ready")
-        return {"documents": len(versions), "pages": pages, "askable": askable}
+        return runtime.store.document_stats()
 
     @router.get("/api/documents/{document_id}")
     async def documents_get(document_id: str):
@@ -423,7 +470,7 @@ def content_router(runtime):
         version = runtime.store.version(document_id)
         runtime.store.resource_command(
             "resource.delete", version["resource_id"],
-            operation_key=content_key(request))
+            operation_key=content_key(request), blobs=runtime.blobs)
         return Response(status_code=204)
 
     @router.get("/api/documents/{document_id}/jobs")
@@ -458,6 +505,10 @@ def content_router(runtime):
         try:
             return json.loads(runtime.blobs.read(version["layout_key"], 32 * 1024 * 1024))
         except Exception as exc:
+            # A layout that later proves corrupt is recorded on the version row
+            # so the list projection stays visibly degraded (invariant 2).
+            if not version.get("layout_error"):
+                runtime.store.mark_layout_error(version["id"], "layout_unreadable")
             raise ApplicationError("result_not_ready", "stored layout is unreadable") from exc
 
     @router.get("/api/documents/{document_id}/pages")
@@ -528,13 +579,9 @@ def content_router(runtime):
 
     @router.get("/api/documents/{document_id}/source")
     async def documents_source(document_id: str):
-        return Response(await _async_source_bytes(document_id), media_type="application/pdf",
-                        headers={"Content-Disposition": 'inline; filename="document.pdf"'})
-
-    async def _async_source_bytes(document_id):
         import asyncio as _asyncio
 
-        return await _asyncio.to_thread(runtime.source_bytes, document_id)
+        return await _asyncio.to_thread(runtime.download_source_response, document_id)
 
     @router.get("/api/search")
     async def search(q: str = "", doc: str = "", limit: int = 20):
@@ -782,11 +829,12 @@ def bundle_export_router(runtime):
 
     @router.get("/api/resources/{resource_id}/versions/{version_id}/bundle")
     async def bundle_export(resource_id: str, version_id: str):
+        import asyncio as _asyncio
+
         version = runtime.store.version(version_id)
         if version["resource_id"] != resource_id:
             raise ApplicationError("not_found", "version not found in this resource")
-        return Response(runtime.export_bundle(version_id), media_type="application/zip",
-                        headers={"Content-Disposition": 'attachment; filename="document.ddp.zip"'})
+        return await _asyncio.to_thread(runtime.download_bundle_response, version_id)
 
     @router.get("/api/resources/{resource_id}/versions/{version_id}/bundle/evidence")
     async def bundle_evidence(resource_id: str, version_id: str):

@@ -141,7 +141,7 @@ def center_file_scope(request, *, local_node_id, workspace_id, now):
     recipient = center["recipient_node_id"]
     pinned = request["inputs"][0] if len(request["inputs"]) == 1 else None
     if pinned is None:
-        raise ValueError("file parse binds exactly one pinned input")
+        reject("invalid_plan", "file parse binds exactly one pinned input")
     retention = request["retention"]
     valid_until = utc_instant(now + request["valid_seconds"])
     plan_id = "plan-" + uuid.uuid4().hex

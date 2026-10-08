@@ -25,27 +25,102 @@ export function staticUI(root, expected, { clients } = {}) {
   }
 }
 
+const PROXY_BODY_LIMIT = 64 * 1024 * 1024
+const PROXY_REWRITE_LIMIT = 16 * 1024 * 1024
+const SUCCESS_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' }
+
+// Stream the renderer request body with an incremental byte cap (invariant 6):
+// a Compromised renderer must not OOM the host by POSTing a body whose
+// Content-Length lies (or is absent) and then streaming gigabytes. The
+// contract promises a streamed 64 MiB cap, so enforce it while reading, not
+// after Buffer.from(await request.arrayBuffer()).
+async function readProxyBody(request) {
+  if (['GET', 'HEAD'].includes(request.method)) return undefined
+  const declared = request.headers.get('content-length')
+  if (declared !== null) {
+    const size = Number(declared)
+    if (!Number.isSafeInteger(size) || size < 0) throw new HostError('invalid_arguments')
+    if (size > PROXY_BODY_LIMIT) throw new HostError('input_too_large')
+  }
+  if (!request.body) {
+    const buffered = Buffer.from(await request.arrayBuffer())
+    if (buffered.length > PROXY_BODY_LIMIT) throw new HostError('input_too_large')
+    return buffered.length ? buffered : undefined
+  }
+  const reader = request.body.getReader()
+  const chunks = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > PROXY_BODY_LIMIT) throw new HostError('input_too_large')
+      chunks.push(Buffer.from(value))
+    }
+  } finally { reader.releaseLock() }
+  return chunks.length ? Buffer.concat(chunks, total) : undefined
+}
+
+async function readBoundedStream(stream, maximum, code) {
+  const reader = stream.getReader()
+  const chunks = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > maximum) throw new HostError(code)
+      chunks.push(Buffer.from(value))
+    }
+  } finally { reader.releaseLock() }
+  return Buffer.concat(chunks, total).toString('utf8')
+}
+
+function successHeaders(proxied) {
+  const headers = { ...proxied.headers, ...SUCCESS_HEADERS }
+  const policy = contentSecurityPolicy(new URL('ddp://app/'))
+  if (!Object.keys(headers).some(name => name.toLowerCase() === 'content-security-policy')) {
+    headers['Content-Security-Policy'] = policy
+  }
+  return headers
+}
+
 async function apiProxy(request, url, clients) {
   const host = clients()
   const errorHeaders = { 'Content-Security-Policy': contentSecurityPolicy(new URL('ddp://app/')),
     'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' }
-  const fail = (status, code, message) => new Response(JSON.stringify({ error: { code, message } }),
-    { status, headers: { ...errorHeaders, 'Content-Type': 'application/json' } })
+  // Error responses carry X-DDP-Source while a source is active, so the
+  // renderer's fail-closed fence (missing/mismatched header → source_changed)
+  // still surfaces the real error for the current source instead of discarding
+  // it. no_active_source has no source to name: the header stays absent and a
+  // booted renderer treats it as source_changed (re-sync, never stale data).
+  const fail = (status, code, message) => {
+    const headers = { ...errorHeaders, 'Content-Type': 'application/json' }
+    const active = (() => {
+      try { return typeof host.activeSourceId === 'function' ? host.activeSourceId() : null }
+      catch { return null }
+    })()
+    if (active) headers['X-DDP-Source'] = active
+    return new Response(JSON.stringify({ error: { code, message } }), { status, headers })
+  }
   try {
     if (url.username || url.password) throw new HostError('invalid_arguments')
     const headers = {}
     request.headers.forEach((value, name) => { headers[name] = value })
-    const body = ['GET', 'HEAD'].includes(request.method) ? undefined
-      : Buffer.from(await request.arrayBuffer())
+    const body = await readProxyBody(request)
     const proxied = await host.apiProxy({ method: request.method,
       path: url.pathname, query: url.search.replace(/^\?/, ''), headers, body })
     // JSON responses from a center source get _object rewriting before the
     // bytes leave the host; the renderer never sees a presigned URL.
     let stream = proxied.body
-    const responseHeaders = { ...proxied.headers }
+    const responseHeaders = successHeaders(proxied)
     const contentType = responseHeaders['content-type'] ?? responseHeaders['Content-Type'] ?? ''
     if (stream && contentType.includes('application/json') && proxied.rewriteOrigins?.length) {
-      const text = await new Response(stream).text()
+      const declared = Number(responseHeaders['content-length'] ?? responseHeaders['Content-Length'] ?? NaN)
+      if (Number.isFinite(declared) && declared > PROXY_REWRITE_LIMIT) throw new HostError('protocol_incompatible')
+      const text = await readBoundedStream(stream, PROXY_REWRITE_LIMIT, 'protocol_incompatible')
       stream = rewriteUrls(proxied.sourceId, host, text, proxied.rewriteOrigins)
       // The rewritten body has a different length than the upstream one.
       for (const name of Object.keys(responseHeaders)) if (name.toLowerCase() === 'content-length') delete responseHeaders[name]
@@ -99,7 +174,7 @@ async function objectFetch(request, url, clients) {
     const id = decodeURIComponent(url.pathname.slice('/_object/'.length))
     if (!id || id.includes('/') || id.length > 256) throw new HostError('invalid_arguments')
     const fetched = await host.fetchObject(id)
-    return new Response(fetched.body, { status: fetched.status, headers: fetched.headers })
+    return new Response(fetched.body, { status: fetched.status, headers: successHeaders(fetched) })
   } catch (error) {
     const code = error instanceof HostError ? error.code : 'host_operation_failed'
     const status = code === 'not_found' ? 404 : code === 'source_changed' ? 409

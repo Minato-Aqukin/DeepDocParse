@@ -99,6 +99,14 @@ export function clientArguments(method, input) {
   if (fields.includes('idempotencyKey') && (typeof input.idempotencyKey !== 'string'
       || !/^[A-Za-z0-9_-]{8,128}$/.test(input.idempotencyKey))) fail()
   if (fields.includes('key')) id(input.key)
+  if (method === 'clientSaveDraft') {
+    // expectedRevision rides IPC unchecked otherwise: floats/strings/negatives burn
+    // structured-clone + stringify work and surface as cache_failure/draft_conflict
+    // instead of invalid_arguments. Value mirrors clientCommand's JSON cap plus the
+    // 1 MiB store limit enforced by SqliteProjectionStore.saveDraft.
+    if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) fail()
+    json(input.value, 1024 * 1024)
+  }
   if (method === 'clientQuery') {
     // The only renderer-side read left is models.list (LocalModelsView); content reads
     // (resources, search, evidence, Wiki) go through the /api proxy.

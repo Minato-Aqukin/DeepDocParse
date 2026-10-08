@@ -13,7 +13,7 @@ import { SOURCE_CHANNELS, sourceArguments, normalizeEndpoint, normalizeOrigin } 
 import { staticUI } from '../src/static-ui.mjs'
 import { contentSecurityPolicy, uiLocation } from '../src/policy.mjs'
 
-// HostProxy wave 1: source registry + /api proxy. Fakes: a loopback "local"
+// Source registry + /api proxy coverage. Fakes: a loopback "local"
 // runtime (process token) and a center double with a real Ed25519 node proof.
 // Consumer-visible behavior only: tokens never reach the renderer, center
 // non-GET never touches the network, 401 marks signed_out, X-DDP-Source is
@@ -383,6 +383,33 @@ test('centerConnect derives identity from the handshake and never persists the p
   assert.equal(connected.state, 'ready')
 })
 
+test('centerConnect surfaces the stored credential mode so the UI never believes a session JWT was persisted', async t => {
+  // The renderer decides "remembered vs session-only" from centerConnect's credential
+  // field (client-host.mjs:411). A persist:true request on an unavailable backend
+  // stores session-only; returning the bare source summary would leave the UI
+  // believing the JWT was persisted. Pin both modes with credential fakes.
+  centerDouble(t)
+  const cases = [
+    { persist: true, stored: { mode: 'session', reason: 'session_only_secret_service_required' },
+      expected: { mode: 'session', reason: 'session_only_secret_service_required' } },
+    // The persistent fake omits reason (as a minimal broker could) to pin the
+    // `?? null` normalization; the real broker returns explicit null.
+    { persist: true, stored: { mode: 'persistent' }, expected: { mode: 'persistent', reason: null } },
+  ]
+  for (const { persist, stored: fake, expected } of cases) {
+    const { clients, stored: secrets } = await hosts(t)
+    clients.credentials.set = async input => {
+      secrets.set(input.environmentId + '/' + input.profileId, input.secret)
+      return { ...fake }
+    }
+    const connected = await clients.centerConnect({ endpoint: CENTER,
+      username: 'alice', password: 's3cret', persist }, { packaged: false })
+    assert.deepEqual(connected.credential, expected,
+      `persist:${persist} stored:${JSON.stringify(fake)} must surface as ${JSON.stringify(expected)}`)
+    assert.equal(connected.state, 'ready')
+  }
+})
+
 test('sourceReconnect wakes a retry-exhausted non-active center without switching the workspace', async t => {
   const { clients, options } = await hosts(t)
   const seen = centerDouble(t)
@@ -410,6 +437,34 @@ test('sourceReconnect wakes a retry-exhausted non-active center without switchin
   const proxied = await clients.apiProxy({ method: 'GET', path: '/api/resources', headers: {} })
   assert.equal(proxied.headers['X-DDP-Source'], local.sourceId)
   assert.deepEqual(JSON.parse(await new Response(proxied.body).text()), { items: [{ id: 'r1' }], total: 1 })
+})
+
+test('sourceReconnect waits through backoff while the retry budget lasts', async t => {
+  const { clients } = await hosts(t)
+  const seen = centerDouble(t)
+  const center = await clients.centerConnect({ endpoint: CENTER,
+    username: 'alice', password: 's3cret', persist: false }, { packaged: false })
+  assert.equal(center.state, 'ready')
+  // Drop the center so the woken loop lands in backoff (still inside its retry
+  // budget), then restore it mid-wait: the readiness wait must ride the backoff
+  // to ready instead of reporting unavailable while retries continue.
+  seen.offline = true
+  const reconnecting = clients.sourceReconnect({ sourceId: center.sourceId })
+  const deadline = Date.now() + 15000
+  let sawBackoff = false
+  while (Date.now() < deadline) {
+    const view = clients.list().find(item => item.connectionId === center.sourceId)?.view
+    if (view?.transport === 'backoff') { sawBackoff = true; break }
+    if (view?.transport === 'blocked') break
+    await delay(25)
+  }
+  assert.ok(sawBackoff, 'woken loop did not enter backoff while offline')
+  seen.offline = false
+  const started = Date.now()
+  const reconnected = await reconnecting
+  assert.ok(Date.now() - started < 15000, 'reconnect must settle on the bounded wait')
+  assert.equal(reconnected.state, 'ready')
+  assert.equal(reconnected.active, true, 'reconnect never switches the active source')
 })
 
 test('sourceReconnect rejects a local source before runtime work and leaves the active source unchanged', async t => {
@@ -511,6 +566,38 @@ test('_object hides the presigned URL: rewrite + fetch with no Authorization', a
     assert.equal(await response.text(), '%PDF-bytes')
     assert.equal(authorization, null)
   } finally { globalThis.fetch = realFetch }
+})
+
+test('_object ids are crypto-random: no connection material, stable without Math.random', async t => {
+  const { clients } = await hosts(t)
+  centerDouble(t)
+  const connected = await clients.centerConnect({ endpoint: CENTER,
+    username: 'alice', password: 's3cret', persist: false }, { packaged: false })
+  const realRandom = Math.random
+  Math.random = () => 0.5
+  t.after(() => { Math.random = realRandom })
+  const first = clients.rewriteObjectUrl(connected.sourceId, 'https://center.test/files/a?x=1')
+  const second = clients.rewriteObjectUrl(connected.sourceId, 'https://center.test/files/b?x=2')
+  assert.match(first, /^obj-[0-9a-f]{32}$/)
+  assert.match(second, /^obj-[0-9a-f]{32}$/)
+  assert.notEqual(first, second, 'ids must differ even with a constant Math.random')
+  assert.ok(!first.includes(connected.sourceId.slice(-8)), 'ids must not embed the connection id')
+})
+
+test('proxy query strings are capped and control characters rejected', async t => {
+  const { clients, options } = await hosts(t)
+  await connectLocalSource(t, clients, options)
+  const ok = await clients.apiProxy({ method: 'GET', path: '/api/resources', query: 'limit=10', headers: {} })
+  assert.equal(ok.status, 200)
+  await new Response(ok.body).arrayBuffer()
+  for (const query of ['x'.repeat(4097), 'q=a\x01b', 'q=a\x7fb', 42]) {
+    await assert.rejects(clients.apiProxy({ method: 'GET', path: '/api/resources', query, headers: {} }),
+      { code: 'invalid_arguments' }, JSON.stringify(String(query).slice(0, 20)))
+  }
+  const boundary = await clients.apiProxy({ method: 'GET', path: '/api/resources',
+    query: 'x'.repeat(4096), headers: {} })
+  assert.equal(boundary.status, 200)
+  await new Response(boundary.body).arrayBuffer()
 })
 test('unparsable center JSON fails closed instead of passing raw object URLs through', async t => {
   const { clients } = await hosts(t)

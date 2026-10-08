@@ -41,6 +41,51 @@ def signature(info):
     return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
 
 
+def host_free_bytes():
+    """Parse MemAvailable from /proc/meminfo; None when unavailable."""
+    try:
+        with open("/proc/meminfo", encoding="ascii") as stream:
+            for line in stream:
+                name, _, rest = line.partition(":")
+                if name.strip() == "MemAvailable":
+                    return int(rest.split()[0]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def memory_warning(artifact):
+    """Download-time notice when the host is below the catalog memory floor.
+
+    Returns None when there is no floor, the host reading is unavailable, or
+    memory suffices. The download continues with the warning surfaced through
+    the progress payload; model start still refuses via check_memory_floor.
+    """
+    floor = artifact.get("minimum_memory_bytes")
+    if not isinstance(floor, int) or floor <= 0:
+        return None
+    free = host_free_bytes()
+    if free is None or free >= floor:
+        return None
+    return (f"host has {free} bytes available but this model needs {floor}; "
+            "the download continues but starting it will refuse until memory is freed")
+
+
+def check_memory_floor(artifact):
+    """Fail fast when the host cannot meet the catalog's memory floor."""
+    floor = artifact.get("minimum_memory_bytes")
+    if not isinstance(floor, int) or floor <= 0:
+        return
+    free = host_free_bytes()
+    if free is None:
+        return
+    if free < floor:
+        raise ApplicationError(
+            "out_of_memory",
+            f"host has {free} bytes available but this model needs {floor}",
+        )
+
+
 class ModelInstaller:
     def __init__(self, directory, *, definitions=None, progress=None):
         self.definitions = definitions if definitions is not None else catalog()
@@ -191,9 +236,15 @@ class ModelInstaller:
         name = self.name(artifact)
         os.replace(name + ".part", name, src_dir_fd=self.fd, dst_dir_fd=self.fd)
         os.fsync(self.fd)
+        # Record the download-time memory notice alongside the installed state:
+        # download() returns status(), which only reports installed/partial, so
+        # without this the warning is lost when the publish overwrites the
+        # progress payload. Computed here so every publisher (download, import)
+        # records the same key; None when no floor applies.
         self._write_json(name + ".state.json", {
             "status": "installed", "manifest_digest": manifest_digest(artifact),
             "file_signature": signature(os.fstat(fd)), "verified_at": time.time(),
+            "memory_warning": memory_warning(artifact),
         })
 
     def import_file(self, identifier, filename):
@@ -223,9 +274,10 @@ class ModelInstaller:
             os.close(source)
         return self.status(identifier)
 
-    def _progress(self, artifact, total, *, error=None):
+    def _progress(self, artifact, total, *, error=None, memory_warning=None):
         data = {"status": "failed" if error else "downloading", "downloaded_bytes": total,
-                "manifest_digest": manifest_digest(artifact), "error": error}
+                "manifest_digest": manifest_digest(artifact), "error": error,
+                "memory_warning": memory_warning}
         self._write_json(self.name(artifact) + ".state.json", data)
         if self.progress:
             self.progress({"artifact_id": artifact["id"], "total_bytes": artifact["bytes"], **data})
@@ -238,6 +290,7 @@ class ModelInstaller:
         with self.lock(artifact):
             if self.status(identifier)["status"] == "installed":
                 return self.status(identifier)
+            notice = memory_warning(artifact)
             fd = self._open(self.name(artifact) + ".part", os.O_RDWR | os.O_CREAT)
             total, last_progress = os.fstat(fd).st_size, 0
             try:
@@ -274,7 +327,7 @@ class ModelInstaller:
                         elif not total and response.status_code != 200:
                             raise ApplicationError("model_download_failed", "publisher did not return the requested artifact")
                         os.lseek(fd, total, os.SEEK_SET)
-                        self._progress(artifact, total)
+                        self._progress(artifact, total, memory_warning=notice)
                         async for chunk in response.aiter_bytes():
                             total += len(chunk)
                             if total > artifact["bytes"]:
@@ -284,13 +337,14 @@ class ModelInstaller:
                                 view = view[os.write(fd, view):]
                             if time.monotonic() - last_progress >= 1:
                                 os.fsync(fd)
-                                self._progress(artifact, total)
+                                self._progress(artifact, total, memory_warning=notice)
                                 last_progress = time.monotonic()
                         await settled_io(self._publish, artifact, fd)
                         return self.status(identifier)
                 raise ApplicationError("model_download_redirect", "too many publisher redirects")
             except (httpx.HTTPError, ApplicationError) as exc:
-                self._progress(artifact, total, error=getattr(exc, "code", "model_download_failed"))
+                self._progress(artifact, total, error=getattr(exc, "code", "model_download_failed"),
+                               memory_warning=notice)
                 if isinstance(exc, ApplicationError):
                     raise
                 raise ApplicationError("model_download_failed", "download interrupted; explicit retry resumes the partial file") from exc

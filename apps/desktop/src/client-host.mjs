@@ -17,6 +17,8 @@ const emptyView = () => ({ transport: 'disconnected', snapshot: 'loading', reaso
 const LIMIT = 32 * 1024 * 1024
 const CENTER_FEATURES = Object.freeze(['resources', 'documents', 'search', 'wiki', 'federation_tasks'])
 const PROXY_BODY_LIMIT = 64 * 1024 * 1024
+const PROXY_PATH_LIMIT = 4096
+const PROXY_QUERY_LIMIT = 4096
 const PROXY_SAFE_HEADERS = new Set(['content-type', 'content-length', 'content-disposition',
   'cache-control', 'etag', 'last-modified'])
 const STRIP_REQUEST_HEADERS = new Set(['authorization', 'cookie', 'origin', 'referer', 'host',
@@ -99,6 +101,16 @@ export class ClientHost {
           // A native handle must stay an absolute host directory. A WSL handle is a
           // virtual path inside the distribution (~/...), validated by selectedWsl.
           if (metadata.workspaceKind === 'native' && !path.isAbsolute(metadata.directory)) throw new Error('invalid')
+          if (metadata.workspaceKind === 'wsl') {
+            // Entries persisted before distro binding carry none: adopt the
+            // host's current distribution once (migrated on next persist). A
+            // recorded distro that no longer matches fails at connect time.
+            if (metadata.workspaceDistro === undefined) {
+              metadata.workspaceDistro = this.workspaces.defaultWslDistro ?? null
+            } else if (metadata.workspaceDistro !== null) {
+              this.workspaces.resolveWslDistro(metadata.workspaceDistro)
+            }
+          }
           if (metadata.contentFeatures !== undefined
             && (!Array.isArray(metadata.contentFeatures) || !metadata.contentFeatures.length
               || !metadata.contentFeatures.every(item => CENTER_FEATURES.includes(item)))) {
@@ -131,7 +143,8 @@ export class ClientHost {
     if (prior) {
       if (binding(prior) !== binding(metadata) || prior.kind !== metadata.kind) throw new HostError('identity_mismatch')
       if (prior.kind === 'local' && (prior.directory !== metadata.directory
-          || (prior.workspaceKind ?? 'native') !== (metadata.workspaceKind ?? 'native')))
+          || (prior.workspaceKind ?? 'native') !== (metadata.workspaceKind ?? 'native')
+          || (prior.workspaceDistro ?? null) !== (metadata.workspaceDistro ?? null)))
         throw new HostError('workspace_alias_conflict')
       return prior
     }
@@ -158,7 +171,6 @@ export class ClientHost {
   #sourceLoaded = false
   #sourceConnecting = new Set()
   #objects = new Map()
-  #objectSequence = 0
   #activeSourceFile() { return path.join(this.directory, 'active-source.json') }
   async #loadActiveSource() {
     if (this.#sourceLoaded) return
@@ -256,13 +268,21 @@ export class ClientHost {
     try {
       await this.wake({ connectionId: sourceId })
       // wake/attach only restart the connection loop; stay `connecting` until the
-      // snapshot is current or the loop gives up, so the renderer never reads a
-      // transient `unavailable` as a failed switch. Bounded: a hung center ends as
-      // the honest `unavailable`.
-      const current = this.#entry(sourceId), deadline = Date.now() + 20000
-      while (!this.#closing && Date.now() < deadline
-          && !(current.view.transport === 'ready' && current.view.snapshot === 'current')
-          && !['blocked', 'backoff'].includes(current.view.transport)) {
+      // snapshot is current or the loop gives up (blocked), so the renderer never
+      // reads a transient `unavailable` as a failed switch. `backoff` is still
+      // inside the bounded retry budget (maxRetries/delaysMs in client-runtime):
+      // treat it as still-connecting while this entry's wake generation is alive.
+      // Bounded: a hung center ends as the honest `unavailable`.
+      const deadline = Date.now() + 20000
+      for (;;) {
+        if (this.#closing) break
+        const current = this.#entries.get(sourceId)
+        if (!current) break
+        const { transport, snapshot } = current.view
+        if (transport === 'ready' && snapshot === 'current') break
+        if (transport === 'blocked') break
+        if (Date.now() >= deadline) break
+        if (!this.#sourceConnecting.has(sourceId)) break
         await new Promise(resolve => setTimeout(resolve, 50))
       }
     } finally {
@@ -378,13 +398,17 @@ export class ClientHost {
       .update(JSON.stringify([verified.nodeId, actor.issuer, actor.subject])).digest('hex').slice(0, 32)
     const profile = { profileId: 'profile-' + digest, ...actor }
     const label = new URL(endpoint).host
-    await this.credentials.set({ environmentId: environment.environmentId,
+    // Surface the actual persistence mode: a renderer requesting persist:true on a
+    // basic_text/unavailable backend gets session-only storage, and the UI must
+    // never believe the JWT was persisted. The mode rides on the returned summary.
+    const stored = await this.credentials.set({ environmentId: environment.environmentId,
       profileId: profile.profileId, secret: token, persist })
     let summary
     try {
       summary = await this.pairRemote({ environment, profile, label,
         ...(storageOrigin === undefined ? {} : { uploadOrigin: storageOrigin }) })
-      return await this.sourceActivate({ sourceId: summary.connectionId })
+      const settled = await this.sourceActivate({ sourceId: summary.connectionId })
+      return { ...settled, credential: { mode: stored.mode, reason: stored.reason ?? null } }
     } catch (error) {
       await this.credentials.clear({ environmentId: environment.environmentId,
         profileId: profile.profileId }).catch(() => {})
@@ -494,6 +518,7 @@ export class ClientHost {
     const data = JSON.stringify([...this.#entries.values()].map(entry => ({ kind: entry.kind, label: entry.label,
       environment: entry.environment, profile: entry.profile,
       ...(entry.kind === 'local' ? { directory: entry.directory, workspaceKind: entry.workspaceKind ?? 'native',
+        ...(entry.workspaceDistro != null ? { workspaceDistro: entry.workspaceDistro } : {}),
         ...(entry.contentFeatures ? { contentFeatures: entry.contentFeatures } : {}) }
         : { uploadOrigin: entry.uploadOrigin }) })))
     const write = async () => {
@@ -563,15 +588,17 @@ export class ClientHost {
     const profile = { profileId: profileId(current.handshake.profile), ...current.handshake.profile }
     const directory = await this.workspaces.directory(workspaceId)
     const workspaceKind = this.workspaces.kind(workspaceId)
+    const workspaceDistro = workspaceKind === 'wsl' ? (this.workspaces.distro(workspaceId) ?? null) : null
     const prior = [...this.#entries.values()].find(entry => entry.kind === 'local' && entry.directory === directory)
     if (prior && (connectionId(environment, profile) !== prior.connectionId
         || binding({ environment, profile }) !== binding(prior)
-        || (prior.workspaceKind ?? 'native') !== workspaceKind)) {
+        || (prior.workspaceKind ?? 'native') !== workspaceKind
+        || (prior.workspaceDistro ?? null) !== workspaceDistro)) {
       this.#changed(prior, { ...prior.view, transport: 'blocked', snapshot: prior.view.projection ? 'stale' : 'failed', reason: 'identity_mismatch' })
       throw new HostError('identity_mismatch')
     }
     const entry = this.#register({ kind: 'local', label: this.workspaces.public(workspaceId).name, directory,
-      workspaceKind, environment, profile })
+      workspaceKind, ...(workspaceKind === 'wsl' ? { workspaceDistro } : {}), environment, profile })
     entry.workspaceId = workspaceId
     if (entry.handle && entry.environment.endpoint === environment.endpoint && entry.view.transport === 'ready')
       return this.#summary(entry)
@@ -748,7 +775,8 @@ export class ClientHost {
       } catch { throw new HostError('source_signed_out') }
       upstream = { url: entry.environment.endpoint, token: credential }
     }
-    const target = upstream.url + normalized + (query ? '?' + String(query).replace(/^\?/, '') : '')
+    const cleanQuery = this.#proxyQuery(query)
+    const target = upstream.url + normalized + (cleanQuery ? '?' + cleanQuery : '')
     if (body !== undefined && body !== null) {
       const size = typeof body === 'string' ? Buffer.byteLength(body)
         : body?.byteLength ?? body?.length ?? 0
@@ -796,12 +824,25 @@ export class ClientHost {
       throw new HostError('invalid_arguments')
     }
     const [clean] = path.split('?')
-    if (clean.length > 4096) throw new HostError('invalid_arguments')
+    if (clean.length > PROXY_PATH_LIMIT) throw new HostError('invalid_arguments')
     // Upstream servers percent-decode the path before routing; decide on what they will see.
     let decoded
     try { decoded = decodeURIComponent(clean) } catch { throw new HostError('invalid_arguments') }
     if (decoded !== clean && (/[\\\0?#]/.test(decoded) || decoded.split('/').length !== clean.split('/').length
         || /\/\.(?:\/|$)/.test(decoded))) throw new HostError('invalid_arguments')
+    return clean
+  }
+  #proxyQuery(query) {
+    // The proxy path is capped at 4096 chars but url.search used to flow into the
+    // upstream URL unbounded. Cap the query under the same budget and reject
+    // control characters (never valid in a query) before concatenation.
+    if (query === undefined || query === null || query === '') return ''
+    if (typeof query !== 'string') throw new HostError('invalid_arguments')
+    const clean = query.replace(/^\?/, '')
+    if (!clean) return ''
+    if (clean.length > PROXY_QUERY_LIMIT || /[\x00-\x1f\x7f]/.test(clean)) {
+      throw new HostError('invalid_arguments')
+    }
     return clean
   }
   // Rewrite one absolute center object URL to an opaque short-lived id bound to
@@ -817,8 +858,10 @@ export class ClientHost {
     return this.#registerObject(entry, String(url))
   }
   #registerObject(entry, url) {
-    const id = 'obj-' + (entry.connectionId.slice(-8) + '-' + (++this.#objectSequence).toString(36)
-      + '-' + Math.random().toString(36).slice(2, 10))
+    // Opaque bearer ids substitute for presigned center URLs and the contract
+    // promises they are random: the opaque part is 128 bits from crypto, with
+    // no connection suffix or sequence counter to narrow enumeration.
+    const id = 'obj-' + randomBytes(16).toString('hex')
     this.#objects.set(id, { sourceId: entry.connectionId, url,
       origin: new URL(url).origin, createdAt: Date.now() })
     if (this.#objects.size > 256) {

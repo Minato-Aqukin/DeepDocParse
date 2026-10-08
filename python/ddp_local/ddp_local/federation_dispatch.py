@@ -482,7 +482,7 @@ def _authorize_bindings(runtime, identity, plan_id, view, scope, phase, seed, co
             confirmed_scope_digest=view["scope_digest"], current_spec=scope["task_spec"],
             current_plan=scope["plan"], input_bytes=inputs,
             output_location=scope["output_locations"][0], retention=scope["retention"],
-            local_only=False, current_transport=_current_transport(scope, binding, config),
+            current_transport=_current_transport(scope, binding, config),
         )
     return verified
 
@@ -1159,56 +1159,65 @@ async def _fetch_file_delivery(runtime, plan_id, config, identity, state, *, act
                 os.close(target)
                 raise ApplicationError("task_in_progress", "delivery fetch is already running") from exc
             try:
+                # The store lock covers only the offset read and per-chunk
+                # persist steps; the awaited Range download runs without it
+                # (the fcntl NB guard above is the single-writer fence).
                 with runtime.store.lock:
                     offset = os.fstat(target).st_size
-                    total = None
-                    try:
-                        while True:
-                            try:
-                                chunk, total = await client.download_range(
-                                    compute_id, start=offset,
-                                    end=offset + DOWNLOAD_CHUNK_BYTES - 1,
-                                    output_sha256=digest.removeprefix("sha256:"),
-                                    total=total)
-                            except CenterFault as exc:
-                                # A durable partial may already hold every byte (crash
-                                # after the last chunk, before import). The server
-                                # answers start==total with 416; the full-digest check
-                                # below is the authority on whether the prefix is whole.
-                                if exc.code == "range_not_satisfiable" and offset > 0:
-                                    break
-                                raise
+                total = None
+                try:
+                    while True:
+                        try:
+                            chunk, total = await client.download_range(
+                                compute_id, start=offset,
+                                end=offset + DOWNLOAD_CHUNK_BYTES - 1,
+                                output_sha256=digest.removeprefix("sha256:"),
+                                total=total)
+                        except CenterFault as exc:
+                            # A durable partial may already hold every byte (crash
+                            # after the last chunk, before import). The server
+                            # answers start==total with 416; the full-digest check
+                            # below is the authority on whether the prefix is whole.
+                            if exc.code == "range_not_satisfiable" and offset > 0:
+                                break
+                            raise
+                        with runtime.store.lock:
                             offset = append_complete_chunk(
                                 target, chunk, expected_offset=offset,
                                 manifest_digest=digest)
-                            if len(chunk) < DOWNLOAD_CHUNK_BYTES or offset >= total:
-                                break
-                    except CenterFault as exc:
-                        if exc.code in ("result_unavailable", "delivery_expired", "not_found",
-                                        "precondition_failed", "invalid_range",
-                                        "range_not_satisfiable", "result_manifest_mismatch"):
-                            delivery["verified"] = False
-                            delivery["bytes_verified"] = False
-                            delivery["reason"] = exc.code
-                            delivery["received_bytes"] = offset
-                            state["delivery"] = delivery
-                            _record(state, "fetch_delivery", "pending", exc.code, exc.status)
-                            return _save(runtime, identity, plan_id, state)
-                        raise
-                    # Reassemble only from the durable partial: seek back to
-                    # zero, stream the persisted prefix, and rehash the
-                    # complete bytes. A 200 full response path does not exist
-                    # here, so a full body can never append onto partial bytes.
-                    os.lseek(target, 0, os.SEEK_SET)
-                    staged = bytearray()
-                    while True:
-                        piece = os.read(target, 65536)
-                        if not piece:
+                        if len(chunk) < DOWNLOAD_CHUNK_BYTES or offset >= total:
                             break
-                        staged += piece
-                        if len(staged) > MAX_ARCHIVE:
-                            reject("result_unavailable", "delivery body is missing or over budget")
-                    raw = bytes(staged)
+                except CenterFault as exc:
+                    if exc.code in ("result_unavailable", "delivery_expired", "not_found",
+                                    "precondition_failed", "invalid_range",
+                                    "range_not_satisfiable", "result_manifest_mismatch"):
+                        delivery["verified"] = False
+                        delivery["bytes_verified"] = False
+                        delivery["reason"] = exc.code
+                        delivery["received_bytes"] = offset
+                        state["delivery"] = delivery
+                        if exc.code == "delivery_expired":
+                            delivery["state"] = "expired"
+                            state["delivery"] = delivery
+                            _record(state, "fetch_delivery", "expired", exc.code, exc.status)
+                        else:
+                            _record(state, "fetch_delivery", "pending", exc.code, exc.status)
+                        return _save(runtime, identity, plan_id, state)
+                    raise
+                # Reassemble only from the durable partial: seek back to
+                # zero, stream the persisted prefix, and rehash the
+                # complete bytes. A 200 full response path does not exist
+                # here, so a full body can never append onto partial bytes.
+                os.lseek(target, 0, os.SEEK_SET)
+                staged = bytearray()
+                while True:
+                    piece = os.read(target, 65536)
+                    if not piece:
+                        break
+                    staged += piece
+                    if len(staged) > MAX_ARCHIVE:
+                        reject("result_unavailable", "delivery body is missing or over budget")
+                raw = bytes(staged)
                 try:
                     checked = verify_output_bytes(raw, digest)
                     stored = import_verified_bundle(
@@ -1499,6 +1508,16 @@ async def cancel_remote_compute(runtime, plan_id, config, *,
     if record.get("status") == "cancelled":
         state["state"] = "cancelled"
         _record(state, "cancel_remote_compute", "ok")
+        # Cancelled transfers never resume: drop only this transfer's partial
+        # (already-imported versions are untouched, see discard_partial). A
+        # malformed digest could never name a partial, so it skips the
+        # discard instead of failing the terminal save below.
+        delivery = state.get("delivery") if isinstance(state.get("delivery"), dict) else {}
+        digest = delivery.get("result_manifest_digest")
+        from ddp_local.remote_compute import MANIFEST_PATTERN, discard_partial, partial_identity
+
+        if isinstance(digest, str) and MANIFEST_PATTERN.fullmatch(digest) is not None:
+            discard_partial(runtime, partial_identity(plan_id, digest))
     else:
         _record(state, "cancel_remote_compute", "rejected",
                 record.get("status") or "ack_not_confirmed")

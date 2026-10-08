@@ -18,6 +18,21 @@ from ddp_local.model_runtime.install import ModelInstaller, settled_io
 from ddp_local.model_runtime.process import ModelProcess
 from ddp_local.store import LocalStore
 from ddp_local.wiki_store import LocalWikiStore
+# Adapter aliases behind the shared business seams. LocalStore serves the
+# Corpus/Search/Task/Policy roles — Corpus/Search/Policy via
+# KnowledgeApplication(self.store, self.store, self.store, ...) below
+# (version/evidence reads, keyword_search, authorize_versions) and Task via
+# claim/renew/fail used by generation persistence. FileBlobStore is the Blob
+# store and LocalExecutionProvider is the Execution provider. ConsentStore is
+# the human-approval record (prepare/approve/authorize_dispatch); it is a
+# policy control but does not implement the PolicyService protocol, so the
+# PolicyService alias points at the adapter that does.
+CorpusStore = LocalStore
+SearchIndex = LocalStore
+TaskStore = LocalStore
+BlobStore = FileBlobStore
+ExecutionProvider = LocalExecutionProvider
+PolicyService = LocalStore
 
 
 class LocalRuntime:
@@ -135,6 +150,19 @@ class LocalRuntime:
         }
 
     def client_handshake(self):
+        caps = ["resource.list", "resource.upload", "task.read", "task.cancel",
+                "corpus.retrieve", "evidence.read", "bundle.export", "bundle.import"]
+        # Handshake advertises the currently-operable surface: generation-gated
+        # ops ride on provider.generate, whose readiness gate is
+        # capabilities()["generation"]["available"] (answer/ask/build_wiki all
+        # raise model_unavailable with no model). Retrieval/read caps stay
+        # always; gated caps join only when the gate currently passes.
+        if self.provider.capabilities()["generation"]["available"]:
+            caps += ["rag.answer.cited", "wiki.create", "wiki.rebuild", "wiki.edit"]
+        caps += ["wiki.read", "client.snapshot", "client.events",
+                 "client.receipt", "plan.prepare", "plan.approve", "plan.read", "plan.revoke",
+                 "plan.dispatch", "plan.reconcile", "plan.federation.read", "plan.delivery.ack",
+                 "plan.propose", "plan.list", "plan.delivery.result"]
         return {
             "protocol_version": "ddp-client/1",
             "identity": {"environment_id": self.store.environment_id,
@@ -142,13 +170,7 @@ class LocalRuntime:
                          "authority_node_id": self.store.environment_id},
             "profile": {"issuer": self.store.environment_id,
                         "subject": "workspace:" + self.store.workspace_id},
-            # API support is separate from capabilities() provider readiness.
-            "capabilities": ["resource.list", "resource.upload", "task.read", "task.cancel",
-                             "corpus.retrieve", "evidence.read", "bundle.export", "bundle.import",
-                             "rag.answer.cited", "wiki.create", "wiki.rebuild", "wiki.edit", "wiki.read", "client.snapshot", "client.events",
-                             "client.receipt", "plan.prepare", "plan.approve", "plan.read", "plan.revoke",
-                             "plan.dispatch", "plan.reconcile", "plan.federation.read", "plan.delivery.ack",
-                             "plan.propose", "plan.list", "plan.delivery.result"],
+            "capabilities": caps,
         }
 
     @staticmethod
@@ -204,11 +226,11 @@ class LocalRuntime:
 
     def delete_version(self, version_id: str):
         """Delete one unretained version; Wiki/active-task retention refuses."""
-        return self.store.delete_version(version_id)
+        return self.store.delete_version(version_id, blobs=self.blobs)
 
     def delete_resource(self, resource_id: str):
         """Delete a whole logical resource once nothing retains it."""
-        return self.store.delete_resource(resource_id)
+        return self.store.delete_resource(resource_id, blobs=self.blobs)
 
     def source(self, version):
         return {
@@ -662,6 +684,117 @@ class LocalRuntime:
                         "dependency_manifest": list(dependencies.values())}
             return {}
 
+    def source_key(self, version_id):
+        """Validated blob key for one ready version's original PDF bytes."""
+        self.store.authorize_versions([version_id])
+        version = self.store.version(version_id)
+        if version.get("source_json") and version["source_json"].get("original") != "present":
+            raise ApplicationError("source_missing", "original source bytes are unavailable")
+        return version["blob_key"]
+
+    def bundle_key(self, version_id):
+        """Validated blob key for one exportable version bundle."""
+        version = self.store.version(version_id)
+        if version["state"] not in {"ready", "unparsed"} or not version["bundle_key"]:
+            raise ApplicationError(
+                "version_not_ready", "wait for the fixed parse to finish before export"
+            )
+        return version["bundle_key"]
+
+    def download_source_response(self, version_id):
+        """Digest- and magic-verified chunked download of one ready source PDF."""
+        key = self.source_key(version_id)
+        return self.download_response(
+            key, maximum=MAX_INPUT, media_type="application/pdf",
+            filename="document.pdf", inline=True, pdf_magic=True,
+        )
+
+    def download_bundle_response(self, version_id):
+        """Digest-verified chunked download of one exportable version bundle."""
+        key = self.bundle_key(version_id)
+        return self.download_response(
+            key, maximum=MAX_ARCHIVE, media_type="application/zip",
+            filename="document.ddp.zip", inline=False,
+        )
+
+    def download_response(self, key, *, maximum, media_type, filename, inline=True, pdf_magic=False):
+        """Digest-verified chunked download; corrupt bytes fail as a contract error.
+
+        The blob is hashed on its pinned descriptor before the first body
+        byte streams, so a digest mismatch surfaces as ``blob_corrupt``
+        (never a 200 with bad bytes). Exactly one 64 KiB window is in flight
+        at a time; the verified fd is rewound after the pre-hash and closed
+        once the body finishes (or by the response background task on early
+        disconnect). Runs on the calling thread; HTTP routes serve it via
+        ``asyncio.to_thread``.
+        """
+        import os as _os
+        import stat as _stat
+
+        from fastapi.responses import StreamingResponse
+        from starlette.background import BackgroundTask
+
+        from ddp_local.blobs import STREAM_CHUNK
+
+        fd = _os.open(self.blobs._key(key),
+                      _os.O_RDONLY | _os.O_NOFOLLOW | _os.O_NONBLOCK, dir_fd=self.blobs.fd)
+        closed = False
+
+        def close_fd():
+            nonlocal closed
+            if closed:
+                return
+            closed = True
+            try:
+                _os.close(fd)
+            except OSError:
+                pass
+
+        try:
+            if not _stat.S_ISREG(_os.fstat(fd).st_mode):
+                raise ApplicationError("unsafe_path", "blob is not a regular file")
+            _os.set_blocking(fd, True)
+            hasher, total, head = hashlib.sha256(), 0, b""
+            while True:
+                data = _os.read(fd, STREAM_CHUNK)
+                if not data:
+                    break
+                total += len(data)
+                if total > maximum:
+                    raise ApplicationError("input_too_large", "blob exceeds the read budget")
+                hasher.update(data)
+                if len(head) < 5:
+                    head += data[: 5 - len(head)]
+            if hasher.hexdigest() != key:
+                raise ApplicationError("blob_corrupt", "immutable blob digest does not match")
+            if pdf_magic and not head.startswith(b"%PDF-"):
+                raise ApplicationError("source_invalid", "fixed source is not a supported PDF")
+            _os.lseek(fd, 0, _os.SEEK_SET)
+        except BaseException:
+            close_fd()
+            raise
+
+        def chunks():
+            try:
+                while True:
+                    data = _os.read(fd, STREAM_CHUNK)
+                    if not data:
+                        return
+                    yield data
+            finally:
+                close_fd()
+
+        return StreamingResponse(
+            chunks(),
+            media_type=media_type,
+            headers={"Content-Disposition": f"{'inline' if inline else 'attachment'}; filename=\"{filename}\""},
+            background=BackgroundTask(close_fd),
+        )
+
+    def blob_stream(self, key):
+        """Binary stream for one immutable blob; caller must close it."""
+        return self.blobs.open(key)
+
     def source_bytes(self, version_id):
         self.store.authorize_versions([version_id])
         version = self.store.version(version_id)
@@ -690,15 +823,21 @@ class LocalRuntime:
             if e["source_type"] != "source":
                 continue
             loc, excerpt = e["locator"], record["excerpt"]
-            size = loc["page_size"]
+            size = loc.get("page_size")
+            if loc.get("kind") == "paragraph" and "physical_page_index" not in loc:
+                # Bundle paragraph locators carry no page index; the local chunk
+                # row keys evidence by (page, seq), so these land on page 0.
+                page_idx = 0
+            else:
+                page_idx = loc["physical_page_index"]
             chunk = {
                 "seq": loc["seq"],
                 "text": excerpt,
                 "text_tokenized": " ".join(tokens(excerpt)),
-                "page_idx": loc["physical_page_index"],
+                "page_idx": page_idx,
                 "printed_page_label": loc.get("printed_page_label"),
-                "bbox": loc["bbox"],
-                "page_size": [size["width"], size["height"]] if size else None,
+                "bbox": loc.get("bbox"),
+                "page_size": ([size["width"], size["height"]] if size else None),
                 "block_type": e.get("block_type") or "text",
                 "source_type": "source",
                 "model_meta": {"origin": "verified_bundle", "vector_available": False},

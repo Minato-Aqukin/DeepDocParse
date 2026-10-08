@@ -2,8 +2,8 @@ import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { createReadStream } from 'node:fs'
+import { EventEmitter } from 'node:events'
+import { createReadStream, existsSync } from 'node:fs'
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -304,6 +304,43 @@ test('WSL workspaces are virtual, stable and never touched through the host file
   assert.equal(path.basename(await realpath(path.join(root, 'Docs'))), await handles.public(native.workspaceId).name)
 })
 
+test('WSL handles reject dot segments so ~/a/../b can never alias ~/b', async () => {
+  // Lexical rejection (workspaces.mjs:111-128): resolving `..` would let two spellings
+  // share one handle (or escape the virtual root). Pure handle logic — no WSL needed,
+  // so this runs on every platform (distro binding matters most on Windows).
+  const handles = new WorkspaceHandles()
+  const clean = handles.selectedWsl({ directory: '~/b' })
+  assert.equal(await handles.directory(clean.workspaceId), '~/b')
+  for (const directory of ['~/a/../b', '~/../b', '/a/../b', '~/a/./b', '~/a/b/..', '~/..', '/../b']) {
+    assert.throws(() => handles.selectedWsl({ directory }), /invalid_workspace/, directory)
+  }
+  assert.equal(handles.selectedWsl({ directory: '~/b' }).workspaceId, clean.workspaceId)
+})
+
+test('the same virtual path on two distros yields distinct WSL handles', async () => {
+  // Distro-bound identity (workspaces.mjs:57-59): the same virtual path inside
+  // different distributions must never collide. Pure — runs everywhere.
+  const handles = new WorkspaceHandles()
+  const ubuntu = handles.selectedWsl({ directory: WSL_WORKSPACE, distro: 'Ubuntu-22.04' })
+  const debian = handles.selectedWsl({ directory: WSL_WORKSPACE, distro: 'Debian' })
+  assert.notEqual(ubuntu.workspaceId, debian.workspaceId, 'same path on different distros must not collide')
+  assert.equal(handles.distro(ubuntu.workspaceId), 'Ubuntu-22.04')
+  assert.equal(handles.distro(debian.workspaceId), 'Debian')
+  assert.equal(await handles.directory(ubuntu.workspaceId), WSL_WORKSPACE)
+  assert.equal(await handles.directory(debian.workspaceId), WSL_WORKSPACE)
+  assert.equal(handles.selectedWsl({ directory: WSL_WORKSPACE, distro: 'Ubuntu-22.04' }).workspaceId, ubuntu.workspaceId)
+  // The default binds at selection time; existing handles keep their own distro when
+  // the host default changes (main.mjs sets it once at startup).
+  const bound = new WorkspaceHandles({ defaultWslDistro: 'Ubuntu-22.04' })
+  const viaDefault = bound.selectedWsl({ directory: WSL_WORKSPACE })
+  assert.equal(bound.distro(viaDefault.workspaceId), 'Ubuntu-22.04')
+  const explicitOther = bound.selectedWsl({ directory: WSL_WORKSPACE, distro: 'Debian' })
+  assert.notEqual(viaDefault.workspaceId, explicitOther.workspaceId)
+  bound.defaultWslDistro = 'Debian'
+  assert.equal(bound.distro(viaDefault.workspaceId), 'Ubuntu-22.04')
+  assert.equal(await bound.directory(viaDefault.workspaceId), WSL_WORKSPACE)
+})
+
 test('the real W3 tarball provisions, launches, handshakes and stops by inner pid', linuxOnly, async t => {
   const real = await realTarball(t)
   if (!real) return
@@ -373,4 +410,112 @@ test('validateBundle speaks the bundled runtime-files.py protocol inside WSL', l
     runtimeRoot: '~/.deepdocparse/not-installed' })
   await assert.rejects(missing.validateBundle(Buffer.from('x')),
     error => error.code === 'wsl_runtime_not_installed')
+})
+
+// Stop-before-bootstrap with a fully faked wsl.exe: no distro, no shim, runs on
+// any platform. The fake answers `-l -v` detection, the INSTALLED.json marker
+// (matching the manifest, so no provisioning runs), and records every in-distro
+// invocation by script shape (sweep vs inner kill vs relay spawn).
+function fakeChild() {
+  const child = new EventEmitter()
+  child.stdout = new EventEmitter()
+  child.stderr = new EventEmitter()
+  child.exitCode = null
+  child.signalCode = null
+  return child
+}
+
+async function preBootstrapBackend(t, { relayCloses = true } = {}) {
+  const root = await temporary(t)
+  const archiveName = 'deepdocparse-wsl-runtime-0.1.0-linux-x64.tar.gz'
+  const archive = path.join(root, archiveName)
+  await writeFile(archive, Buffer.from('placeholder-bytes'))
+  const manifest = path.join(root, 'wsl-runtime.json')
+  await writeFile(manifest, JSON.stringify(manifestValue({ archive: archiveName, size: 18,
+    sha256: await hash(archive) })))
+  await mkdir(path.join(root, 'sessions'))
+  const runtime = path.join(root, 'runtime')
+  await mkdir(path.join(runtime, 'app/src'), { recursive: true })
+  await writeFile(path.join(runtime, 'INSTALLED.json'), JSON.stringify({ format: 1,
+    version: '0.1.0', sha256: await hash(archive) }))
+  const calls = []
+  let relay = null
+  const spawnProcess = (command, args, options) => {
+    calls.push({ command, args })
+    const child = fakeChild()
+    const script = args.slice(3).join('\n')
+    setImmediate(() => {
+      if (args[0] === '-l') {
+        child.stdout.emit('data', Buffer.from(LIST, 'utf8'))
+        child.emit('close', 0, null)
+        return
+      }
+      if (script.includes('INSTALLED.json')) {
+        child.stdout.emit('data', Buffer.from(JSON.stringify({ format: 1,
+          version: '0.1.0', sha256: calls.sha256 ?? '' }) || '{}', 'utf8'))
+        child.emit('close', 0, null)
+        return
+      }
+      if (script.includes('runtime-launcher.py --workspace')) {
+        relay = child
+        child.kill = signal => {
+          calls.push({ kill: signal })
+          if (relayCloses) {
+            child.exitCode = 0
+            setImmediate(() => child.emit('close', 0, null))
+          }
+        }
+        return
+      }
+      // sweep + inner kill + anything else: instant success.
+      child.emit('close', 0, null)
+    })
+    return child
+  }
+  // The marker's sha must equal the manifest's.
+  const digest = await hash(archive)
+  calls.sha256 = digest
+  await writeFile(path.join(runtime, 'INSTALLED.json'), JSON.stringify({ format: 1,
+    version: '0.1.0', sha256: digest }))
+  const backend = await createWslBackend({ wsl: 'wsl.exe', runtimeRoot: WSL_ROOT,
+    runtimeArchive: archive, runtimeManifest: manifest,
+    directory: path.join(root, 'sessions'), environment: {},
+    spawnProcess, killMs: 500 })
+  return { backend, calls, relay: () => relay, root }
+}
+
+test('stop before the first bootstrap line sweeps the inner runtime by workspace', async t => {
+  const { backend, calls, root } = await preBootstrapBackend(t)
+  const sessionDir = path.join(root, 'sessions', 'owned-stop-early')
+  await mkdir(sessionDir, { recursive: true })
+  const handle = await backend.spawn({ workspace: WSL_WORKSPACE, sessionDir })
+  // The manager always consumes ready(); the killed relay rejects it. Attach now so
+  // the rejection is never unhandled while stop() is still awaiting the relay.
+  const ready = handle.ready()
+  ready.catch(() => {})
+  const started = Date.now()
+  await backend.stop(handle.child, { graceMs: 50 })
+  await assert.rejects(ready, error => error.code === 'runtime_exited')
+  assert.ok(Date.now() - started < 5000, 'pre-bootstrap stop must stay bounded')
+  const sweeps = calls.filter(call => (call.args ?? []).includes('sweep'))
+  assert.equal(sweeps.length, 1, 'one workspace sweep, got: ' + JSON.stringify(calls.map(call => call.args?.[3] ?? call.kill)))
+  assert.equal(sweeps[0].args.at(-1), WSL_WORKSPACE, 'the sweep is scoped to this spawn\'s workspace')
+  assert.equal(existsSync(path.join(sessionDir, 'wsl-pid')), false, 'no bootstrap line arrived, no pid file')
+})
+
+test('a bootstrap line arriving after stop is recorded and the inner runtime killed at once', async t => {
+  const { backend, calls, relay, root } = await preBootstrapBackend(t, { relayCloses: false })
+  const sessionDir = path.join(root, 'sessions', 'owned-late-line')
+  await mkdir(sessionDir, { recursive: true })
+  const handle = await backend.spawn({ workspace: WSL_WORKSPACE, sessionDir })
+  await backend.stop(handle.child, { graceMs: 50 })
+  const line = JSON.stringify({ url: 'http://127.0.0.1:9/', token: 'a'.repeat(32), pid: 424242 }) + '\n'
+  relay().stdout.emit('data', Buffer.from(line, 'utf8'))
+  await assert.rejects(handle.ready(), error => error.code === 'runtime_stopped')
+  assert.equal(await readFile(path.join(sessionDir, 'wsl-pid'), 'utf8'), '424242')
+  const kills = calls.filter(call => Array.isArray(call.args) && call.args.join(' ').includes('kill '))
+  assert.ok(kills.some(call => call.args.at(-1) === '424242'),
+    'late inner pid is KILLed now, not left for a later sweep: ' + JSON.stringify(calls))
+  const sweeps = calls.filter(call => (call.args ?? []).includes('sweep'))
+  assert.equal(sweeps.length, 1, 'stop still swept once for the never-bootstrapped window')
 })
