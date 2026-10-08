@@ -1,4 +1,4 @@
-"""联邦执行队列切片（P5 队列 v3）的验收用例。
+"""联邦执行队列（受理即持久、执行可恢复）的验收用例。
 
 这一层要钉死的是"受理即持久、执行可恢复"：
 
@@ -57,6 +57,7 @@ from test_federation_tasks import (
     create_intent,
     exploration,
     member,
+    peer_evidence,
     plan_task,
     scope_manifest,
     task_spec,
@@ -1224,3 +1225,504 @@ async def test_resume_that_adds_evidence_regenerates_the_delegated_answer(
     assert again.status_code == 202, again.text
     await drain_tasks(app_state)
     assert len(compute_peer.admissions) == 2, "an unchanged evidence set reuses the answer"
+
+
+async def test_root_cancel_cancels_local_executions_and_reconciles_peer(
+        actor_client, session, app_state, monkeypatch):
+    """根取消到达本地步骤执行与对端子图：提交后、worker 尚未排空时取消，已排队/
+    运行中/已领取的本地执行行经 federation.cancel_execution（generation+1 + 去重
+    取消）转 cancelled，取消事件载荷按执行者逐个对账（cancelled vs 已终态）；
+    第二次取消幂等（返回当前状态）。纯本地任务保持原有行为。
+    """
+    run = await _local_flow(actor_client, session, key="queue-cancel-exec")
+    submitted = await actor_client.post(
+        "/api/v1/tasks", headers={"Idempotency-Key": "queue-cancel-exec"},
+        json={"root_task_id": run["root"], "plan_digest": run["plan"]["plan_digest"]})
+    assert submitted.status_code == 202, submitted.text
+    cancelled = await actor_client.post(f"/api/v1/tasks/{run['root']}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    session.expunge_all()
+    live = await session.scalars(select(FederationExecution).where(
+        FederationExecution.root_task_id == run["root"],
+        FederationExecution.state.in_(("queued", "running", "claimed"))))
+    assert list(live) == [], "no local step execution may stay live after root cancel"
+    events = (await actor_client.get(f"/api/v1/tasks/{run['root']}/events?after=0")).json()["events"]
+    cancel_events = [event for event in events if event["type"] == "task_cancelled"]
+    assert cancel_events, "cancel must append a reconciled task_cancelled event"
+    assert "executions" in cancel_events[-1]["payload"], \
+        "cancel payload carries per-executor reconciliation"
+    again = await actor_client.post(f"/api/v1/tasks/{run['root']}/cancel")
+    assert again.status_code == 200, again.text
+    assert again.json()["status"] == "cancelled", "second cancel returns current status"
+
+
+async def test_root_cancel_attempts_peer_cancel_for_remote_steps(
+        actor_client, session, app_state, monkeypatch):
+    """远端步骤的对端取消尽力而为：执行中途取消时，协调者按业务键查到已派发回执
+    后经 PeerClient.cancel 发取消，传输失败不影响取消本身；取消事件载荷按执行者
+    逐个对账，迟到的 worker 输出不得覆盖已取消行。
+    """
+    import json as _json
+    from conftest import ACTOR as _ACTOR, ORG as _ORG
+    from ddp_corpus.deps import Actor as ActorCls
+    from ddp_corpus.federation_peers import PeerDirectory as _PD, parse_peers as _pp
+    from ddp_corpus.models import utcnow as _utcnow2
+    from node_credentials_fixture import LocalControlSigner as _Signer
+    from test_federation_probes import NODE as _NODE2
+    from test_federation_tasks import SlowExecutorPeer
+    # SlowExecutorPeer: executions stay running until cancelled; its transport
+    # answers PeerClient.cancel with state=cancelled and records the executor.
+    # NOTE: SlowExecutorPeer.transport wraps ReconcilingStubPeer.transport,
+    # whose "/tasks/" branch answers status WITHOUT a /cancel branch — so
+    # route cancel through a recording wrapper here instead of peer.cancelled.
+    peer = SlowExecutorPeer(items=[peer_evidence()])
+    _peer_transport = peer.transport()
+    peer.cancel_calls: list[str] = []
+
+    def _cancel_recording_handler(request):
+        if request.url.path.endswith("/cancel"):
+            peer.cancel_calls.append(request.url.path)
+        return _peer_transport.handle_request(request)
+
+    import httpx as _httpx2
+    _peers = _pp(_json.dumps({PEER_NODE: {"endpoint": "https://peer.example"}}))
+    _signer = _Signer(issuer_node_id=_NODE2)
+
+    def _factory(actor, delegation=None):
+        return _PD(_peers, actor=actor,
+                   transport=_httpx2.MockTransport(_cancel_recording_handler),
+                   signer=_signer, delegation=delegation)
+
+    monkeypatch.setattr(federation_tasks, "peer_directory", _factory)
+    from ddp_corpus.federation_tasks import targets as _targets
+    monkeypatch.setattr(_targets, "FAST_CANDIDATE_LIMIT", 1)
+    manifest = scope_manifest([member("peer-collection-1", PEER_NODE),
+                               member("peer-collection-2", PEER_NODE)])
+    intent = await create_intent(
+        actor_client, spec=task_spec(scope="federation_public", mode="fast", scope_ref="scope-1",
+                                     operation="corpus.retrieve"),
+        consent=exploration(recipients=(PEER_NODE,)), manifest=manifest,
+        key="cancel-remote-intent")
+    root = intent["root_task_id"]
+    plan = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
+
+    async def _cancel_mid_dispatch(*args, **kwargs):
+        # Admit WITHOUT polling (SlowExecutorPeer holds executions running
+        # forever, so the real poll never returns): replicate the admission
+        # half of `_run_remote_step`, then cancel from another session. The
+        # coordinator's `_cancel_step_executions` finds the dispatched receipt
+        # by business key and issues best-effort PeerClient.cancel.
+        from ddp_corpus.federation_tasks.steps import (
+            _admission_body, _lookup_remote_receipt, _step_inputs)
+        from ddp_core.application import plans as _plans
+        _peers = kwargs.get("peers", args[0] if args else None)
+        _step = kwargs.get("step")
+        _plan = kwargs.get("plan")
+        _spec = kwargs.get("task_spec")
+        _consent = kwargs.get("consent")
+        _root = kwargs.get("root_task_id")
+        _client = _peers.client(_step["executor_node_id"])
+        _body = _admission_body(root_task_id=_root, plan=_plan, task_spec=_spec,
+                                consent=_consent, step=_step,
+                                inputs=_step_inputs(_spec.get("query") or ""),
+                                generation=kwargs.get("generation", 0))
+        _receipt = await _client.admit(_body, idempotency_key=_body["idempotency_key"])
+        assert _receipt.get("executor_task_id"), "admission must dispatch before cancel"
+        from ddp_corpus.db import get_sessionmaker as _sessions
+        async with _sessions()() as other:
+            other_actor = ActorCls(id=_ACTOR, kind="user", organization_id=_ORG,
+                                   role="contributor")
+            await federation_tasks.cancel(other, other_actor, _root, now=_utcnow2())
+        # Cancel committed: report the step as not-attempted without polling
+        # the (now cancelled) peer execution.
+        return "not_attempted", "cancelled", [], None, []
+
+    monkeypatch.setattr(federation_tasks, "_run_remote_step", _cancel_mid_dispatch)
+    submitted = await actor_client.post(
+        "/api/v1/tasks", headers={"Idempotency-Key": "cancel-remote-submit"},
+        json={"root_task_id": root, "plan_digest": plan["plan_digest"]})
+    assert submitted.status_code == 202, submitted.text
+    await drain_tasks(app_state)
+    status = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert status["status"] == "cancelled", status
+    events = (await actor_client.get(f"/api/v1/tasks/{root}/events?after=0")).json()["events"]
+    payload = [event["payload"] for event in events if event["type"] == "task_cancelled"][-1]
+    assert "executions" in payload, "cancel payload carries per-target reconciliation"
+    assert set(payload["executions"]) == {"local_cancelled", "local_already_terminal",
+                                          "remote_cancelled", "remote_already_terminal",
+                                          "remote_unreachable"}
+    assert peer.cancel_calls, "peer cancel must be attempted best-effort for dispatched steps"
+
+async def test_persisted_remote_probe_carries_policy_revision(session):
+    """记录侧：持久化探测行携带目录修订。
+
+    `_persist_remote_probe` stores `policy_revision` (same origin as
+    `_probe_policy_revision`: the target's registry revision from the scope
+    manifest) at `result_json["policy_revision"]` — the stored-level source
+    `cache._recorded_policy_revision` reads for reuse matching. Absent
+    revision keeps the legacy envelope shape (no key).
+    """
+    from conftest import ACTOR, ORG
+    from ddp_corpus.deps import Actor as ActorCls
+    from ddp_corpus.federation_models import FederationProbe
+    from ddp_corpus.models import utcnow as _utcnow
+    from test_federation_tasks import peer_evidence as _peer_evidence, peer_probe
+    actor = ActorCls(id=ACTOR, kind="user", organization_id=ORG, role="contributor")
+    probe = peer_probe()
+    row_id = await federation_tasks._persist_remote_probe(
+        session, actor, probe, [_peer_evidence()], key="policy-rev-key",
+        task_spec_digest=probe["task_spec_digest"], consent_ref="explore-1",
+        query_digest="sha256:" + "e" * 64, request_digest="sha256:" + "f" * 64,
+        policy_revision="registry:node-b:3", now=_utcnow())
+    await session.commit()
+    stored = await session.get(FederationProbe, row_id)
+    assert (stored.result_json or {}).get("policy_revision") == "registry:node-b:3"
+    legacy_id = await federation_tasks._persist_remote_probe(
+        session, actor, probe, [_peer_evidence()], key="policy-rev-legacy-key",
+        task_spec_digest=probe["task_spec_digest"], consent_ref="explore-1",
+        query_digest="sha256:" + "e" * 64, request_digest="sha256:" + "f" * 64,
+        now=_utcnow())
+    await session.commit()
+    legacy = await session.get(FederationProbe, legacy_id)
+    assert "policy_revision" not in (legacy.result_json or {}), \
+        "absent revision keeps the legacy envelope shape"
+
+
+async def test_reuse_binds_task_spec_digest_fail_closed(session):
+    """复用绑定任务摘要，fail-closed。
+
+    A cached probe from task A must not satisfy task B: with an explicit
+    `task_spec_digest`, `_find_reusable_probe` rejects a digest-mismatched
+    receipt (returns None, caller re-probes) and reuses the digest-matched
+    one. The mismatch is reported as `task_spec_digest_mismatch` (wrapper
+    caller-side recheck); a kernel-level miss reports `cache_miss`.
+    """
+    from conftest import ACTOR, ORG
+    from ddp_corpus.deps import Actor as ActorCls
+    from ddp_corpus.models import utcnow as _utcnow
+    from test_federation_probes import NODE as _NODE
+    from test_federation_tasks import (
+        member as _member,
+        peer_evidence as _peer_evidence,
+        peer_probe,
+        scope_manifest as _manifest,
+    )
+    actor = ActorCls(id=ACTOR, kind="user", organization_id=ORG, role="contributor")
+    manifest = _manifest([_member("peer-collection-1", PEER_NODE)],
+                         revisions=[(_NODE, 1), (PEER_NODE, 1)])
+    target = {"origin_node_id": PEER_NODE, "collection_id": "peer-collection-1",
+              "operation": federation_tasks.RETRIEVAL_OPERATION}
+    probe = peer_probe(index_revision="peer-index-1")
+    probe["task_spec_digest"] = "sha256:" + "a" * 64
+    query_digest = "sha256:" + "e" * 64
+    policy_rev = f"registry:{PEER_NODE}:1"
+    await federation_tasks._persist_remote_probe(
+        session, actor, probe, [_peer_evidence()], key="reuse-digest-key",
+        task_spec_digest="sha256:" + "a" * 64, consent_ref="explore-1",
+        query_digest=query_digest, request_digest="sha256:" + "f" * 64,
+        policy_revision=policy_rev, now=_utcnow())
+    await session.commit()
+    hit, _row, skip = await federation_tasks._find_reusable_probe(
+        session, actor, target=target, query_digest=query_digest,
+        index_revision="peer-index-1", manifest=manifest,
+        task_spec_digest="sha256:" + "b" * 64, now=_utcnow())
+    assert hit is None, "digest-mismatched receipt must not reuse (fail-closed)"
+    # Kernel rejects first (cache_miss covers task-digest/index/TTL gates);
+    # the wrapper's explicit task_spec_digest_mismatch fires when a candidate
+    # survives the kernel but fails the caller-side digest recheck.
+    assert skip == "cache_miss", skip
+    match, match_row, match_skip = await federation_tasks._find_reusable_probe(
+        session, actor, target=target, query_digest=query_digest,
+        index_revision="peer-index-1", manifest=manifest,
+        task_spec_digest="sha256:" + "a" * 64, now=_utcnow())
+    assert match is not None and match_row is not None, \
+        "digest-matched receipt reuses (same task, same revision)"
+    assert match_skip is None, match_skip
+
+async def test_terminal_commit_maps_event_seq_collision_to_409(
+        actor_client, session, app_state, monkeypatch):
+    """终态写入经 _commit：_execute_plan 的事件追加与并发写撞上 (root_task_id, seq)
+    时必须报可重试 409 idempotency_conflict，而不是裸 IntegrityError。
+
+    穿插点选在终态事件追加：先让序号计算看到已提交真相（算出下一个 seq），
+    再用独立会话真实提交赢家的同序号行 —— 输家的终态 commit 真实撞上
+    `uq_federation_task_events_seq`。变异确认：把 execution.py 终态的
+    `_commit` 还原成 `session.commit()`，这里的 `raises(APIError)` 按不住裸异常。
+
+    竞输后整笔终态事务回滚：行留在 running、旧结果不动，调用方同键重试即可 ——
+    不断言任何"回滚后仍是终态"的形态（那是单连接 SQLite 把输家的刷新写提前
+    提交造成的假象，PG 上不存在）。
+    """
+    from ddp_corpus import db as db_module
+    from ddp_corpus.deps import Actor as ActorCls
+    from ddp_corpus.federation_models import FederationRequest as _Request
+    from ddp_corpus.federation_models import FederationTaskEvent as _Event
+    from ddp_corpus.models import utcnow as _utcnow
+    from sqlalchemy import func as _func, select as _select
+    from sqlalchemy.exc import IntegrityError as _IntegrityError
+    from conftest import ACTOR as _ACTOR, ORG as _ORG
+
+    run = await _local_flow(actor_client, session, key="terminal-race-flow")
+    root = run["root"]
+    submitted = await actor_client.post(
+        "/api/v1/tasks", headers={"Idempotency-Key": "terminal-race-flow"},
+        json={"root_task_id": root, "plan_digest": run["plan"]["plan_digest"]})
+    assert submitted.status_code == 202, submitted.text
+    await session.commit()
+    session.expunge_all()
+    row = await session.get(_Request, root)
+    assert row is not None and row.status == "running"
+    pre_result = dict(row.result_json or {})
+
+    from ddp_corpus.federation_tasks import execution as _execution_mod
+    real_append = _execution_mod._append_event
+    raced = {"done": False}
+
+    async def _racing_terminal_append(sess, root_task_id, type_, payload, *, now):
+        sess.autoflush = False
+        try:
+            await real_append(sess, root_task_id, type_, payload, now=now)
+            if raced["done"] or type_ != "task_completed" or root_task_id != root:
+                return
+            raced["done"] = True
+            loser_seq = max(
+                obj.seq for obj in sess.new
+                if isinstance(obj, _Event) and obj.root_task_id == root)
+        finally:
+            sess.autoflush = True
+        winner = db_module.get_sessionmaker()()
+        try:
+            winner.add(_Event(id=new_id(), root_task_id=root, seq=loser_seq,
+                              type=type_, payload=dict(payload), created_at=_utcnow()))
+            await winner.commit()
+        except _IntegrityError:
+            pass
+        finally:
+            await winner.close()
+
+    monkeypatch.setattr(_execution_mod, "_append_event", _racing_terminal_append)
+    actor = ActorCls(id=_ACTOR, kind="user", organization_id=_ORG, role="contributor")
+    with pytest.raises(APIError) as caught:
+        await federation_tasks._execute_plan(
+            session, actor, row, now=_utcnow(),
+            http=app_state.http, index=app_state.search_index, retry_only=False)
+    assert caught.value.status_code == 409
+    assert caught.value.code == "idempotency_conflict"
+
+    session.expunge_all()
+    final = await session.get(_Request, root, populate_existing=True)
+    if final.status == "running":
+        # Real invariant (also what PG shows): the rolled-back terminal write
+        # leaves the row running with its pre-race result for a same-key retry.
+        assert (final.result_json or {}) == pre_result, \
+            "the rolled-back result must not leak a half-written manifest"
+    else:
+        # SQLite-shared-connection artifact, pinned so a *change* is noticed:
+        # StaticPool's single connection commits the loser's flushed terminal
+        # UPDATE along with the winner's event row. The PG twin below asserts
+        # the real invariant on separate connections.
+        assert final.status == "succeeded", final.status
+        assert (final.result_json or {}).get("result_manifest_digest"), \
+            "the SQLite artifact keeps a complete terminal row, never a half write"
+
+async def test_partial_subquery_evidence_keeps_target_and_group_incomplete(
+        actor_client, session, app_state):
+    """F8：部分子查询的证据不得让目标或分组提前 complete。
+
+    同一目标单次检索只跑 `task_spec.query` 一遍：返回的正文能回答哪个子查询，
+    哪个 ledger 行才记 succeeded；文本对不上的子查询行记 not_attempted /
+    subquery_evidence_missing（尝试与回执保留），分组计数不把目标算成功，
+    exhaustive + sealed 的判定仍是 partial。变异确认：把 fan-out 还原成
+    vacuous shared-fate（所有子查询行都记同一个 recorded 结局），这里的
+    not_attempted 断言与 partial 断言变红。
+    """
+    from ddp_core.application import plans as plans_kernel
+
+    evidence_text = "retrieval target text"
+    _, version, _, _, evidence_rows = await indexed_source(
+        session, texts=(evidence_text,))
+    await publish_collection(actor_client, version)
+    subqueries = ["retrieval target",
+                  "unrelated zebra quasar",
+                  "distant nebula cartography"]
+    spec = task_spec(scope="site_public", mode="exhaustive_scope",
+                     query="retrieval target",
+                     scope_ref="scope-1")
+    spec["requirements"] = {"query_plan": {"subqueries": list(subqueries)}}
+    consent = exploration(egress="local_only", recipients=(), payload=(),
+                          budget={"max_probe_requests": 0, "max_egress_bytes": 0})
+    intent = await create_intent(actor_client, spec=spec, consent=consent)
+    root = intent["root_task_id"]
+    plan = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan)
+    submitted = await actor_client.post(
+        "/api/v1/tasks", headers={"Idempotency-Key": "partial-subquery-flow"},
+        json={"root_task_id": root, "plan_digest": plan["plan_digest"]})
+    assert submitted.status_code == 202, submitted.text
+    await drain_tasks(app_state)
+    status = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert status["status"] == "succeeded", status
+    assert status["retrieval_completeness"] == "partial", status
+    assert status["result"]["counts"]["succeeded"] == 0, status
+    assert status["result"]["counts"]["incomplete"] == 1, status
+    assert status["result"]["evidence"], "matched subquery keeps its real evidence"
+    assert {item["evidence_id"] for item in status["result"]["evidence"]} == {
+        evidence_rows[0].id}
+    assert status["result"]["unretrieved_targets"], \
+        "unmatched subqueries stay listed as not retrieved"
+
+    digests = [plans_kernel.content_digest(text.encode("utf-8"))
+               for text in subqueries]
+    rows = list(await session.scalars(select(CoverageEntry).where(
+        CoverageEntry.root_task_id == root).execution_options(populate_existing=True)))
+    assert len(rows) == 3, "one ledger row per bound subquery"
+    by_digest = {row.query_digest: row for row in rows}
+    assert set(by_digest) == set(digests)
+    matched = by_digest[digests[0]]
+    assert matched.state == "succeeded"
+    assert matched.probe_refs_json, "success keeps its probe receipt binding"
+    assert matched.actual_index_revision
+    assert matched.evidence_refs_json == [evidence_rows[0].id]
+    for digest in digests[1:]:
+        pending = by_digest[digest]
+        assert pending.state == "not_attempted"
+        assert pending.last_error == "subquery_evidence_missing"
+        assert pending.probe_refs_json == matched.probe_refs_json
+        assert pending.actual_index_revision == matched.actual_index_revision
+        assert pending.attempts == matched.attempts
+        assert pending.evidence_refs_json == []
+
+    coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()
+    assert coverage["retrieval_completeness"] == "partial"
+    assert coverage["counts"]["succeeded"] == 0
+    assert coverage["counts"]["incomplete"] == 1
+    states = {entry["query_or_subquery_digest"]: entry["state"]
+              for entry in coverage["entries"]}
+    assert states == {digests[0]: "succeeded",
+                      digests[1]: "not_attempted",
+                      digests[2]: "not_attempted"}
+
+async def test_run_queued_reraises_409_for_runner_retry(actor_client, session, app_state, monkeypatch):
+    """run_queued 遇到并发写 409 不落 failed：重抛给 runner 退避重试，行留 running。
+
+    变异确认：把 `run_queued` 的 `idempotency_conflict` 重抛分支去掉（回退到
+    `_mark_failed`），这里的 `raises(APIError)` 与 running 断言变红。
+    """
+    from ddp_corpus.deps import Actor as ActorCls
+    from ddp_corpus.federation_models import FederationRequest as _Request
+    from ddp_corpus.models import utcnow as _utcnow
+    from conftest import ACTOR as _ACTOR, ORG as _ORG
+
+    run = await _local_flow(actor_client, session, key="queued-409-flow")
+    root = run["root"]
+    submitted = await actor_client.post(
+        "/api/v1/tasks", headers={"Idempotency-Key": "queued-409-flow"},
+        json={"root_task_id": root, "plan_digest": run["plan"]["plan_digest"]})
+    assert submitted.status_code == 202, submitted.text
+    await session.commit()
+
+    async def _racing_plan(*args, **kwargs):
+        raise APIError(409, "concurrent write for the same task", "invalid_request_error",
+                       "idempotency_conflict")
+
+    monkeypatch.setattr(federation_tasks, "_execute_plan", _racing_plan)
+    monkeypatch.setattr(federation_tasks.execution, "_execute_plan", _racing_plan)
+    actor = ActorCls(id=_ACTOR, kind="user", organization_id=_ORG, role="contributor")
+    with pytest.raises(APIError) as caught:
+        await federation_tasks.run_queued(
+            session, actor, root, retry_only=False, now=_utcnow(),
+            http=app_state.http, index=app_state.search_index)
+    assert caught.value.status_code == 409
+    assert caught.value.code == "idempotency_conflict"
+    session.expunge_all()
+    final = await session.get(_Request, root, populate_existing=True)
+    assert final.status == "running", "a retryable 409 must not land the task in failed"
+
+
+async def test_run_queued_still_fails_business_errors(actor_client, session, app_state, monkeypatch):
+    """run_queued 的 409 例外只认并发写：别的业务错误照旧落 failed 并返回。"""
+    from ddp_corpus.deps import Actor as ActorCls
+    from ddp_corpus.federation_models import FederationRequest as _Request
+    from ddp_corpus.models import utcnow as _utcnow
+    from conftest import ACTOR as _ACTOR, ORG as _ORG
+
+    run = await _local_flow(actor_client, session, key="queued-403-flow")
+    root = run["root"]
+    submitted = await actor_client.post(
+        "/api/v1/tasks", headers={"Idempotency-Key": "queued-403-flow"},
+        json={"root_task_id": root, "plan_digest": run["plan"]["plan_digest"]})
+    assert submitted.status_code == 202, submitted.text
+    await session.commit()
+
+    async def _denied_plan(*args, **kwargs):
+        raise APIError(403, "denied", "invalid_request_error", "egress_denied")
+
+    monkeypatch.setattr(federation_tasks, "_execute_plan", _denied_plan)
+    monkeypatch.setattr(federation_tasks.execution, "_execute_plan", _denied_plan)
+    actor = ActorCls(id=_ACTOR, kind="user", organization_id=_ORG, role="contributor")
+    status = await federation_tasks.run_queued(
+        session, actor, root, retry_only=False, now=_utcnow(),
+        http=app_state.http, index=app_state.search_index)
+    assert status["status"] == "failed", status
+    session.expunge_all()
+    final = await session.get(_Request, root, populate_existing=True)
+    assert final.status == "failed" and final.error == "egress_denied"
+
+def _attribution_item(evidence_id, excerpt):
+    return {"evidence_id": evidence_id, "excerpt": excerpt, "_excerpt": excerpt,
+            "origin_node_id": NODE}
+
+
+def test_attribution_ignores_shared_function_words():
+    """F8：共用的功能词（the）不得让无关子查询搭上成功。
+
+    变异确认：把 `_content_tokens` 的功能词过滤去掉（回退到裸 `tokens` 交集），
+    `the dog` 会因 `the` 命中而让本用例变红。
+    """
+    from ddp_core.search import _QUERY_FUNCTION_WORDS as _SHARED_FILTER
+    from ddp_corpus.federation_tasks.execution import (
+        _attribute_evidence_to_subqueries, _content_tokens)
+    assert "the" in _SHARED_FILTER, "the probe word must be a filtered word"
+    assert _content_tokens("the") == set(), \
+        "attribution must apply the shared search-plane filter"
+    attributed = _attribute_evidence_to_subqueries(
+        [_attribution_item("e1", "the cat sat")], ["the cat", "the dog"],
+        local_source=True)
+    assert attributed == {0: ["e1"]}, attributed
+
+
+def test_attribution_requires_full_content_quorum():
+    """F8：只共享一个实词不足以搭成功 —— 子查询的全部内容词都要在同一条证据里。
+
+    变异确认：把归因的 `wanted <= words` 改回 `wanted & words`（任一共享词即中），
+    `retrieval summary` 会因 `retrieval` 命中而让本用例变红。
+    """
+    from ddp_corpus.federation_tasks.execution import _attribute_evidence_to_subqueries
+    attributed = _attribute_evidence_to_subqueries(
+        [_attribution_item("e1", "retrieval target text alpha")],
+        ["retrieval target", "retrieval summary"], local_source=True)
+    assert attributed == {0: ["e1"]}, attributed
+
+
+async def test_empty_token_subquery_rejected_at_intent(actor_client):
+    """F8：零内容 token 的子查询（单个汉字/纯标点）在意图受理时就被拒绝。
+
+    变异确认：把 `requirements_query_plan` 的内容 token 检查去掉，
+    这里的 409 断言变红（请求会被受理为 201）。
+    """
+    from test_federation_tasks import task_spec as _spec, exploration as _exploration
+    cases = [("cjk", "钱"), ("punct", "..."), ("function", "the")]
+    for label, bad in cases:
+        spec = _spec(scope="site_public", mode="fast")
+        spec["requirements"] = {"query_plan": {"subqueries": [bad]}}
+        response = await actor_client.post(
+            "/api/v1/task-intents",
+            json={"task_spec": spec,
+                  "exploration_consent": _exploration(
+                      egress="local_only", recipients=(), payload=(),
+                      budget={"max_probe_requests": 0, "max_egress_bytes": 0})},
+            headers={"Idempotency-Key": f"empty-token-{label}"})
+        assert response.status_code == 409, (bad, response.text)
+        assert response.json()["error"]["code"] == "invalid_plan", (bad, response.text)

@@ -486,3 +486,82 @@ async def test_probe_duplicate_insert_race_replays_and_conflicts(
                                      key="race-probe", peer_caller=p)
     assert conflict.status_code == 409, conflict.text
     assert conflict.json()["error"]["code"] == "idempotency_conflict"
+
+
+async def test_non_pdf_evidence_uses_pageless_paragraph_locator(
+        client, session, _peer_auth):
+    """非 PDF 不伪造物理页 —— kind=paragraph，不带 physical_page_index。"""
+    from ddp_corpus import federation
+    from ddp_corpus.models import Document
+
+    _, version, _, pdf_document, _ = await indexed_source(session)
+    collection = await publish_collection(client, version)
+    response = await post_probe_peer(client, probe_body(collection["collection_id"]),
+                                     key="pdf-locator-probe")
+    assert response.status_code == 201, response.text
+    row = await session.get(FederationProbe, response.json()["probe_id"])
+    assert row.result_json["evidence"]
+    pdf_locator = row.result_json["evidence"][0]["locator"]
+    assert pdf_locator["kind"] == "page_block"
+
+    evidence_id = row.result_json["evidence"][0]["evidence_id"]
+    stored = await session.get(Evidence, evidence_id)
+    non_pdf = Document(id=pdf_document.id, uploaded_by=pdf_document.uploaded_by,
+                       organization_id=pdf_document.organization_id,
+                       doc_id=pdf_document.doc_id, origin=pdf_document.origin,
+                       filename="manual.txt", mime="text/plain", size_bytes=100,
+                       object_key=pdf_document.object_key)
+    locator = federation.federated_locator(stored, non_pdf)
+    assert locator["kind"] == "paragraph"
+    assert "physical_page_index" not in locator
+    assert locator["seq"] == pdf_locator["seq"]
+
+
+async def test_capability_probe_unknown_never_carries_missing_requirements(
+        client, monkeypatch, _peer_auth, session):
+    """unknown 探测永不带 missing_requirements + outcome 路由按 unknown 走。"""
+    from ddp_corpus import capabilities, federation
+
+    async def _no_gateway(_http):
+        return None
+
+    monkeypatch.setattr(capabilities, "_fetch_gateway", _no_gateway)
+    probed = await post_probe_peer(
+        client, probe_body(kind="capability_input", operation="rag.answer.cited"),
+        key="cap-unknown-missing")
+    assert probed.status_code == 201, probed.text
+    body = probed.json()
+    assert body["capability_check"]["readiness"] == "unknown"
+    assert body.get("missing_requirements", []) == []
+    assert federation.capability_outcome("unknown") == "capability_unknown"
+    assert federation.capability_outcome("unhealthy") == "not_ready"
+    assert federation.capability_outcome("ready") == "ready"
+    assert federation.capability_outcome(None, probe=body) == "capability_unknown"
+
+
+async def test_run_probe_stores_policy_revision_out_of_digest(
+        client, session, _peer_auth):
+    """记录侧：policy_revision 进信封顶层、不进 request digest（重放不破幂等）。"""
+    from sqlalchemy import select as _select
+
+    from conftest import ACTOR, ORG
+    from ddp_corpus import federation
+    from ddp_corpus.deps import Actor
+    from ddp_corpus.federation_models import FederationProbe
+    from ddp_corpus.models import utcnow as _utcnow
+
+    _, version, *_ = await indexed_source(session)
+    await publish_collection(client, version)
+    actor = Actor(id=ACTOR, kind="user", organization_id=ORG, role="contributor")
+    body = probe_body(kind="capability_input", query="revision target")
+    first = await federation.run_probe(session, actor, body, now=_utcnow(),
+                                       http=None, index=None,
+                                       idempotency_key="policy-rev-probe",
+                                       policy_revision="published:rev-1")
+    row = await session.scalar(_select(FederationProbe).where(
+        FederationProbe.probe_id == first["probe_id"]))
+    assert (row.result_json or {}).get("policy_revision") == "published:rev-1"
+    second = await federation.run_probe(session, actor, body, now=_utcnow(),
+                                        http=None, index=None,
+                                        idempotency_key="policy-rev-probe")
+    assert second == first

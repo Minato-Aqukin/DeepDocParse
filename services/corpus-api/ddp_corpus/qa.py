@@ -196,20 +196,26 @@ async def retrieve(session: AsyncSession, index: SearchIndex, http: httpx.AsyncC
 
 
 async def inherited_retrieval(session: AsyncSession,
-                              evidence_ids: list[str], *, actor=None) -> Retrieval:
-    """把上一轮仍能接回当前 Chunk 的 Evidence 重建成 Retrieval；失效证据不继承。"""
-    if not evidence_ids:
+                              evidence_ids: list[str], *, actor) -> Retrieval:
+    """把上一轮仍能接回当前 Chunk 的 Evidence 重建成 Retrieval；失效证据不继承。
+
+    `actor` 必填：继承必须收敛到调用方当前可见的固定解析集合里，
+    上一轮别的资产 / 已撤销版本的证据不许带进本轮（不变式 8）。
+    """
+    from ddp_corpus.document_context import search_contexts
+    allowed = set(await search_contexts(session, actor))
+    if not evidence_ids or not allowed:
         return Retrieval(degraded="no_evidence_in_turn")
     evidence_rows = (await session.execute(
-        select(Evidence).where(Evidence.id.in_(evidence_ids))
+        select(Evidence).where(Evidence.id.in_(evidence_ids),
+                              Evidence.parse_job_id.in_(allowed))
     )).scalars().all()
-    if actor is not None:
-        from ddp_corpus.document_context import search_contexts
-        allowed = await search_contexts(session, actor)
-        evidence_rows = [row for row in evidence_rows if row.parse_job_id in allowed]
+    # SQL 收敛是授权主判据；这一层 Python 过滤是防实现漂移的第二道门。
+    evidence_rows = [row for row in evidence_rows if row.parse_job_id in allowed]
     evidence_by_id = {row.id: row for row in evidence_rows}
     chunks = (await session.execute(
         select(Chunk).where(
+            Chunk.parse_job_id.in_(allowed),
             Chunk.parse_job_id.in_({row.parse_job_id for row in evidence_rows}),
             Chunk.seq.in_({row.seq for row in evidence_rows}))
     )).scalars().all() if evidence_rows else []

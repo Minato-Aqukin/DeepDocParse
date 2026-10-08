@@ -42,6 +42,21 @@ class StaleGeneration(RuntimeError):
     """
 
 
+def _is_dedupe_conflict(exc: IntegrityError) -> bool:
+    """判断 IntegrityError 是否来自 `uq_tasks_kind_dedupe`。
+
+    PG 报 `duplicate key value violates unique constraint "uq_tasks_kind_dedupe"`，
+    SQLite 报 `UNIQUE constraint failed: tasks.kind, tasks.dedupe_key`。
+    任何其它约束（受理行、事件序号、主键……）都必须回到调用方。
+    """
+    text = str(exc.orig) if exc.orig is not None else str(exc)
+    if "uq_tasks_kind_dedupe" in text:
+        return True
+    lowered = text.lower()
+    return ("unique constraint failed" in lowered and "tasks.kind" in lowered
+            and "tasks.dedupe_key" in lowered)
+
+
 async def enqueue(session: AsyncSession, *, kind: str, payload: dict,
                   organization_id: str = "", dedupe_key: str | None = None,
                   max_attempts: int = 3, delay_seconds: float = 0) -> Task | None:
@@ -67,10 +82,15 @@ async def enqueue(session: AsyncSession, *, kind: str, payload: dict,
         async with session.begin_nested():
             session.add(task)
         return task
-    except IntegrityError:
-        # 同 dedupe_key 的任务已经在队列里 —— 用户连点三次"重建索引"
-        # 不该跑三遍
-        return None
+    except IntegrityError as exc:
+        # 只认真正的 (kind, dedupe_key) 冲突才返回 None（幂等去重）。
+        # 调用方自己的行若撞上别的约束，必须以 IntegrityError 回到调用方做它
+        # 自己的冲突仲裁 —— 吞掉的话调用方会以为任务排上了。
+        if _is_dedupe_conflict(exc):
+            # 同 dedupe_key 的任务已经在队列里 —— 用户连点三次"重建索引"
+            # 不该跑三遍
+            return None
+        raise
 
 
 async def claim(session: AsyncSession, kinds: list[str], *, limit: int = 1,
@@ -87,7 +107,8 @@ async def claim(session: AsyncSession, kinds: list[str], *, limit: int = 1,
 
     stmt = (
         select(Task)
-        .where(Task.kind.in_(kinds), Task.run_after <= now)
+        .where(Task.kind.in_(kinds), Task.run_after <= now,
+               Task.attempts < Task.max_attempts)
         .where(
             # 还没人领 / 租约已过期（领取者崩了）
             (Task.status == "queued")
@@ -207,30 +228,85 @@ async def fail(session: AsyncSession, task_id: str, generation: int, error: str,
 
     重试用指数退避，超过 `max_attempts` 就落 failed 并停手 —— 无限重试会让
     一个必然失败的任务永远占着 worker。
+
+    **单条条件 UPDATE**：`generation` + 活跃状态都在 WHERE 里，cancel 插在
+    "读行"与"写失败"之间时 cancel 赢 —— 迟到的失败写不进终态（StaleGeneration），
+    而不是把 cancelled 复活成 queued/failed。
     """
-    task = await session.get(Task, task_id)
-    if task is None or task.generation != generation:
+    row = await session.execute(
+        select(Task.attempts, Task.max_attempts)
+        .where(Task.id == task_id, Task.generation == generation,
+               Task.status.in_(("queued", "claimed", "running")))
+    )
+    current = row.one_or_none()
+    if current is None:
         raise StaleGeneration(f"任务 {task_id} 的 generation 已经不是 {generation}")
-    if task.status not in ("queued", "claimed", "running"):
-        # cancelled / succeeded 是终态：不许被迟到的失败（或重试）改写。
-        raise StaleGeneration(f"任务 {task_id} 已经是终态 {task.status}，拒绝覆盖")
+    attempts, max_attempts = current
 
-    if retry and task.attempts < task.max_attempts:
-        backoff = min(2 ** task.attempts, 300)
-        task.status = "queued"
-        task.error = error          # 留着：排查时要看得到"它试过几次、每次为什么失败"
-        task.lease_until = None
-        task.claimed_by = None
-        task.run_after = utcnow() + timedelta(seconds=backoff)
+    now = utcnow()
+    if retry and attempts < max_attempts:
+        backoff = min(2 ** attempts, 300)
+        done = await session.execute(
+            update(Task)
+            .where(Task.id == task_id, Task.generation == generation,
+                   Task.status.in_(("queued", "claimed", "running")))
+            .values(status="queued", error=error,      # 留着：排查时要看得到每次为什么失败
+                    lease_until=None, claimed_by=None,
+                    run_after=now + timedelta(seconds=backoff), updated_at=now)
+        )
     else:
-        task.status = "failed"
-        task.error = error
-        task.lease_until = None
-        task.dedupe_key = None      # 允许人工重排
-        task.finished_at = utcnow()
-    task.updated_at = utcnow()
+        done = await session.execute(
+            update(Task)
+            .where(Task.id == task_id, Task.generation == generation,
+                   Task.status.in_(("queued", "claimed", "running")))
+            .values(status="failed", error=error,
+                    lease_until=None, dedupe_key=None,      # 允许人工重排
+                    finished_at=now, updated_at=now)
+        )
     await session.commit()
+    if done.rowcount == 0:
+        # 第二个 UPDATE 没命中：cancel（或接管）插在了"读行"与"写失败"之间，
+        # cancel 赢 —— 统一报 StaleGeneration，调用方丢弃本次失败写入。
+        raise StaleGeneration(f"任务 {task_id} 的 generation 已经不是 {generation}")
 
+
+async def sweep_exhausted(session: AsyncSession, *, limit: int = 100) -> int:
+    """把耗尽重试次数的残留行落成可见的 failed（poison-pill 死信）。
+
+    claim 永远不领 `attempts >= max_attempts` 的行（毒丸不该反复占 worker），
+    而 `fail(retry=True)` 只在被调用时才把超限行落终态 —— 从没再被领起的行
+    会永远停在 queued/claimed/running，对用户是"一直在处理中"。清扫把这类
+    租约已过期（或无租约）的超限行标成 `failed`（error 形如 `poison: …`），
+    并清空 `dedupe_key`（与 fail 同一口径：腾出幂等键，允许人工重排）。
+
+    只动租约已过期或无租约的行：还在租约内的 claimed/running 正在被 worker
+    处理，清扫不得抢它的活。
+    """
+    now = utcnow()
+    # UPDATE…LIMIT 不是可移植语法：先按主键查出一批，再按主键圈定更新。
+    ids = (await session.execute(
+        select(Task.id)
+        .where(Task.status.in_(("queued", "claimed", "running")),
+               Task.attempts >= Task.max_attempts,
+               (Task.lease_until.is_(None)) | (Task.lease_until < now))
+        .order_by(Task.run_after)
+        .limit(limit)
+    )).scalars().all()
+    if not ids:
+        return 0
+    marked = await session.execute(
+        update(Task)
+        .where(Task.id.in_(ids),
+               Task.status.in_(("queued", "claimed", "running")),
+               Task.attempts >= Task.max_attempts)
+        .values(status="failed",
+                error="poison: attempts exhausted (max_attempts reached)",
+                lease_until=None, claimed_by=None, dedupe_key=None,
+                finished_at=now, updated_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    await session.commit()
+    return marked.rowcount
 
 async def backlog(session: AsyncSession) -> dict[str, dict]:
     """队列水位：每种任务的积压数与最老任务年龄。

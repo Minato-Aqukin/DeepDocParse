@@ -163,11 +163,13 @@ async def test_expired_snapshot_wrong_binding_is_invalid_not_expired(client, ses
     assert wrong_cursor.status_code == 410
     assert wrong_cursor.json()["error"]["code"] == "catalog_snapshot_invalid"
     assert "revoked_collection_ids" not in wrong_cursor.json()
+    assert "snapshot_id" not in wrong_cursor.json()
     for kwargs in ({"who": "mallory"}, {"org": "other-org"}, {"scope": "other-scope"}):
         denied = await snapshot(client, snapshot_id=first["snapshot_id"], cursor=first["terminal_cursor"], **kwargs)
         assert denied.status_code == 410, denied.text
         assert denied.json()["error"]["code"] == "catalog_snapshot_invalid", denied.text
         assert "revoked_collection_ids" not in denied.json()
+        assert "snapshot_id" not in denied.json()
     # Only a legitimately bound caller+cursor may learn the snapshot expired.
     expired = await snapshot(client, snapshot_id=first["snapshot_id"], cursor=first["terminal_cursor"])
     assert expired.status_code == 410
@@ -186,8 +188,37 @@ async def test_withdrawn_ancestor_invalidates_reads_and_terminal_proof(client, s
     await session.commit()
     terminal = await snapshot(client, snapshot_id=first["snapshot_id"], cursor=first["terminal_cursor"])
     assert terminal.status_code == 410 and terminal.json()["error"]["code"] == "catalog_snapshot_invalid"
+    body = terminal.json()
+    assert body["revoked_collection_ids"] == [collection["collection_id"]]
+    for field, want in (("snapshot_id", first["snapshot_id"]), ("scope_id", "scope-one"),
+                        ("caller_scope_hash", internal()["X-DDP-Caller-Scope"]),
+                        ("origin_node_id", NODE)):
+        assert body[field] == want, (field, body)
     assert (await snapshot(client)).json()["total"] == 0
     assert (await client.get(f"{BASE}/{collection['collection_id']}", headers=actor_headers("third"))).status_code == 404
+
+
+async def test_cross_org_copied_from_parent_cannot_leak_publication_into_ancestry(
+        client, session):
+    """目录血缘遍历必须携带组织边界。
+
+    A cross-org `copied_from` parent must read as missing (catalog 404/empty),
+    never leak its publication into the copy's ancestry.
+    """
+    from ddp_corpus.models import Resource
+    ancestor, _, _, _ = await source(session)
+    resource, version, _, _ = await source(session, "copy-owner")
+    resource.copied_from = ancestor.id
+    await session.commit()
+    collection = (await create(client, version, who="copy-owner")).json()
+    await publish(client, collection, who="copy-owner")
+    assert (await snapshot(client)).json()["total"] == 1
+    # Move the parent into another org while keeping the same id: the ancestry
+    # lookup is now scoped by organization, so it reads as missing.
+    await session.execute(update(Resource).where(Resource.id == ancestor.id).values(
+        organization_id="other-org"))
+    await session.commit()
+    assert (await snapshot(client)).json()["total"] == 0
 
 
 async def test_unready_indexes_remain_enumerable_without_content_completeness(client, session):
@@ -347,7 +378,10 @@ async def test_node_published_snapshot_withdrawal_is_not_completion(client, sess
         params={"snapshot_id": page["snapshot_id"], "cursor": page["terminal_cursor"]})
     assert revoked.status_code == 410
     assert revoked.json()["error"]["code"] == "catalog_snapshot_invalid"
-    assert collection["collection_id"] in revoked.json()["revoked_collection_ids"]
+    assert revoked.json()["revoked_collection_ids"] == [collection["collection_id"]]
+    assert revoked.json()["snapshot_id"] == page["snapshot_id"]
+    assert revoked.json()["scope_id"] == "peer-directory"
+    assert revoked.json()["origin_node_id"] == NODE
     after = (await client.get(PEER, headers=service())).json()
     assert after["total"] == 0 and after["collections"] == []
 

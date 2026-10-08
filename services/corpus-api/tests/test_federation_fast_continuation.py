@@ -172,3 +172,50 @@ async def test_continuation_stop_reason_keeps_settled_consent_denials(actor_clie
     assert ready[1]["fast_stop"] == "budget_or_consent_gate", ready[1]
     assert "/".join((unlisted, "unlisted-collection", "corpus.retrieve")) not in ready[1]["outcomes"], \
         "the settled denial is not probed again"
+
+
+async def test_continuation_gate_rotates_submit_key_for_fresh_approval(actor_client, monkeypatch,
+                                                                      session):
+    """分段续跑接受新一轮 approve-then-submit key：上一批的已消费 key 不得残留。
+
+    Fast task finishes batch N with continuation open: the gate stages revision
+    N+1 (status queued, execution consent cleared, new plan) and must rotate
+    `row.idempotency_key` to None, so the mandatory fresh approve-then-submit
+    accepts a new key. Before the fix, the consumed submit key stayed on the
+    row: execute_task replayed the old status on the same key and 409'd any
+    new key, stranding the task with no driver.
+    """
+    from ddp_corpus.federation_models import FederationRequest
+    monkeypatch.setattr(federation_tasks, "FAST_CANDIDATE_LIMIT", 1)
+    install_peer(monkeypatch, StubPeer(items=[peer_evidence()]))
+    manifest = scope_manifest([member("peer-collection-1", PEER_NODE),
+                               member("peer-collection-2", PEER_NODE)])
+    intent = await create_intent(
+        actor_client, spec=task_spec(scope="federation_public", mode="fast", scope_ref="scope-1",
+                                     operation="corpus.retrieve"),
+        consent=exploration(recipients=(PEER_NODE,)), manifest=manifest)
+    root = intent["root_task_id"]
+    plan = await plan_task(actor_client, root)
+    await approve_task(actor_client, root, plan, recipients=(NODE, PEER_NODE))
+    first = (await submit_task(actor_client, root, plan["plan_digest"], "gate-first-key")).json()
+    assert first["status"] == "succeeded", first
+
+    staged = await actor_client.post(f"/api/v1/tasks/{root}/resume")
+    assert staged.status_code == 202, staged.text
+    await drain_tasks(corpus_app.state)
+    session.expunge_all()
+    row = await session.get(FederationRequest, root, populate_existing=True)
+    assert row.status == "queued", "staged revision waits for fresh approval, not auto-enqueued"
+    assert row.idempotency_key is None, "gate must rotate the consumed submit key"
+    assert row.execution_consent_json is None
+    second_plan = (await actor_client.get(f"/api/v1/task-plans/{root}")).json()
+    assert second_plan["revision"] == 2
+    await approve_task(actor_client, root, second_plan, recipients=(NODE, PEER_NODE))
+    resumed = await actor_client.post(
+        "/api/v1/tasks", headers={"Idempotency-Key": "gate-fresh-key"},
+        json={"root_task_id": root, "plan_digest": second_plan["plan_digest"]})
+    assert resumed.status_code == 202, resumed.text
+    await drain_tasks(corpus_app.state)
+    final = (await actor_client.get(f"/api/v1/tasks/{root}")).json()
+    assert final["status"] == "succeeded", final
+    assert final["result"]["counts"]["succeeded"] == 2, final["result"]["counts"]

@@ -107,7 +107,7 @@ async def test_locate_revoked_peer_is_rejected(client, session, _peer_auth):
         organization_id=ORG, authority_node_id=NODE, state="revoked")
     response = await peer(client).post(f"{BASE}/resources/locate",
         json_body={"resource_id": resource.id, "version_id": version.id})
-    assert response.status_code == 401
+    assert response.status_code == 403
     assert response.json()["error"]["code"] == "node_revoked"
 
 

@@ -220,8 +220,12 @@ async def _index_claimed(session, storage, http, *, document_id, generation, job
             f"编译版面失败：{type(exc).__name__}: {exc}", compile_failed=True)
         return 0
     if guarded_http.model_requests:
+        # Bill each indexing attempt: the key carries the claim generation, so a
+        # replay of the same generation dedupes while a new attempt (takeover or
+        # reindex) bills the work it actually did.
         await record_usage(session, actor_id=actor_id, organization_id=organization_id,
-                           parse_job_id=job_id, kind="compile_vision", requests=guarded_http.model_requests)
+                           parse_job_id=job_id, kind="compile_vision", requests=guarded_http.model_requests,
+                           business_key=f"index:{job_id}:{generation}:compile_vision")
         await session.commit()
     if not chunks or not any(c.get("search_text") for c in chunks):
         await _fail_if_current(session, document_id, job_id, generation,
@@ -230,7 +234,8 @@ async def _index_claimed(session, storage, http, *, document_id, generation, job
     async def account_embeddings():
         if guarded_http.embedding_requests:
             await record_usage(session, actor_id=actor_id, organization_id=organization_id,
-                parse_job_id=job_id, kind="embed", requests=guarded_http.embedding_requests)
+                parse_job_id=job_id, kind="embed", requests=guarded_http.embedding_requests,
+                business_key=f"index:{job_id}:{generation}:embed")
             await session.commit()
     try:
         vectors = await _embed_sparse(guarded_http, [c.get("search_text") or "" for c in chunks])
@@ -319,7 +324,11 @@ def _anchor_key(chunk: dict) -> str:
 async def _materialize_evidence(session: AsyncSession, document: Document, job: ParseJob,
                                 compiled: CompileOutput
                                 ) -> dict[int, tuple[Evidence, Evidence | None]]:
-    """源/派生 Evidence 幂等落库；内容变化时保留旧行供历史 citation 判失效。"""
+    """源/派生 Evidence 幂等落库；内容变化时保留旧行供历史 citation 判失效。
+
+    已有行不改写 printed_page_label（重编页码标签变化不得改写历史证据行）；
+    crop_key 仅在已有值为 None 且本次有值时回填（加法补齐，不改写历史）。
+    """
     existing = (await session.execute(
         select(Evidence).where(Evidence.parse_job_id == job.id)
     )).scalars().all()
@@ -358,7 +367,6 @@ async def _materialize_evidence(session: AsyncSession, document: Document, job: 
             source_by_anchor[key] = source
         elif source.crop_key is None and compiled.crop_keys.get(seq):
             source.crop_key = compiled.crop_keys[seq]
-        source.printed_page_label = chunk.get("printed_page_label")
 
         derived = None
         if chunk.get("derived_text"):
@@ -381,7 +389,6 @@ async def _materialize_evidence(session: AsyncSession, document: Document, job: 
                 session.add(derived)
                 await session.flush()
                 derived_by_anchor[dkey] = derived
-            derived.printed_page_label = chunk.get("printed_page_label")
         rows[seq] = (source, derived)
     return rows
 

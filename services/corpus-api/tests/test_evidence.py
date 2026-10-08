@@ -339,3 +339,39 @@ async def test_two_citations_of_one_block_across_a_reindex_are_judged_separately
         "三月这次看到的就是当前内容，却被一月那次的指纹判成了失效"
     assert out["m-jan"][0]["resolved"] is False, \
         "一月作证的那段内容已经不在了，必须失效"
+
+
+async def test_record_evidence_constrains_to_allowed_parse_jobs(session):
+    """allowed_parse_job_ids 非 None 时只接回集合内解析；None 保持旧行为。"""
+    document, job = await _seed(session, texts=["本轮的内容"])
+    other_job = ParseJob(document_id=document.id, engine="borndigital", options={},
+                         options_hash="h-other", status="succeeded", document_version=2)
+    session.add(other_job)
+    await session.flush()
+    # 主键在 flush 后就是普通字符串：rollback 会把 ORM 对象置过期，
+    # 之后再同步碰 job.id 会触发懒加载（MissingGreenlet），所以先快照。
+    own_job_id, other_job_id = job.id, other_job.id
+    session.add(Chunk(document_id=document.id, parse_job_id=other_job_id, seq=0,
+                      page_idx=0, bbox=[72, 100, 500, 130], page_size=[612, 792],
+                      text="别家资产的内容", char_len=len("别家资产的内容"),
+                      block_type="text", text_tokenized=tokenized("别家资产的内容")))
+    await session.commit()
+
+    foreign = _citation(other_job_id, 0, snippet="别家资产的内容")
+    # 不收敛时旧行为：能接回就写。
+    assert await record_evidence(session, [foreign],
+                                 source_kind="message", source_id="m-legacy") == 1
+    await session.rollback()
+    # 收敛到本轮解析时：别家 job 的引用写不进去。
+    assert await record_evidence(session, [foreign],
+                                 source_kind="message", source_id="m-scoped",
+                                 allowed_parse_job_ids={own_job_id}) == 0
+    await session.commit()
+    assert (await session.execute(select(Citation).where(
+        Citation.source_id == "m-scoped"))).scalars().all() == []
+    # 本轮自己的引用不受影响。
+    assert await record_evidence(
+        session, [_citation(own_job_id, 0, snippet="本轮的内容")],
+        source_kind="message", source_id="m-own",
+        allowed_parse_job_ids={own_job_id}) == 1
+    await session.commit()

@@ -18,6 +18,7 @@
 """
 import hashlib
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_contracts import USAGE_KIND_VALUES
@@ -73,11 +74,33 @@ async def emit(session: AsyncSession, organization_id: str, event_type: str,
 
     确定的 `event_id` 已经在表里（尚未投递或尚未清理）时不再写第二行；已投递
     并被清掉后再写一次也无妨 —— control 按 event_id 幂等落账。
+
+    先查后插有竞态（两个并发事务同时查到"没有"，同时插同一 ID）：插入包在
+    savepoint 里，败者只回滚到这里、返回胜者的 ID —— 调用方挂起的业务写入
+    不受影响，照常随外层事务提交（否则整个 session 被污染，接下来的 commit
+    直接变 PendingRollbackError，业务写入跟着丢）。
+
+    调用方挂起的待写行先在 try 外刷出去：`begin_nested` 进入时会自动 flush
+    会话里**全部**待写行，那一刷若落在下面的 try 里，调用方撞上的唯一约束
+    会被当成"outbox 重复"吞掉（`queue.enqueue` 同一坑，见 P5-PG-VALIDATION）。
+    那里的 IntegrityError 原样回到调用方，由它自己的冲突仲裁处理。
+
+    **不 commit** —— 由调用方连同业务写入一起提交（见 `record_usage`）。
     """
     if event_id is not None and await session.get(CorpusOutbox, event_id) is not None:
         return event_id
+    # 调用方挂起的待写行先在 try 外刷出去（见上面 docstring）：savepoint 里只剩本行。
+    await session.flush()
     event = CorpusOutbox(id=event_id or new_id(), organization_id=organization_id,
                          type=event_type, payload=payload)
-    session.add(event)
-    await session.flush()
+    try:
+        async with session.begin_nested():
+            session.add(event)
+            await session.flush()
+    except IntegrityError:
+        if event_id is None:
+            # 随机 ID 撞主键：理论上不可能，真撞上说明 ID 生成器坏了，原样上抛
+            raise
+        # 确定 ID 的并发重复：胜者已在表里，返回它的 ID（幂等）
+        return event_id
     return event.id

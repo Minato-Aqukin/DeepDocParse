@@ -131,10 +131,15 @@ async def _upload(client, content: bytes = PDF, filename: str = "sample.pdf",
 
 
 async def _callback(client, status: str = "succeeded", task_id: str = "s-1",
-                    drain: bool = True):
+                    drain: bool = True, token: str | None = "__auto__"):
     """网关的解析回调。**只带服务凭据**，与 `ddp_gateway/worker/tasks.py::_notify_callback`
     实际发出的一模一样 —— 网关无状态、不认识组织，发不出 actor 头。
     （这个 helper 以前给回调补上了服务 actor 头：测试绿，真网关的每一次回调都 401。）
+
+    per-job HMAC：生产里网关回打的是 ingest 拼的 callback_url
+    （`?token=<HMAC(job.id)>`），token 跟着穿回来。这里 token="__auto__"
+    时自动取第一条匹配 job 的真 token；显式传 None = 不带 token（验拒绝路径），
+    传字符串 = 用该值（验伪造路径）。
 
     回调会把索引排进持久队列。合仓前那是进程内的 BackgroundTask，
     客户端返回时已经跑完了；现在要显式把队列跑一轮（`drain=False` 可关掉，
@@ -144,14 +149,56 @@ async def _callback(client, status: str = "succeeded", task_id: str = "s-1",
     from ddp_corpus.main import app
     from tests.conftest import drain_tasks
 
+    if token == "__auto__":
+        from sqlalchemy import select
+        from ddp_corpus.db import get_sessionmaker
+        from ddp_corpus.models import ParseJob
+        from ddp_corpus.service_client import callback_token
+        async with get_sessionmaker()() as probe:
+            jobs = (await probe.execute(
+                select(ParseJob).where(ParseJob.service_task_id == task_id)
+            )).scalars().all()
+        token = callback_token(jobs[0].id) if jobs else "no-such-job"
+    url = "/internal/parse-callback" + (f"?token={token}" if token else "")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://corpus",
                                  trust_env=False) as gateway:
-        resp = await gateway.post("/internal/parse-callback",
+        resp = await gateway.post(url,
                                   json={"task_id": task_id, "status": status},
                                   headers={"Authorization": f"Bearer {settings.service_token}"})
     if drain:
         await drain_tasks(app.state)
     return resp
+
+
+@respx.mock
+async def test_cross_org_callback_without_token_cannot_mutate(actor_client, session):
+    """跨组织伪造回调：没有 per-job HMAC token 就 401，且一条状态都不落。
+
+    变异确认：把 internal.py 里那行 `raise APIError(401, ...)` 改成放行，
+    本用例必须红（回调会把别人的 job 归档掉）。
+    """
+    from sqlalchemy import select
+    from ddp_corpus.models import ParseJob
+    _mock_service()
+    await _upload(actor_client)
+    before = {row.id: row.status for row in
+              (await session.execute(select(ParseJob))).scalars().all()}
+    assert before, "前置上传没有建出 job，用例本身已失效"
+    # 无 token：401
+    denied = await _callback(actor_client, token=None)
+    assert denied.status_code == 401, denied.text
+    assert denied.json()["error"]["code"] == "invalid_callback_token"
+    # 错 token（别的 job.id 算出来的）：同样 401
+    forged = await _callback(actor_client, token="0" * 64)
+    assert forged.status_code == 401, forged.text
+    # 未知任务：{ok:false}，不报错（网关不该为记账问题重试）
+    unknown = await _callback(actor_client, task_id="no-such-task", token="0" * 64)
+    assert unknown.status_code == 200 and unknown.json() == {
+        "ok": False, "reason": "unknown task"}
+    await session.rollback()
+    after = {row.id: row.status for row in
+             (await session.execute(select(ParseJob))).scalars().all()}
+    assert after == before, "被拒绝的回调改了 job 状态"
 
 
 async def test_parse_callback_still_requires_the_service_credential(client):
@@ -914,3 +961,189 @@ async def test_reparse_bills_the_person_who_asked_not_the_uploader(
         f"建索引的费用记到了上传者头上：{embed_billed}"
     assert new_job.initiated_by in embed_billed, \
         f"embed 应当记在发起人头上，实际 {embed_billed}"
+
+
+@pytest.mark.parametrize("hostile", [
+    "../document.md", "a/b", "", "x" * 125 + ".png", "back\\slash.png",
+    "no-suffix", "fig.txt", ".hidden.png", "..", "nul\x00.png",
+])
+def test_image_key_rejects_hostile_names(hostile):
+    """Service-supplied image names are untrusted input: anything that could
+    escape images/ or shadow document.md must be refused before the put."""
+    from ddp_corpus.archive import _image_key
+    assert _image_key(hostile) is None, hostile
+
+
+def test_image_key_accepts_a_plain_image_leaf():
+    from ddp_corpus.archive import _image_key
+    assert _image_key("fig-1.png") == "fig-1.png"
+
+
+@respx.mock
+async def test_archive_skips_hostile_image_name(actor_client, session, app_state):
+    """A hostile name in the service result is skipped (degraded), not written
+    outside images/: only document.md/layout.json/the valid image appear."""
+    from ddp_corpus.archive import archive_job, image_base_url
+    payload = "iVBORw0KGgo="
+    routes = _mock_service()
+    routes["result"].mock(return_value=httpx.Response(200, json={
+        "markdown": "# t\n\n![evil](../document.md)\n![ok](ok.png)\n",
+        "layout_json": LAYOUT,
+        "images": [
+            {"name": "../document.md", "url": f"data:image/png;base64,{payload}"},
+            {"name": "ok.png", "url": f"data:image/png;base64,{payload}"},
+        ],
+    }))
+    document = await _upload(actor_client)
+    before = set(app_state.storage.objects)
+    job = (await session.execute(select(ParseJob))).scalars().one()
+    assert await archive_job(session, app_state.storage, app_state.service_client, job.id)
+    prefix = f"results/{job.id}/"
+    assert set(app_state.storage.objects) - before == {
+        f"{prefix}document.md", f"{prefix}layout.json", f"{prefix}images/ok.png"}
+    markdown = (await app_state.storage.get(f"{prefix}document.md")).decode()
+    assert f"{image_base_url(document['id'], job.id)}/ok.png" in markdown
+
+
+@respx.mock
+async def test_download_md_json_over_limit_returns_413(
+        actor_client, session, app_state, monkeypatch):
+    """Derived md/json past the download cap must 413 `result_too_large` —
+    never a silent truncation, never an unbounded read."""
+    from ddp_corpus.routers import documents as documents_router
+    monkeypatch.setattr(documents_router, "MAX_DERIVED_FILE", 16)
+    _mock_service()
+    document = await _upload(actor_client)
+    await _callback(actor_client)
+    job = (await session.execute(select(ParseJob))).scalars().one()
+    await app_state.storage.put(f"{job.result_prefix}document.md", b"x" * 64,
+                                "text/markdown")
+    await app_state.storage.put(f"{job.result_prefix}layout.json", b"y" * 64,
+                                "application/json")
+    for fmt in ("md", "json"):
+        resp = await actor_client.get(
+            f"/api/documents/{document['id']}/download?format={fmt}")
+        assert resp.status_code == 413, (fmt, resp.status_code, resp.text)
+        assert resp.json()["error"]["code"] == "result_too_large"
+
+
+@respx.mock
+async def test_download_zip_preserves_member_bytes(actor_client, session, app_state):
+    """Streaming must not change bytes: every zip member is byte-identical to
+    its stored object (document.md after the documented base-url → images/
+    rewrite, layout and images verbatim). Zip timestamps are wall-clock by
+    design, so identity is asserted at member level, not on the raw archive."""
+    import io
+    import zipfile
+    from ddp_corpus.archive import image_base_url
+    from ddp_corpus.storage import prefix_of
+    _mock_service()
+    document = await _upload(actor_client)
+    await _callback(actor_client)
+    job = (await session.execute(select(ParseJob))).scalars().one()
+    prefix = prefix_of(job)
+    stored_md = await app_state.storage.get(f"{prefix}document.md")
+    stored_layout = await app_state.storage.get(f"{prefix}layout.json")
+    image_keys = await app_state.storage.list_prefix(f"{prefix}images/")
+    assert image_keys, "the fixture must archive at least one image"
+    resp = await actor_client.get(f"/api/documents/{document['id']}/download?format=zip")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        assert set(zf.namelist()) == {
+            "document.md", "layout.json",
+            *(f"images/{key.rsplit('/', 1)[-1]}" for key in image_keys)}
+        base = image_base_url(document["id"], job.id)
+        expected_md = stored_md.decode()
+        for key in image_keys:
+            expected_md = expected_md.replace(
+                f"{base}/{key.rsplit('/', 1)[-1]}",
+                f"images/{key.rsplit('/', 1)[-1]}")
+        assert zf.read("document.md").decode() == expected_md
+        assert zf.read("layout.json") == stored_layout
+        for key in image_keys:
+            assert zf.read(f"images/{key.rsplit('/', 1)[-1]}") == (
+                await app_state.storage.get(key))
+
+
+@respx.mock
+async def test_download_zip_over_limit_returns_413(actor_client, app_state, monkeypatch):
+    """An oversized zip member fails the whole download with 413
+    `result_too_large` — explicit, never a silent truncation."""
+    from ddp_corpus.routers import documents as documents_router
+    monkeypatch.setattr(documents_router, "MAX_ZIP_MEMBER", 4)
+    _mock_service()
+    document = await _upload(actor_client)
+    await _callback(actor_client)
+    resp = await actor_client.get(f"/api/documents/{document['id']}/download?format=zip")
+    assert resp.status_code == 413, resp.text
+    assert resp.json()["error"]["code"] == "result_too_large"
+
+
+@respx.mock
+async def test_archive_releases_job_on_oversize_result(actor_client, session, app_state):
+    """A service result past MAX_RESULT_BYTES releases the job back to running
+    for reconciliation to retry — it must never land in failed."""
+    from ddp_corpus.archive import MAX_RESULT_BYTES, archive_job
+    from ddp_corpus.service_client import ServiceError
+    routes = _mock_service()
+    await _upload(actor_client)
+    job = (await session.execute(select(ParseJob))).scalars().one()
+    routes["result"].mock(return_value=httpx.Response(
+        200, headers={"content-length": str(MAX_RESULT_BYTES + 1)},
+        json={"markdown": "too big to read"}))
+    with pytest.raises(ServiceError) as exc:
+        await archive_job(session, app_state.storage, app_state.service_client, job.id)
+    assert exc.value.status_code == 413
+    assert job.status == "running", "over-limit results retry; they must not fail the job"
+    assert job.error
+
+
+@respx.mock
+async def test_archive_releases_job_on_oversize_single_image(actor_client, session, app_state):
+    """单张解码后图片超 MAX_IMAGE_BYTES 即 413，job 退回 running 待对账重试。
+
+    变异确认：把 _archive_images 的单张/总量上限判断删掉，本用例必须红
+    （超限图片会被落盘归档，archive_job 直接返回 True）。
+    """
+    import io
+
+    from ddp_corpus.archive import MAX_IMAGE_BYTES, archive_job
+    from ddp_corpus.service_client import ServiceError
+
+    routes = _mock_service()
+    await _upload(actor_client)
+    job = (await session.execute(select(ParseJob))).scalars().one()
+    big = base64.b64encode(b"x" * (MAX_IMAGE_BYTES + 1)).decode()
+    oversize = dict(RESULT, images=[
+        {"name": "huge.png", "url": f"data:image/png;base64,{big}"}])
+    routes["result"].mock(return_value=httpx.Response(200, json=oversize))
+    with pytest.raises(ServiceError) as exc:
+        await archive_job(session, app_state.storage, app_state.service_client, job.id)
+    assert exc.value.status_code == 413
+    assert job.status == "running", "over-limit images retry; they must not fail the job"
+    assert job.error
+    assert await app_state.storage.list_prefix(f"results/{job.id}/") == []
+
+
+@respx.mock
+async def test_archive_releases_job_on_too_many_images(actor_client, session, app_state):
+    """图片张数超 MAX_IMAGE_COUNT 即 413，job 退回 running 待对账重试。
+
+    变异确认：把 _archive_images 的计数上限判断删掉，本用例必须红。
+    """
+    from ddp_corpus.archive import MAX_IMAGE_COUNT, archive_job
+    from ddp_corpus.service_client import ServiceError
+
+    routes = _mock_service()
+    await _upload(actor_client)
+    job = (await session.execute(select(ParseJob))).scalars().one()
+    pixel = "data:image/png;base64,iVBORw0KGgo="
+    many = dict(RESULT, images=[
+        {"name": f"img_{n}.png", "url": pixel} for n in range(MAX_IMAGE_COUNT + 1)])
+    routes["result"].mock(return_value=httpx.Response(200, json=many))
+    with pytest.raises(ServiceError) as exc:
+        await archive_job(session, app_state.storage, app_state.service_client, job.id)
+    assert exc.value.status_code == 413
+    assert job.status == "running", "over-count results retry; they must not fail the job"
+    assert job.error

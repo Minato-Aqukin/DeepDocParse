@@ -181,6 +181,9 @@ async def test_upload_acceptance_receipt_is_real_durable_and_never_redispatches(
 @respx.mock
 async def test_query_fixed_versions_authorized_before_topk_and_evidence_identity(client, session, app_state, client_caps, monkeypatch):
     from test_mcp_tools import _evidence
+    from ddp_corpus import node_identity
+    # 资产头与证据信封只认绑定身份：把绑定设成 headers() 声明的那个节点。
+    node_identity.bind_static_for_tests("node-" + "a" * 48)
     own, version, job, document = await asset(session)
     other, version2, job2, document2 = await asset(session)
     secret, secret_version, secret_job, _ = await asset(session, "bob", document=document)
@@ -268,6 +271,9 @@ def test_metadata_above_four_mib_remains_explicit_bounded_windows():
 
 
 async def test_fixed_original_read_authorizes_each_logical_version(client, session, app_state):
+    from ddp_corpus import node_identity
+    # 同上：source 资产头要绑定身份，没有它就是 503。
+    node_identity.bind_static_for_tests("node-" + "a" * 48)
     original = b"%PDF-1.4\noriginal bytes shared by two separately owned resources\n"
     resource, version, _, document = await asset(session)
     document.doc_id = version.source_digest = hashlib.sha256(original).hexdigest()
@@ -278,22 +284,112 @@ async def test_fixed_original_read_authorizes_each_logical_version(client, sessi
 
     route = f"/api/v1/client/versions/{version.id}/source"
     accepted = await client.get(route, headers=headers())
-    assert accepted.status_code == 200, accepted.text
-    assert accepted.content == original
+    assert accepted.status_code == 302, accepted.text
+    assert accepted.headers["location"].startswith("memory://"), accepted.headers["location"]
+    assert "filename=" in accepted.headers["location"]
     assert accepted.headers["x-ddp-source-digest"] == "sha256:" + version.source_digest
     assert accepted.headers["x-ddp-actor-subject"] == ACTOR
     assert accepted.headers["x-ddp-source-availability"] == "online"
+    assert accepted.headers["cache-control"] == "private, no-store"
+    assert original not in accepted.content
     # Possessing another resource for the same physical document is not an ACL bypass.
     denied = await client.get(route, headers=headers("bob"))
     missing = await client.get("/api/v1/client/versions/unknown/source", headers=headers("bob"))
     assert denied.status_code == missing.status_code == 404
     assert denied.json() == missing.json()
     own_copy = await client.get(f"/api/v1/client/versions/{bob_version.id}/source", headers=headers("bob"))
-    assert own_copy.status_code == 200 and own_copy.content == original
+    assert own_copy.status_code == 302, own_copy.text
+    assert own_copy.headers["location"].startswith("memory://")
     # Existing caller-scoped metadata is never enough after resource deletion.
     resource.deleted_at = utcnow()
     await session.commit()
     assert (await client.get(route, headers=headers())).status_code == 404
+async def test_asset_authority_header_emits_bound_node_never_echo(client, session, app_state):
+    """资产头的 authority 节点必须是绑定身份，绝不回显请求头。
+
+    变异确认：把 `_asset_identity` 改回 `request.headers.get(...)`，
+    本用例必须红（evil 节点会被原样回显）。
+    """
+    from ddp_corpus import node_identity
+    node_identity.bind_static_for_tests("node-" + "b" * 48)
+    original = b"%PDF-1.4\nbound identity bytes\n"
+    _, version, _, document = await asset(session)
+    document.doc_id = version.source_digest = hashlib.sha256(original).hexdigest()
+    document.size_bytes = version.size_bytes = len(original)
+    await app_state.storage.put(document.object_key, original, "application/pdf")
+    await session.commit()
+    bound = node_identity.local_node_id()
+    assert bound.startswith("node-")
+    route = f"/api/v1/client/versions/{version.id}/source"
+    # 调用方自称另一个节点：响应头必须是绑定身份，不是他声称的那个
+    evil = await client.get(route, headers={**headers(), "X-DDP-Authority-Node": "node-evil"})
+    assert evil.status_code == 302, evil.text
+    assert evil.headers["x-ddp-authority-node"] == bound
+    assert evil.headers["x-ddp-authority-node"] != "node-evil"
+    # 连头都不带：同样是绑定身份（不是空字符串）
+    bare = {k: v for k, v in headers().items() if k != "X-DDP-Authority-Node"}
+    plain = await client.get(route, headers=bare)
+    assert plain.status_code == 302, plain.text
+    assert plain.headers["x-ddp-authority-node"] == bound
+
+
+async def test_evidence_mismatched_claim_rejected(client, session, app_state, client_caps,
+                                                  monkeypatch):
+    """证据信封用绑定节点；请求头声明了不一致的节点 -> 409。
+
+    变异确认：把 `client_evidence` 改回用请求头拼信封，本用例必须红
+    （evil 节点会进 origin/authority 字段）。
+    """
+    from test_mcp_tools import _evidence
+    from ddp_corpus import node_identity
+    node_identity.bind_static_for_tests("node-" + "b" * 48)
+    _, version, job, document = await asset(session)
+    document.doc_id = version.source_digest = hashlib.sha256(b"bound node fact bytes").hexdigest()
+    first = await _evidence(session, document, job, seq=0, text="bound node fact")
+    await session.commit()
+    bound = node_identity.local_node_id()
+    good = await client.post("/api/v1/client/query", headers={**headers(), "X-DDP-Authority-Node": bound},
+                             json={"name": "evidence.get",
+                                   "payload": {"evidence_id": first.id,
+                                               "version_id": version.id}})
+    assert good.status_code == 200, good.text
+    envelope = good.json()["evidence"]
+    assert envelope["origin_node_id"] == bound == envelope["authority_node_id"]
+    evil = await client.post(
+        "/api/v1/client/query",
+        headers={**headers(), "X-DDP-Authority-Node": "node-" + "e" * 48},
+        json={"name": "evidence.get",
+              "payload": {"evidence_id": first.id, "version_id": version.id}})
+    assert evil.status_code == 409, evil.text
+    assert evil.json()["error"]["code"] == "evidence_provenance_unavailable"
+
+async def test_evidence_locator_is_paragraph_for_non_pdf(
+    client, session, app_state, client_caps):
+    """非 PDF 文档的 client 证据 locator 不伪造页码。
+
+    与 federation.evidence_locator 同源（client_evidence 直接复用它）；PDF 路径形状
+    由既有 locator 断言覆盖，这里钉住非 PDF 不带页序。
+    """
+    from test_mcp_tools import _evidence
+    from ddp_corpus import node_identity
+    node_identity.bind_static_for_tests("node-" + "b" * 48)
+    _, version, job, document = await asset(session)
+    document.mime = "text/markdown"
+    document.doc_id = version.source_digest = hashlib.sha256(b"non pdf fact bytes").hexdigest()
+    first = await _evidence(session, document, job, seq=4, text="non pdf fact")
+    await session.commit()
+    # 不带 authority 声明：client_evidence 直接用绑定身份（有声明且不一致 -> 409）。
+    bare = {k: v for k, v in headers().items() if k != "X-DDP-Authority-Node"}
+    good = await client.post("/api/v1/client/query", headers=bare,
+                             json={"name": "evidence.get",
+                                   "payload": {"evidence_id": first.id,
+                                               "version_id": version.id}})
+    assert good.status_code == 200, good.text
+    locator = good.json()["evidence"]["locator"]
+    assert locator["kind"] == "paragraph"
+    assert "physical_page_index" not in locator
+    assert locator["seq"] == 4
+    assert "printed_page_label" not in locator
 
 
 async def test_fixed_original_rechecks_permission_after_storage_read(client, session, app_state, monkeypatch):

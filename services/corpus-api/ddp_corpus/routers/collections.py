@@ -141,6 +141,7 @@ async def enumerate_collections(scope_id: str = Query(min_length=1, max_length=1
         revoked = getattr(exc, "revoked_collection_ids", None)
         if revoked is not None:
             return response({**error_body(str(exc.detail), exc.type, exc.code),
+                             **getattr(exc, "snapshot_binding", {}),
                              "revoked_collection_ids": revoked}, 410)
         raise
 
@@ -163,5 +164,6 @@ async def enumerate_published_collections(snapshot_id: str = Query(default="", m
         revoked = getattr(exc, "revoked_collection_ids", None)
         if revoked is not None:
             return response({**error_body(str(exc.detail), exc.type, exc.code),
+                             **getattr(exc, "snapshot_binding", {}),
                              "revoked_collection_ids": revoked}, 410)
         raise

@@ -456,7 +456,9 @@ async def test_revoked_collection_is_visible_only_to_the_bound_caller(actor_clie
                 "cursor": snapshot["first_cursor"]})
     assert bound.status_code == 410
     assert bound.json()["error"]["code"] == "catalog_snapshot_invalid"
-    assert collection["collection_id"] in bound.json()["revoked_collection_ids"]
+    assert bound.json()["revoked_collection_ids"] == [collection["collection_id"]]
+    assert bound.json()["snapshot_id"] == snapshot["snapshot_id"]
+    assert bound.json()["scope_id"] == scope_id
 
     foreign = await actor_client.get(
         "/internal/federation/collections",
@@ -467,3 +469,32 @@ async def test_revoked_collection_is_visible_only_to_the_bound_caller(actor_clie
     assert foreign.json()["error"]["code"] == "catalog_snapshot_invalid"
     assert "revoked_collection_ids" not in foreign.json(), \
         "撤权明细只给绑定调用方，别人不该知道哪个集合出过事"
+    assert "snapshot_id" not in foreign.json()
+
+
+async def test_peer_catalog_revoked_410_carries_snapshot_binding(actor_client, session, _peer_auth, monkeypatch):
+    """对等目录 410 也要自证身份：绑定调用方才拿到 revoked 明细。"""
+    from ddp_corpus.config import settings as corpus_settings
+    from test_collection_catalog import create, internal
+    from test_federation_probes import indexed_source, publish_collection
+    monkeypatch.setattr(corpus_settings, "bundle_node_id", NODE)
+    _, version, *_ = await indexed_source(session)
+    collection = await publish_collection(actor_client, version)
+    peer = _peer(actor_client)
+    created = await peer.get("/api/v1/federation/published-collections")
+    assert created.status_code == 200, created.text
+    page = created.json()
+    assert collection["collection_id"] in {c["collection_id"] for c in page["collections"]}
+    withdrawn = await actor_client.post(
+        f"/api/v1/collections/{collection['collection_id']}/withdraw",
+        headers={**headers(role="admin"), "Idempotency-Key": "peer-410-binding"},
+        json={"expected_revision": collection["revision"]})
+    assert withdrawn.status_code == 200, withdrawn.text
+    revoked = await peer.get("/api/v1/federation/published-collections",
+                             params={"snapshot_id": page["snapshot_id"], "cursor": page["terminal_cursor"]})
+    assert revoked.status_code == 410, revoked.text
+    assert revoked.json()["error"]["code"] == "catalog_snapshot_invalid"
+    assert revoked.json()["revoked_collection_ids"] == [collection["collection_id"]]
+    assert revoked.json()["snapshot_id"] == page["snapshot_id"]
+    assert revoked.json()["scope_id"] == "peer-directory"
+    _assert_no_credential_leak(revoked, peer)

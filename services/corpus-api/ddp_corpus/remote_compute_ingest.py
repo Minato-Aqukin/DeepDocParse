@@ -41,6 +41,15 @@ async def bind_verified_upload(session: AsyncSession, storage: Storage,
                                upload_id: str, object_key: str, filename: str,
                                mime: str, size_bytes: int, sha256: str,
                                remote_compute_id: str):
+    # id 与归属判定走在键/输入校验之前：未知/外组织 id 在这里 404，
+    # 畸形 id、错键、被替换的输入一律在 ingest 落资产、起任务之前被拒。
+    import re as _re
+    if not isinstance(remote_compute_id, str) \
+            or not _re.fullmatch(r"[0-9a-f]{32}", remote_compute_id):
+        # new_id() 是 uuid4 hex（32 位小写十六进制）：形状不对的 id 连库都不查，
+        # 与"不存在"同一形状返回，不做存在性预言机。
+        raise APIError(404, "remote compute not found",
+                       "invalid_request_error", "remote_compute_not_found")
     row = await session.scalar(select(RemoteCompute).where(
         RemoteCompute.id == remote_compute_id).with_for_update()
         .execution_options(populate_existing=True))
@@ -50,6 +59,12 @@ async def bind_verified_upload(session: AsyncSession, storage: Storage,
         # oracle, no second asset, no task.
         raise APIError(404, "remote compute not found",
                        "invalid_request_error", "remote_compute_not_found")
+    expected_key = f"tmp-remote-compute/{organization_id}/{remote_compute_id}/source.bin"
+    if object_key != expected_key:
+        # 精确匹配 `_tmp_key(org, compute_id)`：前缀接受会让调用方把任意同目录
+        # 键塞进来冒充 verified 输入。control 永远只铸这一个固定键。
+        raise APIError(409, "temporary input key does not match the compute record",
+                       "invalid_request_error", "input_changed")
     if expire_if_due(row):
         await session.commit()
     if row.status != "waiting_input":
@@ -63,13 +78,6 @@ async def bind_verified_upload(session: AsyncSession, storage: Storage,
         # Input was replaced mid-flight: refuse as a changed input, never
         # register mixed bytes as one version (T14).
         raise APIError(409, "verified input differs from the approved input",
-                       "invalid_request_error", "input_changed")
-    expected_key = f"tmp-remote-compute/{organization_id}/{row.id}/source.bin"
-    if object_key != expected_key and not object_key.startswith(
-            f"tmp-remote-compute/{organization_id}/{row.id}/"):
-        # Control always mints the fixed tmp key for temporary_compute; an
-        # unexpected key is refused, never adopted.
-        raise APIError(409, "temporary input key does not match the compute record",
                        "invalid_request_error", "input_changed")
     row.status = "content_verifying"
     row.upload_id = upload_id

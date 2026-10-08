@@ -19,8 +19,8 @@ if TYPE_CHECKING:
     # 这是 TYPE_CHECKING 的固有代价，不是没修干净。
     # 之所以可以接受：没有任何地方对这个函数做运行期类型解析
     # （FastAPI 只对**端点**做，而它不是端点）。
+    from ddp_core.fetch_policy import FetchPolicyConfig
     from ddp_core.rerank import RerankConfig
-
 
 class Settings(BaseSettings):
     # 仓库根的 .env 与 backend/.env 都读（后者优先）——backend 与 alembic 的 cwd 不同
@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     # 控制面（services/control-api）。本服务向它要两样东西：
     # 稳定文件 URL 的凭证、actor 显示名 —— 两者都住在 control schema，
     # 而 corpus 对那个 schema 没有任何权限（企业边界 5）
-    control_url: str = "http://127.0.0.1:8080"
+    control_url: str = "http://127.0.0.1:8090"
     # 内网服务凭据，**三个服务必须一致**（control-api / model-gateway / 本服务）。
     # 它是本服务唯一的门禁：actor 上下文头之所以可信，前提就是
     # "只有持有它的调用方能进来"。占位值会被拒绝启动
@@ -89,7 +89,42 @@ class Settings(BaseSettings):
     # 本服务对模型网关可达的地址：解析回调用它拼。
     # 宿主机混合模式用 127.0.0.1:8081，全容器模式用服务名（http://corpus-api:8081）
     public_base_url: str = "http://127.0.0.1:8081"
+    # 出站抓取缺省不跟随重定向（SSRF，与网关同名）。True = 手工逐跳、
+    # 每跳重验目的地策略、至多 3 跳，且永不转发 Authorization。
+    # 语料转发路径从不跟随重定向 —— 这里只装配给抓取方用的配置快照（判据见
+    # `ddp_core.fetch_policy`）。
+    fetch_allow_redirects: bool = False
+    # 受信文件基座（SSRF，逗号分隔可配多个，与网关同名）。file_url
+    # 受信当且仅当 scheme+host+port 一致，且路径在基座路径之下、同时落在
+    # `/files/` 段边界之下（query 不透明，不参与比较）。典型值：control-api 的
+    # 内网基座（如 http://control-api:8080/files/）。判据见 `ddp_core.fetch_policy`。
+    fetch_trusted_base: str = ""
 
+    def fetch_policy_config(self) -> "FetchPolicyConfig":
+        """本服务的出站抓取配置快照：判据住在 `ddp_core.fetch_policy`，这里只装配。
+
+        直接读环境（与网关同名），不读 `self` 的启动时快照 —— `settings` 在
+        import 时建好，而测试与运维都可能在进程启动后改环境（monkeypatch
+        `FETCH_TRUSTED_BASE` 必须当场生效，旧实现就是直接读 env 的）。
+        """
+        import os
+
+        from ddp_core.fetch_policy import FetchPolicyConfig
+
+        if "FETCH_TRUSTED_BASE" in os.environ:
+            bases = os.environ.get("FETCH_TRUSTED_BASE", "")
+        else:
+            bases = self.fetch_trusted_base or ""
+        if "FETCH_ALLOW_REDIRECTS" in os.environ:
+            allow = os.environ.get(
+                "FETCH_ALLOW_REDIRECTS", "").strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            allow = self.fetch_allow_redirects
+        return FetchPolicyConfig(
+            trusted_bases=tuple(
+                base.strip() for base in bases.split(",") if base.strip()),
+            allow_redirects=allow,
+        )
     # 多副本部署必须配：对账选主靠它。留空 = 单实例模式。
     # **限速不在这里** —— 整体迁去了 control-api
     redis_url: str = ""
@@ -155,6 +190,28 @@ class Settings(BaseSettings):
     task_concurrency_federation_execute: int = 4
     # 空转时的轮询间隔。调大省数据库连接，调小降低任务延迟
     task_poll_interval: float = 1.0
+    # 单个 handler 连续跑的最长秒数（挂起 handler 的兜底 deadline）。
+    # 超过后 runner 不再续租、取消 handler 并以 task_timeout 落失败/重试。
+    # **默认必须兜住活锁**（handler 永远不返回时任务不能永远占着租约），
+    # 但也不能太小 —— 正常慢任务（编译/抽取）一次要跑十几分钟。默认 30 分钟。
+    task_max_runtime_seconds: float = 1800.0
+    # 按 kind 覆盖上面的默认值：{"compile": 3600.0} 这类形状。
+    # 未列出的 kind 走上面的全局默认值。
+    task_max_runtime_seconds_by_kind: dict[str, float] = {}
+    # ---- 内容诊断（plan.md §8.6）----
+    # 默认关：日志默认只记截断/脱敏后的资料（问题、原文片段绝不全文落日志）。
+    # 打开（true）才允许记录完整问题/snippet 做排障，且必须同时满足：
+    # actor 权限钩子（content_diagnostics_require_admin 为 true 时仅 admin 可触发
+    # 诊断日志）与留存上限（content_diagnostics_retention_seconds，诊断记录保留
+    # 至多这么久，0 = 不落盘只记内存环）。开关本身只是"允许"，每一次记录仍要
+    # 走 `content_diagnostics_permitted(actor)` 显式放行 —— 默认红线不动。
+    content_diagnostics_enabled: bool = False
+    # 打开诊断时是否要求 admin 身份。默认 true：排障也不该让普通调用者
+    # 把别人的原文打进共享日志。
+    content_diagnostics_require_admin: bool = True
+    # 诊断记录的留存上限（秒）。默认 7 天：排障窗口够用，过期必须清。
+    # 上限 30 天 —— 诊断不是档案，留更久请走正式的审计导出。
+    content_diagnostics_retention_seconds: int = 7 * 24 * 3600
 
     index_lease_seconds: int = 300          # worker 无 heartbeat 后多久允许接管
     index_heartbeat_seconds: int = 30       # 活 worker 的续租周期
@@ -386,12 +443,34 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _check_chunk_max_chars(self):
+        """分块上限必须是正整数：0 会让索引一建就炸，且报错离配错的地方很远。
+
+        `layout_to_chunks` 收到非正数会当场 ValueError —— 没有这条启动检查的话，
+        配错的人看到的是"索引失败"，而不是"配置错了"。启动时拦下来，错因指回配错的那一行。
+        """
+        if self.chunk_max_chars < 1:
+            raise ValueError(
+                f"CHUNK_MAX_CHARS({self.chunk_max_chars}) 必须是不小于 1 的整数")
+        return self
+
+    @model_validator(mode="after")
     def _check_index_lease(self):
         if self.index_lease_seconds < 3 or not (
                 0 < self.index_heartbeat_seconds < self.index_lease_seconds / 2):
             raise ValueError(
                 "INDEX_HEARTBEAT_SECONDS 必须 > 0 且小于 INDEX_LEASE_SECONDS 的一半，"
                 "INDEX_LEASE_SECONDS 至少为 3")
+        return self
+
+    @model_validator(mode="after")
+    def _check_task_runtime(self):
+        if self.task_max_runtime_seconds <= 0:
+            raise ValueError("TASK_MAX_RUNTIME_SECONDS 必须是正数秒（0 会让每个任务都被判超时）")
+        bad = {k: v for k, v in self.task_max_runtime_seconds_by_kind.items() if v <= 0}
+        if bad:
+            raise ValueError(
+                f"TASK_MAX_RUNTIME_SECONDS_BY_KIND 里 {sorted(bad)} 必须是正数秒")
         return self
 
     @model_validator(mode="after")
@@ -455,6 +534,16 @@ class Settings(BaseSettings):
                 "正常执行中的协调任务标成卡死")
         return self
 
+    @model_validator(mode="after")
+    def _check_content_diagnostics(self):
+        """诊断留存必须有界。无界留存 = 诊断日志变成第二份原文库，
+        而它没有原文库的访问控制 —— 留存上限 30 天，0 不是"关闭"（关闭用
+        CONTENT_DIAGNOSTICS_ENABLED=false），0 在这里表示"不落盘"。"""
+        if not 0 <= self.content_diagnostics_retention_seconds <= 30 * 24 * 3600:
+            raise ValueError(
+                "CONTENT_DIAGNOSTICS_RETENTION_SECONDS 必须在 0..2592000")
+        return self
+
     @property
     def embeddings_endpoint(self) -> str:
         return self.embedding_url or f"{self.service_url}/v1/embeddings"
@@ -471,8 +560,19 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # 占位值集合。`.env.example` 里写的是 change-me / change-me-please，
-# 复制过去忘了改是最常见的部署事故
+# 复制过去忘了改是最常见的部署事故。minioadmin 是 MinIO 出厂默认。
 _PLACEHOLDER_SECRETS = {"", "change-me", "change-me-please", "changeme", "secret"}
+
+# MinIO 口令的占位集合：出厂默认 minioadmin/minioadmin 带着它跑起来，对象存储
+# 等于没有门禁。只查口令（secret key）：access key 是账号名，不是凭据 ——
+# 口令随机时账号名叫 minioadmin 并不构成门禁缺口，而改账号名会让既有
+# MinIO 数据卷的根凭据对不上。
+_PLACEHOLDER_MINIO_SECRETS = _PLACEHOLDER_SECRETS | {"minioadmin"}
+
+# database_url 里"出厂默认口令"的形状：user:pass@ 段两侧都是弱口令
+#（ddp:ddp 是本仓库的开发默认值，postgres:postgres 是上游镜像的出厂默认）。
+# 只看口令段，不看 host/db 名 —— 那些换环境是正常的。
+_PLACEHOLDER_DB_PASSWORDS = {"", "ddp", "postgres", "password", "change-me", "changeme", "secret"}
 
 
 def rerank_config() -> "RerankConfig":
@@ -493,11 +593,43 @@ def rerank_config() -> "RerankConfig":
     )
 
 
+def _db_password_of(database_url: str) -> str:
+    """从 database_url 里抽出口令段。解析失败返回 ""（按占位处理：fail closed）。"""
+    try:
+        creds = database_url.split("://", 1)[1].split("@", 1)[0]
+        return creds.split(":", 1)[1] if ":" in creds else ""
+    except (IndexError, ValueError):
+        return ""
+
+
+def content_diagnostics_permitted(actor: object | None = None) -> bool:
+    """这次调用允不允许记录完整问题/snippet（内容诊断的权限钩子）。
+
+    三道门全过才放行：开关打开、（要求 admin 时）actor 真的是 admin、
+    且当前进程确实允许诊断。**默认全关**：开关默认 false，第一道门就拦住；
+    调用方拿不到 actor 时传 None，按"无权"处理 —— 绝不因"没传 actor"而放行。
+
+    要记诊断内容的调用点必须先问这一句，而不是自己读
+    `settings.content_diagnostics_enabled` —— 那样权限那道门会被绕过去。
+    """
+    if not settings.content_diagnostics_enabled:
+        return False
+    if settings.content_diagnostics_require_admin:
+        role = getattr(actor, "role", None)
+        if role != "admin":
+            return False
+    return True
+
+
 def assert_secrets_configured() -> None:
     """启动即失败，而不是带着占位密钥安静地跑起来。
 
     service_token 是占位值 = 本服务的唯一门禁形同虚设，而 actor 上下文头
     之所以可信，前提正是"只有持有它的调用方能进来"。任何人都能自称 admin。
+
+    minio 口令与 database_url 口令同理：minioadmin 出厂默认带着跑起来，
+    对象存储与数据库等于没有门禁，而只查 service_token 会让人误以为
+    "密钥都查过了"。
 
     这不会在运行时报任何错，只会安静地把整套鉴权变成摆设 —— 正是
     必须在启动时拦下来的那类问题。
@@ -506,12 +638,18 @@ def assert_secrets_configured() -> None:
     control↔corpus 内部请求（签发凭证、查信任记录、绑定身份）。旧共享配置
     （FEDERATION_PEER_AUTH / FEDERATION_PEER_TOKEN）由上面的 validator 拒绝，
     这里不再为它们开任何例外分支。
+
+    逃生口是 ALLOW_INSECURE_DEFAULTS=true（显式、留痕，启动即打印警告）。
     """
     if settings.allow_insecure_defaults:
         print("[config] WARNING: ALLOW_INSECURE_DEFAULTS 已开启，占位密钥检查被跳过")
         return
     bad = [name for name in ("service_token",)
            if getattr(settings, name).strip().lower() in _PLACEHOLDER_SECRETS]
+    if settings.minio_secret_key.strip().lower() in _PLACEHOLDER_MINIO_SECRETS:
+        bad.append("minio_secret_key")
+    if _db_password_of(settings.database_url).strip().lower() in _PLACEHOLDER_DB_PASSWORDS:
+        bad.append("database_url")
     if bad:
         raise RuntimeError(
             f"拒绝启动：{', '.join(n.upper() for n in bad)} 还是占位值。"

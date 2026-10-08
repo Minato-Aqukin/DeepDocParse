@@ -1,13 +1,18 @@
-"""Read fixed original bytes without granting access from a digest or a locator."""
-from fastapi.responses import Response
+"""Authorize fixed originals, then hand out short-lived direct-read URLs.
+
+Licensed originals never travel through the app process (invariant 6): this module
+authorizes against the fixed version + replica ledger, verifies size/digest with
+HEAD/ranged reads, and returns a presigned redirect capped by the licence term.
+"""
+from fastapi.responses import RedirectResponse
 from minio.error import S3Error
 from sqlalchemy import select
 
 from ddp_core.bundle import MAX_FILE, MAX_MANIFEST, BundleError, digest, licence_valid_until, parse_json
 from ddp_corpus.bundle_models import BundleReplica, replica_is_live
+from ddp_corpus.config import settings
 from ddp_corpus.errors import APIError
 from ddp_corpus.models import Document, ParseJob, ResourceVersion, as_aware, utcnow
-
 
 def _unavailable():
     return APIError(410, "fixed original is unavailable", "invalid_request_error", "source_unavailable")
@@ -149,9 +154,9 @@ def licence_ttl(deadline, cap_seconds: int) -> int:
     return min(cap_seconds, remaining)
 
 
-async def source_response(resource_id, version_id, *, actor, session, storage, http):
+async def source_response(resource_id, version_id, *, actor, session, storage):
     # Local imports avoid coupling router registration to this reusable reader.
-    from ddp_corpus.routers.bundles import _bundle_error, _get_bytes, _version
+    from ddp_corpus.routers.bundles import _bundle_error, _version
 
     resource, version = await _version(session, actor, resource_id, version_id)
     document = await session.get(Document, version.document_id, populate_existing=True)
@@ -160,21 +165,32 @@ async def source_response(resource_id, version_id, *, actor, session, storage, h
     expected_digest = "sha256:" + version.source_digest
     original_key, availability = document.object_key, "online"
     replica_binding = None
+    deadline = None
     snapshot = await licensed_version(session, version)
     try:
         if snapshot is not None:
             original_key, replica = await licensed_source_binding(session, storage, resource, snapshot)
             availability = "offline_snapshot"
+            deadline = as_aware(replica.valid_until) if replica.valid_until else None
             replica_binding = (
                 replica.id, replica.origin_node_id, replica.authority_node_id, replica.policy_revision,
-                as_aware(replica.valid_until) if replica.valid_until else None,
+                deadline,
             )
         if not original_key:
             raise _unavailable()
-        content = await _get_bytes(storage, original_key, MAX_FILE)
-        if len(content) != version.size_bytes or digest(content) != expected_digest:
-            raise BundleError("bundle_storage_mismatch", "fixed original digest mismatch")
-    except (KeyError, FileNotFoundError) as exc:
+        # 不变式 6：原件不进应用进程。HEAD 验大小；摘要整份验只在 MAX_FILE 以内做，
+        # 更大的原件以 control 签发时校验过的大小为准（上传即验，见 ingest）。
+        size = await storage.stat_size(original_key)
+        if size != version.size_bytes:
+            raise BundleError("bundle_storage_mismatch", "fixed original size mismatch")
+        if size <= MAX_FILE:
+            content = await storage.get_limited(original_key, MAX_FILE)
+            if len(content) != version.size_bytes or digest(content) != expected_digest:
+                raise BundleError("bundle_storage_mismatch", "fixed original digest mismatch")
+            pdf_hint = content.startswith(b"%PDF-")
+        else:
+            pdf_hint = (await storage.get_range(original_key, 0, 5)) == b"%PDF-"
+    except (KeyError, FileNotFoundError, ValueError) as exc:
         raise _unavailable() from exc
     except S3Error as exc:
         if exc.code in {"NoSuchKey", "NoSuchObject", "NoSuchBucket"}:
@@ -189,20 +205,23 @@ async def source_response(resource_id, version_id, *, actor, session, storage, h
     await session.refresh(document)
     await _version(session, actor, resource_id, version_id)
     if (document.deleted_at is not None or version.source_digest != expected_digest[7:]
-            or version.size_bytes != len(content)):
+            or version.size_bytes != size):
         raise _unavailable()
     if replica_binding is not None:
         current = await _licensed_replica(session, resource, snapshot)
         if (current.id, current.origin_node_id, current.authority_node_id, current.policy_revision,
                 as_aware(current.valid_until) if current.valid_until else None) != replica_binding:
             raise _unavailable()
-    media = "application/pdf" if document.mime == "application/pdf" and content.startswith(b"%PDF-") else "application/octet-stream"
-    return Response(content, media_type=media, headers={
+    media = "application/pdf" if document.mime == "application/pdf" and pdf_hint else "application/octet-stream"
+    url = await storage.presigned_get(
+        original_key, expires_seconds=licence_ttl(deadline, settings.source_url_ttl_seconds),
+        filename=f"source-{version.id}.bin", content_type=media)
+    headers = {
         "Cache-Control": "private, no-store",
         "X-Content-Type-Options": "nosniff",
-        "Content-Disposition": f'attachment; filename="source-{version.id}.bin"',
         "X-DDP-Source-Digest": expected_digest,
         "X-DDP-Source-Availability": availability,
         **({"X-DDP-Source-Licence-Valid-Until": replica_binding[-1].isoformat()}
            if replica_binding is not None and replica_binding[-1] is not None else {}),
-    })
+    }
+    return RedirectResponse(url, status_code=302, headers=headers)

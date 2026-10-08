@@ -458,7 +458,7 @@ async def test_idempotency_key_reuse_across_tasks_conflicts(actor_client, two_no
     whose `SELECT max(seq)` triggers SQLAlchemy autoflush *before* the
     `try: await session.commit() / except IntegrityError` handler can map the
     unique-constraint violation to `idempotency_conflict`
-    (federation_tasks.py:1244-1252). The same key on a second root task must be
+    (federation_tasks/execution.py:749-782). The same key on a second root task must be
     a 409; instead the exception escapes as an unhandled DB error.
     """
     # 两个真正不同的 intent（同 body 会被 intent 幂等键折叠成同一个 root）。
@@ -482,7 +482,7 @@ async def test_idempotency_key_reuse_across_tasks_conflicts(actor_client, two_no
             "idempotency_conflict (federation-tasks-v1.yaml POST /tasks 409); instead "
             f"the request blew up with {type(exc).__name__} during autoflush before "
             "federation_tasks.execute_task's commit handler could map it "
-            f"(federation_tasks.py:1244-1252). Underlying error: {exc}")
+            f"(federation_tasks/execution.py:749-782). Underlying error: {exc}")
     assert conflict.status_code == 409, conflict.text
     assert conflict.json()["error"]["code"] == "idempotency_conflict"
 
@@ -492,7 +492,7 @@ async def test_same_task_tampered_plan_digest_is_rejected(actor_client, two_node
 
     The P5 brief phrased this as `idempotency_conflict`; the implementation
     verifies the submitted revision against the stored plan first and answers
-    `plan_changed` (federation_tasks.py:1226-1228). The contract for POST
+    `plan_changed` (federation_tasks/execution.py:724-726). The contract for POST
     /tasks allows either code for 409 (federation-tasks-v1.yaml:184), and the
     cross-task test above exercises the true `idempotency_conflict` path. This
     test pins the actual behavior so the ordering cannot drift silently.
@@ -516,9 +516,9 @@ async def test_unapproved_peer_fails_closed_without_fabrication(
         actor_client, session, two_node, monkeypatch, tmp_path):
     """B 撤销 A 的批准后：探测与受理一律 401，中途换信任不伪造证据。
 
-    这是旧 `test_wrong_peer_token_*` 的干净切换版：以前靠配错共享口令触发
-    401，现在靠 B 的成员目录里没有 A（node_unknown）触发 —— 同一个 Fail Closed
-    形状，同一组"不伪造、不重试风暴"断言，只是信任根从共享秘密换成了成员批准。
+    B 的成员目录里没有 A，A 的凭证在 B 验不过签名 —— 按验证顺序 6–9，
+    未验证调用方一律中性 credential_invalid（不披露没登记/待批准/已撤销）。
+    同一个 Fail Closed 形状，同一组"不伪造、不重试风暴"断言。
     """
     revoked_dir = tmp_path / "revoked"
     revoked_dir.mkdir(exist_ok=True)
@@ -537,11 +537,11 @@ async def test_unapproved_peer_fails_closed_without_fabrication(
         status = (await submit_task(actor_client, root, plan["plan_digest"], "bad-trust")).json()
         assert status["status"] == "failed"
         assert status["result"]["evidence"] == [], "an auth failure must never fabricate evidence"
-        assert status["error"] == "node_unknown"
+        assert status["error"] == "credential_invalid"
         coverage = await coverage_of(actor_client, root)
         entry = entry_for(coverage, NODE_B)
         assert entry["state"] == "failed"
-        assert entry["last_error"] == "node_unknown"
+        assert entry["last_error"] == "credential_invalid"
 
         # Exactly two rejected probes and one admission attempt: no retry loop.
         assert [call["status"] for call in revoked.calls_to("/api/v1/federation/admissions")] \

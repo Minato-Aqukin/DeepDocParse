@@ -6,7 +6,11 @@ snapshots, the owning actor, and the source policy revision plus the
 term/revocation state. Reads reuse the fixed version authorization and the
 stored snapshot bytes — a replica never invents a permission of its own.
 Revoked or expired replicas block reads; an offline original stays readable
-only through the fixed snapshot of a still-valid replica.
+only through the fixed snapshot of a still-valid replica. Replica rows are
+never physically deleted by application code: tombstoning the resource/version
+ends readability, the reference-safe GC (`gc.py`) owns snapshot-byte lifetimes,
+and CASCADE on `resources`/`resource_versions` removes ledger rows only with
+their parent asset.
 
 Tables live in `database/corpus/alembic/versions/0034_bundle_replicas.py`.
 Wiki model/routers are untouched here: imported Wiki stays a draft and is
@@ -119,13 +123,3 @@ def replica_is_live(row: BundleReplica, now: datetime) -> bool:
         valid_until = valid_until.replace(tzinfo=timezone.utc)
     return valid_until is None or valid_until > now
 
-
-def physical_delete_guard(row: BundleReplica) -> None:
-    """Physical deletion must keep every actually referenced snapshot.
-
-    The replica ledger never deletes snapshot bytes itself: the shared
-    reference-safe GC owns that rule. Callers check live versions, active
-    tasks and dependency manifests before removing anything.
-    """
-    if row.revoked_at is None:
-        raise ValueError("a live replica cannot be physically deleted")

@@ -22,9 +22,9 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_core.chunking import page_count_of
+from ddp_corpus.service_client import ServiceClient, ServiceError
 from ddp_corpus.usage import record_usage
 from ddp_corpus.models import Document, ParseJob, ResourceVersion, utcnow
-from ddp_corpus.service_client import ServiceClient
 from ddp_corpus.storage import Storage, job_result_prefix
 from ddp_corpus.indexing import mark_index_pending
 
@@ -54,6 +54,40 @@ def _ext_of(mime: str | None) -> str:
         mime or "", ".png")
 
 
+#: 单个归档结果的上限：网关结果体含 base64 图片，无界 resp.json() 即 OOM（不变式 6）。
+#: 与 bundle 的 MAX_FILE 对齐；超限按可重试处理（release_job），不落终态。
+MAX_RESULT_BYTES = 64 * 1024 * 1024
+#: 单张解码后图片上限 + 每个结果的图片总上限：data URI 是"压缩过的谎言"，
+#: 64MiB base64 可胀到 ~48MiB 字节，一份结果里塞几十张即 OOM。
+MAX_IMAGE_BYTES = 16 * 1024 * 1024
+MAX_IMAGES_BYTES = 64 * 1024 * 1024
+MAX_IMAGE_COUNT = 2000
+
+#: 允许落盘的图片后缀：service 结果的 name 是**不可信输入**（受损 service 可伪造），
+#: 落盘前必须同时过"路径安全 + 后缀白名单"，否则 '../document.md' 即覆写同前缀产物。
+_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"})
+
+
+def _image_key(name: str) -> str:
+    """Validate a service-supplied image name and return its object-store leaf.
+
+    Rejects empty names, path separators, parent traversal, overlong keys and
+    non-image suffixes; callers store under `images/` + the returned leaf, so a
+    hostile name can never escape the images/ family or shadow document.md.
+    返回 None 表示拒绝 —— 调用方跳过该图并记降级，不让整份归档失败。
+    """
+    if not name or len(name) > 128 or "\\" in name or "\x00" in name:
+        return None
+    leaf = PurePosixPath(name).name
+    if leaf != name or name in (".", "..") or "/" in name or name.startswith("."):
+        return None
+    suffix = PurePosixPath(leaf).suffix.lower()
+    if suffix not in _IMAGE_SUFFIXES:
+        return None
+    return leaf
+
+
+
 def _rewrite_image_refs(markdown: str, names: set[str], base_url: str) -> str:
     """把 markdown 里指向图片文件的引用改写到本层的图片代理端点。"""
     def sub(m: re.Match) -> str:
@@ -70,8 +104,10 @@ async def _externalize_inline_images(markdown: str, storage: Storage, prefix: st
     """markdown 里内联的 data URI 图片落成对象存储文件。
 
     归档后的 markdown 不该带 base64：既让结果体积失控，前端渲染也慢得离谱。
+    单张/总量有上限（不变式 6）：超限的图片留在 data URI 里，不挡整份归档。
     """
     saved = 0
+    total = 0
     pending: list[tuple[str, str]] = []      # (原 target, 新文件名)
 
     for m in _IMG_REF.finditer(markdown):
@@ -82,18 +118,64 @@ async def _externalize_inline_images(markdown: str, storage: Storage, prefix: st
         mime, is_b64, payload = parsed.group(1), parsed.group(2), parsed.group(3)
         if not is_b64:
             continue
+        if saved >= MAX_IMAGE_COUNT or total >= MAX_IMAGES_BYTES:
+            break
+        if len(payload) > (MAX_IMAGE_BYTES * 4) // 3 + 16:
+            continue            # base64 文本先行粗筛：明显超单张上限的不解码
         try:
             data = base64.b64decode(payload)
         except (ValueError, TypeError):
+            continue
+        if len(data) > MAX_IMAGE_BYTES or total + len(data) > MAX_IMAGES_BYTES:
             continue
         name = f"inline_{saved}{_ext_of(mime)}"
         await storage.put(f"{prefix}images/{name}", data, mime or "image/png")
         pending.append((target, name))
         saved += 1
+        total += len(data)
 
     for target, name in pending:
         markdown = markdown.replace(target, f"{base_url}/{name}")
     return markdown, saved
+
+
+async def _archive_images(result: dict, storage: Storage, prefix: str) -> set[str]:
+    """Decode result data-URI images to `{prefix}images/`, return stored leaf names.
+
+    Raises ServiceError on count/per-image/total overflow: the caller releases the
+    job back to running so reconciliation retries instead of dropping bytes.
+    """
+    names: set[str] = set()
+    image_total = 0
+    seen_images = 0
+    for image in result.get("images") or []:
+        if not isinstance(image, dict):
+            continue
+        name, url = image.get("name"), image.get("url") or ""
+        leaf = _image_key(name) if isinstance(name, str) else None
+        if leaf is None or leaf in names:
+            continue
+        if seen_images >= MAX_IMAGE_COUNT:
+            raise ServiceError(413, f"service result exceeds {MAX_IMAGE_COUNT} images")
+        if not isinstance(url, str):
+            continue
+        parsed = _DATA_URI.match(url)
+        if parsed is None:
+            continue
+        mime, is_b64, payload = parsed.group(1), parsed.group(2), parsed.group(3)
+        if len(payload) > (MAX_IMAGE_BYTES * 4) // 3 + 16:
+            raise ServiceError(413, f"service image exceeds {MAX_IMAGE_BYTES} bytes: {leaf}")
+        try:
+            data = base64.b64decode(payload) if is_b64 else payload.encode()
+        except (ValueError, TypeError) as exc:
+            raise ServiceError(413, f"invalid service image payload: {leaf}") from exc
+        if len(data) > MAX_IMAGE_BYTES or image_total + len(data) > MAX_IMAGES_BYTES:
+            raise ServiceError(413, f"service images exceed {MAX_IMAGES_BYTES} bytes total")
+        await storage.put(f"{prefix}images/{leaf}", data, mime or "application/octet-stream")
+        names.add(leaf)
+        image_total += len(data)
+        seen_images += 1
+    return names
 
 
 async def archive_job(session: AsyncSession, storage: Storage, service: ServiceClient,
@@ -123,8 +205,8 @@ async def archive_job(session: AsyncSession, storage: Storage, service: ServiceC
         return False
 
     try:
-        result = await service.get_result(job.service_task_id)
-    except Exception as exc:                       # service 不可达/结果已过期
+        result = await service.get_result(job.service_task_id, max_bytes=MAX_RESULT_BYTES)
+    except Exception as exc:                       # service 不可达/结果已过期/超限
         await release_job(session, job, str(exc))
         raise
     if result is None:                             # 409：service 侧还没归档完，下一轮再来
@@ -134,19 +216,14 @@ async def archive_job(session: AsyncSession, storage: Storage, service: ServiceC
     prefix = job_result_prefix(job.id)
     base_url = image_base_url(document.id, job.id)
 
-    # 1. 结果里的图片是 data URI（见 gateway mineru_client._RESULT_FIELDS），解码落盘
-    names: set[str] = set()
-    for image in result.get("images") or []:
-        name, url = image.get("name"), image.get("url") or ""
-        if not name:
-            continue
-        parsed = _DATA_URI.match(url)
-        if parsed is None:
-            continue
-        mime, is_b64, payload = parsed.group(1), parsed.group(2), parsed.group(3)
-        data = base64.b64decode(payload) if is_b64 else payload.encode()
-        await storage.put(f"{prefix}images/{name}", data, mime or "application/octet-stream")
-        names.add(name)
+    # 1. 结果里的图片是 data URI（见 gateway mineru_client._RESULT_FIELDS），解码落盘。
+    # name 是不可信输入：先过路径安全 + 后缀白名单（_image_key），同名去重；
+    # 单张/总量有上限（不变式 6），超限整份退回 running 让对账重试，不吞字节。
+    try:
+        names = await _archive_images(result, storage, prefix)
+    except ServiceError as exc:
+        await release_job(session, job, str(exc))
+        raise
 
     # 2. markdown：引用重写 + 内联 base64 外置
     markdown = result.get("markdown") or ""

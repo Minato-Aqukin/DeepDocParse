@@ -152,10 +152,10 @@ def peer_evidence(*, evidence_id="peer-evidence-1", resource_id="peer-resource-1
 
 
 def peer_probe(*, probe_id="probe-remote-1", collection="peer-collection-1",
-               index_revision="peer-index-1"):
+               index_revision="peer-index-1", task_spec_digest="sha256:" + "c" * 64):
     return {
         "schema": "ddp-probe/1", "probe_id": probe_id, "target_node_id": PEER_NODE,
-        "task_spec_digest": "sha256:" + "c" * 64, "consent_ref": "explore-1",
+        "task_spec_digest": task_spec_digest, "consent_ref": "explore-1",
         "probe_kind": "evidence_retrieval",
         "capability_check": {"operation": "corpus.retrieve", "readiness": "ready",
                              "input_validation": "content_verified"},
@@ -238,8 +238,8 @@ class StubPeer:
         self.answer_execution: dict | None = None
         #: 业务键 -> (请求体, 回执)。真实执行者（`federation.admit`）同键同体复用
         #: 回执、同键异体 409（delegation_generation 在请求摘要里），lookup 找得到
-        #: 已受理的回执。旧 stub 每次都发新回执、lookup 永远 404，于是"resume 按新
-        #: 代次重发同一个业务键"在远端路径上从来不会红（F-34 #11）。
+        #: 已受理的回执。旧 stub 每次都发新回执、lookup 永远 404，于是“resume 按新
+        #: 代次重发同一个业务键”在远端路径上从不变红，盖住了真实执行者的去重语义。
         self.accepted: dict[str, tuple[dict, dict]] = {}
 
     def catalog_page(self, request: httpx.Request) -> dict:
@@ -298,7 +298,8 @@ class StubPeer:
                         "code": "egress_denied", "message": "denied"}})
                 return httpx.Response(201, json=peer_probe(
                     collection=str(body.get("collection_id") or "peer-collection-1"),
-                    index_revision=self.index_revision))
+                    index_revision=self.index_revision,
+                    task_spec_digest=str(body.get("task_spec_digest") or "sha256:" + "c" * 64)))
             if path.endswith("/admissions"):
                 body = json.loads(request.content or b"{}")
                 self.admissions.append(body)
@@ -717,7 +718,7 @@ async def test_local_intent_plan_approve_execute_coverage_events_and_ack(
 async def test_exhaustive_sealed_scope_reaches_complete(actor_client, session):
     _, version, _, _, _ = await indexed_source(session)
     collection = await publish_collection(actor_client, version)
-    # 控制面枚举出的 operation 可以是 "search" 这类名字；本切片一律按集合检索执行，
+    # 控制面枚举出的 operation 可以是 "search" 这类名字；这里一律按集合检索执行，
     # 不拿 operation 字符串当执行类型的判据。
     manifest = scope_manifest([member(collection["collection_id"], operation="search")],
                               enumeration="sealed")
@@ -1468,6 +1469,22 @@ async def test_commit_maps_unique_violation_to_conflict(session):
     assert exc.value.status_code == 409
     assert exc.value.code == "idempotency_conflict"
 
+
+async def test_commit_reraises_non_unique_integrity_errors(session):
+    """_commit 只翻译并发写的唯一冲突：外键/非空失败必须原样重抛（5xx）。
+
+    把程序错误翻译成 409 会让调用方原样重试一个永远过不了的写。
+    变异确认：把 `_is_unique_violation` 的判断去掉（所有 IntegrityError 都翻
+    译），这里的 `raises(IntegrityError)` 变红。
+    """
+    from sqlalchemy.exc import IntegrityError as _IntegrityError
+    session.add(FederationExecution(
+        executor_task_id=new_id(), admission_id="missing-admission",
+        root_task_id="fk-root", step_id="retrieve-1", operation="retrieve",
+        state="queued", generation=1, result_json={},
+        created_at=utcnow(), updated_at=utcnow()))
+    with pytest.raises(_IntegrityError):
+        await federation_tasks._commit(session)
 
 async def test_execute_unknown_write_conflict_is_retryable_conflict(
         actor_client, session, monkeypatch):
@@ -2424,7 +2441,7 @@ async def test_fixed_resources_wait_for_input_and_stay_in_denominator(
     response = await submit_task(actor_client, root, plan_body["plan_digest"], "fixed")
     assert response.status_code == 200, response.text
     body = response.json()
-    # 本切片执行者无法本地重算资源内容摘要 -> waiting_input，而不是假装验过。
+    # 这里的执行者无法本地重算资源内容摘要 -> waiting_input，而不是假装验过。
     assert body["status"] == "failed"
     assert body["result"]["evidence"] == []
     coverage = (await actor_client.get(f"/api/v1/tasks/{root}/coverage")).json()

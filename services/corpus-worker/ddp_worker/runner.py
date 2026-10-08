@@ -16,12 +16,21 @@
 import asyncio
 import logging
 import signal
+import time
 from collections.abc import Awaitable, Callable
 
 from ddp_corpus.config import settings
 from ddp_corpus.db import get_sessionmaker
 from ddp_corpus.models import Task
-from ddp_corpus.queue import StaleGeneration, claim, fail, heartbeat, succeed
+from ddp_corpus.queue import (
+    StaleGeneration, claim, fail, heartbeat, succeed, sweep_exhausted,
+)
+
+
+def max_runtime_seconds(kind: str) -> float:
+    """单个 handler 的 deadline（秒）：按 kind 覆盖，否则走全局默认。"""
+    by_kind = settings.task_max_runtime_seconds_by_kind or {}
+    return float(by_kind.get(kind, settings.task_max_runtime_seconds))
 
 log = logging.getLogger("ddp.worker")
 
@@ -62,14 +71,25 @@ class Pool:
 
 
 async def run_one(task: Task, pool: Pool, state: WorkerState) -> None:
-    """跑一条任务：起心跳 -> 跑 handler -> 落终态。"""
+    """跑一条任务：起心跳 -> 跑 handler -> 落终态。
+
+    hang 住的 handler 有 deadline 兜底：超过 `max_runtime_seconds(kind)` 后
+    不再续租、取消 handler，并以 `task_timeout` 落失败/重试 —— 任务不会永远
+    占着租约（活锁），而是按正常失败路径退避重试或落终态。
+    """
     sessionmaker = get_sessionmaker()
     generation = task.generation
+    deadline = time.monotonic() + max_runtime_seconds(task.kind)
 
     async def beat() -> None:
         """续租失败必须被主协程观察，不能独自停止而让 handler 继续跑。"""
         while True:
             await asyncio.sleep(settings.task_heartbeat_seconds)
+            if time.monotonic() >= deadline:
+                # deadline 已过：停掉续租，让主协程去取消 handler。
+                # 不写任何终态 —— 终态由主协程的 task_timeout 路径统一写。
+                log.warning("任务 %s 超过最大运行时，停止续租", task.id)
+                return
             async with sessionmaker() as session:
                 if not await heartbeat(session, task.id, generation):
                     log.warning("任务 %s 已被接管（generation 变了），停手", task.id)
@@ -77,19 +97,33 @@ async def run_one(task: Task, pool: Pool, state: WorkerState) -> None:
 
     beater = asyncio.create_task(beat())
     runner = asyncio.create_task(pool.handler(task, state))
+    timed_out = False
     try:
         try:
             done, _ = await asyncio.wait({runner, beater}, return_when=asyncio.FIRST_COMPLETED)
             if beater in done:
-                # 正常返回表示失去租约；异常则交给既有失败路径持久化。
+                # 正常返回表示失去租约（被接管或 deadline 到）；异常则交给既有失败路径持久化。
                 beater.result()
-                return
-            degraded = runner.result()
+                if runner.done():
+                    # handler 已经跑完但 beater 先结束：按"被接管"处理，不再写终态。
+                    return
+                # handler 还没跑完：被接管则直接停手；deadline 到则走超时失败路径。
+                timed_out = time.monotonic() >= deadline
+                if not timed_out:
+                    return
+            else:
+                # runner 先完成：刚压线（wait 返回时已过 deadline）的完成仍算完成，
+                # 不判超时 —— deadline 只掐"还没跑完"的 handler。
+                degraded = runner.result()
         finally:
             # 在落终态/重排之前收完子协程，外层取消也必须走这条清理路径。
             runner.cancel()
             beater.cancel()
             await asyncio.gather(runner, beater, return_exceptions=True)
+        if timed_out:
+            raise TimeoutError(
+                f"task_timeout: kind={task.kind} 超过最大运行时 "
+                f"{max_runtime_seconds(task.kind)}s")
         async with sessionmaker() as session:
             await succeed(session, task.id, generation, degraded=degraded)
     except StaleGeneration:
@@ -117,6 +151,12 @@ async def loop(pools: dict[str, Pool], state: WorkerState, stopping: asyncio.Eve
                 picked += 1
                 pool.spawn(run_one(task, pool, state))
         if picked == 0:
+            # 空转时顺手清扫毒丸：耗尽 max_attempts 又没人领的行落成可见 failed，
+            # 而不是永远"处理中"。显式函数 + 主循环空闲路径调用，不搭别的顺风车。
+            async with sessionmaker() as session:
+                swept = await sweep_exhausted(session)
+            if swept:
+                log.warning("死信清扫：%d 条耗尽任务已标 failed", swept)
             try:
                 await asyncio.wait_for(stopping.wait(), settings.task_poll_interval)
             except TimeoutError:

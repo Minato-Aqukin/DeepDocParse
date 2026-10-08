@@ -183,8 +183,26 @@ async def update_resource(resource_id: str, body: UpdateResource,
         if source is None:
             raise APIError(403, "source does not permit publication", "permission_error",
                            "derived_publication_denied")
+    flipped_away = (body.publication is not None and body.publication != "published"
+        and row.publication == "published")
     for name, value in body.model_dump(exclude_none=True).items():
         setattr(row, name, value)
+    await session.flush()
+    if flipped_away:
+        # Same invalidation as tombstone_resource: a flip away from published must not
+        # leave published pointers or projections alive past the commit.
+        from ddp_corpus import cache, wiki
+        from ddp_corpus.collection_models import CollectionMember
+        version_ids = list((await session.execute(select(ResourceVersion.id).where(
+            ResourceVersion.resource_id == row.id))).scalars())
+        await wiki.invalidate_dependents(session, resource_id=row.id)
+        await cache.invalidate(session, scope_key=cache.resource_scope(row.id))
+        for version_id in version_ids:
+            await cache.invalidate(session, scope_key=cache.version_scope(version_id))
+        collection_ids = list((await session.execute(select(CollectionMember.collection_id).where(
+            CollectionMember.version_id.in_(version_ids)).distinct())).scalars())
+        for collection_id in collection_ids:
+            await cache.invalidate(session, scope_key=cache.collection_scope(collection_id))
     await session.commit()
     return await resource_out(session, row)
 

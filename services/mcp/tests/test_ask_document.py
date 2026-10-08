@@ -114,6 +114,57 @@ async def test_ask_document_submits_with_the_callers_identity(mcp_env):
         assert sent[name] == value, f"{name} 没有随解析提交一起转发"
     assert sent["authorization"] == f"Bearer {TOKEN}"
     assert json.loads(submit.calls.last.request.content) == {"file_url": PDF}
+@respx.mock
+async def test_ask_document_image_redirect_to_internal_refused(mcp_env):
+    """图片 URL 302 到内网：策略在抓取前逐跳重验，必须拒绝且一次都不取。
+
+    变异确认：把 `ddp_core.fetch_policy` 逐跳循环换回 `follow_redirects=True`
+    的直取，本用例必须红（内网字节会被取回并送进 VQA）。
+    """
+    passthrough_mcp(respx)
+    respx.get("http://files.example.com/pic.png").mock(return_value=Response(
+        302, headers={"location": "http://169.254.169.254/latest/meta-data/"}))
+    internal = respx.get("http://169.254.169.254/latest/meta-data/")
+    vqa = respx.post(f"{GW}/v1/chat/completions")
+    async with entry_client() as client:
+        result = await client.call_tool(
+            "ask_document",
+            {"file_url": "http://files.example.com/pic.png", "question": "图中数值？"},
+            raise_on_error=False)
+    assert result.is_error, "302 到内网的抓取竟然被受理了"
+    assert not internal.called, "策略拒绝后还去取了内网地址"
+    assert not vqa.called, "拒绝后还去调了 VQA"
+
+
+async def test_ask_document_dns_rebind_to_metadata_refused(mcp_env, monkeypatch):
+    """外部域名 DNS 解析到云元数据 IP：fail closed，fetch 一次都不发。
+
+    变异确认：把 `ddp_core.fetch_policy` 里的 METADATA 显式拒绝删掉
+    （只留 is_global），本用例必须红 —— 某些平台把元数据地址标成
+    global，单靠 is_global 挡不住。
+    """
+    import socket
+    passthrough_mcp(respx)
+    real_getaddrinfo = socket.getaddrinfo
+
+    def _rebind(host, *args, **kwargs):
+        if host == "rebind.example.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "",
+                     ("100.100.100.200", 0))]
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", _rebind)
+    fetch = respx.get("http://rebind.example.com/doc.pdf")
+    parse = respx.post(f"{CORPUS}/v1/parse")
+    async with entry_client() as client:
+        result = await client.call_tool(
+            "ask_document",
+            {"file_url": "http://rebind.example.com/doc.pdf", "question": "多少"},
+            raise_on_error=False)
+    assert result.is_error, "DNS 指向元数据的地址竟然被受理了"
+    assert not parse.called, "拒绝之前不许先去提交解析"
+    assert not fetch.called, "拒绝之后不许再去取文件"
+
 
 
 # ---------------------------------------------------------------- 原有行为（换了传输）

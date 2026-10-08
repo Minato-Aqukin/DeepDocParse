@@ -61,7 +61,8 @@ def _locator(citation: dict) -> tuple[str, int] | None:
 
 
 async def record_evidence(session: AsyncSession, citations: list[dict], *,
-                          source_kind: str, source_id: str) -> int:
+                          source_kind: str, source_id: str,
+                          allowed_parse_job_ids: set[str] | None = None) -> int:
     """把一批出处双写进 evidence / citations 两张表。返回落库的 citation 行数。
 
     **在老路径写完之后调用，同一个 session、同一次 commit。**
@@ -78,7 +79,8 @@ async def record_evidence(session: AsyncSession, citations: list[dict], *,
     try:
         async with session.begin_nested():
             return await _record(session, citations, source_kind=source_kind,
-                                 source_id=source_id)
+                                 source_id=source_id,
+                                 allowed_parse_job_ids=allowed_parse_job_ids)
     except Exception:      # noqa: BLE001 —— 双写绝不能拖垮老路径，但必须留痕
         DUAL_WRITE_FAILURES.labels(source_kind=source_kind).inc()
         return 0
@@ -102,7 +104,13 @@ def locators_of(citations: list[dict]) -> dict[tuple[str, int], dict]:
 
 
 async def _record(session: AsyncSession, citations: list[dict], *,
-                  source_kind: str, source_id: str) -> int:
+                  source_kind: str, source_id: str,
+                  allowed_parse_job_ids: set[str] | None = None) -> int:
+    """`allowed_parse_job_ids` 非空时只接回该集合内的解析（None = 不收敛，保持旧行为）。
+
+    问答落库由调用方传入本轮固定解析；抽取平面尚未传入，保持 None 直到它也接上
+    （后续工作，不在本函数内默认收敛，避免改抽取行为）。
+    """
     locators = locators_of(citations)
     if not locators:
         return 0
@@ -113,6 +121,8 @@ async def _record(session: AsyncSession, citations: list[dict], *,
     # 而缺它遇到 CropBox 偏移/旋转页就会裁错区域。
     # content_digest 更是只能从这里来 —— dict 里只有截断过的 snippet。
     jobs = {job for job, _ in locators}
+    if allowed_parse_job_ids is not None:
+        jobs &= set(allowed_parse_job_ids)
     seqs = {seq for _, seq in locators}
     chunks = {
         (c.parse_job_id, c.seq): c

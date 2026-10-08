@@ -522,3 +522,103 @@ async def test_task_list_keyset_pages_keep_microsecond_ties_on_pg(pg_stack):
     # NUL 进 PostgreSQL 的文本参数是 CharacterNotInRepertoire：游标解析必须先挡住（400 不是 500）。
     nul = await client.get("/api/v1/tasks", params={"cursor": "WzEsIlx1MDAwMCJd"}, headers=headers)
     assert nul.status_code == 400 and nul.json()["error"]["code"] == "invalid_cursor"
+
+async def test_terminal_race_rolls_back_to_running_on_pg(pg_stack, monkeypatch):
+    """终态竞输在真 PG 上：整笔终态事务回滚，行留在 running，旧结果不动。
+
+    SQLite 双胞胎（`test_terminal_commit_maps_event_seq_collision_to_409`）
+    在竞输注入下走进单连接假象（赢家的提交顺手带走了输家已刷新的终态
+    UPDATE）；真判据只在这里：两个独立 PG 会话，赢家的同序号事件行先
+    提交，输家的终态 `_commit` 报可重试 409，行保持 running 等同键重试。
+    变异确认：把 `common._commit` 的唯一冲突映射改回裸提交，
+    这里的 `raises(APIError)` 按不住 `IntegrityError`。
+    """
+    from sqlalchemy.exc import IntegrityError as _IntegrityError
+
+    from ddp_corpus.deps import Actor as _Actor
+    from ddp_corpus.errors import APIError as _APIError
+    from ddp_corpus.federation_tasks import execution as _execution_mod
+    from ddp_corpus.models import utcnow as _utcnow
+
+    client, factory, state = pg_stack
+    run_key = new_id()
+    async with factory() as session:
+        _, version, _, _, _ = await indexed_source(session)
+    collection = await publish_collection(client, version, key=f"pg-race-{run_key}")
+    consent = exploration(egress="local_only", recipients=(), payload=(),
+                          budget={"max_probe_requests": 0, "max_egress_bytes": 0})
+    intent = await create_intent(
+        client, spec=task_spec(scope="federation_public", mode="fast"), consent=consent,
+        manifest=scope_manifest([member(collection["collection_id"], node=NODE)]),
+        key=f"pg-race-intent-{run_key}")
+    root = intent["root_task_id"]
+    plan = await plan_task(client, root)
+    await approve_task(client, root, plan)
+    submitted = await client.post(
+        "/api/v1/tasks", headers={"Idempotency-Key": f"pg-race-{run_key}"},
+        json={"root_task_id": root, "plan_digest": plan["plan_digest"]})
+    assert submitted.status_code == 202, submitted.text
+
+    async with factory() as session:
+        row = await session.get(FederationRequest, root)
+        assert row is not None and row.status == "running"
+        pre_result = dict(row.result_json or {})
+        pre_seq = await session.scalar(select(func.max(FederationTaskEvent.seq)).where(
+            FederationTaskEvent.root_task_id == root)) or 0
+
+    real_append = _execution_mod._append_event
+    pending = {"seq": None}
+
+    async def _racing_terminal_append(sess, root_task_id, type_, payload, *, now):
+        if (pending["seq"] is not None and root_task_id == root
+                and type_ == "delivery_pending"):
+            # Both terminal events are computed; the loser's seq arithmetic is
+            # done, so the winner's colliding row can land before _commit. The
+            # loser's own task_completed insert must not autoflush here: on PG
+            # it would collide inside _append_event instead of at _commit.
+            winner = factory()
+            try:
+                winner.add(FederationTaskEvent(
+                    id=new_id(), root_task_id=root, seq=pending["seq"],
+                    type="task_completed", payload=dict(payload),
+                    created_at=_utcnow()))
+                await winner.commit()
+            except _IntegrityError:
+                await winner.rollback()
+            finally:
+                await winner.close()
+            pending["seq"] = None
+            sess.autoflush = False
+            try:
+                await real_append(sess, root_task_id, type_, payload, now=now)
+            finally:
+                sess.autoflush = True
+            return
+        await real_append(sess, root_task_id, type_, payload, now=now)
+        if (pending["seq"] is None and type_ == "task_completed"
+                and root_task_id == root):
+            pending["seq"] = max(
+                obj.seq for obj in sess.new
+                if isinstance(obj, FederationTaskEvent) and obj.root_task_id == root)
+
+    monkeypatch.setattr(_execution_mod, "_append_event", _racing_terminal_append)
+    actor = _Actor(id="actor-alice", kind="user", organization_id="org-test",
+                   role="contributor")
+    async with factory() as session:
+        row = await session.get(FederationRequest, root)
+        with pytest.raises(_APIError) as caught:
+            await federation_tasks._execute_plan(
+                session, actor, row, now=_utcnow(),
+                http=state.http, index=state.search_index, retry_only=False)
+    assert caught.value.status_code == 409
+    assert caught.value.code == "idempotency_conflict"
+
+    async with factory() as session:
+        final = await session.get(FederationRequest, root, populate_existing=True)
+        assert final.status == "running", \
+            "the rolled-back terminal write leaves the row running for a same-key retry"
+        assert (final.result_json or {}) == pre_result, \
+            "the rolled-back result must not leak a half-written manifest"
+        assert await session.scalar(select(func.max(FederationTaskEvent.seq)).where(
+            FederationTaskEvent.root_task_id == root)) == pre_seq + 1, \
+            "only the winner's event row survives; the loser's terminal events roll back"

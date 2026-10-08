@@ -498,6 +498,38 @@ async def verify_evidence_human(evidence_id: str, req: HumanVerificationRequest,
             "created_at": verification.created_at}
 
 
+#: The answer stream exposes a single `degraded` value, but one turn can collect
+#: several: a weakened retrieval path, a provisional text-only retry after the
+#: vision runtime fails, then a hard answer failure. The most informative one
+#: wins — highest first: a changed evidence basis (`embedding_unavailable`,
+#: `keyword_unavailable`) outranks a failed answer (`upstream_error`,
+#: `schema_violation`), which outranks provisional markers (`vision_unavailable`,
+#: `decision_unavailable`) that only matter when the retry itself produces an
+#: answer. In particular a total upstream outage must never be reported as merely
+#: "no visual verification", while a dead embedding path stays visible even when
+#: the answer later fails too (`verified=False` already carries "not verified").
+_DEGRADED_PRECEDENCE = (
+    "embedding_unavailable",
+    "keyword_unavailable",
+    "upstream_error",
+    "schema_violation",
+    "vision_unavailable",
+    "decision_unavailable",
+)
+
+
+def _resolve_degraded(current: str | None, incoming: str | None) -> str | None:
+    """Occupy the single degraded slot by precedence, not arrival order."""
+    if current is None:
+        return incoming
+    if incoming is None or current == incoming:
+        return current
+    order = {value: rank for rank, value in enumerate(_DEGRADED_PRECEDENCE)}
+    unknown = len(_DEGRADED_PRECEDENCE)
+    if order.get(incoming, unknown) < order.get(current, unknown):
+        return incoming
+    return current
+
 @router.post("/conversations/{cid}/ask")
 async def ask(cid: str, req: AskRequest, request: Request, actor: Actor = Depends(current_actor),
               session: AsyncSession = Depends(get_session),
@@ -548,8 +580,7 @@ async def ask(cid: str, req: AskRequest, request: Request, actor: Actor = Depend
     if decision.need_retrieval:
         retrieval = await retrieve(session, index, http, question=req.question,
                                    document=document, actor=actor)
-        if retrieval.degraded is None and decision.degraded:
-            retrieval.degraded = decision.degraded
+        retrieval.degraded = _resolve_degraded(retrieval.degraded, decision.degraded)
     else:
         retrieval = await inherited_retrieval(session, decision.inherited_evidence_ids, actor=actor)
         if retrieval.degraded in {"no_evidence_in_turn", "inherited_evidence_incomplete"}:
@@ -607,7 +638,7 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
     except APIError:
         yield _sse("error", {"message": "source access was revoked", "code": "resource_access_revoked"})
         return
-    message_id = None
+    persist_revoked = False
     decision = decision or QueryDecision(need_retrieval=True, reason="legacy_caller")
     assertions: list[dict] = []
     evidence_ids = [item["evidence_id"] for item in retrieval.citations if item.get("evidence_id")]
@@ -658,15 +689,10 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
                     refusing = refusing or claim["unsupported"]
                     yield _sse("delta", {"text": claim["text"] + "\n"})
         except _UpstreamDown:
-            # 请求就没建立起来，大概率是视觉运行时没起（dev 常态）——退回纯文本再试一次，
+            # 请求就没建立起来，大概率是视觉运行时没起——退回纯文本再试一次，
             # 并把降级如实标出来，绝不静默
             if has_image:
-                # degraded 只有一个值。向量化不可用决定了**依据是怎么找来的**（只走了关键词路），
-                # 比"没做视觉核对"更要紧，不能被它盖掉（与 qa.retrieve 里 rerank 的规则同理）；
-                # 没核对这件事 verified=False 已经表达了，界面不会显示"已做视觉验证"。
-                # 真栈实测（2026-09-24，C）：停掉 embedding 问答，回答只标了"视觉模型不可用"
-                if degraded != "embedding_unavailable":
-                    degraded = "vision_unavailable"
+                degraded = _resolve_degraded(degraded, "vision_unavailable")
                 verified = False
                 text_only = _strip_images(messages)
                 try:
@@ -701,7 +727,10 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
                      "code": "upstream_interrupted"}
 
         if error:
-            degraded = "schema_violation" if error["code"] == "schema_violation" else "upstream_error"
+            if error["code"] == "schema_violation":
+                degraded = _resolve_degraded(degraded, "schema_violation")
+            elif error["code"] in ("upstream_unavailable", "upstream_interrupted"):
+                degraded = _resolve_degraded(degraded, "upstream_error")
             verified = False
             yield _sse("error", error)
         elif verify_task is not None and not refusing:
@@ -728,25 +757,37 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
         degraded = "client_aborted"
         raise
     finally:
+        # 落库必须在取消时照常发生（client_aborted 的回答也要写完），所以它住在
+        # finally 里；落库前重验授权失败只记旗标——生成器里不能在 except/finally 中 yield，
+        # revoke 的 error 帧在 try/finally 之后发。
         # 客户端断开时核对已经没有意义，别把它留在后台空跑一次视觉推理
         if verify_task is not None and not verify_task.done():
             verify_task.cancel()
-        # shield：客户端断开时这个 finally 跑在已取消的作用域里，
+        # shield：客户端断开时这个作用域可能已被取消，
         # 不屏蔽的话第一个 await 就被打断，client_aborted 的回答根本落不了库
         if refusing:
             # 防御直接调用 `_stream_answer` 的路径：拒答没有受支持断言，绝不能
             # 继承核对结果或生成一条与断言无关联的自动核对记录。
             verified, verify_verdict = False, None
-        (message_id, verified, degraded, index_changed,
-         assertion_payload) = await asyncio.shield(_persist(
-            conversation_id=conversation_id, actor_id=actor_id,
-            organization_id=organization_id, assertions=assertions,
-            citations=retrieval.citations, verified=verified and not error, degraded=degraded,
-            model_meta=answer_model_meta(), document_id=document_id,
-            expected_job_id=expected_job_id, expected_generation=expected_generation,
-            decision=decision, candidates=retrieval.candidates,
-            verify_verdict=verify_verdict,
-            verify_evidence_id=verify_pair[2] if verify_pair else None))
+        try:
+            (message_id, verified, degraded, index_changed,
+             assertion_payload) = await asyncio.shield(_persist(
+                conversation_id=conversation_id, actor_id=actor_id,
+                organization_id=organization_id, assertions=assertions,
+                citations=retrieval.citations, verified=verified and not error, degraded=degraded,
+                model_meta=answer_model_meta(), document_id=document_id,
+                expected_job_id=expected_job_id, expected_generation=expected_generation,
+                decision=decision, candidates=retrieval.candidates,
+                verify_verdict=verify_verdict,
+                verify_evidence_id=verify_pair[2] if verify_pair else None,
+                actor=actor))
+        except APIError:
+            persist_revoked = True
+    if persist_revoked:
+        # 口径与流内 authorize() 一致（resource_access_revoked）。
+        yield _sse("error", {"message": "source access was revoked",
+                             "code": "resource_access_revoked"})
+        return
 
     cited_raw: list[dict] = []
     seen_evidence: set[str] = set()
@@ -808,13 +849,31 @@ async def _persist(*, conversation_id: str, actor_id: str, organization_id: str,
                    candidates: list[CandidateDecision] | None = None,
                    verify_verdict: bool | None = None,
                    verify_evidence_id: str | None = None,
+                   actor: Actor | None = None,
                    ) -> tuple[str, bool, str | None, bool, list[dict]]:
     """把回答落库。
 
     **必须新开 session**：请求作用域的那个在响应体开始流之前就关了，
     复用它必炸（M5 在 proxy 上踩过，见 proxy.py 模块 docstring）。
+
+    `actor` 给了就要在 add/commit 之前先重验授权：流式回答跨越多次上游
+    await，问答开始时的授权在落库时可能已经失效（撤销/换组织）。会话归属、
+    文档可读、固定解析仍在授权集内，三者任一不满足都不落库（404
+    resource_access_revoked，零行写入）。
     """
     async with get_sessionmaker()() as db:
+        if actor is not None and document_id is not None and expected_job_id is not None:
+            conversation = await db.get(Conversation, conversation_id)
+            if (conversation is None
+                    or conversation.organization_id != actor.organization_id
+                    or conversation.actor_id != actor.id
+                    or conversation.document_id != document_id):
+                raise APIError(404, "source access was revoked",
+                               "permission_error", "resource_access_revoked")
+            await require_document(db, actor, document_id)
+            if expected_job_id not in await search_contexts(db, actor, document_id):
+                raise APIError(404, "source access was revoked",
+                               "permission_error", "resource_access_revoked")
         decision = decision or QueryDecision(need_retrieval=True, reason="legacy_caller")
         candidates = candidates or []
         index_changed = False
@@ -886,7 +945,8 @@ async def _persist(*, conversation_id: str, actor_id: str, organization_id: str,
             requested = [citation_by_evidence[evidence_id] for evidence_id in requested_refs
                          if evidence_id in citation_by_evidence]
             await record_evidence(
-                db, requested, source_kind="assertion", source_id=assertion.id)
+                db, requested, source_kind="assertion", source_id=assertion.id,
+                allowed_parse_job_ids={expected_job_id} if expected_job_id else None)
             persisted = set((await db.execute(
                 select(Citation.evidence_id).where(
                     Citation.source_kind == "assertion",

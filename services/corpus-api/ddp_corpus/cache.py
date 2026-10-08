@@ -10,7 +10,9 @@
    （TTL / query digest / `retrieval.index_revision`）；集合缓存有效性走
    `catalog.cache_revision`；Wiki 失效走 `wiki_dependencies` 同一张依赖表。
 3. **负面缓存绑定修订**：键里带 `(scope, node, node_revision)`，新的节点修订或
-   新上传产生新键 —— 旧的黑名单条目不能把新资料永远挡在门外。负面条目也
+   新上传产生新键 —— 旧的黑名单条目不能把新资料永远挡在门外。可选再绑定
+   `(query_digest, collection_revision)`：传了任一个就都进键（缺的那个用空串
+   哨兵占位），都不传则保持 legacy 三元组摘要不变。负面条目也
    **永远不会**被 `find_reusable_probe` 当成探测回执：后者只读
    `federation_probes`，两个命名空间互不相通。
 
@@ -163,16 +165,26 @@ def probe_cache_key(target_key: dict, query_digest: str, index_revision: str,
     return "probe:" + hashlib.sha256(canonical_bytes(payload)).hexdigest()
 
 
-def negative_cache_key(scope_key: str, node_id: str, node_revision: str) -> str:
+def negative_cache_key(scope_key: str, node_id: str, node_revision: str, *,
+                       query_digest: str | None = None,
+                       collection_revision: str | None = None) -> str:
     """不可达/被拒观测的键：**必须**绑定节点修订。
 
     少了 `node_revision`，一次网络抖动就会变成"这个节点永远不可达"；
     新上传（产生新修订）也会被旧的否定条目挡住 —— 正是负面缓存最危险的用法。
+    可选再绑定 `query_digest` 与 `collection_revision`：任一非 None 时两者都进
+    键（为 None 的一端用空串哨兵占位）；都为 None 时保持 legacy 三元组摘要不变。
     """
-    return "negative:" + hashlib.sha256(canonical_bytes([
+    payload = [
         _require_text("scope_key", scope_key),
         _require_text("node_id", node_id),
-        _require_text("node_revision", node_revision)])).hexdigest()
+        _require_text("node_revision", node_revision)]
+    if query_digest is not None or collection_revision is not None:
+        payload.append(_require_text("query_digest", query_digest)
+                       if query_digest is not None else "")
+        payload.append(_require_text("collection_revision", collection_revision)
+                       if collection_revision is not None else "")
+    return "negative:" + hashlib.sha256(canonical_bytes(payload)).hexdigest()
 
 
 def payload_bytes(value: dict) -> int:
@@ -347,12 +359,16 @@ async def purge_expired(session: AsyncSession, *, now: datetime, limit: int = 50
 async def record_negative(session: AsyncSession, *, scope_key: str, node_id: str,
                           node_revision: str, reason: str, now: datetime,
                           ttl_seconds: int = NEGATIVE_TTL_SECONDS,
-                          limits: CacheLimits | None = None) -> None:
+                          limits: CacheLimits | None = None,
+                          query_digest: str | None = None,
+                          collection_revision: str | None = None) -> None:
     """记录一次不可达/被拒观测。键绑定节点修订，默认 TTL 很短。"""
     _require_text("reason", reason)
     await put(
         session, scope_key=scope_key,
-        cache_key=negative_cache_key(scope_key, node_id, node_revision),
+        cache_key=negative_cache_key(scope_key, node_id, node_revision,
+                                     query_digest=query_digest,
+                                     collection_revision=collection_revision),
         kind=NEGATIVE_KIND,
         value={"negative": True, "node_id": node_id, "node_revision": node_revision,
                "reason": reason, "recorded_at": _stamp(now).isoformat()},
@@ -360,10 +376,15 @@ async def record_negative(session: AsyncSession, *, scope_key: str, node_id: str
 
 
 async def get_negative(session: AsyncSession, *, scope_key: str, node_id: str,
-                       node_revision: str, now: datetime) -> dict | None:
+                       node_revision: str, now: datetime,
+                       query_digest: str | None = None,
+                       collection_revision: str | None = None) -> dict | None:
     """读负面条目；键/内容任一对不上都按没有处理（缓存内容不可信）。"""
     value = await get(session, scope_key=scope_key,
-                      cache_key=negative_cache_key(scope_key, node_id, node_revision), now=now)
+                      cache_key=negative_cache_key(scope_key, node_id, node_revision,
+                                                   query_digest=query_digest,
+                                                   collection_revision=collection_revision),
+                      now=now)
     if value is None or value.get("negative") is not True:
         return None
     if value.get("node_id") != node_id or value.get("node_revision") != node_revision:
@@ -387,10 +408,11 @@ def _observed_epoch(probe: dict) -> float | None:
 
 
 def _recorded_policy_revision(stored: dict, probe: dict, retrieval: dict) -> str | None:
-    """探测行可能在哪里记录策略修订；None = 没有记录（不据此拒绝复用）。
+    """探测行可能在哪里记录策略修订；None = 没有记录。
 
     当前 ProbeResult 契约里没有 policy_revision，所以行/信封级键都允许。
-    **不编造**：任何位置有记录就必须与调用方一致；没有记录就不假装它存在。
+    **不编造**：任何位置有记录就必须与调用方一致；没有记录意味着当时的
+    策略状态未知 —— 调用方按 fail-closed 处理，直接不可复用。
     """
     for source in (stored, probe, retrieval):
         value = source.get("policy_revision")
@@ -401,13 +423,19 @@ def _recorded_policy_revision(stored: dict, probe: dict, retrieval: dict) -> str
 
 async def find_reusable_probe(session: AsyncSession, actor: Actor, *,
                               target_key: dict, query_digest: str, index_revision: str,
-                              policy_revision: str, now: datetime) -> dict | None:
+                              policy_revision: str, now: datetime,
+                              task_spec_digest: str | None = None) -> dict | None:
     """找出仍可复用的证据探测回执；没有就返回 None（由调用方重新探测）。
 
     只读 `federation_probes`（organization 作用域），不读缓存表 —— 所以
-    负面缓存条目**结构上不可能**被当成探测回执。TTL/摘要/索引修订一律由
+    负面缓存条目**结构上不可能**被当成探测回执。TTL/索引修订一律由
     `ddp_core.application.probe.reusable` 判定：TTL 取持久行的 `expires_at`
     与回执 `observed_at` 之差（不另造一份有效期口径）。
+
+    `task_spec_digest` 给了就按任务摘要精确比对（`reusable` 的主判据）；
+    不给则回退到旧口径：调用方的 `query_digest` 必须与行上记录的一致，
+    `reusable` 只做 TTL/索引修订判定。策略修订缺失一律不可复用
+    （fail-closed）：没有记录意味着当时的策略状态未知。
     """
     origin, collection, _operation = _target_parts(target_key)
     if not isinstance(policy_revision, str):
@@ -440,15 +468,21 @@ async def find_reusable_probe(session: AsyncSession, actor: Actor, *,
         ttl_seconds = int(as_aware(row.expires_at).timestamp() - observed)
         if ttl_seconds < 0:
             continue
-        candidate = dict(probe)
-        # query_digest 是**行上的列**（契约 ProbeResult 没有这个字段），
-        # reusable 需要它参与比对，所以显式注入而不是编造一个值。
-        candidate["query_digest"] = row.query_digest
-        if not reusable(candidate, now=stamp.timestamp(), query_digest=query_digest,
-                        index_revision=index_revision, ttl_seconds=ttl_seconds):
+        if task_spec_digest is not None:
+            spec_ok = reusable(probe, now=stamp.timestamp(),
+                               task_spec_digest=task_spec_digest,
+                               index_revision=index_revision, ttl_seconds=ttl_seconds)
+        else:
+            # 旧口径：行上记录的 query_digest 必须与调用方一致；
+            # 任务摘要不参与比对，TTL/索引修订仍由 reusable 判定。
+            if row.query_digest != query_digest:
+                continue
+            spec_ok = reusable(probe, now=stamp.timestamp(),
+                               index_revision=index_revision, ttl_seconds=ttl_seconds)
+        if not spec_ok:
             continue
         recorded = _recorded_policy_revision(stored, probe, retrieval)
-        if recorded is not None and recorded != policy_revision:
+        if recorded != policy_revision:
             continue
         return copy.deepcopy(probe)
     return None

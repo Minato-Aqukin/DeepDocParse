@@ -335,7 +335,9 @@ async def long_source(session, *, count=4, topic="watchdog timer triggers contro
         for seq in range(count)])
 
 
-async def source_with(session, texts: list[str]):
+async def source_with(session, texts: list[str], *, kinds: list[str] | None = None):
+    kinds = list(kinds) if kinds is not None else ["text"] * len(texts)
+    assert len(kinds) == len(texts), "kinds must align with texts"
     digest = hashlib.sha256("\n".join(texts).encode()).hexdigest()
     document = Document(uploaded_by=ACTOR, organization_id=ORG, doc_id=digest, filename="manual.pdf")
     session.add(document)
@@ -352,10 +354,10 @@ async def source_with(session, texts: list[str]):
     session.add(version)
     await session.flush()
     rows = []
-    for seq, text in enumerate(texts):
+    for seq, (text, kind) in enumerate(zip(texts, kinds)):
         row = Evidence(document_id=document.id, parse_job_id=job.id, seq=seq, atom_key=f"text-{seq}",
                        content=text, content_digest=hashlib.sha256(text.encode()).hexdigest(),
-                       kind="text", page_idx=seq, bbox=[0, 0, 50, 50], page_size=[100, 100])
+                       kind=kind, page_idx=seq, bbox=[0, 0, 50, 50], page_size=[100, 100])
         session.add(row)
         rows.append(row)
     await session.flush()
@@ -493,6 +495,32 @@ async def test_selection_ignores_evidence_superseded_by_an_index_rebuild(actor_c
     revision = created.json()["revision"]
     assert superseded.id not in {d["evidence_id"] for d in revision["dependency_manifest"]}
     assert revision["limits"]["evidence_selection"]["total_original_evidence"] == 2
+
+@respx.mock
+async def test_freeze_sources_keeps_every_contract_block_type(actor_client, session):
+    """Wiki 候选按契约块类型词汇表过滤：figure/equation/list 必须留下，契约外的不算。"""
+    from ddp_contracts import BLOCK_TYPE_VALUES
+
+    texts = [f"Controller reset detail in {kind} block {seq}."
+             for seq, kind in enumerate([*BLOCK_TYPE_VALUES, "image"])]
+    resource, version, rows = await source_with(
+        session, texts, kinds=[*BLOCK_TYPE_VALUES, "image"])
+    phantom = rows[-1]
+    assert phantom.kind == "image"
+    assert phantom.kind not in BLOCK_TYPE_VALUES
+    topic_model(rows[:len(BLOCK_TYPE_VALUES)], relations=())
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Controller reset delay and watchdog settings",
+        max_pages=2, max_evidence=len(BLOCK_TYPE_VALUES), max_input_chars=12000,
+        max_output_tokens=2048), headers={"Idempotency-Key": "contract-block-types"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    selected = {d["evidence_id"] for d in revision["dependency_manifest"]}
+    assert {row.id for row in rows[:len(BLOCK_TYPE_VALUES)]} <= selected
+    assert phantom.id not in selected
+    assert revision["limits"]["evidence_selection"]["total_original_evidence"] == len(BLOCK_TYPE_VALUES)
+    assert {"figure", "equation", "list"} <= {
+        row.kind for row in rows if row.id in selected}
 
 
 @respx.mock
@@ -665,19 +693,47 @@ def legacy_model(evidence):
 
 
 @respx.mock
-async def test_legacy_generators_isolated_by_author_and_exact_resource(actor_client, session):
+async def test_legacy_generators_isolated_by_author_and_exact_resource(
+        actor_client, session, app_state):
+    """Author/exact-resource isolation of generated knowledge (build route gone).
+
+    POST /knowledge/build now returns 410 (legacy_wiki_build_removed); the same
+    isolation is seeded through the generate() library function with per-author
+    providers, and reads stay isolated by author + exact resource binding.
+    """
+    from ddp_corpus.deps import Actor
+    from ddp_corpus.knowledge import generate as generate_knowledge
     from ddp_corpus.models import KnowledgeEntity
     resource, version, evidence, document = await source(session, publication="published")
     legacy_model(evidence)
-    request = {"evidence_ids": [evidence.id]}
-    path = f"/api/knowledge/build?resource_id={resource.id}"
-    alice = await actor_client.post(path, json=request)
-    assert alice.status_code == 201, alice.text
+    gone = await actor_client.post("/api/knowledge/build", json={"evidence_ids": [evidence.id]})
+    assert gone.status_code == 410, gone.text
+    assert gone.json()["error"]["code"] == "legacy_wiki_build_removed"
+    alice_actor = Actor(id=ACTOR, kind="user", organization_id=ORG, role="contributor")
+    alice_provider = {"scope_key": "legacy-alice", "generated_by": ACTOR,
+                      "organization_id": ORG, "kind": "knowledge_generation",
+                      "source_bindings": [{"resource_id": resource.id,
+                                           "source_version_id": version.id,
+                                           "document_id": document.id,
+                                           "parse_revision": evidence.parse_job_id}],
+                      "input_document_ids": [document.id]}
+    alice_result = await generate_knowledge(
+        session, app_state.http, [evidence.id], provider=alice_provider, actor=alice_actor)
+    assert alice_result["status"] == "ok", alice_result
     alice_wiki = (await actor_client.get("/api/wiki")).json()[0]
     # A public original does not publish its author's generated draft.
     assert (await actor_client.get("/api/wiki", headers=actor_headers("bob"))).json() == []
-    bob = await actor_client.post(path, json=request, headers=actor_headers("bob"))
-    assert bob.status_code == 201, bob.text
+    bob_actor = Actor(id="bob", kind="user", organization_id=ORG, role="contributor")
+    bob_provider = {"scope_key": "legacy-bob", "generated_by": "bob",
+                    "organization_id": ORG, "kind": "knowledge_generation",
+                    "source_bindings": [{"resource_id": resource.id,
+                                         "source_version_id": version.id,
+                                         "document_id": document.id,
+                                         "parse_revision": evidence.parse_job_id}],
+                    "input_document_ids": [document.id]}
+    bob_result = await generate_knowledge(
+        session, app_state.http, [evidence.id], provider=bob_provider, actor=bob_actor)
+    assert bob_result["status"] == "ok", bob_result
     bob_wiki = (await actor_client.get("/api/wiki", headers=actor_headers("bob"))).json()[0]
     assert bob_wiki["id"] != alice_wiki["id"]
     assert (await actor_client.get("/api/wiki/A")).json()["entry"]["id"] == alice_wiki["id"]

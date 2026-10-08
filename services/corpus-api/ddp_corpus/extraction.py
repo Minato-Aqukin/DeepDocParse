@@ -35,9 +35,9 @@ from ddp_core.extract_format import (
 )
 from ddp_corpus.models import Document, ParseJob
 from ddp_corpus.qa import verify_parse_consistency
-from ddp_core.search import Hit, SearchIndex
+from ddp_core.search import Hit, SearchIndex, search_query
 from ddp_corpus.storage import Storage
-from ddp_corpus.upstream import chat_request, embed_one
+from ddp_corpus.upstream import chat_request, embed_batched
 from ddp_core.rerank import rerank_hits
 
 _SYSTEM = (
@@ -154,20 +154,16 @@ async def _retrieve(ctx: ExtractContext, query: str, *, k: int,
                     prefer_types: tuple[str, ...] = ()) -> tuple[list[Hit], str | None]:
     await ctx.check_access()
     ctx.usage["retrievals"] += 1
-    degraded = None
-    try:
-        vector = await embed_one(ctx.http, query)
-    except Exception:
-        # 绝不能拿零向量顶上：那样检索照跑、结果照返，用户以为是语义命中，
-        # 实际是一堆噪声。如实退回关键词路并打标（铁律 3）
-        vector, degraded = None, "embedding_unavailable"
-
     candidates = max(settings.rerank_candidates if settings.rerank_enabled else k * 3, k)
-    hits = await ctx.index.search(ctx.session, vector=vector, query=query,
-                                  document_id=ctx.document.id,
-                                  authorized_parse_job_ids=ctx.authorized_parse_job_ids,
-                                  limit=candidates, candidates=candidates,
-                                  min_similarity=settings.qa_min_similarity)
+    # 与问答 /api/search 同一条共享检索：search_query 负责分面拆查 + 批量向量化，
+    # 向量化挂了它自己退回关键词路并打标（铁律 3 那条绝不能拿零向量顶上，
+    # 在它内部已经处理，见 ddp_core/search.py::_search_query）
+    hits, degraded = await search_query(
+        ctx.session, ctx.index, embed=lambda texts: embed_batched(ctx.http, texts),
+        query=query, document_id=ctx.document.id,
+        authorized_parse_job_ids=ctx.authorized_parse_job_ids,
+        limit=candidates, candidates=candidates,
+        min_similarity=settings.qa_min_similarity)
     if not hits:
         return [], degraded or "no_hits"
 
@@ -193,11 +189,18 @@ def _citation(hit: Hit, crop_key: str | None) -> dict:
 
     稳定定位键是 `(parse_job_id, seq)` —— chunk_id 每次 reindex 都会重铸，
     只存它等于历史抽取结果一次重建就永久失去原文依据（P0 那条教训的抽取版）。
+
+    视觉块的引用与 qa.attach_crops 同一条规则：命中带派生理解时引用派生
+    evidence（source_type="generated"），沿 derived_from 回到源原子的 bbox
+    （不变式 3：生成物与原文必须可区分，但最终仍指向原始原子）。
     """
+    generated = bool(hit.get("derived_text") and hit.get("derived_evidence_id"))
+    cited_text = hit.get("derived_text") if generated else hit["text"]
     return {
         "chunk_id": hit["chunk_id"],
-        "evidence_id": hit.get("evidence_id"),
-        "source_type": "source",
+        "evidence_id": hit.get("derived_evidence_id") if generated else hit.get("evidence_id"),
+        "source_type": "generated" if generated else "source",
+        "derived_from": hit.get("evidence_id") if generated else None,
         "parse_job_id": hit.get("parse_job_id"),
         # 产品层的稳定定位键是 (parse_job_id, seq)，doc_hash 这一路用不上；
         # 但契约把它列成了字段，如实给 None 而不是省略 —— 省略会让消费方
@@ -210,7 +213,7 @@ def _citation(hit: Hit, crop_key: str | None) -> dict:
         # 裁剪时按它换算坐标，缺它遇到 CropBox 偏移/旋转页会裁错区域
         "page_size": hit.get("page_size"),
         "crop_key": crop_key,
-        "snippet": _snippet(hit["text"]),
+        "snippet": _snippet(cited_text),
         "score": hit.get("score"),
         "similarity": hit.get("similarity"),
         "rerank_score": hit.get("rerank_score"),
@@ -238,9 +241,15 @@ def _format_sources(hits: list[Hit]) -> str:
     parts = []
     for i, hit in enumerate(hits, start=1):
         label = "，表格" if hit.get("block_type") == "table" else ""
-        # 表格块优先给 HTML：拼出来的单元格文字已经丢了行列关系，
-        # 而"第 3 行第 2 列是多少"恰恰是抽取最常问的
-        body = hit.get("table_html") or hit["text"]
+        generated = bool(hit.get("derived_text") and hit.get("derived_evidence_id"))
+        if generated:
+            # 派生理解与 qa.build_messages 同一形状：模型看到的是引用指向的那份文本
+            body = (f"[生成理解，原子证据 {hit.get('evidence_id') or '未编号'}]\n"
+                    f"{hit['derived_text']}\n[原文/OCR]\n{hit['text']}")
+        else:
+            # 表格块优先给 HTML：拼出来的单元格文字已经丢了行列关系，
+            # 而"第 3 行第 2 列是多少"恰恰是抽取最常问的
+            body = hit.get("table_html") or hit["text"]
         parts.append(f"[{i}] (第 {hit['page_idx'] + 1} 页{label}) {body}")
     return "\n\n".join(parts)
 
@@ -282,7 +291,11 @@ async def _crop_and_verify(ctx: ExtractContext, hit: Hit) -> tuple[str | None, b
         await ctx.check_access()
         # The licence can end during the crop read; pixels go out only while it holds.
         await ctx.original_key()
-        consistent = await verify_parse_consistency(ctx.http, uri, hit["text"])
+        # 视觉块核对的是派生理解（引用指向的那份文本），不是 OCR 原文 ——
+        # 拿原文去对图等于拿另一份文本验，误报 parse_mismatch
+        cited = hit.get("derived_text") if (
+            hit.get("derived_text") and hit.get("derived_evidence_id")) else hit["text"]
+        consistent = await verify_parse_consistency(ctx.http, uri, cited)
 
     ctx._crop_cache[cache_key] = (key, consistent, attempted)
     return key, consistent, attempted
@@ -299,18 +312,22 @@ def _field_extra(spec: FieldSpec) -> str:
     return ("\n" + "\n".join(bits)) if bits else ""
 
 
-def _pick_source(hits: list[Hit], source: object) -> Hit:
+def _pick_source(hits: list[Hit], source: object) -> Hit | None:
     """模型说值来自第几条资料就用第几条。
 
     **这是字段级出处的精度所在**：检索给了 4 个块，值只来自其中一个，
     把 4 个都挂上去等于告诉用户"在这四块里自己找"，出处就退化回 chunk 级了。
-    编号越界/没给时退回 top-1（相似度最高的那条，最合理的默认）。
+    编号越界/没给/指到不存在的资料时返回 None —— 调用方按幻觉引用处理
+    （not_found + schema_violation），**绝不退回 top-1**：模型凭空指了一条
+    不存在的资料，那条值已经不可信，硬挂一条出处等于给幻觉贴"已验证"。
     """
+    if not hits:
+        return None
     try:
         index = int(source) - 1
     except (TypeError, ValueError):
-        return hits[0]
-    return hits[index] if 0 <= index < len(hits) else hits[0]
+        return None
+    return hits[index] if 0 <= index < len(hits) else None
 
 
 async def extract_field(ctx: ExtractContext, spec: FieldSpec) -> dict:
@@ -350,6 +367,14 @@ async def extract_field(ctx: ExtractContext, spec: FieldSpec) -> dict:
         return field_result(status="not_found", degraded=degraded)
 
     hit = _pick_source(hits, answer.get("source"))
+    if hit is None:
+        # 模型指了一条不存在的资料（越界编号/非数字/没给）：值声称来自一段
+        # 我们根本没给它看过的文本 —— 这条值已经不可信，不能挂 top-1 出处
+        # 假装它有依据。判 not_found 而不是 error：文档里有没有这个字段，
+        # 此刻已经无从判断，"没抽到"是唯一诚实的回答；而 degraded 用
+        # schema_violation（除非已有更严重的标）：错的是模型输出的格式契约
+        # （source 必须是 1..N 的整数），不是文档内容
+        return field_result(status="not_found", degraded=degraded or "schema_violation")
     crop_key, consistent, attempted = (None, None, False)
     if ctx.verify:
         crop_key, consistent, attempted = await _crop_and_verify(ctx, hit)
@@ -442,8 +467,12 @@ def _record_field(raw: object, spec: FieldSpec, citation: dict, *, verified: boo
 
 # 越靠前越值得让用户先看见。no_hits 排最后：单个字段没检索到很常见，
 # 把它冒泡成整体降级会淹掉真正的系统问题
+# keyword_unavailable 紧跟 embedding_unavailable：关键词腿瘸了比整条语义路
+# 没跑轻，但比 vision/rerank 这类后处理缺席重（字面量来自契约 enums.yaml，
+# 由 contracts 生成物约束取值，见 ddp_core/search.py::SearchHits）
 _DEGRADED_PRIORITY = ("upstream_error", "schema_violation", "parse_mismatch",
-                      "embedding_unavailable", "vision_unavailable", "rerank_unavailable",
+                      "embedding_unavailable", "keyword_unavailable",
+                      "vision_unavailable", "rerank_unavailable",
                       "crop_failed", "crop_unsupported", "no_hits")
 
 

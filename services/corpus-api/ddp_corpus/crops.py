@@ -25,10 +25,27 @@ def bbox_digest(bbox: list) -> str:
 
 
 
+_MAX_CROP_PNG_BYTES = 8 * 1024 * 1024
+
+
+async def _bounded_pdf(storage: Storage, source_key: str, *, limit: int) -> bytes | None:
+    """Fetch the source PDF only when its stored size fits the caller's budget."""
+    try:
+        size = await storage.stat_size(source_key)
+    except Exception:
+        return None
+    if size > limit:
+        return None
+    try:
+        return await storage.get_limited(source_key, limit)
+    except Exception:
+        return None
+
 
 async def get_or_create_crop(storage: Storage, *, job_id: str, source_key: str, mime: str,
                              page_idx: int, bbox: list | None,
-                             page_size: list | None) -> str | None:
+                             page_size: list | None,
+                             max_source_bytes: int = 64 * 1024 * 1024) -> str | None:
     """返回对象键；不支持裁剪（非 PDF / 无 bbox / 渲染失败）时返回 None。"""
     if not bbox or not source_key:
         return None
@@ -38,19 +55,19 @@ async def get_or_create_crop(storage: Storage, *, job_id: str, source_key: str, 
     key = crop_key(job_id, page_idx, bbox_digest(bbox))
     if await storage.exists(key):
         return key
-    try:
-        pdf_bytes = await storage.get(source_key)
-    except Exception:
+    pdf_bytes = await _bounded_pdf(storage, source_key, limit=max_source_bytes)
+    if pdf_bytes is None:
         return None
     png = await asyncio.to_thread(render_crop, pdf_bytes, page_idx, bbox, page_size)
-    if png is None:
+    if png is None or len(png) > _MAX_CROP_PNG_BYTES:
         return None
     await storage.put(key, png, "image/png")
     return key
 
 
 async def get_or_create_crops(storage: Storage, *, job_id: str, source_key: str, mime: str,
-                              atoms: list[dict]) -> dict[int, str]:
+                              atoms: list[dict],
+                              max_source_bytes: int = 64 * 1024 * 1024) -> dict[int, str]:
     """编译期批量裁图：PDF 只读一次，每页只渲染一次。"""
     if not source_key or "pdf" not in (mime or "").lower():
         return {}
@@ -69,15 +86,14 @@ async def get_or_create_crops(storage: Storage, *, job_id: str, source_key: str,
     if not missing:
         return found
 
-    try:
-        pdf_bytes = await storage.get(source_key)
-    except Exception:
+    pdf_bytes = await _bounded_pdf(storage, source_key, limit=max_source_bytes)
+    if pdf_bytes is None:
         return found
     requests = [(atom["page_idx"], atom["bbox"], atom["page_size"])
                 for atom, _ in missing]
     rendered = await asyncio.to_thread(render_crops, pdf_bytes, requests)
     for (atom, key), png in zip(missing, rendered):
-        if png is None:
+        if png is None or len(png) > _MAX_CROP_PNG_BYTES:
             continue
         await storage.put(key, png, "image/png")
         found[atom["seq"]] = key

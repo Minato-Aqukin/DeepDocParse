@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
 from ddp_corpus.config import settings
+from ddp_core.fetch_policy import FetchNotAllowedError, validate_file_url
 from ddp_corpus.db import get_session
 from ddp_corpus.deps import Actor, current_actor
 from ddp_corpus.errors import APIError
@@ -55,7 +56,34 @@ _HOP_BY_HOP = {
     "te", "trailers", "transfer-encoding", "upgrade", "content-length", "host",
 }
 
+# `/v1/parse` 只转发票面契约的四个字段；调用方的 callback_url（以及任何
+# 未知字段）一律丢掉 —— 回调地址是本层的内部面（ingest 拼
+# `{public_base_url}/internal/parse-callback?token=<per-job HMAC>`），
+# 让第三方指定等于把"网关往哪回写结果"交出去。
+_FORWARD_FIELDS = ("file_url", "doc_id", "engine", "options")
+
 _RESULT_PATH = re.compile(r"([^/]+)/result")
+
+
+async def _read_capped_body(request: Request) -> bytes:
+    """`bundles.py` 同款的请求体上限：Content-Length 先快拒，再边读边累计。
+
+    超限即 413 + `request_too_large`，不等整个 body 落进内存再判断（不变式 6）。
+    """
+    limit = settings.max_upload_bytes
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.strip().isdigit() and int(declared.strip()) > limit:
+        raise APIError(413, f"request body exceeds {limit} bytes",
+                       "invalid_request_error", "request_too_large")
+    total = 0
+    chunks: list[bytes] = []
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise APIError(413, f"request body exceeds {limit} bytes",
+                           "invalid_request_error", "request_too_large")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _forward_headers(request: Request) -> dict:
@@ -63,10 +91,16 @@ def _forward_headers(request: Request) -> dict:
 
     **调用方的 Authorization 到此为止** —— 网关不认识用户 key，
     透传只会让它把一个 sk- 当成 service token 去比对。
+    `x-ddp-*` 是本层的 actor 上下文头（入口下发、不接受客户端传入），
+    同样一律剥掉；`x-request-id` 重新生成，避免把调用方的追踪串进内网链路。
+    只剩服务凭据 + 新追踪 id，没有调用方凭据，没有内部上下文。
     """
     headers = {k: v for k, v in request.headers.items()
-               if k.lower() not in _HOP_BY_HOP and k.lower() != "authorization"}
+               if k.lower() not in _HOP_BY_HOP and k.lower() != "authorization"
+               and not k.lower().startswith("x-ddp-")
+               and k.lower() != "x-request-id"}
     headers["Authorization"] = f"Bearer {settings.service_token}"
+    headers["X-Request-Id"] = new_id()
     return headers
 
 
@@ -108,16 +142,29 @@ async def submit(request: Request, actor: Actor = Depends(current_actor),
     """
     if actor.principal_id is None:
         raise APIError(403, "verified user identity is required", "permission_error", "resource_permission_required")
-    body = await request.body()
+    body = await _read_capped_body(request)
     try:
-        payload = json.loads(body)
+        incoming = json.loads(body or b"{}")
     except (ValueError, TypeError):
+        raise APIError(400, "invalid request body", "invalid_request_error", "invalid_json")
+    if not isinstance(incoming, dict):
         raise APIError(400, "invalid request body", "invalid_request_error", "invalid_json")
     # External cache keys are scoped to the verified subject, including URL-only submissions.
     # A guessed content hash must never return another subject's gateway cache entry.
-    source_identity = str(payload.get("doc_id") or payload.get("file_url") or "")
+    source_identity = str(incoming.get("doc_id") or incoming.get("file_url") or "")
+    payload = {k: incoming[k] for k in _FORWARD_FIELDS if k in incoming}
     payload["doc_id"] = hashlib.sha256(json.dumps(["external", actor.organization_id,
         actor.principal_id, source_identity]).encode()).hexdigest()
+    # file_url 先走目的地策略（`ddp_core.fetch_policy`）：私网/元数据/不可解析
+    # 地址在这里就 400，请求根本不到网关（双重校验的前一半；后一半在网关抓取时）。
+    # 语料转发路径从不跟随重定向 —— 这里只判定"能不能发"，不执行任何抓取。
+    file_url = payload.get("file_url")
+    if not isinstance(file_url, str) or not file_url.strip():
+        raise APIError(400, "file_url is required", "invalid_request_error", "missing_file_url")
+    try:
+        validate_file_url(file_url, settings.fetch_policy_config())
+    except FetchNotAllowedError as exc:
+        raise APIError(400, str(exc), "invalid_request_error", "fetch_not_allowed")
     body = json.dumps(payload).encode()
     http: httpx.AsyncClient = request.app.state.http
     try:
@@ -251,10 +298,16 @@ async def _meter_result(session: AsyncSession, actor: Actor, service_task_id: st
     # 同一份文档既从 Web 传过、又用 key 提交过）。
     # 只认外部平面的 job：Web 上传的 job 复用它会被置成 succeeded，
     # 而 succeeded 不满足 claimable_condition —— 那份文档从此永不归档、永不索引
+    # **组织边界（企业边界 8）先行**：`visible_document_condition` 已经含组织
+    # 限定（documents 去重是组织内的），这里再显式按调用方组织过滤 —— 跨组织
+    # 撞上同一个 service_task_id 时，B 的取结果绝不能把 A 组织的 job 拿来计费
+    # （或把 A 的行置成 succeeded）。
     rows = (await session.execute(
         select(ParseJob).join(Document, Document.id == ParseJob.document_id)
         .where(ParseJob.service_task_id == service_task_id,
-               Document.origin == "external").order_by(ParseJob.created_at)
+               Document.origin == "external",
+               Document.organization_id == actor.organization_id,
+               visible_document_condition(actor)).order_by(ParseJob.created_at)
     )).scalars().all()
 
     # **只认这把 key 自己的 job，没有就不记账。**

@@ -29,6 +29,7 @@ import re
 import struct
 import sys
 from pathlib import PurePosixPath
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
@@ -44,6 +45,9 @@ from ddp_mcp.corpus import (
     ask_impl, forwarded_identity, get_evidence_impl, graph_neighbors_impl,
     read_wiki_impl, search_impl,
 )
+
+if TYPE_CHECKING:
+    from ddp_core.fetch_policy import FetchPolicyConfig
 
 GATEWAY = os.environ.get("GATEWAY_URL", "http://localhost:9000")
 SERVICE_TOKEN = os.environ.get("SERVICE_TOKEN", "change-me")
@@ -248,13 +252,39 @@ def _self_hosts() -> set[str]:
     return hosts
 
 
+def _fetch_policy_config() -> "FetchPolicyConfig":
+    """本服务的出站抓取配置快照：判据住在 `ddp_core.fetch_policy`，这里只装配。
+
+    MCP 没有自己的 Settings 类，直接读环境（与语料/网关同名）：
+    `FETCH_TRUSTED_BASE`（逗号分隔，缺省空）、`FETCH_ALLOW_REDIRECTS`（缺省 false）。
+    """
+    import os as _os
+
+    from ddp_core.fetch_policy import FetchPolicyConfig
+
+    return FetchPolicyConfig(
+        trusted_bases=tuple(
+            b.strip() for b in _os.environ.get("FETCH_TRUSTED_BASE", "").split(",")
+            if b.strip()
+        ),
+        allow_redirects=_os.environ.get(
+            "FETCH_ALLOW_REDIRECTS", "").strip().lower() in {"1", "true", "yes", "on"},
+    )
+
+
 def _require_external_url(file_url: str) -> None:
     """只放行**本部署之外**的 http(s) URL；其余一律拒绝并说清为什么。
 
-    这条检查基于 URL 字面量，**不做 DNS 解析** —— 一个解析到内网地址的外部
-    域名（DNS rebinding）挡不住。真正的纵深防御是"网关与语料侧各自只信任
-    自己认识的地址"，这里挡的是最直接的那条：把内网地址直接写进参数。
+    两层检查，缺一不可：
+    1. 本部署自有面（字面量）：CORPUS/GATEWAY/对象存储这些地址背后是受 ACL
+       保护的内容，一个 URL 证明不了授权 —— 沿用 `_self_hosts` 字面量封锁；
+    2. 出站目的地策略（`ddp_core.fetch_policy`）：DNS 解析成 IP，
+       任一地址非全局可路由即拒；云元数据 IP 显式拒绝；不可解析即拒；
+       重定向缺省不跟（FETCH_ALLOW_REDIRECTS=true 才手工逐跳、每跳重验、
+       至多 3 跳）。字面量检查过得去但 DNS 指向内网的（DNS rebinding）
+       在这里被挡住 —— 旧实现只做字面量，那条是通的。
     """
+    from ddp_core.fetch_policy import FetchNotAllowedError, check_destination
     parsed = urlparse(file_url)
     host = (parsed.hostname or "").lower()
     if parsed.scheme not in ("http", "https") or not host:
@@ -268,13 +298,17 @@ def _require_external_url(file_url: str) -> None:
             blocked = not ipaddress.ip_address(host).is_global
         except ValueError:
             blocked = False
-    if blocked:
+    if not blocked:
+        try:
+            check_destination(file_url, _fetch_policy_config())
+        except FetchNotAllowedError as exc:
+            raise ToolError(str(exc)) from None
+    else:
         raise ToolError(
             "ask_document 只受理本部署之外的文件地址。这个地址指向本部署自己的"
             "服务或内网，而它背后的内容受资源授权保护 —— 一个 URL 证明不了你"
             "有权读它。已入库的文档请用 search / get_evidence（那条路带着你的"
             "身份，授权在语料侧判）。")
-
 
 @mcp.tool()
 async def search(query: str, limit: int = 10) -> dict:
@@ -329,10 +363,14 @@ async def ask_document(file_url: str, question: str) -> str:
 
     # ---- 图片：直接走 VQA，秒回 ----
     if ext in IMAGE_EXTS:
-        img_resp = await _http.get(file_url, follow_redirects=True)
-        img_resp.raise_for_status()
-        mime = img_resp.headers.get("content-type", f"image/{ext.lstrip('.')}")
-        data_uri = f"data:{mime};base64," + base64.b64encode(img_resp.content).decode()
+        from ddp_core.fetch_policy import FetchNotAllowedError, fetch_bytes_for_verify
+        try:
+            content, mime = await fetch_bytes_for_verify(
+                _http, file_url, _fetch_policy_config())
+        except FetchNotAllowedError as exc:
+            raise ToolError(str(exc)) from None
+        mime = mime or f"image/{ext.lstrip('.')}"
+        data_uri = f"data:{mime};base64," + base64.b64encode(content).decode()
         answer = await _vqa(data_uri, question)
         return f"{answer}\n\n---\n出处：整张图片（{file_url}）"
 
@@ -404,13 +442,16 @@ async def ask_document(file_url: str, question: str) -> str:
     answer = None
     if ext == ".pdf" and hits[0].get("bbox"):
         try:
-            pdf_resp = await _http.get(file_url, follow_redirects=True)
-            pdf_resp.raise_for_status()
+            from ddp_core.fetch_policy import FetchNotAllowedError, fetch_bytes_for_verify
+            pdf_bytes, _ = await fetch_bytes_for_verify(
+                _http, file_url, _fetch_policy_config())
             data_uri = await _crop_page_region(
-                pdf_resp.content, hits[0]["page_idx"], hits[0]["bbox"], hits[0].get("page_size"))
+                pdf_bytes, hits[0]["page_idx"], hits[0]["bbox"], hits[0].get("page_size"))
             if data_uri:
                 answer = await _vqa(
                     data_uri, f"请仅根据这张文档区域截图回答：{question}")
+        except FetchNotAllowedError:
+            pass  # 策略拒绝（重定向到内网等）：退化为纯文本证据，不碰原文件
         except httpx.HTTPError:
             pass  # 原文件不可达时退化为纯文本证据
 

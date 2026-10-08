@@ -5,12 +5,13 @@
 缓存投影不能在撤回后继续被读出来。两个测试共用一条真实路径：建 Wiki ->
 发布 -> 放缓存 -> DELETE 资源。
 """
-import respx
-from sqlalchemy import func, select
+import hashlib
 
+import respx
+from sqlalchemy import func, select, update
 from conftest import actor_headers
 from ddp_corpus import cache, wiki
-from ddp_corpus.models import Resource, Wiki, utcnow
+from ddp_corpus.models import Evidence, Resource, Wiki, utcnow
 from ddp_corpus.resources import tombstone_resource
 from test_wiki_revisions import body, model, source
 
@@ -56,6 +57,87 @@ async def test_tombstoned_source_unpublishes_wiki_and_purges_cache(actor_client,
     for scope in scopes:
         assert await cache.get(session, scope_key=scope, cache_key="wiki-projection",
                                now=now) is None, "缓存不能把撤回的投影复活"
+
+
+@respx.mock
+async def test_publication_flip_away_from_published_invalidates_wiki_and_cache(
+        actor_client, session):
+    """PATCH 把 publication 从 published 翻走与 DELETE 同等失效。
+
+    Publish -> flip to private must clear published_revision_id and purge
+    resource/version/collection projections in the same commit.
+    """
+    from ddp_corpus.collection_models import Collection
+    from ddp_corpus.models import Chunk, Document, ParseJob, ResourceVersion, new_id
+    from tests.conftest import ACTOR, ORG
+    from tests.test_collection_catalog import (
+        create as catalog_create, publish as catalog_publish)
+    document = Document(id=new_id(), uploaded_by=ACTOR, organization_id=ORG,
+        doc_id=new_id() * 2, origin="web", filename="manual.pdf", mime="application/pdf",
+        size_bytes=100, object_key="flip-object-key")
+    session.add(document)
+    await session.flush()
+    resource = Resource(id=new_id(), organization_id="org-test", owner_id="actor-alice",
+        uploaded_by="actor-alice", display_name="Manual", publication="private")
+    session.add(resource)
+    await session.flush()
+    job = ParseJob(id=new_id(), document_id=document.id, resource_id=resource.id,
+        initiated_by="actor-alice", engine="borndigital", options_hash=new_id(),
+        document_version=1, status="succeeded", index_status="ready")
+    session.add(job)
+    await session.flush()
+    version = ResourceVersion(id=new_id(), resource_id=resource.id, version_no=1,
+        document_id=document.id, source_digest=document.doc_id, filename="manual.pdf",
+        size_bytes=document.size_bytes, parse_job_id=job.id)
+    session.add(version)
+    await session.flush()
+    session.add(Chunk(document_id=document.id, parse_job_id=job.id, seq=0,
+        text="flip fact", text_tokenized="flip fact"))
+    await session.commit()
+    published = await actor_client.patch(
+        f"/api/resources/{resource.id}", json={"publication": "published"})
+    assert published.status_code == 200, published.text
+    assert published.json()["publication"] == "published"
+    from tests.test_wiki_revisions import body as wiki_body, model as wiki_model
+    evidence = Evidence(id=new_id(), document_id=document.id, parse_job_id=job.id,
+        seq=0, atom_key="text-0", content="flip fact",
+        content_digest=hashlib.sha256(b"flip fact").hexdigest(), kind="text", page_idx=0,
+        bbox=[0, 0, 50, 50], page_size=[100, 100])
+    session.add(evidence)
+    await session.flush()
+    session.add(Chunk(document_id=document.id, parse_job_id=job.id, seq=1,
+        text="flip fact", text_tokenized="flip fact", evidence_id=evidence.id))
+    await session.commit()
+    wiki_model(evidence)
+    created = await actor_client.post("/api/wikis", json=wiki_body(resource, version),
+        headers={"Idempotency-Key": "p6-flip"})
+    assert created.status_code == 201, created.text
+    wiki_id = created.json()["wiki"]["id"]
+    released = await actor_client.post(f"/api/wikis/{wiki_id}/publish",
+        json={"base_revision_id": created.json()["revision"]["id"]})
+    assert released.status_code == 200, released.text
+    row = await session.get(Wiki, wiki_id, populate_existing=True)
+    assert row.published_revision_id is not None
+    collection = (await catalog_create(
+        actor_client, version, key="p6-flip-collection")).json()
+    assert (await catalog_publish(actor_client, collection, key="p6-flip-collection")).status_code == 200
+    collection_id = collection["collection_id"]
+    assert (await session.get(Collection, collection_id)) is not None
+    now = utcnow()
+    scopes = (cache.wiki_scope(wiki_id), cache.resource_scope(resource.id),
+              cache.version_scope(version.id), cache.collection_scope(collection_id))
+    for scope in scopes:
+        await put_projection(session, scope, now)
+    await session.commit()
+    flipped = await actor_client.patch(
+        f"/api/resources/{resource.id}", json={"publication": "private"})
+    assert flipped.status_code == 200, flipped.text
+    assert flipped.json()["publication"] == "private"
+    row = await session.get(Wiki, wiki_id, populate_existing=True)
+    assert row.published_revision_id is None, "翻成私有的 Wiki 不能继续有已发布指针"
+    for scope in scopes:
+        assert await cache.get(session, scope_key=scope, cache_key="wiki-projection",
+                               now=now) is None, "翻成私有的投影必须在同一提交里失效"
 
 
 @respx.mock

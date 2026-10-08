@@ -3,6 +3,7 @@
 多副本正确性的关键在限速（进程内计数会让实际上限变成 N×limit）与对账选主，
 这里覆盖可在进程内验证的部分；真 Redis 的 Lua 行为由 e2e 覆盖。
 """
+import httpx
 import pytest
 import respx
 from sqlalchemy import select
@@ -135,17 +136,101 @@ async def test_gc_does_not_delete_a_revived_documents_source(actor_client, sessi
     await _callback(actor_client)
     storage = app_state.storage
 
+    old_row = await session.get(Document, document["id"])
+    await session.refresh(old_row, ["object_key"])
+    old_key = old_row.object_key
     await _delete_and_age(actor_client, session, document["id"])
-    # 复活：同一份文件重新上传
+    # 复活：同一份文件重新上传（新对象键；旧 key 被 park 进 manifest）
     revived = await _upload(actor_client, content=PDF)
     assert revived["id"] == document["id"], "同内容重传应复活同一行"
 
+    row = await session.get(Document, document["id"])
+    await session.refresh(row, ["deleted_at", "object_key", "gc_pending_keys"])
+    assert row.deleted_at is None and row.object_key
+    assert row.object_key != old_key, "复活必须换新对象键，旧 key 才有 park 的意义"
+    assert old_key in row.gc_pending_keys, "被取代的旧 key 必须 park 进 gc_pending_keys"
+    assert await storage.exists(old_key)
+
     assert await collect_deleted_objects(db.get_sessionmaker(), storage) == 0, \
         "已复活的文档不得被回收"
-    row = await session.get(Document, document["id"])
-    await session.refresh(row)
+    await session.refresh(row, ["deleted_at", "object_key", "gc_pending_keys"])
     assert row.deleted_at is None and row.object_key
     assert await storage.get(row.object_key) == PDF, "复活后的原件被 GC 删掉了"
+    # live-drain 删掉旧 key、排空 manifest，而不是永远泄漏。
+    assert row.gc_pending_keys == [], "live-drain 必须排空 manifest"
+    assert not await storage.exists(old_key), "旧 key 必须被 live-drain 删掉"
+    assert await storage.get(row.object_key) == PDF, "复活后的原件必须保留"
+
+
+@respx.mock
+async def test_gc_revival_racing_manifest_commit_loses_claim_without_deleting(
+    actor_client, session, app_state, monkeypatch,
+):
+    """复活 racing manifest commit：条件 claim 落空，一个字节都不许删。"""
+    import ddp_corpus.gc as gc_module
+
+    _mock_service()
+    document = await _upload(actor_client)
+    await _callback(actor_client)
+    storage = app_state.storage
+    await _delete_and_age(actor_client, session, document["id"])
+    row = await session.get(Document, document["id"])
+    await session.refresh(row, ["object_key"])
+    live_key = row.object_key
+
+    real_claim = gc_module._claim_manifest
+
+    async def claim_then_revive(claim_session, claim_document, *, deleted_at, keys):
+        # 在 claim 的条件 UPDATE 生效前提交一次复活：row 已 live，claim 必须落空。
+        # 复活按 ingest._revive 的语义把旧 key park 进 manifest 再换新 key。
+        revived_key = live_key + ".revived"
+        await storage.put(revived_key, PDF, "application/pdf")
+        async with db.get_sessionmaker()() as revival:
+            live = await revival.get(Document, claim_document.id)
+            parked = list(live.gc_pending_keys or [])
+            for key in (live.object_key, revived_key):
+                if key and key not in parked:
+                    parked.append(key)
+            await revival.execute(
+                gc_module.update(Document).where(Document.id == claim_document.id).values(
+                    deleted_at=None, object_key=revived_key, gc_pending_keys=parked,
+                    updated_at=gc_module.utcnow()))
+            await revival.commit()
+        return await real_claim(claim_session, claim_document, deleted_at=deleted_at, keys=keys)
+
+    monkeypatch.setattr(gc_module, "_claim_manifest", claim_then_revive)
+    assert await collect_deleted_objects(db.get_sessionmaker(), storage) == 0
+    assert await storage.exists(live_key), "claim 落空后旧 key 不得被删"
+    await session.refresh(row, ["deleted_at", "object_key"])
+    assert row.deleted_at is None
+    assert await storage.get(row.object_key) == PDF
+
+
+@respx.mock
+async def test_gc_drains_manifest_committed_before_revival(actor_client, session, app_state):
+    """已回收行的旧 key 被复活引用时：复活 park 住它，live-drain 复核后放行。"""
+    _mock_service()
+    document = await _upload(actor_client)
+    await _callback(actor_client)
+    storage = app_state.storage
+    await _delete_and_age(actor_client, session, document["id"])
+    # 宽限期已过：第一轮直接收完字节并计 cleaned == 1；第二轮验证幂等。
+    assert await collect_deleted_objects(db.get_sessionmaker(), storage) == 1
+    assert await collect_deleted_objects(db.get_sessionmaker(), storage) == 0
+    row = await session.get(Document, document["id"])
+    await session.refresh(row, ["object_key", "gc_pending_keys"])
+    assert row.object_key == "" and row.gc_pending_keys == []
+    old_objects = dict(storage.objects)
+    revived = await _upload(actor_client, content=PDF)
+    assert revived["id"] == document["id"]
+    await session.refresh(row, ["deleted_at", "object_key", "gc_pending_keys"])
+    assert row.deleted_at is None and row.object_key
+    # 旧 key 已不在存储里：复活 park 住的是已删 key，live-drain 复核引用后放行。
+    assert await collect_deleted_objects(db.get_sessionmaker(), storage) == 0
+    await session.refresh(row, ["gc_pending_keys"])
+    assert row.gc_pending_keys == []
+    assert await storage.get(row.object_key) == PDF
+    assert set(storage.objects) == set(old_objects) | {row.object_key}
 
 
 @respx.mock
@@ -159,7 +244,7 @@ async def test_gc_leaves_live_documents_alone(actor_client, app_state):
     assert set(app_state.storage.objects) == before
 
 
-@pytest.mark.parametrize("field", ["service_token"])
+@pytest.mark.parametrize("field", ["service_token", "minio_secret_key", "database_url"])
 def test_placeholder_secrets_refuse_to_start(monkeypatch, field):
     """占位密钥必须启动即失败。
 
@@ -167,18 +252,24 @@ def test_placeholder_secrets_refuse_to_start(monkeypatch, field):
     之所以可信，前提正是"只有持有它的调用方能进来"—— 门禁没了，
     任何能连到本端口的人都能自称 admin。
 
+    minio 出厂默认口令（minioadmin）与 database_url 开发默认口令（ddp:ddp）同理：
+    只查 service_token 会让人误以为"密钥都查过了"，而对象存储/数据库等于
+    没有门禁。
+
     **jwt_secret 那条迁去了 Go**（control-api 拥有会话签发）：
     见 services/control-api/internal/config/config_test.go 的
     TestPlaceholderSecretsAreRejected。
     """
     from ddp_corpus.config import assert_secrets_configured
 
-    monkeypatch.setattr(settings, field, "change-me")
+    placeholders = {"service_token": "change-me",
+                    "minio_secret_key": "minioadmin",
+                    "database_url": "postgresql+asyncpg://ddp:ddp@127.0.0.1:15432/deepdocparse"}
+    monkeypatch.setattr(settings, field, placeholders[field])
     # **逃生口要显式关掉，不能靠环境里恰好没开。**
     # CI 的 job 级 env 设了 `ALLOW_INSECURE_DEFAULTS: "true"`（一次性容器没有
     # .env，不开的话任何走 lifespan 的用例都会被拦），于是这条断言
     # DID NOT RAISE —— 而它守的正是"门禁形同虚设"。
-    # model-gateway 那边有一条一模一样的，同批修的
     monkeypatch.setattr(settings, "allow_insecure_defaults", False)
     with pytest.raises(RuntimeError, match=field.upper()):
         assert_secrets_configured()
@@ -188,11 +279,62 @@ def test_placeholder_secrets_refuse_to_start(monkeypatch, field):
     assert_secrets_configured()
 
 
+def test_default_minio_account_name_with_random_secret_passes(monkeypatch):
+    """access key 是账号名不是凭据：口令随机时它叫 minioadmin 不该拦启动。"""
+    from ddp_corpus.config import assert_secrets_configured
+
+    monkeypatch.setattr(settings, "allow_insecure_defaults", False)
+    monkeypatch.setattr(settings, "service_token", "another-random-value")
+    monkeypatch.setattr(settings, "minio_access_key", "minioadmin")
+    monkeypatch.setattr(settings, "minio_secret_key", "real-secret-key")
+    monkeypatch.setattr(settings, "database_url",
+                         "postgresql+asyncpg://ddp:real-password@127.0.0.1:15432/deepdocparse")
+    assert_secrets_configured()
+
+
 def test_real_secrets_pass_the_check(monkeypatch):
     monkeypatch.setattr(settings, "service_token", "another-random-value")
+    monkeypatch.setattr(settings, "minio_access_key", "real-access-key")
+    monkeypatch.setattr(settings, "minio_secret_key", "real-secret-key")
+    monkeypatch.setattr(settings, "database_url",
+                         "postgresql+asyncpg://ddp:real-password@127.0.0.1:15432/deepdocparse")
     from ddp_corpus.config import assert_secrets_configured
 
     assert_secrets_configured()
+
+
+async def test_empty_service_token_never_authenticates(monkeypatch):
+    """空 service_token 配置永远拒绝 —— 即使 ALLOW_INSECURE 打开。
+
+    `compare_digest("", "")` 是 True：没有这道闸的话，
+    SERVICE_TOKEN='' + `Authorization: Bearer ` 就是一把万能钥匙。
+    直接调门禁依赖（/readyz 本身不挂门禁，没有可打的端点）。
+    """
+    from ddp_corpus import deps
+
+    monkeypatch.setattr(settings, "service_token", "")
+    monkeypatch.setattr(settings, "allow_insecure_defaults", True)
+    with pytest.raises(deps.APIError) as exc:
+        await deps.require_gateway_credentials(f"Bearer {settings.service_token}")
+    assert exc.value.status_code == 401
+    assert exc.value.code == "invalid_service_token"
+
+
+async def test_empty_bearer_rejected_before_compare(monkeypatch):
+    """空 bearer 头在 compare_digest 之前 401。
+
+    配置是正常密钥，但请求头是 `Bearer `（strip 后为空）：必须 401，
+    不能走到与正常密钥的比较里去。
+    """
+    from ddp_corpus import deps
+
+    assert settings.service_token not in ("", "change-me")
+    with pytest.raises(deps.APIError) as exc:
+        await deps.require_gateway_credentials("Bearer ")
+    assert exc.value.status_code == 401
+    with pytest.raises(deps.APIError) as exc2:
+        await deps.require_gateway_credentials("Bearer    ")
+    assert exc2.value.status_code == 401
 
 
 @respx.mock
@@ -209,8 +351,90 @@ async def test_readyz_reports_each_dependency(client, app_state):
     assert body["checks"]["service"].startswith("error")
 
 
+@respx.mock
+async def test_readyz_exposes_outbox_and_queue_backlog(client, app_state, session):
+    """/readyz 报 outbox 积压（含 abandoned）与队列水位。
+
+    空库时两组都是零值且 ready；abandoned > 0（重投封顶后仍躺在表里）
+    直接判 not-ready —— 那是需要人工处理的丢账风险，不是"正常"。
+    """
+    from tests.conftest import SERVICE
+
+    from ddp_corpus.models import CorpusOutbox
+
+    respx.get(f"{SERVICE}/healthz").mock(return_value=httpx.Response(200))
+    resp = await client.get("/readyz")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ready"] is True
+    assert body["checks"]["outbox"] == "ok"
+    assert body["outbox"]["undelivered"] == 0
+    assert body["outbox"]["oldest_seconds"] == 0.0
+    assert body["outbox"]["abandoned"] == 0
+    assert isinstance(body["queue"], dict) and body["queue"], "队列水位必须用 queue.backlog() 报出来"
+    first = next(iter(body["queue"].values()))
+    assert set(first) == {"pending", "oldest_seconds"}
+
+    # 一条重投封顶的 parked 事件：仍算未投递 + abandoned，ready 翻成 False
+    from ddp_corpus.outbox import MAX_ATTEMPTS
+
+    session.add(CorpusOutbox(organization_id="org-1", type="UsageRecorded",
+                             payload={}, attempts=MAX_ATTEMPTS))
+    await session.commit()
+    resp = await client.get("/readyz")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["ready"] is False
+    assert body["outbox"]["undelivered"] == 1
+    assert body["outbox"]["abandoned"] == 1
+    assert body["outbox"]["oldest_seconds"] >= 0.0
+    assert body["checks"]["outbox"].startswith("error")
+
+
 async def test_healthz_does_not_depend_on_anything(client):
     assert (await client.get("/healthz")).json() == {"status": "ok"}
+
+
+def test_content_diagnostics_off_by_default(monkeypatch):
+    """内容诊断默认关，留存有界，权限钩子默认拦非 admin。
+
+    plan.md §8.6：日志默认不记完整问题/原文片段；诊断要有显式开关、
+    主体权限和保留期限。三道门缺一即不放行。
+    """
+    from ddp_corpus.config import content_diagnostics_permitted
+    from ddp_corpus.deps import Actor
+
+    assert settings.content_diagnostics_enabled is False
+    assert settings.content_diagnostics_require_admin is True
+    assert 0 < settings.content_diagnostics_retention_seconds <= 30 * 24 * 3600
+    # 开关没开：谁来都不放行
+    assert content_diagnostics_permitted(
+        Actor(id="a", kind="user", organization_id="o", role="admin")) is False
+
+    # 开关开了：admin 放行，非 admin 照样拦
+    monkeypatch.setattr(settings, "content_diagnostics_enabled", True)
+    assert content_diagnostics_permitted(
+        Actor(id="a", kind="user", organization_id="o", role="admin")) is True
+    assert content_diagnostics_permitted(
+        Actor(id="u", kind="user", organization_id="o", role="contributor")) is False
+    # actor 没传（None）= 无权，绝不因"没传 actor"而放行
+    assert content_diagnostics_permitted(None) is False
+
+    # 显式放开 admin 门（require_admin=false）后普通身份也可诊断 —— 但开关仍是总闸
+    monkeypatch.setattr(settings, "content_diagnostics_require_admin", False)
+    assert content_diagnostics_permitted(
+        Actor(id="u", kind="user", organization_id="o", role="contributor")) is True
+    monkeypatch.setattr(settings, "content_diagnostics_enabled", False)
+    assert content_diagnostics_permitted(
+        Actor(id="a", kind="user", organization_id="o", role="admin")) is False
+
+
+def test_content_diagnostics_retention_bounded():
+    """留存上限 30 天：配超了启动即失败，而不是悄悄变成第二份原文库。"""
+    from ddp_corpus.config import Settings
+
+    with pytest.raises(Exception, match="CONTENT_DIAGNOSTICS_RETENTION_SECONDS"):
+        Settings(content_diagnostics_retention_seconds=31 * 24 * 3600)
 
 
 @respx.mock
@@ -224,12 +448,12 @@ def test_rerank_config_falls_back_to_service_token(monkeypatch):
 
     这条兜底是**部署约定**：rerank 与 embed 是同一类 TEI 容器，在同一张内网里，
     绝大多数部署不会为它单独配一个令牌。`docs/CONFIG.md` 与 `config.py:149`
-    的注释都写着"留空用 service_token"，但阶段 2a 之前没有任何用例钉着它 ——
-    验收把 `or settings.service_token` 砍掉，152 例全绿。
+    的注释都写着"留空用 service_token"，但之前没有任何用例覆盖这条兜底 ——
+    去掉 `or settings.service_token` 后既有验收仍全绿。
 
     砍掉的后果是**静默的**：token 变空串 -> TEI 返回 401 ->
     `rerank_hits` 打 `rerank_unavailable` 照常返回原名次。
-    看起来只是"没部署 rerank"，实际是配置装配错了（不变式 2：降级必须可见，
+    看起来只是"没部署 rerank"，实际是配置装配错了（降级必须可见，
     但这里降级的原因会指向错误的方向）。
     """
     from ddp_corpus.config import rerank_config

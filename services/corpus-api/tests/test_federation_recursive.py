@@ -79,7 +79,10 @@ async def test_recursive_retrieval_preserves_leaf_origin_over_real_http(
     assert step["delegated_targets"] == [{
         "target_key": member(recursive_nodes.nodes[leaf].seed.collection_id, leaf),
         "via_node_ids": [] if leaf == NODE_R else [NODE_R]}]
-    assert step["budget_share"]["max_hops"] >= 3
+    # 委托份额按路由深度精确切分（`routing._share_hops`）：单中继直达叶只够
+    # P 自己检索的 2 跳，多一跳中继就多一份受理与深度（A-P-R-S 时 P 得 5）。
+    # 下限与深度闸（`len(path) < max_hops`）一起钉：份额再小一级就会被 R 拒收。
+    assert step["budget_share"]["max_hops"] >= (2 if leaf == NODE_R else 5)
     assert not any(call["path"].endswith("/probes") for call in recursive_nodes.outbound), \
         "routed retrieval must not directly probe leaves during planning"
     route = [NODE_P] if leaf == NODE_R else [NODE_P, NODE_R]

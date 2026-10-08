@@ -608,3 +608,163 @@ async def test_extract_one_runs_against_a_real_document(session, app_state):
     billed = [e["actor_id"] for e in await usage_events(session, "extract")]
     assert billed == [initiator], \
         f"抽取要记在发起人头上，不是上传者（{document.uploaded_by}）头上，实际 {billed}"
+
+# --------------------------------------------------------------------- 引用派生/指针/分面
+
+
+def test_derived_hit_cites_generated_with_derived_from():
+    """派生命中必须引用派生 evidence：source_type="generated"，derived_from 指回源原子。
+
+   此前 `_citation` 硬编码 `"source_type": "source"`，视觉块的派生理解被当成
+    原文引用 —— 生成物与原文不可区分（不变式 3），且 snippet 取的是 OCR 文本
+    而不是引用指向的那份派生文本。
+    """
+    from ddp_core.hits import Hit
+    from ddp_corpus.extraction import _citation
+
+    derived = Hit(chunk_id="c1", parse_job_id="j1", seq=0, page_idx=0, text="OCR 原文",
+                  derived_text="VLM 对表格的理解", evidence_id="src-atom",
+                  derived_evidence_id="derived-atom", block_type="table",
+                  score=0.03, similarity=0.8)
+    citation = _citation(derived, None)
+    assert citation["source_type"] == "generated"
+    assert citation["evidence_id"] == "derived-atom"
+    assert citation["derived_from"] == "src-atom"
+    assert "VLM" in citation["snippet"], "snippet 必须是引用指向的派生文本"
+
+
+def test_source_hit_citation_is_unchanged_shape():
+    """普通命中形状不变：source_type="source"，derived_from=None（显式给 None，
+    不是省略 —— 消费方在两个平面之间不写两套取字段代码）。"""
+    from ddp_core.hits import Hit
+    from ddp_corpus.extraction import _citation
+
+    hit = Hit(chunk_id="c1", parse_job_id="j1", seq=0, page_idx=0, text="买方正文",
+              evidence_id="src-atom", block_type="text", score=0.03, similarity=0.8)
+    citation = _citation(hit, None)
+    assert citation["source_type"] == "source"
+    assert citation["evidence_id"] == "src-atom"
+    assert citation["derived_from"] is None
+    assert "买方" in citation["snippet"]
+
+
+def test_pick_source_rejects_bad_pointers_instead_of_top1():
+    """坏 source 指针必须返回 None（调用方按幻觉引用处理），绝不退回 top-1。
+
+    此前越界/非数字/没给都退回 hits[0]：模型凭空指了一条不存在的资料，
+    值已经不可信，硬挂一条出处等于给幻觉贴"已验证"。
+    """
+    from ddp_core.hits import Hit
+    from ddp_corpus.extraction import _pick_source
+
+    hits = [Hit(chunk_id=f"c{i}", text=f"块{i}") for i in range(2)]
+    assert _pick_source(hits, 1) is hits[0]
+    assert _pick_source(hits, 2) is hits[1]
+    assert _pick_source(hits, 999) is None
+    assert _pick_source(hits, 0) is None
+    assert _pick_source(hits, "abc") is None
+    assert _pick_source(hits, None) is None
+    assert _pick_source([], 1) is None
+
+
+@respx.mock
+@pytest.mark.parametrize("pointer", [999, "abc", None])
+async def test_bad_source_pointer_is_not_found_with_schema_violation(
+        session, app_state, pointer):
+    """端到端：source 指到不存在的资料 -> not_found + schema_violation，无 top-1 出处。
+
+    判 not_found 而不是 error：文档里有没有这个字段此刻已无从判断；
+    degraded 用 schema_violation：错的是模型输出的格式契约（source 必须是
+    1..N 的整数），不是文档内容。已有更严重的标时不覆盖（degraded or 语义）。
+    """
+    document, job = await _seed_document(session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(return_value=Response(200, json={
+        "data": [{"index": 0, "embedding": [1.0, 0.0]}]}))
+    respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
+        {"found": True, "value": "北极星科技有限公司", "source": pointer}))
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    outcome = await run_extraction(ctx, parse_schema(SCHEMA))
+
+    field = outcome.fields["buyer"]
+    assert field["status"] == "not_found"
+    assert field["value"] is None
+    assert field["citations"] == [], "幻觉引用不许挂 top-1 出处"
+    assert field["degraded"] == "schema_violation"
+
+
+@respx.mock
+async def test_retrieve_fans_out_compound_query_through_shared_path(session, app_state):
+    """_retrieve 走共享 search_query：复合问题按分面拆查，每面一批向量。
+
+    此前直调 `index.search` 只发一个 query + 一个向量，复合问题的第二个
+    分面在抽取平面永远拿不到专属候选（问答与 /api/search 早已分面）。
+    """
+    from ddp_core.search import search_query
+    from ddp_corpus import extraction as extraction_mod
+
+    document, job = await _seed_document(session, (await _a_user(session)))
+
+    queries, vectors = [], []
+
+    class RecordingIndex(MemoryIndex):
+        async def search(self, session, **kwargs):        # noqa: ANN001
+            queries.append(kwargs.get("query"))
+            return await super().search(session, **kwargs)
+
+    async def recording_embed(texts):
+        vectors.append(list(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    question = ("What supply voltage does the device use "
+                "and which wireless protocol does it support?")
+
+    # 共享路径本身确实拆分面（对照组：直接调 search_query 至少两路查询）
+    _, _ = await search_query(
+        session, RecordingIndex(), embed=recording_embed, query=question,
+        document_id=document.id, limit=4, candidates=8,
+        min_similarity=settings.qa_min_similarity)
+    assert len(queries) > 1, f"复合问题该拆分面，实际只查了 {queries}"
+    assert len(vectors[0]) > 1, "分面查询该批量向量化"
+    assert len(queries) == len(vectors[0]), "每面一路检索、一个向量"
+
+    # 抽取的 _retrieve 同样扇出（而非直调 index.search 只查一次）
+    queries.clear()
+    embed_calls = []
+    real_batched = extraction_mod.embed_batched
+
+    async def spy_batched(http, texts):                   # noqa: ANN001
+        embed_calls.append(list(texts))
+        return await real_batched(http, texts)
+
+    respx.post(EMBEDDINGS).mock(side_effect=lambda r: Response(200, json={
+        "data": [{"index": i, "embedding": [1.0, 0.0]}
+                 for i in range(len(json.loads(r.content)["input"]))]}))
+    ctx = ExtractContext(session=session, index=RecordingIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    from unittest.mock import patch
+    with patch.object(extraction_mod, "embed_batched", spy_batched):
+        await extraction_mod._retrieve(ctx, question, k=4)
+    assert len(queries) > 1, f"_retrieve 该经 search_query 扇出，实际只查了 {queries}"
+    assert embed_calls and len(embed_calls[0]) > 1, "扇出后该批量向量化所有分面"
+
+
+def test_degraded_priority_orders_keyword_after_embedding():
+    """keyword_unavailable 排在 embedding_unavailable 之后、vision 之前。
+
+    关键词腿瘸了（只走向量路）比整条语义路没跑轻，但比 vision/rerank 这类
+    后处理缺席重。字面量来自契约 enums.yaml。
+    """
+    from ddp_corpus.extraction import _DEGRADED_PRIORITY, rollup_degraded
+
+    assert _DEGRADED_PRIORITY.index("keyword_unavailable") == \
+        _DEGRADED_PRIORITY.index("embedding_unavailable") + 1
+    assert _DEGRADED_PRIORITY.index("keyword_unavailable") < \
+        _DEGRADED_PRIORITY.index("vision_unavailable")
+    assert rollup_degraded([{"degraded": "keyword_unavailable"},
+                            {"degraded": "vision_unavailable"}]) == "keyword_unavailable"
+    assert rollup_degraded([{"degraded": "keyword_unavailable"},
+                            {"degraded": "embedding_unavailable"}]) == "embedding_unavailable"

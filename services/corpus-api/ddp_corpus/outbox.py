@@ -10,7 +10,8 @@
 
 Go 侧的 `deliverOutbox` 是同一件事的另一半，这里刻意照着它写：
 认领时 `FOR UPDATE SKIP LOCKED`（多副本并行投递而不重复）、
-指数退避、409 当成功（消费端幂等去重的正确回应）。
+指数退避、409 + `duplicate_event` 包络当成功（消费端幂等去重的正确回应，
+别的 409 一律重投 —— 见 `_is_duplicate_ack`）。
 
 **时间在 Python 侧算，不用 `make_interval`**：那是 PG 方言，
 而这一层的单测跑在 SQLite 上 —— 用方言函数等于把这段逻辑变成"只能在
@@ -21,11 +22,11 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ddp_corpus.config import settings
-from ddp_corpus.models import CorpusOutbox
+from ddp_corpus.models import CorpusOutbox, as_aware
 
 log = logging.getLogger("ddp.outbox")
 
@@ -43,6 +44,10 @@ MAX_BACKOFF_SECONDS = 300
 #: 让它进 /readyz 的积压计数，而不是悄悄消失（丢一条就是少收一笔钱）。
 MAX_ATTEMPTS = 12
 
+#: 认领可见性窗口（秒）。见 `_claim` —— 认领与投递结果写回之间崩了的话，
+#: 那几条要过这么久才会被别的投递轮次接走，而不是立刻重投。
+VISIBILITY_TIMEOUT_SECONDS = 60
+
 
 def _backoff_seconds(attempts: int) -> int:
     # 指数封在 12 而不是 8：封在 8 的话 2**8=256 < 上限 300，
@@ -57,13 +62,20 @@ def _now() -> datetime:
 async def _claim(sessionmaker: async_sessionmaker) -> list[tuple[str, str, str, dict, int]]:
     """认领一批待投递事件，并把 attempts 先加上去。
 
-    **认领要先落库。** 即使本进程认领完当场崩掉，那几条也只是等下一次
-    退避窗口，不会被无限重投 —— 而"崩了就永远不再投"才是真正的丢事件。
+    **认领要先落库。** 即使本进程认领完当场崩掉，那几条也只是等可见性窗口
+    过去才被别人接走，不会被无限重投 —— 而"崩了就永远不再投"才是真正的丢事件。
+
+    可见性窗口与 attempts+1 在**同一个事务**里落库：认领与投递结果写回是两批
+    session，中间崩了的话那几条在窗口内不会被别的 deliver_once 领走 —— 否则
+    崩溃重启会立刻重投一批"可能已经发出去了"的事件（至少一次变成立刻两次）。
+    投递结果写回时按实际结果重算 next_attempt_at，覆盖掉这个值 —— 它只在
+    "认领完崩了"时生效。
     """
     async with sessionmaker() as session:
+        now = _now()
         stmt = (select(CorpusOutbox)
                 .where(CorpusOutbox.delivered_at.is_(None),
-                       CorpusOutbox.next_attempt_at <= _now())
+                       CorpusOutbox.next_attempt_at <= now)
                 .order_by(CorpusOutbox.created_at)
                 .limit(BATCH))
         if session.bind.dialect.name == "postgresql":
@@ -74,10 +86,43 @@ async def _claim(sessionmaker: async_sessionmaker) -> list[tuple[str, str, str, 
         claimed = []
         for row in rows:
             row.attempts += 1
+            row.next_attempt_at = now + timedelta(seconds=VISIBILITY_TIMEOUT_SECONDS)
             claimed.append((row.id, row.organization_id, row.type,
                             dict(row.payload or {}), row.attempts))
         await session.commit()
         return claimed
+
+
+def _error_code(resp: httpx.Response) -> str:
+    """从 control 的错误包络里读 `error.code`。
+
+    control 的契约形状是 `{"error": {"code": ...}}`（Go 侧 classifyDelivery
+    也是这么解析的）；读不出（代理页、空 body、形状不对）就返回 "" —— 调用方
+    按"暂时故障"重投，**绝不**按成功处理。
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    error = body.get("error")
+    if not isinstance(error, dict):
+        return ""
+    code = error.get("code")
+    return code if isinstance(code, str) else ""
+
+
+def _is_duplicate_ack(resp: httpx.Response) -> bool:
+    """409 里只有 `duplicate_event` 算投递成功 —— 照着 Go 侧 classifyDelivery 写。
+
+    control 按 event_id 幂等落账，重投命中已落账的行时回这个码（"这笔已经记
+    过了"）。以前**所有 409 都算成功**：别的原因的 409 会被记成"已投递"，
+    那笔账就永远少了，还没人看得见。
+    反过来，别的 409（组织没了、让重试的状态冲突……）与读不出码的回应一律
+    按暂时故障退避重投：宁可多投一次（消费端幂等），也不误判成已送达。
+    """
+    return resp.status_code == 409 and _error_code(resp) == "duplicate_event"
 
 
 async def deliver_once(sessionmaker: async_sessionmaker, http: httpx.AsyncClient) -> int:
@@ -93,10 +138,16 @@ async def deliver_once(sessionmaker: async_sessionmaker, http: httpx.AsyncClient
                          "X-DDP-Service": "corpus-api"},
                 timeout=10.0,
             )
-            # 409 = 消费端已经处理过。**当成功** —— 把它当失败会让这条
-            # 事件永远重投，而幂等消费端本来就该这么回应重投
-            ok = resp.status_code < 300 or resp.status_code == 409
-            error = None if ok else f"control-api 返回 {resp.status_code}"
+            # 成功 = 2xx，或 409 + `duplicate_event` 包络。control 按 event_id
+            # 幂等落账，重投命中已落账的行时回这个码；别的 409（与读不出码的
+            # 回应）一律按暂时故障重投 —— 见 `_is_duplicate_ack`。
+            if 200 <= resp.status_code < 300 or _is_duplicate_ack(resp):
+                ok, error = True, None
+            else:
+                code = _error_code(resp)
+                ok = False
+                error = (f"control-api 返回 {resp.status_code} {code}"
+                         if code else f"control-api 返回 {resp.status_code}")
         except httpx.HTTPError as exc:
             ok, error = False, f"control-api 不可达：{exc}"
 
@@ -137,3 +188,29 @@ async def deliver_loop(sessionmaker: async_sessionmaker, http: httpx.AsyncClient
         except Exception as exc:  # noqa: BLE001 —— 见上面那句
             log.exception("outbox 投递循环出错，继续：%s", exc)
         await asyncio.sleep(interval)
+
+
+async def outbox_backlog(session: AsyncSession) -> dict[str, int | float]:
+    """outbox 水位：未投递数、最老未投递年龄（秒）、已放弃（parked）数。
+
+    给 /readyz 用的：`abandoned > 0` 说明有事件重投封顶后还留在表里，需要
+    人工处理 —— 它们留着就是为了被看见（见 MAX_ATTEMPTS），而不是悄悄消失。
+    **只读**：不认领、不改行，探针里调是安全的。
+    """
+    now = _now()
+    undelivered = await session.scalar(
+        select(func.count()).select_from(CorpusOutbox)
+        .where(CorpusOutbox.delivered_at.is_(None))) or 0
+    oldest = await session.scalar(
+        select(func.min(CorpusOutbox.created_at))
+        .where(CorpusOutbox.delivered_at.is_(None)))
+    abandoned = await session.scalar(
+        select(func.count()).select_from(CorpusOutbox)
+        .where(CorpusOutbox.delivered_at.is_(None),
+               CorpusOutbox.attempts >= MAX_ATTEMPTS)) or 0
+    if oldest is None:
+        oldest_seconds = 0.0
+    else:
+        oldest_seconds = (now - as_aware(oldest)).total_seconds()
+    return {"undelivered": undelivered, "oldest_seconds": oldest_seconds,
+            "abandoned": abandoned}

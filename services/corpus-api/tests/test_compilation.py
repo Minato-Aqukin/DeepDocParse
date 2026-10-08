@@ -70,6 +70,54 @@ async def test_compile_crops_read_pdf_once_and_reuse_object_cache(monkeypatch):
     assert len(calls[0][1]) == 2
 
 
+async def test_oversize_source_pdf_skips_crops_and_marks_crop_failed(monkeypatch):
+    """超 max_source_bytes 的源 PDF 不读字节、不渲染，可裁块标 crop_failed。
+
+    变异确认：把 _bounded_pdf 改回 storage.get()，本用例必须红
+    （get 无视上限，渲染仍会被调用）。
+    """
+    import inspect
+
+    from ddp_corpus import crops as crops_module
+    from ddp_corpus.compilation import compile_document
+    from ddp_corpus.models import Document, ParseJob
+
+    assert inspect.signature(
+        crops_module.get_or_create_crop).parameters["max_source_bytes"].default == 64 * 1024 * 1024
+    assert inspect.signature(
+        crops_module.get_or_create_crops).parameters["max_source_bytes"].default == 64 * 1024 * 1024
+    assert crops_module._MAX_CROP_PNG_BYTES == 8 * 1024 * 1024
+
+    storage = MemoryStorage()
+    oversized = _real_pdf() + b"\x00" * (64 * 1024 * 1024)
+    await storage.put("source.pdf", oversized, "application/pdf")
+
+    def fail_on_render(*args, **kwargs):
+        raise AssertionError("oversize source must never reach the renderer")
+
+    monkeypatch.setattr(crops_module, "render_crops", fail_on_render)
+    monkeypatch.setattr(crops_module, "render_crop", fail_on_render)
+    key = await crops_module.get_or_create_crop(
+        storage, job_id="job", source_key="source.pdf", mime="application/pdf",
+        page_idx=0, bbox=[0, 0, 10, 10], page_size=[612, 792])
+    assert key is None
+    document = Document(uploaded_by="actor-alice", organization_id="org-test",
+                        doc_id="d" * 64, origin="web", filename="big.pdf",
+                        mime="application/pdf", size_bytes=len(oversized),
+                        object_key="source.pdf")
+    job = ParseJob(document_id=document.id, engine="borndigital")
+    layout = {"pdf_info": [{"page_idx": 0, "page_size": [612, 792], "para_blocks": [
+        {"bbox": [72, 72, 540, 100], "block_type": "text",
+         "lines": [{"spans": [{"content": "正文"}]}]}]}]}
+    output = await compile_document(
+        storage=storage, http=None, document=document, job=job, layout=layout,
+        source_key="source.pdf")
+    assert "crop_failed" in output.degraded
+    assert "crop_unsupported" not in output.degraded
+    assert output.crop_keys == {}
+
+
+
 @respx.mock
 async def test_compile_materializes_source_and_generated_evidence(actor_client, session):
     _mock_service(result=VISUAL_RESULT)

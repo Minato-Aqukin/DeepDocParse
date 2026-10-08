@@ -58,9 +58,10 @@ from ddp_corpus.models import Chunk, Document, Evidence, Resource, ResourceVersi
 from ddp_corpus.knowledge_policy import accessible_knowledge
 from ddp_corpus.policy import authorized_document_ids, visible_document_condition
 from ddp_corpus.routers import knowledge as knowledge_plane
-from ddp_corpus.upstream import chat_request, embed_one
+from ddp_corpus.upstream import chat_request, embed_batched
 from ddp_core.agent import assertions_from_text
 from ddp_core.knowledge import normalize_entity_name
+from ddp_core.search import search_query
 
 router = APIRouter(prefix="/internal/mcp")
 
@@ -96,22 +97,30 @@ def _asset_fields(contexts: list[DocumentContext]) -> dict:
 
 # --------------------------------------------------------------------- 证据形状
 
-async def _resolve_chunk(session: AsyncSession, evidence: Evidence) -> Chunk | None:
+async def _resolve_chunk(session: AsyncSession, evidence: Evidence,
+                          allowed_parse_job_ids: set[str] | None = None) -> Chunk | None:
     """这条证据现在还接得回哪个 chunk（接不回就是 `resolved=false`）。
 
     判据与 `evidence.load_citations` 一致：稳定定位键是 `(parse_job_id, seq)`，
     而 `chunk_id` 每次 reindex 都重铸，所以只能现算、不能落库。
+
+    `allowed_parse_job_ids` 是调用方已经判好的授权集合：不许一条跨解析的同 seq
+    chunk 替这条证据"被接回"。给了就按它收，没给保持原判据。
     """
-    return await session.scalar(select(Chunk).where(
+    stmt = select(Chunk).where(
         Chunk.parse_job_id == evidence.parse_job_id, Chunk.seq == evidence.seq,
-        or_(Chunk.evidence_id == evidence.id, Chunk.derived_evidence_id == evidence.id)))
+        or_(Chunk.evidence_id == evidence.id, Chunk.derived_evidence_id == evidence.id))
+    if allowed_parse_job_ids is not None:
+        stmt = stmt.where(Chunk.parse_job_id.in_(allowed_parse_job_ids))
+    return await session.scalar(stmt)
 
 
 async def _evidence_payload(session: AsyncSession, evidence: Evidence, *,
                             contexts: list[DocumentContext],
                             live_chunk_id: str | None = None,
                             score: float | None = None,
-                            similarity: float | None = None) -> dict:
+                            similarity: float | None = None,
+                            allowed_parse_job_ids: set[str] | None = None) -> dict:
     """MCP 契约里的 evidence 形状。
 
     `contexts` 是调用方已经拿到的授权证明（这次解析对他开放的资产）。
@@ -121,12 +130,15 @@ async def _evidence_payload(session: AsyncSession, evidence: Evidence, *,
     `live_chunk_id` 是调用方作出的断言："这条证据现在就接在这个 chunk 上"——
     检索命中天然如此，那条路不必再查一次库。不传就自己查。**不要改成
     "传了 None 就当接不回去"**：那会让忘了传的路径静默地把出处都标成失效。
+
+    `allowed_parse_job_ids` 透给 `_resolve_chunk` 的同名收敛：给了就按它收。
     """
     if not contexts:
         raise APIError(500, "evidence payload built without an authorized asset",
                        "api_error", "internal_error")
     chunk_id = live_chunk_id or (
-        chunk.id if (chunk := await _resolve_chunk(session, evidence)) else None)
+        chunk.id if (chunk := await _resolve_chunk(
+            session, evidence, allowed_parse_job_ids)) else None)
     payload = {
         "evidence_id": evidence.id, "document_id": evidence.document_id,
         # 这条证据出自哪一次固定解析。它既是出处的一部分，也是**复核授权的键**
@@ -179,15 +191,11 @@ async def _search(request: Request, session: AsyncSession, actor: Actor, *,
 
     http = request.app.state.http
     index = request.app.state.search_index
-    degraded: str | None = None
-    try:
-        vector = await embed_one(http, query)
-    except Exception:
-        # 零向量顶上会让"语义检索还在工作"变成一句假话（不变式 2）
-        vector, degraded = None, "embedding_unavailable"
-
-    hits = await index.search(
-        session, vector=vector, query=query, document_id=None, limit=limit,
+    # 与 /api/search 同一条共享检索：embed 失败、分面、keyword_unavailable 的
+    # 降级口径都在 `search_query` 里收敛 —— 这里只传授权与配额，不另起实现。
+    hits, degraded = await search_query(
+        session, index, embed=lambda texts: embed_batched(http, texts),
+        query=query, document_id=None, limit=limit,
         candidates=max(settings.qa_candidates, limit * 3),
         min_similarity=settings.qa_min_similarity,
         # **授权进 SQL，排序之前**：文档一层收内容范围，parse 一层收"哪一次解析"。
@@ -220,7 +228,8 @@ async def _search(request: Request, session: AsyncSession, actor: Actor, *,
             continue
         results.append(await _evidence_payload(
             session, row, contexts=allowed, live_chunk_id=hit.get("chunk_id"),
-            score=hit.get("score"), similarity=hit.get("similarity")))
+            score=hit.get("score"), similarity=hit.get("similarity"),
+            allowed_parse_job_ids=set(contexts)))
     results = await _still_authorized(session, actor, results, version_ids=version_ids)
     return {"results": results, "degraded": degraded, "scope": _scope(contexts)}
 
@@ -343,7 +352,8 @@ async def get_evidence(evidence_id: str, request: Request,
         # 分开报等于给出一个"这条证据存不存在"的探测口
         raise APIError(404, "evidence not found", "invalid_request_error", "not_found")
 
-    payload = await _evidence_payload(session, evidence, contexts=allowed)
+    payload = await _evidence_payload(session, evidence, contexts=allowed,
+                                        allowed_parse_job_ids={evidence.parse_job_id})
     storage = getattr(request.app.state, "storage", None)
     # 裁图出自原件：许可快照撤销或过期后不再给像素（与站内裁图同一道门），
     # 证据摘录照常返回。取像素前后各判一次，撤销发生在读取期间也算数。

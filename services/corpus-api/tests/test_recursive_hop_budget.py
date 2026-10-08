@@ -201,6 +201,35 @@ def _task_spec():
     return spec
 
 
+def test_intent_budget_has_no_post_carve_hop_floor(monkeypatch):
+    """预算不足的候选池必须在规划期报 budget_exceeded，不得事后抬预算。"""
+    from ddp_corpus.federation_tasks import intent as intent_module
+    from ddp_corpus.models import utcnow
+    configure_federation(monkeypatch)
+    node = "node-" + "0" * 48
+    monkeypatch.setattr("ddp_corpus.federation.local_node_id", lambda: node)
+    leaf = "node-" + "d" * 48
+    relay = "node-" + "p" * 48
+    manifest = scope_manifest(
+        [{"origin_node_id": leaf, "collection_id": "leaf-c", "operation": "corpus.retrieve"}],
+        revisions=[(node, 1), (relay, 1), (leaf, 1)])
+    manifest["node_routes"] = [{"node_id": leaf, "via_node_ids": [relay]}]
+    manifest["manifest_digest"] = plans.digest({
+        key: value for key, value in manifest.items() if key != "manifest_digest"})
+    spec = task_spec(scope="federation_public", mode="exhaustive_scope",
+                     scope_ref="scope-hop-budget", query="federation keyword",
+                     operation="corpus.retrieve")
+    consent = exploration(recipients=(relay, leaf))
+    budget = intent_module._intent_budget(spec, manifest, consent, now=utcnow())
+    need = routing.hop_need(
+        targets=[{"origin_node_id": leaf, "collection_id": "leaf-c",
+                  "operation": "corpus.retrieve"}],
+        coordinator_node_id=node,
+        node_routes=[{"node_id": leaf, "via_node_ids": [relay]}])
+    assert need < 8
+    assert budget["max_hops"] == need, budget
+
+
 @respx.mock
 async def test_leaves_sharing_a_relay_keep_every_relayed_transmission_in_budget(
         actor_client, session, monkeypatch):

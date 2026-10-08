@@ -575,3 +575,100 @@ async def test_partial_prompt_revocation_does_not_renumber_or_release_answer(cli
     assert chat.call_count == 1 and response.status_code == 404
     assert "confidential generated answer" not in response.text and retained.id not in response.text
     assert (await client.get(f"/internal/mcp/evidence/{retained.id}")).status_code == 200
+
+
+@respx.mock
+async def test_search_results_carry_shared_retrieval_degraded(actor_client, corpus, app_state, monkeypatch):
+    """MCP search 走共享 search_query：关键词腿的降级必须透出来（不变式 2）。"""
+    from ddp_core.search import SearchHits
+
+    respx.post(EMBEDDINGS).mock(return_value=Response(200, json={
+        "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3]}]}))
+    degraded_hits = SearchHits([{"chunk_id": "missing-chunk",
+                                  "derived_evidence_id": corpus["public_evidence"].id,
+                                  "evidence_id": None}],
+                                degraded="keyword_unavailable")
+
+    async def fake_search(session, **kwargs):
+        return degraded_hits
+
+    monkeypatch.setattr(app_state.search_index, "search", fake_search)
+    body = (await _search(actor_client, PUBLIC_TEXT)).json()
+    assert body["degraded"] == "keyword_unavailable"
+
+
+@respx.mock
+async def test_search_fans_out_compound_query_through_shared_path(
+        actor_client, corpus, app_state, monkeypatch):
+    """MCP `_search` 走共享 `search_query`：复合问题按分面拆查，每面一批向量。
+
+    只 mock 最底层的 `index.search` 钉不住路由：直调它和经共享路径都会走到
+    同一个 mock。这里盯住扇出形状 —— 复合问题必须触发多路检索且分面批量
+    向量化（与抽取平面的 `test_retrieve_fans_out_compound_query_through_shared_path`
+    同一判据）。直调 `index.search` 的实现只查一次，直接变红。
+    """
+    from ddp_corpus.routers import mcp_tools as mcp_tools_mod
+
+    queries: list = []
+    real_search = app_state.search_index.search
+
+    async def recording_search(session, **kwargs):
+        queries.append(kwargs.get("query"))
+        return await real_search(session, **kwargs)
+
+    monkeypatch.setattr(app_state.search_index, "search", recording_search)
+    respx.post(EMBEDDINGS).mock(side_effect=lambda request: Response(200, json={
+        "data": [{"index": index, "embedding": [0.1, 0.2, 0.3]}
+                 for index in range(len(json.loads(request.content)["input"]))]}))
+    embed_calls: list = []
+    real_batched = mcp_tools_mod.embed_batched
+
+    async def spy_batched(http, texts):
+        embed_calls.append(list(texts))
+        return await real_batched(http, texts)
+
+    monkeypatch.setattr(mcp_tools_mod, "embed_batched", spy_batched)
+    question = ("What supply voltage does the device use "
+                "and which wireless protocol does it support?")
+    response = await _search(actor_client, question)
+    assert response.status_code == 200, response.text
+    assert len(queries) > 1, f"MCP _search 该经 search_query 扇出，实际只查了 {queries}"
+    assert embed_calls and len(embed_calls[0]) > 1, "扇出后该批量向量化所有分面"
+    assert len(queries) == len(embed_calls[0]), "每面一路检索、一个向量"
+
+
+async def test_resolve_chunk_is_scoped_to_allowed_parse_jobs(session, corpus):
+    """_resolve_chunk 给了 allowed 集合就按它收：排除在外接不回，包含才接回。"""
+    from ddp_corpus.routers.mcp_tools import _resolve_chunk
+
+    evidence = corpus["public_evidence"]
+    assert await _resolve_chunk(session, evidence) is not None
+    assert await _resolve_chunk(session, evidence,
+                                allowed_parse_job_ids={corpus["public_job"].id}) is not None
+    assert await _resolve_chunk(session, evidence,
+                                allowed_parse_job_ids={"other-parse-job"}) is None
+
+@respx.mock
+async def test_wiki_ranking_surfaces_keyword_unavailable(actor_client, session, app_state, monkeypatch):
+    """关键词腿失败时 Wiki 选证报告必须透出 keyword_unavailable（不变式 2）。"""
+    from ddp_core.search import SearchHits
+    from test_wiki_revisions import body, model, source
+
+    resource, version, evidence, _ = await source(session)
+    model(evidence)
+    # 向量路必须成功 degraded 才从 None 起步：embed 挂了的话
+    # embedding_unavailable 按规则优先，关键词腿的标记就看不见了。
+    respx.post(EMBEDDINGS).mock(return_value=Response(200, json={
+        "data": [{"index": 0, "embedding": [0.1] * 1024}]}))
+    real_search = app_state.search_index.search
+
+    async def failing_keyword(session, **kwargs):
+        hits = await real_search(session, **kwargs)
+        return SearchHits(list(hits), degraded="keyword_unavailable")
+
+    monkeypatch.setattr(app_state.search_index, "search", failing_keyword)
+    created = await actor_client.post("/api/wikis", json=body(resource, version),
+                                      headers={"Idempotency-Key": "wiki-keyword-degraded"})
+    assert created.status_code == 201, created.text
+    selection = created.json()["revision"]["limits"]["evidence_selection"]
+    assert selection["ranking_degraded"] == "keyword_unavailable"

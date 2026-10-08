@@ -8,6 +8,7 @@ import json
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ddp_contracts import BLOCK_TYPE_VALUES as BLOCK_TYPES
 from ddp_corpus import cache
 from ddp_corpus.config import settings
 from ddp_corpus.deps import Actor
@@ -128,7 +129,7 @@ async def freeze_sources(session: AsyncSession, actor: Actor, body: dict, *,
             Chunk, Chunk.evidence_id == Evidence.id).where(
             Chunk.document_id == document.id, Chunk.parse_job_id == version.parse_job_id,
             Evidence.derived_from.is_(None), Evidence.content != "",
-            Evidence.kind.in_(["text", "title", "table", "image", "code", "formula", "other"]),
+            Evidence.kind.in_(BLOCK_TYPES),
         ).order_by(Evidence.seq, Evidence.id))).scalars().all()
         if not rows:
             fail(409, "wiki_source_unavailable", "source version has no indexed original evidence")
@@ -146,6 +147,8 @@ async def freeze_sources(session: AsyncSession, actor: Actor, body: dict, *,
             session, vector=vector, query=body["title"], document_id=document.id,
             authorized_parse_job_ids=[version.parse_job_id], limit=body["max_evidence"],
             candidates=body["max_evidence"], min_similarity=settings.qa_min_similarity)
+        degraded = degraded or getattr(hits, "degraded", None) or (
+            "embedding_unavailable" if vector is None else None)
         ranked = list(dict.fromkeys(hit["evidence_id"] for hit in hits
                                     if hit.get("evidence_id") in by_id))
         placed = set(ranked)

@@ -6,6 +6,7 @@
 Document 与 ParseJob 分离（ADR #15）：换引擎/参数重解析 = 同一 Document 下新增一个 job，
 两个版本并存，用户显式切换 current_job 才会影响预览与索引。
 """
+import asyncio
 import hashlib
 import json
 import mimetypes
@@ -16,7 +17,7 @@ from dataclasses import replace
 import httpx
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -754,38 +755,123 @@ async def download(document_id: str, format: str = "md", job: str = "",
         return RedirectResponse(url, status_code=302)
 
     parse_job = await _archived_job(session, document, job or None, actor)
+    prefix = prefix_of(parse_job)
     if format == "md":
-        data, media, name = (await storage.get(f"{parse_job.result_prefix}document.md"),
-                             "text/markdown; charset=utf-8", f"{stem}.md")
-    elif format == "json":
-        data, media, name = (await storage.get(f"{parse_job.result_prefix}layout.json"),
-                             "application/json", f"{stem}.layout.json")
-    elif format == "zip":
-        data, media, name = await _bundle_zip(storage, parse_job), "application/zip", f"{stem}.zip"
-    else:
-        raise APIError(400, f"unknown format: {format}", "invalid_request_error", "bad_format")
-    return Response(content=data, media_type=media, headers={
-        "Content-Disposition": f'attachment; filename="{name}"'})
+        try:
+            data = await storage.get_limited(f"{prefix}document.md", MAX_DERIVED_FILE)
+        except ValueError as exc:
+            raise APIError(413, "derived result exceeds download limit",
+                           "invalid_request_error", "result_too_large") from exc
+        media, name = "text/markdown; charset=utf-8", f"{stem}.md"
+        return Response(content=data, media_type=media, headers={
+            "Content-Disposition": f'attachment; filename="{name}"'})
+    if format == "json":
+        try:
+            data = await storage.get_limited(f"{prefix}layout.json", MAX_DERIVED_FILE)
+        except ValueError as exc:
+            raise APIError(413, "derived result exceeds download limit",
+                           "invalid_request_error", "result_too_large") from exc
+        media, name = "application/json", f"{stem}.layout.json"
+        return Response(content=data, media_type=media, headers={
+            "Content-Disposition": f'attachment; filename="{name}"'})
+    if format == "zip":
+        # 不变式 6：zip 边读边产，不在内存里拼包。成员超限即整包 413，
+        # 明说而不截断（铁律 7：流里不用请求 session，允许前先把授权做完）。
+        names = await _zip_member_names(storage, parse_job)
+        return StreamingResponse(
+            _zip_stream(storage, parse_job, names),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{stem}.zip"'})
+    raise APIError(400, f"unknown format: {format}", "invalid_request_error", "bad_format")
 
 
-async def _bundle_zip(storage: Storage, job: ParseJob) -> bytes:
-    """markdown + 版面 + 图片打包。图片留在 images/ 下，markdown 里的引用同步改成相对路径，
-    这样解压出来就能直接用编辑器打开看图。"""
+#: 单个派生成果上限：markdown/版面是本层生成的文本，64MiB 之外即拒绝并明说。
+#: 与 bundle 的 MAX_FILE 对齐；超限走 413 + result_too_large，不静默截断。
+MAX_DERIVED_FILE = 64 * 1024 * 1024
+#: zip 成员总数与单成员上限：图片是二进制，逐个封顶、逐个核算。
+MAX_ZIP_MEMBERS = 2000
+MAX_ZIP_MEMBER = 16 * 1024 * 1024
+
+
+async def _zip_member_names(storage: Storage, job: ParseJob) -> list[str]:
+    """列出并封顶 zip 成员：markdown + 版面 + images/ 下的图片。"""
+    prefix = prefix_of(job)
+    sizes = await asyncio.gather(
+        storage.stat_size(f"{prefix}document.md"),
+        storage.stat_size(f"{prefix}layout.json"),
+    )
+    if any(size > MAX_DERIVED_FILE for size in sizes):
+        raise APIError(413, "derived result exceeds download limit",
+                       "invalid_request_error", "result_too_large")
+    image_keys = await storage.list_prefix(f"{prefix}images/")
+    if len(image_keys) > MAX_ZIP_MEMBERS:
+        raise APIError(413, "derived result has too many images",
+                       "invalid_request_error", "result_too_large")
+    for key in image_keys:
+        if await storage.stat_size(key) > MAX_ZIP_MEMBER:
+            raise APIError(413, f"derived image exceeds download limit: {key}",
+                           "invalid_request_error", "result_too_large")
+    return image_keys
+
+
+async def _zip_stream(storage: Storage, job: ParseJob, image_keys: list[str]):
+    """Yield a ZIP archive while it is being built; peak memory is one member.
+
+    ZIP 的中央目录在尾部：本地文件头 + 压缩数据先出、目录最后。`zipfile` 按此
+    顺序写一个 queue-backed fileobj，写线程产出一块、HTTP 消费一块 —— 内存里
+    永远只有队列里的几块 + 一个成员，不再是"全部成员 + 整包"的双倍峰值。
+    流里只碰对象存储（铁律 7：请求 session 早已不在这里用）。
+    """
     import io
     import zipfile
 
-    markdown = (await storage.get(f"{job.result_prefix}document.md")).decode()
-    image_keys = await storage.list_prefix(f"{job.result_prefix}images/")
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for key in image_keys:
-            name = key.rsplit("/", 1)[-1]
-            markdown = markdown.replace(f"{image_base_url(job.document_id, job.id)}/{name}",
-                                        f"images/{name}")
-            zf.writestr(f"images/{name}", await storage.get(key))
-        zf.writestr("document.md", markdown)
-        zf.writestr("layout.json", await storage.get(f"{job.result_prefix}layout.json"))
-    return buf.getvalue()
+    prefix = prefix_of(job)
+    markdown = (await storage.get_limited(f"{prefix}document.md", MAX_DERIVED_FILE)).decode()
+    for key in image_keys:
+        name = key.rsplit("/", 1)[-1]
+        markdown = markdown.replace(f"{image_base_url(job.document_id, job.id)}/{name}",
+                                    f"images/{name}")
+    layout = await storage.get_limited(f"{prefix}layout.json", MAX_DERIVED_FILE)
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+    sentinel = object()
+    errors: list[BaseException] = []
+    loop = asyncio.get_running_loop()
+
+    class _QueueWriter(io.RawIOBase):
+        def writable(self) -> bool:
+            return True
+
+        def write(self, data) -> int:
+            asyncio.run_coroutine_threadsafe(queue.put(bytes(data)), loop).result()
+            return len(data)
+
+    def _fetch(coro):
+        return asyncio.run_coroutine_threadsafe(coro, loop).result()
+
+    def _build() -> None:
+        try:
+            with zipfile.ZipFile(_QueueWriter(), "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("document.md", markdown.encode())
+                zf.writestr("layout.json", layout)
+                for key in image_keys:
+                    name = key.rsplit("/", 1)[-1]
+                    zf.writestr(f"images/{name}",
+                                _fetch(storage.get_limited(key, MAX_ZIP_MEMBER)))
+        except BaseException as exc:  # noqa: BLE001 —— 消费端按原错处理
+            errors.append(exc)
+        finally:
+            _fetch(queue.put(sentinel))
+
+    worker = asyncio.create_task(asyncio.to_thread(_build))
+    while True:
+        piece = await queue.get()
+        if piece is sentinel:
+            break
+        yield piece
+    await worker
+    if errors:
+        raise errors[0]
 
 
 @router.delete("/{document_id}", status_code=204)

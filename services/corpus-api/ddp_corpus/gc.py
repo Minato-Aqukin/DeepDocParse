@@ -1,13 +1,15 @@
 """Reference-safe object collection with durable retry manifests.
 
-Persist the exact deletion manifest before the first destructive call. Reacquire
-the content row lock and recheck references after that commit, then hold it through
-object deletion. A failed or interrupted sweep never loses its remaining keys.
+Persist the exact deletion manifest before the first destructive call, claimed
+with a conditional UPDATE (deleted_at IS NOT NULL) so a concurrent revival wins
+the race. Reacquire the content row lock and recheck references after that
+commit, then hold it through object deletion. A failed or interrupted sweep
+never loses its remaining keys.
 """
 
 from datetime import timedelta
 
-from sqlalchemy import String, cast, delete, exists, func, or_, select, text, update
+from sqlalchemy import String, and_, cast, delete, exists, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ddp_corpus.config import settings
@@ -36,20 +38,25 @@ ACTIVE_PARSES = ("pending", "running", "archiving")
 REMOTE_COMPUTE_TMP_PREFIX = "tmp-remote-compute/"
 
 
+def _dialect_name(session) -> str:
+    bind = session.bind
+    engine = getattr(bind, "sync_engine", None) or bind
+    return getattr(getattr(engine, "dialect", None), "name", "") or ""
+
+
 async def collect_terminal_upload(session, storage, *, object_key, eligible_at) -> bool:
     """Collect only an original with no corpus reference; control owns its claim.
 
-    A missing row cannot be row-locked. PostgreSQL table locks fence *all* writers
-    of original references, including bundle import and compute binding, through
-    the destructive call. This rare orphan path never guesses by content hash.
+    PostgreSQL fences *all* writers of original references with a table lock.
+    Without that lock a concurrent bundle-import or compute-bind can land
+    between the reference checks and the delete and lose live bytes, so
+    non-PostgreSQL backends refuse loudly instead of deleting unfenced.
     """
+    from ddp_corpus.errors import APIError
     from ddp_corpus.remote_compute_models import RemoteCompute
 
     if as_aware(eligible_at) > utcnow() - timedelta(seconds=settings.gc_grace_seconds):
         return False
-    if session.bind.dialect.name == "postgresql":
-        await session.execute(text(
-            "LOCK TABLE documents, remote_computes IN SHARE ROW EXCLUSIVE MODE"))
     if await session.scalar(
         select(Document.id).where(Document.object_key == object_key).limit(1)
     ):
@@ -61,6 +68,33 @@ async def collect_terminal_upload(session, storage, *, object_key, eligible_at) 
         return False
     # Pending manifests also protect keys after object_key has been cleared.
     # Do not require a tombstone: interrupted or revived rows can still own one.
+    pending_keys = (await session.execute(
+        select(Document.gc_pending_keys)
+        .where(func.json_array_length(Document.gc_pending_keys) > 0)
+    )).scalars()
+    if any(object_key in keys for keys in pending_keys):
+        return False
+    # PostgreSQL fences *all* writers of original references with a table
+    # lock before the destructive delete. Other backends have no equivalent
+    # fence: the checks above are safe to run anywhere (they only refuse),
+    # but deleting on their word alone would race a concurrent
+    # bundle-import or compute-bind and lose live bytes — so refuse loudly.
+    if _dialect_name(session) != "postgresql":
+        raise APIError(409, "upload reclamation requires PostgreSQL table fencing",
+                       "invalid_request_error", "reclamation_unsupported_dialect")
+    await session.execute(text(
+        "LOCK TABLE documents, remote_computes IN SHARE ROW EXCLUSIVE MODE"))
+    # Recheck under the lock: a writer may have landed between the pre-checks
+    # and the fence. Only the fenced verdict authorizes the delete below.
+    if await session.scalar(
+        select(Document.id).where(Document.object_key == object_key).limit(1)
+    ):
+        return False
+    if await session.scalar(
+        select(RemoteCompute.id)
+        .where(RemoteCompute.input_object_key == object_key).limit(1)
+    ):
+        return False
     pending_keys = (await session.execute(
         select(Document.gc_pending_keys)
         .where(func.json_array_length(Document.gc_pending_keys) > 0)
@@ -312,6 +346,62 @@ async def _collect_keys(session, storage, document, versions, jobs):
     )
 
 
+async def _drain_keys(session, storage, document, keys: list[str]) -> list[str]:
+    """Delete keys, persisting partial progress. Never buffers object bytes."""
+    remaining = list(keys)
+    for key in tuple(remaining):
+        try:
+            await storage.delete(key)
+        except Exception as exc:
+            document.gc_error = f"delete_failed:{type(exc).__name__}"
+            break
+        remaining.remove(key)
+    document.gc_pending_keys = remaining
+    return remaining
+
+
+async def _delete_chunks(session, document) -> None:
+    # Cache text and vectors have no rebuildable source now. Audit
+    # evidence and citations deliberately remain untouched.
+    await session.execute(delete(Chunk).where(Chunk.document_id == document.id))
+
+
+async def _claim_manifest(session, document, *, deleted_at, keys) -> bool:
+    """Conditional-UPDATE claim (iron rule 6): the row must still be deleted.
+
+    The UPDATE itself is the fence: it matches zero rows when a concurrent
+    revival cleared deleted_at between lock and commit, and nothing is
+    mutated in-session before it runs, so a racing revival is never
+    overwritten by autoflush. Returns True when the claim won.
+    Rows that were never stamped but are logically deleted through tombstoned
+    versions/resources claim the live-to-deleted transition instead, with the
+    same loser-rolls-back semantics.
+    """
+    parked = sorted(set(keys) | ({document.object_key} if document.object_key else set()))
+    if document.deleted_at is None:
+        claim = (
+            update(Document)
+            .where(Document.id == document.id, Document.deleted_at.is_(None))
+            .values(deleted_at=deleted_at, gc_pending_keys=parked,
+                    gc_error=None, object_key="")
+        )
+    else:
+        claim = (
+            update(Document)
+            .where(Document.id == document.id, Document.deleted_at.is_not(None))
+            .values(deleted_at=deleted_at, gc_pending_keys=parked,
+                    gc_error=None, object_key="")
+        )
+    if (await session.execute(claim)).rowcount == 0:
+        await session.rollback()
+        return False
+    document.deleted_at = deleted_at
+    document.gc_pending_keys = parked
+    document.gc_error = None
+    document.object_key = ""
+    return True
+
+
 async def collect_deleted_objects(
     sessionmaker: async_sessionmaker, storage: Storage, limit: int = 20
 ) -> int:
@@ -333,14 +423,24 @@ async def collect_deleted_objects(
                 or_(ResourceVersion.deleted_at.is_not(None), Resource.deleted_at.is_not(None)),
             )
         )
+        # Live rows can own a committed manifest (revive parks the superseded
+        # key; a revival racing the manifest commit leaves it behind). They
+        # are candidates for the live-row drain only — never for byte
+        # collection while live.
+        live_with_manifest = Document.deleted_at.is_(None) & pending
         candidate_ids = list(
             (
                 await session.execute(
                     select(Document.id)
                     .where(
-                        or_(Document.object_key != "", pending, reclaimed_chunks),
-                        or_(Document.deleted_at.is_not(None), tombstoned, pending),
-                        ~_live_versions(Document.id),
+                        or_(
+                            and_(
+                                or_(Document.object_key != "", pending, reclaimed_chunks),
+                                or_(Document.deleted_at.is_not(None), tombstoned, pending),
+                                ~_live_versions(Document.id),
+                            ),
+                            live_with_manifest,
+                        )
                     )
                     .order_by(Document.created_at)
                     .limit(limit * 5)
@@ -352,7 +452,38 @@ async def collect_deleted_objects(
             if cleaned >= limit:
                 break
             document, versions, jobs = await _load_locked(session, document_id)
-            if document is None or await _protected(session, document, versions, jobs):
+            if document is None:
+                await session.rollback()
+                continue
+            # A live row can still own a committed manifest: revive parks the
+            # superseded key (ingest._revive) and a revival racing the manifest
+            # commit leaves it behind. Drain still-unreferenced manifest keys
+            # against fresh references instead of leaking them forever.
+            if document.deleted_at is None and (document.gc_pending_keys or []):
+                live_keys = list(document.gc_pending_keys or [])
+                try:
+                    unreferenced = set(
+                        await _collect_keys(session, storage, document, versions, jobs))
+                except Exception as exc:
+                    document.gc_error = f"list_failed:{type(exc).__name__}"
+                    await session.commit()
+                    continue
+                # The live original is back in object_key, so _collect_keys may
+                # re-add the live key itself: never drain the current original.
+                unreferenced.discard(document.object_key)
+                # _collect_keys re-adds pending keys only when still unreferenced;
+                # keys another row now references are dropped from the manifest.
+                # _drain_keys sets gc_pending_keys to the undrained remainder of
+                # `doomed`; re-referenced keys (live_keys - unreferenced) must
+                # leave the manifest without being deleted.
+                doomed = sorted(set(live_keys) & unreferenced)
+                await _drain_keys(session, storage, document, doomed)
+                keep = set(document.gc_pending_keys) - (set(live_keys) - unreferenced)
+                keep.discard(document.object_key)
+                document.gc_pending_keys = sorted(keep)
+                await session.commit()
+                continue
+            if await _protected(session, document, versions, jobs):
                 await session.rollback()
                 continue
             deleted_at = await _deletion_time(session, document, versions)
@@ -365,13 +496,16 @@ async def collect_deleted_objects(
                 document.gc_error = f"list_failed:{type(exc).__name__}"
                 await session.commit()
                 continue
-            document.deleted_at = deleted_at
-            # The exact old keys are now durable before object_key is cleared. A process
-            # crash after any delete can repeat that idempotent delete on the next sweep.
-            document.gc_pending_keys = keys
-            document.gc_error = None
-            document.object_key = ""
-            await session.commit()
+            # The exact old keys are now claimed before object_key is cleared. A
+            # process crash after any delete can repeat that idempotent delete
+            # on the next sweep. The UPDATE itself is the fence: nothing is
+            # mutated in-session before it runs, so a racing revival is never
+            # overwritten by autoflush.
+            if not await _claim_manifest(session, document, deleted_at=deleted_at, keys=keys):
+                # A revival raced the manifest commit and won the conditional
+                # UPDATE: the claim loses, no byte is touched. The parked keys
+                # stay owned by the live-row drain above.
+                continue
 
             # The manifest commit releases the row lock. A writer may have acquired a
             # new reference in that gap: recheck before deleting a single byte.
@@ -383,19 +517,10 @@ async def collect_deleted_objects(
             ):
                 await session.rollback()
                 continue
-            remaining = list(document.gc_pending_keys)
-            for key in tuple(remaining):
-                try:
-                    await storage.delete(key)
-                except Exception as exc:
-                    document.gc_error = f"delete_failed:{type(exc).__name__}"
-                    break
-                remaining.remove(key)
-            document.gc_pending_keys = remaining
+            remaining = await _drain_keys(session, storage, document,
+                                          list(document.gc_pending_keys))
             if not remaining:
-                # Cache text and vectors have no rebuildable source now. Audit
-                # evidence and citations deliberately remain untouched.
-                await session.execute(delete(Chunk).where(Chunk.document_id == document.id))
+                await _delete_chunks(session, document)
                 document.gc_error = None
                 cleaned += 1
             await session.commit()

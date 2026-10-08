@@ -102,6 +102,50 @@ async def test_terminal_writes_cannot_overwrite_cancelled_with_current_generatio
     row = await session.get(Task, task.id, populate_existing=True)
     assert row.status == "cancelled"
 
+async def test_fail_loses_to_cancel_between_read_and_write(session):
+    """cancel 插在"fail 读行"与"fail 写失败"之间时 cancel 赢。
+
+    旧实现先 `session.get` 读行、再在内存里改状态提交：cancel 若插在中间，
+    迟到的失败会把 cancelled 复活成 queued/failed。新实现第二次 UPDATE 带
+    generation + 状态守卫，cancel 赢 —— 统一 StaleGeneration，行保持 cancelled。
+    """
+    from ddp_corpus import queue as queue_module
+
+    await enqueue(session, kind="index", payload={})
+    await session.commit()
+    [task] = await claim(session, ["index"])
+    task_id, generation = task.id, task.generation
+
+    real_execute = session.execute
+    cancelled = False
+
+    async def _execute_with_cancel_racing_in(stmt, *args, **kwargs):
+        nonlocal cancelled
+        # 在 fail 的第二次 UPDATE（写 queued/failed 的那条）**执行前**插 cancel。
+        # 字面量编译后的 SQL 带目标状态值；cancel 自己的 UPDATE 也带 cancelled
+        # 字面量 —— 但它发生在 cancelled 置位之后，旗标保证只拦第一次。
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+        if (not cancelled and compiled.startswith("update")
+                and "tasks" in compiled
+                and ("queued" in compiled or "failed" in compiled)):
+            async with db.get_sessionmaker()() as own:
+                assert await cancel(own, task_id) is True
+            cancelled = True
+        return await real_execute(stmt, *args, **kwargs)
+
+    session.execute = _execute_with_cancel_racing_in
+    try:
+        with pytest.raises(StaleGeneration):
+            await fail(session, task_id, generation, "迟到的失败")
+    finally:
+        session.execute = real_execute
+    assert cancelled, "cancel 没插进去 —— 这个测试什么都没测到"
+
+    row = await session.get(Task, task_id, populate_existing=True)
+    assert row.status == "cancelled", "cancel 赢：迟到的 fail 不得复活终态"
+    assert row.error == "cancelled"
+    assert await queue_module.claim(session, ["index"]) == []
+
 
 async def test_cancel_of_succeeded_is_a_noop(session):
     await enqueue(session, kind="index", payload={})
@@ -183,6 +227,36 @@ async def test_runner_stops_handler_when_heartbeat_fails(session, monkeypatch):
         release.set()
         if handler_task is not None:
             await asyncio.gather(handler_task, return_exceptions=True)
+
+async def test_runner_times_out_a_hung_handler(session, monkeypatch):
+    """挂起的 handler 超过 deadline 后被取消，任务以 task_timeout 落失败/重试。
+
+    没有 deadline 时，这个任务会永远占着租约（心跳一直续）—— 活锁。
+    短 deadline 下它必须停手，且行上留的是 task_timeout 而不是"一直在处理中"。
+    """
+    await enqueue(session, kind="index", payload={})
+    await session.commit()
+    [task] = await claim(session, ["index"])
+    started, stopped = asyncio.Event(), asyncio.Event()
+
+    async def hung(claimed, state):
+        started.set()
+        try:
+            await asyncio.sleep(3600)
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr(settings, "task_heartbeat_seconds", 0.001)
+    monkeypatch.setattr(settings, "task_max_runtime_seconds", 0.02)
+    monkeypatch.setattr(settings, "task_max_runtime_seconds_by_kind", {})
+    state = WorkerState(http=None, storage=None, search_index=None)
+    await asyncio.wait_for(run_one(task, Pool("index", hung, 1), state), timeout=5)
+    assert stopped.is_set(), "超时的 handler 必须被取消，不能留孤儿协程"
+    row = await session.get(Task, task.id, populate_existing=True)
+    assert row.status == "queued", "还有重试机会就该排回去等退避"
+    assert row.error is not None and "task_timeout" in row.error
+    assert row.lease_until is None
+
 
 
 async def test_cancelling_runner_joins_handler_before_returning(session):

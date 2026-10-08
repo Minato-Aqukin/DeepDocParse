@@ -45,7 +45,7 @@ from ddp_corpus.service_client import ServiceClient  # noqa: E402
 from ddp_corpus.storage import MemoryStorage  # noqa: E402
 
 SERVICE = "http://127.0.0.1:9000"       # 与 settings.service_url 默认值一致
-CONTROL = "http://127.0.0.1:8080"       # 与 settings.control_url 默认值一致
+CONTROL = "http://127.0.0.1:8090"       # 与 settings.control_url 默认值一致
 EMBEDDINGS = f"{SERVICE}/v1/embeddings"
 CHAT = f"{SERVICE}/v1/chat/completions"
 

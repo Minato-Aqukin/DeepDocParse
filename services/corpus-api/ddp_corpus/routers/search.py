@@ -69,6 +69,9 @@ async def search(request: Request, q: str = "", doc: str = "", limit: int = 20,
             group["hits"].append({
                 "chunk_id": hit["chunk_id"], "page_idx": hit["page_idx"], "bbox": hit.get("bbox"),
                 "printed_page_label": hit.get("printed_page_label"),
+                "parse_job_id": hit.get("parse_job_id"), "seq": hit.get("seq"),
+                "evidence_id": hit.get("derived_evidence_id") or hit.get("evidence_id"),
+                "page_size": hit.get("page_size"),
                 "score": hit.get("score"), "similarity": hit.get("similarity"),
                 "snippet": " ".join(hit["text"].split())[:200],
             })

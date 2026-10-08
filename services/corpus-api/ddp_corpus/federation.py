@@ -92,9 +92,9 @@ from ddp_corpus.usage import record_usage
 PROBE_TTL_SECONDS = 300
 #: 请求内执行的墙钟上限。超时按失败落库，绝不能把请求永远挂住。
 EXECUTION_BUDGET_SECONDS = 30.0
-#: 执行租约：到期后（本切片内不会有别的 worker 接管）用于区分"还在跑"。
+#: 执行租约：到期后（没有别的 worker 接管）用于区分"还在跑"。
 EXECUTION_LEASE_SECONDS = 300
-#: 本切片真正实现的 operation。`answer`/`wiki_pages` 只在本节点生成就绪时受理，
+#: 这里真正实现的 operation。`answer`/`wiki_pages` 只在本节点生成就绪时受理，
 #: 消费受理时已校验的有界证据快照（远端原始结果，回 A 提交）；不生成就不接单，
 #: 绝不接受后再静默失败。
 SUPPORTED_OPERATIONS = {"retrieve", "delegate", "answer", "wiki_pages"}
@@ -110,6 +110,7 @@ _STATUS_BY_CODE = {
     "input_not_verified": 409,
     "partial_retrieval": 409,
     "capability_unsupported": 409,
+    "capability_unknown": 409,
     "admission_unknown": 409,
     "consent_required": 403,
     "consent_expired": 410,
@@ -239,14 +240,50 @@ async def _excerpts(session: AsyncSession, actor: Actor, hits: list, contexts: d
     return out
 
 
+def is_pdf_document(document: Document | None) -> bool:
+    """该证据的来源文档是否为 PDF（locator 分支的唯一判据）。"""
+    return document is not None and document.mime == "application/pdf"
+
+
+def evidence_locator(*, is_pdf: bool, page_idx: int, seq: int, bbox, page_size,
+                     printed_page_label: str | None) -> dict:
+    """`ddp-evidence/1#Locator`：PDF 用真实页坐标，非 PDF 不伪造页码。
+
+    PDF 时保持既有 `page_block` 形状；其余 mime 一律 `kind="paragraph"` 且**不带**
+    `physical_page_index`（schema 只对 page_block/table_cell 要求物理页序；写 0 就是
+    编造第 1 页，bundle 校验器也会拒收）。bbox/seq/page_size 照旧，page_size 经
+    `_page_size` 归一化；printed_page_label 只在 PDF 路径透出。
+    联邦信封、Bundle 导出与 client 投影共用这一份，形状不得各写各的。
+    """
+    size = _page_size(page_size)
+    if is_pdf:
+        return {
+            "kind": "page_block",
+            "physical_page_index": page_idx,
+            **({"printed_page_label": printed_page_label}
+               if printed_page_label is not None else {}),
+            "seq": seq,
+            "bbox": bbox,
+            "page_size": size,
+        }
+    return {"kind": "paragraph", "seq": seq, "bbox": bbox, "page_size": size}
+
+
+def federated_locator(evidence: Evidence, document: Document | None) -> dict:
+    return evidence_locator(
+        is_pdf=is_pdf_document(document), page_idx=evidence.page_idx, seq=evidence.seq,
+        bbox=evidence.bbox, page_size=evidence.page_size,
+        printed_page_label=evidence.printed_page_label)
+
+
 async def _federated_evidence(session: AsyncSession, evidence: Evidence,
                               document: Document, allowed: list, versions: dict, *,
                               node: str, retrieval_receipt_ref: str | None = None,
                               score=None, similarity=None) -> dict:
     """`ddp-evidence/1#FederatedEvidence` 信封。**没有 URL、没有文件字节** ——
     下载地址是临时位置，不是证据身份（federation-format.md）。字段映射见
-    schema 的 x-ddp-local-mapping；与 `routers/client.py::client_evidence`、
-    `routers/bundles.py` 的同一形状。
+    schema 的 x-ddp-local-mapping；`routers/client.py::client_evidence` 与
+    `routers/bundles.py` 的信封形状相同，locator 三处共用 `evidence_locator`。
     """
     ordered = sorted(allowed, key=lambda item: (item.created_at, item.version_id or ""))
     context = ordered[0]
@@ -255,7 +292,6 @@ async def _federated_evidence(session: AsyncSession, evidence: Evidence,
     source_digest = version.source_digest if version and len(version.source_digest or "") == 64 \
         else evidence.content_digest if len(evidence.content_digest or "") == 64 \
         else hashlib.sha256((evidence.content or "").encode()).hexdigest()
-    page_size = _page_size(evidence.page_size)
     return {
         "schema": "ddp-evidence/1#FederatedEvidence",
         "evidence_id": evidence.id,
@@ -266,15 +302,7 @@ async def _federated_evidence(session: AsyncSession, evidence: Evidence,
         "source_digest": "sha256:" + source_digest,
         "parse_revision": evidence.parse_job_id,
         "excerpt_digest": byte_digest((evidence.content or "").encode("utf-8")),
-        "locator": {
-            "kind": "page_block",
-            "physical_page_index": evidence.page_idx,
-            **({"printed_page_label": evidence.printed_page_label}
-               if evidence.printed_page_label is not None else {}),
-            "seq": evidence.seq,
-            "bbox": evidence.bbox,
-            "page_size": page_size,
-        },
+        "locator": federated_locator(evidence, document),
         "source_type": "generated" if evidence.derived_from else "source",
         "derived_from": evidence.derived_from,
         "uploader_ref": document.uploaded_by or None,
@@ -638,6 +666,32 @@ async def _evidence_probe(session: AsyncSession, actor: Actor, request: dict, *,
     return probe, evidence, state
 
 
+def capability_outcome(readiness: str | None, *, probe: dict | None = None) -> str:
+    """readiness -> 协调者 outcome：`ready`|`capability_unknown`|`not_ready`。
+
+    `unknown`（含未观测：readiness 缺席/非法，或 capability profile 缺席）
+    一律 `capability_unknown` —— 它是"需预检、可重试"，绝不是"可排除"；
+    只有已证伪的非 ready（unhealthy/draining/configured 等）才 `not_ready`
+    （unsupported 口径，可带 basis 排除）。`_capability_probe`/`_locate_probe`/
+    `_evidence_probe` 的 capability_check 路径自带 readiness verbatim，
+    且 `missing_requirements` 只在 proven-not-ready 时出现、unknown 永不携带
+    （规划侧据此区分 unknown-vs-unsupported）。
+
+    答案候选探测（`federation_tasks._probe_answer_candidates`）须用
+    它改写 `outcomes[candidate] = "not_ready"` —— unknown 走 `capability_unknown`
+    （retryable-needs-precheck），unsupported 才走 `not_ready` 排除。
+    """
+    value = readiness
+    if value is None and isinstance(probe, dict):
+        check = probe.get("capability_check") or {}
+        value = check.get("readiness") if isinstance(check, dict) else None
+    if value == "ready":
+        return "ready"
+    if value == "unknown" or value not in ("ready", "draining", "unhealthy", "configured"):
+        return "capability_unknown"
+    return "not_ready"
+
+
 async def _capability_probe(session: AsyncSession, actor: Actor, request: dict, *,
                             now: datetime, http) -> tuple[dict, list[dict], str]:
     """回答"这个节点现在能不能做某个 operation"。
@@ -711,7 +765,7 @@ async def _locate_probe(session: AsyncSession, actor: Actor, request: dict, *,
 
 async def run_probe(session: AsyncSession, actor: Actor, request: dict, *, now: datetime,
                     http=None, index=None, idempotency_key: str = "",
-                    commit: bool = True) -> dict:
+                    commit: bool = True, policy_revision: str | None = None) -> dict:
     """执行一次 capability / evidence / locate 探测并持久化。
 
     同键同摘要返回已有回执（不重算）；同键不同摘要 `idempotency_conflict`。
@@ -720,6 +774,12 @@ async def run_probe(session: AsyncSession, actor: Actor, request: dict, *, now: 
     调用方的事务，由调用方提交。协调者用 `pg_advisory_xact_lock` 串行化同一个
     root 的规划，这里一 commit 事务级锁就提前释放了，并发的第二次规划会看到
     draft、把全部外发与探测再做一遍并覆盖计划摘要。
+
+    `policy_revision` 是观测侧元数据（记录侧）：提供时存进
+    落库信封顶层 `result_json["policy_revision"]`（与
+    `cache._recorded_policy_revision` 的 stored/probe/retrieval 来源一致），
+    缺省不存（peer-path 旧行保持 legacy 形状）；它绝不进入 request digest，
+    同键重放不因修订元数据破幂等。无迁移（JSON 列）。
     """
     node = local_node_id()
     if request.get("target_node_id") != node:
@@ -769,14 +829,17 @@ async def run_probe(session: AsyncSession, actor: Actor, request: dict, *, now: 
         # 已加载/已追加的行一起 expire（N8：create_plan 会在全量回滚后
         # 触发 MissingGreenlet）。commit 层的竞争保留全量回滚兜底。
         async with session.begin_nested():
+            envelope = {"kind": kind, "result": result, "evidence": evidence,
+                        "request_digest": digest}
+            if policy_revision is not None:
+                envelope["policy_revision"] = policy_revision
             session.add(FederationProbe(
                 probe_id=probe_id, organization_id=actor.organization_id,
                 actor_id=acting_actor(actor), target_node_id=node,
                 task_spec_digest=task_spec_digest, consent_ref=consent_ref, probe_kind=kind,
                 collection_id=str(request.get("collection_id") or ""),
                 query_digest=str(request.get("query_digest") or ""), state=state,
-                result_json={"kind": kind, "result": result, "evidence": evidence,
-                             "request_digest": digest},
+                result_json=envelope,
                 expires_at=now + timedelta(seconds=PROBE_TTL_SECONDS), created_at=now))
             await session.flush()
     except IntegrityError:
@@ -1326,8 +1389,9 @@ async def _create_admission(session: AsyncSession, actor: Actor, request: dict,
         except TimeoutError:
             await session.rollback()
             current = await require_execution(session, actor, executor_task_id)
-            await _finish_execution(session, executor_task_id, current.generation,
-                                    state="failed", now=utcnow(), error="execution_timeout")
+            await _finish_execution(
+                session, executor_task_id, current.generation,
+                state="failed", now=utcnow(), error="execution_timeout")
     return receipt, True
 
 
@@ -1408,11 +1472,17 @@ async def _finish_execution(session: AsyncSession, executor_task_id: str, genera
                             result_ref: str | None = None,
                             evidence_set_ref: str | None = None,
                             usage: dict | None = None) -> bool:
-    """generation-fenced 落终态。rowcount=0 表示有更新的代次/终态，不许覆盖。
+    """generation + state fenced 落终态。rowcount=0 即 stale，不覆盖。
 
     **状态围栏与代次围栏同等重要**：超时分支会在 `execute` 可能已经提交
     `succeeded` 之后到达，这时同代次的 `failed` 写入必须被拒绝（T85 复核），
     否则一次迟到超时会把刚提交的成功翻掉。
+
+    这里没有 plan/input 围栏：受理行一旦落库就不再更新（同键同摘要重放、
+    同键异摘要 409、同键异体不改已有行），计划推进只会产生新受理行，
+    而执行行经 `admission_id` 绑定它自己的那一行 —— "长 execute 期间
+    计划修订推进"改不掉正在执行的这次受理，没有可比的窗口。
+    计划新鲜度由受理入口当场校验（过期许可/旧修订的请求到不了执行）。
 
     `usage` 与终态同一个事务，而且只有赢下围栏的那次写入才记：被接管的旧
     代次、已取消、已终态的执行一笔都不记（T81／T58）。

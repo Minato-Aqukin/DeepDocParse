@@ -19,7 +19,10 @@
 = "这次任务还没记过账"）是**按任务**的 —— 任务一共享，那个锚点就从
 "每人各记一次"退化成"整个部署只记一次"。
 """
+import socket
+
 import httpx
+import pytest
 import respx
 from sqlalchemy import select
 
@@ -30,13 +33,31 @@ from tests.conftest import ACTOR, ORG, SERVICE, actor_headers, usage_events
 LAYOUT = {"pdf_info": [{"page_idx": i} for i in range(3)]}
 RESULT = {"markdown": "# x", "layout_json": LAYOUT, "images": []}
 
+# forward-time SSRF 检查做真 DNS，而单测的 `third-party.example` 在任何
+# 真 DNS 下都 NXDOMAIN（RFC 2606 保留名）。这里按 host 打桩：测试里的公网名
+# 解析成 example.com 的真实 A 记录（`is_global` 为真）；私网字面 IP、
+# 元数据地址、坏 scheme、userinfo 与 `.invalid` 保留名走真路径（照样拒绝）。
+_STUB_IPS = {"third-party.example": "93.184.216.34"}
+_REAL_GETADDRINFO = socket.getaddrinfo
 
-def _api_key_actor(actor_id: str, key_id: str) -> dict:
+
+@pytest.fixture(autouse=True)
+def _stub_public_dns(monkeypatch):
+    def _fake(host, *args, **kwargs):
+        if host in _STUB_IPS:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "",
+                     (_STUB_IPS[host], 0))]
+        return _REAL_GETADDRINFO(host, *args, **kwargs)
+    monkeypatch.setattr(socket, "getaddrinfo", _fake)
+
+
+def _api_key_actor(actor_id: str, key_id: str, organization_id: str = ORG) -> dict:
     """对外平面的调用者：actor 是 api_key 类型，带着 key id。
 
     生产里这组头由入口在验完 key 之后填。
     """
-    return actor_headers(actor_id, kind="api_key", api_key_id=key_id)
+    return actor_headers(actor_id, kind="api_key", api_key_id=key_id,
+                         organization_id=organization_id)
 
 
 @respx.mock
@@ -230,3 +251,174 @@ async def test_status_query_requires_an_authorized_record(actor_client):
     # An unowned opaque task id cannot bypass resource ACL through the gateway relay.
     assert resp.status_code == 404
     assert not route.called
+
+@respx.mock
+async def test_submit_rejects_oversize_body(actor_client, session, monkeypatch):
+    """请求体上限：Content-Length 快拒 + 流式累计，超限即 413（`bundles.py` 同款）。"""
+    from ddp_corpus.config import settings
+
+    monkeypatch.setattr(settings, "max_upload_bytes", 1024)
+    route = respx.post(f"{SERVICE}/v1/parse").mock(
+        return_value=httpx.Response(202, json={"task_id": "s-big"}))
+    headers = _api_key_actor("actor-a", "key-a")
+    # 快拒路径：声明长度就超限，一个字节都不读（body 与声明一致，
+    # httpx 会按实际内容重算 Content-Length，对不上就测不到快拒）
+    resp = await actor_client.post("/v1/parse", headers={**headers, "Content-Length": "1025"},
+                                   content=b"x" * 1025)
+    assert resp.status_code == 413, resp.text
+    assert resp.json()["error"]["code"] == "request_too_large"
+    assert not route.called, "超限请求绝不能打到上游"
+
+    # 累计路径：分块流式、不声明长度，读到超限同样 413
+    async def _chunks():
+        yield b'{"file_url": "https://third-party.example/a.pdf", "options": {"pad": "'
+        yield b"y" * 2048
+        yield b'"}}'
+    resp = await actor_client.post("/v1/parse", headers=headers, content=_chunks())
+    assert resp.status_code == 413, resp.status_code
+    assert resp.json()["error"]["code"] == "request_too_large"
+    assert not route.called
+
+
+@respx.mock
+async def test_submit_forwards_only_contract_fields(actor_client, session):
+    """调用方的 callback_url（及未知字段）一律丢掉：回调地址是本层的内部面。"""
+    route = respx.post(f"{SERVICE}/v1/parse").mock(
+        return_value=httpx.Response(202, json={"task_id": "s-cb"}))
+    headers = _api_key_actor("actor-a", "key-a")
+    resp = await actor_client.post("/v1/parse", headers=headers, json={
+        "file_url": "https://third-party.example/a.pdf",
+        "engine": "mineru",
+        "options": {"a": 1},
+        "callback_url": "https://evil.example/steal",
+        "admin": True,
+    })
+    assert resp.status_code == 202, resp.text
+    import json as _json
+    forwarded = _json.loads(route.calls.last.request.content)
+    assert "callback_url" not in forwarded, "调用方的 callback_url 绝不能透传给网关"
+    assert "admin" not in forwarded, "未知字段同样丢掉"
+    assert set(forwarded) <= {"file_url", "doc_id", "engine", "options"}
+
+
+@respx.mock
+async def test_forward_strips_internal_headers(actor_client, session):
+    """`x-ddp-*` 全剥、`x-request-id` 重生成：只剩服务凭据 + 内部回调标识。"""
+    route = respx.post(f"{SERVICE}/v1/parse").mock(
+        return_value=httpx.Response(202, json={"task_id": "s-h"}))
+    headers = dict(_api_key_actor("actor-a", "key-a"))
+    headers["X-DDP-Injected"] = "smuggled"
+    headers["X-Request-Id"] = "caller-chosen-id"
+    await actor_client.post("/v1/parse", headers=headers,
+                            json={"file_url": "https://third-party.example/a.pdf"})
+    sent = route.calls.last.request.headers
+    assert sent["authorization"] == f"Bearer {settings.service_token}"
+    assert "x-ddp-injected" not in sent and "x-ddp-actor" not in sent, \
+        "调用方的 x-ddp-* 头绝不能透传"
+    assert sent["x-request-id"] != "caller-chosen-id" and sent["x-request-id"], \
+        "x-request-id 必须重生成，不能透传调用方的值"
+
+
+@respx.mock
+async def test_submit_rejects_private_file_url(actor_client, session):
+    """SSRF：私网/元数据/不可解析的 file_url 在转发前就 400，请求不到网关。"""
+    route = respx.post(f"{SERVICE}/v1/parse").mock(
+        return_value=httpx.Response(202, json={"task_id": "s-ssrf"}))
+    headers = _api_key_actor("actor-a", "key-a")
+    for bad in ("http://127.0.0.1/secret.pdf",
+                "http://169.254.169.254/latest/meta-data/",
+                "ftp://third-party.example/a.pdf",
+                "http://user:pass@third-party.example/a.pdf",
+                "http://nonexistent.invalid/a.pdf"):
+        resp = await actor_client.post("/v1/parse", headers=headers,
+                                       json={"file_url": bad})
+        assert resp.status_code == 400, (bad, resp.status_code, resp.text)
+        assert resp.json()["error"]["code"] == "fetch_not_allowed", (bad, resp.text)
+    assert not route.called, "被 SSRF 策略拒绝的请求绝不能打到上游"
+
+
+@respx.mock
+async def test_submit_allows_trusted_base_file_url(actor_client, session, monkeypatch):
+    """受信基座（`FETCH_TRUSTED_BASE` + `/files/` 段边界）放行，不做 DNS 封锁。"""
+    monkeypatch.setenv("FETCH_TRUSTED_BASE", "http://127.0.0.1:8080/files/")
+    route = respx.post(f"{SERVICE}/v1/parse").mock(
+        return_value=httpx.Response(202, json={"task_id": "s-trusted"}))
+    headers = _api_key_actor("actor-a", "key-a")
+    ok = await actor_client.post("/v1/parse", headers=headers, json={
+        "file_url": "http://127.0.0.1:8080/files/abc?token=zzz"})
+    assert ok.status_code == 202, ok.text
+    import json as _json
+    assert _json.loads(route.calls.last.request.content)["file_url"].endswith("?token=zzz"), \
+        "query 不透明透传（网关 allowlist 只比 scheme+host+port+path）"
+    # 同 host 不同路径（不在 /files/ 下）仍然拒绝
+    denied = await actor_client.post("/v1/parse", headers=headers, json={
+        "file_url": "http://127.0.0.1:8080/healthz"})
+    assert denied.status_code == 400, denied.text
+    assert denied.json()["error"]["code"] == "fetch_not_allowed"
+
+
+@respx.mock
+async def test_result_metering_is_scoped_to_caller_organization(actor_client, session):
+    """计量组织边界：跨组织撞上同一个 service_task_id 时，B 不能动 A 组织的行。
+
+    B 用自己组织的**新换的** key 取结果时，计量必须落在 B 组织自己的 job 上，
+    而不是沿 `service_task_id` 捡到 A 组织的旧行 —— 那会把账记到陌生人头上，
+    还把陌生人的行置成 succeeded。
+    """
+
+    respx.post(f"{SERVICE}/v1/parse").mock(
+        return_value=httpx.Response(202, json={"task_id": "s-org"}))
+    respx.get(f"{SERVICE}/v1/parse/s-org/result").mock(
+        return_value=httpx.Response(200, json=RESULT))
+
+    # A 组织提交并取结果：正常计费
+    headers_a = _api_key_actor("actor-a", "key-a")
+    await actor_client.post("/v1/parse", headers=headers_a,
+                            json={"file_url": "https://third-party.example/org.pdf"})
+    got = await actor_client.get("/v1/parse/s-org/result", headers=headers_a)
+    assert got.status_code == 200, got.text
+
+    # B 组织（同一个人 id 都不行）拿同一个 task_id 取结果：404 且不记账、不污染 A 的行
+    headers_b = _api_key_actor("actor-a", "key-b", organization_id="org-other")
+    denied = await actor_client.get("/v1/parse/s-org/result", headers=headers_b)
+    assert denied.status_code == 404, denied.text
+    billed = await usage_events(session, "parse")
+    assert len(billed) == 1 and billed[0]["actor_id"] == "actor-a", billed
+
+    # B 组织自己提交同一个 URL：落在自己组织的行上，互不干扰
+    await actor_client.post("/v1/parse", headers=headers_b,
+                            json={"file_url": "https://third-party.example/org.pdf"})
+    docs = (await session.execute(select(Document))).scalars().all()
+    assert {d.organization_id for d in docs} == {ORG, "org-other"}, \
+        "documents 去重是组织内的，两组织各留一行"
+
+    # B 换一把新 key 取结果：记在 B 组织自己的 job 上，A 组织的行原样不动
+    fresh_b = _api_key_actor("actor-a", "key-b-fresh", organization_id="org-other")
+    got_b = await actor_client.get("/v1/parse/s-org/result", headers=fresh_b)
+    assert got_b.status_code == 200, got_b.text
+    jobs = (await session.execute(
+        select(ParseJob).join(Document, Document.id == ParseJob.document_id)
+        .where(Document.organization_id == "org-other"))).scalars().all()
+    assert len(jobs) == 1 and jobs[0].status == "succeeded", \
+        "B 自己的 job 才该落成 succeeded"
+    billed = await usage_events(session, "parse")
+    assert len(billed) == 2, billed
+    assert billed[1]["parse_job_id"] == jobs[0].id, billed
+    assert billed[1]["api_key_id"] == "key-b-fresh", billed
+    other = (await session.execute(
+        select(ParseJob).join(Document, Document.id == ParseJob.document_id)
+        .where(Document.organization_id == ORG))).scalars().all()
+    assert {j.id for j in other} == {billed[0]["parse_job_id"]}, \
+        "A 组织的行与账一一对应，B 的取结果动不了它们"
+
+
+async def test_callback_token_roundtrip():
+    """per-job HMAC 回调令牌：同 job 验过、跨 job 与空令牌拒绝。"""
+    from ddp_corpus.service_client import callback_token, verify_callback_token
+
+    token = callback_token("job-1")
+    assert len(token) == 64, "HMAC-SHA256 hex"
+    assert verify_callback_token("job-1", token)
+    assert not verify_callback_token("job-2", token)
+    assert not verify_callback_token("job-1", None)
+    assert not verify_callback_token("job-1", "")

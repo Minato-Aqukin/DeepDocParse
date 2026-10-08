@@ -1,7 +1,7 @@
 """DDP-Graph v1：图谱、Wiki、反链与复核队列。"""
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,15 +11,13 @@ from ddp_corpus.config import settings
 from ddp_corpus.deps import Actor, current_actor
 from ddp_corpus.errors import APIError
 from ddp_corpus.evidence import citation_out, load_citations
-from ddp_corpus.knowledge_policy import accessible_knowledge, owned_projection, provider_allowed
-from ddp_corpus.policy import document_resource_id, require_document, visible_document_condition
-from ddp_corpus.knowledge import generate as generate_knowledge
-from ddp_corpus.usage import record_usage
+from ddp_corpus.knowledge_policy import accessible_knowledge, owned_projection
+from ddp_corpus.policy import require_document
 from ddp_corpus.routers.wikis import router as versioned_wiki_router
 from ddp_corpus.wiki import claim_backlinks
 from ddp_corpus.models import (
-    Assertion, Citation, Document, Evidence, ExtractionItem, ExtractionRun, GraphEdge, KnowledgeEntity,
-    KnowledgeReview, ResourceVersion, WikiEntry, WikiSection, WikiSentence,
+    Assertion, Citation, Evidence, ExtractionItem, ExtractionRun, GraphEdge, KnowledgeEntity,
+    KnowledgeReview, WikiEntry, WikiSection, WikiSentence,
 )
 from ddp_core.knowledge import neighbor_ids, normalize_entity_name
 
@@ -33,74 +31,10 @@ router = APIRouter(dependencies=[Depends(require_knowledge_enabled)])
 router.include_router(versioned_wiki_router)
 
 
-class BuildIn(BaseModel):
-    evidence_ids: list[str] = Field(default_factory=list, max_length=200)
-
-
-@router.post("/knowledge/build", status_code=201)
-async def build_knowledge(body: BuildIn, request: Request,
-                          actor: Actor = Depends(current_actor),
-                          session: AsyncSession = Depends(get_session)):
-    # **限速不在这里。** 图谱/wiki 生成很贵，但那道闸在 control-api 的
-    # 领域限速里（按路由类别 + actor 计数，跨副本共享）。两处各限一次
-    # 只会让"到底是谁把我限了"变成一个没人答得上的问题
-    actor.require(actor.can_upload and actor.principal_id is not None, "生成知识")
-    evidence_ids = list(dict.fromkeys(body.evidence_ids))
-    if not evidence_ids:
-        evidence_ids = list((await session.execute(
-            select(Evidence.id).join(Document, Evidence.document_id == Document.id).where(
-                visible_document_condition(actor), Evidence.derived_from.is_(None), Evidence.content != "")
-            .order_by(Evidence.created_at.desc()).limit(settings.knowledge_max_evidence)
-        )).scalars().all())
-    if len(evidence_ids) > settings.knowledge_max_evidence:
-        raise APIError(400, f"一次最多 {settings.knowledge_max_evidence} 条证据",
-                       "invalid_request_error", "too_many_evidence")
-    rows = (await session.execute(select(Evidence).join(Document).where(
-        Evidence.id.in_(evidence_ids), visible_document_condition(actor),
-        Evidence.derived_from.is_(None)))).scalars().all()
-    if {row.id for row in rows} != set(evidence_ids):
-        raise APIError(404, "original evidence not found", "invalid_request_error", "not_found")
-    source_bindings = []
-    for evidence in rows:
-        resource_id = await document_resource_id(session, actor, evidence.document_id)
-        version = await session.scalar(select(ResourceVersion).where(
-            ResourceVersion.resource_id == resource_id,
-            ResourceVersion.document_id == evidence.document_id,
-            ResourceVersion.parse_job_id == evidence.parse_job_id,
-            ResourceVersion.deleted_at.is_(None)).order_by(ResourceVersion.version_no.desc()).limit(1))
-        if version is None:
-            raise APIError(409, "explicit source version required", "invalid_request_error",
-                           "knowledge_source_unavailable")
-        binding = {"resource_id": resource_id, "source_version_id": version.id,
-                   "document_id": evidence.document_id, "parse_revision": evidence.parse_job_id}
-        if binding not in source_bindings:
-            source_bindings.append(binding)
-    from ddp_corpus.wiki import canonical_digest
-    scope_key = canonical_digest({"owner": actor.principal_id, "org": actor.organization_id,
-                                  "sources": sorted(source_bindings, key=lambda b: b["source_version_id"])})
-    provider = {"scope_key": scope_key, "source_bindings": source_bindings,
-                "input_document_ids": sorted({row.document_id for row in rows}),
-                "generated_by": actor.principal_id, "organization_id": actor.organization_id,
-                "kind": "knowledge_generation",
-                "model": settings.chat_model or "registry-default", "revision": "runtime"}
-    async def check_sources():
-        if not await provider_allowed(session, actor, provider):
-            raise APIError(404, "knowledge source unavailable", "invalid_request_error", "not_found")
-    try:
-        result = await generate_knowledge(
-            session, request.app.state.http, evidence_ids, provider=provider, check_sources=check_sources)
-        await check_sources()
-    except APIError:
-        await session.rollback()
-        raise
-    except Exception as exc:
-        await session.rollback()
-        raise APIError(502, f"知识生成失败：{type(exc).__name__}", "upstream_error",
-                       "knowledge_generation_failed")
-    await record_usage(session, actor_id=actor.id, organization_id=actor.organization_id,
-                       kind="knowledge", requests=1)
-    await session.commit()
-    return result
+@router.post("/knowledge/build", status_code=410)
+async def build_knowledge_removed() -> None:
+    raise APIError(410, "legacy wiki build was removed; use POST /api/wikis",
+                   "invalid_request_error", "legacy_wiki_build_removed")
 
 
 def _entity_out(row: KnowledgeEntity) -> dict:
@@ -212,11 +146,13 @@ async def read_wiki(entry_id_or_title: str, actor: Actor = Depends(current_actor
                     session: AsyncSession = Depends(get_session)):
     access = await accessible_knowledge(session, actor)
     entry = await session.get(WikiEntry, entry_id_or_title)
+    if entry is not None and entry.id not in access["entries"]:
+        entry = None
     if entry is None:
         entry = (await session.execute(select(WikiEntry).where(
             WikiEntry.title == entry_id_or_title, WikiEntry.id.in_(access["entries"]))
             .order_by(WikiEntry.created_at.desc()).limit(1))).scalar_one_or_none()
-    if entry is None or entry.id not in access["entries"]:
+    if entry is None:
         raise APIError(404, "wiki entry not found", "invalid_request_error", "not_found")
     entity = await session.get(KnowledgeEntity, entry.entity_id)
     sections = (await session.execute(select(WikiSection).where(

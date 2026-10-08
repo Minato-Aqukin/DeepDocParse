@@ -16,7 +16,7 @@ from ddp_corpus.models import (
     AgentTurn, Assertion, Chunk, Conversation, Document, EvidenceVerification, Message,
     RetrievalCandidate,
 )
-from tests.conftest import ORG, CHAT, EMBEDDINGS, drain_tasks
+from tests.conftest import ORG, ACTOR, CHAT, EMBEDDINGS, drain_tasks
 from tests.test_documents import _callback, _embed_response, _mock_service, _upload
 
 
@@ -342,6 +342,7 @@ async def test_vision_fallback_does_not_hide_an_embedding_outage(actor_client, s
 
 @respx.mock
 async def test_ask_reports_upstream_failure_instead_of_hanging(actor_client, session):
+    """回答与纯文本重试都硬失败：done 必须是 upstream_error，不能被 vision_unavailable 盖住。"""
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(return_value=httpx.Response(500, json={"error": {"message": "boom"}}))
@@ -352,6 +353,8 @@ async def test_ask_reports_upstream_failure_instead_of_hanging(actor_client, ses
     message = (await session.execute(
         select(Message).where(Message.role == "assistant"))).scalars().one()
     assert message.verified is False
+    assert message.degraded == "upstream_error", \
+        "回答根本没产出时 vision_unavailable 不能掩盖硬失败"
 
 
 @respx.mock
@@ -1804,3 +1807,200 @@ async def test_compound_query_keeps_vector_retrieval_with_embedding_batch_size_o
     assert {hit["chunk_id"] for hit in hits} == {chunk.id for chunk in chunks}
     assert all(hit["similarity"] == pytest.approx(1.0) for hit in hits)
     assert degraded is None
+
+
+@respx.mock
+async def test_search_hits_carry_stable_locator_fields(actor_client, session):
+    """/api/search 命中带稳定定位四件套：chunk_id 每次 reindex 都会重铸。"""
+    document = await _ready_document(actor_client)
+    rows = {(row.id, row.seq): row for row in (await session.execute(
+        select(Chunk).where(Chunk.document_id == document["id"]))).scalars().all()}
+    assert rows, "ready 文档应有索引行，否则断言本身是假绿"
+    resp = await actor_client.get("/api/search", params={"q": "第二页的表格"})
+    assert resp.status_code == 200, resp.text
+    hits = [hit for group in resp.json()["groups"] for hit in group["hits"]]
+    assert hits, "命中为空时定位字段断言是假绿"
+    for hit in hits:
+        key = next((k for k in rows if k[0] == hit["chunk_id"]), None)
+        assert key is not None, "命中 chunk 必须能在索引行里找到"
+        row = rows[key]
+        assert hit["parse_job_id"] == row.parse_job_id
+        assert hit["seq"] == row.seq
+        assert hit["evidence_id"] == (row.derived_evidence_id or row.evidence_id)
+        assert hit["page_size"] == row.page_size
+
+
+@respx.mock
+async def test_search_surfaces_keyword_unavailable_when_keyword_leg_fails(
+        actor_client, session, app_state, monkeypatch):
+    """关键词腿失败（只剩向量路）时 /api/search 必须透出 keyword_unavailable。"""
+    from ddp_core.search import SearchHits
+
+    document = await _ready_document(actor_client)
+    row = (await session.execute(
+        select(Chunk).where(Chunk.document_id == document["id"]))).scalars().first()
+    assert row is not None
+    full = {"chunk_id": row.id, "document_id": row.document_id,
+            "parse_job_id": row.parse_job_id, "seq": row.seq, "page_idx": row.page_idx,
+            "bbox": row.bbox, "page_size": row.page_size, "text": row.text,
+            "printed_page_label": row.printed_page_label,
+            "derived_text": row.derived_text, "evidence_id": row.evidence_id,
+            "derived_evidence_id": row.derived_evidence_id, "block_type": row.block_type,
+            "table_html": row.table_html, "score": 0.03, "similarity": 0.9}
+    degraded_hits = SearchHits([full], degraded="keyword_unavailable")
+
+    async def fake_search(session, **kwargs):
+        return degraded_hits
+
+    monkeypatch.setattr(app_state.search_index, "search", fake_search)
+    resp = await actor_client.get("/api/search", params={"q": "第二页的表格"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["degraded"] == "keyword_unavailable"
+    assert body["groups"], "降级不断言空结果：命中仍应返回"
+
+
+@respx.mock
+async def test_inherited_retrieval_requires_actor_and_scopes_evidence(actor_client, session):
+    """证据继承必须按调用方授权集收敛；actor 必填关键字，无默认值。"""
+    import inspect
+    from ddp_corpus.qa import inherited_retrieval
+    from ddp_corpus.deps import Actor
+    from ddp_core.models import Evidence as CoreEvidence
+
+    params = inspect.signature(inherited_retrieval).parameters
+    assert params["actor"].default is inspect.Parameter.empty, \
+        "inherited_retrieval.actor 必须是没有默认值的必填关键字"
+    assert params["actor"].kind is inspect.Parameter.KEYWORD_ONLY
+
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(
+        _grounded_doc(("第二页讲的是表格数据。", [1]))))
+    first = dict(await _ask(actor_client, cid))
+    inherited = first["assertions"]["assertions"][0]["evidence_ids"]
+    assert inherited, "前提不成立：首轮必须产出可继承证据"
+
+    # 同组织陌生人：上一轮证据不在他的授权集里，继承为空 -> 拒答降级。
+    stranger = Actor(id="actor-stranger", kind="user", organization_id=ORG,
+                      role="contributor")
+    blocked = await inherited_retrieval(session, inherited, actor=stranger)
+    assert blocked.hits == [] and blocked.degraded == "no_evidence_in_turn"
+
+    # 无授权集（空 contexts）同样早退，不触库。
+    nobody = Actor(id="actor-nobody", kind="user", organization_id="org-other",
+                    role="contributor")
+    empty = await inherited_retrieval(session, inherited, actor=nobody)
+    assert empty.hits == [] and empty.degraded == "no_evidence_in_turn"
+
+    # 跨资产证据即使 id 已知也不能被带进本轮：SQL 层直接过滤。
+    # 外键真实成行（不依赖 SQLite 是否开 FK），授权集里没有它才是被滤掉的原因。
+    from ddp_corpus.models import Document as _Document, ParseJob as _ParseJob
+    foreign_doc = _Document(uploaded_by="actor-other", organization_id="org-other",
+                            doc_id="f" * 64,
+                            filename="foreign.pdf", mime="application/pdf",
+                            object_key="", index_status="ready")
+    session.add(foreign_doc)
+    await session.flush()
+    foreign_job = _ParseJob(document_id=foreign_doc.id, engine="borndigital",
+                            options={}, options_hash="fh",
+                            status="succeeded")
+    session.add(foreign_job)
+    await session.flush()
+    foreign_id = "evidence-foreign-asset"
+    session.add(CoreEvidence(id=foreign_id, document_id=foreign_doc.id,
+                             parse_job_id=foreign_job.id,
+                             atom_key="source:0:foreign",
+                             page_idx=0, bbox=[0, 0, 1, 1], kind="text",
+                             content="foreign", content_digest="d" * 64))
+    await session.commit()
+    mixed = await inherited_retrieval(
+        session, [foreign_id, *inherited],
+        actor=Actor(id=ACTOR, kind="user", organization_id=ORG,
+                    role="contributor"))
+    assert foreign_id not in [h.get("evidence_id") for h in mixed.hits], \
+        "跨资产 evidence_id 不许进入本轮 Retrieval"
+
+
+@respx.mock
+async def test_stream_error_mapping_is_first_degraded_wins(actor_client, session, monkeypatch):
+    """先到的 embedding_unavailable 不能被后来的上游错误盖掉；空槽才填。"""
+    from ddp_corpus.config import settings as cfg
+
+    monkeypatch.setattr(cfg, "qa_verify_parse", False)
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+    respx.post(EMBEDDINGS).mock(return_value=httpx.Response(503))
+    respx.post(CHAT).mock(return_value=httpx.Response(500, json={"error": {"message": "boom"}}))
+
+    events = await _ask(actor_client, cid)
+    assert "error" in [n for n, _ in events]
+    assert dict(events)["done"]["degraded"] == "embedding_unavailable", \
+        f"先到的 embedding_unavailable 不能被 upstream_error 盖掉：{dict(events)['done']}"
+    message = (await session.execute(
+        select(Message).where(Message.role == "assistant"))).scalars().one()
+    assert message.degraded == "embedding_unavailable" and message.verified is False
+
+
+@respx.mock
+async def test_schema_violation_fills_empty_degraded_slot(actor_client, session, monkeypatch):
+    """空槽时 schema_violation 照常填入。"""
+    from ddp_corpus.config import settings as cfg
+
+    monkeypatch.setattr(cfg, "qa_decision_enabled", True)
+    monkeypatch.setattr(cfg, "qa_verify_parse", False)
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+    handler, _ = _agent_chat(need_retrieval=True, answer="我猜第二条。[2]")
+    respx.post(CHAT).mock(side_effect=handler)
+    monkeypatch.setattr(cfg, "qa_context_chars", 5)
+
+    events = dict(await _ask(actor_client, cid))
+    assert dict(events)["error"]["code"] == "schema_violation"
+    assert dict(events)["done"]["degraded"] == "schema_violation"
+
+
+@respx.mock
+async def test_persist_revalidates_actor_before_write(actor_client, client, session):
+    """落库前重验授权；换组织 actor 直接 404 且零行写入。"""
+    from ddp_corpus.deps import Actor
+    from ddp_corpus.routers.conversations import _persist
+    from ddp_corpus.errors import APIError
+    import pytest as _pytest
+
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+    detail = (await actor_client.get(f"/api/documents/{document['id']}")).json()
+    job_id = detail["current_job_id"]
+    before = len((await session.execute(select(Message))).scalars().all())
+
+    foreign = Actor(id="actor-bob", kind="user", organization_id="org-other",
+                     role="contributor")
+    with _pytest.raises(APIError) as info:
+        await _persist(conversation_id=cid, actor_id=foreign.id,
+                       organization_id=foreign.organization_id,
+                       assertions=[{"position": 0, "text": "答案",
+                                    "evidence_ids": [], "unsupported": True}],
+                       citations=[], verified=False, degraded=None,
+                       model_meta={}, document_id=document["id"],
+                       expected_job_id=job_id, expected_generation=0,
+                       actor=foreign)
+    assert info.value.status_code == 404
+    assert info.value.code == "resource_access_revoked"
+    await session.rollback()
+    after = len((await session.execute(select(Message))).scalars().all())
+    assert after == before, "授权失败的回答不许落库"
+
+    # 同组织陌生人同样拿不到别人的会话：会话归属先判。
+    stranger = Actor(id="actor-stranger", kind="user",
+                      organization_id=ORG, role="contributor")
+    with _pytest.raises(APIError) as info2:
+        await _persist(conversation_id=cid, actor_id=stranger.id,
+                       organization_id=stranger.organization_id,
+                       assertions=[{"position": 0, "text": "答案",
+                                    "evidence_ids": [], "unsupported": True}],
+                       citations=[], verified=False, degraded=None,
+                       model_meta={}, document_id=document["id"],
+                       expected_job_id=job_id, expected_generation=0,
+                       actor=stranger)
+    assert info2.value.status_code == 404

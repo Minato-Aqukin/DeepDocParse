@@ -235,6 +235,65 @@ def test_negative_key_binds_scope_node_and_revision():
         cache.negative_cache_key("org-1", "node-a", "")
 
 
+def test_negative_key_binds_query_digest_and_collection_revision():
+    """scoped 键绑定任务摘要与集合修订：任一变了都必须换键。
+
+    两个分量穿过 `record_negative` / `get_negative` 的关键字参数进键 ——
+    实现若忽略其中一个（只用三元组），跨查询/跨修订的否定条目会互相串味，
+    而旧测试只覆盖三元组，全程绿。
+    """
+    base = cache.negative_cache_key("org-1", "node-a", "rev-1",
+                                    query_digest="q" * 64, collection_revision="idx-1")
+    assert base != cache.negative_cache_key(
+        "org-1", "node-a", "rev-1", query_digest="r" * 64, collection_revision="idx-1")
+    assert base != cache.negative_cache_key(
+        "org-1", "node-a", "rev-1", query_digest="q" * 64, collection_revision="idx-2")
+    assert base == cache.negative_cache_key(
+        "org-1", "node-a", "rev-1", query_digest="q" * 64, collection_revision="idx-1")
+
+
+def test_negative_key_without_scope_is_byte_identical_to_legacy():
+    """双参都不给时退回 legacy 三元组摘要，字节级一致。
+
+    `probes.py` 的 dual-write 依赖这条：legacy 读路径只认识三元组键，
+    scoped 键多一个分量它就永远 miss，否定条目静默失效。
+    """
+    import hashlib
+
+    from ddp_core.application.plans import canonical_bytes
+
+    legacy = "negative:" + hashlib.sha256(canonical_bytes(
+        ["org-1", "node-a", "rev-1"])).hexdigest()
+    assert cache.negative_cache_key("org-1", "node-a", "rev-1") == legacy
+    assert cache.negative_cache_key(
+        "org-1", "node-a", "rev-1", query_digest=None, collection_revision=None) == legacy
+    scoped = cache.negative_cache_key("org-1", "node-a", "rev-1",
+                                      query_digest="q" * 64, collection_revision="idx-1")
+    assert scoped != legacy
+
+
+async def test_negative_entry_is_isolated_by_query_and_revision(session):
+    """否定条目按查询与修订隔离读写：串键的读按没有处理。"""
+    now = utcnow()
+    await cache.record_negative(session, scope_key="org-1", node_id="node-a",
+                                node_revision="rev-1", reason="unreachable", now=now,
+                                query_digest="q" * 64, collection_revision="idx-1")
+    assert await cache.get_negative(session, scope_key="org-1", node_id="node-a",
+                                    node_revision="rev-1", now=now,
+                                    query_digest="q" * 64,
+                                    collection_revision="idx-1") is not None
+    assert await cache.get_negative(session, scope_key="org-1", node_id="node-a",
+                                    node_revision="rev-1", now=now,
+                                    query_digest="r" * 64,
+                                    collection_revision="idx-1") is None
+    assert await cache.get_negative(session, scope_key="org-1", node_id="node-a",
+                                    node_revision="rev-1", now=now,
+                                    query_digest="q" * 64,
+                                    collection_revision="idx-2") is None
+    assert await cache.get_negative(session, scope_key="org-1", node_id="node-a",
+                                    node_revision="rev-1", now=now) is None
+
+
 async def test_negative_entry_does_not_block_a_new_revision(session):
     """新节点修订（新上传/重新登记）绝不能命中旧否定条目。"""
     now = utcnow()
@@ -300,7 +359,8 @@ async def test_probe_reuse_returns_the_stored_receipt(session):
     query_digest = content_digest(b"question")
     revision = "sha256:" + "1" * 64
     stored = await store_probe(session, query_digest=query_digest, index_revision=revision,
-                               observed_at=now, expires_at=now + timedelta(seconds=300))
+                               observed_at=now, expires_at=now + timedelta(seconds=300),
+                               policy_revision="policy-1")
     found = await find(session, query_digest=query_digest, index_revision=revision, now=now)
     assert found == stored, "返回的是存下来的回执本身，不是重新拼的近似物"
 
@@ -311,10 +371,12 @@ async def test_probe_reuse_rejects_expired_digest_revision_and_org(session):
     revision = "sha256:" + "1" * 64
     await store_probe(session, query_digest=query_digest, index_revision=revision,
                       observed_at=now - timedelta(seconds=10),
-                      expires_at=now - timedelta(seconds=9))
+                      expires_at=now - timedelta(seconds=9),
+                      policy_revision="policy-1")
     assert await find(session, query_digest=query_digest, index_revision=revision, now=now) is None
     await store_probe(session, query_digest=query_digest, index_revision=revision,
-                      observed_at=now, expires_at=now + timedelta(seconds=300))
+                      observed_at=now, expires_at=now + timedelta(seconds=300),
+                      policy_revision="policy-1")
     assert await find(session, query_digest=content_digest(b"other"),
                       index_revision=revision, now=now) is None
     assert await find(session, query_digest=query_digest,
@@ -324,15 +386,50 @@ async def test_probe_reuse_rejects_expired_digest_revision_and_org(session):
                                   role="contributor")) is None
 
 
-async def test_probe_reuse_policy_revision_only_enforced_when_recorded(session):
+async def test_probe_reuse_policy_revision_is_fail_closed(session):
+    """缺失记录的策略修订一律不可复用（fail-closed）；记录了才按值比对。"""
+    now = utcnow()
+    query_digest = content_digest(b"question")
+    revision = "sha256:" + "1" * 64
+    await store_probe(session, query_digest=query_digest, index_revision=revision,
+                      observed_at=now, expires_at=now + timedelta(seconds=300))
+    assert await find(session, query_digest=query_digest, index_revision=revision,
+                      policy_revision="policy-1", now=now) is None
+    stored = await store_probe(session, query_digest=query_digest, index_revision=revision,
+                               observed_at=now, expires_at=now + timedelta(seconds=300),
+                               policy_revision="policy-1")
+    assert await find(session, query_digest=query_digest, index_revision=revision,
+                      policy_revision="policy-2", now=now) is None
+    assert await find(session, query_digest=query_digest, index_revision=revision,
+                      policy_revision="policy-1", now=now) == stored
+
+async def test_probe_reuse_prefers_task_spec_digest_when_provided(session):
+    """给了 task_spec_digest 就按任务摘要比对，不再看 query_digest 兼容位。"""
     now = utcnow()
     query_digest = content_digest(b"question")
     revision = "sha256:" + "1" * 64
     stored = await store_probe(session, query_digest=query_digest, index_revision=revision,
                                observed_at=now, expires_at=now + timedelta(seconds=300),
                                policy_revision="policy-1")
-    assert await find(session, query_digest=query_digest, index_revision=revision,
-                      policy_revision="policy-2", now=now) is None
+    hit = await cache.find_reusable_probe(
+        session, PROBE_ACTOR, target_key=TARGET, query_digest=query_digest,
+        index_revision=revision, policy_revision="policy-1", now=now,
+        task_spec_digest=content_digest(b"task-spec"))
+    assert hit == stored
+    assert await cache.find_reusable_probe(
+        session, PROBE_ACTOR, target_key=TARGET, query_digest=query_digest,
+        index_revision=revision, policy_revision="policy-1", now=now,
+        task_spec_digest=content_digest(b"other-spec")) is None
+
+
+async def test_probe_reuse_without_task_spec_digest_keeps_query_fallback(session):
+    """不给 task_spec_digest 时保持旧口径：query_digest 兼容位仍可命中。"""
+    now = utcnow()
+    query_digest = content_digest(b"question")
+    revision = "sha256:" + "1" * 64
+    stored = await store_probe(session, query_digest=query_digest, index_revision=revision,
+                               observed_at=now, expires_at=now + timedelta(seconds=300),
+                               policy_revision="policy-1")
     assert await find(session, query_digest=query_digest, index_revision=revision,
                       policy_revision="policy-1", now=now) == stored
 
@@ -364,7 +461,8 @@ async def test_negative_entries_are_never_probe_receipts(session):
                                 reason="unreachable", now=now)
     assert await find(session, query_digest=query_digest, index_revision=revision, now=now) is None
     stored = await store_probe(session, query_digest=query_digest, index_revision=revision,
-                               observed_at=now, expires_at=now + timedelta(seconds=300))
+                               observed_at=now, expires_at=now + timedelta(seconds=300),
+                               policy_revision="policy-1")
     found = await find(session, query_digest=query_digest, index_revision=revision, now=now)
     assert found == stored and found.get("negative") is not True
 

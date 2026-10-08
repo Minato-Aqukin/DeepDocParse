@@ -84,6 +84,8 @@ async def test_pg_migrated_constraints_concurrent_receipts_cas_and_revocation(ca
             "cursor": snap["terminal_cursor"]}, headers=internal(owner, org))
         assert denied.status_code == 410
         assert denied.json()["revoked_collection_ids"] == [cid]
+        assert denied.json()["snapshot_id"] == snap["snapshot_id"]
+        assert denied.json()["scope_id"] == "scope"
     assert (await snapshot())["total"] == 0
 
 

@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from ddp_corpus.models import Task, as_aware, new_id, utcnow
 from ddp_corpus.queue import (
     StaleGeneration, backlog, claim, enqueue, fail, heartbeat, succeed,
+    sweep_exhausted,
 )
 
 
@@ -176,6 +177,55 @@ async def test_failure_retries_with_backoff_then_gives_up(session):
     assert row.status == "failed", "超过 max_attempts 必须落终态"
     assert row.error == "第二次也炸了"
     assert row.finished_at is not None
+
+async def test_exhausted_task_is_never_claimed_and_swept_to_failed(session):
+    """毒丸不占 worker：超限行 claim 领不到，死信清扫把它标成可见 failed。
+
+    只剩 claim 谓词时，超限行会永远停在 queued —— 对用户是"一直在处理中"；
+    只剩清扫时，超限行仍会被领走反复跑。两道必须同时存在。
+    """
+    await enqueue(session, kind="index", payload={}, dedupe_key="index:poison",
+                  max_attempts=1)
+    await session.commit()
+
+    [task] = await claim(session, ["index"])
+    task_id = task.id
+    await fail(session, task_id, task.generation, "第一次就炸了", retry=True)
+    row = await session.get(Task, task_id, populate_existing=True)
+    # max_attempts=1 且 retry=True：第一次失败即落终态（fail 的超限分支）。
+    assert row.status == "failed"
+
+    # 残留形态：耗尽的行卡在 queued（例如旧版本 fail 没落终态、或外部写入），
+    # 租约已过期 —— claim 不得再领，清扫必须把它标成可见 failed。
+    row.status = "queued"
+    row.attempts = row.max_attempts
+    row.lease_until = utcnow() - timedelta(seconds=1)
+    row.dedupe_key = "index:poison"
+    row.finished_at = None
+    row.error = "第一次就炸了"
+    await session.commit()
+
+    assert await claim(session, ["index"]) == [], "耗尽的行不得再被领取"
+
+    swept = await sweep_exhausted(session)
+    assert swept == 1
+    row = await session.get(Task, task_id, populate_existing=True)
+    assert row.status == "failed", "死信必须可见，不能永远处理中"
+    assert row.error is not None and "poison" in row.error
+    assert row.dedupe_key is None, "死信要腾出幂等键，允许人工重排"
+    assert row.finished_at is not None
+    assert await claim(session, ["index"]) == []
+
+    # 租约内的 claimed 行正在被 worker 处理，清扫不得抢。
+    await enqueue(session, kind="index", payload={}, max_attempts=1)
+    await session.commit()
+    [live] = await claim(session, ["index"])
+    live.attempts = live.max_attempts
+    await session.commit()
+    assert await sweep_exhausted(session) == 0
+    row = await session.get(Task, live.id, populate_existing=True)
+    assert row.status == "claimed"
+
 
 
 async def test_succeed_frees_the_dedupe_key(session):

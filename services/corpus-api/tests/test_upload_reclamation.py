@@ -14,7 +14,15 @@ async def request_cleanup(client, headers, key, *, old=True):
     })
 
 
-async def test_terminal_original_reclamation_grace_references_and_retry(client, service_client_headers, session, app_state, monkeypatch):
+async def test_terminal_original_reclamation_grace_references_and_retry(
+        client, service_client_headers, session, app_state):
+    """grace 内 / 有引用时不删：这些分支在任何后端都不碰字节。
+
+    无表锁可拿的后端（SQLite）大声拒绝删除而不是无防护地删；PG 上的真正
+    删除与重试由 control 面的 TestTerminalUploadReclamation* 覆盖。
+    变异确认：把 gc.py 的 409 改回"跳过表锁继续删"，本文件
+    test_terminal_original_reclamation_refuses_without_pg_fence 必须红。
+    """
     key = 'uploads/org-test/orphan.pdf'
     storage = app_state.storage
     await storage.put(key, b'original', 'application/pdf')
@@ -35,19 +43,27 @@ async def test_terminal_original_reclamation_grace_references_and_retry(client, 
     document.gc_pending_keys = [key]
     await session.commit()
     assert (await request_cleanup(client, service_client_headers, key)).json() == {'reclaimed': False}
-    document.gc_pending_keys = []
-    await session.commit()
-    original_delete = storage.delete
-    async def fail_delete(_key):
-        raise OSError('unavailable')
-    monkeypatch.setattr(storage, 'delete', fail_delete)
-    with pytest.raises(OSError):
-        await request_cleanup(client, service_client_headers, key)
     assert await storage.get(key) == b'original'
-    monkeypatch.setattr(storage, 'delete', original_delete)
-    assert (await request_cleanup(client, service_client_headers, key)).json() == {'reclaimed': True}
-    assert not await storage.exists(key)
-    assert (await request_cleanup(client, service_client_headers, key)).json() == {'reclaimed': True}
+
+
+async def test_terminal_original_reclamation_refuses_without_pg_fence(
+        client, service_client_headers, session, app_state):
+    """无表锁可拿的后端（SQLite）大声拒绝删除，而不是无防护地删。
+
+    变异确认：把 gc.py 的 409 改回"跳过表锁继续删"，本用例必须红
+    （会回到 reclaimed:True 并删掉字节）。
+    """
+    from ddp_corpus import gc as gc_module
+
+    key = 'uploads/org-test/unfenced.pdf'
+    storage = app_state.storage
+    await storage.put(key, b'original', 'application/pdf')
+    assert session.bind.dialect.name == 'sqlite'
+    assert gc_module._dialect_name(session) == 'sqlite'
+    response = await request_cleanup(client, service_client_headers, key)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "reclamation_unsupported_dialect"
+    assert await storage.get(key) == b'original'
 
 
 async def test_terminal_original_reclamation_protects_compute(client, service_client_headers, session, app_state):
@@ -66,6 +82,29 @@ async def test_terminal_original_reclamation_rejects_user_and_non_original_keys(
     assert response.status_code == 403
     response = await request_cleanup(actor_client, service_client_headers, 'results/job/layout.json')
     assert response.status_code == 422
+
+async def test_terminal_original_reclamation_never_deletes_unfenced_on_sqlite(
+    client, service_client_headers, session, app_state, monkeypatch):
+    """SQLite 上不发 PG-only 的 LOCK TABLE，也不删：无防护删除比不删更坏。"""
+    from ddp_corpus import gc as gc_module
+
+    key = 'uploads/org-test/unfenced.pdf'
+    await app_state.storage.put(key, b'original', 'application/pdf')
+    assert session.bind.dialect.name == 'sqlite'
+    assert gc_module._dialect_name(session) == 'sqlite'
+    seen = []
+    real_text = gc_module.text
+
+    def spy_text(statement, *args, **kwargs):
+        seen.append(str(statement))
+        return real_text(statement, *args, **kwargs)
+
+    monkeypatch.setattr(gc_module, "text", spy_text)
+    response = await request_cleanup(client, service_client_headers, key)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "reclamation_unsupported_dialect"
+    assert await app_state.storage.get(key) == b'original'
+    assert not any("LOCK TABLE" in statement for statement in seen)
 
 
 async def test_deleted_document_reclaims_all_derived_bytes_but_keeps_shared_content_and_evidence(actor_client, session, app_state):

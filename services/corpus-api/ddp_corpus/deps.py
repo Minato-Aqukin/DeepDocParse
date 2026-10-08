@@ -96,7 +96,12 @@ class Actor:
 def _bearer(authorization: str | None) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise APIError(401, "missing bearer credentials", "authentication_error", "missing_token")
-    return authorization[7:].strip()
+    token = authorization[7:].strip()
+    # 空 bearer（`Authorization: Bearer `）必须在这里 401：`compare_digest("", "")`
+    # 是 True —— 没有这一行的话，空配置 + 空头的组合会直接通过门禁。
+    if not token:
+        raise APIError(401, "missing bearer credentials", "authentication_error", "missing_token")
+    return token
 
 
 async def require_gateway_credentials(authorization: str | None = Header(default=None)) -> None:
@@ -104,7 +109,13 @@ async def require_gateway_credentials(authorization: str | None = Header(default
 
     **这是 actor 上下文可信的前提**：没有它，任何能连到本端口的人都能
     自称 admin。所以它挂在每一个业务路由上，而不是"重要的那几个"。
+
+    空 `service_token` 配置永远拒绝（即使 ALLOW_INSECURE_DEFAULTS 打开）：
+    空密钥的门禁不是门禁，而 `compare_digest` 在两边都空时恰好返回 True。
     """
+    if not settings.service_token:
+        raise APIError(401, "invalid service credentials",
+                       "authentication_error", "invalid_service_token")
     if not secrets.compare_digest(_bearer(authorization), settings.service_token):
         raise APIError(401, "invalid service credentials",
                        "authentication_error", "invalid_service_token")

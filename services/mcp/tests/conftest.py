@@ -47,6 +47,8 @@ IDENTITY = {
 @pytest.fixture
 def mcp_env(monkeypatch):
     """把两个上游地址与服务凭据指到测试替身上。"""
+    import socket as _socket
+
     from ddp_mcp import corpus, server
 
     monkeypatch.setattr(corpus, "SERVICE_TOKEN", TOKEN)
@@ -54,8 +56,18 @@ def mcp_env(monkeypatch):
     monkeypatch.setattr(corpus, "PUBLIC_BASE_URL", PUBLIC)
     monkeypatch.setattr(server, "SERVICE_TOKEN", TOKEN)
     monkeypatch.setattr(server, "GATEWAY", GW)
-    return server
+    # 出站目的地策略做真 DNS，而 `*.example.com` 在真 DNS 下 NXDOMAIN。
+    # 把测试域名钉在公网 IP（目的地检查照常执行并通过，HTTP 层由 respx 拦截）；
+    # 私网/元数据/坏 scheme 的断言用例在自己体内再覆写 getaddrinfo。
+    _real = _socket.getaddrinfo
 
+    def _fake(host, *args, **kwargs):
+        if host.endswith(".example.com"):
+            return [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+        return _real(host, *args, **kwargs)
+
+    monkeypatch.setattr(_socket, "getaddrinfo", _fake)
+    return server
 
 @asynccontextmanager
 async def mcp_client(headers: dict[str, str] | None = None):

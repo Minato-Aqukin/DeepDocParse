@@ -179,9 +179,11 @@ def _validate_item(item: dict) -> tuple[dict, dict]:
     source_digest = _strip_digest(envelope.get("source_digest"), field="source_digest")
     excerpt_digest = _strip_digest(envelope.get("excerpt_digest"), field="excerpt_digest")
     locator = envelope.get("locator")
+    page = locator.get("physical_page_index") if isinstance(locator, dict) else None
     if (not isinstance(locator, dict) or locator.get("kind") not in _LOCATOR_KINDS
-            or type(locator.get("physical_page_index")) is not int
-            or locator["physical_page_index"] < 0
+            # page_block/table_cell 必带物理页序；非 PDF 的 paragraph 不带（不伪造页码）
+            or (locator["kind"] != "paragraph" and page is None)
+            or (page is not None and (type(page) is not int or page < 0))
             or type(locator.get("seq")) is not int or locator["seq"] < 0):
         _fail(409, "wiki_source_unavailable", "federated locator is not a fixed original position")
     bbox = locator.get("bbox")
@@ -614,7 +616,6 @@ async def commit_federated_revision(session: AsyncSession, actor: Actor, *, root
         local_node = node_identity_plane.local_node_id()
     except Exception:  # noqa: BLE001 -- without identity only foreign rows exist.
         local_node = None
-    by_ref = {meta["evidence_id"]: meta for meta in metas}
     for meta in metas:
         if local_node is not None and meta["origin_node_id"] == local_node:
             resolved = await _resolve_local_binding(session, actor, meta)
@@ -624,15 +625,13 @@ async def commit_federated_revision(session: AsyncSession, actor: Actor, *, root
             meta["source_digest"] = resolved["source_digest"]
             meta["parse_revision"] = resolved["parse_revision"]
     clean_pages, edges = _kernel_revalidate(pages, relations_in, normalized, provider)
-    deps = []
-    for page in clean_pages:
-        refs = {claim["evidence_ids"][n] for section in page["generated_sections"]
-                for claim in section["sentences"] for n in range(len(claim["evidence_ids"]))}
-        for edge in edges:
-            if edge.get("subject_id") == page["page_key"] or edge.get("object_id") == page["page_key"]:
-                refs.update(edge.get("evidence_ids") or [])
-        for ref in sorted(refs):
-            deps.append({**by_ref[ref], "page_key": page["page_key"]})
+    # DependencyManifest records the bounded selected context actually sent
+    # to the writing calls (plus retained human-page dependencies below),
+    # conservatively including uncited context so a model cannot launder a
+    # private input by citing a different public input. Every meta here was
+    # gated by `_validate_item` above (private needs a grant, withdrawn /
+    # unmapped fail closed), so these rows are all authorized-at-commit.
+    deps = [{**meta, "page_key": page["page_key"]} for page in clean_pages for meta in metas]
     if old_pages:
         retained = {p["page_key"] for p in clean_pages if p.get("human_paragraphs")}
         planned = {p["page_key"] for p in pages}

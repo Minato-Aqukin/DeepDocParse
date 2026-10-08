@@ -90,15 +90,25 @@ async def parse_callback(body: ParseCallback, request: Request,
     # 60 秒一轮的对账捡回来 —— 功能"正确"，只是每份文档都晚一分钟，且毫无报错。
     # 调用方的可信度就是 SERVICE_TOKEN 持有者的可信度；成功时本层自己去网关取结果。
     #
+    # per-job HMAC 绑住组织边界：ingest.submit_parse 给每个 job 拼了自己的
+    # `?token=`（service_client.callback_token，HMAC-SHA256 key=service_token、
+    # msg=job.id）。网关把 callback_url 原样回打，token 跟着穿回来。
+    # 跨组织伪造回调没有别人的 token —— 验不过就 401，一个字节都不动。
+    #
     # 同一个网关任务可能对应本层多个 job（网关按 doc_id 去重，
-    # 同一份文档从 Web 与对外 API 都提交过）——全部推进
+    # 同一份文档从 Web 与对外 API 都提交过）——任意一个验过即放行整批
+    from ddp_corpus.service_client import verify_callback_token
     jobs = (await session.execute(
         select(ParseJob).where(ParseJob.service_task_id == body.task_id)
     )).scalars().all()
     if not jobs:
         # 未知任务不报错：网关不该因为本层的记账问题重试回调
         return {"ok": False, "reason": "unknown task"}
-
+    token = request.query_params.get("token")
+    if not any(verify_callback_token(job.id, token) for job in jobs):
+        # 缺 token / token 对不上：跨组织伪造或配置错的旧回调 —— 401 且不落任何状态
+        raise APIError(401, "invalid parse callback token",
+                       "authentication_error", "invalid_callback_token")
     archived = 0
     for job in jobs:
         if body.status == "failed":

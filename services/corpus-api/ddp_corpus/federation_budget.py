@@ -235,6 +235,7 @@ async def reserve_share(*, root_task_id, organization_id, step_id, share, budget
         for kind, counter in (("request", "requests"), ("bytes", "bytes"), ("hops", "hops")):
             budget.check(kind, amounts[counter])
         if budget._used["probes"] + amounts["probes"] > budget._sub_caps["probe"]:
+            await independent.rollback()
             raise ApplicationError("budget_exhausted", "delegated probes exceed parent")
         conditions = [FederationRootLedger.root_task_id == root_task_id,
                       FederationRootLedger.organization_id == organization_id,
@@ -248,6 +249,7 @@ async def reserve_share(*, root_task_id, organization_id, step_id, share, budget
         changed = await independent.execute(update(FederationRootLedger).where(*conditions).values(**values)
                                              .execution_options(synchronize_session=False))
         if changed.rowcount != 1:
+            await independent.rollback()
             raise ApplicationError("budget_exhausted", "child share exceeds remaining parent budget")
         await independent.commit()
     for kind, counter in (("request", "requests"), ("bytes", "bytes"), ("hops", "hops")):

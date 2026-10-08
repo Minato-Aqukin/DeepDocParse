@@ -92,6 +92,39 @@ async def test_answer_probes_nearest_allowed_ready_node(
         assert outcomes[DIRECT] == "not_ready"
 
 
+async def test_answer_probe_unknown_readiness_is_needs_precheck_not_exclusion(monkeypatch):
+    """未观测到的能力必须报 capability_unknown，而不是静默排除。"""
+    configure_federation(monkeypatch)
+    monkeypatch.setattr("ddp_corpus.config.settings.bundle_node_id", LOCAL)
+
+    def respond(request):
+        body = json.loads(request.content)
+        result = peer_capability_probe(
+            operation="rag.answer.cited", readiness="unknown", can_generate=False)
+        result.update(target_node_id=DIRECT, task_spec_digest=body["task_spec_digest"],
+                      consent_ref=body["consent_ref"])
+        return httpx.Response(200, json=result)
+
+    directory = PeerDirectory(
+        parse_peers(json.dumps({DIRECT: {"endpoint": "https://direct.example"}})),
+        actor=Actor(id=ACTOR, kind="user", organization_id=ORG, role="contributor"),
+        transport=httpx.MockTransport(respond), signer=LocalControlSigner(issuer_node_id=LOCAL),
+        delegation=Delegation(root_task_id="root-unknown", task_spec_digest="sha256:" + "c" * 64))
+    budget = routing.RootBudget({"max_requests": 8, "max_bytes": 1 << 20,
+                                 "max_generation_tokens": 100, "max_hops": 8,
+                                 "deadline": EXPIRY}, now=utcnow().timestamp())
+
+    async def spend(*, kind, amount):
+        budget.reserve(kind, amount)
+
+    chosen, outcomes = await federation_tasks._probe_answer_candidates(
+        root_task_id="root-unknown", task_spec_digest="sha256:" + "c" * 64,
+        consent=exploration(recipients=(DIRECT,)), scope_ref="scope-unknown",
+        targets=[member("direct", DIRECT)], peers=directory, budget=budget, spend=spend)
+    assert chosen is None
+    assert outcomes[DIRECT] == "capability_unknown"
+
+
 @pytest.mark.parametrize("cache_org,revision,age,expected", [
     (ORG, "1", 0, DIRECT),
     ("other-org", "1", 0, FAR),

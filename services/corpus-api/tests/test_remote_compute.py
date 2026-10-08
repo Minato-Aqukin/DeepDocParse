@@ -19,7 +19,7 @@ import respx
 from sqlalchemy import select
 
 from ddp_core.bundle import MAX_ARCHIVE
-from ddp_corpus.models import ParseJob
+from ddp_corpus.models import Document, ParseJob
 from ddp_corpus.remote_compute_ingest import bind_verified_upload, record_parse_outcome
 from ddp_corpus.remote_compute_models import RemoteCompute
 from tests.conftest import ACTOR, CONTROL, ORG, SERVICE, actor_headers
@@ -108,6 +108,51 @@ async def test_cross_actor_binding_not_observable(actor_client, session, app_sta
             filename="manual.pdf", mime="application/pdf", size_bytes=len(content),
             sha256=_h(content), remote_compute_id=record["id"])
     assert getattr(exc.value, "code", "") == "remote_compute_not_found"
+async def test_unknown_or_foreign_id_rejected_before_any_asset(actor_client, session, app_state):
+    """未知/外组织 id 与非精确 tmp 键都在存储写之前被拒，不建资产与任务。
+
+    变异确认：把 `bind_verified_upload` 顶部的形状/键检查删掉，本用例必须红
+    （畸形 id 会一路走到 ingest 落资产，或前缀键被接受）。
+    """
+    from ddp_corpus.remote_compute_ingest import bind_verified_upload as bind
+    from ddp_corpus.service_client import ServiceClient
+    from ddp_corpus.control_client import ControlClient
+    content = b"precheck bytes"
+    record, _ = await _create(actor_client, session, content, key="rc-precheck-1")
+    real_key = f"tmp-remote-compute/{ORG}/{record['id']}/source.bin"
+    await app_state.storage.put(real_key, content, "application/pdf")
+    before_docs = (await session.execute(select(Document))).scalars().all()
+    before_jobs = (await session.execute(select(ParseJob))).scalars().all()
+
+    async def attempt(**kw):
+        args = dict(organization_id=ORG, actor_id=ACTOR, actor_kind="user",
+                    upload_id="upload-x", object_key=real_key, filename="manual.pdf",
+                    mime="application/pdf", size_bytes=len(content),
+                    sha256=_h(content), remote_compute_id=record["id"])
+        args.update(kw)
+        with pytest.raises(Exception) as exc:
+            await bind(session, app_state.storage, ServiceClient(app_state.http),
+                       ControlClient(app_state.http), **args)
+        return exc.value
+    # 畸形 id：连库都不查，直接 404
+    assert getattr(await attempt(remote_compute_id="not-an-id"), "code", "") == \
+        "remote_compute_not_found"
+    # 未知但形状合法的 id：404（与跨组织同一形状，不做存在性预言机）
+    assert getattr(await attempt(remote_compute_id="0" * 32), "code", "") == \
+        "remote_compute_not_found"
+    # 外组织 id：404（_create 的记录属于 ORG，用另一个组织读它）
+    assert getattr(await attempt(organization_id="org-other",
+                                 object_key=f"tmp-remote-compute/org-other/{record['id']}/source.bin"),
+                    "code", "") == "remote_compute_not_found"
+    # 同目录前缀键但非精确键：409（旧实现以前缀接受，会冒充 verified 输入）
+    assert getattr(await attempt(
+        object_key=f"tmp-remote-compute/{ORG}/{record['id']}/evil.bin"),
+        "code", "") == "input_changed"
+    await session.rollback()
+    after_docs = (await session.execute(select(Document))).scalars().all()
+    after_jobs = (await session.execute(select(ParseJob))).scalars().all()
+    assert len(after_docs) == len(before_docs) and len(after_jobs) == len(before_jobs)
+
 
 
 async def test_interrupted_replay_never_mints_second_task(actor_client, session, app_state):

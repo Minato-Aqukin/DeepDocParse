@@ -72,7 +72,6 @@ async def list_replicas(
 async def licensed_source(
     resource_id: str,
     version_id: str,
-    request: Request,
     actor: Actor = Depends(current_actor),
     session: AsyncSession = Depends(get_session),
     storage=Depends(get_storage),
@@ -83,7 +82,6 @@ async def licensed_source(
         actor=actor,
         session=session,
         storage=storage,
-        http=request.app.state.http,
     )
 
 

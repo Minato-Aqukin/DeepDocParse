@@ -292,6 +292,7 @@ async def read_published_collections(
         revoked = getattr(exc, "revoked_collection_ids", None)
         if revoked is not None:
             return JSONResponse(jsonable_encoder({**error_body(str(exc.detail), exc.type, exc.code),
+                                                  **getattr(exc, "snapshot_binding", {}),
                                                   "revoked_collection_ids": revoked}),
                                 status_code=410, headers={"Cache-Control": "no-store"})
         raise

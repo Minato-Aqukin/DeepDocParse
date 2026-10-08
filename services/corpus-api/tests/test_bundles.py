@@ -287,6 +287,94 @@ async def test_native_export_freezes_parse_revision_and_reports_unbound_parse(
     assert snapshot.layout["reason"] == "parse_revision_unbound"
     assert snapshot.evidence == []
 
+async def test_native_export_emits_paragraph_locator_for_non_pdf(
+    actor_client, session, app_state, monkeypatch
+):
+    """非 PDF 原件的导出 locator 不伪造页码：kind=paragraph，不带 physical_page_index。
+
+    与 federation.federated_locator 同源（bundles._snapshot 直接复用它）；
+    validate_parts 在 read_bundle 内已校验 kind 合法，这里钉住非 PDF 不带页序。
+    """
+    import hashlib
+
+    from ddp_core.bundle import json_bytes
+    from ddp_corpus.models import Evidence, ParseJob, new_id
+
+    monkeypatch.setattr(settings, "bundle_node_id", "node-centre")
+    body = b"# hello\n"
+    document = Document(
+        id=new_id(),
+        uploaded_by="actor-alice",
+        organization_id="org-test",
+        doc_id=hashlib.sha256(body).hexdigest(),
+        filename="hello.md",
+        mime="text/markdown",
+        size_bytes=len(body),
+        object_key="sources/frozen/hello.md",
+    )
+    session.add(document)
+    await session.flush()
+    job = ParseJob(
+        id=new_id(),
+        document_id=document.id,
+        engine="borndigital",
+        status="succeeded",
+        options_hash="md",
+        document_version=1,
+    )
+    session.add(job)
+    resource = Resource(
+        id=new_id(),
+        owner_id="actor-alice",
+        uploaded_by="actor-alice",
+        organization_id="org-test",
+        display_name="hello.md",
+    )
+    session.add(resource)
+    await session.flush()
+    document.current_job_id = job.id
+    version = ResourceVersion(
+        id=new_id(),
+        resource_id=resource.id,
+        document_id=document.id,
+        source_digest=document.doc_id,
+        filename="hello.md",
+        size_bytes=len(body),
+        parse_job_id=job.id,
+    )
+    session.add(version)
+    evidence = Evidence(
+        id=new_id(),
+        document_id=document.id,
+        parse_job_id=job.id,
+        seq=3,
+        atom_key="source:3",
+        content="hello",
+        page_idx=7,
+        printed_page_label="vii",
+        bbox=[10, 20, 200, 40],
+        page_size=[612, 792],
+    )
+    session.add(evidence)
+    await session.commit()
+    await app_state.storage.put(document.object_key, body, "text/markdown")
+    layout = {
+        "layout_version": "ddp-layout/1",
+        "pdf_info": [{"page_idx": 0, "page_size": [612, 792], "para_blocks": []}],
+    }
+    await app_state.storage.put(
+        f"results/{job.id}/layout.json", json_bytes(layout), "application/json"
+    )
+    response = await actor_client.get(
+        f"/api/resources/{resource.id}/versions/{version.id}/bundle")
+    assert response.status_code == 200, response.text
+    snapshot = read_bundle(io.BytesIO(response.content))
+    locator = snapshot.evidence[0]["evidence"]["locator"]
+    assert locator["kind"] == "paragraph"
+    assert "physical_page_index" not in locator
+    assert locator["seq"] == 3
+    assert "printed_page_label" not in locator
+
 
 async def test_last_deleted_bundle_reference_is_collected_after_grace(
     actor_client, session, app_state
@@ -487,3 +575,264 @@ async def test_t03_wiki_revision_references_protect_unique_source_without_old_ci
     before = dict(app_state.storage.objects)
     assert await collect_deleted_objects(db.get_sessionmaker(), app_state.storage) == 0
     assert app_state.storage.objects == before
+
+
+async def test_export_stream_matches_build_bundle_bytes(actor_client, app_state):
+    """Spooled streaming must not change bytes: the exported archive is
+    byte-identical to build_bundle over the stored manifest members."""
+    result = await import_one(actor_client)
+    response = await actor_client.get(
+        f"/api/resources/{result['resource_id']}/versions/{result['source_version_id']}/bundle")
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/zip"
+    prefix = f"bundles/{result['source_version_id']}/"
+    manifest = json.loads(await app_state.storage.get(prefix + "manifest.json"))
+    members = {entry["path"]: await app_state.storage.get(prefix + entry["path"])
+               for entry in manifest["files"]}
+    assert response.content == build_bundle(manifest["source"], members)
+
+
+async def test_export_bounded_buffering_enforces_member_and_total_caps(actor_client, app_state):
+    """导出缓冲有界：单成员超 MAX_FILE 即 413；总量累计超 MAX_EXPANDED 即停。
+
+    只看字节一致性是不够的 —— 旧实现攒下全量成员也能产出同样的字节。
+    本用例钉的是"超限不缓冲"：变异确认：把 _BoundedMembers.add 改回无条件
+    收纳，结构断言必须红（buffered 会超过 MAX_EXPANDED 而不是抛错）；
+    把 _get_bytes 的上限改大，单成员用例必须红。
+    """
+    from ddp_core.bundle import MAX_EXPANDED, MAX_FILE, BundleError
+
+    result = await import_one(actor_client)
+    path = (f"/api/resources/{result['resource_id']}"
+            f"/versions/{result['source_version_id']}/bundle")
+    prefix = f"bundles/{result['source_version_id']}/"
+
+    oversized = b"y" * (MAX_FILE + 1)
+    await app_state.storage.put(prefix + "evidence.json", oversized, "application/json")
+    response = await actor_client.get(path)
+    assert response.status_code == 413, response.text
+    assert response.json()["error"]["code"] == "bundle_too_large"
+
+    from ddp_corpus.routers.bundles import _BoundedMembers
+    bounded = _BoundedMembers()
+    chunk = b"z" * (MAX_FILE - 1)
+    bounded.add("layout.json", chunk)
+    bounded.add("evidence.json", chunk)
+    with pytest.raises(BundleError) as exc:
+        bounded.add("provenance.json", chunk)
+    assert exc.value.code == "bundle_too_large"
+    assert bounded.buffered <= MAX_EXPANDED
+
+
+async def test_import_cleans_up_when_result_write_fails(actor_client, app_state, monkeypatch):
+    """Cleanup entries are registered before their puts: if the job-layout
+    write lands bytes and then fails, no orphan keys may remain under either
+    prefix (row-keyed GC could never reach them).
+
+    A backend failure propagates out of the import (same contract as
+    test_storage_failure_never_publishes_ready_version): the guard under test
+    is the zero-orphan state, not the response shape.
+    """
+    real_put = app_state.storage.put
+
+    async def write_then_fail(key, data, content_type):
+        await real_put(key, data, content_type)
+        if key.startswith("results/bundle-"):
+            raise RuntimeError("backend wrote the bytes, then reported failure")
+
+    monkeypatch.setattr(app_state.storage, "put", write_then_fail)
+    with pytest.raises(RuntimeError, match="backend wrote the bytes"):
+        await actor_client.post(
+            "/api/bundles/import", content=sample_bundle(),
+            headers=upload_headers(key="import-flaky-layout"))
+    leftovers = [key for key in app_state.storage.objects
+                 if key.startswith("bundles/") or key.startswith("results/bundle-")]
+    assert leftovers == [], f"orphaned keys unreachable to row-keyed GC: {leftovers}"
+
+
+async def _import_bundle_bytes(client, payload: bytes, *, key: str):
+    response = await client.post(
+        "/api/bundles/import", content=payload, headers=upload_headers(key=key)
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _vectors_bundle(*, normalization="none", chunker="ddp-chunk/3",
+                    dtype="float32", encoding="json-list"):
+    """A present-vectors bundle whose dense identity matches the running config
+    except for the explicitly overridden preprocessing/chunking/format field."""
+    from ddp_core.compilation import CHUNKER_VERSION, fingerprint
+    from ddp_core.compilation import provider_of as _provider_of
+    from ddp_core.tokenize import backend as tokenizer_backend
+
+    source, files = sample_parts()
+    layout_payload = json.loads(files["layout.json"])
+    layout_body = layout_payload["layout"]
+    layout_body["pdf_info"] = [{
+        "page_idx": 0,
+        "page_size": [612, 792],
+        "para_blocks": [{
+            "type": "text",
+            "bbox": [10, 20, 200, 40],
+            "lines": [{"spans": [{"content": "A fixed source"}]}],
+        }],
+    }]
+    files["layout.json"] = json_bytes({
+        "schema": "ddp-bundle-layout/1",
+        "state": "present",
+        "layout": layout_body,
+        "reason": None,
+    })
+    records = json.loads(files["evidence.json"])
+    model_version = fingerprint(_provider_of(
+        layout=layout_body,
+        parse_options_hash="bundle",
+        embedding_model=settings.embedding_model,
+        vision_model=settings.chat_model,
+    ))
+    assert model_version != settings.embedding_model
+    tokenizer = tokenizer_backend()
+    vectors = {
+        "schema": "ddp-bundle-vectors/1",
+        "state": "present",
+        "model": {
+            "name": settings.embedding_model,
+            "version": model_version,
+            "dimension": settings.embedding_dim,
+        },
+        "dimension": settings.embedding_dim,
+        "preprocessing": {"tokenizer": tokenizer, "normalization": normalization},
+        "chunking": {
+            "max_chars": settings.chunk_max_chars,
+            "tokenizer": tokenizer,
+            "chunker": chunker,
+        },
+        "format": {"dtype": dtype, "encoding": encoding},
+        "source": {
+            "source_digest": source["source_digest"],
+            "parse_revision": source["parse_revision"],
+            "evidence_count": 1,
+        },
+        "vectors": [{
+            "evidence_id": records[0]["evidence"]["evidence_id"],
+            "excerpt_digest": digest(b"A fixed source"),
+            "embedding": [0.5] * settings.embedding_dim,
+        }],
+        "reason": None,
+    }
+    files["vectors.json"] = json_bytes(vectors)
+    bundle = build_bundle(source, files, required_features=["vectors"])
+    assert vectors["chunking"]["chunker"] == CHUNKER_VERSION or chunker != CHUNKER_VERSION
+    assert read_bundle(io.BytesIO(bundle)).vectors["state"] == "present"
+    return bundle
+
+
+async def _import_vectors(actor_client, session, *, key, **overrides):
+    from ddp_corpus.models import ParseJob
+
+    result = await _import_bundle_bytes(
+        actor_client, _vectors_bundle(**overrides), key=key)
+    job = await session.scalar(
+        select(ParseJob).where(ParseJob.document_id == result["document_id"]))
+    assert job is not None
+    chunks = list((await session.execute(
+        select(Chunk).where(Chunk.parse_job_id == job.id))).scalars())
+    assert len(chunks) == 1
+    return job, chunks
+
+
+async def test_import_reuses_vectors_with_matching_preprocessing_and_format(
+    actor_client, session, monkeypatch
+):
+    """Identical normalization/chunker/format identity reuses bundled vectors."""
+    from ddp_core import compilation as compilation_module
+
+    real_provider_of = compilation_module.provider_of
+
+    def frozen_provider_of(*, layout, parse_options_hash, embedding_model, vision_model):
+        return real_provider_of(
+            layout=layout,
+            parse_options_hash="bundle",
+            embedding_model=embedding_model,
+            vision_model=vision_model,
+        )
+
+    monkeypatch.setattr(compilation_module, "provider_of", frozen_provider_of)
+    job, chunks = await _import_vectors(
+        actor_client, session, key="import-vectors-identical")
+    assert job.index_status == "ready", job.index_error
+    assert job.index_error is None
+    assert all(row.embedding is not None for row in chunks)
+
+
+async def test_import_rebuilds_vectors_on_normalization_mismatch(
+    actor_client, session, monkeypatch
+):
+    """A bundle differing only in preprocessing.normalization is NOT reused."""
+    from ddp_core import compilation as compilation_module
+
+    real_provider_of = compilation_module.provider_of
+
+    def frozen_provider_of(*, layout, parse_options_hash, embedding_model, vision_model):
+        return real_provider_of(
+            layout=layout,
+            parse_options_hash="bundle",
+            embedding_model=embedding_model,
+            vision_model=vision_model,
+        )
+
+    monkeypatch.setattr(compilation_module, "provider_of", frozen_provider_of)
+    job, chunks = await _import_vectors(
+        actor_client, session, key="import-vectors-norm", normalization="nfkc")
+    assert job.index_status == "pending"
+    assert job.index_error == "vectors_incompatible_rebuild_required"
+    assert all(row.embedding is None for row in chunks)
+
+
+async def test_import_rebuilds_vectors_on_format_mismatch(
+    actor_client, session, monkeypatch
+):
+    """A bundle differing only in format.dtype/encoding is NOT reused."""
+    from ddp_core import compilation as compilation_module
+
+    real_provider_of = compilation_module.provider_of
+
+    def frozen_provider_of(*, layout, parse_options_hash, embedding_model, vision_model):
+        return real_provider_of(
+            layout=layout,
+            parse_options_hash="bundle",
+            embedding_model=embedding_model,
+            vision_model=vision_model,
+        )
+
+    monkeypatch.setattr(compilation_module, "provider_of", frozen_provider_of)
+    job, chunks = await _import_vectors(
+        actor_client, session, key="import-vectors-format", dtype="float16")
+    assert job.index_status == "pending"
+    assert job.index_error == "vectors_incompatible_rebuild_required"
+    assert all(row.embedding is None for row in chunks)
+
+
+async def test_import_rebuilds_vectors_on_chunker_mismatch(
+    actor_client, session, monkeypatch
+):
+    """A bundle differing only in chunking.chunker is NOT reused."""
+    from ddp_core import compilation as compilation_module
+
+    real_provider_of = compilation_module.provider_of
+
+    def frozen_provider_of(*, layout, parse_options_hash, embedding_model, vision_model):
+        return real_provider_of(
+            layout=layout,
+            parse_options_hash="bundle",
+            embedding_model=embedding_model,
+            vision_model=vision_model,
+        )
+
+    monkeypatch.setattr(compilation_module, "provider_of", frozen_provider_of)
+    job, chunks = await _import_vectors(
+        actor_client, session, key="import-vectors-chunker", chunker="ddp-chunk/2")
+    assert job.index_status == "pending"
+    assert job.index_error == "vectors_incompatible_rebuild_required"
+    assert all(row.embedding is None for row in chunks)

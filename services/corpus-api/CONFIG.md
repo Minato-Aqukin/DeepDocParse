@@ -16,7 +16,7 @@
 **`VITE_DEFAULT_ENGINE` 要与 `DEFAULT_PARSE_ENGINE`、`infra/registry/models.yaml`
 三者对齐** —— 任一处对不上，上传会在网关侧收 404 unknown_engine。
 
-共 **90** 项。
+共 **97** 项。
 
 ## 本层资源
 
@@ -38,7 +38,7 @@
 | 环境变量 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `SERVICE_URL` | `str` | `'http://127.0.0.1:9000'` | DeepDocParse gateway 的地址。解析平面必须走它，embedding/chat 缺省也回落到它 |
-| `CONTROL_URL` | `str` | `'http://127.0.0.1:8080'` | 控制面（services/control-api）。本服务向它要两样东西： 稳定文件 URL 的凭证、actor 显示名 —— 两者都住在 control schema， 而 corpus 对那个 schema 没有任何权限（企业边界 5） |
+| `CONTROL_URL` | `str` | `'http://127.0.0.1:8090'` | 控制面（services/control-api）。本服务向它要两样东西： 稳定文件 URL 的凭证、actor 显示名 —— 两者都住在 control schema， 而 corpus 对那个 schema 没有任何权限（企业边界 5） |
 | `SERVICE_TOKEN` | `str` | `'change-me'` | 内网服务凭据，**三个服务必须一致**（control-api / model-gateway / 本服务）。 它是本服务唯一的门禁：actor 上下文头之所以可信，前提就是 "只有持有它的调用方能进来"。占位值会被拒绝启动 |
 | `BUNDLE_NODE_ID` | `str` | `''` | Persistent node identity for portable source evidence. Empty disables native Bundle exports until deployment config assigns a unique identity; never invent a shared node. |
 | `DEFAULT_PARSE_ENGINE` | `str` | `'mineru'` | 上传/重解析没有显式指定引擎时用哪个。**名字必须在 service 的 models.yaml 里存在**， 否则 service 返回 404 unknown_engine —— 这正是无 GPU 环境踩到的： models.cpu.yaml 只注册了 borndigital，本层却按名字写死 mineru，第一步就断。 与注册表驱动一致：换引擎 = 改这一行配置，不改代码 |
@@ -49,6 +49,8 @@
 | `CHAT_TOKEN` | `str` | `''` | 留空用 service_token |
 | `CHAT_MODEL` | `str` | `''` | 留空由上游注册表选 default |
 | `PUBLIC_BASE_URL` | `str` | `'http://127.0.0.1:8081'` | 本服务对模型网关可达的地址：解析回调用它拼。 宿主机混合模式用 127.0.0.1:8081，全容器模式用服务名（http://corpus-api:8081） |
+| `FETCH_ALLOW_REDIRECTS` | `bool` | `False` | 出站抓取缺省不跟随重定向（SSRF，与网关同名）。True = 手工逐跳、 每跳重验目的地策略、至多 3 跳，且永不转发 Authorization。 语料转发路径从不跟随重定向 —— 这里只装配给抓取方用的配置快照（判据见 `ddp_core.fetch_policy`）。 |
+| `FETCH_TRUSTED_BASE` | `str` | `''` | 受信文件基座（SSRF，逗号分隔可配多个，与网关同名）。file_url 受信当且仅当 scheme+host+port 一致，且路径在基座路径之下、同时落在 `/files/` 段边界之下（query 不透明，不参与比较）。典型值：control-api 的 内网基座（如 http://control-api:8080/files/）。判据见 `ddp_core.fetch_policy`。 |
 | `REDIS_URL` | `str` | `''` | 多副本部署必须配：对账选主靠它。留空 = 单实例模式。 **限速不在这里** —— 整体迁去了 control-api |
 | `MAX_UPLOAD_BYTES` | `int` | `200 * 1024 * 1024` | 单文件上限。**真正的把关在 control-api**（它签发预签名前就校验）， 这里保留是给"外部提交"路径与展示用 —— 两处的值应当一致。 字节流不再经过本进程（不变式 6），所以它不再是 OOM 防线 |
 | `UPLOAD_CHUNK_BYTES` | `int` | `1024 * 1024` | 分片读取的粒度：边读边累计，超限立刻中断，不等整个文件落地 |
@@ -85,6 +87,16 @@
 | `TASK_CONCURRENCY_FEDERATION_PLAN` | `int` | `2` | 联邦协调者（federation_plan）的并发。**与节点执行分开成两个池**： 合成一个池的后果是"等本地子任务的父任务"会把池占满 —— 协调者在本地 目标上要认领并等节点执行，而节点执行排在同一池里领不到 worker。 协调者是编排（主要等 I/O），默认 2。 |
 | `TASK_CONCURRENCY_FEDERATION_EXECUTE` | `int` | `4` | 联邦节点执行（federation_execute）的并发。它真正跑检索，是 CPU/IO 混 合的长任务，默认 4。 |
 | `TASK_POLL_INTERVAL` | `float` | `1.0` | 空转时的轮询间隔。调大省数据库连接，调小降低任务延迟 |
+| `TASK_MAX_RUNTIME_SECONDS` | `float` | `1800.0` | 单个 handler 连续跑的最长秒数（挂起 handler 的兜底 deadline）。 超过后 runner 不再续租、取消 handler 并以 task_timeout 落失败/重试。 **默认必须兜住活锁**（handler 永远不返回时任务不能永远占着租约）， 但也不能太小 —— 正常慢任务（编译/抽取）一次要跑十几分钟。默认 30 分钟。 |
+| `TASK_MAX_RUNTIME_SECONDS_BY_KIND` | `dict[str, float]` | `{}` | 按 kind 覆盖上面的默认值：{"compile": 3600.0} 这类形状。 未列出的 kind 走上面的全局默认值。 |
+
+## 内容诊断（plan.md §8.6）
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `CONTENT_DIAGNOSTICS_ENABLED` | `bool` | `False` | 默认关：日志默认只记截断/脱敏后的资料（问题、原文片段绝不全文落日志）。 打开（true）才允许记录完整问题/snippet 做排障，且必须同时满足： actor 权限钩子（content_diagnostics_require_admin 为 true 时仅 admin 可触发 诊断日志）与留存上限（content_diagnostics_retention_seconds，诊断记录保留 至多这么久，0 = 不落盘只记内存环）。开关本身只是"允许"，每一次记录仍要 走 `content_diagnostics_permitted(actor)` 显式放行 —— 默认红线不动。 |
+| `CONTENT_DIAGNOSTICS_REQUIRE_ADMIN` | `bool` | `True` | 打开诊断时是否要求 admin 身份。默认 true：排障也不该让普通调用者 把别人的原文打进共享日志。 |
+| `CONTENT_DIAGNOSTICS_RETENTION_SECONDS` | `int` | `7 * 24 * 3600` | 诊断记录的留存上限（秒）。默认 7 天：排障窗口够用，过期必须清。 上限 30 天 —— 诊断不是档案，留更久请走正式的审计导出。 |
 | `INDEX_LEASE_SECONDS` | `int` | `300` | worker 无 heartbeat 后多久允许接管 |
 | `INDEX_HEARTBEAT_SECONDS` | `int` | `30` | 活 worker 的续租周期 |
 | `QA_TOP_K` | `int` | `4` | 进 prompt 的 chunk 数 |

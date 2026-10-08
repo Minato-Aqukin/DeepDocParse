@@ -26,7 +26,7 @@ from ddp_corpus import node_identity
 from ddp_corpus.config import assert_secrets_configured, settings
 from ddp_corpus.db import get_engine, get_sessionmaker
 from ddp_corpus.errors import install_error_handlers
-from ddp_corpus.outbox import deliver_loop
+from ddp_corpus.outbox import deliver_loop, outbox_backlog
 from ddp_corpus.reconcile import reconcile_loop, sweep_federation_loop
 from ddp_corpus.routers import (
     conversations, documents, external, extractions, internal, knowledge, search, file_access, resources, bundles, bundle_replicas, mcp_tools,
@@ -159,7 +159,13 @@ async def healthz():
 
 @app.get("/readyz")
 async def readyz():
-    """就绪探针：依赖不通就别往这个副本上导流量。"""
+    """就绪探针：依赖不通就别往这个副本上导流量。
+
+    另带两组水位（降级必须可见）：
+    outbox 未投递积压（含被放弃/abandoned 的条数）与持久任务队列积压。
+    abandoned > 0 直接判 not-ready —— 被放弃的事件还躺在表里等人工处理，
+    那不是"正常"，必须有人看见。
+    """
     from sqlalchemy import text
 
     checks: dict[str, str] = {}
@@ -186,10 +192,39 @@ async def readyz():
         except Exception as exc:
             checks["redis"] = f"error: {type(exc).__name__}"
 
+    # outbox 水位：outbox_backlog(session) ->
+    # {undelivered, oldest_seconds, abandoned}（只读，不认领不改行）。
+    # 键名与上面的 tests/test_outbox.py 断言共用一个形状，改一边必须同步另一边。
+    # 查不到就回退零值，并把失败本身记进 checks —— 回退不是"正常"，必须有人看见。
+    from ddp_corpus.db import get_sessionmaker as _sessionmaker
+
+    try:
+        async with _sessionmaker()() as session:
+            outbox = await outbox_backlog(session)
+    except Exception as exc:
+        outbox = {"undelivered": 0, "oldest_seconds": 0.0, "abandoned": 0}
+        checks["outbox"] = f"error: {type(exc).__name__}"
+    else:
+        if isinstance(outbox.get("abandoned"), int) and outbox["abandoned"] > 0:
+            checks["outbox"] = (f"error: {outbox['abandoned']} "
+                                "abandoned events need attention")
+        else:
+            checks["outbox"] = "ok"
+    # 队列水位：沿用 queue.backlog()（按 kind 的 pending/oldest_seconds）。
+    queue: dict = {}
+    try:
+        from ddp_corpus.queue import backlog as queue_backlog
+
+        async with _sessionmaker()() as session:
+            queue = await queue_backlog(session)
+    except Exception as exc:
+        queue = {"error": type(exc).__name__}
+
     ready = all(v == "ok" for v in checks.values())
     # 联邦身份与认证形态如实报出来。**它不参与 ready**：联邦是可选能力，
     # 控制面没起来时本节点的检索/问答照常可用 —— 但"身份还没绑上/对不上"
     # 必须看得见，而不是只体现在联邦端点的 503 里。
     return JSONResponse(status_code=200 if ready else 503,
                         content={"ready": ready, "checks": checks,
+                                 "outbox": outbox, "queue": queue,
                                  "federation": node_identity.status()})

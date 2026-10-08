@@ -20,7 +20,7 @@
 事件投递是"至少一次"的，所以本模块必须能被同一个事件重复调用而结果不变。
 两道保证：
   1. `processed_events` 表按 event_id 去重（调用方 `routers/internal.py` 做）
-  2. 本模块自己按 `(doc_id, origin)` 全局去重，并发下靠唯一约束兜
+  2. 本模块自己按 `(doc_id, origin, organization_id)` 组织内去重，并发下靠唯一约束兜
 """
 import hashlib
 import json
@@ -36,7 +36,7 @@ from ddp_corpus.models import (
     Citation, Document, DocumentUpload, Evidence, ParseJob, new_id, utcnow,
 )
 from ddp_corpus.control_client import ControlClient
-from ddp_corpus.service_client import ServiceClient, ServiceError
+from ddp_corpus.service_client import ServiceClient, ServiceError, callback_token
 from ddp_corpus.storage import Storage
 from ddp_corpus.versions import advance_index_generation, next_document_version
 
@@ -100,8 +100,10 @@ async def ingest_document(
     if target_resource_id is not None:
         request_payload["target_resource_id"] = target_resource_id
 
+    # 不变式 8：Document 复用按组织隔离 —— 绝不复活/改写别的组织的行。
     document = (await session.execute(
-        select(Document).where(Document.doc_id == doc_id, Document.origin == "web")
+        select(Document).where(Document.doc_id == doc_id, Document.origin == "web",
+                               Document.organization_id == organization_id)
         .with_for_update().execution_options(populate_existing=True)
     )).scalar_one_or_none()
 
@@ -118,7 +120,8 @@ async def ingest_document(
         except IntegrityError:
             # The winning content row is locked before deciding which uploaded object survives.
             document = (await session.execute(
-                select(Document).where(Document.doc_id == doc_id, Document.origin == "web")
+                select(Document).where(Document.doc_id == doc_id, Document.origin == "web",
+                                       Document.organization_id == organization_id)
                 .with_for_update().execution_options(populate_existing=True)
             )).scalar_one_or_none()
             if document is None:
@@ -138,7 +141,7 @@ async def ingest_document(
             except Exception:  # noqa: BLE001
                 pass
 
-    # **归属：谁传过都记一笔。** 全局去重之后第二个人传同一份文件不会产生新的
+    # **归属：谁传过都记一笔。** 组织内去重之后同组织第二个人传同一份文件不会产生新的
     # Document，但"他也传过"这件事不能丢 —— 删除权限判它，界面上也要说得清
     # 这份语料从哪来。用 SAVEPOINT + 唯一约束兜并发。
     if not await session.scalar(
@@ -200,7 +203,18 @@ async def _revive(session: AsyncSession, document: Document, object_key: str) ->
     删除时把 chunks 清空并置 `index_status='none'`。复活后如果解析结果还在，
     必须重新排队建索引 —— 否则文档看着好好的却永远不可问答，
     而对账只捞 pending，自愈不了，只能等用户自己发现去点"重建索引"。
+
+    被取代的旧 key 不在这里直接删：storage 删除不受事务保护，崩溃会丢；
+    把它 park 进 `gc_pending_keys` 交给 manifest，由 GC 的 live-drain 在复核
+    引用后删掉。当前上传的新 key 同样 park 进 manifest：GC 的 claim 绝不删
+    live 行，被复活打断的 manifest 不会把新原件留在 manifest 之外而泄漏。
+    Fencing 不变：两条分支仍是条件 UPDATE，rowcount 落空即 409。
     """
+    old_key = document.object_key or ""
+    parked = list(document.gc_pending_keys or [])
+    for key in (old_key, object_key):
+        if key and key not in parked:
+            parked.append(key)
     if document.current_job_id:
         has_citations = bool(await session.scalar(
             select(func.count(Citation.id)).join(
@@ -212,6 +226,7 @@ async def _revive(session: AsyncSession, document: Document, object_key: str) ->
             # 所以标 failed 并要求先做版本校验 —— 这是"不静默"的一种
             values = {
                 "deleted_at": None, "object_key": object_key,
+                "gc_pending_keys": parked,
                 "index_status": "failed",
                 "index_error": "文档已复活且存在历史出处；请先执行版本校验，确认后再重建索引",
                 "compile_status": "failed",
@@ -221,6 +236,7 @@ async def _revive(session: AsyncSession, document: Document, object_key: str) ->
         else:
             values = {
                 "deleted_at": None, "object_key": object_key,
+                "gc_pending_keys": parked,
                 "index_status": "pending", "index_error": None,
                 "compile_status": "pending", "compile_degraded": [],
                 "index_lease_until": None, "updated_at": utcnow(),
@@ -234,7 +250,8 @@ async def _revive(session: AsyncSession, document: Document, object_key: str) ->
         revived = await session.execute(
             update(Document).where(Document.id == document.id,
                                    Document.deleted_at.is_not(None)).values(
-                deleted_at=None, object_key=object_key, updated_at=utcnow()))
+                deleted_at=None, object_key=object_key, gc_pending_keys=parked,
+                updated_at=utcnow()))
         if revived.rowcount == 0:
             raise APIError(409, "document revival raced with another request; retry",
                            "invalid_request_error", "document_state_changed")
@@ -269,7 +286,8 @@ async def submit_parse(session: AsyncSession, control: ControlClient,
     try:
         task_id = await service.submit_parse(
             file_url=file_url, doc_id=parse_identity(document.doc_id, resource_id, job.id),
-            callback_url=f"{settings.public_base_url}/internal/parse-callback",
+            callback_url=(f"{settings.public_base_url}/internal/parse-callback"
+                          f"?token={callback_token(job.id)}"),
             engine=job.engine, options=job.options,
         )
     except ServiceError as exc:

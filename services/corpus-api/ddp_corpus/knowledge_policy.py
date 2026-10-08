@@ -2,8 +2,17 @@
 
 Unattributed historical projections are quarantined. The first content uploader is
 not proof of who authored a graph/Wiki, so source visibility alone never grants access.
+
+SQL scoping below is a pre-filter only: selects are narrowed by provider org in SQL
+(legacy rows with a NULL org still load), then every surviving row goes through
+provider_allowed as the second gate. The residual risk without that gate would be a
+provider JSON whose recorded org matches the caller while its bindings point at
+another org's resources; require_resource in the loop closes it.
+
+Citation rows carry no org of their own, so the dependency join is scoped through
+the caller's visible documents, the same SQL predicate the knowledge reads use.
 """
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from ddp_corpus.errors import APIError
 from ddp_corpus.models import (
     Assertion, Citation, Conversation, Document, Evidence, ExtractionItem, ExtractionRun,
@@ -19,14 +28,20 @@ async def provider_allowed(session, actor, provider):
         return False
     for binding in provider["source_bindings"]:
         try:
-            await require_resource(session, actor, binding["resource_id"])
+            resource = await require_resource(session, actor, binding["resource_id"])
         except APIError:
+            return False
+        if resource.publication == "withdrawn":
+            # Historical versions stay readable after a re-parse or a new version;
+            # withdrawal is the explicit "take it down" state, so reads fail closed.
             return False
         version = await session.get(ResourceVersion, binding["source_version_id"], populate_existing=True)
         if (version is None or version.deleted_at is not None
                 or version.resource_id != binding["resource_id"]
                 or version.document_id != binding["document_id"]
                 or version.parse_job_id != binding["parse_revision"]):
+            # Missing, deleted, rebound, or re-parsed bindings no longer describe the
+            # frozen source the artifact was generated from.
             return False
     return True
 
@@ -67,18 +82,30 @@ async def owned_projection(session, actor, kind, source_id):
 
 
 async def accessible_knowledge(session, actor):
+    def _org_scope(model):
+        org = model.provider["organization_id"].as_string()
+        return or_(org == actor.organization_id, org.is_(None))
+
     visible_docs = set((await session.execute(select(Document.id).where(
         visible_document_condition(actor)))).scalars())
     cites = (await session.execute(select(Citation.source_kind, Citation.source_id,
-        Evidence.document_id).join(Evidence, Citation.evidence_id == Evidence.id))).all()
+        Evidence.document_id).join(Evidence, Citation.evidence_id == Evidence.id).join(
+            Document, Document.id == Evidence.document_id).where(
+                visible_document_condition(actor)))).all()
     dependencies = {}
     for kind, source_id, doc_id in cites:
         dependencies.setdefault((kind, source_id), set()).add(doc_id)
-    entities = (await session.execute(select(KnowledgeEntity))).scalars().all()
-    edges = (await session.execute(select(GraphEdge))).scalars().all()
-    entries = (await session.execute(select(WikiEntry))).scalars().all()
-    sections = (await session.execute(select(WikiSection))).scalars().all()
-    sentences = (await session.execute(select(WikiSentence))).scalars().all()
+    entities = (await session.execute(
+        select(KnowledgeEntity).where(_org_scope(KnowledgeEntity)))).scalars().all()
+    edges = (await session.execute(
+        select(GraphEdge).where(_org_scope(GraphEdge)))).scalars().all()
+    entries = (await session.execute(
+        select(WikiEntry).where(_org_scope(WikiEntry)))).scalars().all()
+    sections = (await session.execute(select(WikiSection).join(
+        WikiEntry, WikiSection.entry_id == WikiEntry.id).where(
+            _org_scope(WikiEntry)))).scalars().all()
+    sentences = (await session.execute(select(WikiSentence).where(
+        _org_scope(WikiSentence)))).scalars().all()
     cache = {}
 
     async def permitted(row):

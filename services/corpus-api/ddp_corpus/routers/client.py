@@ -97,8 +97,13 @@ async def _asset_version(session, actor, version_id):
 
 
 def _asset_identity(result, request, actor):
+    # Authority header 永远是本节点的绑定身份，绝不回显请求头。
+    # 请求头是入口/调用方传进来的字符串，原样回显等于让调用方自称任意节点
+    # （authority echo）。`node_identity.local_node_id()` 是向控制面绑定来的
+    # 唯一可信身份（拿不到就 503，绝不编一个）。
+    from ddp_corpus import node_identity
     result.headers["Cache-Control"] = "private, no-store"
-    result.headers["X-DDP-Authority-Node"] = request.headers.get("X-DDP-Authority-Node", "")
+    result.headers["X-DDP-Authority-Node"] = node_identity.local_node_id()
     result.headers["X-DDP-Actor-Subject"] = actor.principal_id
     return result
 
@@ -114,7 +119,7 @@ async def source_asset(
     version = await _asset_version(session, actor, version_id)
     result = await source_response(
         version.resource_id, version.id, actor=actor, session=session,
-        storage=storage, http=request.app.state.http,
+        storage=storage,
     )
     return _asset_identity(result, request, actor)
 
@@ -345,20 +350,28 @@ async def client_evidence(session, actor, request, result):
     if binding is None:
         raise projection.error("not_found", 404)
     version, resource, document = binding
-    node = request.headers.get("X-DDP-Authority-Node", "")
+    # 证据信封的节点身份同样只认绑定身份。请求头的值只做校验：
+    # 调用方声明了身份但与本节点不一致 -> 409（跨节点证据在本节点不可复核）；
+    # 没声明则直接用绑定身份。
+    from ddp_corpus import node_identity
+    node = node_identity.local_node_id()
+    claimed = request.headers.get("X-DDP-Authority-Node", "")
+    if claimed and claimed != node:
+        raise projection.error("evidence_provenance_unavailable", 409)
     if document.origin != "web" or version.bundle_prefix or not re.fullmatch(r"node-[0-9a-f]{48}", node) or not re.fullmatch(r"[0-9a-f]{64}", version.source_digest):
         raise projection.error("evidence_provenance_unavailable", 409)
-    page = payload.get("page_size")
-    size = {"width":page[0], "height":page[1]} if isinstance(page, list) and len(page)==2 else page
+    from ddp_corpus.federation import evidence_locator, is_pdf_document
+
+    locator = evidence_locator(
+        is_pdf=is_pdf_document(document), page_idx=payload["page_idx"], seq=payload["seq"],
+        bbox=payload["bbox"], page_size=payload.get("page_size"),
+        printed_page_label=payload.get("printed_page_label"))
     envelope = {"schema":"ddp-evidence/1#FederatedEvidence", "evidence_id":payload["evidence_id"],
         "origin_node_id":node, "authority_node_id":node, "resource_id":resource.id,
         "source_version_id":version.id, "source_digest":"sha256:"+version.source_digest,
         "parse_revision":payload["parse_revision"],
         "excerpt_digest":"sha256:"+hashlib.sha256(payload["content"].encode()).hexdigest(),
-        "locator":{"kind":"page_block", "physical_page_index":payload["page_idx"], "seq":payload["seq"],
-                   "bbox":payload["bbox"], "page_size":size,
-                   **({"printed_page_label":payload["printed_page_label"]}
-                      if payload.get("printed_page_label") is not None else {})},
+        "locator":locator,
         "source_type":payload["source_type"], "derived_from":payload.get("derived_from"),
         "uploader_ref":resource.uploaded_by, "retrieval_receipt_ref":None,
         "policy_revision":resource.publication+":"+as_aware(resource.updated_at).isoformat(),

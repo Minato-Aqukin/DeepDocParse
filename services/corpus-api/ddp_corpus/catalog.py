@@ -98,7 +98,11 @@ async def members_state(session, row, actor, *, public=False):
             ancestry.append([ancestor.id, ancestor.publication,
                 as_aware(ancestor.updated_at).isoformat(), bool(ancestor.deleted_at)])
             parent = ancestor.copied_from
-            ancestor = await session.scalar(select(Resource).where(Resource.id == parent)
+            # Invariant 8: every query carries the org boundary. A cross-org
+            # copied_from must not leak another org's publication into ancestry:
+            # a mismatch reads as missing and fails the catalog read.
+            ancestor = await session.scalar(select(Resource).where(Resource.id == parent,
+                Resource.organization_id == row.organization_id)
                 .execution_options(populate_existing=True)) if parent else None
             if parent and ancestor is None:
                 raise error()
@@ -327,6 +331,8 @@ async def snapshot_page(session, actor, scope, caller_scope, origin, snapshot_id
     if revoked:
         invalid = error("catalog_snapshot_invalid", 410)
         invalid.revoked_collection_ids = revoked
+        invalid.snapshot_binding = {"snapshot_id": snap.id, "scope_id": snap.scope_id,
+            "caller_scope_hash": snap.caller_scope_hash, "origin_node_id": snap.origin_node_id}
         raise invalid
     if changed:
         raise error("catalog_snapshot_changed", 409)

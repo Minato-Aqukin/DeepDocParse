@@ -458,3 +458,54 @@ async def test_late_timeout_never_overwrites_a_committed_success(
     row = await session.scalar(select(FederationExecution).where(
         FederationExecution.executor_task_id == task_id).execution_options(populate_existing=True))
     assert row.state == "succeeded" and row.error is None
+
+async def test_finish_execution_fenced_only_by_generation_and_state(
+        client, session, app_state, _peer_auth):
+    """落终态的围栏是 generation + state：旧代次与已终态写不进，无 plan 自比。
+
+    受理行一旦落库就不再更新（同键同摘要重放、同键异摘要 409），执行行经
+    `admission_id` 绑定它自己的那一行 —— 拿受理行在 execute 首尾自比
+    plan/request/input 摘要永远相等，拦不住任何东西，所以这里不再有
+    `expected_*` 参数。真正可达的 stale 是代次围栏（被接管/被取消的旧执行）
+    与状态围栏（已终态），各用真实落库状态走一遍；最后用签名断言把旧的
+    自比参数钉死在门外。变异确认：把 `_finish_execution` 的 WHERE 里的
+    generation 或 state 条件删掉任一，对应分支变红。
+    """
+    import inspect
+
+    assert "expected_plan_digest" not in inspect.signature(
+        federation._finish_execution).parameters
+    assert "expected_request_digest" not in inspect.signature(
+        federation._finish_execution).parameters
+    assert "expected_input_manifest_digest" not in inspect.signature(
+        federation._finish_execution).parameters
+
+    task_id, admission_id = new_id(), new_id()
+    admission, execution = queued_execution(
+        task_id=task_id, admission_id=admission_id, actor_id=peer(client).actor_id)
+    session.add_all([admission, execution])
+    await session.commit()
+
+    stale = await federation._finish_execution(
+        session, task_id, execution.generation + 7, state="succeeded", now=utcnow(),
+        result_json={"result": "stale-generation"})
+    assert stale is False, "被接管的旧代次写不进终态"
+    row = await session.scalar(select(FederationExecution).where(
+        FederationExecution.executor_task_id == task_id).execution_options(populate_existing=True))
+    assert row.state == "queued" and row.result_json.get("result") is None
+
+    won = await federation._finish_execution(
+        session, task_id, execution.generation, state="succeeded", now=utcnow(),
+        result_json={"result": "ok"})
+    assert won is True
+    row = await session.scalar(select(FederationExecution).where(
+        FederationExecution.executor_task_id == task_id).execution_options(populate_existing=True))
+    assert row.state == "succeeded" and row.result_json.get("result") == "ok"
+
+    late = await federation._finish_execution(
+        session, task_id, execution.generation, state="failed", now=utcnow(),
+        error="execution_timeout")
+    assert late is False, "已终态的执行不接受同代次的迟到失败"
+    row = await session.scalar(select(FederationExecution).where(
+        FederationExecution.executor_task_id == task_id).execution_options(populate_existing=True))
+    assert row.state == "succeeded" and row.error is None

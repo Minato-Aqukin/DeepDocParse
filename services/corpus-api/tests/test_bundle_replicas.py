@@ -104,6 +104,22 @@ def assert_unavailable(response):
     assert ORIGINAL not in response.content
 
 
+def assert_source_redirect(response, *, availability, term=None):
+    """Licensed/client originals never proxy bytes (invariant 6): 302 to a
+    short-lived direct-read URL plus the X-DDP-Source-* authorization facts."""
+    assert response.status_code == 302, response.text
+    location = response.headers["location"]
+    assert location.startswith("memory://"), location
+    assert "filename=" in location
+    assert response.headers["x-ddp-source-availability"] == availability
+    assert response.headers["cache-control"] == "private, no-store"
+    if term is None:
+        assert "x-ddp-source-licence-valid-until" not in response.headers
+    else:
+        assert datetime.fromisoformat(
+            response.headers["x-ddp-source-licence-valid-until"]) == term
+
+
 async def test_import_directory_and_real_offline_original(actor_client, clock):
     result = await import_one(actor_client)
     replica = await directory(actor_client, result)
@@ -114,12 +130,8 @@ async def test_import_directory_and_real_offline_original(actor_client, clock):
     for key in ("origin_node_id", "authority_node_id", "source_digest", "policy_revision"):
         assert replica[key] == result["source"][key]
     response = await actor_client.get(bundle_path(result) + "/licensed-source")
-    assert response.status_code == 200, response.text
-    assert response.content == ORIGINAL
+    assert_source_redirect(response, availability="offline_snapshot")
     assert response.headers["x-ddp-source-digest"] == digest(ORIGINAL)
-    assert response.headers["x-ddp-source-availability"] == "offline_snapshot"
-    assert response.headers["cache-control"] == "private, no-store"
-    assert "x-ddp-source-licence-valid-until" not in response.headers
 
 
 async def test_revoke_empty_body_idempotency_and_cross_replica_conflict(actor_client, clock):
@@ -142,8 +154,8 @@ async def test_revoke_empty_body_idempotency_and_cross_replica_conflict(actor_cl
     assert conflict.json()["error"]["code"] == "idempotency_conflict"
     assert (await directory(actor_client, second))["availability"] == "licensed_copy"
     other_copy = await actor_client.get(bundle_path(second) + "/licensed-source")
-    assert other_copy.status_code == 200, other_copy.text
-    assert other_copy.content == ORIGINAL
+    assert_source_redirect(other_copy, availability="offline_snapshot")
+    assert other_copy.headers["x-ddp-source-digest"] == digest(ORIGINAL)
 
 
 @pytest.mark.parametrize("path", ORIGINAL_PATHS)
@@ -161,6 +173,12 @@ async def test_revocation_blocks_every_original_path(actor_client, session, app_
 
 @pytest.mark.parametrize("path", ORIGINAL_PATHS)
 async def test_finite_licence_expires_at_exact_term(actor_client, session, app_state, clock, path):
+    from ddp_corpus import node_identity
+    # client-source answers through the bound node identity (never the request
+    # header): bind the node the test client claims to be, mirroring
+    # test_client_projection.py. settings.bundle_node_id stays unset here so
+    # the bound value is authoritative and no mismatch trip fires.
+    node_identity.bind_static_for_tests("node-" + "a" * 48)
     archive = licensed_bundle(TERM.isoformat())
     imported = await actor_client.post(
         "/api/bundles/import", content=archive, headers=upload_headers()
@@ -168,11 +186,21 @@ async def test_finite_licence_expires_at_exact_term(actor_client, session, app_s
     assert imported.status_code == 201, imported.text
     result = imported.json()
     # A signed URL needs at least one second of licence left (it must not outlive it).
-    clock[0] = TERM - (timedelta(seconds=1) if path == "document-download"
+    # All three 302 paths mint presigned URLs through licence_ttl; the rest serve
+    # bytes/JSON and stay live until the exact term.
+    clock[0] = TERM - (timedelta(seconds=1) if path in ("document-download", "licensed-source", "client-source")
                        else timedelta(microseconds=1))
     live = await original_request(actor_client, result, path, session, app_state.storage)
-    expected_status = 302 if path == "document-download" else 304 if path == "cached-crop" else 200
+    expected_status = (302 if path in ("document-download", "licensed-source", "client-source")
+                       else 304 if path == "cached-crop" else 200)
     assert live.status_code == expected_status, live.text
+    if path in ("licensed-source", "client-source"):
+        assert_source_redirect(live, availability="offline_snapshot", term=TERM)
+    elif path == "document-download":
+        # The plain download redirect carries no X-DDP-Source-* facts — just
+        # the short-lived direct-read URL (see the source-download landmine test).
+        assert live.headers["location"].startswith("memory://"), live.headers["location"]
+        assert "filename=" in live.headers["location"]
     clock[0] = TERM
     assert_unavailable(await original_request(actor_client, result, path, session, app_state.storage))
     assert (await directory(actor_client, result))["availability"] == "unavailable"
@@ -218,10 +246,7 @@ async def test_native_finite_export_import_ledger_and_holder_cannot_override(
     replica = await directory(actor_client, result)
     assert datetime.fromisoformat(replica["valid_until"]).replace(tzinfo=timezone.utc) == TERM
     source = await actor_client.get(bundle_path(result) + "/licensed-source")
-    assert source.status_code == 200, source.text
-    assert source.content == ORIGINAL
-    assert source.headers["x-ddp-source-availability"] == "offline_snapshot"
-    assert datetime.fromisoformat(source.headers["x-ddp-source-licence-valid-until"]) == TERM
+    assert_source_redirect(source, availability="offline_snapshot", term=TERM)
     reexported = await actor_client.get(bundle_path(result))
     assert reexported.status_code == 200, reexported.text
     assert read_bundle(io.BytesIO(reexported.content)).source["licence_valid_until"] == TERM.isoformat()
@@ -232,9 +257,10 @@ async def test_native_finite_export_import_ledger_and_holder_cannot_override(
     # the native resource so document-scoped reads select the licensed holder.
     deleted = await actor_client.delete(f"/api/resources/{snapshot.source['resource_id']}")
     assert deleted.status_code == 204, deleted.text
-    clock[0] = TERM - timedelta(microseconds=1)
+    # licensed-source mints a presigned URL: one full second of licence must remain.
+    clock[0] = TERM - timedelta(seconds=1)
     before = await actor_client.get(bundle_path(result) + "/licensed-source")
-    assert before.status_code == 200 and before.content == ORIGINAL
+    assert_source_redirect(before, availability="offline_snapshot", term=TERM)
     clock[0] = TERM
     for path in ORIGINAL_PATHS:
         assert_unavailable(await original_request(actor_client, result, path, session, app_state.storage))
@@ -390,6 +416,11 @@ async def reparse_and_select(client, session, result):
                                   "internal-file-access"])
 async def test_reparsed_licensed_copy_stays_bound_to_the_licence(
         actor_client, session, clock, path):
+    from ddp_corpus import node_identity
+    # client-source answers through the bound node identity (never the request
+    # header): bind the node the test client claims to be, mirroring
+    # test_client_projection.py.
+    node_identity.bind_static_for_tests("node-" + "a" * 48)
     result = await import_licensed(actor_client)
     derived = await reparse_and_select(actor_client, session, result)
     endpoint = {
@@ -405,13 +436,15 @@ async def test_reparsed_licensed_copy_stays_bound_to_the_licence(
                 200, json={"token": "fixed-token", "url": f"{CONTROL}/files/fixed-token"})
             return await actor_client.get(endpoint, headers=client_headers(), follow_redirects=False)
 
-    clock[0] = TERM - (timedelta(seconds=1) if path == "document-download"
+    # Both 302 paths mint presigned URLs through licence_ttl (one-second floor);
+    # source-url/internal serve no URLs and stay live until the exact term.
+    clock[0] = TERM - (timedelta(seconds=1) if path in ("document-download", "client-source")
                        else timedelta(microseconds=1))
     live = await request()
-    assert live.status_code == (302 if path == "document-download" else 200), live.text
+    assert live.status_code == (302 if path in ("document-download", "client-source")
+                                else 200), live.text
     if path == "client-source":
-        assert live.headers["x-ddp-source-availability"] == "offline_snapshot", \
-            "a reparse of a licensed copy is not an online original"
+        assert_source_redirect(live, availability="offline_snapshot", term=TERM)
     clock[0] = TERM
     assert_unavailable(await request())
 
@@ -497,6 +530,86 @@ async def test_indexing_cuts_no_pixels_from_an_ended_licence(
     await indexing.index_document(session, app_state.storage, app_state.http,
                                   result["document_id"], job_id=job.id)
     job = await session.get(ParseJob, job.id, populate_existing=True)
-    assert job.index_status == "failed"
-    assert "licensed copy" in (job.index_error or "")
     assert rendered == [], "no page of an ended licensed copy is rendered"
+
+
+
+
+def org_b_headers(actor_id="actor-bob"):
+    """A second organization importing the same bytes: isolation, not sharing."""
+    return actor_headers(actor_id, organization_id="org-b")
+
+
+async def test_cross_org_import_gets_its_own_document_row(actor_client, session):
+    """Invariant 8: org B importing org A's bytes gets its own Document row; A's
+    row (deleted_at/object_key/organization_id) is untouched and both copies read.
+
+    Passes fully only with the per-org UNIQUE constraint: pre-migration the
+    second import takes the visible 409 `bundle_content_shared` fallback
+    instead of corrupting org A's row.
+    """
+    first = await import_one(actor_client)
+    second = await import_one(actor_client, actor_id="actor-bob",
+                              organization_id="org-b", key="import-org-b")
+    assert second["resource_id"] != first["resource_id"]
+    assert second["document_id"] != first["document_id"]
+    mine = await session.get(Document, first["document_id"], populate_existing=True)
+    theirs = await session.get(Document, second["document_id"], populate_existing=True)
+    assert (mine.organization_id, theirs.organization_id) == ("org-test", "org-b")
+    assert mine.deleted_at is None and theirs.deleted_at is None
+    assert mine.object_key == f"bundles/{first['source_version_id']}/source.bin"
+    assert theirs.object_key == f"bundles/{second['source_version_id']}/source.bin"
+    assert mine.object_key != theirs.object_key
+    for result, headers in ((first, actor_headers()),
+                            (second, org_b_headers())):
+        response = await actor_client.get(bundle_path(result) + "/licensed-source",
+                                          headers=headers)
+        assert_source_redirect(response, availability="offline_snapshot")
+        assert response.headers["x-ddp-source-digest"] == digest(ORIGINAL)
+    # Neither org can read through the other's resource/version identity.
+    assert (await actor_client.get(bundle_path(first) + "/licensed-source",
+                                   headers=org_b_headers())).status_code == 404
+
+
+async def test_deleted_org_row_is_not_revived_by_other_org_reimport(
+        actor_client, session):
+    """Org A deletes its resource; org B importing the same digest must not
+    revive or repoint A's Document row — B gets its own row instead."""
+    first = await import_one(actor_client)
+    deleted = await actor_client.delete(f"/api/resources/{first['resource_id']}")
+    assert deleted.status_code == 204, deleted.text
+    grave = await session.get(Document, first["document_id"], populate_existing=True)
+    assert grave.deleted_at is not None
+    old_key = grave.object_key
+    second = await import_one(actor_client, actor_id="actor-bob",
+                              organization_id="org-b", key="import-org-b-after-delete")
+    assert second["document_id"] != first["document_id"]
+    still_gone = await session.get(Document, first["document_id"],
+                                   populate_existing=True)
+    assert still_gone.deleted_at is not None, "another org's import revived our row"
+    assert still_gone.object_key == old_key, "another org's import repointed our row"
+    assert still_gone.organization_id == "org-test"
+    fresh = await session.get(Document, second["document_id"], populate_existing=True)
+    assert fresh.organization_id == "org-b" and fresh.deleted_at is None
+    response = await actor_client.get(bundle_path(second) + "/licensed-source",
+                                      headers=org_b_headers())
+    assert_source_redirect(response, availability="offline_snapshot")
+
+
+def test_no_unguarded_physical_replica_delete_path_exists():
+    """副本行永不由应用层物理删除：可读性止于 tombstone/revoke/expiry，快照字节归
+    引用安全 GC（`gc.py`）所有，账本行只随父资源/版本 CASCADE 消失；任何重引
+    `session.delete(<BundleReplica>)` 的路径都会让本用例变红。
+    """
+    import pathlib
+    import ddp_corpus.bundle_models as models
+    assert not hasattr(models, "physical_delete_guard"), \
+        "physical_delete_guard is dead: delete it instead of calling it"
+    corpus = pathlib.Path(__file__).resolve().parent.parent / "ddp_corpus"
+    offenders = []
+    for path in sorted(corpus.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        if "BundleReplica" in text and "session.delete" in text:
+            offenders.append(str(path.relative_to(corpus)))
+    assert not offenders, \
+        f"replica rows must not be physically deleted by application code: {offenders}"

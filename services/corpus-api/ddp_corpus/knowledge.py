@@ -9,8 +9,9 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ddp_corpus.models import (
-    Citation, Evidence, GraphEdge, KnowledgeEntity, WikiEntry, WikiSection, WikiSentence,
+    Citation, Document, Evidence, GraphEdge, KnowledgeEntity, WikiEntry, WikiSection, WikiSentence,
 )
+from ddp_corpus.policy import visible_document_condition
 from ddp_corpus.upstream import chat_request
 from ddp_core.knowledge import EntityMention, edge_result, merge_mentions, normalize_entity_name
 
@@ -60,11 +61,12 @@ def _evidence_prompt(rows: list[Evidence]) -> str:
 
 
 async def generate(session: AsyncSession, http: httpx.AsyncClient,
-                   evidence_ids: list[str], *, provider: dict, check_sources=None) -> dict:
-    rows = (await session.execute(select(Evidence).where(
-        Evidence.id.in_(evidence_ids), Evidence.content != "", Evidence.derived_from.is_(None)
+                   evidence_ids: list[str], *, provider: dict, actor, check_sources=None) -> dict:
+    rows = (await session.execute(select(Evidence).join(Document).where(
+        Evidence.id.in_(evidence_ids), Evidence.content != "", Evidence.derived_from.is_(None),
+        visible_document_condition(actor),
     ).order_by(Evidence.id))).scalars().all()
-    if not rows:
+    if not rows or {row.id for row in rows} != set(evidence_ids):
         return {"status": "not_found", "entities": 0, "edges": 0,
                 "relation_status": "not_found", "wiki_entries": 0}
     allowed = {row.id for row in rows}
@@ -208,6 +210,10 @@ async def generate(session: AsyncSession, http: httpx.AsyncClient,
                 await _attach(session, "wiki_sentence", sentence.id, cited, rows)
         wiki_count += 1
     await session.flush()
+    # Library path (no HTTP route owns the commit since the legacy build route
+    # was removed): publish the transaction so follow-up reads on other
+    # sessions see the new entities/edges/entries.
+    await session.commit()
     return {"status": "ok", "entities": len(groups), "edges": edge_count,
             "relation_status": "ok" if edge_count else "not_found",
             "wiki_entries": wiki_count}
