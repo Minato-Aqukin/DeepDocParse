@@ -104,7 +104,11 @@ func (s *Server) handleInternalActors(w http.ResponseWriter, r *http.Request) er
 	if len(ids) > 500 {
 		ids = ids[:500]
 	}
-	out, err := s.store.ActorNames(r.Context(), ids)
+	org := r.URL.Query().Get("org")
+	if org == "" {
+		org = s.defaultOrg
+	}
+	out, err := s.store.ActorNames(r.Context(), org, ids)
 	if err != nil {
 		return err
 	}
@@ -149,6 +153,15 @@ func (s *Server) handleInternalUsage(w http.ResponseWriter, r *http.Request) err
 	if org == "" {
 		org = s.defaultOrg
 	}
+	if err := s.store.OrganizationExists(r.Context(), org); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return apierr.NotFound("unknown_org", "未知组织")
+		}
+		return err
+	}
+	if body.Payload.Pages < 0 || body.Payload.Requests < 0 {
+		return apierr.BadRequest("negative_usage", "pages 与 requests 不能为负")
+	}
 	// 计量种类必须在契约里。**不校验的后果是静默的**：
 	// 一个拼错的 kind 会被 usage_ledger 原样收下（那一列没有 CHECK），
 	// 于是它既不进任何按种类分组的报表，也不触发任何告警 ——
@@ -176,9 +189,6 @@ func (s *Server) handleInternalUsage(w http.ResponseWriter, r *http.Request) err
 	if err := s.store.RecordUsage(r.Context(), org, body.Payload.ActorID, actorKind,
 		body.Payload.APIKeyID, kind, body.Payload.Pages, max(body.Payload.Requests, 1),
 		body.EventID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return apierr.NotFound("unknown_org", "未知组织")
-		}
 		return err
 	}
 	return httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})

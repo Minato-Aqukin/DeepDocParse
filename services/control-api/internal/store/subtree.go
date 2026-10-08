@@ -10,23 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func (s *Store) ApprovedScopeNodes(ctx context.Context, org string, visibleOnly bool) (map[string]bool, error) {
-	rows, err := s.pool.Query(ctx, `SELECT node_id FROM control.node_members WHERE organization_id=$1 AND state='approved' AND (NOT $2 OR visible_to_org)`, org, visibleOnly)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]bool{}
-	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out[id] = true
-	}
-	return out, rows.Err()
-}
-
 // Retain at most 32 snapshots per approved issuer, and expire them after five
 // minutes. A directory lock serializes creation and eviction across replicas.
 func (s *Store) CreateSubtreeSnapshot(ctx context.Context, org, issuer, binding string, pageSize int, page discovery.SubtreePage, targets []discovery.RoutedTarget) (*discovery.SubtreePage, error) {

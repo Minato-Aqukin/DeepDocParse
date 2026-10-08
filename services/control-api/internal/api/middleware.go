@@ -90,7 +90,8 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 // 接口只列真正用到的四个方法，不要长成整个 Store 的镜像。
 type apiKeyStore interface {
 	AuthenticateAPIKey(ctx context.Context, plain string) (*store.APIKey, rbac.Role, error)
-	ReserveQuota(ctx context.Context, orgID string, pages int) error
+	CheckQuota(ctx context.Context, orgID string, pages int) error
+	CheckKeyQuota(ctx context.Context, keyID string, pages int) error
 	TouchAPIKey(ctx context.Context, keyID string)
 	Audit(ctx context.Context, orgID, actorID, actorKind, action, target,
 		requestID string, detail map[string]any)
@@ -185,9 +186,11 @@ func apiKeyGate(keys apiKeyStore, limiter ratelimit.Limiter, scope rbac.Scope,
 		}
 
 		// 配额：只在会消耗页数的平面上查（解析/抽取）。
-		// 查询类不查是因为它们不按页计费，多一次查询只是纯开销
+		// 查询类不查是因为它们不按页计费，多一次查询只是纯开销。
+		// 检查只读不写：用量由下游 corpus 结算（RecordUsage），入口不预占 ——
+		// 预占与结算会重复记账。并发窗口内的少量超额由结算收敛。
 		if scope == rbac.ScopeParse || scope == rbac.ScopeExtract {
-			if err := keys.ReserveQuota(r.Context(), actor.OrganizationID, 1); err != nil {
+			if err := keys.CheckQuota(r.Context(), actor.OrganizationID, 1); err != nil {
 				if errors.Is(err, store.ErrQuotaExceeded) {
 					apierr.Write(w, r, apierr.PaymentRequired("quota_exceeded",
 						"组织配额已用尽"))
@@ -195,6 +198,18 @@ func apiKeyGate(keys apiKeyStore, limiter ratelimit.Limiter, scope rbac.Scope,
 				}
 				apierr.Write(w, r, err)
 				return
+			}
+			// key 自己的 quota_pages：NULL = 不限，有值才查。
+			if actor.Kind == identity.KindAPIKey && key.QuotaPages != nil {
+				if err := keys.CheckKeyQuota(r.Context(), key.ID, 1); err != nil {
+					if errors.Is(err, store.ErrQuotaExceeded) {
+						apierr.Write(w, r, apierr.PaymentRequired("quota_exceeded",
+							"这把 key 的配额已用尽"))
+						return
+					}
+					apierr.Write(w, r, err)
+					return
+				}
 			}
 		}
 

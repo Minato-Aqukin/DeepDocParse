@@ -106,23 +106,22 @@ func (s *Server) authenticatePeerRead(r *http.Request) error {
 		return apierr.Unauthorized("credential_invalid", "缺少或无效的节点凭据")
 	}
 	record, err := s.peerTrust().PeerTrust(r.Context(), s.defaultOrg, issuer)
-	if refusal := trustRefusal(record, err, http.StatusForbidden); refusal != nil {
-		// The issuer hint alone is unauthenticated, and an expired or
-		// claim-mismatched token must not mint persistent rows either: audit
-		// only when the credential passes every claim check the success path
-		// applies before consumption (verifyPeerReadClaims), so a captured or
-		// endlessly re-minted token cannot write audit rows forever. Any
-		// failed check keeps today's refusal with no audit row.
-		if err == nil && record != nil {
-			if _, cerr := s.verifyPeerReadClaims(r, token, issuer, record); cerr == nil {
-				s.auditPeerTrustRefusal(r, issuer, "", refusal)
-			}
-		}
-		return refusal
+	if err != nil || record == nil {
+		// The issuer hint alone is unauthenticated: an unknown issuer or any
+		// store failure must not disclose membership state. No audit row.
+		return apierr.Unauthorized("credential_invalid", "节点凭据无效或签发者未知")
 	}
 	claims, err := s.verifyPeerReadClaims(r, token, issuer, record)
 	if err != nil {
+		// Claim failures carry no membership signal; never consult record.State.
 		return err
+	}
+	if refusal := trustRefusal(record, nil, http.StatusForbidden); refusal != nil {
+		// Only fully claim-verified requests may reveal membership state. A
+		// captured or re-minted token that fails verification above never
+		// reaches this audit path.
+		s.auditPeerTrustRefusal(r, issuer, claims, refusal)
+		return refusal
 	}
 	if s.store == nil {
 		return apierr.New(503, apierr.TypeUpstream, "credential_store_unavailable", "重放保护存储不可用")
@@ -134,7 +133,7 @@ func (s *Server) authenticatePeerRead(r *http.Request) error {
 	if !consumed {
 		latest, lookupErr := s.peerTrust().PeerTrust(r.Context(), s.defaultOrg, issuer)
 		if refusal := trustRefusal(latest, lookupErr, http.StatusForbidden); refusal != nil {
-			s.auditPeerTrustRefusal(r, issuer, claims.JTI, refusal)
+			s.auditPeerTrustRefusal(r, issuer, claims, refusal)
 			return refusal
 		}
 		return apierr.Unauthorized("credential_replayed", "节点凭据已使用")
@@ -184,15 +183,17 @@ func (s *Server) verifyPeerReadClaims(r *http.Request, token, issuer string, rec
 }
 
 // auditPeerTrustRefusal records the live issuer re-check when it DENIES a peer
-// directory read (issuer unknown/pending/revoked since the snapshot froze).
+// directory read (issuer pending/revoked since the snapshot froze).
 // Callers must invoke it only for fully claim-verified requests (see
 // verifyPeerReadClaims): the unverified issuer hint, an expired token, or any
 // other claim mismatch must not mint a row attributed to the claimed node.
+// The row carries the verified claims' federation correlation (root/step):
+// tracing a federated read that died on trust re-check starts here.
 // Writes are rate-limited to one row per (organization, issuer) per minute via
 // Store.AuditPeerDenialOnce, so a captured or re-minted token cannot fill
 // audit_events. Successful re-checks stay unaudited, like all other peer
 // directory/catalog reads today.
-func (s *Server) auditPeerTrustRefusal(r *http.Request, issuer, jti string, refusal error) {
+func (s *Server) auditPeerTrustRefusal(r *http.Request, issuer string, claims discovery.CredentialClaims, refusal error) {
 	if s.store == nil {
 		return
 	}
@@ -202,8 +203,8 @@ func (s *Server) auditPeerTrustRefusal(r *http.Request, issuer, jti string, refu
 		reason = refusalErr.Code
 	}
 	detail := map[string]any{"issuer_node_id": issuer, "reason": reason}
-	if jti != "" {
-		detail["credential_jti"] = jti
+	if claims.JTI != "" {
+		detail["credential_jti"] = claims.JTI
 	}
 	if id := r.URL.Query().Get("snapshot_id"); id != "" {
 		detail["snapshot_id"] = id
@@ -213,7 +214,8 @@ func (s *Server) auditPeerTrustRefusal(r *http.Request, issuer, jti string, refu
 		target = issuer
 	}
 	s.store.AuditPeerDenialOnce(r.Context(), s.defaultOrg, issuer, "peer.credential_denied",
-		target, r.Header.Get(identity.HeaderRequestID), detail)
+		target, r.Header.Get(identity.HeaderRequestID), detail,
+		store.FederationCorrelation{RootTaskID: &claims.Constraints.RootTaskID, StepID: stepOrNil(claims.Constraints.StepID)})
 }
 
 func peerPageError(err error) error {

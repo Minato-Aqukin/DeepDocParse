@@ -11,7 +11,7 @@ Go 这边由容器/systemd 注入环境变量）。
 user_id 伪造一个有效会话，且运行时不报任何错。一次性容器 / CI 可用
 `ALLOW_INSECURE_DEFAULTS=true` 显式跳过 —— 逃生口必须显式且留痕。
 
-共 **46** 项。
+共 **48** 项。
 
 ## 通用
 
@@ -26,6 +26,7 @@ user_id 伪造一个有效会话，且运行时不报任何错。一次性容器
 | 环境变量 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `CONTROL_ADDR` | `string` | `":8080"` | 监听地址。容器里通常保持 :8080，对外端口由编排层映射 |
+| `CONTROL_INTERNAL_ADDR` | `string` | `":8090"` | 内网服务面的监听地址（/internal/* 只在这个监听上服务， 公开监听上一律 404）。容器里通常保持 :8090 |
 
 ## 数据库
 
@@ -109,6 +110,7 @@ user_id 伪造一个有效会话，且运行时不报任何错。一次性容器
 | 环境变量 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `CORS_ORIGINS` | `list[str]` | `"http://localhost:5173,http://127.0.0.1:5173"` | 允许的浏览器来源。**不要用 `*`**：配合 credentials 时浏览器会直接拒绝， 而且那等于放弃同源保护 |
+| `TRUSTED_PROXIES` | `string` | `"127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"` | 受信任的反向代理：只有直连对端落在这个集合里时， 才认 X-Forwarded-For。逗号分隔的 CIDR 或单个 IP，缺省回环 + 私有网段。 clientip.go 通过 TrustedProxies.Contains(netIP) 查询它。 |
 | `PUBLIC_BASE_URL` | `string` | `"http://127.0.0.1:8080"` | 本服务对外可达的地址，拼稳定文件 URL 用 |
 | `INTERNAL_BASE_URL` | `string` | `env("PUBLIC_BASE_URL", "http://127.0.0.1:8080")` | 服务之间互相访问本服务时用的地址。  **与 PublicBaseURL 必须分得开。** 稳定文件 URL（`/files/{token}`） 的消费者是 model-gateway —— 一个容器里的进程，它解析不了 `127.0.0.1:8080`（那是给浏览器的）。用公网地址签的话， 表现是解析任务 `failed: All connection attempts failed`， 而上传、入库、状态查询全都正常。  缺省回落到 PublicBaseURL：单机部署两者本来就一样，不该多配一项。 |
 | `ALLOW_INSECURE_DEFAULTS` | `bool` | `false` | 显式跳过占位密钥检查。**只给一次性容器与 CI 用** —— 逃生口必须显式且留痕 |

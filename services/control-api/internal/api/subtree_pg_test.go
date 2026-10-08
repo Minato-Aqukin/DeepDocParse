@@ -244,7 +244,45 @@ func TestPeerSubtreeLoopVisibilityPagingAndIssuerApproval(t *testing.T) {
 	}
 	outsider := newRecursiveCenter(t, false)
 	denied := signedPeerRead(t, p.f, outsider.f.server.nodeIdentity, strings.Replace(base, a.f.server.nodeIdentity.NodeID(), outsider.f.server.nodeIdentity.NodeID(), 1))
-	if w := requestPeer(t, p.f.handler, strings.Replace(base, a.f.server.nodeIdentity.NodeID(), outsider.f.server.nodeIdentity.NodeID(), 1), denied); w.Code != 403 {
-		t.Fatalf("unapproved subtree issuer accepted: %d", w.Code)
+	// 未登记的签发者连成员状态都不该泄露：密码学有效不等于已批准，
+	// 中性 401 credential_invalid 与 forged/unknown 同形（见
+	// TestPeerUnverifiedReadsShareNeutralDenial），不断言 403。
+	if w := requestPeer(t, p.f.handler, strings.Replace(base, a.f.server.nodeIdentity.NodeID(), outsider.f.server.nodeIdentity.NodeID(), 1), denied); w.Code != 401 {
+		t.Fatalf("unapproved subtree issuer not neutrally denied: %d", w.Code)
+	}
+}
+
+func TestPeerSubtreeFreezesApprovalSetAtSnapshot(t *testing.T) {
+	a, p := newRecursiveCenter(t, false), newRecursiveCenter(t, false)
+	linkRecursiveCenters(t, a, p, true)
+	linkRecursiveCenters(t, p, a, false)
+	late := newRecursiveCenter(t, false)
+	// P's peer directory is wired to the late node, but the late node is NOT yet
+	// approved on P when the subtree read runs: P's frozen approval set excludes
+	// it, so the expansion must not contact it directly even though the transport
+	// is configured.
+	configureRecursiveCenters(map[*recursiveCenter][]*recursiveCenter{a: {p}, p: {a, late}})
+	type frozenWire struct {
+		Operation  string `json:"operation"`
+		SnapshotID string `json:"snapshot_id"`
+		State      string `json:"enumeration_state"`
+		Targets    []struct {
+			Key discovery.TargetKey `json:"target_key"`
+		} `json:"targets"`
+		Unknowns []discovery.UnknownSubtree `json:"unexpanded_subtrees"`
+	}
+	base := "/api/v1/federation/subtree?path=" + a.f.server.nodeIdentity.NodeID() + "&max_requests=10&max_nodes=10&limit=1"
+	before := late.reads.Load()
+	first := decodeDiscovery[frozenWire](t, requestPeer(t, p.f.handler, base, signedPeerRead(t, p.f, a.f.server.nodeIdentity, base)), 200)
+	if first.Operation != "search" {
+		t.Fatalf("subtree page not operation-bound: %+v", first)
+	}
+	for _, target := range first.Targets {
+		if target.Key.Operation != "search" {
+			t.Fatalf("subtree target not operation-bound: %+v", first.Targets)
+		}
+	}
+	if late.reads.Load() != before {
+		t.Fatal("unapproved wired child contacted directly instead of via the frozen subtree path")
 	}
 }

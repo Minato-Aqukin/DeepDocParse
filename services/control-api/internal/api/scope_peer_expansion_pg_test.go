@@ -322,8 +322,15 @@ func TestScopeCreateApprovedBoundaryExcludesDirectAndTransitivePeers(t *testing.
 	if excluded.count() != 0 || child.count() != 0 {
 		t.Fatal("directory traversal crossed the approved direct/transitive recipient boundary")
 	}
-	if out.Manifest.EnumerationState != "sealed" || out.TotalTargets != 2 {
-		t.Fatalf("excluded recipients or already-accounted targets depleted the approved scope: %+v", out.Manifest)
+	if out.Manifest.EnumerationState != "partial" || out.TotalTargets != 2 {
+		t.Fatalf("boundary exclusions must surface as partial with honest unknowns: %+v", out.Manifest)
+	}
+	reasons := map[string]string{}
+	for _, unknown := range out.Manifest.UnexpandedSubtrees {
+		reasons[unknown.NodeID] = unknown.Reason
+	}
+	if reasons[excludedNode] != "denied" || reasons[childNode] != "denied" {
+		t.Fatalf("boundary-excluded members must be denied unknowns: %+v", out.Manifest.UnexpandedSubtrees)
 	}
 	targets := map[string]string{}
 	for _, target := range out.Manifest.ExpandedMembers {
@@ -400,5 +407,34 @@ func TestScopeCreateRemoteTimeoutIsHonestAndPartial(t *testing.T) {
 	}
 	if !found || out.Manifest.EnumerationState != "partial" {
 		t.Fatalf("timeout not reported honestly: %+v", out.Manifest)
+	}
+}
+
+func TestScopeCreateFreezesApprovalSetAtMemberSnapshot(t *testing.T) {
+	f := discoveryPGFixture(t)
+	verifiedEmptyCatalog(t, f)
+	pRegistration := remoteRegistration(t, true)
+	approveEnumerableNode(t, f, pRegistration)
+	pNode := pRegistration.Descriptor.NodeID
+	// Freeze the member snapshot BEFORE the late node exists: S1 contains only P.
+	snap := decodeDiscovery[discovery.Snapshot](t, requestDiscovery(t, f.handler, "POST", "/api/v1/federation/member-snapshots", f.aliceToken, map[string]any{"page_size": 50}), 201)
+	xRegistration := remoteRegistration(t, true)
+	approveEnumerableNode(t, f, xRegistration)
+	xNode := xRegistration.Descriptor.NodeID
+	// P's live directory already lists the post-snapshot approval X.
+	p := newFakePeerServer(pNode,
+		[]discovery.PeerMember{enumerablePeerMember(xNode)},
+		[]discovery.CollectionRef{{CollectionID: "p-col", OriginNodeID: pNode}})
+	x := newFakePeerServer(xNode, nil,
+		[]discovery.CollectionRef{{CollectionID: "x-col", OriginNodeID: xNode}})
+	f.server.peers = peerDirectoryFor(t, map[string]*httptest.Server{pNode: p.serve(t), xNode: x.serve(t)})
+	out := createScope(t, f, map[string]any{"operation": "search", "member_snapshot_id": snap.ID})
+	if x.count() != 0 {
+		t.Fatal("post-snapshot approval contacted directly; the scope must freeze approvals at the snapshot")
+	}
+	for _, target := range out.Manifest.ExpandedMembers {
+		if target.OriginNodeID == xNode {
+			t.Fatalf("post-snapshot approval produced a frozen target: %+v", out.Manifest.ExpandedMembers)
+		}
 	}
 }

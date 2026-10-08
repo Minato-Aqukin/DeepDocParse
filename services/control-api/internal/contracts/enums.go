@@ -84,6 +84,8 @@ const (
 	DegradedEmptyQuery Degraded = "empty_query"
 	// MCP `ask` 调上游生成时非 200，本轮没有答案（证据仍然返回）
 	DegradedAnswerUnavailable Degraded = "answer_unavailable"
+	// 关键词路失败（畸形查询等），本轮只走了向量路；与 embedding_unavailable 对称
+	DegradedKeywordUnavailable Degraded = "keyword_unavailable"
 )
 
 // DegradedValues 保持 enums.yaml 里的声明顺序。
@@ -111,6 +113,7 @@ var DegradedValues = []Degraded{
 	DegradedNoInstructModel,
 	DegradedEmptyQuery,
 	DegradedAnswerUnavailable,
+	DegradedKeywordUnavailable,
 }
 
 var DegradedMeta = map[Degraded]EnumMeta{
@@ -137,6 +140,7 @@ var DegradedMeta = map[Degraded]EnumMeta{
 	DegradedNoInstructModel:             {Value: "no_instruct_model", Label: "未抽取（后端没有可用的指令模型）", Severity: SeverityError},
 	DegradedEmptyQuery:                  {Value: "empty_query", Label: "查询词为空", Severity: SeverityNeutral},
 	DegradedAnswerUnavailable:           {Value: "answer_unavailable", Label: "生成服务不可用（证据已返回，结论未生成）", Severity: SeverityError},
+	DegradedKeywordUnavailable:          {Value: "keyword_unavailable", Label: "仅向量检索（关键词检索不可用）", Severity: SeverityWarn},
 }
 
 // Valid 报告 s 是不是一个已知的 degraded 取值。
@@ -1951,9 +1955,9 @@ const (
 	// scope_ref / task_spec_digest）不覆盖这次请求或它要读的那一行（403）；
 	// 以别的协调者名义提交计划也是这个码。
 	FederationErrorCredentialScopeDenied FederationError = "credential_scope_denied"
-	// 签发节点不在本节点控制面的成员目录里，或尚未被管理员批准（401）
+	// 签发节点不在本节点控制面的成员目录里，或尚未被管理员批准（403）
 	FederationErrorNodeUnknown FederationError = "node_unknown"
-	// 签发节点已被管理员撤销。撤销对新请求生效的延迟以公钥缓存上限为界（401）
+	// 签发节点已被管理员撤销。撤销对新请求生效的延迟以公钥缓存上限为界（403）
 	FederationErrorNodeRevoked FederationError = "node_revoked"
 	// 语料服务配置的节点身份（BUNDLE_NODE_ID）与控制面持久密钥派生的身份不一致，
 	// 或控制面报告的本节点身份变了。**Fail Closed（503）**：否则本地目标会被当成远端

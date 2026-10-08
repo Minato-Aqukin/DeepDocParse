@@ -153,8 +153,13 @@ func appliedMap(ctx context.Context, pool *pgxpool.Pool) (map[string]string, err
 	out := map[string]string{}
 	rows, err := pool.Query(ctx, `SELECT version, checksum FROM control.schema_migrations`)
 	if err != nil {
-		// 账本还不存在（全新库）—— 不是错误
-		return out, nil
+		// 全新库：账本表还不存在是"没东西可读"，不是错误。
+		// 其余一切（连不上、没权限、search_path 错）都是真错误 ——
+		// 把它们当空账本会让 status 撒谎、Up 重跑全部迁移——真错误不能按空账本处理。
+		if isUndefinedTable(err) {
+			return out, nil
+		}
+		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -165,6 +170,14 @@ func appliedMap(ctx context.Context, pool *pgxpool.Pool) (map[string]string, err
 		out[v] = c
 	}
 	return out, rows.Err()
+}
+
+// isUndefinedTable 只认 42P01（表不存在）。
+// **不要放宽**：42501（没权限）与 3F000（search_path 里没 control）
+// 看起来都是"读不到账本"，但语义是"库有问题"，必须 loud 失败。
+func isUndefinedTable(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
 }
 
 // bootstrapSQL 只建账本本身。它必须独立于 0001，

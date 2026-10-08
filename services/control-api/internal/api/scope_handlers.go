@@ -17,6 +17,7 @@ import (
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/discovery"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/httpx"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/identity"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/store"
 )
 
 func (s *Server) mountScopes(mux *http.ServeMux) {
@@ -68,11 +69,16 @@ func (s *Server) handleScopeCreate(w http.ResponseWriter, r *http.Request) error
 			if e != nil {
 				return discoveryError(e)
 			}
-			approvedNodes, e := s.store.ApprovedScopeNodes(r.Context(), a.OrganizationID, true)
-			if e != nil {
-				return discoveryError(e)
-			}
 			budget := opts.MaxMembers - len(catalog.Collections)
+			// The expansion contact set freezes with the member snapshot: approvals
+			// granted after the snapshot (or hidden since) cannot retroactively
+			// widen this scope. An incomplete snapshot chain never reaches expansion.
+			approvedNodes := map[string]bool{}
+			for _, m := range members {
+				if m.State == discovery.MemberApproved {
+					approvedNodes[m.NodeID] = true
+				}
+			}
 			if budget < 0 {
 				budget = 0
 			}
@@ -126,7 +132,20 @@ func (s *Server) handleScopeTargets(w http.ResponseWriter, r *http.Request) erro
 	// revalidates exactly its original catalog; no fresh catalog is spliced in.
 	if len(out.Targets) > 0 && !out.Expired {
 		source, e := s.store.ScopeCatalogSource(r.Context(), a.OrganizationID, callerScope, scopeID)
+		storedRevoked := false
 		if e == nil && !source.Revoked {
+			// 点名 revoke 只改 target 页、不写 catalog 行：这里也要看一眼，
+			// 否则已撤回快照会被在线重验复活（并多打一次 producer）。
+			var herr error
+			storedRevoked, herr = s.store.ScopeHasStoredRevocation(r.Context(), a.OrganizationID, callerScope, scopeID)
+			if herr != nil {
+				return herr
+			}
+		}
+		if e == nil && (source.Revoked || storedRevoked) {
+			// 已撤回的快照不再做在线重验：后来的成功响应不能复活它，
+			//  producers 也不该被继续打扰（calls 计数不变）。
+		} else if e == nil {
 			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 			page, code := s.scopeCatalogPage(ctx, a, scopeID, source.SnapshotID, source.TerminalCursor, 0)
 			cancel()
@@ -139,7 +158,7 @@ func (s *Server) handleScopeTargets(w http.ResponseWriter, r *http.Request) erro
 						revokedIDs = []string{}
 					}
 				}
-				if err = s.store.RevokeScopeCollections(r.Context(), a.OrganizationID, callerScope, scopeID, revokedIDs); err != nil {
+				if err = s.store.RevokeScopeCollections(r.Context(), a.OrganizationID, callerScope, scopeID, source.NodeID, revokedIDs); err != nil {
 					return err
 				}
 				out, err = s.store.ScopeTargets(r.Context(), a.OrganizationID, a.UserID, callerScope, scopeID, r.URL.Query().Get("cursor"), s.nodeIdentity.NodeID(), a.Role.CanManageOrg())
@@ -157,8 +176,17 @@ func (s *Server) handleScopeTargets(w http.ResponseWriter, r *http.Request) erro
 				}
 			}
 		} else if e != nil {
+			if !errors.Is(e, store.ErrNotFound) {
+				return e
+			}
+			// The catalog was never bound, so only local targets lack evidence.
+			// Remote targets keep their stored state instead of inheriting the
+			// local producer failure.
+			localID := s.nodeIdentity.NodeID()
 			for i := range out.Targets {
-				out.Targets[i].State = string(contracts.CoverageTargetStateUnreachable)
+				if out.Targets[i].TargetKey.OriginNodeID == localID {
+					out.Targets[i].State = string(contracts.CoverageTargetStateUnreachable)
+				}
 			}
 		}
 	}
@@ -244,6 +272,12 @@ func (s *Server) scopeCatalogPage(ctx context.Context, a *identity.Actor, scopeI
 		if resp.StatusCode == 410 && (code == "catalog_snapshot_invalid" || code == "catalog_snapshot_expired") {
 			var invalid scopeCatalogPage
 			_ = json.Unmarshal(body, &invalid)
+			// 失效快照也要自证身份：绑定对不上（快照/范围/调用者/来源任一不符）
+			// 就不能采信它的 revoked_collection_ids，只当目录不可用。
+			wantScope := discovery.ScopeHash(a)
+			if invalid.SnapshotID != snapshotID || invalid.ScopeID != scopeID || invalid.CallerScopeHash != wantScope || invalid.OriginNodeID != s.nodeIdentity.NodeID() {
+				return nil, "unknown"
+			}
 			return &invalid, code
 		}
 		if resp.StatusCode == 409 {

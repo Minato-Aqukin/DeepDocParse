@@ -159,9 +159,15 @@ func (s *Store) CreateExpandedScope(ctx context.Context, org, subject, callerSco
 				break
 			}
 			for _, member := range members {
-				if !opts.AllowsNode(member.NodeID) || remote.Handled[member.NodeID] {
-					// Excluded nodes are outside this frozen scope. Expanded nodes
-					// already consumed the target budget and recorded their outcome.
+				if !opts.AllowsNode(member.NodeID) {
+					// Boundary-excluded members stay visible as denied subtrees so a
+					// narrowed scope reports partial instead of a sealed denominator.
+					unknown(member.NodeID, "denied")
+					continue
+				}
+				if remote.Handled[member.NodeID] {
+					// Expanded nodes already consumed the target budget and recorded
+					// their outcome.
 					continue
 				}
 				if remaining == 0 {
@@ -274,24 +280,65 @@ func (s *Store) ScopeCatalogSource(ctx context.Context, org, callerScope, id str
 	return &out, norows(err)
 }
 
+// ScopeHasStoredRevocation 报告该 scope 是否已有持久化的点名 revoke：
+// handleScopeTargets 用它在"已有点名 revoke"的快照上跳过在线重验，
+// 后来的成功目录响应不能复活已撤回的目标，也不该继续打扰 producer。
+func (s *Store) ScopeHasStoredRevocation(ctx context.Context, org, callerScope, id string) (bool, error) {
+	var one int
+	err := s.pool.QueryRow(ctx, `SELECT 1 FROM control.scope_target_pages p JOIN control.scope_manifests m ON m.id=p.scope_id, jsonb_array_elements(p.targets) t WHERE m.id=$1 AND m.organization_id=$2 AND m.caller_scope_hash=$3 AND t.value->>'state'='revoked' LIMIT 1`, id, org, callerScope).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
 func (s *Store) RevokeScopeCatalog(ctx context.Context, org, callerScope, id string) error {
-	return s.RevokeScopeCollections(ctx, org, callerScope, id, nil)
+	source, err := s.ScopeCatalogSource(ctx, org, callerScope, id)
+	if err == nil {
+		return s.RevokeScopeCollections(ctx, org, callerScope, id, source.NodeID, nil)
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	// No catalog source row means the scope froze without a bound catalog
+	// (producer failure or empty legacy scope). There is no single origin to
+	// scope the revocation to, so revoke every target as the legacy behavior
+	// did via the all-origins flag below.
+	return s.revokeScopeTargets(ctx, org, callerScope, id, "", nil, true)
 }
 
 // A withdrawn catalog stops use of that snapshot; only specifically identified
 // collections are labelled revoked. Other targets remain unknown/incomplete.
-// nil means a trusted producer has revoked the entire catalog.
-func (s *Store) RevokeScopeCollections(ctx context.Context, org, callerScope, id string, revokedIDs []string) error {
+// nil means a trusted producer has revoked the entire catalog of that origin.
+func (s *Store) RevokeScopeCollections(ctx context.Context, org, callerScope, id, originNodeID string, revokedIDs []string) error {
+	if originNodeID == "" {
+		return ErrDiscoveryConflict
+	}
+	return s.revokeScopeTargets(ctx, org, callerScope, id, originNodeID, revokedIDs, false)
+}
+
+func (s *Store) revokeScopeTargets(ctx context.Context, org, callerScope, id, originNodeID string, revokedIDs []string, allOrigins bool) error {
 	all := revokedIDs == nil
 	if revokedIDs == nil {
 		revokedIDs = []string{}
 	}
+	// A bound 410 names only the withdrawn collections, but the whole snapshot
+	// is invalid: unrevoked same-origin targets cannot be revalidated against
+	// it, so the catalog row marks them unreachable on read while named ones
+	// stay revoked (see ScopeTargets). Only the legacy all-origins path (scopes
+	// frozen without a bound catalog) skips the row: there is no single origin
+	// whose snapshot died.
+	wholeCatalog := !allOrigins
 	return s.InTx(ctx, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO control.scope_catalog_revocations(scope_id) SELECT id FROM control.scope_manifests WHERE id=$1 AND organization_id=$2 AND caller_scope_hash=$3 ON CONFLICT DO NOTHING`, id, org, callerScope)
-		if err != nil {
-			return err
+		if wholeCatalog {
+			_, err := tx.Exec(ctx, `INSERT INTO control.scope_catalog_revocations(scope_id) SELECT id FROM control.scope_manifests WHERE id=$1 AND organization_id=$2 AND caller_scope_hash=$3 ON CONFLICT DO NOTHING`, id, org, callerScope)
+			if err != nil {
+				return err
+			}
 		}
-		_, err = tx.Exec(ctx, `UPDATE control.scope_target_pages p SET targets=(SELECT COALESCE(jsonb_agg(CASE WHEN $5 OR t.value->>'collection_id'=ANY($4::text[]) THEN t.value || '{"state":"revoked"}'::jsonb ELSE t.value END ORDER BY t.ord),'[]'::jsonb) FROM jsonb_array_elements(p.targets) WITH ORDINALITY AS t(value,ord)) FROM control.scope_manifests m WHERE p.scope_id=m.id AND m.id=$1 AND m.organization_id=$2 AND m.caller_scope_hash=$3`, id, org, callerScope, revokedIDs, all)
+		_, err := tx.Exec(ctx, `UPDATE control.scope_target_pages p SET targets=(SELECT COALESCE(jsonb_agg(CASE WHEN $5 OR (t.value->>'origin_node_id'=$6 AND ($7 OR t.value->>'collection_id'=ANY($4::text[]))) THEN t.value || '{"state":"revoked"}'::jsonb ELSE t.value END ORDER BY t.ord),'[]'::jsonb) FROM jsonb_array_elements(p.targets) WITH ORDINALITY AS t(value,ord)) FROM control.scope_manifests m WHERE p.scope_id=m.id AND m.id=$1 AND m.organization_id=$2 AND m.caller_scope_hash=$3`, id, org, callerScope, revokedIDs, allOrigins, originNodeID, all)
 		return err
 	})
 }
@@ -324,11 +371,12 @@ func (s *Store) ScopeTargets(ctx context.Context, org, subject, callerScope, id,
 	}
 	for _, key := range keys {
 		state := string(contracts.CoverageTargetStateNotAttempted)
-		if sourceErr == nil && source.Revoked && key.OriginNodeID == source.NodeID {
-			state = string(contracts.CoverageTargetStateUnreachable)
-		}
 		if key.State == string(contracts.CoverageTargetStateRevoked) {
 			state = key.State
+		} else if sourceErr == nil && source.Revoked && key.OriginNodeID == source.NodeID {
+			// catalog 整体撤回后：没被点名的同源目标只是"目录不可用"，
+			// 不是 revocation。点名 revoke 的上面已经处理。
+			state = string(contracts.CoverageTargetStateUnreachable)
 		}
 		if key.OriginNodeID != localID {
 			// A discovered origin (B through P) has no local registration of its

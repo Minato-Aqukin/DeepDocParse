@@ -136,7 +136,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) error {
 // 但在没有身份的路径上没有更好的键。**这里的目的不是精确公平，
 // 是让暴力破解从"几分钟"变成"几个月"**。
 func (s *Server) limitByIP(r *http.Request, bucket string) error {
-	ip := clientIP(r)
+	ip := clientIPVia(r, s.cfg.TrustedProxies)
 	allowed, _, err := s.limiter.Allow(r.Context(),
 		bucket+":"+ip, s.cfg.LoginRatePerMin, time.Minute)
 	if err != nil {

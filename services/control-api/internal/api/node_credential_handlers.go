@@ -22,8 +22,19 @@ import (
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/apierr"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/discovery"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/httpx"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/identity"
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/obs"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/store"
 )
+
+// stepOrNil maps an optional credential step to the correlation field set:
+// unset stays unset so the log carries no empty step_id key.
+func stepOrNil(step string) *string {
+	if step == "" {
+		return nil
+	}
+	return &step
+}
 
 // nodeCredentialRatePerMinute bounds how many credentials the local corpus may
 // obtain for one audience per minute. It is a runaway-loop brake, not a quota:
@@ -151,10 +162,24 @@ func (s *Server) handleIssueNodeCredential(w http.ResponseWriter, r *http.Reques
 		return apierr.Internal("无法签发节点凭证")
 	}
 	// Audit trail without the secret: the jti identifies the credential, the
-	// token itself never reaches a log line.
-	slog.Info("node credential issued", "audience", claims.AudienceNodeID, "operation", claims.Operation,
-		"root_task_id", claims.Constraints.RootTaskID, "step_id", claims.Constraints.StepID,
-		"jti", claims.JTI, "expires_at", claims.ExpiresAt)
+	// token itself never reaches a log line. Federation correlation travels as
+	// one field set (obs.FederationFields): whoever greps the issuance log
+	// finds the same root_task_id/step_id keys the audit row carries.
+	fields := obs.FederationFields{RootTaskID: &claims.Constraints.RootTaskID, StepID: stepOrNil(claims.Constraints.StepID)}.Fields()
+	args := append([]any{"audience", claims.AudienceNodeID, "operation", claims.Operation}, fields...)
+	args = append(args, "jti", claims.JTI, "expires_at", claims.ExpiresAt)
+	slog.Info("node credential issued", args...)
+	// Issuance is a federation-lifecycle event: the audit row carries the same
+	// correlation tuple, so probe/admission/task tracing starts here and the
+	// jti (not the credential) identifies the row. Unit fixtures run without
+	// a store, so the audit is store-guarded like the peer refusal path.
+	if s.store != nil {
+		s.store.AuditFederation(r.Context(), s.defaultOrg, in.Actor.Subject, in.Actor.Kind,
+			"federation.credential_issued", claims.AudienceNodeID,
+			r.Header.Get(identity.HeaderRequestID),
+			map[string]any{"operation": claims.Operation, "credential_jti": claims.JTI},
+			store.FederationCorrelation{RootTaskID: &claims.Constraints.RootTaskID, StepID: stepOrNil(claims.Constraints.StepID)})
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	return httpx.JSON(w, http.StatusOK, map[string]any{
 		"credential": token, "issuer_node_id": claims.IssuerNodeID, "jti": claims.JTI,

@@ -113,10 +113,11 @@ func NewServer(ctx context.Context, d Deps) (*Server, error) {
 	return s, nil
 }
 
-// Routes 挂全部路由。
+// Routes 挂公开监听的路由。
 //
 // 路由表是**读这个服务的入口**，所以它一处集中、按前缀分组，
-// 而不是散落在各个 register 函数里。
+// 而不是散落在各个 register 函数里。/internal/* 只在 InternalRoutes()
+// 上服务（独立监听，只在服务网络内可达）；公开监听上它们一律 404。
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 
@@ -138,12 +139,6 @@ func (s *Server) Routes() http.Handler {
 	// 稳定文件 URL：token 即凭证，不需要会话。
 	// **路径必须永远稳定** —— 见 store.FileGrant 的注释
 	mux.Handle("GET /files/{token}", httpx.Wrap(s.handleFileByToken))
-
-	// ---- 内网服务面（只认服务凭据，**不读 actor 上下文头**）----
-	svc := s.requireServiceCredentials
-	mux.Handle("POST /internal/file-grants", svc(httpx.Wrap(s.handleInternalFileGrant)))
-	mux.Handle("GET /internal/actors", svc(httpx.Wrap(s.handleInternalActors)))
-	mux.Handle("POST /internal/usage", svc(httpx.Wrap(s.handleInternalUsage)))
 
 	// ---- 会话鉴权（/api/*）----
 	session := s.requireSession
@@ -183,9 +178,11 @@ func (s *Server) Routes() http.Handler {
 
 	// ---- 对外 API：key 鉴权 + 配额 + 限速 + 计量 ----
 	//
-	// **`/v1/parse*` 走语料 API，不是网关。** 它会在语料里留下 Document 与
-	// ParseJob，而那两张表 Go 一个字都写不了（企业边界 5）。其余 `/v1/*`
-	// 是纯算力，直接代给网关。对外契约一个字没变（非目标 §3.2）。
+	// 每个平面按自己的作用域鉴权：只带 parse 的 key 不能调 chat/embeddings/
+	// rerank/extract，反之亦然。平面清单对着 gateway-v1.yaml：parse（语料 API，
+	// 留 Document/ParseJob）/ chat / embeddings / extract（网关）/ rerank /
+	// models（只读）。网关的运维端点（capabilities/healthz/readyz）与任何未知
+	// 平面都落到兜底 404，不代给网关 —— 加平面时漏配作用域表现为缺口而不是默认开放。
 	mux.Handle("POST /v1/parse", s.requireAPIKey(rbac.ScopeParse, http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			s.corpus.ServeHTTP(w, r, "")
@@ -194,10 +191,32 @@ func (s *Server) Routes() http.Handler {
 		func(w http.ResponseWriter, r *http.Request) {
 			s.corpus.ServeHTTP(w, r, "")
 		})))
-	mux.Handle("/v1/", s.requireAPIKey(rbac.ScopeParse, http.HandlerFunc(
+	mux.Handle("POST /v1/chat/completions", s.requireAPIKey(rbac.ScopeChat, http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			s.gateway.ServeHTTP(w, r, "")
 		})))
+	mux.Handle("POST /v1/embeddings", s.requireAPIKey(rbac.ScopeEmbeddings, http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			s.gateway.ServeHTTP(w, r, "")
+		})))
+	mux.Handle("POST /v1/extract", s.requireAPIKey(rbac.ScopeExtract, http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			s.gateway.ServeHTTP(w, r, "")
+		})))
+	mux.Handle("GET /v1/extract/{rest...}", s.requireAPIKey(rbac.ScopeExtract, http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			s.gateway.ServeHTTP(w, r, "")
+		})))
+	mux.Handle("POST /v1/rerank", s.requireAPIKey(rbac.ScopeRerank, http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			s.gateway.ServeHTTP(w, r, "")
+		})))
+	mux.Handle("GET /v1/models", s.requireAPIKey(rbac.ScopeRead, http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			s.gateway.ServeHTTP(w, r, "")
+		})))
+	mux.Handle("/v1/", notFound())
+	mux.Handle("/internal/", notFound())
 	mux.Handle("/mcp", s.requireAPIKey(rbac.ScopeMCP, http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			s.mcp.ServeHTTP(w, r, "/mcp")
@@ -206,7 +225,6 @@ func (s *Server) Routes() http.Handler {
 		func(w http.ResponseWriter, r *http.Request) {
 			s.mcp.ServeHTTP(w, r, "/mcp")
 		})))
-
 	return httpx.Chain(mux,
 		httpx.Recover,
 		httpx.RequestID,
@@ -214,6 +232,36 @@ func (s *Server) Routes() http.Handler {
 		httpx.StripInboundIdentity,
 		httpx.SecurityHeaders,
 		httpx.CORS(s.cfg.CORSOrigins),
+		s.observe,
+	)
+}
+
+// notFound 是公开监听上 /internal/* 与未知 /v1/* 平面的回答。
+// 用 apierr.NotFound 而不是 http.NotFound：契约错误体是 OpenAI 风格，
+// SDK 只需一套解析（见 control-v1.yaml「错误体」一节）。
+func notFound() http.Handler {
+	return httpx.Wrap(func(w http.ResponseWriter, r *http.Request) error {
+		return apierr.NotFound("not_found", "不存在")
+	})
+}
+
+// InternalRoutes 挂内网服务面：只认服务凭据，不读 actor 上下文头。
+// 中间件链与公开监听相同（没有 CORS —— 浏览器永远不该到这里），
+// 差别只有监听地址与路由表。
+func (s *Server) InternalRoutes() http.Handler {
+	mux := http.NewServeMux()
+
+	s.mountNodeCredentials(mux)
+	svc := s.requireServiceCredentials
+	mux.Handle("POST /internal/file-grants", svc(httpx.Wrap(s.handleInternalFileGrant)))
+	mux.Handle("GET /internal/actors", svc(httpx.Wrap(s.handleInternalActors)))
+	mux.Handle("POST /internal/usage", svc(httpx.Wrap(s.handleInternalUsage)))
+
+	return httpx.Chain(mux,
+		httpx.Recover,
+		httpx.RequestID,
+		httpx.StripInboundIdentity,
+		httpx.SecurityHeaders,
 		s.observe,
 	)
 }

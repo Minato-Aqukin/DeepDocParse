@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/auth"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/rbac"
 )
@@ -160,6 +162,22 @@ func toScopes(raw []string) []rbac.Scope {
 }
 
 // ---------------------------------------------------------------- 配额
+//
+// 两本账，各记各的：
+//
+//   - 组织账：usage_ledger 当期求和 + upload_sessions 未完成行的 reserved_pages。
+//     入口只做**准入检查**（CheckQuota）：读锁 quotas 行求和比上限，不写用量或
+//     hold 行（只在首次建行与周期轮换时写 quotas 本身）—— 网关只是透传，下游
+//     corpus 才是结算的地方，入口没有归属行可写、
+//     重复记账（旧 ReserveQuota/ReserveKeyQuota 就是这么 double-charge 的，
+//     见下），而"检查加等待结算"是网关配额的标准做法：检查挡住已超的组织，
+//     并发窗口内的少量超额由结算侧的真实用量收敛（超了下次就进不来）。
+//   - key 账：api_keys.used_pages，**唯一写入者是 RecordUsage**（结算时累加，
+//     按 event_id 幂等）。入口的检查只读不写，不存在"预占转实耗"的第二步。
+//
+// 旧设计为什么错：ReserveKeyQuota 在准入时 used_pages+1，RecordUsage 在结算
+// 时又 +pages —— 一次 1 页解析记 2 页；失败/被代理掉的请求（没有用量事件）
+// 永久占 1 页。准入与结算是两个不同的事件，不能共用同一个累加器做两次加法。
 
 type Quota struct {
 	OrganizationID string    `json:"organization_id"`
@@ -169,38 +187,113 @@ type Quota struct {
 	PeriodEnd      time.Time `json:"period_end"`
 }
 
-func (s *Store) Quota(ctx context.Context, orgID string) (*Quota, error) {
-	q := &Quota{OrganizationID: orgID}
-	var periodDays int
-	err := s.pool.QueryRow(ctx, `
+// quotaTx 锁住配额行、轮转过期窗口、返回（limit, periodStart）。
+// Quota / CheckQuota / ClaimUpload 三处判定共用它 —— 口径永远一致。
+// 行锁只保证"读到的求和口径一致"，不保证"并发检查互斥"：检查本身不写行，
+// 两个并发检查可以同时通过 —— 真正的互斥只在 ClaimUpload（检查且写行）里。
+func quotaTx(ctx context.Context, tx pgx.Tx, orgID string) (*int, time.Time, int, error) {
+	var (
+		limit      *int
+		periodDays int
+		period     time.Time
+	)
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO control.quotas (organization_id) VALUES ($1)
 		ON CONFLICT (organization_id) DO UPDATE SET period_days = control.quotas.period_days
 		RETURNING pages_limit, period_days, period_start`, orgID).
-		Scan(&q.PagesLimit, &periodDays, &q.PeriodStart)
+		Scan(&limit, &periodDays, &period); err != nil {
+		return nil, time.Time{}, 0, err
+	}
+	if !time.Now().Before(period.AddDate(0, 0, periodDays)) {
+		if err := tx.QueryRow(ctx, `
+			UPDATE control.quotas SET period_start = now()
+			WHERE organization_id = $1
+			RETURNING period_days, period_start`, orgID).
+			Scan(&periodDays, &period); err != nil {
+			return nil, time.Time{}, 0, err
+		}
+	}
+	// 锁住配额行：同一组织的并发 CheckQuota/ClaimUpload 串行化到这一行上。
+	if err := tx.QueryRow(ctx, `
+		SELECT pages_limit FROM control.quotas
+		WHERE organization_id = $1 FOR UPDATE`, orgID).Scan(&limit); err != nil {
+		return nil, time.Time{}, 0, err
+	}
+	return limit, period, periodDays, nil
+}
+
+func (s *Store) Quota(ctx context.Context, orgID string) (*Quota, error) {
+	q := &Quota{OrganizationID: orgID}
+	// 窗口轮转与读数必须在同一个事务里：先把过期窗口往前拨，再按新起点求和。
+	// 分两次的话，并发请求会在"还没轮转的旧起点"上重复计费 —— 配额永远不清零。
+	err := s.InTx(ctx, func(tx pgx.Tx) error {
+		limit, period, days, err := quotaTx(ctx, tx, orgID)
+		if err != nil {
+			return err
+		}
+		q.PagesLimit = limit
+		q.PeriodStart = period
+		q.PeriodEnd = period.AddDate(0, 0, days)
+		return tx.QueryRow(ctx, `
+			SELECT coalesce(sum(pages), 0) FROM control.usage_ledger
+			WHERE organization_id = $1 AND created_at >= $2`, orgID, q.PeriodStart).
+			Scan(&q.PagesUsed)
+	})
 	if err != nil {
 		return nil, err
 	}
-	q.PeriodEnd = q.PeriodStart.AddDate(0, 0, periodDays)
-	err = s.pool.QueryRow(ctx, `
-		SELECT coalesce(sum(pages), 0) FROM control.usage_ledger
-		WHERE organization_id = $1 AND created_at >= $2`, orgID, q.PeriodStart).
-		Scan(&q.PagesUsed)
-	return q, err
+	return q, nil
 }
 
-// ReserveQuota 在受理一次上传前先占额度。
+// CheckQuota 在网关放行一次计费调用前做准入检查。
 //
-// **必须在受理前占**：等解析完再扣的话，一次批量上传可以把配额透支到任意程度。
-// 这里用的是"当前周期已用 + 本次预估 <= 上限"，预估用页数上界（文件大小 / 平均页大小）。
-func (s *Store) ReserveQuota(ctx context.Context, orgID string, pages int) error {
-	q, err := s.Quota(ctx, orgID)
-	if err != nil {
-		return err
+// 口径与上传受理（ClaimUpload）同一求和：当期 usage_ledger 求和 + 未完成
+// 上传的 reserved_pages，两边都超才拦。**检查只读不写**：网关是透传，
+// 真正的用量由下游 corpus 结算（RecordUsage），入口写 hold 会与结算重复记账。
+//
+// 并发语义说清楚：两个同时到达的检查可以同时看到"还有 1 页"并同时通过 ——
+// 这是检查的固有窗口，不是 bug。超额由结算收敛：用量一落账，下一次检查就
+// 进不来。需要硬互斥的场景（上传受理）走 ClaimUpload，那里检查与建行在
+// 同一事务里，原子地占住额度。
+func (s *Store) CheckQuota(ctx context.Context, orgID string, pages int) error {
+	return s.InTx(ctx, func(tx pgx.Tx) error {
+		limit, period, _, err := quotaTx(ctx, tx, orgID)
+		if err != nil {
+			return err
+		}
+		if limit == nil {
+			return nil
+		}
+		var used, held int64
+		if err := tx.QueryRow(ctx, `SELECT coalesce(sum(pages),0) FROM control.usage_ledger WHERE organization_id=$1 AND created_at >= $2`, orgID, period).Scan(&used); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT coalesce(sum(reserved_pages),0) FROM control.upload_sessions WHERE organization_id=$1 AND status IN ('created','uploading','verifying')`, orgID).Scan(&held); err != nil {
+			return err
+		}
+		if used+held+int64(pages) > int64(*limit) {
+			return ErrQuotaExceeded
+		}
+		return nil
+	})
+}
+
+// CheckKeyQuota 按 key 的 quota_pages 做准入检查。
+//
+// 只读不写：used_pages 的唯一写入者是结算（RecordUsage），入口检查绝不累加。
+// QuotaPages 为空（NULL）= 不限，直接过。
+func (s *Store) CheckKeyQuota(ctx context.Context, keyID string, pages int) error {
+	var quota *int
+	var used int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT quota_pages, used_pages FROM control.api_keys
+		WHERE id = $1`, keyID).Scan(&quota, &used); err != nil {
+		return norows(err)
 	}
-	if q.PagesLimit == nil {
+	if quota == nil {
 		return nil
 	}
-	if q.PagesUsed+pages > *q.PagesLimit {
+	if used+pages > *quota {
 		return ErrQuotaExceeded
 	}
 	return nil
@@ -224,6 +317,8 @@ type UsagePoint struct {
 //
 // eventID 非空时做幂等：同一个 outbox 事件重投不得记两笔账。
 // 这是 outbox 消费者的命门 —— 投递器"至少一次"，消费必须"恰好一次"。
+// 同一事务里把 key 的 used_pages 一起累加：重投（ON CONFLICT 没插入）
+// 不得重复扣 key 的额度，否则一次重试就吃掉两份 key 配额。
 func (s *Store) RecordUsage(ctx context.Context, orgID, actorID, actorKind, apiKeyID,
 	kind string, pages, requests int, eventID string) error {
 
@@ -234,13 +329,24 @@ func (s *Store) RecordUsage(ctx context.Context, orgID, actorID, actorKind, apiK
 	if eventID != "" {
 		eventArg = eventID
 	}
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO control.usage_ledger
-		    (id, organization_id, actor_id, actor_kind, api_key_id, kind, pages, requests, event_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-		ON CONFLICT (event_id) DO NOTHING`,
-		auth.NewID(), orgID, actorID, actorKind, keyArg, kind, pages, requests, eventArg)
-	return err
+	return s.InTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO control.usage_ledger
+			    (id, organization_id, actor_id, actor_kind, api_key_id, kind, pages, requests, event_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			ON CONFLICT (event_id) DO NOTHING`,
+			auth.NewID(), orgID, actorID, actorKind, keyArg, kind, pages, requests, eventArg)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 1 && apiKeyID != "" && pages > 0 {
+			_, err = tx.Exec(ctx, `
+				UPDATE control.api_keys SET used_pages = used_pages + $2
+				WHERE id = $1`, apiKeyID, pages)
+			return err
+		}
+		return nil
+	})
 }
 
 func (s *Store) UsageSeries(ctx context.Context, orgID string, userID string, days int) ([]UsagePoint, error) {

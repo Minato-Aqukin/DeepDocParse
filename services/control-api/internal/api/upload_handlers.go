@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -88,6 +89,22 @@ func (s *Server) handleCreateUpload(w http.ResponseWriter, r *http.Request) erro
 	}
 	if purpose != "permanent" && purpose != "temporary_compute" {
 		return apierr.BadRequest("bad_purpose", "purpose 只能是 permanent 或 temporary_compute")
+	}
+	// temporary_compute 必须带合法的 remote_compute_id：它进对象 key，
+	// 非法字符就是路径穿越；存在性/归属由 corpus 侧在字节落盘后复核
+	// （remote_compute_ingest.py），这里只保证形状合法 + key 唯一。
+	if purpose == "temporary_compute" {
+		// 两个坏法都要拒，但"先形状、再语义"：缺 id 是请求残缺
+		// （bad_remote_compute_id），id 合法却带 target 是"两种上传混成一种"
+		// （invalid_upload_target）—— 测试按这个顺序各喂一个坏请求。
+		if body.RemoteComputeID == nil || !validRemoteComputeID(*body.RemoteComputeID) {
+			return apierr.BadRequest("bad_remote_compute_id", "temporary_compute 上传必须绑定合法的 remote_compute_id")
+		}
+		if body.TargetResourceID != nil {
+			return apierr.BadRequest("invalid_upload_target", "临时计算上传不能指定目标资源")
+		}
+	} else if body.RemoteComputeID != nil && *body.RemoteComputeID != "" {
+		return apierr.BadRequest("bad_remote_compute_id", "只有 temporary_compute 上传可以带 remote_compute_id")
 	}
 	// 追加目标是上传身份的一部分：进创建摘要（同键换目标 = 幂等冲突），在会话
 	// 行上冻结，事件载荷只从行上取 —— finalize 没有、也不接受这个字段。
@@ -287,14 +304,13 @@ func (s *Server) handleFinalizeUpload(w http.ResponseWriter, r *http.Request) er
 	if err != nil {
 		return err
 	}
-	var body struct {
-		Parts   []objectstore.CompletedPart `json:"parts"`
-		Engine  string                      `json:"engine"`
-		Options json.RawMessage             `json:"options"`
-	}
-	// 空 body 也允许：分片 ETag 可以从对象存储自己列
-	if r.ContentLength > 0 {
-		if err := httpx.DecodeJSON(r, &body); err != nil {
+	var body finalizeBody
+	// 空 body 也允许：分片 ETag 可以从对象存储自己列。
+	// **不能看 ContentLength**：chunked 请求的 ContentLength 是 -1，
+	// 有 body 也会被当成空 —— engine/options 悄悄变成空，202 照回。
+	// 空 body（EOF）不是错误；真有 body 才解，解错照常 400。
+	if r.Body != nil && r.Body != http.NoBody {
+		if err := decodeFinalizeBody(r, &body); err != nil {
 			return err
 		}
 	}
@@ -439,6 +455,28 @@ func (s *Server) writeUpload(w http.ResponseWriter, r *http.Request, u *store.Up
 	return httpx.JSON(w, code, out)
 }
 
+// decodeFinalizeBody 解 finalize 的可选 body：空 body（EOF）是合法的
+// （分片 ETag 从对象存储自己列），真有 body 才解，解错照样是 400。
+type finalizeBody struct {
+	Parts   []objectstore.CompletedPart `json:"parts"`
+	Engine  string                      `json:"engine"`
+	Options json.RawMessage             `json:"options"`
+}
+
+func decodeFinalizeBody(r *http.Request, body *finalizeBody) error {
+	if err := httpx.DecodeJSON(r, body); err != nil {
+		// httpx.DecodeJSON 已限长；这里只放行"根本没有 body"，
+		// 半截 JSON 照样是 400，不能吞。
+		var apiErr *apierr.Error
+		if errors.As(err, &apiErr) && apiErr.Code == "invalid_json" &&
+			errors.Is(apiErr.Unwrap(), io.EOF) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 // validResourceID 只放行语料资源 id 的字符集：它会进 URL 路径与事件载荷，
 // 不能夹带分隔符或控制字符。
 func validResourceID(id string) bool {
@@ -453,13 +491,20 @@ func validResourceID(id string) bool {
 	return true
 }
 
+// validRemoteComputeID 与 validResourceID 同一字符集：remote_compute_id
+// 进对象 key（tmp-remote-compute/<org>/<id>/…），必须防路径穿越。
+func validRemoteComputeID(id string) bool { return validResourceID(id) }
+
 // tmpObjectKey mints the immutable object key for an upload session.
 // Temporary compute inputs live under the agreed tmp prefix so reference-safe
 // GC can scope deletion to one compute record id; permanent uploads keep the
 // existing random uploads/ key shape unchanged.
 func tmpObjectKey(orgID, purpose string, remoteComputeID *string, random string) string {
 	if purpose == "temporary_compute" && remoteComputeID != nil && *remoteComputeID != "" {
-		return "tmp-remote-compute/" + orgID + "/" + *remoteComputeID + "/source.bin"
+		// random 参与 key：同 org 内学会别人的 remote_compute_id 也
+		// 覆盖不了受害者的 source.bin —— 每个会话写自己的 key。
+		// corpus 侧接受前缀下任意 key（remote_compute_ingest.py 前缀分支）。
+		return "tmp-remote-compute/" + orgID + "/" + *remoteComputeID + "/" + random + "/source.bin"
 	}
 	return "uploads/" + orgID + "/" + random
 }

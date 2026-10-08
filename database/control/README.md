@@ -3,8 +3,9 @@
 Go control-api 拥有的表。按文件名顺序执行，账本在 `control.schema_migrations`。
 
 ```bash
-go run ./cmd/control-migrate -database "$CONTROL_DATABASE_URL" up
-go run ./cmd/control-migrate -database "$CONTROL_DATABASE_URL" status
+# 连接串走环境变量 —— argv 在 ps 与 CI 日志里可见，而连接串里有口令
+CONTROL_DATABASE_URL="$CONTROL_DATABASE_URL" go run ./cmd/control-migrate up
+CONTROL_DATABASE_URL="$CONTROL_DATABASE_URL" go run ./cmd/control-migrate status
 ```
 
 ## 为什么不用 Alembic

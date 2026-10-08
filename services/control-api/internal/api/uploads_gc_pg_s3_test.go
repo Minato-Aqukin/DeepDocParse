@@ -45,6 +45,21 @@ func TestTerminalUploadRealReclamation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// verify 只认领取租约：先 PendingVerification 领一行，再 MarkUploadVerified ——
+			// 与 verifyUploads 生产路径同顺序。
+			claimed, err := f.server.store.PendingVerification(ctx, 16)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, c := range claimed {
+				if c.ID == u.ID {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("upload not claimed by PendingVerification: %s", u.ID)
+			}
 			if err := f.server.store.MarkUploadVerified(ctx, f.org, u.ID, digest); err != nil {
 				t.Fatal(err)
 			}

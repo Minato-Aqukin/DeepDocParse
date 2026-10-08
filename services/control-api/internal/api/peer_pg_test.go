@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -272,5 +273,95 @@ func TestPeerCollectionsProxiesCorpusAndNeverLeaksCallerScope(t *testing.T) {
 	f.server.corpus, _ = proxy.New("corpus", wrongEnvelope.URL, f.server.cfg.ServiceToken)
 	if w := requestPeer(t, f.handler, "/api/v1/federation/collections", signedPeerRead(t, f, peer, "/api/v1/federation/collections")); w.Code != 502 {
 		t.Fatalf("foreign-origin catalog envelope relayed: %d", w.Code)
+	}
+}
+
+// Unverified peer reads reveal nothing about membership on any peer route:
+// an unknown-issuer self-signed token, a revoked-issuer forged token, and an
+// approved-issuer token with a corrupted signature all get the identical
+// neutral 401 credential_invalid with no audit row.
+func TestPeerUnverifiedReadsShareNeutralDenial(t *testing.T) {
+	f := discoveryPGFixture(t)
+	victim := approvedReadPeer(t, f)
+	membersPath := "/api/v1/federation/members?limit=1"
+	local := f.server.nodeIdentity.NodeID()
+	subtreePath := "/api/v1/federation/subtree?path=" + local + "," + victim.NodeID() + "&max_requests=10&max_nodes=2&limit=1"
+	decodeDiscovery[map[string]any](t, requestDiscovery(t, f.handler, "POST", "/api/v1/federation/nodes/"+victim.NodeID()+"/revoke", f.adminToken, nil), 200)
+
+	stranger, err := discovery.LoadIdentity(filepath.Join(t.TempDir(), "stranger"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsider, err := discovery.LoadIdentity(filepath.Join(t.TempDir(), "outsider"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedMembers := forgedIssuerToken(t, stranger, victim.NodeID(), membersPath, f.server.nodeIdentity.NodeID())
+
+	// Approved issuer, corrupted signature: the issuer hint still parses to a
+	// registered key, but verification against that key fails.
+	holder := approvedReadPeer(t, f)
+	valid := signedPeerRead(t, f, holder, membersPath)
+	parts := strings.SplitN(valid, ".", 2)
+	if len(parts) != 2 || len(parts[1]) == 0 {
+		t.Fatal("signed token has no signature part")
+	}
+	sig := parts[1]
+	// Flip the first signature character (not the last: trailing base64 bits
+	// may be padding): the issuer hint still parses against the registered
+	// key, but verification must fail.
+	first := byte('A')
+	if sig[0] == 'A' {
+		first = 'B'
+	}
+	corrupted := parts[0] + "." + string([]byte{first}) + sig[1:]
+
+	decode := func(t *testing.T, w *httptest.ResponseRecorder) (int, string) {
+		t.Helper()
+		var denied struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &denied); err != nil {
+			t.Fatal(err)
+		}
+		return w.Code, denied.Error.Code
+	}
+	type probe struct {
+		name string
+		path string
+		make func(path string) string
+	}
+	probes := []probe{
+		{"unknown-issuer", membersPath, func(path string) string { return signedPeerRead(t, f, outsider, path) }},
+		{"revoked-forged", membersPath, func(string) string { return forgedMembers }},
+		{"bad-signature", membersPath, func(string) string { return corrupted }},
+	}
+	var wantCode int
+	var wantErr string
+	for i, p := range probes {
+		status, code := decode(t, requestPeer(t, f.handler, p.path, p.make(p.path)))
+		if status != 401 || code != "credential_invalid" {
+			t.Fatalf("%s members probe: got %d %q, want 401 credential_invalid", p.name, status, code)
+		}
+		if i == 0 {
+			wantCode, wantErr = status, code
+		} else if status != wantCode || code != wantErr {
+			t.Fatalf("%s denial differs: got %d %q, want %d %q", p.name, status, code, wantCode, wantErr)
+		}
+	}
+	// A second peer route shows the same neutral denial for the forged token.
+	subtreeForged := forgedIssuerToken(t, stranger, victim.NodeID(), subtreePath, f.server.nodeIdentity.NodeID())
+	status, code := decode(t, requestPeer(t, f.handler, subtreePath, subtreeForged))
+	if status != wantCode || code != wantErr {
+		t.Fatalf("revoked-forged subtree probe: got %d %q, want %d %q", status, code, wantCode, wantErr)
+	}
+	events, err := f.server.store.AuditEvents(context.Background(), f.org, "peer.credential_denied", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("unverified probes minted %d audit rows", len(events))
 	}
 }

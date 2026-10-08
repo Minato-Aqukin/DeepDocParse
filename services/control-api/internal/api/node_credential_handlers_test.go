@@ -243,3 +243,56 @@ func TestPeerKeyLookupReturnsStateAndLocalAuthority(t *testing.T) {
 		t.Fatalf("identity readable without service credentials: %d", w.Code)
 	}
 }
+
+// 签发是联邦生命周期的起点：审计行必须带上凭证约束里的关联元组 ——
+// 查审计的人用 root_task_id/step_id 能串起 probe→admission→task 整条链。
+// 凭证本身绝不能进审计（detail 里出现 credential 即泄密）。
+func TestNodeCredentialIssuanceAuditsCorrelationTuple(t *testing.T) {
+	f := discoveryPGFixture(t)
+	peer := approvedReadPeer(t, f)
+	internal := f.server.InternalRoutes()
+	body := map[string]any{
+		"audience_node_id": peer.NodeID(),
+		"actor":            map[string]any{"organization_id": f.org, "subject": "user-1", "kind": "user"},
+		"operation":        "execution_read",
+		"constraints":      map[string]any{"root_task_id": "root-issuance-1", "step_id": "step-9"},
+		"request": map[string]any{"method": "GET", "path": "/api/v1/federation/tasks/exec-1",
+			"body_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+		"ttl_seconds": 60,
+	}
+	raw, _ := json.Marshal(body)
+	r := httptest.NewRequest(http.MethodPost, "/internal/federation/node-credentials", bytes.NewReader(raw))
+	r.Header.Set("Authorization", "Bearer internal-test-service")
+	w := httptest.NewRecorder()
+	internal.ServeHTTP(w, r)
+	var out struct {
+		Credential string `json:"credential"`
+		JTI        string `json:"jti"`
+	}
+	if w.Code != 200 {
+		t.Fatalf("issuance: %d %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	events, err := f.server.store.AuditEvents(context.Background(), f.org, "federation.credential_issued", nil, 5)
+	if err != nil || len(events) == 0 {
+		t.Fatalf("issuance audit missing: %+v %v", events, err)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal(events[0].Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail["root_task_id"] != "root-issuance-1" || detail["step_id"] != "step-9" {
+		t.Fatalf("issuance audit lost correlation: %v", detail)
+	}
+	if detail["credential_jti"] != out.JTI {
+		t.Fatalf("issuance audit jti mismatch: %v want %s", detail, out.JTI)
+	}
+	if _, leaked := detail["credential"]; leaked {
+		t.Fatal("issuance audit leaked the credential itself")
+	}
+	if strings.Contains(string(events[0].Detail), out.Credential) {
+		t.Fatal("issuance audit body contains the credential")
+	}
+}

@@ -40,8 +40,10 @@ func (l *RedisLimiter) Kind() string { return "redis" }
 // 对"防洪峰"这个目的，边界效应不值得用一个 sorted set 去换。
 // 真需要平滑的场合（比如按 token 计费）再换令牌桶。
 func (l *RedisLimiter) Allow(ctx context.Context, key string, limit int, window time.Duration) (bool, int, error) {
+	// limit <= 0 是"配置坏了"，不是"不限速"：签发侧已经把 <=0 挡掉，
+	// 这里再放行等于让脏数据直接关掉限速 —— 默认必须拒绝。
 	if limit <= 0 {
-		return true, 0, nil
+		return false, 0, nil
 	}
 	bucket := time.Now().UnixNano() / int64(window)
 	redisKey := "ratelimit:" + key + ":" + itoa(bucket)
@@ -77,8 +79,9 @@ func NewMemory() *MemoryLimiter {
 func (l *MemoryLimiter) Kind() string { return "memory" }
 
 func (l *MemoryLimiter) Allow(_ context.Context, key string, limit int, window time.Duration) (bool, int, error) {
+	// 同上：坏限额默认拒绝，不放行。
 	if limit <= 0 {
-		return true, 0, nil
+		return false, 0, nil
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()

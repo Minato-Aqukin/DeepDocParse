@@ -66,12 +66,17 @@ func TestPeerSubtreeSnapshotRevokedIssuerDenialIsAudited(t *testing.T) {
 		Issuer   string `json:"issuer_node_id"`
 		Snapshot string `json:"snapshot_id"`
 		Reason   string `json:"reason"`
+		RootTask string `json:"root_task_id"`
 	}
 	if err := json.Unmarshal(got.Detail, &detail); err != nil {
 		t.Fatal(err)
 	}
 	if detail.Issuer != issuer.NodeID() || detail.Snapshot != first.SnapshotID || detail.Reason != "node_revoked" {
 		t.Fatalf("audit detail missing issuer/snapshot/reason: %s", got.Detail)
+	}
+	// 拒绝行带上已验证凭证的联邦关联：directory 读的 root 是 directory:<jti>。
+	if detail.RootTask == "" || !strings.HasPrefix(detail.RootTask, "directory:") {
+		t.Fatalf("denial audit lost federation correlation: %s", got.Detail)
 	}
 }
 
@@ -121,11 +126,12 @@ func forgedIssuerToken(t *testing.T, stranger *discovery.Identity, claimedIssuer
 	return base64.RawURLEncoding.EncodeToString(raw) + "." + parts[1]
 }
 
-// An unauthenticated caller must not be able to mint audit rows attributed to
-// a revoked node: a forged credential naming the revoked issuer, and a
-// credential naming an unknown issuer, both keep today's denial (status +
-// code) and write ZERO audit rows. Only a signature-verified credential from
-// the claimed issuer may attribute an audit row to it.
+// An unverified caller learns nothing about membership and mints no audit rows
+// attributed to the claimed node: a forged credential naming the revoked issuer
+// and a credential naming an unknown issuer both get the SAME neutral 401
+// credential_invalid and write ZERO audit rows. Only a fully
+// signature-verified credential from the claimed issuer may reveal (and audit)
+// membership state.
 func TestPeerTrustRefusalWithoutValidSignatureWritesNoAudit(t *testing.T) {
 	f := discoveryPGFixture(t)
 	issuer := approvedReadPeer(t, f)
@@ -140,19 +146,19 @@ func TestPeerTrustRefusalWithoutValidSignatureWritesNoAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := requestPeer(t, f.handler, continuation, forgedIssuerToken(t, stranger, issuer.NodeID(), continuation, f.server.nodeIdentity.NodeID()))
-	if w.Code != 403 {
+	if w.Code != 401 {
 		t.Fatalf("forged revoked-issuer read: %d %s", w.Code, w.Body.String())
 	}
-	var denied struct {
+	var forgedDenied struct {
 		Error struct {
 			Code string `json:"code"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &denied); err != nil {
+	if err := json.Unmarshal(w.Body.Bytes(), &forgedDenied); err != nil {
 		t.Fatal(err)
 	}
-	if denied.Error.Code != "node_revoked" {
-		t.Fatalf("forgery denial code changed: %q (%s)", denied.Error.Code, w.Body.String())
+	if forgedDenied.Error.Code != "credential_invalid" {
+		t.Fatalf("forgery denial discloses membership: %q (%s)", forgedDenied.Error.Code, w.Body.String())
 	}
 	events, err := f.server.store.AuditEvents(context.Background(), f.org, "peer.credential_denied", nil, 10)
 	if err != nil {
@@ -162,15 +168,29 @@ func TestPeerTrustRefusalWithoutValidSignatureWritesNoAudit(t *testing.T) {
 		t.Fatalf("forged credential minted %d audit rows attributed to the revoked issuer", len(events))
 	}
 
-	// Unknown issuer: no trust record at all → same denial, still no audit.
+	// Unknown issuer: no trust record at all → same neutral denial, still no audit.
 	outsider, err := discovery.LoadIdentity(filepath.Join(t.TempDir(), "outsider"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	unknownPath := "/api/v1/federation/subtree?path=" + local + "," + outsider.NodeID() + "&max_requests=10&max_nodes=2&limit=1"
 	u := requestPeer(t, f.handler, unknownPath, signedPeerRead(t, f, outsider, unknownPath))
-	if u.Code != 403 {
+	if u.Code != 401 {
 		t.Fatalf("unknown issuer read: %d %s", u.Code, u.Body.String())
+	}
+	var unknownDenied struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(u.Body.Bytes(), &unknownDenied); err != nil {
+		t.Fatal(err)
+	}
+	if unknownDenied.Error.Code != forgedDenied.Error.Code {
+		t.Fatalf("unverified denials differ: forged=%q unknown=%q", forgedDenied.Error.Code, unknownDenied.Error.Code)
+	}
+	if unknownDenied.Error.Code != "credential_invalid" {
+		t.Fatalf("unknown-issuer denial discloses membership: %q (%s)", unknownDenied.Error.Code, u.Body.String())
 	}
 	events, err = f.server.store.AuditEvents(context.Background(), f.org, "peer.credential_denied", nil, 10)
 	if err != nil {

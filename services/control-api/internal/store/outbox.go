@@ -27,6 +27,12 @@ type OutboxEvent struct {
 	CreatedAt      time.Time       `json:"created_at"`
 }
 
+// claimLease 是领取后"别立刻重领"的租约：deliverEvent 一次往返（含 corpus
+// 处理 + 网络抖动）通常几秒内完成，60 秒租约盖得住慢投递，又不会让崩溃的
+// 投递器卡住队列太久。失败/成功落回行时会覆盖它（MarkOutboxFailed 的退避、
+// MarkOutboxDelivered 的 delivered_at），所以它只影响"领完还没落结果"的窗口。
+const claimLease = 60 * time.Second
+
 // EnqueueOutbox 必须在**调用方的事务里**执行，所以收的是 pgx.Tx 而不是池。
 func EnqueueOutbox(ctx context.Context, tx pgx.Tx, orgID, typ string, payload json.RawMessage) error {
 	_, err := tx.Exec(ctx, `
@@ -38,22 +44,28 @@ func EnqueueOutbox(ctx context.Context, tx pgx.Tx, orgID, typ string, payload js
 // ClaimOutbox 领一批待投递事件。
 //
 // `FOR UPDATE SKIP LOCKED` 让多个副本可以并行投递而不互相阻塞，
-// 也不会把同一条投两次 —— 这是 PG 做队列的标准姿势，比自己写 lease 简单得多。
+// 也不会把同一条投两次 —— 这是 PG 做队列的标准姿势。
+// 同一个 UPDATE 里把 next_attempt_at 拨到"这次投递的租约之后"
+// （claimLease）：领取提交后、投递完成前，另一个副本不会立刻
+// 把同一条再领走 —— 投递中重复 POST 给 corpus 的窗口被关掉。
+// 租约只是"别立刻重领"，投递结果（delivered/failed/rejected）
+// 照样由 deliverEvent 落回同一行；失败路径的退避会覆盖这个租约。
 func (s *Store) ClaimOutbox(ctx context.Context, limit int) ([]OutboxEvent, error) {
 	// rejected_at 有值的行是终端态：投递器不再领取，状态机也不再轮询它。
 	// 它仍留在表里 —— rejected ingest 的可见性就靠这一行。
 	rows, err := s.pool.Query(ctx, `
-		WITH claimed AS (
-		  SELECT id FROM control.control_outbox
-		  WHERE delivered_at IS NULL AND rejected_at IS NULL AND next_attempt_at <= now()
-		  ORDER BY created_at
-		  LIMIT $1
-		  FOR UPDATE SKIP LOCKED
-		)
-		UPDATE control.control_outbox o
-		SET attempts = o.attempts + 1
-		FROM claimed c WHERE o.id = c.id
-		RETURNING o.id, o.organization_id, o.type, o.payload, o.attempts, o.created_at`, limit)
+	WITH claimed AS (
+	  SELECT id FROM control.control_outbox
+	  WHERE delivered_at IS NULL AND rejected_at IS NULL AND next_attempt_at <= now()
+	  ORDER BY created_at
+	  LIMIT $1
+	  FOR UPDATE SKIP LOCKED
+	)
+	UPDATE control.control_outbox o
+	SET attempts = o.attempts + 1,
+	    next_attempt_at = now() + ($2 * interval '1 second')
+	FROM claimed c WHERE o.id = c.id
+	RETURNING o.id, o.organization_id, o.type, o.payload, o.attempts, o.created_at`, limit, int(claimLease.Seconds()))
 	if err != nil {
 		return nil, err
 	}

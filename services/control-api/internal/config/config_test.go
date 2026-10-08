@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"net"
 	"strings"
 	"testing"
 
@@ -12,6 +13,15 @@ func good(t *testing.T) {
 	t.Setenv("JWT_SECRET", strings.Repeat("a", 48))
 	t.Setenv("SERVICE_TOKEN", strings.Repeat("b", 32))
 	t.Setenv("OBJECT_SECRET_KEY", "not-the-default")
+}
+
+func mustParseIP(t *testing.T, s string) net.IP {
+	t.Helper()
+	ip := net.ParseIP(s)
+	if ip == nil {
+		t.Fatalf("解析 IP %q 失败", s)
+	}
+	return ip
 }
 
 // TestPlaceholderSecretsAreRejected：带着 change-me 跑起来的话鉴权形同虚设，
@@ -55,6 +65,60 @@ func TestPartSizeFloor(t *testing.T) {
 	t.Setenv("UPLOAD_PART_SIZE", "1048576")
 	if _, err := config.Load(); err == nil {
 		t.Fatal("小于 5MiB 的分片大小被接受了")
+	}
+}
+
+// TestBcryptCostFloor：BCRYPT_COST < 10 基本等于没有慢哈希，
+// 与邻近的数字守卫一样必须拒绝启动，而不是带着绿灯跑。
+func TestBcryptCostFloor(t *testing.T) {
+	for _, cost := range []string{"4", "9"} {
+		t.Run(cost, func(t *testing.T) {
+			good(t)
+			t.Setenv("BCRYPT_COST", cost)
+			if _, err := config.Load(); err == nil {
+				t.Fatalf("BCRYPT_COST=%s 被接受了", cost)
+			}
+		})
+	}
+	for _, cost := range []string{"10", "12"} {
+		t.Run(cost, func(t *testing.T) {
+			good(t)
+			t.Setenv("BCRYPT_COST", cost)
+			if _, err := config.Load(); err != nil {
+				t.Fatalf("BCRYPT_COST=%s 被拒绝了：%v", cost, err)
+			}
+		})
+	}
+}
+
+// TestInternalAddrDefault：内网监听缺省 :8090，
+// 显式给 CONTROL_INTERNAL_ADDR 则以显式的为准。
+func TestInternalAddrDefault(t *testing.T) {
+	good(t)
+	c, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.InternalAddr != ":8090" {
+		t.Fatalf("InternalAddr 缺省 = %q，应为 :8090", c.InternalAddr)
+	}
+}
+
+// TestTrustedProxiesDefaultContainsLoopback：
+// 缺省信任回环 + 私有网段；公网 IP 不在里面。
+func TestTrustedProxiesDefaultContainsLoopback(t *testing.T) {
+	good(t)
+	c, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, ip := range []string{"127.0.0.1", "::1", "10.1.2.3", "192.168.1.1", "172.16.5.4"} {
+		if !c.TrustedProxies.Contains(mustParseIP(t, ip)) {
+			t.Errorf("%s 应当在缺省信任集里", ip)
+		}
+	}
+	if c.TrustedProxies.Contains(mustParseIP(t, "8.8.8.8")) {
+		t.Error("8.8.8.8 不该在缺省信任集里")
 	}
 }
 

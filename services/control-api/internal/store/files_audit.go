@@ -36,32 +36,18 @@ type FileGrant struct {
 	Revoked   bool
 }
 
-func (s *Store) CreateFileGrant(ctx context.Context, g *FileGrant) error {
-	if g.Token == "" {
-		g.Token = auth.NewToken()
-	}
-	if g.Scope == "" {
-		g.Scope = "source"
-	}
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO control.file_grants
-		    (token, organization_id, document_id, object_key, mime, filename, scope, expires_at, subject_id, resource_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		g.Token, g.OrganizationID, g.DocumentID, g.ObjectKey, g.MIME, g.Filename,
-		g.Scope, g.ExpiresAt, g.SubjectID, g.ResourceID)
-	return err
-}
-
 // FileGrantByToken 只返回**当前有效**的凭证。
 // 撤销与过期在这里一起判掉，调用方拿不到一个"存在但不该用"的对象 ——
 // 那种对象迟早会被某个分支漏判。
+// NULL 视为无效：0017 之后新行必有 expires_at，存量 NULL 行已被回填；
+// 残留的 NULL 行只能是绕过 Go 路径的手工行，不得兑换。
 func (s *Store) FileGrantByToken(ctx context.Context, token string) (*FileGrant, error) {
 	g := &FileGrant{Token: token}
 	err := s.pool.QueryRow(ctx, `
 		SELECT organization_id, document_id, object_key, mime, scope, expires_at, subject_id, resource_id, filename
 		FROM control.file_grants
 		WHERE token = $1 AND revoked = FALSE
-		  AND (expires_at IS NULL OR expires_at > now())`, token).
+		  AND expires_at > now()`, token).
 		Scan(&g.OrganizationID, &g.DocumentID, &g.ObjectKey, &g.MIME, &g.Scope, &g.ExpiresAt, &g.SubjectID, &g.ResourceID, &g.Filename)
 	if err != nil {
 		return nil, norows(err)
@@ -71,6 +57,14 @@ func (s *Store) FileGrantByToken(ctx context.Context, token string) (*FileGrant,
 
 // StableGrantFor reuses a stable bearer capability within one authorized subject.
 // An empty objectKey is read-only: downloads cannot manufacture an empty grant.
+//
+// 有界寿命：新签的行 expires_at = now() + fileGrantTTL（24h，见 0017 列默认）。
+// FileGrantByToken 本来就把过期当无效，所以旧行到期自动失效；调用方到期后
+// 重新 StableGrantFor 拿新 token —— 凭证不再是"一次签发、永久有效"。
+// 续签只复用剩余寿命还长于 fileGrantRenewMargin 的行：签出去的 URL 要等网关
+// 排队后才被抓取，复用一张只剩几分钟的凭证会让解析在抓取时 404。
+// 已过期/已撤销的 capability 永远不再复活 —— 延长旧 token 等于把失效凭证救回来，
+// 所以临近到期的行是撤销后换新 token，而不是改它的 expires_at。
 func (s *Store) StableGrantFor(ctx context.Context, orgID, documentID, subjectID, resourceID, objectKey, mime, filename string) (*FileGrant, error) {
 	if subjectID == "" {
 		return nil, ErrNotFound
@@ -81,7 +75,7 @@ func (s *Store) StableGrantFor(ctx context.Context, orgID, documentID, subjectID
             SELECT token, object_key, mime, filename FROM control.file_grants
             WHERE organization_id=$1 AND document_id=$2 AND subject_id=$3
               AND resource_id=$4 AND scope='source' AND revoked=FALSE
-              AND (expires_at IS NULL OR expires_at > now())`, orgID, documentID, subjectID, resourceID).
+              AND expires_at > now()`, orgID, documentID, subjectID, resourceID).
 			Scan(&g.Token, &g.ObjectKey, &g.MIME, &g.Filename)
 		return g, norows(err)
 	}
@@ -98,19 +92,23 @@ func (s *Store) StableGrantFor(ctx context.Context, orgID, documentID, subjectID
 	}
 	if _, err = tx.Exec(ctx, `UPDATE control.file_grants SET revoked=TRUE
 		WHERE organization_id=$1 AND document_id=$2 AND subject_id=$3 AND resource_id=$4
-		  AND scope='source' AND revoked=FALSE AND expires_at <= now()`,
-		orgID, documentID, subjectID, resourceID); err != nil {
+		  AND scope='source' AND revoked=FALSE AND expires_at <= now() + $5::interval`,
+		orgID, documentID, subjectID, resourceID, fileGrantRenewMargin.String()); err != nil {
 		return nil, err
 	}
 	// The partial unique index also protects callers outside this renewal path.
+	// expires_at 由 Go 侧显式写（列默认是兜底，直写 SQL 不漏无界行）；
+	// 存量行靠 0017 回填，之后没有 NULL 行。
+	expiresAt := time.Now().Add(fileGrantTTL)
+	g.ExpiresAt = &expiresAt
 	err = tx.QueryRow(ctx, `
         INSERT INTO control.file_grants
-          (token, organization_id, document_id, subject_id, resource_id, object_key, mime, filename, scope)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'source')
+          (token, organization_id, document_id, subject_id, resource_id, object_key, mime, filename, scope, expires_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'source',$9)
         ON CONFLICT (organization_id, document_id, scope, subject_id, resource_id) WHERE revoked=FALSE AND subject_id<>''
         DO UPDATE SET filename=CASE WHEN file_grants.filename='' THEN EXCLUDED.filename ELSE file_grants.filename END
         RETURNING token, object_key, mime, filename`,
-		auth.NewToken(), orgID, documentID, subjectID, resourceID, objectKey, mime, filename).
+		auth.NewToken(), orgID, documentID, subjectID, resourceID, objectKey, mime, filename, expiresAt).
 		Scan(&g.Token, &g.ObjectKey, &g.MIME, &g.Filename)
 	if err != nil {
 		return nil, err
@@ -123,6 +121,18 @@ func (s *Store) StableGrantFor(ctx context.Context, orgID, documentID, subjectID
 	}
 	return g, nil
 }
+
+// fileGrantTTL 是稳定文件凭证的有界寿命：24h。
+// 与 PresignTTL（15 分钟级、浏览器直链）不同 —— 这是服务端到服务端的
+// capability，太短会导致网关每次解析都重新换 token 打破 doc_hash 幂等，
+// 太长等于永久凭证。24h 是"每天最多换一次"的折中。
+// 不要加新配置项：TTL 的来源只有两处且必须同值 —— 这里的 fileGrantTTL
+// 与 0017 迁移的列默认；加配置项只会多一个漂移源。
+const fileGrantTTL = 24 * time.Hour
+
+// fileGrantRenewMargin：剩余寿命不足它的凭证不再复用，换一张新的（见 StableGrantFor）。
+// 取 TTL 的一半：每份文档每天至多换两次 token，签出去的 URL 至少还能用 12h。
+const fileGrantRenewMargin = fileGrantTTL / 2
 
 func (s *Store) RevokeFileGrants(ctx context.Context, orgID, documentID string) error {
 	_, err := s.pool.Exec(ctx, `
@@ -143,6 +153,66 @@ type AuditEvent struct {
 	RequestID      *string         `json:"request_id"`
 	Detail         json.RawMessage `json:"detail"`
 	OrganizationID string          `json:"-"`
+}
+
+// FederationCorrelation 是联邦生命周期的关联元组（plan.md §8.6）：
+// probe → admission → task/step → delivery 的端到端追踪就靠这几个 ID。
+// 进 audit_events.detail 的同名字段，也进 obs 的统一日志字段
+// （见 obs.FederationFields），两边同名 —— 查审计的人
+// 与查日志的人用同一组 key。
+//
+// 全指针：没走联邦的审计一行也不写，保持老事件字节不变。
+type FederationCorrelation struct {
+	RootTaskID    *string `json:"root_task_id,omitempty"`
+	StepID        *string `json:"step_id,omitempty"`
+	ProbeID       *string `json:"probe_id,omitempty"`
+	AdmissionID   *string `json:"admission_id,omitempty"`
+	Attempt       *int    `json:"attempt,omitempty"`
+	CoverageRef   *string `json:"coverage_ref,omitempty"`
+	DeliveryState *string `json:"delivery_state,omitempty"`
+}
+
+// AuditFederation 把关联元组写进 detail 再调 Audit。
+// 关联 ID 不是密钥，原样透；detail 里已有的同名字段不覆盖 ——
+// 调用方显式给的值优先。密钥红线与 Audit 同（原文/JWT/key/token/URL 查询串/内容不进审计）。
+func (s *Store) AuditFederation(ctx context.Context, orgID, actorID, actorKind, action, target,
+	requestID string, detail map[string]any, corr FederationCorrelation) {
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	mergeCorrelation(detail, corr)
+	s.Audit(ctx, orgID, actorID, actorKind, action, target, requestID, detail)
+}
+
+// mergeCorrelation 把关联元组写进 detail：与 obs.FederationFields 同名同义。
+// detail 里已有的同名字段不覆盖 —— 调用方显式给的值优先；空指针不写键。
+func mergeCorrelation(detail map[string]any, corr FederationCorrelation) {
+	put := func(k string, v any) {
+		if _, ok := detail[k]; !ok && v != nil {
+			detail[k] = v
+		}
+	}
+	if corr.RootTaskID != nil {
+		put("root_task_id", *corr.RootTaskID)
+	}
+	if corr.StepID != nil {
+		put("step_id", *corr.StepID)
+	}
+	if corr.ProbeID != nil {
+		put("probe_id", *corr.ProbeID)
+	}
+	if corr.AdmissionID != nil {
+		put("admission_id", *corr.AdmissionID)
+	}
+	if corr.Attempt != nil {
+		put("attempt", *corr.Attempt)
+	}
+	if corr.CoverageRef != nil {
+		put("coverage_ref", *corr.CoverageRef)
+	}
+	if corr.DeliveryState != nil {
+		put("delivery_state", *corr.DeliveryState)
+	}
 }
 
 // Audit 记一条审计。
@@ -176,8 +246,10 @@ func (s *Store) Audit(ctx context.Context, orgID, actorID, actorKind, action, ta
 
 // AuditPeerDenialOnce records a peer credential denial attributed to issuer,
 // keeping snapshot_id, credential_jti and reason in detail, but at most one
-// row per (organization, issuer) per minute. The check+insert runs in one
-// short transaction that first takes pg_advisory_xact_lock over
+// row per (organization, issuer) per minute. The denial carries the verified
+// credential's federation correlation (root/step): tracing a federated read
+// that died on trust re-check starts from this row. The check+insert runs in
+// one short transaction that first takes pg_advisory_xact_lock over
 // ("peer-denial-audit", org, issuer) — the same hashtextextended key
 // convention the file-grant renewal path uses — so concurrent requests
 // serialize on the same predicate and exactly one wins even under READ
@@ -189,10 +261,12 @@ func (s *Store) Audit(ctx context.Context, orgID, actorID, actorKind, action, ta
 // audit_org_at_idx range scan. No migration. Like Audit it is fire-and-forget
 // (write failures only log), so denials never fail because the audit write did.
 func (s *Store) AuditPeerDenialOnce(ctx context.Context, orgID, issuer, action, target,
-	requestID string, detail map[string]any) {
+	requestID string, detail map[string]any, corr FederationCorrelation) {
 	if detail == nil {
 		detail = map[string]any{}
 	}
+	// 关联元组进 detail，与 AuditFederation 同键：显式 detail 优先，空指针不写。
+	mergeCorrelation(detail, corr)
 	payload, err := json.Marshal(detail)
 	if err != nil {
 		payload = []byte(`{}`)

@@ -42,7 +42,9 @@ func scopeCatalogFixture(t *testing.T, f *discoveryFixture, mode *atomic.Value) 
 				status = 409
 			}
 			w.WriteHeader(status)
-			json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code}, "revoked_collection_ids": []string{"collection-a"}})
+			// 410 携带原快照绑定（失效的快照也要自证身份）：
+			// 缺了这些 handler 无法确认"撤的是哪一份"，只能当 unknown。
+			json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code}, "revoked_collection_ids": []string{"collection-a"}, "snapshot_id": "catalog-stable", "scope_id": r.URL.Query().Get("scope_id"), "caller_scope_hash": r.Header.Get(identity.HeaderCallerScope), "origin_node_id": f.server.nodeIdentity.NodeID()})
 			return
 		}
 		cursor := r.URL.Query().Get("cursor")
@@ -121,11 +123,21 @@ func TestScopeHTTPPersistentWirePagingIsolationAndRevocation(t *testing.T) {
 	if revoked.Targets[0].State != "revoked" || revoked.TotalTargets != 2 || revoked.ManifestDigest != out.Manifest.ManifestDigest {
 		t.Fatalf("revocation dropped target %+v", revoked)
 	}
+	if revoked.NextCursor == nil {
+		t.Fatal("revocation lost second target page")
+	}
+	other := decodeDiscovery[discovery.ScopeTargetPage](t, requestDiscovery(t, f.handler, "GET", path+"/targets?cursor="+*revoked.NextCursor, f.aliceToken, nil), 200)
+	if len(other.Targets) != 1 || other.Targets[0].State != "unreachable" {
+		t.Fatalf("unrevoked same-origin target not unreachable after snapshot death %+v", other)
+	}
 	before := calls.Load()
 	mode.Store("normal")
 	repeated := decodeDiscovery[discovery.ScopeTargetPage](t, requestDiscovery(t, f.handler, "GET", path+"/targets", f.aliceToken, nil), 200)
-	if repeated.Targets[0].State != "revoked" || calls.Load() != before {
-		t.Fatal("later response resurrected revoked scope")
+	if repeated.Targets[0].State != "revoked" {
+		t.Fatalf("later response resurrected revoked scope: %+v", repeated)
+	}
+	if calls.Load() != before {
+		t.Fatalf("revoked snapshot re-polled producer: calls=%d before=%d", calls.Load(), before)
 	}
 	terminal := decodeDiscovery[discovery.ScopeTargetPage](t, requestDiscovery(t, f.handler, "GET", path+"/targets?cursor="+out.TerminalCursor, f.aliceToken, nil), 200)
 	if !terminal.Complete || len(terminal.Targets) != 0 || terminal.NextCursor != nil {
@@ -162,5 +174,62 @@ func TestScopeHTTPPartialForInvalidEnumerationAndBudget(t *testing.T) {
 	out := decodeDiscovery[discovery.ScopeEnvelope](t, requestDiscovery(t, f.handler, "POST", "/api/v1/federation/scopes", f.aliceToken, map[string]any{"operation": "search", "max_members": 1}), 201)
 	if out.Manifest.EnumerationState != "partial" || out.TotalTargets != 1 || out.Manifest.UnexpandedSubtrees[0].Reason != "budget_exhausted" {
 		t.Fatalf("budget incomplete hidden %+v", out)
+	}
+}
+
+func TestScopeHTTPUnboundCatalogLeavesRemoteTargetsAttemptable(t *testing.T) {
+	f := discoveryPGFixture(t)
+	producer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "internal"}})
+	}))
+	t.Cleanup(producer.Close)
+	f.server.cfg.CorpusURL = producer.URL
+	f.server.corpus, _ = proxy.New("corpus", producer.URL, f.server.cfg.ServiceToken)
+	registration := remoteRegistration(t, true)
+	approveEnumerableNode(t, f, registration)
+	pNode := registration.Descriptor.NodeID
+	p := newFakePeerServer(pNode, nil, []discovery.CollectionRef{{CollectionID: "p-col", OriginNodeID: pNode}})
+	f.server.peers = peerDirectoryFor(t, map[string]*httptest.Server{pNode: p.serve(t)})
+	out := createScope(t, f, map[string]any{"operation": "search"})
+	if out.TotalTargets != 1 {
+		t.Fatalf("remote target missing: %+v", out.Manifest)
+	}
+	page := decodeDiscovery[discovery.ScopeTargetPage](t, requestDiscovery(t, f.handler, "GET", "/api/v1/federation/scopes/"+out.Manifest.ScopeID+"/targets", f.aliceToken, nil), 200)
+	for _, target := range page.Targets {
+		if target.TargetKey.OriginNodeID == pNode && target.State != "not_attempted" {
+			t.Fatalf("unbound catalog poisoned remote target: %+v", target)
+		}
+	}
+}
+
+func TestScopeHTTPUnbound410IsUnreachableNotRevoked(t *testing.T) {
+	f := discoveryPGFixture(t)
+	var mode atomic.Value
+	mode.Store("normal")
+	scopeCatalogFixture(t, f, &mode)
+	out := decodeDiscovery[discovery.ScopeEnvelope](t, requestDiscovery(t, f.handler, "POST", "/api/v1/federation/scopes", f.aliceToken, map[string]any{"operation": "search", "page_size": 1}), 201)
+	path := "/api/v1/federation/scopes/" + out.Manifest.ScopeID + "/targets"
+	for _, scenario := range []string{"bare", "forged_binding"} {
+		producer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body := map[string]any{"error": map[string]string{"code": "catalog_snapshot_invalid"}, "revoked_collection_ids": []string{"collection-a"}}
+			if scenario == "forged_binding" {
+				body["snapshot_id"] = "00000000000000000000000000000000"
+				body["scope_id"] = out.Manifest.ScopeID
+				body["caller_scope_hash"] = r.Header.Get(identity.HeaderCallerScope)
+				body["origin_node_id"] = f.server.nodeIdentity.NodeID()
+			}
+			w.WriteHeader(410)
+			_ = json.NewEncoder(w).Encode(body)
+		}))
+		t.Cleanup(producer.Close)
+		f.server.cfg.CorpusURL = producer.URL
+		f.server.corpus, _ = proxy.New("corpus", producer.URL, f.server.cfg.ServiceToken)
+		page := decodeDiscovery[discovery.ScopeTargetPage](t, requestDiscovery(t, f.handler, "GET", path, f.aliceToken, nil), 200)
+		if len(page.Targets) != 1 || page.Targets[0].State != "unreachable" {
+			producer.Close()
+			t.Fatalf("%s 410 trusted as revocation: %+v", scenario, page)
+		}
+		producer.Close()
 	}
 }

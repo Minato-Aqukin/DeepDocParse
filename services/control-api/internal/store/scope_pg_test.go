@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,5 +164,147 @@ func TestScopePGDirectMembersAreUnknownNotInventedCollections(t *testing.T) {
 		if u.NodeID == "private-node" {
 			t.Fatal("private topology leaked")
 		}
+	}
+}
+
+func TestScopePGRevocationPairsOriginAndCollection(t *testing.T) {
+	s, org, opts := scopeFixture(t)
+	ctx := context.Background()
+	registerApproved(t, s, org, testNode("remote-x", true))
+	id := auth.NewID()
+	remote := discovery.RemoteExpansion{
+		Targets: []discovery.TargetKey{{OriginNodeID: "remote-x", CollectionID: "docs", Operation: "search"}},
+	}
+	if _, err := s.CreateExpandedScope(ctx, org, "alice", "scope-alice", "local-node", id, false, opts, testScopeCatalog(id), remote); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RevokeScopeCollections(ctx, org, "scope-alice", id, "local-node", []string{"docs"}); err != nil {
+		t.Fatal(err)
+	}
+	collect := func() map[string]string {
+		t.Helper()
+		states := map[string]string{}
+		cursor := ""
+		for {
+			page, err := s.ScopeTargets(ctx, org, "alice", "scope-alice", id, cursor, "local-node", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, target := range page.Targets {
+				states[target.TargetKey.OriginNodeID+"\x00"+target.TargetKey.CollectionID] = target.State
+			}
+			if page.Complete || page.NextCursor == nil {
+				break
+			}
+			cursor = *page.NextCursor
+		}
+		return states
+	}
+	paired := collect()
+	if len(paired) != 3 {
+		t.Fatalf("expected 2 local + 1 remote targets, got %+v", paired)
+	}
+	for key, state := range paired {
+		want := "not_attempted"
+		if strings.HasPrefix(key, "local-node\x00") {
+			// The named ("docs") collection is not in this origin's catalog,
+			// so nothing is revoked — but the origin's snapshot is still
+			// invalid, and its unrevoked targets read unreachable.
+			want = "unreachable"
+		}
+		if state != want {
+			t.Fatalf("unpaired revocation leaked: %s=%s want %s", key, state, want)
+		}
+	}
+	if err := s.RevokeScopeCollections(ctx, org, "scope-alice", id, "local-node", []string{"collection-a"}); err != nil {
+		t.Fatal(err)
+	}
+	after := collect()
+	if after["local-node\x00collection-a"] != "revoked" {
+		t.Fatalf("paired local target not revoked: %+v", after)
+	}
+	if after["local-node\x00collection-b"] != "unreachable" || after["remote-x\x00docs"] != "not_attempted" {
+		t.Fatalf("revocation crossed its origin pair: %+v", after)
+	}
+	if err := s.RevokeScopeCollections(ctx, org, "scope-alice", id, "local-node", nil); err != nil {
+		t.Fatal(err)
+	}
+	cleared := collect()
+	for key, state := range cleared {
+		want := "revoked"
+		if key == "remote-x\x00docs" {
+			want = "not_attempted"
+		}
+		if state != want {
+			t.Fatalf("nil-IDs revoke crossed origins: %s=%s", key, state)
+		}
+	}
+	if err := s.RevokeScopeCollections(ctx, org, "scope-alice", id, "", []string{"docs"}); !errors.Is(err, ErrDiscoveryConflict) {
+		t.Fatalf("empty origin must fail loud, got %v", err)
+	}
+}
+
+func TestScopePGUnboundCatalogLeavesRemoteTargetsAttemptable(t *testing.T) {
+	s, org, opts := scopeFixture(t)
+	ctx := context.Background()
+	registerApproved(t, s, org, testNode("remote-x", true))
+	id := auth.NewID()
+	remote := discovery.RemoteExpansion{
+		Targets: []discovery.TargetKey{{OriginNodeID: "remote-x", CollectionID: "docs", Operation: "search"}},
+	}
+	if _, err := s.CreateExpandedScope(ctx, org, "alice", "scope-alice", "local-node", id, false, opts, discovery.CollectionCatalog{}, remote); err != nil {
+		t.Fatal(err)
+	}
+	cursor := ""
+	seenRemote := false
+	for {
+		page, err := s.ScopeTargets(ctx, org, "alice", "scope-alice", id, cursor, "local-node", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, target := range page.Targets {
+			if target.TargetKey.OriginNodeID == "remote-x" {
+				seenRemote = true
+				if target.State != "not_attempted" {
+					t.Fatalf("unbound catalog poisoned remote target: %+v", target)
+				}
+			}
+		}
+		if page.Complete || page.NextCursor == nil {
+			break
+		}
+		cursor = *page.NextCursor
+	}
+	if !seenRemote {
+		t.Fatal("remote target missing from frozen scope")
+	}
+}
+
+func TestScopePGBoundaryExcludedMembersReportDeniedPartial(t *testing.T) {
+	s, org, opts := scopeFixture(t)
+	ctx := context.Background()
+	registerApproved(t, s, org, testNode("excluded-leaf", true))
+	snap, err := s.CreateMemberSnapshot(ctx, org, "alice", "scope-alice", "local-node", false, 100, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts.MemberSnapshotID = snap.ID
+	opts.AllowedNodeIDs = []string{"local-node"}
+	id := auth.NewID()
+	out, err := s.CreateScope(ctx, org, "alice", "scope-alice", "local-node", id, false, opts, testScopeCatalog(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Manifest.EnumerationState != "partial" {
+		t.Fatalf("narrowed scope claimed sealed: %+v", out.Manifest)
+	}
+	found := false
+	for _, unknown := range out.Manifest.UnexpandedSubtrees {
+		if unknown.NodeID == "excluded-leaf" && unknown.Reason == "denied" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("boundary exclusion not recorded as denied: %+v", out.Manifest.UnexpandedSubtrees)
 	}
 }

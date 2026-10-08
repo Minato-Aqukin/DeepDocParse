@@ -29,12 +29,14 @@ type fakeKeyStore struct {
 	role    rbac.Role
 	authErr error
 
-	quotaErr error
+	quotaErr    error
+	keyQuotaErr error
 
-	mu        sync.Mutex
-	touched   []string
-	auditLog  []string
-	quotaCall int
+	mu           sync.Mutex
+	touched      []string
+	auditLog     []string
+	quotaCall    int
+	keyQuotaCall int
 }
 
 func (f *fakeKeyStore) AuthenticateAPIKey(context.Context, string) (*store.APIKey, rbac.Role, error) {
@@ -44,11 +46,18 @@ func (f *fakeKeyStore) AuthenticateAPIKey(context.Context, string) (*store.APIKe
 	return f.key, f.role, nil
 }
 
-func (f *fakeKeyStore) ReserveQuota(context.Context, string, int) error {
+func (f *fakeKeyStore) CheckQuota(context.Context, string, int) error {
 	f.mu.Lock()
 	f.quotaCall++
 	f.mu.Unlock()
 	return f.quotaErr
+}
+
+func (f *fakeKeyStore) CheckKeyQuota(context.Context, string, int) error {
+	f.mu.Lock()
+	f.keyQuotaCall++
+	f.mu.Unlock()
+	return f.keyQuotaErr
 }
 
 func (f *fakeKeyStore) TouchAPIKey(_ context.Context, id string) {
@@ -195,6 +204,48 @@ func TestGateDeniesMissingScopeAndAudits(t *testing.T) {
 	}
 }
 
+// TestGateEnforcesOneScopePerPlane：每个平面只认自己的
+// 作用域 —— parse key 调 chat 平面 403，chat key 调 chat 平面放行。
+// 路由表把 scope 写进 requireAPIKey 的那一行，就是这里钉住的行为。
+func TestGateEnforcesOneScopePerPlane(t *testing.T) {
+	planes := []rbac.Scope{
+		rbac.ScopeParse, rbac.ScopeChat, rbac.ScopeEmbeddings,
+		rbac.ScopeExtract, rbac.ScopeRerank, rbac.ScopeRead,
+	}
+	for _, plane := range planes {
+		t.Run(string(plane), func(t *testing.T) {
+			// 只带本平面 scope：本平面放行
+			key := liveKey()
+			key.Scopes = []rbac.Scope{plane}
+			if _, reached, _ := run(t, &fakeKeyStore{key: key, role: rbac.Admin}, nil, plane, "Bearer sk-live"); !reached {
+				t.Fatalf("只带 %s 的 key 调 %s 平面被拦了", plane, plane)
+			}
+			// 只带 parse：非 parse/extract 平面一律 403 scope_denied
+			if plane != rbac.ScopeParse && plane != rbac.ScopeExtract {
+				parseOnly := liveKey()
+				parseOnly.Scopes = []rbac.Scope{rbac.ScopeParse}
+				rec, reached, _ := run(t, &fakeKeyStore{key: parseOnly, role: rbac.Admin}, nil, plane, "Bearer sk-live")
+				if reached || rec.Code != http.StatusForbidden || errCode(t, rec) != "scope_denied" {
+					t.Errorf("只带 parse 的 key 调 %s 平面应当 403 scope_denied，得到 %d %s",
+						plane, rec.Code, rec.Body.String())
+				}
+			}
+		})
+	}
+	// 只带 chat 的 key 调 chat 放行、调 parse 403 —— 跨平面调用必须 403。
+	t.Run("chat-key", func(t *testing.T) {
+		chatOnly := liveKey()
+		chatOnly.Scopes = []rbac.Scope{rbac.ScopeChat}
+		if _, reached, _ := run(t, &fakeKeyStore{key: chatOnly, role: rbac.Admin}, nil, rbac.ScopeChat, "Bearer sk-live"); !reached {
+			t.Fatal("只带 chat 的 key 调 chat 平面被拦了")
+		}
+		rec, reached, _ := run(t, &fakeKeyStore{key: chatOnly, role: rbac.Admin}, nil, rbac.ScopeParse, "Bearer sk-live")
+		if reached || rec.Code != http.StatusForbidden {
+			t.Errorf("只带 chat 的 key 调 parse 平面应当 403，得到 %d", rec.Code)
+		}
+	})
+}
+
 // 签发时带 parse 的 key，主人降成 viewer 之后不能再用 parse：角色每次请求现读，
 // 作用域只是 key 的上限，不是一份在签发时冻结的权限。403 且留审计。
 func TestGateDeniesScopeTheOwnersCurrentRoleNoLongerAllows(t *testing.T) {
@@ -296,6 +347,11 @@ func TestGateChecksQuotaOnlyOnBillablePlanes(t *testing.T) {
 		{rbac.ScopeParse, 1},
 		{rbac.ScopeExtract, 1},
 		{rbac.ScopeRead, 0},
+		// 查询类平面（chat/embeddings/rerank）不按页计费，
+		// 配额一律不查 —— 以前它们错挂 ScopeParse，配额被误扣。
+		{rbac.ScopeChat, 0},
+		{rbac.ScopeEmbeddings, 0},
+		{rbac.ScopeRerank, 0},
 	} {
 		t.Run(string(tc.scope), func(t *testing.T) {
 			key := liveKey()
@@ -346,5 +402,55 @@ func TestGateSurfacesQuotaLookupFailureAsServerError(t *testing.T) {
 	}
 	if reached {
 		t.Error("下游被调到了")
+	}
+}
+
+// key 自己的 quota_pages 在计费平面上查 ——
+// 有值才查（NULL = 不限），用尽 402。
+func TestGateChecksKeyQuotaOnBillablePlanes(t *testing.T) {
+	quota := 10
+	for _, tc := range []struct {
+		name      string
+		scope     rbac.Scope
+		quota     *int
+		wantCalls int
+	}{
+		{"parse 有值查一次", rbac.ScopeParse, &quota, 1},
+		{"extract 有值查一次", rbac.ScopeExtract, &quota, 1},
+		{"parse 不限不查", rbac.ScopeParse, nil, 0},
+		{"read 不查", rbac.ScopeRead, &quota, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := liveKey()
+			key.Scopes = []rbac.Scope{tc.scope}
+			key.QuotaPages = tc.quota
+			keys := &fakeKeyStore{key: key, role: rbac.Admin}
+			if _, reached, _ := run(t, keys, nil, tc.scope, "Bearer sk-live"); !reached {
+				t.Fatal("应当放行")
+			}
+			if keys.keyQuotaCall != tc.wantCalls {
+				t.Errorf("key 配额查了 %d 次，应为 %d 次", keys.keyQuotaCall, tc.wantCalls)
+			}
+		})
+	}
+}
+
+// key 配额用尽是 402，下游不许碰。
+func TestGateReturns402WhenKeyQuotaExhausted(t *testing.T) {
+	quota := 1
+	key := liveKey()
+	key.Scopes = []rbac.Scope{rbac.ScopeParse}
+	key.QuotaPages = &quota
+	keys := &fakeKeyStore{key: key, role: rbac.Admin, keyQuotaErr: store.ErrQuotaExceeded}
+
+	rec, reached, _ := run(t, keys, nil, rbac.ScopeParse, "Bearer sk-live")
+	if rec.Code != http.StatusPaymentRequired {
+		t.Errorf("状态码 = %d，应为 402", rec.Code)
+	}
+	if got := errCode(t, rec); got != "quota_exceeded" {
+		t.Errorf("错误码 = %q，应为 quota_exceeded", got)
+	}
+	if reached {
+		t.Error("key 配额用尽后下游还是被调到了")
 	}
 }

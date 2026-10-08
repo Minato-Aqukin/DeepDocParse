@@ -575,3 +575,114 @@ func TestExpandScopeUnconfiguredChildrenWithoutLocalRevocationStayUnknown(t *tes
 		t.Fatalf("unconfigured children without local revocation changed reason: %+v", out.Unknowns)
 	}
 }
+
+func TestExpandScopeFrozenApprovalSetExcludesPostSnapshotApprovals(t *testing.T) {
+	p := &fakeDirectory{
+		members:     []PeerMember{federatedPeerMember("node-x", true)},
+		collections: []CollectionRef{{CollectionID: "p-col", OriginNodeID: "node-p"}},
+	}
+	pServer := p.serve(t, "node-p")
+	x := &fakeDirectory{collections: []CollectionRef{{CollectionID: "x-col", OriginNodeID: "node-x"}}}
+	xServer := x.serve(t, "node-x")
+	dir := directoryFor(t, map[string]string{"node-p": pServer.URL, "node-x": xServer.URL})
+
+	// node-x is approved after the snapshot froze: it is missing from the frozen
+	// ApprovedNodeIDs even though P's live directory already lists it. P 404s the
+	// subtree read, so node-x must surface as unknown via the subtree path and
+	// never receive a direct directory or catalog pull.
+	out := ExpandScope(context.Background(), dir, ExpansionInput{
+		Members: []Member{federatedMemberDescriptor("node-p", true)}, LocalNodeID: "node-a",
+		Operation: "search", ApprovedNodeIDs: map[string]bool{"node-p": true},
+		MaxTargets: 100, MaxRequests: 64, MaxNodes: 32, Now: time.Now().UTC(),
+	})
+	if x.count() != 0 {
+		t.Fatalf("post-snapshot approval contacted directly: %d requests %v", x.count(), x.paths)
+	}
+	reasons := map[string]string{}
+	for _, unknown := range out.Unknowns {
+		reasons[unknown.NodeID] = unknown.Reason
+	}
+	if reasons["node-x"] != "unknown" {
+		t.Fatalf("post-snapshot approval must arrive as unknown via the subtree path: %+v", out.Unknowns)
+	}
+	for _, target := range out.Targets {
+		if target.OriginNodeID == "node-x" {
+			t.Fatalf("post-snapshot approval produced a frozen target: %+v", out.Targets)
+		}
+	}
+
+	// Control case: when the frozen set already contains node-x, the same live
+	// directory is contacted directly for both its directory and its catalog.
+	x2 := &fakeDirectory{collections: []CollectionRef{{CollectionID: "x-col", OriginNodeID: "node-x"}}}
+	x2Server := x2.serve(t, "node-x")
+	dir2 := directoryFor(t, map[string]string{"node-p": pServer.URL, "node-x": x2Server.URL})
+	control := ExpandScope(context.Background(), dir2, ExpansionInput{
+		Members: []Member{federatedMemberDescriptor("node-p", true)}, LocalNodeID: "node-a",
+		Operation: "search", ApprovedNodeIDs: map[string]bool{"node-p": true, "node-x": true},
+		MaxTargets: 100, MaxRequests: 64, MaxNodes: 32, Now: time.Now().UTC(),
+	})
+	if x2.countPath("/api/v1/federation/members") == 0 || x2.countPath("/api/v1/federation/collections") == 0 {
+		t.Fatalf("frozen approval not contacted directly: members=%d catalogs=%d", x2.countPath("/api/v1/federation/members"), x2.countPath("/api/v1/federation/collections"))
+	}
+	found := false
+	for _, target := range control.Targets {
+		if target.OriginNodeID == "node-x" && target.CollectionID == "x-col" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("frozen approval produced no direct target: %+v", control.Targets)
+	}
+}
+
+func TestExpandScopeAllowedBoundaryRecordsDeniedWithoutBudget(t *testing.T) {
+	p := &fakeDirectory{
+		members:     []PeerMember{federatedPeerMember("node-direct-excluded", true), federatedPeerMember("node-child", true)},
+		collections: []CollectionRef{{CollectionID: "p-col", OriginNodeID: "node-p"}},
+	}
+	pServer := p.serve(t, "node-p")
+	child := &fakeDirectory{
+		members:     []PeerMember{federatedPeerMember("node-transitive-excluded", true)},
+		collections: []CollectionRef{{CollectionID: "child-col", OriginNodeID: "node-child"}},
+	}
+	childServer := child.serve(t, "node-child")
+	excluded := &fakeDirectory{}
+	excludedServer := excluded.serve(t, "node-direct-excluded")
+	transitive := &fakeDirectory{}
+	transitiveServer := transitive.serve(t, "node-transitive-excluded")
+	dir := directoryFor(t, map[string]string{
+		"node-p": pServer.URL, "node-child": childServer.URL,
+		"node-direct-excluded": excludedServer.URL, "node-transitive-excluded": transitiveServer.URL,
+	})
+	out := ExpandScope(context.Background(), dir, ExpansionInput{
+		Members: []Member{
+			federatedMemberDescriptor("node-p", true),
+			federatedMemberDescriptor("node-direct-excluded", true),
+		},
+		LocalNodeID: "node-a", Operation: "search",
+		AllowedNodeIDs: []string{"node-a", "node-p", "node-child"},
+		MaxTargets:     100, MaxRequests: 64, MaxNodes: 32, Now: time.Now().UTC(),
+	})
+	reasons := map[string]string{}
+	for _, unknown := range out.Unknowns {
+		reasons[unknown.NodeID] = unknown.Reason
+	}
+	if reasons["node-direct-excluded"] != "denied" || reasons["node-transitive-excluded"] != "denied" {
+		t.Fatalf("boundary exclusions must be denied unknowns: %+v", out.Unknowns)
+	}
+	if excluded.count() != 0 || transitive.count() != 0 {
+		t.Fatalf("boundary-excluded nodes contacted: direct=%d transitive=%d", excluded.count(), transitive.count())
+	}
+	if out.Consumption.Requests != p.count()+child.count() {
+		t.Fatalf("denied unknowns consumed budget: %+v", out.Consumption)
+	}
+	found := false
+	for _, target := range out.Targets {
+		if target.OriginNodeID == "node-transitive-excluded" {
+			found = true
+		}
+	}
+	if found {
+		t.Fatalf("boundary-excluded origin produced a target: %+v", out.Targets)
+	}
+}

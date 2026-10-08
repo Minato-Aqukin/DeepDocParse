@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -47,7 +48,18 @@ func (s *Store) DefaultOrganization(ctx context.Context) (*Organization, error) 
 	return org, nil
 }
 
-// ---------------------------------------------------------------- 用户
+// OrganizationExists 只回答"这个组织在不在"：handleInternalUsage 用它把未知
+// org 翻成 404，而不是等 usage_ledger 的 FK 在 500 里炸。
+// RecordUsage 自己不做这个判定 —— 它是"只 INSERT"的账本写路径，
+// org 是否存在由调用它的 handler 在入口处查。
+func (s *Store) OrganizationExists(ctx context.Context, orgID string) error {
+	var one int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT 1 FROM control.organizations WHERE id = $1`, orgID).Scan(&one); err != nil {
+		return norows(err)
+	}
+	return nil
+}
 
 type User struct {
 	ID             string     `json:"id"`
@@ -120,14 +132,18 @@ func (s *Store) CreateUser(ctx context.Context, orgID, username, email, password
 func (s *Store) UserByUsername(ctx context.Context, orgID, username string) (*User, error) {
 	u := &User{OrganizationID: orgID}
 	var role string
+	var hash *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT u.id, u.username, u.email, u.password_hash, u.is_active, u.created_at, m.role
 		FROM control.users u
 		JOIN control.memberships m ON m.user_id = u.id AND m.organization_id = $1
 		WHERE u.username = $2`, orgID, username).
-		Scan(&u.ID, &u.Username, &u.Email, &u.passwordHash, &u.active, &u.CreatedAt, &role)
+		Scan(&u.ID, &u.Username, &u.Email, &hash, &u.active, &u.CreatedAt, &role)
 	if err != nil {
 		return nil, norows(err)
+	}
+	if hash != nil {
+		u.passwordHash = *hash
 	}
 	parsed, err := rbac.Parse(role)
 	if err != nil {
@@ -140,14 +156,18 @@ func (s *Store) UserByUsername(ctx context.Context, orgID, username string) (*Us
 func (s *Store) UserByID(ctx context.Context, orgID, userID string) (*User, error) {
 	u := &User{OrganizationID: orgID}
 	var role string
+	var hash *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT u.id, u.username, u.email, u.password_hash, u.is_active, u.created_at, m.role
 		FROM control.users u
 		JOIN control.memberships m ON m.user_id = u.id AND m.organization_id = $1
 		WHERE u.id = $2`, orgID, userID).
-		Scan(&u.ID, &u.Username, &u.Email, &u.passwordHash, &u.active, &u.CreatedAt, &role)
+		Scan(&u.ID, &u.Username, &u.Email, &hash, &u.active, &u.CreatedAt, &role)
 	if err != nil {
 		return nil, norows(err)
+	}
+	if hash != nil {
+		u.passwordHash = *hash
 	}
 	parsed, err := rbac.Parse(role)
 	if err != nil {
@@ -159,9 +179,19 @@ func (s *Store) UserByID(ctx context.Context, orgID, userID string) (*User, erro
 
 // UpsertOIDCUser 按 (issuer, subject) 找人；没有就建一个并加入组织。
 // **subject 才是稳定标识**，email 会变、username 会重名。
+//
+// 并发与占位两道防护都在这里：
+//   - 先在事务里 ON CONFLICT DO NOTHING 插，再按 (issuer, subject) 回查 ——
+//     两个回调同时首次登录不会 double-insert，总有一个拿到对方建好的行；
+//   - username/email 被人提前占位（本地预注册）不得让 OIDC 登录 500：
+//     username 冲突时加数字后缀重试，email 冲突时置空（subject 才是身份，
+//     email 只是联系方式，登录不靠它）。
 func (s *Store) UpsertOIDCUser(ctx context.Context, orgID, issuer, subject, username, email string,
 	defaultRole rbac.Role) (*User, error) {
 
+	if username == "" {
+		username = "oidc-" + subject
+	}
 	var userID string
 	err := s.pool.QueryRow(ctx, `
 		SELECT id FROM control.users WHERE oidc_issuer = $1 AND oidc_subject = $2`,
@@ -185,29 +215,92 @@ func (s *Store) UpsertOIDCUser(ctx context.Context, orgID, issuer, subject, user
 		if members == 0 {
 			role = rbac.Admin
 		}
-		id := auth.NewID()
+		u = &User{OrganizationID: orgID, Role: role, active: true}
 		var emailArg any
 		if email != "" {
 			emailArg = email
 		}
-		u = &User{OrganizationID: orgID, Role: role, active: true}
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO control.users (id, username, email, oidc_issuer, oidc_subject)
-			VALUES ($1, $2, $3, $4, $5)
-			RETURNING id, username, email, created_at`,
-			id, username, emailArg, issuer, subject).
-			Scan(&u.ID, &u.Username, &u.Email, &u.CreatedAt); err != nil {
-			return err
+		candidate := username
+		// 无推断的 DO NOTHING 对"任何唯一冲突"都不写：
+		// 冲突后按 (issuer, subject) 回查 —— 查到是并发赢家，查不到是占位。
+		// （不能写 ON CONFLICT (oidc_issuer, oidc_subject)：唯一的那个索引是
+		// users_oidc_idx partial index，无谓词的推断在运行时对不上约束。）
+		for attempt := 0; ; attempt++ {
+			id := auth.NewID()
+			err := scanOIDCUser(tx.QueryRow(ctx, `
+				INSERT INTO control.users (id, username, email, oidc_issuer, oidc_subject)
+				VALUES ($1, $2, $3, $4, $5)
+				ON CONFLICT DO NOTHING
+				RETURNING id, username, email, password_hash, created_at`,
+				id, candidate, emailArg, issuer, subject), u)
+			if err == nil {
+				return upsertMembership(ctx, tx, orgID, u.ID, role)
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			if err := scanOIDCUser(tx.QueryRow(ctx, `
+				SELECT id, username, email, password_hash, created_at FROM control.users
+				WHERE oidc_issuer = $1 AND oidc_subject = $2`,
+				issuer, subject), u); err == nil {
+				// 并发赢家已经建好：直接用它的行。
+				return upsertMembership(ctx, tx, orgID, u.ID, role)
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			// 占位冲突：email 先让路（只让一次），否则 username 加后缀。
+			// 每轮都换新 id：同一事务里重试 INSERT 时固定 id 无所谓
+			// （DO NOTHING 没写行），但随机后缀保证固定测试名
+			// （victim-name）在脏库里也能收敛。
+			if emailArg != nil {
+				emailArg = nil
+				continue
+			}
+			if attempt >= 16 {
+				return ErrUsernameTaken
+			}
+			candidate = usernameSuffix(username, attempt)
 		}
-		_, err := tx.Exec(ctx, `
-			INSERT INTO control.memberships (organization_id, user_id, role)
-			VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, orgID, u.ID, string(role))
-		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	return u, nil
+	return s.UserByID(ctx, orgID, u.ID)
+}
+
+// upsertMembership 保证登录用户在组织里有成员行。
+// u.ID 可能是回查到的并发赢家的行 —— ON CONFLICT 下照样保证，不报错。
+func upsertMembership(ctx context.Context, tx pgx.Tx, orgID, userID string, role rbac.Role) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO control.memberships (organization_id, user_id, role)
+		VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, orgID, userID, string(role))
+	return err
+}
+
+// usernameSuffix 给被占位的 username 找个不撞的：attacker 预注册了受害者的
+// 首选名，登录照样成功，只是名字后面多个数字 —— 500 变正常登录。
+// 后缀带随机串：同一个 username 的多次 OIDC 登录（不同 subject）不会在
+// "victim-name-2" 这类固定名上互相撞，也不会撞上历史测试/重试留下的行。
+func usernameSuffix(base string, attempt int) string {
+	if attempt >= 8 {
+		return base + "-" + auth.NewID()[:8]
+	}
+	return base + "-" + strconv.Itoa(attempt+2)
+}
+
+// scanOIDCUser 读 OIDC 用户行：password_hash 与 email 都可能为 NULL，
+// 不能直接扫进 string/*string —— 前者会在占位冲突后的回查/RETURNING 上 500，
+// 正好是这个函数要修的登录路径。
+func scanOIDCUser(row pgx.Row, u *User) error {
+	var hash, email *string
+	if err := row.Scan(&u.ID, &u.Username, &email, &hash, &u.CreatedAt); err != nil {
+		return err
+	}
+	u.Email = email
+	if hash != nil {
+		u.passwordHash = *hash
+	}
+	return nil
 }
 
 func (u *User) PasswordHash() string { return u.passwordHash }
@@ -361,17 +454,23 @@ func (s *Store) AddMember(ctx context.Context, orgID, username string, role rbac
 //
 // actor 可能是用户，也可能是 API key（对外调用产生的语料就挂在 key 上）。
 // **两种都要认**，否则界面上会出现一半有名字一半没有的列表。
-func (s *Store) ActorNames(ctx context.Context, ids []string) (map[string]string, error) {
+//
+// 组织边界：两个分支都带 organization_id —— 用户分支走 membership，
+// key 分支走 key 自己的 organization_id。跨组织的 id 查不到，
+// 调用方（corpus directory.py）按"查不到给占位名"处理，与"不存在"同形。
+func (s *Store) ActorNames(ctx context.Context, orgID string, ids []string) (map[string]string, error) {
 	out := map[string]string{}
 	if len(ids) == 0 {
 		return out, nil
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, username FROM control.users WHERE id = ANY($1)
+		SELECT u.id, u.username FROM control.users u
+		JOIN control.memberships m ON m.user_id = u.id AND m.organization_id = $2
+		WHERE u.id = ANY($1)
 		UNION ALL
 		SELECT k.id, u.username || '（' || k.name || '）'
 		FROM control.api_keys k JOIN control.users u ON u.id = k.user_id
-		WHERE k.id = ANY($1)`, ids)
+		WHERE k.id = ANY($1) AND k.organization_id = $2`, ids, orgID)
 	if err != nil {
 		return nil, err
 	}

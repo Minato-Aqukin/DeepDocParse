@@ -24,6 +24,7 @@ type DiscoveryConsumption struct {
 }
 type SubtreePage struct {
 	AuthorityNodeID  string               `json:"authority_node_id"`
+	Operation        string               `json:"operation"`
 	SnapshotID       string               `json:"snapshot_id"`
 	CreatedAt        time.Time            `json:"created_at"`
 	ValidUntil       time.Time            `json:"valid_until"`
@@ -83,8 +84,9 @@ func (d *PeerDirectory) pullSubtree(ctx context.Context, cfg PeerConfig, path, a
 			*requests += page.Consumption.Requests
 		} else {
 			first := out.page
-			if page.SnapshotID != first.SnapshotID || !page.CreatedAt.Equal(first.CreatedAt) || !page.ValidUntil.Equal(first.ValidUntil) || page.FirstCursor != first.FirstCursor || page.TerminalCursor != first.TerminalCursor || page.Consumption != first.Consumption || page.EnumerationState != first.EnumerationState || !equalJSON(page.Revisions, first.Revisions) || !equalJSON(page.Unknowns, first.Unknowns) {
+			if page.SnapshotID != first.SnapshotID || page.Operation != first.Operation || !page.CreatedAt.Equal(first.CreatedAt) || !page.ValidUntil.Equal(first.ValidUntil) || page.FirstCursor != first.FirstCursor || page.TerminalCursor != first.TerminalCursor || page.Consumption != first.Consumption || page.EnumerationState != first.EnumerationState || !equalJSON(page.Revisions, first.Revisions) || !equalJSON(page.Unknowns, first.Unknowns) {
 				out.reason = "unknown"
+				out.targets = nil
 				return out
 			}
 		}
@@ -126,7 +128,7 @@ func equalJSON(a, b any) bool {
 	return string(x) == string(y)
 }
 func (p SubtreePage) valid(authority string, path []string) bool {
-	if p.AuthorityNodeID != authority || p.SnapshotID == "" || p.CreatedAt.IsZero() || !p.ValidUntil.After(p.CreatedAt) || p.FirstCursor == "" || p.TerminalCursor == "" || len(p.Targets) > 100 || p.Consumption.Requests < 0 || p.Consumption.Nodes < 0 || (p.EnumerationState != "sealed" && p.EnumerationState != "partial") || p.Targets == nil || p.Revisions == nil || p.Unknowns == nil {
+	if p.AuthorityNodeID != authority || p.Operation == "" || p.SnapshotID == "" || p.CreatedAt.IsZero() || !p.ValidUntil.After(p.CreatedAt) || p.FirstCursor == "" || p.TerminalCursor == "" || len(p.Targets) > 100 || p.Consumption.Requests < 0 || p.Consumption.Nodes < 0 || (p.EnumerationState != "sealed" && p.EnumerationState != "partial") || p.Targets == nil || p.Revisions == nil || p.Unknowns == nil {
 		return false
 	}
 	if p.EnumerationState == "sealed" && len(p.Unknowns) > 0 {

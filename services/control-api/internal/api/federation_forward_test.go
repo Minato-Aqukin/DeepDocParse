@@ -128,7 +128,7 @@ func TestFederationCorpusIngressDoesNotBroadenPublicSurface(t *testing.T) {
 		{"POST", "/api/v1/tasks", 401},
 		{"GET", "/api/documents", 401},
 		{"GET", "/internal/capabilities", 404},
-		{"GET", "/internal/actors", 401},
+		{"GET", "/internal/actors", 404}, // 公开监听从不服务 /internal/*；内网路由在 InternalRoutes()
 		{"GET", "/api/v1/federation/tasksX/execution-1", 404},
 		{"POST", "/api/v1/federation/probesX", 404},
 		{"POST", "/api/v1/federation/admissionsX/lookup", 404},

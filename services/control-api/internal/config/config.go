@@ -8,6 +8,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -27,6 +28,9 @@ type Config struct {
 	// ---- 监听 ----
 	// 监听地址。容器里通常保持 :8080，对外端口由编排层映射
 	Addr string
+	// 内网服务面的监听地址（/internal/* 只在这个监听上服务，
+	// 公开监听上一律 404）。容器里通常保持 :8090
+	InternalAddr string
 
 	// ---- 数据库 ----
 	// control schema 的连接串。**必须用 ddp_control 角色连** —— 它对 corpus
@@ -150,6 +154,10 @@ type Config struct {
 	// 允许的浏览器来源。**不要用 `*`**：配合 credentials 时浏览器会直接拒绝，
 	// 而且那等于放弃同源保护
 	CORSOrigins []string
+	// 受信任的反向代理：只有直连对端落在这个集合里时，
+	// 才认 X-Forwarded-For。逗号分隔的 CIDR 或单个 IP，缺省回环 + 私有网段。
+	// clientip.go 通过 TrustedProxies.Contains(netIP) 查询它。
+	TrustedProxies TrustedProxies
 	// 本服务对外可达的地址，拼稳定文件 URL 用
 	PublicBaseURL string
 	// 服务之间互相访问本服务时用的地址。
@@ -177,6 +185,7 @@ func Load() (*Config, error) {
 		DiscoveryRenewalInterval: time.Duration(envInt("DISCOVERY_RENEWAL_INTERVAL_SECONDS", 60)) * time.Second,
 		DiscoveryRetention:       time.Duration(envInt("DISCOVERY_METADATA_RETENTION_SECONDS", 86400)) * time.Second,
 		Addr:                     env("CONTROL_ADDR", ":8080"),
+		InternalAddr:             env("CONTROL_INTERNAL_ADDR", ":8090"),
 		DatabaseURL:              env("CONTROL_DATABASE_URL", "postgres://ddp_control:ddp@127.0.0.1:15432/deepdocparse"),
 		DBMaxConns:               int32(envInt("CONTROL_DB_MAX_CONNS", 20)),
 		DBMinConns:               int32(envInt("CONTROL_DB_MIN_CONNS", 2)),
@@ -217,6 +226,7 @@ func Load() (*Config, error) {
 		CORSOrigins:              envList("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
 		PublicBaseURL:            env("PUBLIC_BASE_URL", "http://127.0.0.1:8080"),
 		InternalBaseURL:          env("INTERNAL_BASE_URL", env("PUBLIC_BASE_URL", "http://127.0.0.1:8080")),
+		TrustedProxies:           parseTrustedProxies(env("TRUSTED_PROXIES", "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16")),
 		AllowInsecureDefaults:    envBool("ALLOW_INSECURE_DEFAULTS", false),
 		OutboxInterval:           time.Duration(envInt("OUTBOX_INTERVAL_SECONDS", 2)) * time.Second,
 	}
@@ -260,6 +270,11 @@ func (c *Config) validate() error {
 	if c.UploadPartSize < 5*1024*1024 {
 		problems = append(problems, "UPLOAD_PART_SIZE 必须 >= 5MiB（S3 兼容实现的硬性下限）")
 	}
+	// bcrypt 成本下限：低于 10 基本等于没有慢哈希（与字段注释同一条线）。
+	// 邻近的数字守卫都是拒绝启动，这里也不该是警告。
+	if c.BcryptCost < 10 {
+		problems = append(problems, "BCRYPT_COST 必须 >= 10（低于 10 基本等于没有慢哈希）")
+	}
 	if c.PresignTTL > 2*time.Hour {
 		problems = append(problems, "PRESIGN_TTL_SECONDS 超过 2 小时：签名 URL 泄露的代价与 TTL 成正比")
 	}
@@ -273,6 +288,51 @@ func (c *Config) validate() error {
 		fmt.Fprintln(os.Stderr, "[config] WARNING: ALLOW_INSECURE_DEFAULTS 已开启，占位密钥检查被跳过")
 	}
 	return nil
+}
+
+// TrustedProxies 是受信任反向代理的集合：只有直连对端落在这个集合里，
+// clientip.go 才认 X-Forwarded-For，否则一律用 RemoteAddr。解析在启动时做一次：
+// 条目是 CIDR（"10.0.0.0/8"）或单个 IP（"127.0.0.1"）；非法条目直接丢掉
+// （启动日志里不留痕的要求在这里不适用 —— 非法条目只会缩小信任集，
+// 从不扩大它，所以 fail-closed 而不是 fail-boot）。
+type TrustedProxies struct {
+	nets []*net.IPNet
+}
+
+// parseTrustedProxies 把逗号分隔的 CIDR/IP 解析成集合。
+func parseTrustedProxies(raw string) TrustedProxies {
+	var out TrustedProxies
+	for _, part := range strings.Split(raw, ",") {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			continue
+		}
+		if _, ipNet, err := net.ParseCIDR(p); err == nil {
+			out.nets = append(out.nets, ipNet)
+			continue
+		}
+		if ip := net.ParseIP(p); ip != nil {
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+			out.nets = append(out.nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+		}
+	}
+	return out
+}
+
+// Contains 报告 ip 是否来自受信任的代理。nil/非法 IP 一律返回 false。
+func (t TrustedProxies) Contains(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	for _, n := range t.nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // MIMEAllowed 报告上传的 MIME 在不在白名单里。

@@ -150,6 +150,49 @@ func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) error {
 	return httpx.JSON(w, http.StatusOK, keys)
 }
 
+// resolveKeyScopes 把签发请求里的 scope 字符串转成 Scope。
+//
+// 三条缺一不可：新分配 slice（`scopes[:0]` 复用会把全局 AllScopes 原地改写）；
+// 逐个校验是不是合约取值（未知字符串存进 key 行之后，
+// 门禁 HasScope 永远匹配不上，表现为"这把 key 莫名其妙 403"）；
+// 最后按签发人当前角色再判一次（viewer 不能发 parse key）。
+func resolveKeyScopes(role rbac.Role, names []string) ([]rbac.Scope, error) {
+	if len(names) == 0 {
+		return role.DefaultScopes(), nil
+	}
+	requested := make([]rbac.Scope, 0, len(names))
+	for _, s := range names {
+		sc := rbac.Scope(s)
+		if !rbac.IsKnownScope(sc) {
+			return nil, apierr.BadRequest("bad_scope", "未知作用域 "+s)
+		}
+		requested = append(requested, sc)
+	}
+	if err := role.AllowedScopes(requested); err != nil {
+		return nil, apierr.Forbidden("scope_escalation", err.Error())
+	}
+	return requested, nil
+}
+
+// resolveKeyRateLimit 定签发 key 的限速。
+//
+// 0 或负数会把按 key 的限速整个关掉（ratelimit.Allow 对 limit<=0 必须拒绝）
+// —— 所以签发时直接 400；不能管理组织的成员还不能高于
+// 运营商配的 DefaultRatePerMin 上限。
+func resolveKeyRateLimit(role rbac.Role, ceiling int, want *int) (int, error) {
+	rate := ceiling
+	if want != nil {
+		rate = *want
+	}
+	if rate <= 0 {
+		return 0, apierr.BadRequest("bad_rate_limit", "rate_limit_per_min 必须 >= 1")
+	}
+	if ceiling > 0 && !role.CanManageOrg() && rate > ceiling {
+		rate = ceiling
+	}
+	return rate, nil
+}
+
 func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) error {
 	actor, err := mustActor(r)
 	if err != nil {
@@ -172,22 +215,14 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) error {
 		body.Name = "default"
 	}
 
-	scopes := actor.Role.DefaultScopes()
-	if len(body.Scopes) > 0 {
-		scopes = scopes[:0]
-		for _, s := range body.Scopes {
-			scopes = append(scopes, rbac.Scope(s))
-		}
-		// **不能签发比自己权限更大的 key**，否则 viewer 可以发一把
-		// 能上传的 key 来绕过自己的角色
-		if err := actor.Role.AllowedScopes(scopes); err != nil {
-			return apierr.Forbidden("scope_escalation", err.Error())
-		}
+	scopes, err := resolveKeyScopes(actor.Role, body.Scopes)
+	if err != nil {
+		return err
 	}
 
-	rate := s.cfg.DefaultRatePerMin
-	if body.RateLimitPerMin != nil {
-		rate = *body.RateLimitPerMin
+	rate, err := resolveKeyRateLimit(actor.Role, s.cfg.DefaultRatePerMin, body.RateLimitPerMin)
+	if err != nil {
+		return err
 	}
 	var expires *time.Time
 	if body.ExpiresInDays != nil {

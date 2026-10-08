@@ -139,16 +139,25 @@ func TestUploadTargetAdmissionPrecedesStorageAndKeyReplaySkipsIt(t *testing.T) {
 		t.Fatalf("same key moved target: %d %s", w.Code, w.Body.String())
 	}
 
-	temp := uploadBody([]byte("scratch"))
-	temp["target_resource_id"] = "res-controller"
-	temp["purpose"] = "temporary_compute"
-	for _, bad := range []map[string]any{temp, func() map[string]any {
-		b := uploadBody([]byte("bad id"))
-		b["target_resource_id"] = "../escape"
-		return b
-	}()} {
-		if w := uploadRequest(t, f, "POST", "/api/uploads", f.aliceToken, "", bad); w.Code != 400 || !strings.Contains(w.Body.String(), "invalid_upload_target") {
-			t.Fatalf("invalid target accepted: %d %s", w.Code, w.Body.String())
+	tempNoID := uploadBody([]byte("scratch"))
+	tempNoID["target_resource_id"] = "res-controller"
+	tempNoID["purpose"] = "temporary_compute"
+	tempWithTarget := uploadBody([]byte("scratch"))
+	tempWithTarget["target_resource_id"] = "res-controller"
+	tempWithTarget["purpose"] = "temporary_compute"
+	tempWithTarget["remote_compute_id"] = "compute-valid-1"
+	escaped := uploadBody([]byte("bad id"))
+	escaped["target_resource_id"] = "../escape"
+	for _, bad := range []struct {
+		body map[string]any
+		code string
+	}{
+		{tempNoID, "bad_remote_compute_id"},
+		{tempWithTarget, "invalid_upload_target"},
+		{escaped, "invalid_upload_target"},
+	} {
+		if w := uploadRequest(t, f, "POST", "/api/uploads", f.aliceToken, "", bad.body); w.Code != 400 || !strings.Contains(w.Body.String(), bad.code) {
+			t.Fatalf("bad target accepted: %d %s want %s", w.Code, w.Body.String(), bad.code)
 		}
 	}
 	if n := orgUploadCount(t, f); n != 1 {
@@ -233,6 +242,21 @@ func TestUploadDuplicateEventIsTheOnlyConflictThatAcknowledges(t *testing.T) {
 		t.Fatalf("part %d", status)
 	}
 	decodeDiscovery[targetWire](t, uploadRequest(t, f, "POST", "/api/uploads/"+u.ID+"/finalize", f.aliceToken, "", nil), 202)
+	// verify 只认领取租约：先 PendingVerification 领一行（单测里就是这一行），
+	// 再 MarkUploadVerified —— 与 verifyUploads 生产路径同顺序。
+	claimed, err := f.server.store.PendingVerification(context.Background(), 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range claimed {
+		if c.ID == u.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("upload not claimed by PendingVerification: %s", u.ID)
+	}
 	if err := f.server.store.MarkUploadVerified(context.Background(), f.org, u.ID, uploadBody(data)["sha256"].(string)); err != nil {
 		t.Fatal(err)
 	}

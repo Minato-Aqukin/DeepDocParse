@@ -51,6 +51,21 @@ func handoffReady(t *testing.T, s *Store, org string, u *UploadSession) {
 	if _, _, err := s.FinalizeUpload(ctx, org, u.ID, "fin-"+u.ID, 20, "", json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
+	// verify 只认领取租约：先 PendingVerification 领一行（单测里就是这一行），
+	// 再 MarkUploadVerified —— 与 verifyUploads 生产路径同顺序。
+	claimed, err := s.PendingVerification(ctx, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range claimed {
+		if c.ID == u.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("upload not claimed by PendingVerification: %s", u.ID)
+	}
 	if err := s.MarkUploadVerified(ctx, org, u.ID, strings.Repeat("c", 64)); err != nil {
 		t.Fatal(err)
 	}

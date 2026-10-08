@@ -55,7 +55,77 @@ var (
 		Name: "ddp_control_presigned_urls_total",
 		Help: "签发的预签名 URL 数，按用途",
 	}, []string{"purpose"})
+
+	// per-phase 延迟：discovery / input / queue /
+	// retrieval / generation / verify / delivery 七个阶段各一条时间线。
+	// per-request 直方图只回答"这次请求慢"，这组回答"慢在哪一段" ——
+	// delivery 慢与 retrieval 慢在唯一可用的图上原来长得一模一样。
+	// 阶段名是契约外的运维词汇（枚举只管用户可见状态），来源就是这里，
+	// ObservePhase 做参数校验：不在名单里的 phase 记成 "other"，不炸基数。
+	phaseLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "ddp_control_phase_duration_seconds",
+		Help:    "control-api 分阶段耗时",
+		Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60},
+	}, []string{"phase"})
 )
+
+// controlPhases 是 ObservePhase 认的阶段名单。新增阶段先改这里 ——
+// label 基数只随这里涨，不随调用方传什么涨。
+var controlPhases = map[string]bool{
+	"discovery": true, "input": true, "queue": true, "retrieval": true,
+	"generation": true, "verify": true, "delivery": true,
+}
+
+// ObservePhase 记一次分阶段耗时。未知 phase 记 "other" 不丢弃 ——
+// 调用方拼错阶段名时，错误本身可见（other 突然涨），而不是静默消失。
+func ObservePhase(phase string, d time.Duration) {
+	if !controlPhases[phase] {
+		phase = "other"
+	}
+	phaseLatency.WithLabelValues(phase).Observe(d.Seconds())
+}
+
+// FederationFields 是联邦生命周期的统一日志字段：
+// 与 store.FederationCorrelation 同名同义 —— 查审计的人与查日志的人
+// 用同一组 key（root_task_id / step_id / probe_id / admission_id /
+// attempt / coverage_ref / delivery_state）。空指针字段直接省略，
+// 日志里不出现空键。
+type FederationFields struct {
+	RootTaskID    *string
+	StepID        *string
+	ProbeID       *string
+	AdmissionID   *string
+	Attempt       *int
+	CoverageRef   *string
+	DeliveryState *string
+}
+
+// Fields 压成 slog 的交错键值对：slog.Info("...", obs.Federation(f).Fields()...)。
+func (f FederationFields) Fields() []any {
+	var out []any
+	if f.RootTaskID != nil {
+		out = append(out, "root_task_id", *f.RootTaskID)
+	}
+	if f.StepID != nil {
+		out = append(out, "step_id", *f.StepID)
+	}
+	if f.ProbeID != nil {
+		out = append(out, "probe_id", *f.ProbeID)
+	}
+	if f.AdmissionID != nil {
+		out = append(out, "admission_id", *f.AdmissionID)
+	}
+	if f.Attempt != nil {
+		out = append(out, "attempt", *f.Attempt)
+	}
+	if f.CoverageRef != nil {
+		out = append(out, "coverage_ref", *f.CoverageRef)
+	}
+	if f.DeliveryState != nil {
+		out = append(out, "delivery_state", *f.DeliveryState)
+	}
+	return out
+}
 
 func Observe(method, route string, status int, d time.Duration) {
 	requests.WithLabelValues(method, route, statusClass(status)).Inc()

@@ -117,11 +117,31 @@ func run() error {
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
 
+	// 内网服务面：/internal/* 只在这个监听上服务。
+	// 同一条 svc 门 + 同一条中间件链，差别只有监听地址与路由表。
+	// 公开监听上 /internal/* 一律 404（见 Server.Routes）。
+	internalServer := &http.Server{
+		Addr:              cfg.InternalAddr,
+		Handler:           srv.InternalRoutes(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+	}
+
 	go func() {
 		slog.Info("control-api 已启动", "addr", cfg.Addr,
+			"internal", cfg.InternalAddr,
 			"corpus", cfg.CorpusURL, "gateway", cfg.GatewayURL, "mcp", cfg.MCPURL)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("监听失败", "err", err)
+			stop()
+		}
+	}()
+
+	go func() {
+		slog.Info("control-api 内网服务面已启动", "addr", cfg.InternalAddr)
+		if err := internalServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("内网监听失败", "err", err)
 			stop()
 		}
 	}()
@@ -132,7 +152,10 @@ func run() error {
 	// 这是有意的：优雅退出不能变成永远不退出
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return httpServer.Shutdown(shutdownCtx)
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+	return internalServer.Shutdown(shutdownCtx)
 }
 
 func logLevel() slog.Level {

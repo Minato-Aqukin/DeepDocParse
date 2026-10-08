@@ -10,6 +10,7 @@ package rbac
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/contracts"
@@ -110,7 +111,19 @@ func (r Role) DefaultScopes() []Scope {
 	if !r.AtLeast(Contributor) {
 		return []Scope{ScopeRead}
 	}
-	return AllScopes
+	return slices.Clone(AllScopes)
+}
+
+// IsKnownScope 报告 s 是不是合约认可的 API key 作用域取值。
+// 未知字符串必须在签发时挡掉 —— 否则它会被存进 key 行，
+// 而门禁 HasScope 永远匹配不上，表现为"这把 key 莫名其妙 403"。
+func IsKnownScope(s Scope) bool {
+	for _, known := range AllScopes {
+		if s == known {
+			return true
+		}
+	}
+	return false
 }
 
 // AllowedScopes 报告该角色能否签发含 want 的 key。
@@ -120,6 +133,9 @@ func (r Role) AllowedScopes(want []Scope) error {
 		allowed[s] = true
 	}
 	for _, s := range want {
+		if !IsKnownScope(s) {
+			return fmt.Errorf("未知作用域 %q", string(s))
+		}
 		if !allowed[s] {
 			return fmt.Errorf("角色 %s 不能签发带 %s 作用域的 key", r, s)
 		}

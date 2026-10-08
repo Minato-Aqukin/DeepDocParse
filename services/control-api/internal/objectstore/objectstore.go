@@ -21,6 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"net/url"
 	"time"
 
@@ -57,11 +59,27 @@ func Open(ctx context.Context, c Config) (*Store, error) {
 	//
 	// 这个坑只在"内外两个 endpoint"的部署形态下出现，本机单测与
 	// 进程内 e2e 都碰不到 —— 2026-09-02 第一次真起全栈时炸出来的。
+	// 铁律 8：minio client 也不读代理环境变量。minio-go 的 DefaultTransport
+	// 跟 http.DefaultTransport 一样读 HTTP(S)_PROXY，带代理的机器上对
+	// 127.0.0.1:19000 的 S3 调用会被塞进代理 —— 表现是卡住而不是报错。
+	transport := &http.Transport{
+		Proxy: nil,
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          200,
+		MaxIdleConnsPerHost:   50,
+		IdleConnTimeout:       90 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		ForceAttemptHTTP2:     true,
+	}
 	mk := func(endpoint string, secure bool) (*minio.Client, error) {
 		return minio.New(endpoint, &minio.Options{
 			Creds:      credentials.NewStaticV4(c.AccessKey, c.SecretKey, ""),
 			Secure:     secure,
 			Region:     c.Region,
+			Transport:  transport,
 			MaxRetries: 1, // Mutation retries require persisted reconciliation, especially NewMultipartUpload.
 		})
 	}

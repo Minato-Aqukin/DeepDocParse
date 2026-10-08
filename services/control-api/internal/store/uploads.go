@@ -151,6 +151,11 @@ func (s *Store) FinalizeUpload(ctx context.Context, orgID, id, idempotencyKey st
 //
 // **事件与状态必须同一个事务**：分两次写的话，进程在中间崩溃会留下一个
 // 永远 ready 却没人消费的会话 —— 用户看到"上传成功"，文档却永远不出现。
+//
+// 领取围栏：只认"租约还在"的 verifying 行（verify_claimed_at 在窗内）。
+// 两个副本同时 Digest 同一个对象时，只有一个持有租约 —— 另一个的 verify
+// 落空（404），Digest 的 CPU/S3 账单只付一份。verifyUploads 循环里
+// 刚从 PendingVerification 领到的行租约一定在窗内，当次 verify 不受影响。
 func (s *Store) MarkUploadVerified(ctx context.Context, orgID, id, sha256 string) error {
 	return s.InTx(ctx, func(tx pgx.Tx) error {
 		var (
@@ -166,11 +171,13 @@ func (s *Store) MarkUploadVerified(ctx context.Context, orgID, id, sha256 string
 			UPDATE control.upload_sessions
 			SET status = 'ready', verified_sha256 = $3, updated_at = now()
 			WHERE id = $1 AND organization_id = $2 AND status = 'verifying'
+			  AND verify_claimed_at IS NOT NULL
+			  AND verify_claimed_at >= now() - ($4 * interval '1 second')
 			RETURNING id, object_key, filename, mime, coalesce(actual_size, 0),
 			          coalesce(engine, ''), options, actor_id, actor_kind,
 			          coalesce(purpose, 'permanent'), coalesce(remote_compute_id, ''),
 			          target_resource_id`,
-			id, orgID, sha256).
+			id, orgID, sha256, int(verifyClaimLease.Seconds())).
 			Scan(&uploadID, &objectKey, &filename, &mime, &size,
 				&engine, &options, &actorID, &actorKind, &purpose, &remoteComputeID, &target); err != nil {
 			return norows(err)
@@ -198,14 +205,31 @@ func (s *Store) MarkUploadFailed(ctx context.Context, orgID, id, reason string) 
 	return err
 }
 
-// PendingVerification 列出等待摘要校验的会话，供后台校验器领取。
+// PendingVerification 领取一批等待摘要校验的会话，供后台校验器消费。
+//
+// **领取即加租约**：UPDATE ... FOR UPDATE SKIP LOCKED 让多个副本并行领取
+// 而不互相阻塞，也不会把同一行领两次 —— PG 做队列的标准姿势。领到的行
+// 在 verifyClaimLease 窗内不再被领走（verify_claimed_at），多副本部署下
+// 同一个对象不会被 N 个副本同时全量 Digest。每次领取 verify_attempts +1：
+// Digest 一直失败的行计数涨到上限后由 FailStalledVerifications 置 failed
+// 并释放 reserved_pages，而不是永远 verifying 把配额吃光。
+//
+// MarkUploadVerified 只认"租约还在自己手里"的行：
+// verifyUploads 循环里刚领到的行当次就能 verify，别的路径（测试/手工）
+// 调 MarkUploadVerified 走无租约行会 404 —— 校验工作只从领取处来。
 func (s *Store) PendingVerification(ctx context.Context, limit int) ([]UploadSession, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, organization_id, object_key, coalesce(actual_size, 0), declared_sha256
-		FROM control.upload_sessions
-		WHERE status = 'verifying'
-		ORDER BY updated_at
-		LIMIT $1`, limit)
+		UPDATE control.upload_sessions
+		SET verify_claimed_at = now(), verify_attempts = verify_attempts + 1, updated_at = now()
+		WHERE id IN (
+			SELECT id FROM control.upload_sessions
+			WHERE status = 'verifying'
+			  AND (verify_claimed_at IS NULL OR verify_claimed_at < now() - ($2 * interval '1 second'))
+			ORDER BY updated_at
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING id, organization_id, object_key, coalesce(actual_size, 0), declared_sha256`, limit, int(verifyClaimLease.Seconds()))
 	if err != nil {
 		return nil, err
 	}
@@ -222,12 +246,49 @@ func (s *Store) PendingVerification(ctx context.Context, limit int) ([]UploadSes
 	return out, rows.Err()
 }
 
+// verifyClaimLease 是 verify 领取的租约窗：一次全对象 Digest（含 S3 抖动）
+// 通常几十秒内完成，5 分钟盖得住慢对象；崩溃的校验器最多卡住一行 5 分钟，
+// 之后别的副本自动接手。FailStalledVerifications 的上限（maxVerifyAttempts）
+// 远大于租约窗内的正常重试，所以租约过期重领不会误杀慢对象。
+const verifyClaimLease = 5 * time.Minute
+
+// maxVerifyAttempts 是 verify 领取次数上限：Digest 一直失败（对象丢了、
+// 权限没了）超过这个次数就不是"慢"，是"永远好不了" —— 置 failed，
+// reserved_pages 占用随状态离开 verifying 自动释放（ClaimUpload 的 held
+// 求和只看 created/uploading/verifying），配额不再被僵尸会话吃掉。
+const maxVerifyAttempts = 20
+
+// FailStalledVerifications 把"领了太多次还 verify 不出来"的会话置 failed。
+// verifyUploads 在 Digest 失败时只计数（领取时已 +1），不断言内容损坏；
+// 这里是唯一判死刑的地方 —— 阈值之外的行继续 verifying 等对象恢复。
+// limit 是单次最多判的行数（UPDATE 没有 LIMIT，用 ctid 子查询圈定）：
+// verifyUploads 每轮只处理一小批，剩下的下轮继续 —— 一次扫全表会锁住太多行。
+func (s *Store) FailStalledVerifications(ctx context.Context, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE control.upload_sessions u SET status = 'failed', error = 'verify stalled: object unreadable', updated_at = now()
+		WHERE u.ctid IN (
+			SELECT s.ctid FROM control.upload_sessions s
+			WHERE s.status = 'verifying' AND s.verify_attempts >= $1
+			AND (s.verify_claimed_at IS NULL OR s.verify_claimed_at < now() - ($2 * interval '1 second'))
+			LIMIT $3
+		)`, maxVerifyAttempts, int(verifyClaimLease.Seconds()), limit)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // ExpireStaleUploads 把过期未完成的会话标成 expired。
 // **不删对象**：删除是不可逆的，回收交给 corpus 侧带宽限期的 GC。
+// verifying 也过期：Digest 一直失败的行不能靠 expires_at 一直占着 reserved_pages，
+// 到期后同样 expired —— 与 created/uploading 同规则。
 func (s *Store) ExpireStaleUploads(ctx context.Context) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE control.upload_sessions SET status = 'expired', updated_at = now()
-		WHERE status IN ('created', 'uploading') AND expires_at < now()`)
+		WHERE status IN ('created', 'uploading', 'verifying') AND expires_at < now()`)
 	if err != nil {
 		return 0, err
 	}
@@ -374,12 +435,10 @@ func (s *Store) ClaimUpload(ctx context.Context, u *UploadSession, pages int) (*
 	var id string
 	created := false
 	err := s.InTx(ctx, func(tx pgx.Tx) error {
-		// Serializes org input reservations, including the first quota row creation.
-		var limit *int
-		var period time.Time
-		if err := tx.QueryRow(ctx, `INSERT INTO control.quotas(organization_id) VALUES($1)
-   ON CONFLICT(organization_id) DO UPDATE SET period_days=control.quotas.period_days
-   RETURNING pages_limit, period_start`, u.OrganizationID).Scan(&limit, &period); err != nil {
+		// 配额门与 CheckQuota 同一求和、同一行锁（quotaTx）：窗口轮转、
+		// 行锁、used+held 判定全在建行之前 —— 建行即占住额度，并发受理不会集体通过。
+		limit, period, _, err := quotaTx(ctx, tx, u.OrganizationID)
+		if err != nil {
 			return err
 		}
 		if u.CreateIdempotencyKey != nil {
@@ -410,7 +469,7 @@ func (s *Store) ClaimUpload(ctx context.Context, u *UploadSession, pages int) (*
 			}
 		}
 		id = auth.NewID()
-		_, err := tx.Exec(ctx, `INSERT INTO control.upload_sessions
+		_, err = tx.Exec(ctx, `INSERT INTO control.upload_sessions
    (id,organization_id,actor_id,actor_kind,status,object_key,filename,mime,declared_size,declared_sha256,expires_at,create_idempotency_key,request_digest,allocation_state,part_size,reserved_pages,purpose,remote_compute_id,target_resource_id)
    VALUES($1,$2,$3,$4,'created',$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13,$14,$15,$16,$17)`,
 			id, u.OrganizationID, u.ActorID, u.ActorKind, u.ObjectKey, u.Filename, u.MIME, u.DeclaredSize, u.DeclaredSHA256, u.ExpiresAt, u.CreateIdempotencyKey, u.RequestDigest, u.PartSize, pages, purposeOrDefault(u.Purpose), nullableRemoteCompute(u.RemoteComputeID), nullableTarget(u.TargetResourceID))

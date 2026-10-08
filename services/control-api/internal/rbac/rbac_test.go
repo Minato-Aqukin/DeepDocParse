@@ -77,3 +77,36 @@ func TestViewerCannotEscalateViaAPIKey(t *testing.T) {
 		t.Fatalf("viewer 的缺省作用域应当只有 read，得到 %v", scopes)
 	}
 }
+
+// DefaultScopes 必须返回拷贝 —— 调用方改返回值
+// 不能把全局 AllScopes 原地改写。
+func TestDefaultScopesReturnsACopy(t *testing.T) {
+	before := append([]rbac.Scope(nil), rbac.AllScopes...)
+	got := rbac.Contributor.DefaultScopes()
+	for i := range got {
+		got[i] = rbac.ScopeRead
+	}
+	for i, s := range rbac.AllScopes {
+		if s != before[i] {
+			t.Fatalf("改 DefaultScopes 返回值污染了 AllScopes：%v", rbac.AllScopes)
+		}
+	}
+	if len(rbac.AllScopes) != len(before) {
+		t.Fatalf("AllScopes 长度变了：%v", rbac.AllScopes)
+	}
+}
+
+// 未知 scope 字符串签发时就挡掉，不能存进 key 行。
+func TestAllowedScopesRejectsUnknownScope(t *testing.T) {
+	if err := rbac.Contributor.AllowedScopes([]rbac.Scope{rbac.Scope("admin")}); err == nil {
+		t.Fatal("未知作用域 admin 被放行了")
+	}
+	if !rbac.IsKnownScope(rbac.ScopeParse) || rbac.IsKnownScope(rbac.Scope("nope")) {
+		t.Fatal("IsKnownScope 判定错了已知/未知作用域")
+	}
+	for _, s := range rbac.AllScopes {
+		if !rbac.IsKnownScope(s) {
+			t.Fatalf("AllScopes 成员 %q 被判成未知", string(s))
+		}
+	}
+}

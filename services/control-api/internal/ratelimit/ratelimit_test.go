@@ -73,14 +73,17 @@ func TestWindowResets(t *testing.T) {
 	}
 }
 
-// limit <= 0 是"不限速"，不是"一次都不许"。
-// 反过来的话，配置里漏填 rate_limit_per_min 会让那把 key 一个请求都发不出去。
-func TestNonPositiveLimitMeansUnlimited(t *testing.T) {
+// limit <= 0 是"配置坏了"，必须默认拒绝 —— 反过来（不限速）的话，
+// 一把 rate_limit_per_min=0 的 key 就直接关掉了按 key 的限速。
+// 签发侧已经把 <=0 挡掉，这里是脏数据的最后一道门。
+func TestNonPositiveLimitDenies(t *testing.T) {
 	l := NewMemory()
 	for _, limit := range []int{0, -1} {
-		for i := 0; i < 5; i++ {
-			if ok, _, _ := l.Allow(context.Background(), "key:d", limit, time.Minute); !ok {
-				t.Fatalf("limit=%d 应当不限速，第 %d 次却被拒", limit, i+1)
+		for i := range 5 {
+			if ok, remaining, _ := l.Allow(context.Background(), "key:d", limit, time.Minute); ok {
+				t.Fatalf("limit=%d 应当拒绝，第 %d 次却被放行", limit, i+1)
+			} else if remaining != 0 {
+				t.Fatalf("limit=%d 拒绝时剩余 = %d，应为 0", limit, remaining)
 			}
 		}
 	}

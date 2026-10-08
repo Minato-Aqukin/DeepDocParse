@@ -292,7 +292,11 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 	// Seed the frozen direct members. The classification mirrors the store's
 	// historical fallback exactly for a deployment with no registered peers.
 	for _, member := range in.Members {
-		if member.State != MemberApproved || !allowed(member.NodeID) || visited[member.NodeID] {
+		if member.State != MemberApproved || visited[member.NodeID] {
+			continue
+		}
+		if !allowed(member.NodeID) {
+			addUnknown(member.NodeID, "denied")
 			continue
 		}
 		out.Handled[member.NodeID] = true
@@ -398,7 +402,11 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 		for _, child := range membersPull.items {
 			// Re-entering the local node or an already scheduled directory is the
 			// loop/duplicate path itself, not an unexpanded subtree.
-			if !allowed(child.NodeID) || child.NodeID == in.LocalNodeID || visited[child.NodeID] || scheduled[child.NodeID] {
+			if child.NodeID == in.LocalNodeID || visited[child.NodeID] || scheduled[child.NodeID] {
+				continue
+			}
+			if !allowed(child.NodeID) {
+				addUnknown(child.NodeID, "denied")
 				continue
 			}
 			// Local revocation overrides a peer's stale approval before inspecting
@@ -459,13 +467,22 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 						out.Revisions = append(out.Revisions, revision)
 					}
 					for _, unknown := range pull.page.Unknowns {
-						if allowed(unknown.NodeID) && !visited[unknown.NodeID] {
-							addUnknown(unknown.NodeID, unknown.Reason)
+						if visited[unknown.NodeID] {
+							continue
 						}
+						if !allowed(unknown.NodeID) {
+							addUnknown(unknown.NodeID, "denied")
+							continue
+						}
+						addUnknown(unknown.NodeID, unknown.Reason)
 					}
 					for _, target := range pull.targets {
 						origin := target.TargetKey.OriginNodeID
-						if !allowed(origin) || in.RevokedNodeIDs[origin] || visited[origin] {
+						if !allowed(origin) {
+							addUnknown(origin, "denied")
+							continue
+						}
+						if in.RevokedNodeIDs[origin] || visited[origin] {
 							continue
 						}
 						via := append([]string{current.nodeID}, target.ViaNodeIDs...)
@@ -488,13 +505,13 @@ func ExpandScope(ctx context.Context, dir *PeerDirectory, in ExpansionInput) Rem
 					out.Children = append(out.Children, ChildManifest{NodeID: current.nodeID, ScopeRef: pull.page.SnapshotID, EnumerationState: pull.page.EnumerationState})
 				}
 				if pull.reason != "" {
-					addUnknown(current.nodeID, pull.reason)
+					addUnknown(child.NodeID, pull.reason)
 					if pull.reason == "budget_exhausted" {
 						stop()
 					}
 				}
 				if !pull.complete && pull.reason == "" {
-					addUnknown(current.nodeID, "unknown")
+					addUnknown(child.NodeID, "unknown")
 				}
 				continue
 			}

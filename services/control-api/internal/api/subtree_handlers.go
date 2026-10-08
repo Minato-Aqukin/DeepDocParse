@@ -105,16 +105,22 @@ func (s *Server) handlePeerSubtree(w http.ResponseWriter, r *http.Request) error
 			if e != nil {
 				return peerPageError(e)
 			}
-			approved, e := s.store.ApprovedScopeNodes(r.Context(), s.defaultOrg, true)
-			if e != nil {
-				return e
+			// The expansion contact set freezes with the directory snapshot read two
+			// lines above: an approval granted after the snapshot cannot retroactively
+			// widen this subtree read. An empty snapshot yields an empty non-nil map so
+			// the expansion fails closed instead of treating nil as fully approved.
+			frozen := map[string]bool{}
+			for _, member := range members {
+				if member.State == discovery.MemberApproved {
+					frozen[member.NodeID] = true
+				}
 			}
 			revoked, e := s.store.RevokedScopeNodes(r.Context(), s.defaultOrg)
 			if e != nil {
 				return e
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-			remote = discovery.ExpandScope(ctx, s.peers, discovery.ExpansionInput{Members: members, LocalNodeID: localID, Operation: "search", Path: path, AllowedNodeIDs: allowed, ApprovedNodeIDs: approved, RevokedNodeIDs: revoked, MaxTargets: 10000, MaxRequests: requests, MaxNodes: nodes, Now: s.clock().UTC()})
+			remote = discovery.ExpandScope(ctx, s.peers, discovery.ExpansionInput{Members: members, LocalNodeID: localID, Operation: "search", Path: path, AllowedNodeIDs: allowed, ApprovedNodeIDs: frozen, RevokedNodeIDs: revoked, MaxTargets: 10000, MaxRequests: requests, MaxNodes: nodes, Now: s.clock().UTC()})
 			cancel()
 			for _, member := range members {
 				if member.State == discovery.MemberApproved && member.NodeID != localID && !slices.Contains(path, member.NodeID) && (allowed == nil || slices.Contains(allowed, member.NodeID)) && !remote.Handled[member.NodeID] {
@@ -150,7 +156,7 @@ func (s *Server) handlePeerSubtree(w http.ResponseWriter, r *http.Request) error
 			}
 			targets = append(targets, discovery.RoutedTarget{TargetKey: target, ViaNodeIDs: via})
 		}
-		page, err = s.store.CreateSubtreeSnapshot(r.Context(), s.defaultOrg, issuer, binding, size, discovery.SubtreePage{AuthorityNodeID: localID, ValidUntil: remote.ValidUntil, Revisions: revisions, Unknowns: unknowns, EnumerationState: state, Consumption: remote.Consumption}, targets)
+		page, err = s.store.CreateSubtreeSnapshot(r.Context(), s.defaultOrg, issuer, binding, size, discovery.SubtreePage{AuthorityNodeID: localID, Operation: "search", ValidUntil: remote.ValidUntil, Revisions: revisions, Unknowns: unknowns, EnumerationState: state, Consumption: remote.Consumption}, targets)
 	}
 	if err != nil {
 		return peerPageError(err)

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -26,6 +28,24 @@ func (s *Server) RunBackground(ctx context.Context) {
 	go s.renewDiscoveryLeases(ctx)
 }
 
+// proxyTransport 给内网 HTTP 调用（outbox 投递、reclaim 回调）用：
+// Proxy:nil —— 不读 HTTP(S)_PROXY 环境变量（铁律 8，见 proxy.New）；
+// 其余参数照抄 proxy.New 的内网调优。
+func proxyTransport() *http.Transport {
+	return &http.Transport{
+		Proxy: nil,
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          200,
+		MaxIdleConnsPerHost:   50,
+		IdleConnTimeout:       90 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		ForceAttemptHTTP2:     true,
+	}
+}
+
 // deliverOutbox 把 control 侧的事件投给 corpus-api。
 //
 // **至少一次**语义：消费端按 event_id 幂等。投递失败会指数退避并把原因
@@ -34,7 +54,9 @@ func (s *Server) deliverOutbox(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.OutboxInterval)
 	defer ticker.Stop()
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	// 铁律 8：内网投递不走代理。proxy.New 同款 Transport（Proxy:nil），
+	// 超时保持 30s（outbox 载荷小但 corpus 可能正在忙 GC）。
+	client := &http.Client{Transport: proxyTransport(), Timeout: 30 * time.Second}
 	for {
 		select {
 		case <-ctx.Done():
@@ -58,6 +80,8 @@ func (s *Server) deliverOutbox(ctx context.Context) {
 }
 
 // deliverEvent 投递一条已领取的事件并把结果落回同一行：ACK、终态拒绝或退避重试。
+// 每次实际发出 HTTP 投递都记一次 delivery 阶段耗时 —— 成功、拒绝、失败、网络错
+// 全记：只记成功会让"corpus 挂了"表现为 delivery 延迟消失，而不是延迟爆炸。
 func (s *Server) deliverEvent(ctx context.Context, client *http.Client, e store.OutboxEvent) {
 	body, _ := json.Marshal(map[string]any{
 		"event_id":        e.ID,
@@ -92,7 +116,9 @@ func (s *Server) deliverEvent(ctx context.Context, client *http.Client, e store.
 	// 幂等键就是事件 ID —— 消费端据此去重
 	req.Header.Set(identity.HeaderIdempotency, e.ID)
 
+	start := time.Now()
 	resp, err := client.Do(req)
+	obs.ObservePhase("delivery", time.Since(start))
 	if err != nil {
 		_ = s.store.MarkOutboxFailed(ctx, e.ID, e.Attempts, err.Error())
 		return
@@ -179,14 +205,18 @@ func (s *Server) verifyUploads(ctx context.Context) {
 			continue
 		}
 		for _, sess := range sessions {
+			start := time.Now()
 			digest, size, err := s.objects.Digest(ctx, sess.ObjectKey)
 			if err != nil {
 				slog.Error("摘要校验失败", "upload_id", sess.ID, "err", err)
 				obs.UploadFailed("digest_error")
 				// A transient read failure is unknown, not proof of corrupt content.
-				// Keep verifying so restart/reconnect retries the full-object digest.
+				// Keep verifying so restart/reconnect retries the full-object digest;
+				// FailStalledVerifications (below) is the only path that retires a
+				// row whose object never becomes readable.
 				continue
 			}
+			obs.ObservePhase("verify", time.Since(start))
 			if sess.DeclaredSize > 0 && size != sess.DeclaredSize {
 				obs.UploadFailed("size_mismatch_async")
 				_ = s.store.MarkUploadFailed(ctx, sess.OrganizationID, sess.ID,
@@ -205,8 +235,18 @@ func (s *Server) verifyUploads(ctx context.Context) {
 				continue
 			}
 			if err := s.store.MarkUploadVerified(ctx, sess.OrganizationID, sess.ID, digest); err != nil {
+				// Lost the claim race (lease expired or another replica verified
+				// first): the winner's outcome stands, nothing left to do.
+				if errors.Is(err, store.ErrNotFound) {
+					continue
+				}
 				slog.Error("上传标记 ready 失败", "upload_id", sess.ID, "err", err)
 			}
+		}
+		if n, err := s.store.FailStalledVerifications(ctx, 32); err != nil {
+			slog.Error("stalled verify 清理失败", "err", err)
+		} else if n > 0 {
+			slog.Info("已把卡住的校验标为 failed", "count", n)
 		}
 	}
 }
@@ -236,7 +276,8 @@ func (s *Server) housekeeping(ctx context.Context) {
 }
 
 func (s *Server) reclaimUploads(ctx context.Context) (int, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	// 铁律 8：同上，reclaim 回调也是内网调用，不读代理环境变量。
+	client := &http.Client{Transport: proxyTransport(), Timeout: 30 * time.Second}
 	// The store commits its lease before this callback; corpus HTTP and exact-key
 	// multipart aborts run without holding a control transaction or row lock.
 	return s.store.ReclaimTerminalUploads(ctx, time.Hour, 20, func(u store.UploadReclamation) (bool, error) {
