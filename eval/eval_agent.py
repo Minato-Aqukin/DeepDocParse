@@ -87,11 +87,23 @@ def _rate(value: tuple[int, int]) -> str:
     return "—" if not total else f"{hit / total:.1%} ({hit}/{total})"
 
 
+def _ratio(value: tuple[int, int]) -> float | None:
+    hit, total = value
+    return None if not total else hit / total
+
+
+def _delta(before: float | None, after: float | None) -> str:
+    # 空分母时表格里那格已经是"—"：变化行同样不编数字，不抛 ZeroDivisionError。
+    if before is None or after is None:
+        return "—（样本为空，未比较）"
+    return f"{before:.1%} → {after:.1%}（{after-before:+.1%}）"
+
+
 def render(metrics: AgentMetrics, *, revision: str, mode: str = "offline") -> str:
-    before = metrics.refusal_before[0] / metrics.refusal_before[1]
-    after = metrics.refusal_after[0] / metrics.refusal_after[1]
-    gate_before = metrics.gate_precision_before[0] / metrics.gate_precision_before[1]
-    gate_after = metrics.gate_precision_after[0] / metrics.gate_precision_after[1]
+    before = _ratio(metrics.refusal_before)
+    after = _ratio(metrics.refusal_after)
+    gate_before = _ratio(metrics.gate_precision_before)
+    gate_after = _ratio(metrics.gate_precision_after)
     return "\n".join([
         f"# Deep Agent 评测报表（mode={mode}）", "",
         f"数据 revision：`{revision}`。offline 是固定代理输出的结构评测，**不是模型真机质量**。", "",
@@ -105,22 +117,28 @@ def render(metrics: AgentMetrics, *, revision: str, mode: str = "offline") -> st
         f"| 拒答正确率（改造前） | {_rate(metrics.refusal_before)} |",
         f"| 拒答正确率（Deep Agent） | {_rate(metrics.refusal_after)} |",
         f"| unsupported 不变式违反率 | {_rate(metrics.unsupported_violations)} |", "",
-        f"门控精确率变化：{gate_before:.1%} → {gate_after:.1%}（{gate_after-gate_before:+.1%}）。",
-        f"拒答正确率变化：{before:.1%} → {after:.1%}（{after-before:+.1%}，不得下降）。", "",
+        f"门控精确率变化：{_delta(gate_before, gate_after)}。",
+        f"拒答正确率变化：{_delta(before, after)}（不得下降）。", "",
         "GPU 批次二待补：用真实判定模型、embedding、rerank、chat/VQA 输出替换固定输出，",
         "并按同一列定义报告 live 数字。", "",
     ])
 
 
 def passes_acceptance(metrics: AgentMetrics) -> bool:
-    before = metrics.refusal_before
-    after = metrics.refusal_after
-    gate_before = metrics.gate_precision_before
-    gate_after = metrics.gate_precision_after
+    # 空分母（自定义 --dataset 下 refusal_cases/candidates 为空）判 False，
+    # 不抛 ZeroDivisionError：没样本就没有"不下降"可证。
+    before = _ratio(metrics.refusal_before)
+    after = _ratio(metrics.refusal_after)
+    gate_before = _ratio(metrics.gate_precision_before)
+    gate_after = _ratio(metrics.gate_precision_after)
     return (
         metrics.unsupported_violations[0] == 0
-        and after[0] / after[1] >= before[0] / before[1]
-        and gate_after[0] / gate_after[1] >= gate_before[0] / gate_before[1]
+        and before is not None
+        and after is not None
+        and gate_before is not None
+        and gate_after is not None
+        and after >= before
+        and gate_after >= gate_before
     )
 
 

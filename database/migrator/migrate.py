@@ -1,10 +1,13 @@
 #!/usr/bin/env python
 """一次性数据迁移器：旧库 -> control / corpus 双 schema。
 
-    python database/migrator/migrate.py --source "$OLD_DATABASE_URL" \
-        --target "$NEW_DATABASE_URL" --dry-run
-    python database/migrator/migrate.py --source ... --target ... --apply \
-        --report out/migration-report.json
+    SOURCE_DATABASE_URL=<旧库连接串> TARGET_DATABASE_URL=<新库连接串> \
+        python database/migrator/migrate.py
+    SOURCE_DATABASE_URL=... TARGET_DATABASE_URL=... \
+        python database/migrator/migrate.py --apply --report out/migration-report.json
+
+连接串一律走环境变量 —— argv 在 ps 与 CI 日志里可见，而连接串里有口令。
+对象存储密钥也一样，只走环境变量 OBJECT_SECRET_KEY —— argv 在 ps 与 CI 日志里可见。
 
 ## 它是交付工具，不是运行路径
 
@@ -274,7 +277,13 @@ async def stamp_organization(target: asyncpg.Connection, org_id: str,
 
     迁移 0013 建列时给的是 `''`（存量行必须有确定值），这里改写成真实组织。
     **只改还是空串的行** —— 重跑时第二遍不动任何东西。
+
+    分批写、逐批提交：asyncpg 在显式事务之外每条语句自动提交，所以这个循环
+    不要包进一个大事务 —— 一次全表 UPDATE 会按住全表行锁直到提交，生产量级
+    上顶不住。中途失败留下的是"部分已回填"的可续跑状态，重跑只碰剩下还是
+    `''` 的行。
     """
+    BATCH = 1000
     step = report.step("organization_id 回填")
     for table in ("documents", "conversations", "extraction_templates", "extraction_runs"):
         count = await target.fetchval(
@@ -282,9 +291,16 @@ async def stamp_organization(target: asyncpg.Connection, org_id: str,
         step.read += count
         if dry_run or not count:
             continue
-        await target.execute(
-            f"UPDATE {table} SET organization_id = $1 WHERE organization_id = ''", org_id)
-        step.written += count
+        while True:
+            done = await target.execute(
+                f"UPDATE {table} SET organization_id = $1 WHERE ctid IN "
+                f"(SELECT ctid FROM {table} WHERE organization_id = '' LIMIT $2)",
+                org_id, BATCH)
+            # asyncpg execute 回 "UPDATE <n>" —— 尾数即本批行数，0 表示没剩了
+            written = int(done.split()[-1])
+            step.written += written
+            if written == 0:
+                break
 
 
 # ---------------------------------------------------------------- 对账
@@ -331,16 +347,39 @@ async def reconcile(source: asyncpg.Connection, target: asyncpg.Connection,
 
     **每一项失败都会让整个迁移报 not ok** —— 不允许"大体上搬过去了"。
     """
-    # 1) 行数
-    for old_table, new_table in (
-        ("users", "control.users"),
-        ("api_keys", "control.api_keys"),
-        ("usage_records", "control.usage_ledger"),
-        ("file_tokens", "control.file_grants"),
+    # 1) 逐行对账 + 行数下界。
+    #
+    # **判据是"旧表每一行都能在新表里按主键找到"，不是"新旧行数相等"。**
+    # 行数相等证明不了任何事：迁移之后新建的用户与 key 只会让新表更多，
+    # 一次漏搬照样能"通过"；反过来它还会把合法的新行判成失败，让重跑变红。
+    # 所以每对表发两条检查：缺失集为空，以及新表行数 >= 旧表行数。
+    #
+    # 源库与目标库可能是两个库，跨库的 NOT EXISTS 写不成一条 SQL ——
+    # 主键集分别取回，在 Python 里做差集（键是短串，生产量级也放得下）。
+    # 判据与 drop_legacy_account_tables.py 同一条，那个脚本是单库，
+    # 所以直接用的 NOT EXISTS。
+    for old_table, old_key, new_table, new_key in (
+        ("users", "id", "control.users", "id"),
+        ("api_keys", "id", "control.api_keys", "id"),
+        # usage_ledger 的幂等键 event_id 填的也是旧主键（见 migrate_usage），
+        # 这里按主键 id 核对，同一回事
+        ("usage_records", "id", "control.usage_ledger", "id"),
+        ("file_tokens", "token", "control.file_grants", "token"),
     ):
-        old = await source.fetchval(f"SELECT count(*) FROM {old_table}")
-        new = await target.fetchval(f"SELECT count(*) FROM {new_table}")
-        report.check(f"行数 {old_table} -> {new_table}", old == new, f"{old} -> {new}")
+        old_keys = [r["k"] for r in await source.fetch(
+            f'SELECT "{old_key}" AS k FROM {old_table}')]
+        new_keys = {r["k"] for r in await target.fetch(
+            f"SELECT {new_key} AS k FROM {new_table}")}
+        missing = [k for k in old_keys if k not in new_keys]
+        if missing:
+            detail = (f"旧表 {len(old_keys)} 行里有 {len(missing)} 行"
+                      f"在 {new_table} 里找不到 —— 搬漏了。样例：{missing[:5]}")
+        else:
+            detail = f"旧表 {len(old_keys)} 行，每一行都能在 {new_table} 里找到"
+        report.check(f"行齐 {old_table} -> {new_table}", not missing, detail)
+        report.check(f"行数 {old_table} -> {new_table}",
+                     len(new_keys) >= len(old_keys),
+                     f"{len(old_keys)} -> {len(new_keys)}")
 
     # 2) 每个用户都有 membership。**没有 membership 的用户等于登不进去** ——
     #    而那在登录接口上表现为"用户名或密码错误"，与真的密码错分不开
@@ -527,8 +566,14 @@ async def run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="旧库 -> control/corpus 双 schema 的一次性迁移")
-    parser.add_argument("--source", required=True, help="旧库连接串（只读）")
-    parser.add_argument("--target", required=True, help="新库连接串")
+    parser.add_argument("--source", required=False,
+                        default=os.environ.get("SOURCE_DATABASE_URL", ""),
+                        help="旧库连接串（只读）。优先用环境变量 SOURCE_DATABASE_URL —— "
+                             "argv 在 ps 与 CI 日志里可见，连接串里有口令")
+    parser.add_argument("--target", required=False,
+                        default=os.environ.get("TARGET_DATABASE_URL", ""),
+                        help="新库连接串。优先用环境变量 TARGET_DATABASE_URL —— "
+                             "argv 在 ps 与 CI 日志里可见，连接串里有口令")
     parser.add_argument("--apply", action="store_true",
                         help="真正写入。**缺省是 dry-run** —— 默认不改数据")
     parser.add_argument("--report", help="迁移报告写到哪个 json")
@@ -536,11 +581,19 @@ def main() -> int:
                         help="显式确认 target 是隔离克隆/演练库。缺省拒绝一切看起来像 dev/生产默认库的 target")
     parser.add_argument("--object-endpoint", help="对象存储地址（给了才做存在性抽样）")
     parser.add_argument("--object-access-key", default=os.environ.get("OBJECT_ACCESS_KEY", ""))
-    parser.add_argument("--object-secret-key", default=os.environ.get("OBJECT_SECRET_KEY", ""))
+    parser.add_argument("--object-secret-key", default=os.environ.get("OBJECT_SECRET_KEY", ""),
+                        help="对象存储密钥。只走环境变量 OBJECT_SECRET_KEY —— "
+                             "argv 在 ps 与 CI 日志里可见，不要经命令行传递密钥")
     parser.add_argument("--object-bucket", default=os.environ.get("OBJECT_BUCKET", "deepdocparse"))
     parser.add_argument("--object-secure", action="store_true")
     parser.add_argument("--object-sample", type=int, default=200)
     args = parser.parse_args()
+    if not args.source:
+        parser.error("缺 --source：请 export SOURCE_DATABASE_URL 再跑"
+                     "（连接串里有口令，不要写进命令行或 CI 日志）")
+    if not args.target:
+        parser.error("缺 --target：请 export TARGET_DATABASE_URL 再跑"
+                     "（连接串里有口令，不要写进命令行或 CI 日志）")
 
     return asyncio.run(run(args))
 

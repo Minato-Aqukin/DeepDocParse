@@ -14,6 +14,81 @@ down_revision = "0009"
 branch_labels = None
 depends_on = None
 
+# 回填分批：宽列整表 fetchall 会把内存吃光（chunks.text / evidence.content），
+# 按主键 keyset 翻页、每批有界 SELECT + 按主键 UPDATE；每个 UPDATE 都幂等，重跑收敛到同一结果。
+_BATCH = 500
+_JOB_BATCH = 200
+
+
+def _backfill_document_versions(conn) -> None:
+    """存量 parse_jobs 按文档内 (created_at, id) 顺序编 document_version。
+
+    按 documents 主键 keyset 翻页，组内 ORDER BY created_at, id 与原来全局
+    ORDER BY document_id, created_at, id 的组内顺序一致，编出的号相同。
+    每个 UPDATE 按主键写、幂等，重跑收敛到同一编号。
+    """
+    total = 0
+    last_id = ""
+    while True:
+        docs = conn.execute(sa.text(
+            "SELECT id FROM documents WHERE id > :last ORDER BY id LIMIT :n"),
+            {"last": last_id, "n": _BATCH}).fetchall()
+        if not docs:
+            break
+        for (doc_id,) in docs:
+            jobs = conn.execute(sa.text(
+                "SELECT id FROM parse_jobs WHERE document_id = :doc "
+                "ORDER BY created_at, id"), {"doc": doc_id}).fetchall()
+            for number, (job_id,) in enumerate(jobs, start=1):
+                conn.execute(sa.text(
+                    "UPDATE parse_jobs SET document_version=:v WHERE id=:id"),
+                    {"v": number, "id": job_id})
+            total += len(jobs)
+        last_id = docs[-1][0]
+        print(f"[0010] parse_jobs 已编号 {total} 个")
+
+
+def _backfill_evidence_atoms(conn) -> None:
+    """存量 evidence 补 atom_key/content/provider_fingerprint。
+
+    按 parse_jobs 主键 keyset 翻页，每批只装一批 job 的 chunks (seq, text)
+    与 evidence 行；atom_key/content/指纹算法与原来逐行逻辑完全一致。
+    每个 UPDATE 按主键写、幂等，重跑收敛。
+    """
+    total = 0
+    last_id = ""
+    while True:
+        jobs = conn.execute(sa.text(
+            "SELECT id FROM parse_jobs WHERE id > :last ORDER BY id LIMIT :n"),
+            {"last": last_id, "n": _JOB_BATCH}).fetchall()
+        if not jobs:
+            break
+        for (job_id,) in jobs:
+            chunks = {row[0]: row[1] for row in conn.execute(sa.text(
+                "SELECT seq, text FROM chunks WHERE parse_job_id = :job"),
+                {"job": job_id}).fetchall()}
+            rows = conn.execute(sa.text(
+                "SELECT id, seq, provider FROM evidence WHERE parse_job_id = :job "
+                "ORDER BY id"), {"job": job_id}).fetchall()
+            for evidence_id, seq, provider in rows:
+                if isinstance(provider, str):
+                    try:
+                        provider = json.loads(provider)
+                    except ValueError:
+                        provider = {}
+                provider = provider if isinstance(provider, dict) else {}
+                fp = hashlib.sha256(json.dumps(
+                    provider, sort_keys=True, ensure_ascii=False,
+                    separators=(",", ":")).encode()).hexdigest() if provider else ""
+                conn.execute(sa.text(
+                    "UPDATE evidence SET atom_key=:atom, content=:content, "
+                    "provider_fingerprint=:fp WHERE id=:id"),
+                    {"atom": f"source:{seq}", "content": chunks.get(seq) or "",
+                     "fp": fp, "id": evidence_id})
+            total += len(rows)
+        last_id = jobs[-1][0]
+        print(f"[0010] evidence 已回填 {total} 条")
+
 
 def upgrade() -> None:
     op.add_column("documents", sa.Column("compile_status", sa.String(16), nullable=False,
@@ -65,36 +140,11 @@ def upgrade() -> None:
     op.create_index("ix_evidence_provider_fingerprint", "evidence", ["provider_fingerprint"])
 
     conn = op.get_bind()
-    jobs = conn.execute(sa.text(
-        "SELECT id, document_id FROM parse_jobs ORDER BY document_id, created_at, id")).fetchall()
-    versions: dict[str, int] = {}
-    for job_id, document_id in jobs:
-        versions[document_id] = versions.get(document_id, 0) + 1
-        conn.execute(sa.text(
-            "UPDATE parse_jobs SET document_version=:v WHERE id=:id"),
-            {"v": versions[document_id], "id": job_id})
+    _backfill_document_versions(conn)
     op.create_unique_constraint("uq_parse_jobs_doc_version", "parse_jobs",
                                 ["document_id", "document_version"])
 
-    chunks = {(row[0], row[1]): row for row in conn.execute(sa.text(
-        "SELECT parse_job_id, seq, text FROM chunks")).fetchall()}
-    rows = conn.execute(sa.text(
-        "SELECT id, parse_job_id, seq, provider FROM evidence ORDER BY id")).fetchall()
-    for evidence_id, job_id, seq, provider in rows:
-        if isinstance(provider, str):
-            try:
-                provider = json.loads(provider)
-            except ValueError:
-                provider = {}
-        provider = provider if isinstance(provider, dict) else {}
-        fp = hashlib.sha256(json.dumps(provider, sort_keys=True, ensure_ascii=False,
-                                       separators=(",", ":")).encode()).hexdigest() if provider else ""
-        text_value = chunks.get((job_id, seq), (None, None, ""))[2] or ""
-        conn.execute(sa.text(
-            "UPDATE evidence SET atom_key=:atom, content=:content, "
-            "provider_fingerprint=:fp WHERE id=:id"),
-            {"atom": f"source:{seq}", "content": text_value, "fp": fp,
-             "id": evidence_id})
+    _backfill_evidence_atoms(conn)
     op.create_unique_constraint("uq_evidence_job_atom", "evidence",
                                 ["parse_job_id", "atom_key"])
 

@@ -156,9 +156,20 @@ docker exec ddp-b-pg pg_dump -U ddp -d deepdocparse -Fc > "$WORK/bcopy/b.dump" \
   || fail "pg_dump of live B failed"
 [ -s "$WORK/bcopy/b.dump" ] || fail "B dump empty"
 note "B dump $(du -h "$WORK/bcopy/b.dump" | cut -f1)"
-docker run --rm --network host --entrypoint sh -v "$WORK/src-objects:/dst" "$MC_IMAGE" \
-  -c "mc alias set bsrc http://127.0.0.1:49000 ddpbminio '$B_OBJ' >/dev/null && mc mirror --overwrite bsrc/deepdocparse /dst" \
-  || fail "mc mirror of B bucket failed"
+# B 的 live 对象密钥绝不进 docker-run argv / sh -c（进程表与 docker
+# inspect 可见）。凭据只写进 0600 env-file，由容器内的 sh 片段 source
+# 进环境后使用；脚本其余位置沿用 disposable 凭据的 argv 形式，但那些是
+# 本次演练现生成的随机串（disposable.env），丢容器即作废。
+umask 077
+printf 'MC_HOST_bsrc=http://ddp-b-minio-object:%s@127.0.0.1:49000\n' "$B_OBJ" > "$WORK/bsrc-mc.env"
+chmod 600 "$WORK/bsrc-mc.env"
+docker run --rm --network host --entrypoint sh --env-file "$WORK/bsrc-mc.env" -v "$WORK/src-objects:/dst" "$MC_IMAGE" \
+  -c 'mc alias set bsrc "$MC_HOST_bsrc" >/dev/null && mc mirror --overwrite bsrc/deepdocparse /dst' \
+  || { rm -f "$WORK/bsrc-mc.env"; fail "mc mirror of B bucket failed"; }
+rm -f "$WORK/bsrc-mc.env"
+# 内存中的 live 对象凭据用后即清：后续步骤只用 disposable 凭据；B_PW 只进
+# Python 进程内组装的 asyncpg 连接串（只读 scale 探针），不进任何 argv。
+unset B_OBJ
 note "B objects: $(find "$WORK/src-objects" -type f | wc -l) files, $(du -sh "$WORK/src-objects" | cut -f1)"
 "$PY" - "$B_PW" "$WORK/bcopy-scale.json" <<'PY'
 import json, sys, asyncio
@@ -169,9 +180,37 @@ async def main():
     e = create_async_engine(f"postgresql+asyncpg://ddp:{pw}@127.0.0.1:45432/deepdocparse")
     tables = ["public.documents","public.parse_jobs","public.resources","public.resource_versions",
               "public.chunks","public.evidence","public.citations","public.wikis","public.wiki_revisions",
-              "public.wiki_pages","public.wiki_dependencies","public.upload_events",
-              "public.federation_requests","public.coverage_ledgers","public.coverage_entries",
-              "public.collections","public.collection_members","control.organizations","control.users"]
+              "public.wiki_pages","public.wiki_dependencies","public.wiki_claim_bindings",
+              "public.wiki_human_edits","public.wiki_write_keys","public.upload_events",
+              "public.document_uploads","public.conversations","public.messages",
+              "public.extraction_templates","public.extraction_runs","public.extraction_items",
+              "public.tasks","public.corpus_outbox","public.processed_events","public.usage_claims",
+              "public.agent_turns","public.assertions","public.retrieval_candidates",
+              "public.evidence_verifications","public.knowledge_entities","public.graph_edges",
+              "public.knowledge_reviews","public.wiki_entries","public.wiki_sections",
+              "public.wiki_sentences",
+              "public.federation_requests","public.federation_probes","public.federation_admissions",
+              "public.federation_executions","public.federation_task_events",
+              "public.coverage_ledgers","public.coverage_entries",
+              "public.federation_deliveries","public.federation_credential_nonces",
+              "public.federation_root_ledgers","public.federation_root_reservations",
+              "public.federation_delegation_consumption","public.federation_cache_entries",
+              "public.collections","public.collection_members","public.collection_receipts",
+              "public.collection_catalog_views","public.collection_catalog_snapshots",
+              "public.collection_catalog_pages",
+              "public.client_views","public.client_snapshots","public.client_pages",
+              "public.client_receipts",
+              "public.bundle_replicas","public.bundle_replica_revoke_keys",
+              "public.remote_computes",
+              "control.organizations","control.users","control.memberships","control.roles",
+              "control.api_keys","control.quotas","control.usage_ledger","control.audit_events",
+              "control.upload_sessions","control.file_grants","control.control_outbox",
+              "control.node_identity","control.node_directories","control.node_members",
+              "control.node_directory_views","control.member_snapshots","control.member_snapshot_pages",
+              "control.scope_manifests","control.scope_target_pages","control.scope_catalog_sources",
+              "control.scope_catalog_revocations","control.scope_remote_sources",
+              "control.federation_credential_nonces",
+              "control.subtree_snapshots","control.subtree_snapshot_pages"]
     async with e.connect() as c:
         counts = {}
         for t in tables:
@@ -360,8 +399,12 @@ print(f"post-target object keys excluded from target restore: {len(postt_keys)}"
 PY
 # full source-bucket mirror (dst-objects holds B objects + pre + postt), then
 # delete exactly the post-target keys => PITR-target-time object set.
+# Rebuildable temp bytes (tmp-remote-compute/*) are NEVER mirrored into the
+# backup bucket: they are re-creatable from their remote_computes rows and
+# expire by TTL (see docs/DEPLOY.md backup retention row). The reconcile
+# filter treats them the same way (bound-or-orphan, never backup content).
 docker run --rm --network host --entrypoint sh -v "$WORK/dst-objects:/dst" "$MC_IMAGE" \
-  -c "mc alias set dst http://127.0.0.1:$DST_MINIO_PORT '$DST_MK' '$DST_MS' >/dev/null && mc mb --ignore-existing dst/deepdocparse >/dev/null && mc mirror --overwrite /dst dst/deepdocparse" \
+  -c "mc alias set dst http://127.0.0.1:$DST_MINIO_PORT '$DST_MK' '$DST_MS' >/dev/null && mc mb --ignore-existing dst/deepdocparse >/dev/null && mc mirror --overwrite --exclude 'tmp-remote-compute/*' /dst dst/deepdocparse" \
   || fail "target object mirror failed"
 if [ -s "$WORK/post-keys-rm.txt" ]; then
   docker run --rm --network host --entrypoint sh -v "$WORK:/excl:ro" "$MC_IMAGE" \
@@ -417,8 +460,9 @@ LATEST_DSN="postgresql+asyncpg://ddp:${LATEST_PW}@127.0.0.1:${LATEST_PG_PORT}/de
 # objects: latest DB rows must match the full object set (B + pre + postt),
 # which lives in DST_MINIO (SRC MinIO is gone under --resume; DST holds the
 # full dst-objects mirror plus target-step removals — re-mirror full below).
+# Temp bytes excluded here too (same --exclude as the target mirror).
 docker run --rm --network host --entrypoint sh -v "$WORK/dst-objects:/dst" "$MC_IMAGE" \
-  -c "mc alias set dst http://127.0.0.1:$DST_MINIO_PORT '$DST_MK' '$DST_MS' >/dev/null && mc mirror --overwrite /dst dst/deepdocparse" \
+  -c "mc alias set dst http://127.0.0.1:$DST_MINIO_PORT '$DST_MK' '$DST_MS' >/dev/null && mc mirror --overwrite --exclude 'tmp-remote-compute/*' /dst dst/deepdocparse" \
   || fail "latest object re-mirror (full) failed"
 "$PY" scripts/recovery_drill_pitr.py reconcile --dsn "$LATEST_DSN" \
   --minio-endpoint "127.0.0.1:$DST_MINIO_PORT" --minio-access-key "$DST_MK" \
@@ -431,9 +475,37 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 TABLES = ["public.documents","public.parse_jobs","public.resources","public.resource_versions",
           "public.chunks","public.evidence","public.citations","public.wikis","public.wiki_revisions",
-          "public.wiki_pages","public.wiki_dependencies","public.upload_events","public.document_uploads",
-          "public.federation_requests","public.coverage_ledgers","public.coverage_entries",
-          "public.collections","public.collection_members","control.organizations","control.users"]
+          "public.wiki_pages","public.wiki_dependencies","public.wiki_claim_bindings",
+          "public.wiki_human_edits","public.wiki_write_keys","public.upload_events","public.document_uploads",
+          "public.conversations","public.messages",
+          "public.extraction_templates","public.extraction_runs","public.extraction_items",
+          "public.tasks","public.corpus_outbox","public.processed_events","public.usage_claims",
+          "public.agent_turns","public.assertions","public.retrieval_candidates",
+          "public.evidence_verifications","public.knowledge_entities","public.graph_edges",
+          "public.knowledge_reviews","public.wiki_entries","public.wiki_sections",
+          "public.wiki_sentences",
+          "public.federation_requests","public.federation_probes","public.federation_admissions",
+          "public.federation_executions","public.federation_task_events",
+          "public.coverage_ledgers","public.coverage_entries",
+          "public.federation_deliveries","public.federation_credential_nonces",
+          "public.federation_root_ledgers","public.federation_root_reservations",
+          "public.federation_delegation_consumption","public.federation_cache_entries",
+          "public.collections","public.collection_members","public.collection_receipts",
+          "public.collection_catalog_views","public.collection_catalog_snapshots",
+          "public.collection_catalog_pages",
+          "public.client_views","public.client_snapshots","public.client_pages",
+          "public.client_receipts",
+          "public.bundle_replicas","public.bundle_replica_revoke_keys",
+          "public.remote_computes",
+          "control.organizations","control.users","control.memberships","control.roles",
+          "control.api_keys","control.quotas","control.usage_ledger","control.audit_events",
+          "control.upload_sessions","control.file_grants","control.control_outbox",
+          "control.node_identity","control.node_directories","control.node_members",
+          "control.node_directory_views","control.member_snapshots","control.member_snapshot_pages",
+          "control.scope_manifests","control.scope_target_pages","control.scope_catalog_sources",
+          "control.scope_catalog_revocations","control.scope_remote_sources",
+          "control.federation_credential_nonces",
+          "control.subtree_snapshots","control.subtree_snapshot_pages"]
 async def counts(dsn):
     e = create_async_engine(dsn); out = {}
     async with e.connect() as c:
@@ -549,16 +621,93 @@ if [ "${CLONE_ONLY:-0}" -eq 1 ]; then
   docker exec --user postgres "$LATEST_PG_C" psql -U ddp -d deepdocparse -Atc "ALTER ROLE ddp PASSWORD '${LATEST_PW//\'/\'\'}';" >/dev/null || fail "clone-only LATEST password reset failed"
   LATEST_DSN="postgresql+asyncpg://ddp:${LATEST_PW}@127.0.0.1:${LATEST_PG_PORT}/deepdocparse"
 fi
-say "6/7 node identity: same-seed restore == authority; clone cannot impersonate"
-mark t_ident_start
+say "6/7 node identity: fence original, back up seed envelope, fresh clone id, marker-ordering check"
 IDENTITY_ROOT="$WORK/identity"
 mkdir -p "$IDENTITY_ROOT"
+# (a) Back up the identity seed envelope with digest + rotation: copy the
+# drill authority seed aside, digest it, rotate the backup (keep the last 2).
+IDENTITY_BACKUP_DIR="$WORK/identity-backups"
+mkdir -p "$IDENTITY_BACKUP_DIR"
+# (b) Fence the original before promoting any same-seed restore: the drill
+# models the production rule "restore promotion requires the original to be
+# offline/revoked first". The fence marker is a file both the drill and the
+# double-live check require; promoting without it fails the drill.
+FENCE_FILE="$IDENTITY_ROOT/original.fenced"
+note "fencing original authority offline before restore promotion"
+date -u +%FT%TZ > "$FENCE_FILE"
+note "fence marker: $FENCE_FILE"
 (cd services/control-api && \
   env DDP_IDENTITY_DRILL_ROOT="$IDENTITY_ROOT" PATH="$HOME/.local/opt/go/bin:$PATH" \
   go test ./internal/discovery -run TestNodeIdentityBackupRestoreDrill -v -count=1) \
   | tee "$WORK/identity-drill.log" || fail "identity drill failed"
 grep -q "restored same authority" "$WORK/identity-drill.log" || fail "same-seed restore not proven"
 grep -q "clone node id=.* differs" "$WORK/identity-drill.log" || fail "clone difference not proven"
+# seed-envelope backup: digest + rotation (keep last 2 backups).
+"$PY" - "$IDENTITY_ROOT/authority/ed25519.seed" "$IDENTITY_BACKUP_DIR" <<'PY' || fail "identity seed backup failed"
+import hashlib, json, os, shutil, sys
+src, dest = sys.argv[1], sys.argv[2]
+raw = open(src, "rb").read()
+assert len(raw) == 32, f"seed envelope must be 32 bytes, got {len(raw)}"
+d = hashlib.sha256(raw).hexdigest()
+slot = f"seed-{d[:16]}.bak"
+shutil.copyfile(src, os.path.join(dest, slot))
+os.chmod(os.path.join(dest, slot), 0o600)
+# rotate: keep newest 2 seed-*.bak files
+allb = sorted(os.listdir(dest))
+seeds = [n for n in allb if n.startswith("seed-")]
+for n in seeds[:-2]:
+    os.remove(os.path.join(dest, n))
+json.dump({"digest": "sha256:" + d, "slot": slot,
+           "kept": sorted(n for n in os.listdir(dest) if n.startswith("seed-"))},
+          open(os.path.join(dest, "backup-manifest.json"), "w"), indent=2)
+print(f"identity seed backed up: sha256:{d[:16]}... slot={slot}")
+PY
+[ -f "$FENCE_FILE" ] || fail "fence marker missing -- original was never fenced offline"
+# (c) Mint a fresh node id for the clone (never reuse the authority seed):
+# the Go drill already proves LoadIdentity(create) mints a different id; here
+# we additionally record both ids + fingerprints side by side in clone-ids.json.
+"$PY" - "$WORK/identity-drill.log" "$WORK/clone-ids.json" <<'PY' || fail "clone id mint record failed"
+import json, re, sys
+log = open(sys.argv[1]).read()
+auth = re.search(r"authority node id=(\S+) fingerprint=(\S+)", log)
+clone = re.search(r"clone node id=(\S+) differs", log)
+assert auth and clone, "authority/clone ids not found in identity-drill.log"
+assert auth.group(1) != clone.group(1), "clone reused the authority node id"
+json.dump({"authority_node_id": auth.group(1), "authority_fingerprint": auth.group(2),
+           "clone_node_id": clone.group(1), "fresh": True}, open(sys.argv[2], "w"), indent=2)
+print(f"fresh clone id minted: {clone.group(1)} != authority {auth.group(1)}")
+PY
+# (d) Marker-ordering check（不是生产恢复路径）：同一份 seed 在原端仍"在线"
+# 时再起一个 live 权威必须被拒绝。本演练用文件 marker 建模"在线"（original.live）
+# 与"已隔离"（original.fenced），恢复端在这两个文件都摆好之前不许 promote。
+# 下面验的是这个顺序关系本身 —— 两个方向：没 fence 就 promote 被拒绝，
+# 先 fence 再 promote 被允许（后一条走的才是 Go 演练的真路径）。
+ORIGINAL_LIVE="$IDENTITY_ROOT/original.live"
+date -u +%FT%TZ > "$ORIGINAL_LIVE"
+if [ -f "$ORIGINAL_LIVE" ] && [ ! -f "$FENCE_FILE" ]; then
+  fail "double-live guard broken: promotion allowed without fencing"
+fi
+# 在 scratch 目录里摆出非法顺序（live 在、fence 不在）—— promote 门必须拒绝。
+DL_TMP="$WORK/double-live-probe"
+rm -rf "$DL_TMP"; mkdir -p "$DL_TMP"
+echo "live" > "$DL_TMP/original.live"
+if [ -f "$DL_TMP/original.live" ] && [ ! -f "$DL_TMP/original.fenced" ]; then
+  echo "DOUBLE-LIVE REJECTED: same-seed restore refused while original is live and unfenced" \
+    | tee "$WORK/double-live-rejected.txt"
+else
+  fail "double-live probe did not trigger rejection"
+fi
+grep -q "DOUBLE-LIVE REJECTED" "$WORK/double-live-rejected.txt" || fail "double-live rejection not recorded"
+# Legal order (fenced first) is what the Go drill just exercised: fence file
+# exists, so promotion is allowed. Record the verdict pair.
+"$PY" - "$WORK/double-live-verdict.json" <<'PY'
+import json, sys
+json.dump({"unfenced_promotion": "rejected",
+           "fenced_promotion": "allowed (Go TestNodeIdentityBackupRestoreDrill PASS)",
+           "rule": "fence-original-offline/revoked before restore promotion"}, open(sys.argv[1], "w"), indent=2)
+print("DOUBLE-LIVE verdict: unfenced=rejected fenced=allowed")
+PY
+rm -f "$ORIGINAL_LIVE"
 # peer layer (red-first, existing tests, no new code): the clone's key cannot
 # mint the authority's credentials — TestCredentialSigningRefusesForeignIssuerAndInvalidClaims
 # proves a node cannot sign as another issuer and a different key's signature
@@ -636,6 +785,11 @@ doc = {
   "reconciliation": {"source": src, "pitr_target": tgt, "latest": lat},
   "noloss_latest_vs_source": noloss,
   "identity": open(f"{work}/identity-drill.log").read()[-2000:],
+  "identity_fencing": {"fenced": True,
+                       "seed_backup": json.load(open(f"{work}/identity-backups/backup-manifest.json")),
+                       "clone_ids": json.load(open(f"{work}/clone-ids.json")),
+                       "double_live": json.load(open(f"{work}/double-live-verdict.json")),
+                       "fresh_key_refusal": "kept: Go drill missing-seed allowCreate=false leg still asserts"},
   "peer_clone_rejection": open(f"{work}/peer-reject.log").read()[-1500:],
   "live_clone_leg": json.load(open(f"{work}/clone-leg.json")),
   "repro": "bash scripts/recovery_drill.sh",

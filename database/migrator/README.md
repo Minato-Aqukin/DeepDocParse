@@ -4,23 +4,24 @@
 切换完成后从运行镜像删除（§11.4）。
 
 ## 用法
-
 ```bash
 # 0. 先把两套 schema 建好（顺序无关，没有跨 schema 外键）
-control-migrate -database "$DSN" up
+# 连接串一律走环境变量 —— argv 在 ps 与 CI 日志里可见，而连接串里有口令
+CONTROL_DATABASE_URL=... control-migrate up
 cd database/corpus && alembic upgrade head
 
+export SOURCE_DATABASE_URL=... TARGET_DATABASE_URL=...
 # 1. dry-run：只做源侧预检。**必须通过才允许进入切换窗口**
-python database/migrator/migrate.py --source "$OLD" --target "$NEW"
+python database/migrator/migrate.py
 
-# 2. 真跑，带对象存储对账
-python database/migrator/migrate.py --source "$OLD" --target "$NEW" --apply \
+# 2. 真跑，带对象存储对账（密钥只走环境变量 OBJECT_SECRET_KEY，不经 argv）
+python database/migrator/migrate.py --apply \
     --object-endpoint 127.0.0.1:19000 --object-bucket deepdocparse \
     --report out/migration-report.json
 ```
 
-原地升级时 `--source` 与 `--target` 可以是**同一个连接串**：语料表本来就在
-那个库里，迁移器只是把账号层搬进 `control` schema 并回填 `organization_id`。
+原地升级时 `SOURCE_DATABASE_URL` 与 `TARGET_DATABASE_URL` 设成**同一个连接串**：
+语料表本来就在那个库里，迁移器只是把账号层搬进 `control` schema 并回填 `organization_id`。
 
 ## 它做什么
 
@@ -55,6 +56,34 @@ python database/migrator/migrate.py --source "$OLD" --target "$NEW" --apply \
 每一步都是 `INSERT ... ON CONFLICT DO NOTHING`，键取旧库主键 —— 重跑时
 第二遍全部落空。**没有一处用自增或随机 id 建新行**，那是重跑产生重复的唯一来源。
 第二轮演练实测：重跑写 0、跳过全部、对账仍然全 PASS。
+
+## 删旧表（另起一步）
+
+迁移器**不删旧表**。对账通过、兼容窗口过期之后，才手动删 —— 连接串同样走环境变量：
+
+```bash
+# 只检查不动手
+TARGET_DATABASE_URL=... python database/migrator/drop_legacy_account_tables.py
+
+# 真删：还要审批文件 + 当次通过的对账报告，缺一不可
+TARGET_DATABASE_URL=... python database/migrator/drop_legacy_account_tables.py \
+    --apply --approval out/drop-approval.json \
+    --reconcile-report out/migration-report.json
+```
+
+审批文件是 JSON，恰好三个键，一个不能多一个不能少：
+
+```json
+{"compat_window_expired_on": "2026-10-01",
+ "approved_by": "alice",
+ "reconcile_report_sha256": "<out/migration-report.json 的 sha256>"}
+```
+
+- `compat_window_expired_on`：兼容窗口过期日（YYYY-MM-DD），必须是今天或过去 ——
+  窗口没过就删表，等于提前烧掉回滚路；
+- `approved_by`：第二位人类审批人签字（非空字符串；动手的人不能给自己批）；
+- `reconcile_report_sha256`：把这次审批绑定到某一份具体的对账报告，
+  那份报告的 `ok` 必须为 true —— 换一份报告就要重新批。
 
 ## 演练记录
 

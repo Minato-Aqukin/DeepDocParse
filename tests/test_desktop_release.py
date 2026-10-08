@@ -358,9 +358,33 @@ def test_unsigned_manifest_needs_explicit_risk_flag(tmp_path, capsys):
 
 # --------------------------------------------------------------- apply / rollback
 
-def test_apply_keeps_previous_and_rollback_restores_it(tmp_path):
+def _install_tree(root: Path, version: str) -> None:
+    """A directly installed tree: packaged files + manifest, like `apply` leaves."""
+    make_tree(root, version)
+    (root / "LICENSE").write_text("test license\n")
+    manifest_files = {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*")) if path.is_file()
+    }
+    build = {"format": 1, "epoch": 1789257600, "electron": "44.3.0",
+             "runtime": {"distributions": {}},
+             "license_manifest": {"electron": {"LICENSE": manifest_files["LICENSE"]},
+                                  "distributions": {}},
+             "files": manifest_files}
+    (root / "BUILD-MANIFEST.json").write_text(json.dumps(build) + "\n")
+
+
+def _apply_for_rollback(root: Path, tmp: Path, old: str, new: str) -> None:
+    """Run the real `apply` so `.previous` + UPDATE-STATE.json are genuine."""
+    archive = make_archive(tmp, new)
+    manifest = make_manifest(tmp, archive, new)
+    assert update_check.main(["apply", "--root", str(root), "--manifest", str(manifest),
+                              "--archive", str(archive), "--allow-unsigned"]) == 0
+
+
+def test_apply_keeps_previous_and_rollback_restores_it(tmp_path, capsys):
     root = tmp_path / "opt" / "deepdocparse"
-    make_tree(root, "0.1.0")
+    _install_tree(root, "0.1.0")
     archive = make_archive(tmp_path, "0.2.0")
     manifest = make_manifest(tmp_path, archive, "0.2.0")
     assert update_check.main(["apply", "--root", str(root), "--manifest", str(manifest),
@@ -369,6 +393,7 @@ def test_apply_keeps_previous_and_rollback_restores_it(tmp_path):
     previous = root.with_name(root.name + ".previous")
     assert json.loads((previous / "RELEASE-MANIFEST.json").read_text())["version"] == "0.1.0"
     assert update_check.main(["rollback", "--root", str(root)]) == 0
+    assert "rollback: 0.2.0 -> 0.1.0" in capsys.readouterr().err
     assert json.loads((root / "RELEASE-MANIFEST.json").read_text())["version"] == "0.1.0"
     rolled = list(root.parent.glob(root.name + ".rolledback-*"))
     assert rolled and json.loads(
@@ -390,7 +415,7 @@ def test_pending_previous_refuses_until_forced(tmp_path, capsys):
 def test_interrupted_update_leaves_old_version_runnable(tmp_path, capsys):
     root = tmp_path / "opt" / "deepdocparse"
     previous = root.with_name(root.name + ".previous")
-    make_tree(previous, "0.1.0")
+    _install_tree(previous, "0.1.0")
     assert not root.exists()
     assert update_check.main(["status", "--root", str(root)]) == 0
     state = json.loads(capsys.readouterr().out)
@@ -401,11 +426,93 @@ def test_interrupted_update_leaves_old_version_runnable(tmp_path, capsys):
     assert not previous.exists()
 
 
-# --------------------------------------------------------------- models
+def test_rollback_records_previous_digest(tmp_path):
+    """`apply` records the pre-upgrade digest the rollback gate trusts."""
+    root = tmp_path / "opt" / "deepdocparse"
+    _install_tree(root, "0.1.0")
+    expected = update_check.tree_digest(root)
+    _apply_for_rollback(root, tmp_path, "0.1.0", "0.2.0")
+    state = json.loads((root / "UPDATE-STATE.json").read_text())
+    assert state["previous_digest"] == expected
+    assert state["previous_version"] == "0.1.0"
+
+
+def test_rollback_refuses_tampered_previous_tree(tmp_path, capsys):
+    """A planted `.previous` with a modified payload must fail, not go live."""
+    root = tmp_path / "opt" / "deepdocparse"
+    _install_tree(root, "0.1.0")
+    _apply_for_rollback(root, tmp_path, "0.1.0", "0.2.0")
+    previous = root.with_name(root.name + ".previous")
+    (previous / "data.txt").write_text("planted payload\n")
+    assert update_check.main(["rollback", "--root", str(root)]) == 1
+    assert "package integrity check failed" in capsys.readouterr().err
+    assert json.loads((root / "RELEASE-MANIFEST.json").read_text())["version"] == "0.2.0"
+    assert previous.is_dir()
+
+
+def test_rollback_refuses_smuggled_file_in_previous_tree(tmp_path, capsys):
+    """An extra file no BUILD-MANIFEST covers must fail the pre-swap gate."""
+    root = tmp_path / "opt" / "deepdocparse"
+    _install_tree(root, "0.1.0")
+    _apply_for_rollback(root, tmp_path, "0.1.0", "0.2.0")
+    previous = root.with_name(root.name + ".previous")
+    (previous / "evil.bin").write_bytes(b"smuggled\n")
+    assert update_check.main(["rollback", "--root", str(root)]) == 1
+    assert "unmanifested" in capsys.readouterr().err
+    assert json.loads((root / "RELEASE-MANIFEST.json").read_text())["version"] == "0.2.0"
+    assert previous.is_dir()
+
+
+def test_rollback_refuses_replaced_previous_tree(tmp_path, capsys):
+    """A planted `.previous` with different payload bytes fails the recorded digest.
+
+    A byte-identical rebuild is indistinguishable from the original by design
+    (same bytes = same tree); the gate's job is to refuse a *different*
+    tree, even when it carries a self-consistent manifest.
+    """
+    root = tmp_path / "opt" / "deepdocparse"
+    _install_tree(root, "0.1.0")
+    _apply_for_rollback(root, tmp_path, "0.1.0", "0.2.0")
+    previous = root.with_name(root.name + ".previous")
+    shutil.rmtree(previous)
+    _install_tree(previous, "0.1.0")
+    # Same-version rebuild, but one payload byte differs (e.g. a backdoored
+    # binary): the rebuilt BUILD-MANIFEST is self-consistent yet no longer
+    # byte-identical to the apply-time record.
+    (previous / "data.txt").write_bytes(b"payload for 0.1.0\nplanted delta\n")
+    manifest_files = {
+        path.relative_to(previous).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(previous.rglob("*"))
+        if path.is_file() and path.name != "BUILD-MANIFEST.json"
+    }
+    build = {"format": 1, "epoch": 1789257600, "electron": "44.3.0",
+             "runtime": {"distributions": {}},
+             "license_manifest": {"electron": {"LICENSE": manifest_files["LICENSE"]},
+                                  "distributions": {}},
+             "files": manifest_files}
+    (previous / "BUILD-MANIFEST.json").write_text(json.dumps(build) + "\n")
+    assert update_check.main(["rollback", "--root", str(root)]) == 1
+    assert "recorded manifest" in capsys.readouterr().err
+    assert json.loads((root / "RELEASE-MANIFEST.json").read_text())["version"] == "0.2.0"
+    assert previous.is_dir()
+
+
+def test_rollback_refuses_previous_without_marker(tmp_path, capsys):
+    """A bare `.previous` directory with no marker/signature is refused."""
+    root = tmp_path / "opt" / "deepdocparse"
+    _install_tree(root, "0.2.0")
+    previous = root.with_name(root.name + ".previous")
+    previous.mkdir(parents=True)
+    (previous / "data.txt").write_text("no manifest here\n")
+    assert update_check.main(["rollback", "--root", str(root)]) == 1
+    assert "RELEASE-MANIFEST" in capsys.readouterr().err
+    assert json.loads((root / "RELEASE-MANIFEST.json").read_text())["version"] == "0.2.0"
+    assert previous.is_dir()
+
 
 def test_models_are_untouched_by_apply_and_rollback(tmp_path):
     root = tmp_path / "opt" / "deepdocparse"
-    make_tree(root, "0.1.0")
+    _install_tree(root, "0.1.0")
     models = tmp_path / "var" / "models"
     models.mkdir(parents=True)
     (models / "bge-m3.bin").write_bytes(b"weights")
@@ -624,7 +731,25 @@ def test_electron_zip_hash_is_pinned(tmp_path):
         build_desktop.verify_electron_zip(zip_path, lock)
 
 
-# --------------------------------------------------------------- windows
+def test_build_linux_refuses_missing_electron_zip(tmp_path, monkeypatch):
+    """A missing pinned zip must fail closed, not warn-and-continue."""
+    monkeypatch.setattr(build_desktop, "dependencies", lambda: {})
+    monkeypatch.setattr(build_desktop, "runtime_lock", lambda installed: {})
+    monkeypatch.setattr(build_desktop, "LOCK", tmp_path / "runtime-lock.json")
+    (tmp_path / "runtime-lock.json").write_text(json.dumps({}) + "\n")
+    monkeypatch.setattr(build_desktop.sys, "platform", "linux")
+    monkeypatch.setattr(build_desktop.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(build_desktop, "ROOT", tmp_path)
+    dist = tmp_path / "apps/desktop/node_modules/electron/dist"
+    dist.mkdir(parents=True)
+    (dist / "electron").write_bytes(b"e")
+    (dist / "version").write_text("v44.3.0\n")
+    args = argparse.Namespace(lock_runtime=False, electron_zip=tmp_path / "missing.zip",
+                              output=tmp_path / "out", version="0.1.0")
+    with pytest.raises(SystemExit, match="pinned Electron archive not present"):
+        build_desktop.build_linux(args)
+    assert not (tmp_path / "out").exists()
+
 
 def simulate_windows(monkeypatch):
     """Make host_system()/host_machine() behave like an AMD64 Windows host."""
@@ -1453,6 +1578,15 @@ def test_verify_dispatch_prefers_assembled_stage(tmp_path, capsys):
     assert "binary" not in result
 
 
+def _write_installer_anchors(directory: Path, installer: Path) -> None:
+    """Record the SHA256SUMS/sidecar anchors `verify_windows_package` trusts."""
+    windows = directory if directory.name == "windows" else directory / "windows"
+    windows.mkdir(parents=True, exist_ok=True)
+    actual = hashlib.sha256(installer.read_bytes()).hexdigest()
+    (windows / (installer.name + ".sha256")).write_text(f"{actual}  {installer.name}\n")
+    (windows / "SHA256SUMS").write_text(f"{actual}  {installer.name}\n")
+
+
 def test_verify_windows_package_installer_payload_floor(tmp_path, capsys):
     verifier = load("verify_windows_package")
     package, lock = make_packaged_windows_dir(tmp_path)
@@ -1461,12 +1595,39 @@ def test_verify_windows_package_installer_payload_floor(tmp_path, capsys):
     with pytest.raises(SystemExit, match="payload is missing"):
         verifier.main([str(package), "--wsl-lock", str(lock),
                        "--installer", str(stub)])
-    portable = tmp_path / "DeepDocParse-0.1.0-win-x64-portable.exe"
+    portable = tmp_path / "windows/DeepDocParse-0.1.0-win-x64-portable.exe"
     portable.write_bytes(b"P" * (verifier.MIN_INSTALLER_BYTES + 1))
+    _write_installer_anchors(tmp_path, portable)
     assert verifier.main([str(package), "--wsl-lock", str(lock),
                           "--installer", str(portable)]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["installers"][0]["size"] == portable.stat().st_size
+    assert result["installers"][0]["sha256"] == hashlib.sha256(
+        portable.read_bytes()).hexdigest()
+
+
+def test_verify_windows_package_installer_hash_mismatch_fails_closed(tmp_path):
+    """A same-size trojaned exe must fail against the SHA256SUMS/sidecar."""
+    verifier = load("verify_windows_package")
+    package, lock = make_packaged_windows_dir(tmp_path)
+    portable = tmp_path / "windows/DeepDocParse-0.1.0-win-x64-portable.exe"
+    portable.write_bytes(b"P" * (verifier.MIN_INSTALLER_BYTES + 1))
+    _write_installer_anchors(tmp_path, portable)
+    portable.write_bytes(b"Q" * (verifier.MIN_INSTALLER_BYTES + 1))
+    with pytest.raises(SystemExit, match="does not match"):
+        verifier.main([str(package), "--wsl-lock", str(lock),
+                       "--installer", str(portable)])
+
+
+def test_verify_windows_package_installer_without_anchor_fails_closed(tmp_path):
+    """An exe with no SHA256SUMS/sidecar anchor is refused, not merely recorded."""
+    verifier = load("verify_windows_package")
+    package, lock = make_packaged_windows_dir(tmp_path)
+    portable = tmp_path / "windows/DeepDocParse-0.1.0-win-x64-portable.exe"
+    portable.write_bytes(b"P" * (verifier.MIN_INSTALLER_BYTES + 1))
+    with pytest.raises(SystemExit, match="no SHA256SUMS/sidecar anchor"):
+        verifier.main([str(package), "--wsl-lock", str(lock),
+                       "--installer", str(portable)])
 
 # --------------------------------------------------------------- lifecycle
 #

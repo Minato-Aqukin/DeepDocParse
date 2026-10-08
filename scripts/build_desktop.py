@@ -1062,11 +1062,10 @@ def build_linux(args):
     ):
         raise SystemExit("install pinned Electron 44.3.0 with checksum verification first")
     electron_zip = args.electron_zip or ELECTRON_ZIP
-    if electron_zip.is_file():
-        verify_electron_zip(electron_zip)
-    else:
-        print("warning: pinned Electron archive not present; extracted tree is not "
-              "checksum-verified against packaging/arch/electron-lock.json", file=sys.stderr)
+    if not electron_zip.is_file():
+        raise SystemExit(f"pinned Electron archive not present: {electron_zip}; "
+                         "refusing to package an unverified Electron tree")
+    verify_electron_zip(electron_zip)
     ui = ROOT / "apps/web/dist"
     if not (ui / "index.html").is_file():
         raise SystemExit("build the shared Vue UI first: npm run web:build")

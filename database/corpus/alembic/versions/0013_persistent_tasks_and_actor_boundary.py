@@ -218,6 +218,14 @@ def downgrade() -> None:
         ):
             if _has_column(table, new):
                 op.alter_column(table, new, new_column_name=old)
+        # 旧唯一键建回来：没有它，重复的 (user_id, name) 会被接受；
+        # 且 upgrade 先 DROP IF EXISTS 它再建 actor 唯一键，re-upgrade 才稳定。
+        if _has_column("extraction_templates", "user_id"):
+            existing = {c["name"] for c in
+                        sa.inspect(bind).get_unique_constraints("extraction_templates")}
+            if "uq_extraction_templates_user_name" not in existing:
+                op.create_unique_constraint("uq_extraction_templates_user_name",
+                                            "extraction_templates", ["user_id", "name"])
 
     for table in ("extraction_runs", "extraction_templates", "conversations", "documents"):
         if _has_column(table, "organization_id"):

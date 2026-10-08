@@ -23,6 +23,9 @@ CORE = ROOT / "python" / "ddp_core" / "ddp_core"
 GATEWAY = ROOT / "services" / "model-gateway" / "ddp_gateway"
 MCP = ROOT / "services" / "mcp" / "ddp_mcp"
 CORPUS = ROOT / "services" / "corpus-api" / "ddp_corpus"
+WORKER = ROOT / "services" / "corpus-worker" / "ddp_worker"
+DDP_LOCAL = ROOT / "python" / "ddp_local" / "ddp_local"
+EVAL = ROOT / "eval"
 
 # 服务包名 —— ddp_core 不得 import 其中任何一个
 SERVICE_PACKAGES = ("ddp_gateway", "ddp_corpus", "ddp_mcp", "ddp_worker")
@@ -141,16 +144,52 @@ def test_gateway_does_not_reach_into_the_corpus_layer():
         + "。gateway 的 venv 没有 sqlalchemy，容器会起不来")
 
 
+def _from_imports_of(tree: ast.AST) -> list[tuple[str, list[str]]]:
+    # _imports 的树上兄弟：带出 `from X import a, b` 的名字 —— MCP 包形态判据用
+    return [(node.module, [a.name for a in node.names]) for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module and node.level == 0]
+
+def _mcp_forbidden_ddp_core(tree: ast.AST, corpus: set[str]) -> set[str]:
+    # MCP 判据的单点实现：模块形态（ddp_core.models[. ...]）与包形态
+    # （from ddp_core import models / search / …）都算。纯层（crops / vector_index …）
+    # 不在实测 corpus 集里，自然放行
+    forbidden: set[str] = set()
+    for module, names in _from_imports_of(tree):
+        if module == "ddp_core.models" or module.startswith("ddp_core.models."):
+            forbidden.add(module)
+        elif module == "ddp_core":
+            forbidden |= {f"ddp_core:{n}" for n in names
+                          if n == "models" or n.split(".")[0] in corpus}
+        elif module.split(".")[0] in CORPUS_DEPS:
+            forbidden.add(module)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            forbidden |= {a.name for a in node.names
+                        if a.name == "ddp_core.models"
+                        or a.name.startswith("ddp_core.models.")
+                        or a.name.split(".")[0] in CORPUS_DEPS}
+    return forbidden
+
+
 def test_mcp_cannot_import_the_corpus_database_layer():
     """MCP must go through actor-authorized corpus HTTP, never a whole-database connection."""
     pyproject = (MCP.parent / "pyproject.toml").read_text(encoding="utf-8")
     assert '"ddp-core"' in pyproject and "ddp-core[db]" not in pyproject
+    corpus = _corpus_modules()
+    assert corpus, "一个 corpus 模块都没识别出来，探测逻辑坏了"
     for path in MCP.rglob("*.py"):
-        modules = _imports(path, top_level_only=False)
-        forbidden = {module for module in modules if module == "ddp_core.models"
-                     or module.startswith("ddp_core.models.")
-                     or module.split(".")[0] in CORPUS_DEPS}
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        forbidden = _mcp_forbidden_ddp_core(tree, corpus)
         assert not forbidden, (path, forbidden)
+    # 正哨兵（行内 AST，不动仓库）：包形态必须拦，纯层必须放行
+    assert _mcp_forbidden_ddp_core(ast.parse("from ddp_core import models"), corpus), \
+        "from ddp_core import models 没拦住 —— 包形态漏网"
+    assert "search" in corpus, f"search 不在实测 corpus 集里：{sorted(corpus)}"
+    assert _mcp_forbidden_ddp_core(ast.parse("from ddp_core import search"), corpus), \
+        "from ddp_core import search 没拦住 —— 包形态漏网"
+    assert "chunking" not in corpus, f"chunking 被算进 [db] 层了：{sorted(corpus)}"
+    assert not _mcp_forbidden_ddp_core(ast.parse("from ddp_core import chunking"), corpus), \
+        "from ddp_core import chunking 误报 —— 纯层必须放行"
 
 
 def test_the_boundary_scan_actually_covers_something():
@@ -166,8 +205,35 @@ def test_the_boundary_scan_actually_covers_something():
         assert any(root.rglob("*.py")), f"{root} 下一个 .py 都没有，路径写错了"
 
 
+def _httpx_calls(root: pathlib.Path) -> list[tuple[pathlib.Path, ast.Call]]:
+    # 单点采集：包根用 rglob；eval 是仓库根下扁平的 *.py，用 glob
+    pattern = root.glob if root is EVAL else root.rglob
+    out: list[tuple[pathlib.Path, ast.Call]] = []
+    for path in sorted(pattern("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            target = node.func
+            name = (target.attr if isinstance(target, ast.Attribute)
+                    else getattr(target, "id", ""))
+            if name in ("AsyncClient", "Client"):
+                out.append((path, node))
+    return out
+
+
+def _httpx_trust_env_status(node: ast.Call) -> str:
+    # 判据是字面 False：缺省 / True / 变量 / `not X` 统统不算
+    for kw in node.keywords:
+        if kw.arg == "trust_env":
+            if isinstance(kw.value, ast.Constant) and kw.value.value is False:
+                return "ok"
+            return f"non-False({ast.unparse(kw.value)})"
+    return "missing"
+
+
 def test_every_httpx_client_disables_proxy_env():
-    """所有 `httpx.AsyncClient` 都必须显式 `trust_env=False`。
+    """所有 `httpx.AsyncClient/Client` 都必须写字面 `trust_env=False`。
 
     带代理变量的机器（AutoDL 镜像常年自带，旧 dev 机的 SOCKS 也是）会把
     `http://127.0.0.1:...` 这种内网调用也塞进代理。**表现不是报错，是卡住**：
@@ -177,42 +243,37 @@ def test_every_httpx_client_disables_proxy_env():
     2026-08-29 上机时实测：`mcp_server` 两处与 Web 的 `service_client` 早就带着它，
     **只有 gateway 的 `main.py` 与 `worker/tasks.py` 漏了**。靠"记得写"维持
     一致性的东西迟早会漏一处，所以钉成守卫。
-    """
-    import ast
 
+    只认字面 False：缺省、`True`、变量、`not X` 都算违规 —— 非字面的东西
+    今天是 False 明天可能不是，而违规的表现是线上卡住不是单测变红。
+    覆盖 gateway / mcp / corpus-api 三个包根，外加 corpus-worker（ddp_worker）、
+    ddp_local（python/ddp_local/ddp_local）与仓库根 eval/*.py（扁平 glob）。
+    """
     offenders = []
-    for root in (GATEWAY, MCP, CORPUS):
-        for path in sorted(root.rglob("*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call):
-                    continue
-                target = node.func
-                name = (target.attr if isinstance(target, ast.Attribute)
-                        else getattr(target, "id", ""))
-                if name not in ("AsyncClient", "Client"):
-                    continue
-                keywords = {kw.arg for kw in node.keywords}
-                if "trust_env" not in keywords:
-                    offenders.append(f"{path.relative_to(root.parent)}:{node.lineno}")
+    for root in (GATEWAY, MCP, CORPUS, WORKER, DDP_LOCAL, EVAL):
+        for path, node in _httpx_calls(root):
+            status = _httpx_trust_env_status(node)
+            if status != "ok":
+                rel = path.relative_to(ROOT)
+                offenders.append(f"{rel}:{node.lineno}({status})")
     assert not offenders, (
-        f"这些 httpx 客户端没写 trust_env=False：{offenders}。"
+        f"这些 httpx 客户端没写字面 trust_env=False：{offenders}。"
         f"带代理变量的机器上，内网调用会被塞进代理并卡住而不是报错")
+    # 正哨兵（行内 AST，不动仓库）：字面 False 放行，其余三形态都拦
+    ok_call = next(n for n in ast.walk(ast.parse("httpx.AsyncClient(trust_env=False)"))
+                   if isinstance(n, ast.Call))
+    assert _httpx_trust_env_status(ok_call) == "ok"
+    for snippet in ("httpx.AsyncClient()",
+                    "httpx.AsyncClient(trust_env=True)",
+                    "httpx.AsyncClient(trust_env=FLAG)"):
+        bad_call = next(n for n in ast.walk(ast.parse(snippet)) if isinstance(n, ast.Call))
+        assert _httpx_trust_env_status(bad_call) != "ok", f"{snippet} 没拦住"
 
 
 def test_the_httpx_scan_actually_finds_clients():
     """反哨兵：扫不到任何客户端时上一条会恒真。"""
-    import ast
-
-    total = 0
-    for root in (GATEWAY, MCP, CORPUS):
-        for path in sorted(root.rglob("*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            total += sum(
-                1 for node in ast.walk(tree)
-                if isinstance(node, ast.Call)
-                and (node.func.attr if isinstance(node.func, ast.Attribute)
-                     else getattr(node.func, "id", "")) in ("AsyncClient", "Client"))
+    total = sum(len(_httpx_calls(root))
+                for root in (GATEWAY, MCP, CORPUS, WORKER, DDP_LOCAL, EVAL))
     assert total >= 3, f"只扫到 {total} 个 httpx 客户端，扫描逻辑可能坏了"
 
 
@@ -436,6 +497,8 @@ def test_dropping_legacy_tables_stays_hard_to_do_by_accident():
     # 换个名字叫 --yes 一样能绕过。这一条守的是性质
     escapes = {"--force", "-f", "--yes", "-y", "--skip-checks", "--no-verify",
                "--ignore-checks", "--i-know-what-im-doing"}
+    assert "--approval" not in escapes and "--reconcile-report" not in escapes, \
+        "判据写错了：--approval / --reconcile-report 是闸门不是绕过开关"
     forced = [n for n in ast.walk(tree)
               if isinstance(n, ast.Call)
               and isinstance(n.func, ast.Attribute) and n.func.attr == "add_argument"
@@ -445,6 +508,180 @@ def test_dropping_legacy_tables_stays_hard_to_do_by_accident():
         "删表脚本加了 --force。前提不成立的时候要做的是查清楚，不是绕过 ——"
         "这条如果真要改，先改掉脚本开头那段说明并说清为什么")
 
+
+def _drop_script_add_options(tree: ast.AST) -> set[str]:
+    # argparse 里定义的选项名 —— 两个删表守卫共用同一份采集
+    return {a.value for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute) and n.func.attr == "add_argument"
+            for a in n.args if isinstance(a, ast.Constant) and isinstance(a.value, str)}
+
+
+def test_dropping_legacy_tables_requires_approval_evidence():
+    """删旧账号表还要第二道闸：窗口过期 + 独立审批 + 绑定的对账报告。
+
+    上一条守的是"默认不动手"（args.apply 闸门）与"没有绕过开关"；这一条守的是
+    `--apply` 之后也不是一敲回车就 DROP：必须同时给 `--approval` 与
+    `--reconcile-report`，审批文件恰好是 compat_window_expired_on / approved_by /
+    reconcile_report_sha256 三个键，且报告的 ok 为 true，而 main() 在第一个
+    DROP TABLE 之前必须调用 `_check_approval` 并按它的返回值拒绝。行为侧的
+    关得住（审批缺键 / 窗口没过 / 报告没通过都拒绝）由下面的
+    `test_drop_legacy_tables_approval_gate` 单测覆盖，这里只钉结构 ——
+    调用点或拒绝分支被删掉时变红。
+    """
+    script = ROOT / "database" / "migrator" / "drop_legacy_account_tables.py"
+    assert script.exists(), "删表脚本不见了 —— 它是有意存在的，不是遗留物"
+    source = script.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    # 1. argparse 同时定义 --approval 与 --reconcile-report
+    options = _drop_script_add_options(tree)
+    assert "--approval" in options, "删表脚本缺 --approval —— --apply 的审批证据没地方给"
+    assert "--reconcile-report" in options, "删表脚本缺 --reconcile-report —— 审批绑定的对账报告没地方给"
+
+    # 2. 三个审批键都在源码里，且查了报告的 ok 字段
+    for key in ("compat_window_expired_on", "approved_by", "reconcile_report_sha256"):
+        assert key in source, f"删表脚本里没有审批键 {key} —— 审批证据少了一项"
+    assert "reconcile_report_sha256" in ast.dump(tree), "判据失效了：审批键只出现在注释里"
+    ok_checks = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Compare)
+                 and "ok" in ast.dump(n)
+                 and any(isinstance(c, ast.Constant) and c.value is True
+                         for c in ast.walk(n))]
+    assert ok_checks, "删表脚本没查对账报告的 ok 字段 —— 没通过的对账也能删表"
+
+    # 3. main() 里、第一个 DROP 之前，审批闸的调用点 + 它的拒绝分支。
+    #
+    # **只数"带 approval 字样的 If"是不够的**：`_check_approval()` helper
+    # 自身的 If 天生写满 "approval"，删掉 main() 里
+    # `refusal = _check_approval(…)` 的调用都拦不住 —— helper 还在，
+    # If 还在，守卫就还绿。这里钉的是调用点及其支配关系：main() 在 DROP
+    # 之前必须真的调用它，并按它的返回值拒绝（helper 本身正确与否由单测管）。
+    docstrings = {id(n.value) for n in ast.walk(tree)
+                  if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)}
+    drops = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Constant) and isinstance(n.value, str)
+             and "DROP TABLE" in n.value and id(n) not in docstrings]
+    assert drops, "脚本里没有 DROP TABLE（文档字符串不算）—— 判据失效了，先看它是不是改写过"
+    first_drop = min(n.lineno for n in drops)
+    mains = [n for n in tree.body
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "main"]
+    assert mains, "删表脚本里没有 main() —— 判据失效了，先看它是不是改写过"
+    main_fn = mains[0]
+
+    def _is_approval_call(node: ast.AST) -> bool:
+        return (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "_check_approval")
+
+    calls = [n for n in ast.walk(main_fn) if _is_approval_call(n)]
+    assert calls and all(n.lineno < first_drop for n in calls), (
+        "main() 在 DROP 之前没有调用 _check_approval —— 审批闸门被绕过了")
+    # 调用结果绑定的名字（`refusal = _check_approval(…)` 里的 refusal）：
+    # 拒绝分支的 test 必须提到它（或者直接把调用写在 test 里）。
+    bound = {t.id for n in ast.walk(main_fn)
+             if isinstance(n, ast.Assign)
+             and any(_is_approval_call(c) for c in ast.walk(n.value))
+             for t in n.targets if isinstance(t, ast.Name)}
+    refusals = []
+    for node in ast.walk(main_fn):
+        if not isinstance(node, ast.If):
+            continue
+        if getattr(node, "lineno", None) is None or node.lineno >= first_drop:
+            continue
+        test_names = {c.id for c in ast.walk(node.test)
+                      if isinstance(c, ast.Name)}
+        if not (test_names & bound
+               or any(_is_approval_call(c) for c in ast.walk(node.test))):
+            continue
+        # 拒绝路径：非零退出（return 2 / return 1）或抛异常
+        bad_exit = any(
+            isinstance(c, ast.Return) and not (
+                isinstance(c.value, ast.Constant) and c.value.value == 0)
+            for c in ast.walk(node))
+        if bad_exit or any(isinstance(c, ast.Raise) for c in ast.walk(node)):
+            refusals.append(node.lineno)
+    assert refusals, (
+        f"第 {first_drop} 行的 DROP TABLE 之前没有任何审批 / 对账拒绝路径 ——"
+        f"--apply 一敲回车就删表")
+
+    # 4. 这两个新选项是闸门不是绕过开关 —— 不许进 escapes 名单
+    escapes = {"--force", "-f", "--yes", "-y", "--skip-checks", "--no-verify",
+               "--ignore-checks", "--i-know-what-im-doing"}
+    assert "--approval" not in escapes and "--reconcile-report" not in escapes, \
+        "判据写错了：--approval / --reconcile-report 是闸门不是绕过开关"
+    forced = [n for n in ast.walk(tree)
+              if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Attribute) and n.func.attr == "add_argument"
+              and any(isinstance(a, ast.Constant) and a.value in escapes
+                      for a in n.args)]
+    assert not forced, "删表脚本加了绕过开关 —— 前提不成立的时候要做的是查清楚，不是绕过"
+
+
+def _load_drop_legacy_script():
+    # 删表脚本住在 database/migrator/，不是可安装包 —— 按文件路径加载。
+    # 同一手法 tests/ 里已有三处（release_publication / wsl_runtime / desktop 发布）。
+    import importlib.util
+
+    script = ROOT / "database" / "migrator" / "drop_legacy_account_tables.py"
+    spec = importlib.util.spec_from_file_location("drop_legacy_account_tables", script)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_drop_legacy_tables_approval_gate(tmp_path):
+    """`_check_approval` 关得住：七种坏审批/坏报告都拒绝，好的一次放行。
+
+    删表是本仓库唯一一处不可逆丢数据的地方，行数对上只能证明"搬对了"，
+    证明不了"现在可以删"。这个 helper 是 `--apply` 的第二道闸 —— 放行条件
+    是四个"与"（窗口已过 + 有人签字 + 报告绑定 + 报告通过），少钉住任何一个，
+    将来删一行就等于删一整道闸。没有数据库参与：闸门只读两个 JSON 文件。
+    """
+    import hashlib
+    import json
+    from datetime import date, timedelta
+
+    drop = _load_drop_legacy_script()
+    report = tmp_path / "migration-report.json"
+    report.write_text(json.dumps({"ok": True, "steps": []}), encoding="utf-8")
+    digest = hashlib.sha256(report.read_bytes()).hexdigest()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+
+    def approval(payload):
+        path = tmp_path / "drop-approval.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return str(path)
+
+    good = {"compat_window_expired_on": yesterday,
+            "approved_by": "alice（第二审批人）",
+            "reconcile_report_sha256": digest}
+    assert drop._check_approval(approval(good), str(report)) is None
+
+    cases = [
+        ("缺键", {k: v for k, v in good.items() if k != "approved_by"}),
+        ("多键", {**good, "extra": "x"}),
+        ("窗口没过", {**good, "compat_window_expired_on": tomorrow}),
+        ("日期不是 YYYY-MM-DD", {**good, "compat_window_expired_on": "10/01/2026"}),
+        ("没人签字", {**good, "approved_by": "  "}),
+        ("绑定了另一份报告", {**good, "reconcile_report_sha256": "0" * 64}),
+    ]
+    for label, payload in cases:
+        refusal = drop._check_approval(approval(payload), str(report))
+        assert isinstance(refusal, str) and refusal, f"{label} 必须拒绝，不能放行"
+    bad_report = tmp_path / "bad-report.json"
+    bad_report.write_text(json.dumps({"ok": False}), encoding="utf-8")
+    bad_digest = hashlib.sha256(bad_report.read_bytes()).hexdigest()
+    bound_bad = {**good, "reconcile_report_sha256": bad_digest}
+    refusal = drop._check_approval(approval(bound_bad), str(bad_report))
+    assert isinstance(refusal, str) and refusal, "ok 不是 true 的报告必须拒绝"
+    missing = tmp_path / "missing.json"
+    refusal = drop._check_approval(approval(good), str(missing))
+    assert isinstance(refusal, str) and refusal, "报告文件不存在必须拒绝"
+    refusal = drop._check_approval(str(missing), str(report))
+    assert isinstance(refusal, str) and refusal, "审批文件不存在必须拒绝"
 
 # ---------------------------------------------------------------------------
 # §6 跨包的 tests 命名空间不许靠运气

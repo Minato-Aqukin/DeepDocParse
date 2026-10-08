@@ -80,6 +80,27 @@ denied ddp_control "UPDATE control.audit_events SET action = 'x'" "ddp_control �
 denied ddp_control "CREATE TABLE public.boundary_probe (id int)"  "ddp_control 不能在 public 建表"
 denied ddp_corpus  "CREATE TABLE control.boundary_probe (id int)" "ddp_corpus 不能在 control 建表"
 
+# ---- 默认授权真的会落到新表上（EFFECTIVE 探针）。**上面的读写断言只验旧表**：
+#      ALTER DEFAULT PRIVILEGES 只对之后建的对象生效，旧表授权全对、新表全错
+#      是 2026-09-02 的真实死法（迁移全成功、健康检查全绿，只有入库 500）。
+#      所以让属主 `ddp` 现建一张表 + 一个序列，确认 FOR ROLE ddp 的默认授权
+#      真的对 ddp 建出来的东西生效。探针名带 defaults，
+#      与上面的建表权限探针 boundary_probe 区分开。
+#      开头 DROP IF EXISTS 是幂等：上一轮失败留下的探针不影响这一轮；
+#      结尾无条件清理（断言之后直接执行，不包条件），失败也不把探针留下。
+run_as ddp "DROP TABLE IF EXISTS public.boundary_probe_defaults"
+run_as ddp "DROP SEQUENCE IF EXISTS public.boundary_probe_defaults_seq"
+run_as ddp "CREATE TABLE public.boundary_probe_defaults(id int primary key)"
+run_as ddp "CREATE SEQUENCE public.boundary_probe_defaults_seq"
+allowed ddp_corpus "INSERT INTO public.boundary_probe_defaults(id) VALUES (1)" "ddp_corpus 写得进默认授权的新表"
+allowed ddp_corpus "SELECT count(*) FROM public.boundary_probe_defaults"       "ddp_corpus 读得到默认授权的新表"
+allowed ddp_corpus "SELECT nextval('public.boundary_probe_defaults_seq')"     "ddp_corpus 用得上默认授权的新序列"
+allowed ddp_corpus "SELECT * FROM public.boundary_probe_defaults_seq"         "ddp_corpus 读得到默认授权的新序列"
+denied ddp_control "SELECT count(*) FROM public.boundary_probe_defaults"      "ddp_control 读不了默认授权的新表"
+denied ddp_control "INSERT INTO public.boundary_probe_defaults(id) VALUES (1)" "ddp_control 写不了默认授权的新表"
+run_as ddp "DROP TABLE IF EXISTS public.boundary_probe_defaults"
+run_as ddp "DROP SEQUENCE IF EXISTS public.boundary_probe_defaults_seq"
+
 # ---- 只读那两张是**穷举**的，不是"control 随便读" ----
 denied ddp_corpus "SELECT count(*) FROM control.api_keys"     "ddp_corpus 读不到 control.api_keys"
 denied ddp_corpus "SELECT count(*) FROM control.audit_events" "ddp_corpus 读不到 control.audit_events"

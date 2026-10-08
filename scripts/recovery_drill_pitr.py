@@ -42,14 +42,50 @@ sys.path.insert(0, str(ROOT / "python" / "ddp_contracts"))
 ORG = "org-pitr"
 USER_PREFIX = "pitr-user-"
 ACTOR = "actor-pitr"
+# NOLOSS 覆盖的持久表清单（plan §15.3：持久资产、Bundle、Wiki/人工编辑、
+# 授权配置、任务状态、节点身份绑定、上传/outbox 行全部纳入备份）。
+# 来源（只读核对）：database/control/*.sql 的 CREATE TABLE control.* +
+# Base.metadata（services/corpus-api/ddp_corpus/* + python/ddp_core/models.py）
+# 在 head 状态的全部表。public schema 名即模型 __tablename__；control.*
+# 即 control 迁移里的表名。audit/knowledge 等只增审计表也在内 —— NOLOSS
+# 若漏掉它们，丢行也会报 PASS。
+# 注意：users/api_keys/file_tokens/usage_records 是 0001 时代的旧 public
+# 表，已被 control.* 取代（head 无此表），故不在清单内。
 COUNT_TABLES = ["public.documents", "public.parse_jobs", "public.resources",
                 "public.resource_versions", "public.chunks", "public.evidence",
                 "public.citations", "public.wikis", "public.wiki_revisions",
-                "public.wiki_pages", "public.wiki_dependencies", "public.upload_events",
-                "public.document_uploads", "public.federation_requests",
+                "public.wiki_pages", "public.wiki_dependencies", "public.wiki_claim_bindings",
+                "public.wiki_human_edits", "public.wiki_write_keys",
+                "public.upload_events", "public.document_uploads",
+                "public.conversations", "public.messages",
+                "public.extraction_templates", "public.extraction_runs", "public.extraction_items",
+                "public.tasks", "public.corpus_outbox", "public.processed_events", "public.usage_claims",
+                "public.agent_turns", "public.assertions", "public.retrieval_candidates",
+                "public.evidence_verifications", "public.knowledge_entities", "public.graph_edges",
+                "public.knowledge_reviews", "public.wiki_entries", "public.wiki_sections",
+                "public.wiki_sentences",
+                "public.federation_requests", "public.federation_probes", "public.federation_admissions",
+                "public.federation_executions", "public.federation_task_events",
                 "public.coverage_ledgers", "public.coverage_entries",
-                "public.collections", "public.collection_members",
-                "control.organizations", "control.users", "control.memberships"]
+                "public.federation_deliveries", "public.federation_credential_nonces",
+                "public.federation_root_ledgers", "public.federation_root_reservations",
+                "public.federation_delegation_consumption", "public.federation_cache_entries",
+                "public.collections", "public.collection_members", "public.collection_receipts",
+                "public.collection_catalog_views", "public.collection_catalog_snapshots",
+                "public.collection_catalog_pages",
+                "public.client_views", "public.client_snapshots", "public.client_pages",
+                "public.client_receipts",
+                "public.bundle_replicas", "public.bundle_replica_revoke_keys",
+                "public.remote_computes",
+                "control.organizations", "control.users", "control.memberships", "control.roles",
+                "control.api_keys", "control.quotas", "control.usage_ledger", "control.audit_events",
+                "control.upload_sessions", "control.file_grants", "control.control_outbox",
+                "control.node_identity", "control.node_directories", "control.node_members",
+                "control.node_directory_views", "control.member_snapshots", "control.member_snapshot_pages",
+                "control.scope_manifests", "control.scope_target_pages", "control.scope_catalog_sources",
+                "control.scope_catalog_revocations", "control.scope_remote_sources",
+                "control.federation_credential_nonces",
+                "control.subtree_snapshots", "control.subtree_snapshot_pages"]
 
 
 
@@ -73,11 +109,25 @@ async def seed_dataset(args, n_docs: int, tag: str) -> dict:
     """Seed a realistic generated dataset. Returns state dict."""
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     from sqlalchemy import text
-    from ddp_corpus.federation_models import CoverageEntry, CoverageLedger, FederationRequest
-    from ddp_corpus.collection_models import Collection, CollectionMember
+    from datetime import datetime, timezone, timedelta
+    from ddp_corpus.federation_models import (CoverageEntry, CoverageLedger, FederationRequest,
+                                              FederationProbe, FederationAdmission, FederationExecution,
+                                              FederationTaskEvent, FederationDelivery, FederationCredentialNonce,
+                                              FederationRootLedger, FederationRootReservation,
+                                              FederationDelegationConsumption)
+    from ddp_corpus.cache import FederationCacheEntry
+    from ddp_corpus.collection_models import (Collection, CollectionMember, CollectionReceipt,
+                                              CollectionCatalogView, CollectionCatalogSnapshot,
+                                              CollectionCatalogPage)
+    from ddp_corpus.client_models import ClientView, ClientSnapshot, ClientPage, ClientReceipt
+    from ddp_corpus.bundle_models import BundleReplica, BundleReplicaRevokeKey
+    from ddp_corpus.remote_compute_models import RemoteCompute
     from ddp_corpus.models import (Chunk, Citation, DependencyManifest, Document,
                                    DocumentUpload, Evidence, ParseJob, Resource, ResourceVersion,
-                                   UploadEvent, Wiki, WikiRevision, WikiPage)
+                                   UploadEvent, Wiki, WikiRevision, WikiPage, WikiHumanEdit,
+                                   WikiWriteKey, ClaimEvidenceBinding, Task, CorpusOutbox,
+                                   ProcessedEvent, UsageClaim, Conversation, Message,
+                                   ExtractionTemplate, ExtractionRun, ExtractionItem)
 
     engine = create_async_engine(args.dsn, pool_size=4, max_overflow=8)
     mc = minio_client(args)
@@ -165,9 +215,11 @@ async def seed_dataset(args, n_docs: int, tag: str) -> dict:
         state["docs"].append({"id": did, "job": jid, "resource": rid, "version": vid,
                               "digest": dhash, "object_key": okey})
         state["versions"].append(vid)
-    # federation rows
+    # federation rows + every other persistent table named in plan 15.3, so
+    # NOLOSS actually covers Bundle/authz/task/identity/upload/outbox rows.
+    # (B-carryover rows already populate some tables; the drill writes at
+    # least one row per table so a dropped table fails NOLOSS, not vacuous 0==0.)
     async with mk() as s:
-        from ddp_corpus.federation_models import CoverageEntry, CoverageLedger, FederationRequest
         rt = f"task-pitr-{tag}-" + "1" * 16
         s.add(FederationRequest(root_task_id=rt, organization_id=ORG, actor_id=ACTOR,
                                 task_spec_digest="sha256:" + "e" * 64, scope_id="scope-pitr",
@@ -187,14 +239,76 @@ async def seed_dataset(args, n_docs: int, tag: str) -> dict:
                             query_digest="sha256:" + "3" * 64, state="succeeded", attempts=1,
                             actual_index_revision="index-1", evidence_refs_json=[],
                             used_budget_json={"requests": 1, "bytes": 0}))
+        # federation executor chain for the same root task
+        now = datetime.now(timezone.utc)
+        s.add(FederationProbe(probe_id=(f"pb-{tag}" + "0" * 32)[:32], organization_id=ORG,
+                              actor_id=ACTOR, target_node_id="node-pitr",
+                              task_spec_digest="sha256:" + "e" * 64, consent_ref="pitr-probe-1",
+                              probe_kind="capability_input", state="succeeded",
+                              expires_at=now + timedelta(hours=1)))
+        adm_id = (f"ad-{tag}" + "0" * 32)[:32]
+        s.add(FederationAdmission(admission_id=adm_id, organization_id=ORG, actor_id=ACTOR,
+                                 idempotency_key=f"pitr-{tag}-adm-1",
+                                 request_digest="sha256:" + "a" * 64,
+                                 plan_digest="sha256:" + "0" * 64, root_task_id=rt,
+                                 step_id="step-1", issuer_node_id="node-pitr",
+                                 executor_node_id="node-pitr", state="admitted",
+                                 input_validation="valid", effective_policy_ref="pol-pitr-1"))
+        await s.flush()
+        exe_id = (f"ex-{tag}" + "0" * 32)[:32]
+        s.add(FederationExecution(executor_task_id=exe_id, admission_id=adm_id, root_task_id=rt,
+                                 step_id="step-1", operation="retrieve", state="succeeded"))
+        s.add(FederationTaskEvent(id=(f"te-{tag}" + "0" * 32)[:32], root_task_id=rt, seq=1,
+                                 type="planned", payload={"step": "step-1"}))
+        s.add(FederationDelivery(delivery_id=(f"dl-{tag}" + "0" * 32)[:32], root_task_id=rt,
+                                state="delivered",
+                                result_manifest_digest="sha256:" + "d" * 64))
+        s.add(FederationCredentialNonce(jti=(f"jti-{tag}" + "0" * 64)[:22], issuer_node_id="node-pitr",
+                                       operation="probe_create",
+                                       expires_at=now + timedelta(seconds=120)))
+        s.add(FederationRootLedger(root_task_id=rt, organization_id=ORG,
+                                  max_requests=100, max_bytes=10**6, max_hops=4,
+                                  deadline=now + timedelta(hours=1)))
+        s.add(FederationRootReservation(root_task_id=rt, reservation_key=f"pitr-{tag}-r1",
+                                       kind="requests", amount=1))
+        s.add(FederationDelegationConsumption(root_task_id=rt, step_id="step-1",
+                                             reserved_json={"requests": 1}))
+        s.add(FederationCacheEntry(id=(f"ce-{tag}" + "0" * 32)[:32], scope_key=f"scope-pitr-{tag}",
+                                  cache_key=f"pitr-{tag}-k1", kind="probe",
+                                  created_at=now, expires_at=now + timedelta(hours=1)))
         # collection + one member + citations + wiki chain on doc 0
         d0 = state["docs"][0]
-        s.add(Collection(id=(f"col-{tag}" + "0" * 32)[:32], organization_id=ORG, owner_id=users[0],
+        col_id = (f"col-{tag}" + "0" * 32)[:32]
+        s.add(Collection(id=col_id, organization_id=ORG, owner_id=users[0],
                          name=f"pitr-{tag}", publication="published", revision=1))
         await s.flush()
-        s.add(CollectionMember(collection_id=(f"col-{tag}" + "0" * 32)[:32], version_id=d0["id"] and state["versions"][0],
+        s.add(CollectionMember(collection_id=col_id, version_id=state["versions"][0],
                                resource_id=d0["resource"], document_id=d0["id"], parse_job_id=d0["job"],
                                source_digest=d0["digest"]))
+        s.add(CollectionReceipt(key_hash="c" * 64, request_digest="sha256:" + "c" * 64,
+                               collection_id=col_id, revision=1))
+        s.add(CollectionCatalogView(binding=f"bind-{tag}", revision=1, fingerprint="f" * 64))
+        await s.flush()
+        snap = CollectionCatalogSnapshot(id=(f"cs-{tag}" + "0" * 32)[:32], binding=f"bind-{tag}",
+                                        scope_id="scope-pitr", caller_scope_hash="sha256:" + "9" * 64,
+                                        origin_node_id="node-pitr", revision=1, page_size=50,
+                                        descriptors=[], index_readiness={},
+                                        valid_until=now + timedelta(hours=1))
+        s.add(snap)
+        await s.flush()
+        s.add(CollectionCatalogPage(cursor=(f"cc-{tag}" + "0" * 32)[:32], snapshot_id=snap.id, offset=0))
+        s.add(ClientView(scope=f"scope-pitr-{tag}", sequence=1, fingerprint="f" * 64, cursor="c0"))
+        await s.flush()
+        csnap = ClientSnapshot(id=(f"csn-{tag}" + "0" * 64)[:64], scope=f"scope-pitr-{tag}", sequence=1,
+                              state={"sealed": True}, bindings=[], byte_size=10,
+                              expires_at=now + timedelta(hours=1))
+        s.add(csnap)
+        await s.flush()
+        s.add(ClientPage(cursor=(f"cp-{tag}" + "0" * 64)[:64], snapshot_id=csnap.id, kind="members",
+                         body={"members": []}))
+        s.add(ClientReceipt(key_hash="k" * 64, organization_id=ORG, principal_id=users[0],
+                           request_digest="sha256:" + "b" * 64, resource_id=d0["resource"],
+                           version_id=state["versions"][0], parse_job_id=d0["job"]))
         s.add(Citation(id=(f"cit-{tag}" + "0" * 32)[:32], evidence_id=(f"e00000{tag}" + "0" * 32)[:32],
                        source_kind="assertion", source_id="a" * 32, role="primary",
                        score=1.0, similarity=1.0, snippet="PITR drill", rank=0,
@@ -212,11 +326,99 @@ async def seed_dataset(args, n_docs: int, tag: str) -> dict:
                        generated_sections=[{"claim": "beacon", "evidence_id": (f"e00000{tag}" + "0" * 32)[:32]}],
                        human_paragraphs=[]))
         s.add(DependencyManifest(id=(f"wd-{tag}" + "0" * 32)[:32], revision_id=rev.id, page_key="p0",
-                                 resource_id=d0["resource"], source_version_id=d0["id"] and state["versions"][0],
+                                 resource_id=d0["resource"], source_version_id=state["versions"][0],
                                  document_id=d0["id"], source_digest=d0["digest"],
                                  parse_revision=d0["job"], evidence_id=(f"e00000{tag}" + "0" * 32)[:32],
                                  excerpt_digest="0" * 64, locator={"kind": "page", "page_idx": 0},
                                  origin_node_id="node-pitr", authority_node_id="node-pitr"))
+        s.add(ClaimEvidenceBinding(id=(f"cb-{tag}" + "0" * 32)[:32], revision_id=rev.id, page_key="p0",
+                                  claim_id="claim-1", evidence_id=(f"e00000{tag}" + "0" * 32)[:32],
+                                  excerpt_digest="0" * 64))
+        s.add(WikiHumanEdit(id=(f"wh-{tag}" + "0" * 32)[:32], revision_id=rev.id,
+                           base_revision_id=rev.id, page_key="p0", actor_id=users[0],
+                           before=[], after=[{"text": "human"}]))
+        s.add(WikiWriteKey(id=(f"wk-{tag}" + "0" * 32)[:32], organization_id=ORG, actor_id=users[0],
+                          idempotency_key=f"pitr-{tag}-wk-1", request_digest="0" * 64, revision_id=rev.id))
+        # Bundle replica + revoke key (licensed-copy ledger survives restore)
+        rep_id = (f"br-{tag}" + "0" * 32)[:32]
+        s.add(BundleReplica(id=rep_id, organization_id=ORG, resource_id=d0["resource"],
+                           source_version_id=state["versions"][0], document_id=d0["id"],
+                           owner_id=users[0], created_by=users[0], origin_node_id="node-pitr",
+                           authority_node_id="node-pitr", source_digest=d0["digest"],
+                           policy_revision="pol-pitr-1"))
+        await s.flush()
+        s.add(BundleReplicaRevokeKey(id=(f"bk-{tag}" + "0" * 32)[:32], organization_id=ORG,
+                                   actor_id=users[0], idempotency_key=f"pitr-{tag}-bk-1",
+                                   replica_id=rep_id, request_digest="0" * 64))
+        # remote compute (rebuildable temp input) + local task/outbox/usage/conversation/extract rows
+        s.add(RemoteCompute(id=(f"rc-{tag}" + "0" * 32)[:32], organization_id=ORG, actor_id=users[0],
+                           actor_kind="user", status="waiting_input", input_sha256="0" * 64,
+                           input_size=100, plan_digest="sha256:" + "p" * 64,
+                           input_object_key=f"tmp-remote-compute/{ORG}/rc-{tag}/source.bin"))
+        s.add(Task(id=(f"t-{tag}" + "0" * 32)[:32], organization_id=ORG, kind="index",
+                  status="succeeded", payload={"doc": d0["id"]}))
+        s.add(CorpusOutbox(id=(f"co-{tag}" + "0" * 32)[:32], organization_id=ORG, type="UsageRecorded",
+                          payload={"doc": d0["id"]}))
+        s.add(ProcessedEvent(event_id=f"evt-{tag}-1", type="DocumentSubmitted", organization_id=ORG,
+                            result_id=d0["id"]))
+        s.add(UsageClaim(id=(f"uc-{tag}" + "0" * 32)[:32], actor_id=users[0], parse_job_id=d0["job"]))
+        conv_id = (f"cv-{tag}" + "0" * 32)[:32]
+        s.add(Conversation(id=conv_id, actor_id=users[0], organization_id=ORG, document_id=d0["id"],
+                          title=f"PITR {tag}"))
+        await s.flush()
+        s.add(Message(id=(f"m-{tag}" + "0" * 32)[:32], conversation_id=conv_id, role="user",
+                     content="beacon?"))
+        tmpl_id = (f"et-{tag}" + "0" * 32)[:32]
+        s.add(ExtractionTemplate(id=tmpl_id, organization_id=ORG, actor_id=users[0], name=f"pitr-{tag}"))
+        await s.flush()
+        run_id = (f"er-{tag}" + "0" * 32)[:32]
+        s.add(ExtractionRun(id=run_id, organization_id=ORG, actor_id=users[0], template_id=tmpl_id,
+                           status="succeeded"))
+        await s.flush()
+        s.add(ExtractionItem(id=(f"ei-{tag}" + "0" * 32)[:32], run_id=run_id, document_id=d0["id"],
+                            record_index=0, fields={"name": {"status": "ok", "value": "pitr"}}))
+        # control authz + identity + upload/outbox rows (inserted as SQL: Go-owned tables)
+        await s.execute(text(
+            "INSERT INTO control.api_keys (id, organization_id, user_id, name, key_prefix, key_hash,"
+            " scopes, created_at) VALUES (:id,:o,:u,'pitr',:p,:h,'{read}','2026-10-05T00:00:00+00:00')"
+            " ON CONFLICT (id) DO NOTHING"),
+            {"id": (f"ak-{tag}" + "0" * 32)[:32], "o": ORG, "u": users[0],
+             "p": f"pitr-{tag}", "h": "h" * 64})
+        await s.execute(text(
+            "INSERT INTO control.file_grants (token, organization_id, document_id, object_key,"
+            " mime, scope, created_at) VALUES (:t,:o,:d,:k,'application/pdf','source',"
+            " '2026-10-05T00:00:00+00:00') ON CONFLICT (token) DO NOTHING"),
+            {"t": f"tok-{tag}-pitr", "o": ORG, "d": d0["id"], "k": d0["digest"] and f"uploads/{ORG}/{d0['id']}.pdf"})
+        await s.execute(text(
+            "INSERT INTO control.usage_ledger (id, organization_id, actor_id, actor_kind, kind,"
+            " pages, requests, event_id, created_at) VALUES (:id,:o,:a,'user','parse',1,1,:e,"
+            " '2026-10-05T00:00:00+00:00') ON CONFLICT (id) DO NOTHING"),
+            {"id": (f"ul-{tag}" + "0" * 32)[:32], "o": ORG, "a": users[0], "e": f"evt-{tag}-ul-1"})
+        await s.execute(text(
+            "INSERT INTO control.upload_sessions (id, organization_id, actor_id, actor_kind, status,"
+            " object_key, filename, mime, declared_size, created_at, expires_at, updated_at)"
+            " VALUES (:id,:o,:a,'user','created',:k,'pitr.pdf','application/pdf',100,"
+            " '2026-10-05T00:00:00+00:00','2026-10-06T00:00:00+00:00','2026-10-05T00:00:00+00:00')"
+            " ON CONFLICT (id) DO NOTHING"),
+            {"id": (f"us-{tag}" + "0" * 32)[:32], "o": ORG, "a": users[0],
+             "k": f"uploads/{ORG}/{d0['id']}.pdf"})
+        await s.execute(text(
+            "INSERT INTO control.control_outbox (id, organization_id, type, payload)"
+            " VALUES (:id,:o,'DocumentSubmitted',:p) ON CONFLICT (id) DO NOTHING"),
+            {"id": (f"cb-{tag}-out" + "0" * 32)[:32], "o": ORG,
+             "p": json.dumps({"upload_id": (f"us-{tag}" + "0" * 32)[:32]})})
+        await s.execute(text(
+            "INSERT INTO control.node_directories (organization_id, revision) VALUES (:o,1)"
+            " ON CONFLICT (organization_id) DO NOTHING"), {"o": ORG})
+        await s.execute(text(
+            "INSERT INTO control.node_members (organization_id, node_id, public_key, descriptor,"
+            " descriptor_revision, state, revision) VALUES (:o,'node-pitr',:k,'{}',1,'approved',1)"
+            " ON CONFLICT (organization_id, node_id) DO NOTHING"),
+            {"o": ORG, "k": "cGl0cg=="})
+        await s.execute(text(
+            "INSERT INTO control.federation_credential_nonces (jti, issuer, operation, expires_at)"
+            " VALUES (:j,'node-pitr','probe_create','2026-10-06T00:00:00+00:00')"
+            " ON CONFLICT (jti) DO NOTHING"), {"j": f"ctl-jti-{tag}"})
         await s.commit()
         state["root_task"] = rt
     await engine.dispose()
@@ -337,7 +539,10 @@ async def reconcile(args) -> dict:
             async def rows(sql, **p):
                 r = await c.execute(text(sql), p)
                 return [dict(x) for x in r.mappings()]
-            # FK-style invariants (count violations)
+            # FK-style invariants (count violations). Covers every seeded
+            # persistent table: Bundle/authz/task/identity/upload/outbox rows
+            # that NOLOSS now counts also get a binding check here, so a
+            # silently dropped ledger fails reconcile even at equal counts.
             inv = {
                 "versions->resources": "SELECT count(*) FROM public.resource_versions v LEFT JOIN public.resources r ON r.id=v.resource_id WHERE r.id IS NULL",
                 "versions->documents": "SELECT count(*) FROM public.resource_versions v LEFT JOIN public.documents d ON d.id=v.document_id WHERE d.id IS NULL",
@@ -353,6 +558,25 @@ async def reconcile(args) -> dict:
                 "uploads->versions": "SELECT count(*) FROM public.upload_events u LEFT JOIN public.resource_versions v ON v.id=u.resource_version_id WHERE v.id IS NULL",
                 "docuploads->documents": "SELECT count(*) FROM public.document_uploads u LEFT JOIN public.documents d ON d.id=u.document_id WHERE d.id IS NULL",
                 "entries->ledgers": "SELECT count(*) FROM public.coverage_entries e LEFT JOIN public.coverage_ledgers l ON l.root_task_id=e.root_task_id WHERE l.root_task_id IS NULL",
+                "replicas->versions": "SELECT count(*) FROM public.bundle_replicas b LEFT JOIN public.resource_versions v ON v.id=b.source_version_id WHERE v.id IS NULL",
+                "replicas->resources": "SELECT count(*) FROM public.bundle_replicas b LEFT JOIN public.resources r ON r.id=b.resource_id WHERE r.id IS NULL",
+                "replicakeys->replicas": "SELECT count(*) FROM public.bundle_replica_revoke_keys k LEFT JOIN public.bundle_replicas b ON b.id=k.replica_id WHERE b.id IS NULL",
+                "executions->admissions": "SELECT count(*) FROM public.federation_executions e LEFT JOIN public.federation_admissions a ON a.admission_id=e.admission_id WHERE a.admission_id IS NULL",
+                "taskevents->requests": "SELECT count(*) FROM public.federation_task_events e LEFT JOIN public.federation_requests r ON r.root_task_id=e.root_task_id WHERE r.root_task_id IS NULL",
+                "deliveries->requests": "SELECT count(*) FROM public.federation_deliveries d LEFT JOIN public.federation_requests r ON r.root_task_id=d.root_task_id WHERE r.root_task_id IS NULL",
+                "rootledgers->requests": "SELECT count(*) FROM public.federation_root_ledgers l LEFT JOIN public.federation_requests r ON r.root_task_id=l.root_task_id WHERE r.root_task_id IS NULL",
+                "reservations->requests": "SELECT count(*) FROM public.federation_root_reservations v LEFT JOIN public.federation_requests r ON r.root_task_id=v.root_task_id WHERE r.root_task_id IS NULL",
+                "delegation->requests": "SELECT count(*) FROM public.federation_delegation_consumption d LEFT JOIN public.federation_requests r ON r.root_task_id=d.root_task_id WHERE r.root_task_id IS NULL",
+                "catalogpages->snapshots": "SELECT count(*) FROM public.collection_catalog_pages p LEFT JOIN public.collection_catalog_snapshots s ON s.id=p.snapshot_id WHERE s.id IS NULL",
+                "clientpages->snapshots": "SELECT count(*) FROM public.client_pages p LEFT JOIN public.client_snapshots s ON s.id=p.snapshot_id WHERE s.id IS NULL",
+                "messages->conversations": "SELECT count(*) FROM public.messages m LEFT JOIN public.conversations c ON c.id=m.conversation_id WHERE c.id IS NULL",
+                "items->runs": "SELECT count(*) FROM public.extraction_items i LEFT JOIN public.extraction_runs r ON r.id=i.run_id WHERE r.id IS NULL",
+                "items->documents": "SELECT count(*) FROM public.extraction_items i LEFT JOIN public.documents d ON d.id=i.document_id WHERE d.id IS NULL",
+                "usageclaims->jobs": "SELECT count(*) FROM public.usage_claims u LEFT JOIN public.parse_jobs j ON j.id=u.parse_job_id WHERE j.id IS NULL",
+                "wikibindings->revisions": "SELECT count(*) FROM public.wiki_claim_bindings b LEFT JOIN public.wiki_revisions r ON r.id=b.revision_id WHERE r.id IS NULL",
+                "wikiedits->revisions": "SELECT count(*) FROM public.wiki_human_edits e LEFT JOIN public.wiki_revisions r ON r.id=e.revision_id WHERE r.id IS NULL",
+                "wikiwritekeys->revisions": "SELECT count(*) FROM public.wiki_write_keys k LEFT JOIN public.wiki_revisions r ON r.id=k.revision_id WHERE r.id IS NULL",
+                "collectionreceipts->collections": "SELECT count(*) FROM public.collection_receipts r LEFT JOIN public.collections c ON c.id=r.collection_id WHERE c.id IS NULL",
             }
             for name, sql in inv.items():
                 n = await scalar(sql)
@@ -427,8 +651,10 @@ async def reconcile(args) -> dict:
     check("obj:every live document digest matches", not wrong, f"mismatched={len(wrong)}")
     rep["orphans"]["missing_objects"] = missing[:20]
     rep["orphans"]["digest_mismatches"] = wrong[:20]
-    # bucket extras: tmp-remote-compute keys explained via remote_computes;
-    # results/ prefixes belong to parse_jobs (deleted docs explain empty ones).
+    # bucket extras: tmp-remote-compute/ keys are rebuildable temp bytes, NOT
+    # backup content (see backup TTL policy in docs/DEPLOY.md and the drill's
+    # --exclude 'tmp-remote-compute/*' mirrors). They are explained only via
+    # an open remote_computes row; temp keys with no compute row are orphans.
     bucket = set(o.object_name for o in mc.list_objects(args.bucket, recursive=True))
     prefixes = set(j["result_prefix"] for j in parse_jobs)
     empty = [j for j in parse_jobs if not any(k.startswith(j["result_prefix"]) for k in bucket)]
@@ -436,6 +662,19 @@ async def reconcile(args) -> dict:
     check("obj:result prefixes without objects are only deleted docs", not unexplained_empty,
           f"explained_deleted={len(empty)-len(unexplained_empty)} unexplained={len(unexplained_empty)}")
     rep["orphans"]["empty_result_prefixes"] = [j["id"] for j in unexplained_empty[:20]]
+    tmp_keys = [k for k in bucket if k.startswith("tmp-remote-compute/")]
+    eng2 = _cae(args.dsn)
+    try:
+        async with eng2.connect() as c:
+            r = await c.execute(_t("SELECT input_object_key FROM public.remote_computes "
+                                  "WHERE input_object_key IS NOT NULL AND input_object_key<>''"))
+            live_tmp = {row[0] for row in r.all()}
+    finally:
+        await eng2.dispose()
+    orphan_tmp = [k for k in tmp_keys if k not in live_tmp]
+    check("obj:temp bytes are bound to an open remote_computes row", not orphan_tmp,
+          f"temp={len(tmp_keys)} orphan_temp={len(orphan_tmp)}")
+    rep["orphans"]["orphan_temp_keys"] = orphan_tmp[:20]
     extras = [k for k in bucket if k not in expected_keys
               and not any(k.startswith(p) for p in prefixes)
               and not k.startswith("tmp-remote-compute/")]

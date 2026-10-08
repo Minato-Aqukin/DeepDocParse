@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 """删掉搬走之后剩下的四张旧账号表。
 
-    python database/migrator/drop_legacy_account_tables.py --database <dsn>          # 只检查
-    python database/migrator/drop_legacy_account_tables.py --database <dsn> --apply  # 真删
+    TARGET_DATABASE_URL=<dsn> python database/migrator/drop_legacy_account_tables.py  # 只检查
+    TARGET_DATABASE_URL=<dsn> python database/migrator/drop_legacy_account_tables.py --apply \
+        --approval out/drop-approval.json --reconcile-report out/migration-report.json  # 真删
 
 ## 为什么这不是一个 alembic 迁移
 
@@ -42,10 +43,39 @@
 
 任何一条不满足就拒绝，并说清是哪一条。**不提供 --force。**
 真要跳过检查，说明前提没成立，那时候要做的是查清楚而不是绕过。
+
+## --apply 还要两样东西：审批文件与对账报告
+
+`--apply` 除了上面的行级检查，还要求两个参数：
+
+    --approval out/drop-approval.json --reconcile-report out/migration-report.json
+
+审批文件是 JSON，恰好三个键，一个不能多一个不能少：
+
+    {"compat_window_expired_on": "2026-10-01",
+     "approved_by": "alice（第二审批人）",
+     "reconcile_report_sha256": "<migration-report.json 的 sha256>"}
+
+- `compat_window_expired_on`：兼容窗口过期日（YYYY-MM-DD），必须是今天或过去 ——
+  窗口没过就删表，等于把回滚路提前烧掉；
+- `approved_by`：第二位人类审批人签字，必须是非空字符串 ——
+  动手的人不能给自己批，这里的"第二"靠换人执行保证，脚本只强制非空；
+- `reconcile_report_sha256`：`--reconcile-report` 指向的那份报告文件的 sha256 ——
+  审批必须绑定某一次具体的对账，换一份报告就要重新批；
+  那份报告的 `ok` 必须为 true（migrate.py 报告的形状），没通过的对账不能删表。
+
+为什么：这是本仓库唯一一处不可逆丢数据的地方。行数对上只能证明"搬对了"，
+证明不了"现在可以删" —— 删表还需要两个独立证据：兼容窗口已过（回滚期结束），
+以及一位没动手的人看过对账报告并签字。而 sha 绑定保证他签字的就是你指的那份报告。
+
 """
 import argparse
 import asyncio
+import hashlib
+import json
+import os
 import sys
+from datetime import date, datetime
 
 import asyncpg
 
@@ -67,12 +97,70 @@ PAIRS = {
 GREEN, RED, YELLOW, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[0m"
 
 
+#: 审批文件的三个键，一个不能多一个不能少。
+APPROVAL_KEYS = frozenset({
+    "compat_window_expired_on", "approved_by", "reconcile_report_sha256"})
+
+
+def _check_approval(approval_path: str, report_path: str) -> str | None:
+    """审掉 --apply 的第二道闸：返回 None 表示放行，否则返回拒绝理由。"""
+    try:
+        with open(approval_path, encoding="utf-8") as fh:
+            approval = json.load(fh)
+    except FileNotFoundError:
+        return f"审批文件不存在：{approval_path}"
+    except (OSError, ValueError) as exc:
+        return f"审批文件读不出来：{approval_path}（{exc}）"
+    if not isinstance(approval, dict) or set(approval) != APPROVAL_KEYS:
+        return ("审批文件必须是恰好这三个键的 JSON："
+                "compat_window_expired_on / approved_by / reconcile_report_sha256")
+    try:
+        expired_on = datetime.strptime(
+            approval["compat_window_expired_on"], "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return "compat_window_expired_on 必须是 YYYY-MM-DD 日期"
+    if expired_on > date.today():
+        return (f"兼容窗口还没过（compat_window_expired_on="
+                f"{approval['compat_window_expired_on']}）—— "
+                "窗口期内删表等于提前烧掉回滚路")
+    approved_by = approval["approved_by"]
+    if not isinstance(approved_by, str) or not approved_by.strip():
+        return "approved_by 必须是非空字符串 —— 动手的人不能给自己批，要第二位人类审批人签字"
+    try:
+        with open(report_path, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+    except OSError as exc:
+        return f"对账报告读不出来：{report_path}（{exc}）"
+    want = approval["reconcile_report_sha256"]
+    if not isinstance(want, str) or digest != want.strip().lower():
+        return ("审批绑定的对账报告对不上（reconcile_report_sha256 不一致）—— "
+                "换一份报告就要重新批")
+    try:
+        with open(report_path, encoding="utf-8") as fh:
+            report = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return f"对账报告不是合法 JSON：{report_path}（{exc}）"
+    if not isinstance(report, dict) or report.get("ok") is not True:
+        return "对账报告的 ok 不是 true —— 没通过的对账不能删表"
+    return None
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--database", required=True, help="目标库连接串")
+    parser.add_argument("--database", required=False,
+                        default=os.environ.get("TARGET_DATABASE_URL", ""),
+                        help="被迁移过的库连接串。优先用环境变量 TARGET_DATABASE_URL —— "
+                             "argv 在 ps 与 CI 日志里可见，连接串里有口令")
     parser.add_argument("--apply", action="store_true",
                         help="真的 DROP。**不给这个参数就只检查**")
+    parser.add_argument("--approval", default="",
+                        help="审批文件路径（JSON）。--apply 时必填")
+    parser.add_argument("--reconcile-report", default="",
+                        help="migrate.py 生成的对账报告路径。--apply 时必填，审批绑定到这份报告")
     args = parser.parse_args()
+    if not args.database:
+        parser.error("缺 --database：请 export TARGET_DATABASE_URL 再跑"
+                     "（连接串里有口令，不要写进命令行或 CI 日志）")
 
     conn = await asyncpg.connect(args.database)
     try:
@@ -153,6 +241,20 @@ async def main() -> int:
             print("加 --apply 真正执行。**这一步不可逆**，"
                   "执行前请确认已有当天的 pg_dump。")
             return 0
+
+        # --apply 的第二道闸：审批 + 对账报告绑定。放在任何 DROP 之前 ——
+        # 上面的行级检查证明"搬对了"，这里证明"现在可以删"。
+        if not args.approval or not args.reconcile_report:
+            print("::error::--apply 必须同时给 --approval 与 --reconcile-report —— "
+                  "不可逆的 DROP 需要窗口过期 + 独立审批证据，并绑定一次通过的对账报告",
+                  file=sys.stderr)
+            return 2
+        refusal = _check_approval(args.approval, args.reconcile_report)
+        if refusal:
+            print(f"{RED}拒绝删除{RESET}：{refusal}", file=sys.stderr)
+            print("先把上面的问题查清楚。**这个脚本没有 --force** —— "
+                  "前提不成立的时候要做的是查清楚，不是绕过。", file=sys.stderr)
+            return 1
 
         # 走到这里说明上面那条依赖检查已经确认：CASCADE 只会碰这四张表
         # 彼此之间的外键（`api_keys.user_id -> users.id`、

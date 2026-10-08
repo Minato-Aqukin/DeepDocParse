@@ -39,7 +39,7 @@ def main() -> int:
     if size != EXPECTED_BIN_SIZE:
         print(f"ERROR: {src.name} 大小 {size}，期望 {EXPECTED_BIN_SIZE} —— 下载未完成。\n"
               f"       断点续传（务必只用一个来源，混用会拼出坏文件）：\n"
-              f"         curl -L --ssl-no-revoke -C - -o '{src}' \\\n"
+              f"         curl -L -C - -o '{src}' \\\n"
               f"           https://huggingface.co/BAAI/bge-m3/resolve/main/pytorch_model.bin",
               file=sys.stderr)
         return 1

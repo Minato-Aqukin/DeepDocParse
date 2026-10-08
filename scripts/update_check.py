@@ -37,7 +37,10 @@ model cache holds partial (`.part`) downloads, unless `--allow-active` is
 passed explicitly. With `--workspace`, `--backup-dir` is required: consistent
 online copies of both databases land in
 `<backup-dir>/<root>-<old-version>-workspaces/` and are recorded in
-`UPDATE-STATE.json`. `rollback` restores the application tree and, by default,
+`UPDATE-STATE.json`. `rollback` restores the application tree only after the
+pre-upgrade backup re-proves itself (BUILD-MANIFEST re-hash, versioned marker,
+and the recorded `archive_sha256`): a planted or tampered `.previous` tree is
+refused before the swap, and the version transition is logged. By default it
 keeps the current workspace databases (post-upgrade writes survive a
 same-schema rollback); `--restore-workspaces` restores the recorded
 pre-upgrade copies after verifying their digests and integrity. `uninstall`
@@ -80,7 +83,7 @@ def _workspace_expected_versions():
     and with the release marker's `workspace_schemas` (drift guard:
     tests/test_desktop_release.py::test_workspace_schema_declaration_matches_stores).
     """
-    return {"workspace.sqlite3": {0, 1, 2, 3}, "consents.sqlite3": {0, 1, 2, 3, 4}}
+    return {"workspace.sqlite3": {0, 1, 2, 3, 4}, "consents.sqlite3": {0, 1, 2, 3, 4}}
 
 FORMAT = 1
 NAME = "deepdocparse-desktop"
@@ -111,7 +114,7 @@ def digest(path: Path) -> str:
 # ----------------------------------------------------------------- lifecycle
 #
 # Workspaces (local SQLite) live outside the application tree:
-#   <workspace>/workspace.sqlite3          LocalStore (user_version 0..3, fresh writes 3)
+#   <workspace>/workspace.sqlite3          LocalStore (user_version 0..4, fresh writes 4)
 #   <workspace>/consents.sqlite3           ConsentStore (user_version 0..4, fresh writes 4)
 #   <workspace>/models/                    ModelInstaller (0700, fd-pinned)
 # The installer never touches them except as below. Update flow for one
@@ -469,6 +472,18 @@ def tree_digest(root: Path) -> str:
     return hashlib.sha256("".join(entries).encode()).hexdigest()
 
 
+def _tree_digest_excluding(root: Path, excluded: set[str]) -> str:
+    """`tree_digest` with installer-written state files excluded by name."""
+    entries = []
+    for path in sorted(root.rglob("*")):
+        if path.is_dir():
+            continue
+        if path.relative_to(root).as_posix() in excluded:
+            continue
+        entries.append(f"{path.relative_to(root).as_posix()}:{digest(path)}\n")
+    return hashlib.sha256("".join(entries).encode()).hexdigest()
+
+
 def marker_of(tree: Path) -> dict:
     return load_json(tree / MARKER, f"installed {MARKER}")
 
@@ -788,7 +803,7 @@ def read_candidate(manifest_path: Path, archive: Path, root: Path | None,
 
 # --------------------------------------------------------------- tree checks
 
-def verify_tree(directory: Path) -> dict:
+def verify_tree(directory: Path, *, extra_allowed: tuple[str, ...] = ()) -> dict:
     """Re-hash an extracted package against its own BUILD-MANIFEST.json.
 
     **Extra files are rejected too.** The manifest lists every packaged file;
@@ -796,10 +811,15 @@ def verify_tree(directory: Path) -> dict:
     (an archive can be internally self-consistent and still carry a file no
     notice covers). The single documented allowance is `BUILD-MANIFEST.json`
     itself, which the builder deliberately keeps out of its own `files` map.
+    Callers pass `extra_allowed` for files the installer itself writes after
+    the swap — `apply` records `UPDATE-STATE.json` inside the live tree, so a
+    pre-upgrade backup always carries one its BUILD-MANIFEST cannot list. The
+    staging check passes nothing extra: an archive smuggling state is refused.
     """
     build = load_json(directory / BUILD_MANIFEST, BUILD_MANIFEST)
     if build.get("format") != 1 or not isinstance(build.get("files"), dict):
         raise Rejected("BUILD-MANIFEST.json has an unsupported shape")
+    allowed = set(extra_allowed)
     problems = []
     declared = set(build["files"])
     for relative, expected in sorted(build["files"].items()):
@@ -812,7 +832,7 @@ def verify_tree(directory: Path) -> dict:
         if path.is_dir():
             continue
         relative = path.relative_to(directory).as_posix()
-        if relative == BUILD_MANIFEST or relative in declared:
+        if relative == BUILD_MANIFEST or relative in declared or relative in allowed:
             continue
         problems.append(f"unmanifested {'symlink' if path.is_symlink() else 'file'}: "
                         f"{relative}")
@@ -844,6 +864,62 @@ def _copy_verified_archive(archive: Path, manifest: dict, directory: Path) -> Pa
             "archive changed between verification and extraction; refusing to apply")
     return target
 
+
+def _verify_rollback_tree(previous: Path, state: dict) -> dict:
+    """Pre-swap gate for `rollback`: the planted `.previous` tree must prove itself.
+
+    `verify_tree` re-hashes the tree against its own BUILD-MANIFEST (tampered or
+    smuggled files fail). The tree must carry a parseable RELEASE-MANIFEST
+    version, and — when the live UPDATE-STATE.json records the pre-upgrade
+    state — its BUILD-MANIFEST bytes plus its payload digest (excluding the
+    installer-written UPDATE-STATE.json, which did not exist when the digest
+    was recorded) must equal the recorded values: a planted replacement still
+    fails even when self-consistent. With no update record anywhere
+    (hand-installed tree restored into a missing root), there is no newer
+    live tree to protect — BUILD-MANIFEST re-hash + marker are the whole
+    gate. `UPDATE-STATE.json` is the one installer-written file the manifest
+    cannot list, so it is allowed here (and only here — the apply staging
+    check passes nothing extra).
+    """
+    has_build = (previous / BUILD_MANIFEST).is_file()
+    candidate = marker_of(previous)
+    parse_version(candidate.get("version"))  # missing/malformed versions refuse here
+    build: dict = verify_tree(previous, extra_allowed=("UPDATE-STATE.json",)) if has_build else {}
+    _ = build  # returned below; kept live so the re-hash is never optimized into a check-only call
+    # Gate on the exact BUILD-MANIFEST bytes the apply path saw, when it saw
+    # one: a rebuilt tree with identical payload regenerates identical
+    # canonical bytes (the `_install_tree` fixtures prove it — same-version
+    # rebuilds match), while any payload or file-set difference changes them.
+    # Byte comparison, not a parsed `files` map: re-serializing JSON would
+    # normalize away the whitespace/ordering differences a forgery could hide
+    # behind. Trees installed before this gate existed record no manifest, so
+    # the payload digest below is their only pin — still strictly stronger
+    # than the old marker-only gate.
+    recorded_raw = state.get("previous_build_manifest")
+    recorded_sha = state.get("previous_build_sha256")
+    live_recorded = state.get("previous_digest")
+    if live_recorded is None and "previous_version" not in state:
+        return build
+    if not isinstance(live_recorded, str) or not re.fullmatch(r"[0-9a-f]{64}", live_recorded):
+        raise Rejected("no recorded pre-upgrade digest in UPDATE-STATE.json; refusing rollback")
+    if isinstance(recorded_raw, str) and isinstance(recorded_sha, str):
+        current_raw = (previous / BUILD_MANIFEST).read_bytes()
+        if (hashlib.sha256(current_raw).hexdigest() != recorded_sha
+                or current_raw.decode("utf-8") != recorded_raw):
+            raise Rejected("pre-upgrade backup does not match the recorded manifest; refusing rollback")
+    # `tree_digest` hashes every file including UPDATE-STATE.json, but the
+    # apply path recorded `previous_digest` BEFORE that file existed in the
+    # old tree — so digest with the installer-written state file excluded.
+    # A planted replacement still fails: its payload bytes differ. Excluding
+    # by name (not by recomputing around content) keeps the gate total: any
+    # extra/missing file besides this one still changes the digest.
+    if _tree_digest_excluding(previous, {"UPDATE-STATE.json"}) != live_recorded:
+        raise Rejected("pre-upgrade backup does not match the recorded digest; refusing rollback")
+    live_version = state.get("previous_version")
+    if live_version is not None and live_version != candidate.get("version"):
+        raise Rejected("pre-upgrade backup version does not match the recorded update; "
+                       "refusing rollback")
+    return build
 
 # ------------------------------------------------------------------- commands
 
@@ -1083,6 +1159,9 @@ def command_apply(args) -> int:
                 workspace_dir.mkdir(parents=True)
                 workspace_backup = backup_workspaces(workspaces, workspace_dir)
                 workspace_backup["directory"] = str(workspace_dir)
+        previous_digest = tree_digest(root)
+        previous_build_path = root / BUILD_MANIFEST
+        previous_build_raw = previous_build_path.read_bytes() if previous_build_path.is_file() else None
         os.replace(root, previous)
         if args.backup_dir:
             shutil.copytree(previous, backup, symlinks=False)
@@ -1092,6 +1171,10 @@ def command_apply(args) -> int:
         (root / "UPDATE-STATE.json").write_text(json.dumps({
             "format": 1, "name": NAME, "version": final_marker["version"],
             "python": final_marker.get("python"), "previous": str(previous),
+            "previous_digest": previous_digest, "previous_version": old_version,
+            **({"previous_build_manifest": previous_build_raw.decode("utf-8"),
+                "previous_build_sha256": hashlib.sha256(previous_build_raw).hexdigest()}
+               if previous_build_raw is not None else {}),
             "archive_sha256": manifest["sha256"], "installed_at": _now(),
             "licenses_checked": sorted(
                 (build.get("license_manifest") or {}).get("distributions") or {}),
@@ -1129,27 +1212,45 @@ def command_rollback(args) -> int:
             previous_state = load_json(previous_state_path, "UPDATE-STATE.json")
         except Rejected:
             previous_state = {}
+    # An interrupted update deleted `root` without installing anything: the
+    # live UPDATE-STATE.json is gone with it, but `.previous` (the untouched
+    # old tree) is still runnable. When `.previous` itself carries the record
+    # of the last successful apply INTO it, gate against that record. A tree
+    # installed by hand (no UPDATE-STATE.json anywhere) restores without a
+    # recorded digest — there is no newer live tree to protect and no state
+    # to be stale against; BUILD-MANIFEST re-hash + marker still apply.
+    rollback_state = state or previous_state
     if restore and not (state.get("workspace_backup") or {}).get("workspaces"):
         raise Rejected("no workspace backup is recorded in UPDATE-STATE.json; "
                        "rollback keeps the current workspace databases")
-    # Pre-verify every workspace copy (digest + integrity + schema match)
-    # BEFORE the tree swap: a refusal after `os.replace` would leave the old
-    # tree restored while the command reports failure — or worse, restore the
-    # tree but not the data it promised.
+    # Pre-swap gates, all BEFORE any `os.replace`: a refusal after the swap
+    # would leave the wrong tree installed while reporting failure. First the
+    # workspace copies (digest + integrity + schema match), then the planted
+    # `.previous` tree itself (BUILD-MANIFEST re-hash + marker + recorded
+    # update digest), so a tampered backup fails instead of going live.
     if restore:
         _preverify_workspace_restore(state, wanted or None)
     reports = (check_workspaces(args._guarded_workspaces, allow_active=False) if not restore
                else [workspace_preflight(workspace) for workspace in args._guarded_workspaces])
+    _verify_rollback_tree(previous, rollback_state)
     _check_workspace_readers(marker_of(previous), reports)
+    if root.is_dir():
+        current_version = (marker_of(root).get("version", "unknown")
+                           if (root / MARKER).is_file() else "unknown")
+        print(f"rollback: {current_version} -> "
+              f"{marker_of(previous).get('version', 'unknown')}",
+              file=sys.stderr)
+    else:
+        print(f"rollback: restoring {marker_of(previous).get('version', 'unknown')} "
+              f"into missing {root}", file=sys.stderr)
     kept = None
     if root.is_dir():
-        marker = marker_of(root) if (root / MARKER).is_file() else {}
-        kept = root.with_name(f"{root.name}.rolledback-{marker.get('version', 'unknown')}")
+        live_marker = marker_of(root) if (root / MARKER).is_file() else {}
+        kept = root.with_name(f"{root.name}.rolledback-{live_marker.get('version', 'unknown')}")
         if kept.exists():
             shutil.rmtree(kept)
         os.replace(root, kept)
     os.replace(previous, root)
-    marker = marker_of(root)
     restored: list[dict] = []
     restore_note: str | None = None
     if restore:
@@ -1161,7 +1262,8 @@ def command_rollback(args) -> int:
     else:
         restore_note = ("workspace databases were left in place; "
                         "pass --restore-workspaces to bring back the pre-upgrade copies")
-    print(json.dumps({"rolled_back": True, "version": marker.get("version"),
+    final = marker_of(root)
+    print(json.dumps({"rolled_back": True, "version": final.get("version"),
                       "root": str(root), "kept_copy": str(kept) if kept else None,
                       "workspaces_restored": restored,
                       "workspace_note": restore_note,

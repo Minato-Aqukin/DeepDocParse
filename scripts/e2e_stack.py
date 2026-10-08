@@ -105,7 +105,11 @@ async def main() -> int:
         print("\n[0] 入口健康")
         try:
             health = await http.get("/healthz")
-            run.ok("healthz", f"{health.status_code}")
+            if health.status_code == 200:
+                run.ok("healthz", f"{health.status_code}")
+            else:
+                run.fail("healthz", f"{health.status_code} {health.text[:200]}")
+                return run.summary()
         except httpx.HTTPError as exc:
             run.fail("healthz", f"入口不可达：{exc}（先跑 scripts/dev.sh up）")
             return run.summary()

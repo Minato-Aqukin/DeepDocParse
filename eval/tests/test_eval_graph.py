@@ -52,3 +52,44 @@ def test_a_new_agent_metric_without_a_baseline_counts_as_drift():
     metrics = eval_graph.evaluate(data)
     assert metrics["agent_drift"] == {"refusal_after": [[4, 4], []]}
     assert not eval_graph.passes(metrics)
+
+
+def test_graph_gate_fails_when_citations_all_present_but_wrong():
+    """覆盖 100% 但正确率 0% 必须红：门禁以前只看覆盖，错引能拿 exit 0。"""
+    data = json.loads((EVAL_DIR / "datasets" / "graph.json").read_text(encoding="utf-8"))
+    for row in data["wiki_sentences"]:
+        if row["evidence_ids"]:
+            row["citation_correct"] = False
+    metrics = eval_graph.evaluate(data)
+    assert metrics["wiki_sentence_coverage"] == (20, 20)
+    assert metrics["wiki_citation_correctness"] == (0, 16)
+    assert not eval_graph.passes(metrics)
+
+
+def test_graph_gate_fails_on_a_partially_wrong_citation_set():
+    """正确率差一条也不行：门禁要求全等，不是"差不多"。"""
+    data = json.loads((EVAL_DIR / "datasets" / "graph.json").read_text(encoding="utf-8"))
+    data["wiki_sentences"][0]["citation_correct"] = False
+    metrics = eval_graph.evaluate(data)
+    assert metrics["wiki_sentence_coverage"] == (20, 20)
+    assert metrics["wiki_citation_correctness"] == (15, 16)
+    assert not eval_graph.passes(metrics)
+
+
+def test_unattributed_edge_row_scores_a_named_failure_not_a_traceback():
+    """attributes 里没有已知环节的行：记名失败走门禁红，不抛 StopIteration。"""
+    data = json.loads((EVAL_DIR / "datasets" / "graph.json").read_text(encoding="utf-8"))
+    data["edges"][0]["attributes"] = ["manual"]
+    metrics = eval_graph.evaluate(data)
+    assert metrics["attribution_errors"] == ["edge-001"]
+    assert not eval_graph.passes(metrics)
+    assert "edge-001" in eval_graph.render(data, metrics)
+
+
+def test_attribution_still_splits_clean_rows_after_an_unattributed_one():
+    """坏行跳过之后，好行的三分表计数不受影响。"""
+    data = json.loads((EVAL_DIR / "datasets" / "graph.json").read_text(encoding="utf-8"))
+    data["edges"][0]["attributes"] = ["manual"]
+    metrics = eval_graph.evaluate(data)
+    assert sum(hit for hit, _ in metrics["attribution"].values()) == 49
+    assert sum(total for _, total in metrics["attribution"].values()) == 49

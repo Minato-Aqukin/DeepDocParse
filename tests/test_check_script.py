@@ -52,6 +52,8 @@ class Checkout:
         self.env = dict(os.environ)
         self.env.pop("PY", None)
         self.env.pop("CONTROL_TEST_DATABASE_URL", None)
+        # CI 把跳过视为失败：测试各自显式传 CI，这里先清掉 ambient，避免本机/CI 结果不一致。
+        self.env.pop("CI", None)
         self.env.update({
             "PATH": f"{self.bin}:{os.defpath}",
             "BASH_ENV": str(bash_env),
@@ -222,3 +224,38 @@ def test_missing_web_dependencies_fail_loudly(checkout, target):
     assert result.returncode != 0
     assert "依赖未安装" in result.stdout
     assert checkout.calls() == []
+
+def test_default_run_reports_database_skips_and_stays_green(checkout):
+    # 桩 docker 恒 exit 1（边界走跳过）+ 未设 CONTROL_TEST_DATABASE_URL（计量走跳过）。
+    result = checkout.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "SKIP" in result.stdout
+    assert "数据所有权（真库）：dev postgres 未起，已跳过" in result.stdout
+    assert "计量用例（需 CONTROL_TEST_DATABASE_URL）：4 条，已跳过" in result.stdout
+    assert "--allow-without-db" in result.stdout
+    assert "跳过 2" in result.stdout and "失败 0" in result.stdout
+
+
+def test_ci_turns_database_skips_into_failures(checkout):
+    result = checkout.run(env={"CI": "true"})
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "SKIP" not in result.stdout
+    assert "FAIL" in result.stdout
+    assert "数据所有权（真库）：dev postgres 未起，已跳过" in result.stdout
+    assert "计量用例（需 CONTROL_TEST_DATABASE_URL）：4 条，已跳过" in result.stdout
+    assert "跳过 0" in result.stdout and "失败 2" in result.stdout
+
+
+def test_ci_with_allow_without_db_keeps_skips_visible(checkout):
+    result = checkout.run("--allow-without-db", env={"CI": "true"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "SKIP" in result.stdout
+    assert "数据所有权（真库）：dev postgres 未起，已跳过" in result.stdout
+    assert "计量用例（需 CONTROL_TEST_DATABASE_URL）：4 条，已跳过" in result.stdout
+    assert "跳过 2" in result.stdout and "失败 0" in result.stdout
+
+
+def test_allow_without_db_is_a_flag_not_a_target(checkout):
+    result = checkout.run("guards", "--allow-without-db", env={"CI": "true"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "SKIP" in result.stdout and "跳过 1" in result.stdout

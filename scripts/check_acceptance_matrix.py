@@ -173,7 +173,12 @@ def main() -> None:
 
     def source(path: str) -> str:
         if path not in source_cache:
-            source_cache[path] = (ROOT / path).read_text(encoding="utf-8", errors="ignore")
+            try:
+                source_cache[path] = (ROOT / path).read_text(encoding="utf-8", errors="ignore")
+            except FileNotFoundError:
+                # 证据指向了一个不存在的文件：记成空内容，让调用方按"引用不成立"
+                # 报红，而不是在这里抛 traceback 中断整张台账的校验。
+                source_cache[path] = ""
         return source_cache[path]
 
     py_files = [path for path in files if path.endswith(".py")]

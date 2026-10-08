@@ -145,6 +145,14 @@ def backfill_assets(bind) -> None:
 
 def downgrade() -> None:
     # 纯新增，内容层没动过 —— 这次是**真的**数据回滚（0006 不是）
+    bind = op.get_bind()
+    counts = {t: bind.execute(sa.text(f"SELECT COUNT(*) FROM {t}")).scalar() or 0
+              for t in ("resources", "resource_versions", "upload_events")}
+    if any(counts.values()):
+        populated = ", ".join(f"{t}={c}" for t, c in counts.items() if c)
+        raise RuntimeError(
+            "0015 cannot downgrade with populated resource tables "
+            f"({populated}); export data first")
     op.drop_index("uq_resources_origin_binding", table_name="resource_versions")
     op.drop_table("upload_events")
     op.drop_table("resource_versions")

@@ -50,7 +50,8 @@ def evaluate(data: dict) -> dict:
     edges = data["edges"]
     pointback = 0
     attribution = {stage: [0, 0] for stage in ("recognition", "extraction", "link")}
-    for row in edges:
+    attribution_errors: list[str] = []
+    for index, row in enumerate(edges):
         output = row.get("output") or {}
         citation = output.get("citation") or {}
         bbox = citation.get("bbox")
@@ -61,8 +62,12 @@ def evaluate(data: dict) -> dict:
                 and isinstance(page_size, list) and len(page_size) == 2
                 and basis in str(citation.get("crop_text") or ""))
         pointback += int(bool(good))
-        expected_stage = next(value for value in row["attributes"]
-                              if value in attribution)
+        expected_stage = next((value for value in row.get("attributes") or []
+                               if value in attribution), None)
+        if expected_stage is None:
+            # 无已知环节：记下行 id 走门禁红，不抛 StopIteration 崩掉整份评测。
+            attribution_errors.append(row.get("id") or f"edges[{index}]")
+            continue
         attribution[expected_stage][1] += 1
         attribution[expected_stage][0] += int(output.get("error_stage") == expected_stage)
 
@@ -90,6 +95,7 @@ def evaluate(data: dict) -> dict:
         "wiki_sentence_coverage": (covered, len(wiki)),
         "wiki_citation_correctness": (citation_correct, len(supported)),
         "attribution": attribution,
+        "attribution_errors": attribution_errors,
         "agent_drift": drift,
         "graph_off_agent_unchanged": not drift,
     }
@@ -113,6 +119,9 @@ def render(data: dict, metrics: dict) -> str:
         *([] if metrics["graph_off_agent_unchanged"] else [
             "漂掉的字段（实测 / 阶段 6 基线）：`" + json.dumps(
                 metrics["agent_drift"], ensure_ascii=False, sort_keys=True) + "`。", ""]),
+        *([] if not metrics.get("attribution_errors") else [
+            "归因失败的行（attributes 里没有识别/抽取/连边任一环节）：`"
+            + ", ".join(metrics["attribution_errors"]) + "`。", ""]),
         "实体合并 `merged_by` 分布：`" + json.dumps(
             metrics["merge_distribution"], ensure_ascii=False, sort_keys=True) + "`。", "",
         "## 错误归因（三分表，不报综合分）", "",
@@ -133,6 +142,9 @@ def passes(metrics: dict) -> bool:
         and metrics["merge_accuracy"][0] == metrics["merge_accuracy"][1]
         and metrics["uncertain_splittable"][0] == metrics["uncertain_splittable"][1]
         and metrics["wiki_sentence_coverage"][0] == metrics["wiki_sentence_coverage"][1]
+        # 覆盖只管"有出处"，正确率才管"引得对"：全在但全错也必须红。
+        and metrics["wiki_citation_correctness"][0] == metrics["wiki_citation_correctness"][1]
+        and not metrics.get("attribution_errors")
         and metrics["graph_off_agent_unchanged"]
     )
 

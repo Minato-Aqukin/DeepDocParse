@@ -16,18 +16,39 @@ alembic upgrade head
 
 # 授权必须在迁移之后：ALTER DEFAULT PRIVILEGES 只管**之后**建的对象，
 # 已经建好的那些要显式 GRANT 一遍
-psql_url=$(python - <<'PY'
+#
+# **DSN 不上 argv。** DATABASE_URL 里有口令，放命令行里会被 ps / CI 日志
+# 看到；这里在进程内拆成 PG* 环境变量传给 psql（环境变量不在 ps 里出现）。
+eval "$(python - <<'PY'
 import os
-from urllib.parse import urlsplit, urlunsplit
+import shlex
+from urllib.parse import parse_qsl, urlsplit, unquote
 
-# alembic 用的是 postgresql+asyncpg://，psql 只认 postgresql://
+# alembic 用的是 postgresql+asyncpg://，拆出来的 host/port/db/user 在这里
+# 给 psql 用（psql 只认 PG* 环境变量，不认 +asyncpg 后缀）
 raw = os.environ["DATABASE_URL"]
 parts = urlsplit(raw)
-print(urlunsplit(("postgresql", parts.netloc, parts.path, parts.query, parts.fragment)))
+scheme = parts.scheme.split("+")[0]
+if scheme not in ("postgresql", "postgres"):
+    raise SystemExit(f"DATABASE_URL 的 scheme 不认：{parts.scheme}")
+out = {
+    "PGHOST": parts.hostname or "localhost",
+    "PGPORT": str(parts.port or 5432),
+    "PGDATABASE": (parts.path or "/").lstrip("/") or "postgres",
+    "PGUSER": unquote(parts.username or ""),
+    "PGPASSWORD": unquote(parts.password or ""),
+}
+for key, value in dict(parse_qsl(parts.query)).items():
+    if key.lower() == "sslmode":
+        out["PGSSLMODE"] = value
+for key, value in out.items():
+    print(f"{key}={shlex.quote(value)}")
 PY
-)
+)"
+export PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD
+if [ -n "${PGSSLMODE:-}" ]; then export PGSSLMODE; fi
 
 # ON_ERROR_STOP：没有它，psql 会把失败的 GRANT 打成一行日志然后退出 0，
 # 而那正是"迁移成功但服务没权限"这个故障的来源
-psql "$psql_url" --set ON_ERROR_STOP=1 -f "$HERE/grants.sql"
+psql --set ON_ERROR_STOP=1 -f "$HERE/grants.sql"
 echo "corpus schema 迁移与授权完成"

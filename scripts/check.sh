@@ -15,7 +15,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
   cat <<'USAGE'
-用法：scripts/check.sh [guards|python|go|web|web-e2e ...]
+用法：scripts/check.sh [guards|python|go|web|web-e2e ...] [--allow-without-db]
       scripts/check.sh --help
 
 默认：guards python go web（依次运行，失败后继续汇总）。
@@ -25,12 +25,24 @@ usage() {
   web      类型检查与生产构建、组件单测、共享连接层与桌面主机测试
   web-e2e  前端浏览器测试（含构建；需提前安装 Playwright Chromium）
 
+  --allow-without-db  允许无真库时记为跳过而不失败（本地默认行为；CI 下不传则跳过视为失败）
+无真库（dev postgres 未起 / 未设 CONTROL_TEST_DATABASE_URL）时相关检查记为跳过；
+本地默认退出 0，CI 下跳过视为失败，除非传入 --allow-without-db。
 PY 可指定解释器命令名或路径；相对路径基于调用目录。未设置时优先 .venv/bin/python。
 完整验证范围与依赖见 docs/DEVELOPMENT.md。
 USAGE
 }
 
-WANTED=("$@")
+ALLOW_WITHOUT_DB=0
+WANTED=()
+for _arg in "$@"; do
+  case "$_arg" in
+    --allow-without-db) ALLOW_WITHOUT_DB=1 ;;
+    *) WANTED+=("$_arg") ;;
+  esac
+done
+unset _arg
+
 if [ ${#WANTED[@]} -eq 1 ] && [ "${WANTED[0]}" = --help ]; then
   usage
   exit 0
@@ -75,6 +87,15 @@ export PATH="$HOME/.local/opt/go/bin:$PATH"
 FAILED=()
 PASSED=()
 
+SKIPPED=()
+
+# 静默跳过与真的绿长得一模一样：记入 SKIPPED 桶，汇总里可见；CI 下默认视为失败。
+skip() {
+  local name="$1"
+  printf '\033[33m    跳过：%s\033[0m\n' "$name"
+  SKIPPED+=("$name")
+}
+
 run() {
   local name="$1"; shift
   printf '\n\033[1m>>> %s\033[0m\n' "$name"
@@ -111,6 +132,7 @@ if want guards; then
   run "内容契约路由"      "$PY" scripts/check_content_contract.py
   run "验收台账"          "$PY" scripts/check_acceptance_matrix.py
   run "control 迁移同步"  "$PY" scripts/check_control_migrations.py
+  run "动作引用 pin"      "$PY" scripts/check_action_pins.py
   run "配置参考文档"      "$PY" scripts/gen_config_docs.py --check
   run "架构守卫"          "$PY" -m pytest -q
 fi
@@ -143,8 +165,8 @@ if want guards; then
   if docker exec "${DDP_PG_CONTAINER:-ddp-postgres-1}" true 2>/dev/null; then
     run "数据所有权（真库）" ./scripts/check_db_boundary.sh
   else
-    printf '\033[33m    注意：dev 的 postgres 没起，check_db_boundary.sh 跳过\033[0m\n'
-    printf '\033[2m    它验的是"越界 SQL 会不会被数据库拒绝"，与静态守卫互补；CI 里是必跑的\033[0m\n'
+    skip "数据所有权（真库）：dev postgres 未起，已跳过"
+    printf '\033[2m    它验的是"越界 SQL 会不会被数据库拒绝"，与静态守卫互补；CI 下必跑（跳过视为失败），如需放行请传 --allow-without-db\033[0m\n'
   fi
 fi
 
@@ -163,8 +185,8 @@ if want go; then
     if [ -n "${CONTROL_TEST_DATABASE_URL:-}" ]; then
       printf '\033[2m    已配置 CONTROL_TEST_DATABASE_URL，计量用例使用 PostgreSQL 测试连接。\033[0m\n'
     else
-      printf '\033[33m    注意：没有 CONTROL_TEST_DATABASE_URL，internal/store 的 4 条计量用例被跳过\033[0m\n'
-      printf '\033[2m    请准备独立 PostgreSQL 测试库并设置该变量；见 docs/DEVELOPMENT.md，CI 里是必跑的\033[0m\n'
+      skip "计量用例（需 CONTROL_TEST_DATABASE_URL）：4 条，已跳过"
+      printf '\033[2m    没有 CONTROL_TEST_DATABASE_URL 时 internal/store 的 4 条计量用例只能跳过；请准备独立 PostgreSQL 测试库并设置该变量，见 docs/DEVELOPMENT.md；CI 下跳过视为失败，如需放行请传 --allow-without-db\033[0m\n'
     fi
   else
     # **显式报缺，不静默跳过**：静默跳过的绿与真的绿长得一模一样
@@ -197,8 +219,15 @@ if want web-e2e; then
   fi
 fi
 
+# CI 下跳过视为失败：无真库的跳过在 CI 里必须红，除非显式传入 --allow-without-db。
+if [ ${#SKIPPED[@]} -gt 0 ] && [ -n "${CI:-}" ] && [ "$ALLOW_WITHOUT_DB" -eq 0 ]; then
+  FAILED+=("${SKIPPED[@]}")
+  SKIPPED=()
+fi
+
 printf '\n\033[1m===== 汇总 =====\033[0m\n'
 for name in "${PASSED[@]}"; do printf '  \033[32mPASS\033[0m %s\n' "$name"; done
+for name in "${SKIPPED[@]}"; do printf '  \033[33mSKIP\033[0m %s\n' "$name"; done
 for name in "${FAILED[@]}"; do printf '  \033[31mFAIL\033[0m %s\n' "$name"; done
-printf '通过 %d / 失败 %d\n' "${#PASSED[@]}" "${#FAILED[@]}"
+printf '通过 %d / 跳过 %d / 失败 %d\n' "${#PASSED[@]}" "${#SKIPPED[@]}" "${#FAILED[@]}"
 [ ${#FAILED[@]} -eq 0 ]

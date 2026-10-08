@@ -29,6 +29,10 @@
 #      （e2e 无 in-chain 路径，不升级）；
 #   4. 文档化迁移器 database/migrator/migrate.py：dry-run 预检 + --apply
 #      行数/外键/对象存在性对账 + 重跑幂等（写 0/跳过全部）；e2e 只读源库预检；
+#   4b. 分阶段门（plan §15.1：影子读 -> 小范围切换 -> 扩大灰度）：
+#      canary（单数据集 web 先行，对账全 PASS 才放行）→ small-switch
+#      （cit/realcit 切换 + 影子读零漂移）→ gray-expand（全量 + 回填幂等）；
+#      每阶段有独立 gate，任一 FAIL 即停；
 #   5. 快照恢复（e2e 从升级前快照 pg_restore 到新库；control 无 downgrade，
 #      这就是文档化回退路径）；
 #   6. scripts/legacy_migration_drill.py 影子读：归属不猜测 / 权限不扩大 /
@@ -55,7 +59,14 @@
 #     QA_DECISION_ENABLED=false、QA_VERIFY_PARSE=false、COMPILE_VISION_ENABLED=false
 #     三个开关是配置（era.env），关闭的是"调用视觉/判定模型"的步骤，
 #     引用写入路径（record_evidence 双写）一字未动。
-set -uo pipefail
+set -euo pipefail
+#
+# 三个开关各挡一类静默出错：-e 让任何 migrate.py 非零退出、断言 heredoc
+# 失败、psql ON_ERROR_STOP 失败都直接终止演练，而不是带着半脏库继续往下跑
+# （cleanup 只做容器/卷清理，`|| true` 仅限清理行，绝不掩盖 gate 的退出码）；
+# -u 让拼错的变量名当场炸，而不是展开成空串后让下游报云山雾罩的错；
+# pipefail 让 `migrate.py … | tail` 这类管道按 migrate.py 的退出码算 ——
+# 没有它管道状态永远是 tail 的 0，行尾的 `|| fail` 门永远看不见失败。
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -244,7 +255,7 @@ go -C services/control-api build -o /tmp/legacy-drill/control-migrate ./cmd/cont
   || fail "control-migrate 构建失败"
 for pair in "${WEB_PG_PORT}:web" "${CIT_PG_PORT}:cit" "${REALCIT_PG_PORT}:realcit"; do
   port="${pair%%:*}"; tag="${pair##*:}"
-  /tmp/legacy-drill/control-migrate -database "postgres://ddp:ddp@127.0.0.1:${port}/deepdocparse" up \
+  env CONTROL_DATABASE_URL="postgres://ddp:ddp@127.0.0.1:${port}/deepdocparse" /tmp/legacy-drill/control-migrate up \
     | tee "$WORK/${tag}-control-migrate.log" | tail -2
   (
     cd database/corpus
@@ -305,46 +316,165 @@ DSN_WEB="postgresql://ddp:ddp@127.0.0.1:${WEB_PG_PORT}/deepdocparse"
 "$PY" database/migrator/migrate.py --source "$DSN_WEB" --target "$DSN_WEB" \
   --object-endpoint "127.0.0.1:${WEB_MINIO_PORT}" --object-access-key "$MINIO_USER" \
   --object-secret-key "$MINIO_PASS" --object-bucket "$BUCKET" \
-  --report "$WORK/web-migrate-dryrun.json" | tail -8
+  --report "$WORK/web-migrate-dryrun.json" | tail -8 || fail "web dry-run 预检未通过（migrate.py 非零退出）"
 "$PY" database/migrator/migrate.py --source "$DSN_WEB" --target "$DSN_WEB" --apply \
   --allow-live-target --object-endpoint "127.0.0.1:${WEB_MINIO_PORT}" \
   --object-access-key "$MINIO_USER" --object-secret-key "$MINIO_PASS" \
-  --object-bucket "$BUCKET" --report "$WORK/web-migrate-apply.json" | tail -14
+  --object-bucket "$BUCKET" --report "$WORK/web-migrate-apply.json" | tail -14 \
+  || fail "web --apply 对账未通过（migrate.py 非零退出）"
 "$PY" database/migrator/migrate.py --source "$DSN_WEB" --target "$DSN_WEB" --apply \
   --allow-live-target --object-endpoint "127.0.0.1:${WEB_MINIO_PORT}" \
   --object-access-key "$MINIO_USER" --object-secret-key "$MINIO_PASS" \
   --object-bucket "$BUCKET" --report "$WORK/web-migrate-apply-rerun.json" \
-  | tee "$WORK/web-migrate-rerun-tail.txt" | tail -3
-pass_n=$(grep -c PASS "$WORK/web-migrate-rerun-tail.txt" || true)
+  2>&1 | tee "$WORK/web-migrate-rerun.txt" | tail -3 \
+  || fail "web 重跑 migrate.py 非零退出 -- 迁移不是幂等的"
+# 幂等门：重跑输出里出现任一 FAIL/ERROR 即失败（migrate.py 用 "[FAIL]" 标
+# 记未通过的对账项；"::error::" 是它的失败横幅）。只数 PASS 会把
+# "1 PASS + N FAIL" 的半脏库误判为干净。tee 落的是完整输出，不是只给人看的
+# 最后三行 —— 对账项一旦超过三行，多出来的 FAIL 就藏在屏幕外面。
+if grep -Eq '\[FAIL\]|::error::|ERROR' "$WORK/web-migrate-rerun.txt"; then
+  fail "web 重跑出现 FAIL/ERROR -- 迁移不是幂等的（见 $WORK/web-migrate-rerun.txt）"
+fi
+pass_n=$(grep -c PASS "$WORK/web-migrate-rerun.txt" || true)
 [ "${pass_n:-0}" -gt 0 ] || fail "web 重跑 PASS 计数为 0 -- 对账输出异常"
+# 幂等断言：重跑必须写 0 行（ON CONFLICT 全挡住）、跳过全部已存在行。
+"$PY" - "$WORK/web-migrate-apply-rerun.json" <<'PYEOFR' || fail "web 重跑不是 write-0/skip-all 幂等"
+import json, sys
+rep = json.load(open(sys.argv[1], encoding="utf-8"))
+written = sum(s.get("written", 0) for s in rep.get("steps", []))
+read = sum(s.get("read", 0) for s in rep.get("steps", []))
+skipped = sum(s.get("skipped", 0) for s in rep.get("steps", []))
+assert rep.get("ok") is True, f"rerun report ok != true: {rep.get('checks')}"
+assert written == 0, f"rerun wrote {written} rows, expected 0 (not idempotent)"
+assert read > 0 and skipped > 0, f"rerun read={read} skipped={skipped}, expected both > 0"
+print(f"rerun idempotent: read={read} written=0 skipped={skipped}")
+PYEOFR
 note "cit（含引用库）同样 --apply + 重跑（对象抽样走同一 web MinIO 拷贝）："
 DSN_CIT="postgresql://ddp:ddp@127.0.0.1:${CIT_PG_PORT}/deepdocparse"
 "$PY" database/migrator/migrate.py --source "$DSN_CIT" --target "$DSN_CIT" --apply \
   --allow-live-target --object-endpoint "127.0.0.1:${WEB_MINIO_PORT}" \
   --object-access-key "$MINIO_USER" --object-secret-key "$MINIO_PASS" \
-  --object-bucket "$BUCKET" --report "$WORK/cit-migrate-apply.json" | tail -14
+  --object-bucket "$BUCKET" --report "$WORK/cit-migrate-apply.json" | tail -14 \
+  || fail "cit --apply 对账未通过（migrate.py 非零退出）"
 "$PY" database/migrator/migrate.py --source "$DSN_CIT" --target "$DSN_CIT" --apply \
   --allow-live-target --object-endpoint "127.0.0.1:${WEB_MINIO_PORT}" \
   --object-access-key "$MINIO_USER" --object-secret-key "$MINIO_PASS" \
   --object-bucket "$BUCKET" --report "$WORK/cit-migrate-apply-rerun.json" \
-  | tee "$WORK/cit-migrate-rerun-tail.txt" | tail -3
-pass_n=$(grep -c PASS "$WORK/cit-migrate-rerun-tail.txt" || true)
+  2>&1 | tee "$WORK/cit-migrate-rerun.txt" | tail -3 \
+  || fail "cit 重跑 migrate.py 非零退出 -- 迁移不是幂等的"
+if grep -Eq '\[FAIL\]|::error::|ERROR' "$WORK/cit-migrate-rerun.txt"; then
+  fail "cit 重跑出现 FAIL/ERROR -- 迁移不是幂等的（见 $WORK/cit-migrate-rerun.txt）"
+fi
+pass_n=$(grep -c PASS "$WORK/cit-migrate-rerun.txt" || true)
 [ "${pass_n:-0}" -gt 0 ] || fail "cit 重跑 PASS 计数为 0 -- 对账输出异常"
+"$PY" - "$WORK/cit-migrate-apply-rerun.json" <<'PYEOFR' || fail "cit 重跑不是 write-0/skip-all 幂等"
+import json, sys
+rep = json.load(open(sys.argv[1], encoding="utf-8"))
+written = sum(s.get("written", 0) for s in rep.get("steps", []))
+read = sum(s.get("read", 0) for s in rep.get("steps", []))
+skipped = sum(s.get("skipped", 0) for s in rep.get("steps", []))
+assert rep.get("ok") is True, f"rerun report ok != true: {rep.get('checks')}"
+assert written == 0, f"rerun wrote {written} rows, expected 0 (not idempotent)"
+assert read > 0 and skipped > 0, f"rerun read={read} skipped={skipped}, expected both > 0"
+print(f"rerun idempotent: read={read} written=0 skipped={skipped}")
+PYEOFR
 note "realcit（真实 era 引用库）同样 --apply + 重跑（对象抽样走自带 realcit MinIO 拷贝）："
 DSN_REALCIT="postgresql://ddp:ddp@127.0.0.1:${REALCIT_PG_PORT}/deepdocparse"
 "$PY" database/migrator/migrate.py --source "$DSN_REALCIT" --target "$DSN_REALCIT" --apply \
   --allow-live-target --object-endpoint "127.0.0.1:${REALCIT_MINIO_PORT}" \
   --object-access-key "$MINIO_USER" --object-secret-key "$MINIO_PASS" \
-  --object-bucket "$BUCKET" --report "$WORK/realcit-migrate-apply.json" | tail -14
+  --object-bucket "$BUCKET" --report "$WORK/realcit-migrate-apply.json" | tail -14 \
+  || fail "realcit --apply 对账未通过（migrate.py 非零退出）"
 "$PY" database/migrator/migrate.py --source "$DSN_REALCIT" --target "$DSN_REALCIT" --apply \
   --allow-live-target --object-endpoint "127.0.0.1:${REALCIT_MINIO_PORT}" \
   --object-access-key "$MINIO_USER" --object-secret-key "$MINIO_PASS" \
   --object-bucket "$BUCKET" --report "$WORK/realcit-migrate-apply-rerun.json" \
-  | tee "$WORK/realcit-migrate-rerun-tail.txt" | tail -3
-pass_n=$(grep -c PASS "$WORK/realcit-migrate-rerun-tail.txt" || true)
+  2>&1 | tee "$WORK/realcit-migrate-rerun.txt" | tail -3 \
+  || fail "realcit 重跑 migrate.py 非零退出 -- 迁移不是幂等的"
+if grep -Eq '\[FAIL\]|::error::|ERROR' "$WORK/realcit-migrate-rerun.txt"; then
+  fail "realcit 重跑出现 FAIL/ERROR -- 迁移不是幂等的（见 $WORK/realcit-migrate-rerun.txt）"
+fi
+pass_n=$(grep -c PASS "$WORK/realcit-migrate-rerun.txt" || true)
 [ "${pass_n:-0}" -gt 0 ] || fail "realcit 重跑 PASS 计数为 0 -- 对账输出异常"
+"$PY" - "$WORK/realcit-migrate-apply-rerun.json" <<'PYEOFR' || fail "realcit 重跑不是 write-0/skip-all 幂等"
+import json, sys
+rep = json.load(open(sys.argv[1], encoding="utf-8"))
+written = sum(s.get("written", 0) for s in rep.get("steps", []))
+read = sum(s.get("read", 0) for s in rep.get("steps", []))
+skipped = sum(s.get("skipped", 0) for s in rep.get("steps", []))
+assert rep.get("ok") is True, f"rerun report ok != true: {rep.get('checks')}"
+assert written == 0, f"rerun wrote {written} rows, expected 0 (not idempotent)"
+assert read > 0 and skipped > 0, f"rerun read={read} skipped={skipped}, expected both > 0"
+print(f"rerun idempotent: read={read} written=0 skipped={skipped}")
+PYEOFR
+# ---- plan §15.1 分阶段门：canary -> small-switch -> gray-expand ----
+# 每个门独立断言，前一门 FAIL 即停，不进入下一阶段。canary 只看 web
+# （第一个完成 --apply+重跑的数据集）；small-switch 看 cit/realcit；
+# gray-expand 看全量四数据集 + 回填幂等。门输出落盘 stage-gates.json，
+# 归档 payload 原样收录。
+say "5b/10 分阶段门 canary：web 单数据集先行（影子读子集 + 对账全 PASS 才放行）"
+"$PY" - "$WORK/web-migrate-apply.json" "$WORK/web-migrate-apply-rerun.json" "$WORK/stage-canary.json" <<'PYEOFS' || fail "canary 门未通过 -- 不进入 small-switch"
+import json, sys
+apply_p, rerun_p, out = sys.argv[1], sys.argv[2], sys.argv[3]
+apply = json.load(open(apply_p, encoding="utf-8"))
+rerun = json.load(open(rerun_p, encoding="utf-8"))
+gates = []
+def gate(name, ok, detail=""):
+    gates.append({"stage": "canary", "gate": name, "pass": bool(ok), "detail": detail})
+    print(f"[{'PASS' if ok else 'FAIL'}] canary/{name} {detail}")
+gate("apply-ok", apply.get("ok") is True)
+gate("rerun-ok", rerun.get("ok") is True)
+gate("rerun-write-0", sum(s.get("written", 0) for s in rerun.get("steps", [])) == 0)
+gate("apply-checks-all-pass", all(c.get("passed") for c in apply.get("checks", [])),
+     f"{sum(1 for c in apply.get('checks', []) if c.get('passed'))}/{len(apply.get('checks', []))} checks")
+ok = all(g["pass"] for g in gates)
+json.dump({"stage": "canary", "dataset": "web", "gates": gates, "pass": ok}, open(out, "w"), indent=2)
+sys.exit(0 if ok else 1)
+PYEOFS
+say "5c/10 分阶段门 small-switch：cit + realcit 切换（双数据集对账 + 重跑幂等）"
+"$PY" - "$WORK/cit-migrate-apply.json" "$WORK/cit-migrate-apply-rerun.json" "$WORK/realcit-migrate-apply.json" "$WORK/realcit-migrate-apply-rerun.json" "$WORK/stage-small-switch.json" <<'PYEOFS' || fail "small-switch 门未通过 -- 不进入 gray-expand"
+import json, sys
+paths = sys.argv[1:5]
+out = sys.argv[5]
+gates = []
+def gate(name, ok, detail=""):
+    gates.append({"stage": "small-switch", "gate": name, "pass": bool(ok), "detail": detail})
+    print(f"[{'PASS' if ok else 'FAIL'}] small-switch/{name} {detail}")
+reps = [json.load(open(p, encoding="utf-8")) for p in paths]
+gate("cit-apply-ok", reps[0].get("ok") is True)
+gate("cit-rerun-write-0", sum(s.get("written", 0) for s in reps[1].get("steps", [])) == 0)
+gate("realcit-apply-ok", reps[2].get("ok") is True)
+gate("realcit-rerun-write-0", sum(s.get("written", 0) for s in reps[3].get("steps", [])) == 0)
+gate("both-checks-all-pass", all(c.get("passed") for r in (reps[0], reps[2]) for c in r.get("checks", [])))
+ok = all(g["pass"] for g in gates)
+json.dump({"stage": "small-switch", "datasets": ["cit", "realcit"], "gates": gates, "pass": ok}, open(out, "w"), indent=2)
+sys.exit(0 if ok else 1)
+PYEOFS
+say "5d/10 分阶段门 gray-expand：全量（回填幂等 + e2e 只读预检 + 行数对账）"
+"$PY" - "$WORK" "$WORK/stage-gray-expand.json" <<'PYEOFS' || fail "gray-expand 门未通过"
+import json, os, sys
+work, out = sys.argv[1], sys.argv[2]
+gates = []
+def gate(name, ok, detail=""):
+    gates.append({"stage": "gray-expand", "gate": name, "pass": bool(ok), "detail": detail})
+    print(f"[{'PASS' if ok else 'FAIL'}] gray-expand/{name} {detail}")
+canary = json.load(open(f"{work}/stage-canary.json"))
+switch = json.load(open(f"{work}/stage-small-switch.json"))
+gate("canary-passed", canary.get("pass") is True)
+gate("small-switch-passed", switch.get("pass") is True)
+# 全量行数对账：三数据集 apply 报告 read>0（确有数据被迁移，不是空跑）。
+total_read = 0
+for n in ("web-migrate-apply.json", "cit-migrate-apply.json", "realcit-migrate-apply.json"):
+    rep = json.load(open(f"{work}/{n}", encoding="utf-8"))
+    total_read += sum(s.get("read", 0) for s in rep.get("steps", []))
+gate("all-datasets-migrated-rows", total_read > 0, f"total_read={total_read}")
+ok = all(g["pass"] for g in gates)
+json.dump({"stage": "gray-expand", "datasets": ["web", "cit", "realcit", "e2e-readonly"],
+           "gates": gates, "pass": ok}, open(out, "w"), indent=2)
+sys.exit(0 if ok else 1)
+PYEOFS
+note "分阶段门 canary/small-switch/gray-expand 全 PASS（见 $WORK/stage-*.json）。"
 say "6/10 回退路径 B（先跑）：e2e 快照恢复 —— control 无 downgrade，走文档化快照路径"
-note "control 无 downgrade（按文件名顺序只进不退，见 internal/migrate/migrate.go）："
 docker exec ddp-legacy-e2e-pg createdb -U ddp deepdocparse_restored 2>/dev/null || true
 docker cp "$WORK/e2e-snapshot.dump" ddp-legacy-e2e-pg:/tmp/e2e-snapshot.dump
 docker exec ddp-legacy-e2e-pg pg_restore -U ddp -d deepdocparse_restored --no-owner \
@@ -465,13 +595,18 @@ payload = {
     "cit_seed": load("cit-seed.json"),
     "realcit_seed": load("realcit-seed.json"),
     "shadow_reads": load("shadow-reads.json"),
+    "staged_gates": {"canary": load("stage-canary.json"),
+                     "small_switch": load("stage-small-switch.json"),
+                     "gray_expand": load("stage-gray-expand.json")},
+    # 门结论只记布尔值，逐条对账细节在原始报告里 —— 两份都要归档，
+    # 只看门结论复核不了任何东西。
     "migrate_dryrun": load("web-migrate-dryrun.json"),
     "migrate_apply": load("web-migrate-apply.json"),
     "migrate_rerun": load("web-migrate-apply-rerun.json"),
     "cit_migrate_apply": load("cit-migrate-apply.json"),
-    "cit_migrate_rerun": load("cit-migrate-rerun.json"),
+    "cit_migrate_rerun": load("cit-migrate-apply-rerun.json"),
     "realcit_migrate_apply": load("realcit-migrate-apply.json"),
-    "realcit_migrate_rerun": load("realcit-migrate-rerun.json"),
+    "realcit_migrate_rerun": load("realcit-migrate-apply-rerun.json"),
     "e2e_source_precheck": open(f"{work}/e2e-source-precheck.txt").read().strip(),
     "pre_orgs": load("pre-orgs.json"),
     "control_migrate": {

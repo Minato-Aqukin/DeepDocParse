@@ -18,7 +18,10 @@ lock's `archive`/`version` disagree with the staged tarball/app; and when any
 `resources/app/**` or `resources/client-runtime/**` entry recorded by the
 payload anchor (`--stage`, else the assembled stage next to the output, else the
 repository sources) disagrees with the packaged tree. A BUILD-MANIFEST inside
-the directory being verified is never trusted.
+the directory being verified is never trusted. Each `--installer` exe must
+additionally match the SHA256SUMS/sidecar anchors recorded in the `windows/`
+directory by the checksum step (`release_publication.py verify-package` checks
+the same anchors): same-size tampering or a missing anchor fails closed.
 `scripts/build_desktop.py --verify <directory>` runs the same directory checks.
 """
 
@@ -40,6 +43,101 @@ def load_build_desktop():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _installer_anchor_dirs(installer: Path, directory: Path) -> list[Path]:
+    """Candidate dirs holding the SHA256SUMS/sidecar anchors, nearest first.
+
+    The `directory` argument is the win-unpacked output dir (e.g.
+    `dist/desktop/windows/win-unpacked`), while `verify-package` records the
+    anchors next to the installers in the real `windows/` package directory
+    (`locate_package` resolution). Neither path alone finds the other, so walk
+    upward from both the unpacked dir and the installer location: the nearest
+    `windows/`-style dir wins, and a bare anchor dir (holding SHA256SUMS for
+    the installer name) is accepted too. Symlinked anchor dirs are skipped so
+    a redirected anchor cannot bless a trojaned exe.
+    """
+    seen: list[Path] = []
+    for base in (Path(directory), installer.parent):
+        node = base.resolve()
+        for _ in range(6):
+            if node.is_symlink():
+                break
+            if node not in seen:
+                seen.append(node)
+            win = node / "windows"
+            if win.is_dir() and not win.is_symlink() and win not in seen:
+                seen.append(win)
+            if node.parent == node:
+                break
+            node = node.parent
+    return seen
+
+
+def check_installer_against_anchors(installer: Path, build_desktop, directory: Path) -> dict:
+    """Fail closed unless the exe matches the release's recorded SHA256SUMS/sidecar.
+
+    `release_publication.py verify-package` (and the `write-receipt` build step
+    before it) records one SHA256SUMS line plus one `<name>.sha256` sidecar per
+    installer inside the real `windows/` package directory. A same-size
+    trojaned exe passes the payload floor, so the digest is compared against
+    those anchors — never trusted on its own — and any missing or mismatched
+    anchor refuses. `parse_sums`/`read_sidecar` raise `PublicationError` (not
+    `SystemExit`), so only that failure type is translated into a closed
+    refusal — unexpected errors still surface.
+    """
+    scripts_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        from release_publication import PublicationError as _PublicationError  # noqa: PLC0415
+        from release_publication import parse_sums as _parse_sums  # noqa: PLC0415
+        from release_publication import read_sidecar as _read_sidecar  # noqa: PLC0415
+    finally:
+        sys.path.remove(str(scripts_dir))
+    if not installer.is_file() or installer.is_symlink():
+        raise SystemExit(f"installer not found: {installer}")
+    size = installer.stat().st_size
+    if size < MIN_INSTALLER_BYTES:
+        raise SystemExit(
+            f"installer {installer} is only {size} bytes; the payload "
+            "is missing (an electron-builder uninstaller stub?)")
+    actual = build_desktop.digest(installer)
+    anchors: list[str] = []
+    anchor_dir: Path | None = None
+    for candidate in _installer_anchor_dirs(installer, Path(directory)):
+        sums_path = candidate / "SHA256SUMS"
+        if sums_path.is_file() and not sums_path.is_symlink():
+            try:
+                covered = _parse_sums(sums_path, {installer.name})
+            except _PublicationError:
+                continue  # lists other installers; not this exe's anchor
+            if covered[installer.name] != actual:
+                raise SystemExit(
+                    f"installer {installer.name} sha256 {actual} does not match "
+                    f"SHA256SUMS {covered[installer.name]} in {candidate}; refusing")
+            anchors.append(f"{candidate.name}/SHA256SUMS" if anchor_dir else "SHA256SUMS")
+            anchor_dir = anchor_dir or candidate
+        sidecar = candidate / (installer.name + ".sha256")
+        if sidecar.is_file() and not sidecar.is_symlink():
+            try:
+                expected = _read_sidecar(sidecar, installer.name)
+            except _PublicationError as exc:
+                raise SystemExit(
+                    f"installer {installer.name} has an unreadable {sidecar.name} "
+                    f"anchor in {candidate}: {exc}; refusing") from exc
+            if expected != actual:
+                raise SystemExit(
+                    f"installer {installer.name} sha256 {actual} does not match "
+                    f"{sidecar.name} {expected} in {candidate}; refusing")
+            anchors.append(f"{candidate.name}/{sidecar.name}" if anchor_dir is not None and anchor_dir != candidate else sidecar.name)
+            anchor_dir = anchor_dir or candidate
+    if not anchors:
+        raise SystemExit(
+            f"installer {installer.name} has no SHA256SUMS/sidecar anchor near "
+            f"{directory} or {installer.parent}; refusing (run the checksum step "
+            "that writes SHA256SUMS + sidecars first)")
+    return {"path": str(installer), "size": size, "sha256": actual,
+            "anchors": sorted(anchors)}
 
 
 def main(argv=None):
@@ -66,16 +164,9 @@ def main(argv=None):
     if args.installer:
         result["installers"] = []
         for installer in args.installer:
-            if not installer.is_file():
-                raise SystemExit(f"installer not found: {installer}")
-            size = installer.stat().st_size
-            if size < MIN_INSTALLER_BYTES:
-                raise SystemExit(
-                    f"installer {installer} is only {size} bytes; the payload "
-                    "is missing (an electron-builder uninstaller stub?)")
-            result["installers"].append({
-                "path": str(installer), "size": size,
-                "sha256": build_desktop.digest(installer)})
+            result["installers"].append(
+                check_installer_against_anchors(installer, build_desktop,
+                                              Path(args.directory)))
     print(json.dumps(result, indent=2))
     return 0
 

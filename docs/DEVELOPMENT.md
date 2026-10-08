@@ -77,10 +77,11 @@ Linux 缺少浏览器系统依赖时，按 Playwright 提示安装；CI 使用
 `playwright install --with-deps chromium`。此步骤不由默认门禁自动执行。
 
 Go 真库测试应连接**独立测试数据库**，先应用 control 迁移，再运行测试。
-将连接串通过 `CONTROL_TEST_DATABASE_URL` 注入环境后执行：
+将连接串通过 `CONTROL_TEST_DATABASE_URL` 注入环境后执行（连接串只走环境变量 ——
+argv 在 ps 与 CI 日志里可见，而连接串里有口令，control-migrate 认 `CONTROL_DATABASE_URL`）：
 
 ```bash
-(cd services/control-api && go run ./cmd/control-migrate -database "$CONTROL_TEST_DATABASE_URL" up)
+(cd services/control-api && CONTROL_DATABASE_URL="$CONTROL_TEST_DATABASE_URL" go run ./cmd/control-migrate up)
 ./scripts/check.sh go
 ```
 

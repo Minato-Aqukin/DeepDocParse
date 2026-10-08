@@ -33,6 +33,10 @@ down_revision = "0008"
 branch_labels = None
 depends_on = None
 
+# 回填分批：extraction_items.fields 是宽 JSON 列，整表 fetchall 吃内存；
+# 按主键 keyset 翻页；每行 UPDATE 幂等，重跑收敛。
+_BATCH = 500
+
 
 def upgrade() -> None:
     conn = op.get_bind()
@@ -56,26 +60,36 @@ def upgrade() -> None:
     # 而这段只在升级时跑一次，可读性比性能重要得多
     import json
 
-    rows = conn.execute(sa.text(
-        "SELECT id, fields FROM extraction_items ORDER BY id")).fetchall()
     stripped = 0
-    for row_id, fields in rows:
-        if isinstance(fields, str):
-            try:
-                fields = json.loads(fields)
-            except (TypeError, ValueError):
+    scanned = 0
+    last_id = ""
+    while True:
+        rows = conn.execute(sa.text(
+            "SELECT id, fields FROM extraction_items "
+            "WHERE id > :last ORDER BY id LIMIT :n"),
+            {"last": last_id, "n": _BATCH}).fetchall()
+        if not rows:
+            break
+        for row_id, fields in rows:
+            if isinstance(fields, str):
+                try:
+                    fields = json.loads(fields)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(fields, dict):
                 continue
-        if not isinstance(fields, dict):
-            continue
-        cleaned = {name: ({k: v for k, v in cell.items() if k != "citations"}
-                          if isinstance(cell, dict) else cell)
-                   for name, cell in fields.items()}
-        if cleaned != fields:
-            conn.execute(sa.text("UPDATE extraction_items SET fields = :f WHERE id = :id"),
-                         {"f": json.dumps(cleaned, ensure_ascii=False), "id": row_id})
-            stripped += 1
+            cleaned = {name: ({k: v for k, v in cell.items() if k != "citations"}
+                              if isinstance(cell, dict) else cell)
+                       for name, cell in fields.items()}
+            if cleaned != fields:
+                conn.execute(sa.text("UPDATE extraction_items SET fields = :f WHERE id = :id"),
+                             {"f": json.dumps(cleaned, ensure_ascii=False), "id": row_id})
+                stripped += 1
+        scanned += len(rows)
+        last_id = rows[-1][0]
+        print(f"[0009] 已扫描 {scanned} 条，摘掉 {stripped} 条")
     print(f"[0009] 删掉 messages.citations（{old_rows} 行曾有出处）；"
-          f"从 {stripped}/{len(rows)} 条抽取结果里摘掉 fields[].citations")
+          f"从 {stripped}/{scanned} 条抽取结果里摘掉 fields[].citations")
 
 
 def downgrade() -> None:

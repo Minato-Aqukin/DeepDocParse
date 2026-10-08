@@ -113,13 +113,22 @@ RETURN_POSITIONS = {
         {1: "degraded"},
     # 返回值本身就是答案原因，调用方原样交给 `_delegated_failure` / `unavailable_answer`
     "services/corpus-api/ddp_corpus/federation.py::excerpt_reason": {-1: "federated_answer_reason"},
-    "services/corpus-api/ddp_corpus/federation_tasks.py::_receipt_binding_error":
+    "services/corpus-api/ddp_corpus/federation_tasks/steps.py::_receipt_binding_error":
         {-1: "federated_answer_reason"},
-    "services/corpus-api/ddp_corpus/federation_tasks.py::_remote_answer_reason":
+    "services/corpus-api/ddp_corpus/federation_tasks/steps.py::_remote_answer_reason":
         {-1: "federated_answer_reason"},
     # 计划里没有生成步骤时的原因（来源策略排除了生成节点 / 没有模型）
-    "services/corpus-api/ddp_corpus/federation_tasks.py::_no_generator_reason":
+    "services/corpus-api/ddp_corpus/federation_tasks/synthesis.py::_no_generator_reason":
         {-1: "federated_answer_reason"},
+    # 联邦协议错误码的 return 写点（`_error_codes` 认不到 return 里的字面量）：
+    # readiness → 协调者 outcome 映射的返回值本身就是错误码
+    # （`capability_unknown` 落在枚举里，`ready` / `not_ready` 不是码）。
+    "services/corpus-api/ddp_corpus/federation.py::capability_outcome":
+        {-1: "federation_error"},
+    # admission 对账的 (outcome, error_code, ...) 元组第二个位置是错误码
+    # （录取结果未知时落 `admission_unknown`，调用方按幂等键对账）。
+    "services/corpus-api/ddp_corpus/federation_tasks/steps.py::_run_local_step":
+        {1: "federation_error"},
 }
 
 #: 调用处**第几个位置参数**是哪个枚举。按函数名认（`federation.unavailable_answer`
@@ -162,11 +171,28 @@ KNOWN_UNPRODUCED = {
     # 联邦答案原因是给用户看的"为什么没有答案"：声明了却没人写出去，就是一句
     # 永远不会出现的文案；写出去了却没声明，界面上就是一串原始代码。
     "federated_answer_reason": set(),
+    # 联邦协议错误码登记这三枚。
+    "federation_error": {
+        # 没有生产流附带 offer（全部 build_probe 调用都不传 offer），也没有
+        # 接单路径消费 offer —— 附带的执行意向过期这个错误码自然无人打出。
+        # 它留在枚举里是因为契约 schema 允许 probe 携带 offer（§6.4），
+        # 探测复用（reusable）也按 valid_until 拒绝过期意向；接单时核对意向
+        # 的强制执行是计划 §6.5 / T-scheduler 的工作（"offer 在 admission
+        # 校验里核对 valid_until"），不在本轮实现范围内。
+        "offer_expired",
+        # 这两枚同时是 federated_answer_reason 的成员，生产者只以"答案原因"
+        # 的身份写出它们（unavailable_answer / _delegated_failure / _wiki_failure
+        # 的参数，逐取值覆盖由 federated_answer_reason 那条腿钉着）。它们在
+        # federation_error 里没有 reject/APIError 形状的写点 —— 不是没人用，
+        # 是用的身份不同；真有人以错误码身份打出新写点，覆盖判据会把它算进来。
+        "insufficient_evidence",
+        "local_model_missing",
+    },
 }
 
-#: 哪些枚举要做逐取值覆盖检查。只列不变式 2 的那两个 ——
-#: 别的枚举（block_type / source_type 之类）有大量取值本来就只在
-#: 契约与前端出现，逐取值要求会变成噪音。
+#: 哪些枚举要做逐取值覆盖检查：KNOWN_UNPRODUCED 里登记过的每一组（每个取值要么
+#: 有生产写点，要么在那里写明为何无人产生）。别的枚举（block_type / source_type
+#: 之类）有大量取值本来就只在契约与前端出现，逐取值要求会变成噪音。
 REQUIRED_COVERAGE = {name: KNOWN_UNPRODUCED[name] for name in KNOWN_UNPRODUCED}
 
 #: 这些取值出现在被扫的位置上，但**不是**枚举值 —— 逐条写清理由，不许无脑加。
@@ -177,6 +203,13 @@ ALLOWED_NON_ENUM = {
     # block_type 归一化的入参是**引擎原生类型**，不是契约词汇表
     ("block_type", "table_caption"),
     ("block_type", "image_caption"),
+    # capability_outcome 的返回值是三态 outcome（ready/capability_unknown/
+    # not_ready），只有中间那态是联邦错误码；另外两态是"能做/已证伪不能做"。
+    ("federation_error", "ready"),
+    ("federation_error", "not_ready"),
+    # admission 对账捡回来的旧受理：连对账都不确定时落的是本地哨兵
+    # admission_lookup_failed，不是契约错误码（契约的未知态是 admission_unknown）。
+    ("federation_error", "admission_lookup_failed"),
 }
 
 
@@ -186,8 +219,44 @@ def contract_values() -> dict[str, set[str]]:
 
     return {
         name: set(getattr(enums, f"{name.upper()}_VALUES"))
-        for name in set(TRACKED.values())
+        for name in set(TRACKED.values()) | set(REQUIRED_COVERAGE)
     }
+
+
+#: 联邦协议错误码的写点形状 —— 错误码不是字段值，没有 TRACKED 那种
+#: "名即枚举"的对应，只能按调用形状认。认三类：
+#:
+#: - `reject("offer_expired", ...)` / `ApplicationError("offer_expired", ...)`
+#:   的第一个位置参数（ddp_core 内核）；
+#: - `APIError(409, ..., "task_cancelled")` 的第四个位置参数（语料 HTTP 层）；
+#: - `CredentialUnavailable("node_revoked", ...)` 的第一个位置参数（凭据签发）。
+#:
+#: **仍然看不见的**（与 TRACKED 的盲区同理）：变量中转
+#: （`code = "x"; raise APIError(409, m, t, code)`）、`exc.code == "x"` 的
+#: 读比对、`_STATUS` / `_EVENT_*` 这类表里的码。它们靠评审，不靠这把尺子。
+ERROR_CODE_CALLS = {
+    "reject": 0,
+    "ApplicationError": 0,
+    "APIError": 3,
+    "CredentialUnavailable": 0,
+}
+
+
+def _error_codes(tree: ast.AST) -> list[tuple[str, int]]:
+    """按 ERROR_CODE_CALLS 抽错误码字面量：返回 [(取值, 行号)]。"""
+    found: list[tuple[str, int]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else (
+            func.attr if isinstance(func, ast.Attribute) else None)
+        index = ERROR_CODE_CALLS.get(name)
+        if index is None or index >= len(node.args):
+            continue
+        if (code := _const_str(node.args[index])) is not None:
+            found.append((code, node.lineno))
+    return found
 
 
 def _const_str(node: ast.AST) -> str | None:
@@ -343,6 +412,16 @@ def scan(path: pathlib.Path) -> list[tuple[str, str, int]]:
                 key = _const_str(k) if k is not None else None
                 if key in tracked:
                     found += [(tracked[key], val, node.lineno) for val in _str_values(v)]
+    # 联邦协议错误码走另一套形状（reject/ApplicationError/APIError 的码参数），
+    # 以 (枚举名, 取值, 行号) 并入 —— 但只并入落在契约 federation_error 里的码：
+    # APIError/ApplicationError 还装着大量本面错误码（not_found、policy_denied、
+    # wiki_*…），它们不属于这个枚举，逐条加白名单等于复刻一份错误码清单。
+    # 判据只做"覆盖"方向：契约里的码至少有一处写点被扫到，否则它就是一句
+    # 永远不会出现的文案（或 scan 漏了形状）。
+    contract = contract_values()
+    declared_federation = contract["federation_error"]
+    found += [("federation_error", code, line) for code, line in _error_codes(tree)
+              if code in declared_federation]
     return found + _returns(tree, rel)
 
 

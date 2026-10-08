@@ -85,8 +85,13 @@ async def sign_in(http: httpx.AsyncClient, username: str | None) -> dict:
     reg = await http.post(f"{WEB}/api/auth/register",
                           json={"username": username, "password": PASSWORD})
     if reg.status_code == 201:
-        check("注册返回 JWT", True)
-        return {"Authorization": f"Bearer {reg.json()['access_token']}"}
+        try:
+            body = reg.json()
+        except ValueError:
+            body = {}
+        token = body.get("access_token") if isinstance(body, dict) else None
+        check("注册返回 JWT", bool(token), f"status={reg.status_code}")
+        return {"Authorization": f"Bearer {token}"}
     login = await http.post(f"{WEB}/api/auth/login",
                             json={"username": username, "password": PASSWORD})
     check("登录已有账号", login.status_code == 200, f"status={login.status_code}")

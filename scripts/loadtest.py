@@ -393,7 +393,8 @@ def register_account(args, run_id, password):
     return {"username": username, "status": response.status_code,
             "latency_ms": round((time.monotonic() - started) * 1000, 3),
             "user_id": body.get("user", {}).get("id"),
-            "error_code": None if response.status_code < 300 else error_code(response)}
+            "error_code": None if response.status_code < 300 else error_code(response),
+            "detail": None if response.status_code < 300 else response.text[:500]}
 
 
 def self_test():
@@ -461,7 +462,7 @@ def main():
     registration = register_account(args, run_id, args.password)
     report["registration"] = registration
     if registration["status"] != 201:
-        print(f"::error::registration failed: {registration['body']}", file=sys.stderr)
+        print(f"::error::registration failed: status={registration['status']} error_code={registration.get('error_code')} detail={registration.get('detail')}", file=sys.stderr)
         return 1
     for level in levels:
         summary = asyncio.run(run_level(args, fixture=args.fixture, run_id=run_id,

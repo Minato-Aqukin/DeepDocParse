@@ -21,9 +21,10 @@
 
 ```bash
 createdb ddp_drill_empty && psql -c 'CREATE EXTENSION vector'
-control-migrate -database ... up          # 2 个迁移
-alembic upgrade head                      # 13 个迁移
-python database/migrator/migrate.py --source ... --target ... --apply
+# 连接串走环境变量 —— argv 在 ps 与 CI 日志里可见，而连接串里有口令
+CONTROL_DATABASE_URL=... control-migrate up          # 2 个迁移
+alembic upgrade head                                 # 13 个迁移
+SOURCE_DATABASE_URL=... TARGET_DATABASE_URL=... python database/migrator/migrate.py --apply
 ```
 
 **结果**：12 项对账全 PASS。

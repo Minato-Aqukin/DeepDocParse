@@ -79,6 +79,11 @@ GRANT SELECT ON control.organizations, control.users TO ddp_corpus;
 | `upload_sessions` | 直传会话：预签名、预期大小、MIME、finalize 状态 | 新建（§9.1） |
 | `file_grants` | 稳定文件 URL 的凭证 | 旧 `file_tokens` |
 | `control_outbox` | 出站事件 | 新建 |
+| `node_identity` / `node_directories` / `node_members` / `node_directory_views` | 联邦节点身份与目录绑定 | 新建 |
+| `member_snapshots` / `member_snapshot_pages` | 成员快照 | 新建 |
+| `scope_manifests` / `scope_target_pages` / `scope_catalog_sources` / `scope_catalog_revocations` / `scope_remote_sources` | 授权作用域清单 | 新建 |
+| `federation_credential_nonces` | 联邦凭证 nonce（与语料侧同名，schema 不同是两张表） | 新建 |
+| `subtree_snapshots` / `subtree_snapshot_pages` | 子树快照 | 新建 |
 
 ### corpus schema（Python 写，Go 只通过 corpus-api 访问）
 
@@ -89,11 +94,21 @@ GRANT SELECT ON control.organizations, control.users TO ddp_corpus;
 | `chunks` | 向量索引及全文／搜索／派生文本，可重建缓存；引用安全 GC 完成原件回收时删除，普通清扫补删历史已回收文档的遗留缓存 |
 | `evidence` / `citations` | **唯一实现留在 Python**（风险台账：Go 重写证据规则 → 假出处）；不随原件 GC 删除，已回收文档的证据保留为审计轨迹 |
 | `agent_turns` / `assertions` / `retrieval_candidates` / `evidence_verifications` | |
-| `knowledge_entities` / `graph_edges` / `wiki_entries` / `wiki_sections` / `wiki_sentences` / `knowledge_reviews` | |
+| `knowledge_entities` / `graph_edges` / `wiki_entries` / `wiki_sections` / `wiki_sentences` / `knowledge_reviews` | `wiki_entries` 系旧表，与下面的 `wikis` 主表并存 |
+| `wikis` / `wiki_revisions` / `wiki_pages` / `wiki_dependencies` / `wiki_claim_bindings` / `wiki_human_edits` / `wiki_write_keys` | wiki 主表家族 |
 | `conversations` / `messages` | 从旧 web 层迁入 corpus（它们绑 Document，属于语料） |
 | `extraction_templates` / `extraction_runs` / `extraction_items` | 同上 |
 | `tasks` | **新建**：持久任务真相（§10），claim + generation + lease |
 | `corpus_outbox` | 出站事件 |
+| `processed_events` / `usage_claims` | 幂等键与用量上报事件 |
+| `resources` / `resource_versions` / `upload_events` | 资源主表、版本、上传事件 |
+| `bundle_replicas` / `bundle_replica_revoke_keys` | 复本与其撤销键 |
+| `collections` / `collection_members` / `collection_receipts` | 集合、成员、回执 |
+| `collection_catalog_snapshots` / `collection_catalog_pages` / `collection_catalog_views` | 集合目录快照、页、视图 |
+| `client_pages` / `client_receipts` / `client_snapshots` / `client_views` | 客户端投影 |
+| `federation_admissions` / `federation_cache_entries` / `federation_credential_nonces` / `federation_delegation_consumption` / `federation_deliveries` / `federation_executions` / `federation_probes` / `federation_requests` / `federation_root_ledgers` / `federation_root_reservations` / `federation_task_events` | 联邦家族；注意控制侧也有一张同名 `control.federation_credential_nonces`（两边各写各的，守卫只看 `corpus.` / `public.` / 无前缀的写操作） |
+| `remote_computes` | 远端算力 |
+| `coverage_entries` / `coverage_ledgers` | 覆盖率 |
 
 ## 3. 跨 schema 外键的处理（必须在同一次改动里做完）
 
@@ -121,11 +136,12 @@ GRANT SELECT ON control.organizations, control.users TO ddp_corpus;
 
 `scripts/check_data_ownership.py` 会红在下面任何一条：
 
-1. Go 代码里出现 `corpus.` 开头的表名写操作（`INSERT`/`UPDATE`/`DELETE`）
-2. Python 代码里出现对 `control.organizations` / `memberships` / `roles` 的写操作
-3. corpus 模型里出现指向 control 表的 `ForeignKey`
+1. Go 代码里出现对语料表的写操作（`INSERT`/`UPDATE`/`DELETE`，`corpus.` / `public.` / 无 schema 前缀都算，表名与 schema 可带双引号；`control.` 限定的同名表除外——控制侧自有一张 `control.federation_credential_nonces`）
+2. Python 代码里出现对 `control.organizations` / `memberships` / `roles` 的写操作（同上，`public.` 限定与双引号写法一样拦）
+3. corpus 模型里出现指向 control 表的 `ForeignKey`（`control.memberships.id` / `memberships.id` / 全引号写法都拦）
 4. 同一字段在两侧各存一份副本而没有对账脚本
 5. 一次请求里出现跨服务的分布式事务（两个连接同时 `BEGIN`）
+6. `database/control/*.sql`（全部 control 迁移，不只 0002：未来加新迁移也一样）或 `database/corpus/grants.sql` 里出现不带 `FOR ROLE` 的 `ALTER DEFAULT PRIVILEGES`（建表角色一换，新表的默认权限就归错人）。例外只有 0002 那一行**历史原文**——它已由 control-migrate 的 checksum 钉死在所有部署过的库里，改一个字就会让下次 `up` 报错，所以守卫按原文精确豁免它（这行被改过也会红）；控制面的实际生效声明由后续迁移（0017 迁移，用 `FOR ROLE ddp` 重新声明，后声明的赢）承担
 
 ## 5. 跨边界流程：本地事务 + Outbox
 
@@ -136,7 +152,6 @@ GRANT SELECT ON control.organizations, control.users TO ddp_corpus;
 Go: BEGIN
       INSERT control.upload_sessions ... (finalize)
       INSERT control.control_outbox (id, type='DocumentSubmitted', payload)
-    COMMIT
         │
         └─ outbox 投递器 → POST corpus-api /internal/events
                               │
