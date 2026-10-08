@@ -18,10 +18,12 @@ info:
       它们**不接受** SERVICE_TOKEN 与 actor 头：远端调用者由凭证派生为本节点的
       `peer-*` 只读主体，映射进批准该节点的本地组织，再按本地资源 ACL 判权 ——
       节点认证通过不代表资源权限，同名用户不跨中心合并（T32）。每个端点对应的
-      凭证操作写在 `x-ddp-node-credential-operation`。认证失败 401
+      凭证操作写在 `x-ddp-node-credential-operation`。未验证调用方一律中性 401
       （credential_invalid / credential_expired / credential_replayed /
-      credential_audience_mismatch / node_unknown / node_revoked），越权 403
-      （credential_operation_denied / credential_scope_denied），本节点身份未绑定或
+      credential_audience_mismatch，不披露成员状态、不记审计）；签名与声明全部
+      通过后再看成员状态：未批准 403（node_unknown / node_revoked，可记审计）；
+      越权 403（credential_operation_denied / credential_scope_denied），
+      本节点身份未绑定或
       不一致 503（node_identity_unavailable / node_identity_mismatch）。
       不存在任何共享口令兼容路径。
 
@@ -35,10 +37,10 @@ info:
     传输预算覆盖最坏 JSON 转义证据载荷并给 task_spec / plan / consent 留出余量，
     不表示这些元数据的无界 schema 已有可计算的最大大小。
 
-    schema 绑定类型直接 `$ref ../schemas/*.json`。**生成枚举不在本文件另写取值**：
-    字段上的 `x-ddp-enum` 指向 `packages/contracts/enums.yaml` 里的枚举名
-    （与 schemas/*.json 同一套约定）；只有协议错误码清单（enums.yaml 的
-    `federation_error`，计划 §9.6）在 components 里落成字面量。
+    schema 绑定类型直接 `$ref ../schemas/*.json`。字段上的 `x-ddp-enum` 指向
+    `packages/contracts/enums.yaml` 里的枚举名（与 schemas/*.json 同一套约定），
+    且同一节点必须同时手写 `enum` 列表（由 generate.py --check 对拍）——
+    光有标注没有列表，OpenAPI 侧仍是 `type: string`，约束等于不存在。
 security: [{service: []}]
 x-ddp-peer-request-body-max-bytes: 8388608
 paths:
@@ -570,15 +572,15 @@ components:
         admission_id: {type: string, minLength: 1}
         root_task_id: {type: string, minLength: 1}
         step_id: {type: string, minLength: 1}
-        operation: {description: 类型化步骤 operation（本切片通常为 retrieve / answer）, type: string, minLength: 1}
-        state: {description: '见 enums.yaml 的 task_status：queued/claimed/running/succeeded/failed/cancelled。succeeded/failed/cancelled 均为终态，协调者直接消费该响应，不等待非空 result_ref 或更高 generation；succeeded 的草稿仍可能 validation_state=failed。accepted ≠ 算力预留，unknown ≠ 未执行；cancelled 是显式取消的终态，迟到结果不许覆盖。', type: string, x-ddp-enum: task_status}
+        operation: {description: 类型化步骤 operation（通常为 retrieve / answer）, type: string, minLength: 1}
+        state: {description: '见 enums.yaml 的 task_status：queued/claimed/running/succeeded/failed/cancelled。succeeded/failed/cancelled 均为终态，协调者直接消费该响应，不等待非空 result_ref 或更高 generation；succeeded 的草稿仍可能 validation_state=failed。accepted ≠ 算力预留，unknown ≠ 未执行；cancelled 是显式取消的终态，迟到结果不许覆盖。', type: string, x-ddp-enum: task_status, enum: [queued, claimed, running, succeeded, failed, cancelled]}
         generation: {description: 防旧结果提交的代次围栏, type: integer, minimum: 1}
         lease_until: {type: [string, 'null'], format: date-time}
         result_ref: {type: [string, 'null']}
         evidence_set_ref: {type: [string, 'null']}
         actual_index_revision: {description: retrieve 实际使用的索引修订；不可拿 parse_revision 替代。, type: [string, 'null']}
         error: {type: [string, 'null']}
-        degraded: {description: 本次执行的可见降级（如 embedding_unavailable）；没有降级为 null。协调者不得把它当成 internal_limits, type: [string, 'null'], x-ddp-enum: degraded, x-ddp-enum-nullable: true}
+        degraded: {description: 本次执行的可见降级（如 embedding_unavailable）；没有降级为 null。协调者不得把它当成 internal_limits, type: [string, 'null'], x-ddp-enum: degraded, x-ddp-enum-nullable: true, enum: [no_hits, parse_mismatch, resource_index_unavailable, embedding_unavailable, vision_unavailable, crop_unsupported, crop_failed, client_aborted, upstream_error, upstream_interrupted, index_changed_during_answer, decision_unavailable, no_evidence_in_turn, inherited_evidence_incomplete, gate_rejected_all, citation_persist_failed, verification_unavailable, evidence_unavailable, schema_violation, rerank_unavailable, no_instruct_model, empty_query, answer_unavailable, keyword_unavailable, null]}
         internal_limits: {description: '本次执行自报的内部不完整（如 truncated_by_limit / index_lagging）。非空时协调者必须把覆盖记 partial，绝不允许由此推出 complete（T85）', type: [array, 'null'], items: {type: string, enum: [shard_failed, index_lagging, subset_only, truncated_by_limit]}}
         answer:
           description: |
@@ -699,8 +701,8 @@ components:
       properties:
         root_task_id: {type: string, minLength: 1}
         task_spec_digest: {$ref: '#/components/schemas/Digest'}
-        planning_state: {type: string, x-ddp-enum: planning_state}
-        status: {type: string, x-ddp-enum: task_status}
+        planning_state: {type: string, x-ddp-enum: planning_state, enum: [draft, exploring, ready, awaiting_approval, approved, invalidated]}
+        status: {type: string, x-ddp-enum: task_status, enum: [queued, claimed, running, succeeded, failed, cancelled]}
         task_spec: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/TaskSpec'}
         exploration_consent: {$ref: '../schemas/ddp-task-probe/v1.json#/$defs/ExplorationConsent'}
         created_at: {type: string, format: date-time}
@@ -738,7 +740,7 @@ components:
       properties:
         delivery_id: {type: string, minLength: 1}
         root_task_id: {type: string, minLength: 1}
-        state: {type: string, x-ddp-enum: delivery_state}
+        state: {type: string, x-ddp-enum: delivery_state, enum: [not_requested, pending, transferring, confirmed, expired]}
         result_manifest_digest: {description: 结果文档的规范摘要；与 result 的 content_digest 必须一致, type: [string, 'null'], pattern: '^sha256:[0-9a-f]{64}$'}
         result:
           type: [object, 'null']
@@ -764,7 +766,7 @@ components:
             2000 字符的上限，协调者**不静默放行也不静默截断**：拒绝生成并写机器原因
             `excerpt_over_contract_bound`，正文永不无界进 prompt。
             `excerpt` 只在证据集读取时返回，单条 resolve 不返回。
-        complete: {type: boolean, description: 'false 表示证据超过 50 条被截断（本切片不提供分页）'}
+        complete: {type: boolean, description: 'false 表示证据超过 50 条被截断（不提供分页）'}
     TaskListItem:
       type: object
       additionalProperties: false
@@ -773,14 +775,14 @@ components:
       properties:
         root_task_id: {type: string, minLength: 1}
         query: {description: TaskSpec.query 原文（本人发起，列表只给本人看）, type: string}
-        operation: {type: string, minLength: 1, x-ddp-enum: federation_task_operation}
+        operation: {type: string, minLength: 1, x-ddp-enum: federation_task_operation, enum: [corpus.retrieve, rag.answer.cited, wiki.pages]}
         scope_kind: {type: string, enum: [local_only, site_public, federation_public, fixed_resources]}
-        search_mode: {type: string, x-ddp-enum: search_mode}
-        status: {type: string, x-ddp-enum: task_status}
-        planning_state: {type: string, x-ddp-enum: planning_state}
-        retrieval_completeness: {type: string, x-ddp-enum: retrieval_completeness}
-        evidence_sufficiency: {type: string, x-ddp-enum: evidence_sufficiency}
-        delivery_state: {type: string, x-ddp-enum: delivery_state}
+        search_mode: {type: string, x-ddp-enum: search_mode, enum: [fast, exhaustive_scope]}
+        status: {type: string, x-ddp-enum: task_status, enum: [queued, claimed, running, succeeded, failed, cancelled]}
+        planning_state: {type: string, x-ddp-enum: planning_state, enum: [draft, exploring, ready, awaiting_approval, approved, invalidated]}
+        retrieval_completeness: {type: string, x-ddp-enum: retrieval_completeness, enum: [not_started, partial, complete]}
+        evidence_sufficiency: {type: string, x-ddp-enum: evidence_sufficiency, enum: [sufficient_by_policy, insufficient, conflicting, unknown]}
+        delivery_state: {type: string, x-ddp-enum: delivery_state, enum: [not_requested, pending, transferring, confirmed, expired]}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
     TaskListPage:
@@ -796,18 +798,18 @@ components:
       required: [root_task_id, status, planning_state, plan_revision, plan_digest, task_spec_digest, search_mode, retrieval_completeness, evidence_sufficiency, execution_consent_ref, coverage_ref, delivery_id, delivery_state, result, error, created_at, updated_at]
       properties:
         root_task_id: {type: string, minLength: 1}
-        status: {description: '执行轴，见 enums.yaml 的 task_status；cancelled 是显式取消的终态', type: string, x-ddp-enum: task_status}
-        planning_state: {type: string, x-ddp-enum: planning_state}
+        status: {description: '执行轴，见 enums.yaml 的 task_status；cancelled 是显式取消的终态', type: string, x-ddp-enum: task_status, enum: [queued, claimed, running, succeeded, failed, cancelled]}
+        planning_state: {type: string, x-ddp-enum: planning_state, enum: [draft, exploring, ready, awaiting_approval, approved, invalidated]}
         plan_revision: {type: integer, minimum: 0}
         plan_digest: {type: [string, 'null'], pattern: '^sha256:[0-9a-f]{64}$'}
         task_spec_digest: {$ref: '#/components/schemas/Digest'}
-        search_mode: {type: string, x-ddp-enum: search_mode}
-        retrieval_completeness: {type: string, x-ddp-enum: retrieval_completeness}
-        evidence_sufficiency: {type: string, x-ddp-enum: evidence_sufficiency}
+        search_mode: {type: string, x-ddp-enum: search_mode, enum: [fast, exhaustive_scope]}
+        retrieval_completeness: {type: string, x-ddp-enum: retrieval_completeness, enum: [not_started, partial, complete]}
+        evidence_sufficiency: {type: string, x-ddp-enum: evidence_sufficiency, enum: [sufficient_by_policy, insufficient, conflicting, unknown]}
         execution_consent_ref: {type: [string, 'null']}
         coverage_ref: {type: [string, 'null'], description: 指向 CoverageLedger；没有它就无法判断"未找到"是什么意思}
         delivery_id: {type: [string, 'null']}
-        delivery_state: {type: string, x-ddp-enum: delivery_state}
+        delivery_state: {type: string, x-ddp-enum: delivery_state, enum: [not_requested, pending, transferring, confirmed, expired]}
         used_budget:
           description: 独立根账本的已提交预扣量；跨计划修订、重试、回滚与重启单调累计，不是模型账单。
           type: object
@@ -843,7 +845,7 @@ components:
       required: [seq, type, at]
       properties:
         seq: {type: integer, minimum: 1}
-        type: {type: string, minLength: 1, x-ddp-enum: task_event_type}
+        type: {type: string, minLength: 1, x-ddp-enum: task_event_type, enum: [intent_created, plan_ready, plan_approved, execution_started, task_resumed, task_completed, task_failed, task_cancelled, delivery_pending, delivery_confirmed, delivery_expired]}
         at: {type: string, format: date-time}
         payload: {type: [object, 'null']}
     EventPage:

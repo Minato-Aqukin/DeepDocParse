@@ -145,6 +145,18 @@
           "properties": {
             "citations": { "type": "string", "enum": ["required", "preferred", "not_required"] },
             "output_schema": { "type": "string" },
+            "query_plan": {
+              "description": "Composite-question decomposition: one ledger entry is written per (target, subquery_digest), and the coverage all-must-succeed rule then enforces per-subquery completion.",
+              "type": "object",
+              "properties": {
+                "subqueries": {
+                  "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 2000 }
+                }
+              },
+              "required": ["subqueries"],
+              "additionalProperties": false
+            },
             "wiki": {
               "description": "wiki.pages 的 Wiki 需求（与 ddp_core.application.plans.requirements_wiki 同形）。",
               "type": "object",

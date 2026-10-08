@@ -113,6 +113,25 @@ def build(pages: list[dict], *, engine: str, code_detection: str = "unavailable"
     }
 
 
+def _checked_page_size(page: dict, index: int) -> list:
+    """build_pages 的 page_size 守卫：缺失/畸形直接拒掉，不许编造 [0, 0]。
+
+    [0, 0] 通不过 PROMISED_PAGE_FIELDS（x > 0），下游裁剪按它换算坐标会裁到
+    错误区域 —— 出处图对不上原文是最恶劣的一种错。缺尺寸的页是上游引擎的错，
+    在这里当场 ValueError 告诉引擎作者，而不是让一张错图流进归档。
+    """
+    size = page.get("page_size")
+    if (
+        not isinstance(size, (list, tuple))
+        or len(size) != 2
+        or any(type(v) is bool or not isinstance(v, (int, float)) for v in size)
+        or not all(v > 0 for v in size)
+    ):
+        raise ValueError(f"pdf_info[{index}].page_size 缺失或不合规（收到 {size!r}）："
+                         "需要 [w, h] 且都大于 0")
+    return [size[0], size[1]]
+
+
 def build_pages(pages: list[dict], *, engine: str, code_detection: str = "unavailable") -> dict:
     """已经是 DDP-Layout 形状的页 -> 完整 layout_json（盖章 + 归一化块类型）。
 
@@ -127,7 +146,7 @@ def build_pages(pages: list[dict], *, engine: str, code_detection: str = "unavai
         "pdf_info": [
             {
                 "page_idx": page.get("page_idx", i),
-                "page_size": list(page.get("page_size") or [0, 0]),
+                "page_size": _checked_page_size(page, page.get("page_idx", i)),
                 "printed_page_label": _printed_page_label(page),
                 "para_blocks": [
                     _normalize_block(b)

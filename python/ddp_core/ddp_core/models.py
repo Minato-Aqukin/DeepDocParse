@@ -91,12 +91,11 @@ class Document(Base):
     `uploaded_by` 只是**归属署名**，不再是可见性边界 —— 谁都看得见全部语料，
     检索天然跨全语料。全部上传者记在 `document_uploads` 里：同一份文件被
     好几个人先后传过，那仍是**同一份语料**，不是几份。
-
-    **去重因此变成全局的**：唯一约束从 (user_id, doc_id, origin) 收成
-    (doc_id, origin)。收益是实打实的钱 —— 以前两个人传同一份手册 =
-    两次解析 + 两次索引 + 两套 embedding，而 GPU 按小时租。
+    **去重因此是组织内的**：唯一约束是 (doc_id, origin, organization_id)。
+    同一份文件在同一个组织、同一个 origin 下只存一份（省 GPU 解析/索引钱）；
+    不同组织各存各的行 —— bundle import 绝不能复用/改写别的组织名下的 Document
+    行（invariant 8）。`DocumentUpload` 记录同一份内容被哪些用户传过。
     """
-
     __tablename__ = "documents"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
@@ -142,8 +141,10 @@ class Document(Base):
                                                  onupdate=utcnow)
 
     __table_args__ = (
-        # **全局去重**：同一份文件在同一个 origin 下，整个部署只存一份
-        UniqueConstraint("doc_id", "origin", name="uq_documents_doc_origin"),
+        # **组织内去重**：同一份文件在同一个组织、同一个 origin 下只存一份；
+        # 不同组织互不复用（bundle import 按 organization_id 查，不碰别组织的行）。
+        UniqueConstraint("doc_id", "origin", "organization_id",
+                         name="uq_documents_doc_origin_org"),
         # 列表页按 (未删, 时间倒序) 翻页，不再有 user 维
         Index("ix_documents_deleted_created", "deleted_at", "created_at"),
     )
@@ -153,12 +154,12 @@ class Resource(Base):
     """逻辑资产 —— **「谁的东西」，与「哪份内容」是两件事。**
 
     v3 计划的不变量 I01：逻辑资源不等于内容哈希。两个人上传相同字节拥有
-    **各自独立**的资源记录，删一条不影响另一条；而文件内容仍然只存一份、
-    只解析一次、只索引一次（0006 的全局去重原封不动）。
+    **各自独立**的资源记录，删一条不影响另一条；而文件内容在组织内仍然只存一份、
+    只解析一次、只索引一次（0006 的组织内去重原封不动）。
 
         Resource（本类）          谁的、能发布到哪
           └─ ResourceVersion     固定版本
-               └─ document_id ──→ Document（内容层，全局去重）
+               └─ document_id ──→ Document（内容层，组织内去重）
 
     与 `DocumentUpload` 的关系：那张表记的是"谁提交过这份内容"，
     是**内容层**的归属台账；本表是**资产层**，一条 DocumentUpload 对应一条
@@ -262,7 +263,7 @@ class UploadEvent(Base):
 class DocumentUpload(Base):
     """谁传过这份文件 —— **一份文档可以有多个上传者**。
 
-    全局去重之后，第二个人传同一份文件不会产生第二个 Document，
+    组织内去重之后，同一组织里第二个人传同一份文件不会产生第二个 Document，
     但"他也传过"这件事不能丢：删除权限判它，界面上也要说得清这份语料从哪来。
     §11 已定 6「合并并保留全部归属」说的就是这张表。
     """

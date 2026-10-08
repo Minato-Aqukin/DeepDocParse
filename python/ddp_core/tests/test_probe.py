@@ -17,7 +17,6 @@ from ddp_paths import CONTRACTS
 from plan_samples import NOW
 
 DIGEST = "sha256:" + "a" * 64
-QUERY_DIGEST = "sha256:" + "b" * 64
 OBSERVED = utc_instant(NOW)
 
 
@@ -154,14 +153,36 @@ def test_unknown_enum_values_and_shapes_are_rejected():
         probe(scope="scope-17")
 
 
-def test_reusable_checks_ttl_query_and_index_revision():
+def test_reusable_checks_ttl_task_spec_and_index_revision():
     value = probe()
-    value["query_digest"] = QUERY_DIGEST  # 持久行带查询摘要，纯契约对象没有
-    assert reusable(value, now=NOW, query_digest=QUERY_DIGEST, index_revision="index-42")
+    assert reusable(value, now=NOW, task_spec_digest=DIGEST, index_revision="index-42")
     assert reusable(value, now=NOW + 300)  # 恰好在 TTL 边界上仍可复用
     assert not reusable(value, now=NOW + 301)
-    assert not reusable(value, now=NOW, query_digest="sha256:" + "c" * 64)
+    assert not reusable(value, now=NOW, task_spec_digest="sha256:" + "c" * 64)
     assert not reusable(value, now=NOW, index_revision="index-99")
+    # 旧 query_digest 位置参数仍映射到任务摘要，保持调用兼容。
+    assert reusable(value, now=NOW, query_digest=DIGEST, index_revision="index-42")
+    assert not reusable(value, now=NOW, query_digest="sha256:" + "c" * 64)
+
+
+def test_reusable_rejects_task_spec_mismatch():
+    value = probe()
+    assert not reusable(value, now=NOW, task_spec_digest="sha256:" + "c" * 64)
+    other = probe(task_spec_digest="sha256:" + "c" * 64)
+    assert reusable(other, now=NOW, task_spec_digest="sha256:" + "c" * 64)
+    assert not reusable(other, now=NOW, task_spec_digest=DIGEST)
+
+
+def test_expired_offer_is_not_reusable_with_boundary():
+    from ddp_core.application.plans import utc_instant as _instant
+
+    live_until = _instant(NOW + 60)
+    offer = {"offer_id": "offer-c-3", "target_node_id": "node-c", "plan_digest": DIGEST,
+             "valid_until": live_until, "reservation": False}
+    live = probe(offer=offer)
+    assert reusable(live, now=NOW)
+    assert reusable(live, now=NOW + 60)  # valid_until 时刻本身仍有效
+    assert not reusable(live, now=NOW + 61)
 
 
 def test_reusable_requires_a_retrieval_revision_and_observed_at():

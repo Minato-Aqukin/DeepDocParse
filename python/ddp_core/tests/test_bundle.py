@@ -174,3 +174,64 @@ def test_t12_locator_cannot_point_outside_fixed_layout():
     files["evidence.json"] = json_bytes(records)
     with pytest.raises(BundleError, match="page missing"):
         build_bundle(source, files)
+
+def test_malformed_layout_page_size_fails_instead_of_silent_skip():
+    source, files = sample_parts()
+    layout = json.loads(files["layout.json"])
+    layout["layout"]["pdf_info"][0]["page_size"] = {"width": 0, "height": 792}
+    files["layout.json"] = json_bytes(layout)
+    with pytest.raises(BundleError, match="invalid fixed layout page size"):
+        build_bundle(source, files)
+    source, files = sample_parts()
+    layout = json.loads(files["layout.json"])
+    layout["layout"]["pdf_info"][0]["page_size"] = [0, -5]
+    files["layout.json"] = json_bytes(layout)
+    with pytest.raises(BundleError, match="invalid fixed layout page size"):
+        build_bundle(source, files)
+    source, files = sample_parts()
+    layout = json.loads(files["layout.json"])
+    layout["layout"]["pdf_info"][0]["page_size"] = [612, 100]
+    files["layout.json"] = json_bytes(layout)
+    with pytest.raises(BundleError, match="page size differs"):
+        build_bundle(source, files)
+    # 合法的 dict 形同样参与比对：一致通过。
+    source, files = sample_parts()
+    layout = json.loads(files["layout.json"])
+    layout["layout"]["pdf_info"][0]["page_size"] = {"width": 612, "height": 792}
+    files["layout.json"] = json_bytes(layout)
+    build_bundle(source, files)
+
+
+def test_non_pdf_pageless_paragraph_validates_and_pdf_paragraph_accepted():
+    source, files = sample_parts()
+    source["mime"] = "text/markdown"
+    records = json.loads(files["evidence.json"])
+    locator = records[0]["evidence"]["locator"]
+    locator["kind"] = "paragraph"
+    del locator["physical_page_index"]
+    locator.pop("bbox", None)
+    locator.pop("page_size", None)
+    files["evidence.json"] = json_bytes(records)
+    build_bundle(source, files)
+    source, files = sample_parts()
+    source["mime"] = "text/markdown"
+    records = json.loads(files["evidence.json"])
+    records[0]["evidence"]["locator"]["physical_page_index"] = 0
+    files["evidence.json"] = json_bytes(records)
+    with pytest.raises(BundleError, match="unsupported non-PDF locator"):
+        build_bundle(source, files)
+    source, files = sample_parts()
+    records = json.loads(files["evidence.json"])
+    records[0]["evidence"]["locator"]["kind"] = "paragraph"
+    files["evidence.json"] = json_bytes(records)
+    build_bundle(source, files)
+    source, files = sample_parts()
+    source["mime"] = "application/pdf"
+    records = json.loads(files["evidence.json"])
+    records[0]["evidence"]["locator"]["kind"] = "paragraph"
+    del records[0]["evidence"]["locator"]["physical_page_index"]
+    records[0]["evidence"]["locator"].pop("bbox", None)
+    records[0]["evidence"]["locator"].pop("page_size", None)
+    files["evidence.json"] = json_bytes(records)
+    with pytest.raises(BundleError, match="requires a page"):
+        build_bundle(source, files)

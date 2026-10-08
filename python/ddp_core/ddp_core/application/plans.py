@@ -148,6 +148,37 @@ def requirements_wiki(value, *, operation):
         reject(message="wiki.pages requires base_revision_id for a Wiki update")
 
 
+def requirements_query_plan(value):
+    """TaskSpec.requirements.query_plan 的精确形状：{subqueries: 1..8 条各 1..2000 字，不重复}。
+
+    复合问题的分解：每个 (target, subquery_digest) 写一条 ledger，
+    coverage 的全过规则再逐条强制完成。None = 没分解，不校验。
+    与契约 schemas/ddp-task-probe/v1.json 的 requirements.query_plan 同形。
+
+    每条子查询还必须至少带一个内容 token（共享分词器输出去掉检索面的语法
+    功能词之后非空）：零 token 的子查询（纯标点、纯功能词；jieba 后端下还有
+    单个汉字）在归因里永远对不上任何证据，只能永久 not_attempted —— 与其让
+    任务卡在 partial，不如在受理时就拒绝。受理与归因用同一个分词器，所以无论
+    装的是 jieba 还是二元组回退，两边对同一条子查询的判定总是一致。
+    """
+    if value is None:
+        return
+    obj(value, ("subqueries",))
+    subqueries = value["subqueries"]
+    if not isinstance(subqueries, list) or not 1 <= len(subqueries) <= 8:
+        reject(message="requirements.query_plan.subqueries must list 1..8 subqueries")
+    from ddp_core.search import _QUERY_FUNCTION_WORDS as _FUNCTION_WORDS
+    from ddp_core.tokenize import tokens as _tokens
+    seen = set()
+    for subquery in subqueries:
+        if not isinstance(subquery, str) or not 1 <= len(subquery) <= 2000:
+            reject(message="each subquery must be within 1..2000 characters")
+        if subquery in seen:
+            reject(message="requirements.query_plan.subqueries must not repeat")
+        if not [token for token in _tokens(subquery) if token not in _FUNCTION_WORDS]:
+            reject(message="each subquery must carry at least one content token")
+        seen.add(subquery)
+
 def validate_spec(spec):
     obj(spec, ("schema", "protocol", "operation", "workspace_ref", "resource_scope", "search_policy", "execution_policy", "consent_refs", "budget_ref"), ("query", "requirements"))
     if spec["schema"] != "ddp-task-probe/1#TaskSpec" or spec["protocol"] != "ddp-task/1":
@@ -183,12 +214,13 @@ def validate_spec(spec):
         if ref is not None:
             string(ref)
     if "requirements" in spec:
-        obj(spec["requirements"], (), ("citations", "output_schema", "wiki"))
+        obj(spec["requirements"], (), ("citations", "output_schema", "wiki", "query_plan"))
         if spec["requirements"].get("citations", "required") not in {"required", "preferred", "not_required"}:
             reject(message="invalid citation requirement")
         if "output_schema" in spec["requirements"]:
             string(spec["requirements"]["output_schema"])
     requirements_wiki(spec.get("requirements", {}).get("wiki"), operation=spec["operation"])
+    requirements_query_plan(spec.get("requirements", {}).get("query_plan"))
 
 
 def validate_delegation(step, budget):

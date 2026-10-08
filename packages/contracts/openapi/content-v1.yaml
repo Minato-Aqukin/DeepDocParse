@@ -152,8 +152,14 @@ components:
           description: 取值与文案的唯一来源是 enums.yaml 的 `compile_status`。
         compile_degraded:
           type: array
-          items: { type: string }
-          description: 取值见 enums.yaml 的 `compile_degraded`。
+          x-ddp-enum: compile_degraded
+          x-ddp-enum-items: true
+          items:
+            type: string
+            enum: [code_detection_unavailable, crop_unsupported, crop_failed,
+                   vision_unavailable, vision_invalid_output, provider_unresolved,
+                   reindex_validation_required, compile_failed, layout_unavailable]
+          description: 取值见 enums.yaml 的 `compile_degraded`（items 的手写 enum 由 generate.py --check 对拍）。
         compile_fingerprint: { type: string }
         layout_version: { type: string }
         code_detection:
@@ -321,7 +327,15 @@ components:
         degraded:
           type: string
           nullable: true
-          description: 取值见 enums.yaml 的 `degraded`。
+          x-ddp-enum: degraded
+          enum: [no_hits, parse_mismatch, resource_index_unavailable, embedding_unavailable,
+                 vision_unavailable, crop_unsupported, crop_failed, client_aborted,
+                 upstream_error, upstream_interrupted, index_changed_during_answer,
+                 decision_unavailable, no_evidence_in_turn, inherited_evidence_incomplete,
+                 gate_rejected_all, citation_persist_failed, verification_unavailable,
+                 evidence_unavailable, schema_violation, rerank_unavailable, no_instruct_model,
+                 empty_query, answer_unavailable, keyword_unavailable]
+          description: 取值见 enums.yaml 的 `degraded`（手写 enum 由 generate.py --check 对拍）。
 
     CandidateDecision:
       type: object
@@ -383,7 +397,15 @@ components:
         degraded:
           type: string
           nullable: true
-          description: 取值见 enums.yaml 的 `degraded`。
+          x-ddp-enum: degraded
+          enum: [no_hits, parse_mismatch, resource_index_unavailable, embedding_unavailable,
+                 vision_unavailable, crop_unsupported, crop_failed, client_aborted,
+                 upstream_error, upstream_interrupted, index_changed_during_answer,
+                 decision_unavailable, no_evidence_in_turn, inherited_evidence_incomplete,
+                 gate_rejected_all, citation_persist_failed, verification_unavailable,
+                 evidence_unavailable, schema_violation, rerank_unavailable, no_instruct_model,
+                 empty_query, answer_unavailable, keyword_unavailable]
+          description: 取值见 enums.yaml 的 `degraded`（手写 enum 由 generate.py --check 对拍）。
         model_meta: { type: object }
         confidence: { $ref: '#/components/schemas/RetrievalConfidence' }
         created_at: { type: string, format: date-time }
@@ -412,6 +434,16 @@ components:
           minItems: 4
           maxItems: 4
           nullable: true
+        parse_job_id: { type: string, description: '稳定定位键的一半：这次命中出自哪一次固定解析。chunk_id 每次 reindex 都会重铸，(parse_job_id, seq) 不会。' }
+        seq: { type: integer, nullable: true, description: '稳定定位键的另一半：同一份解析里的原子序号。' }
+        evidence_id: { type: string, nullable: true, description: '可引用的证据：派生理解命中取 derived_evidence_id，否则取 evidence_id；与 MCP 证据 id 同形。' }
+        page_size:
+          type: array
+          items: { type: number }
+          minItems: 2
+          maxItems: 2
+          nullable: true
+          description: '坐标换算的基准（出处三件套之一），缺它遇到 CropBox 偏移/旋转页会裁错区域。'
         score: { type: number, description: RRF 融合分，只用来排序，不是相关度。 }
         similarity: { type: number, nullable: true, description: 余弦相似度，这才是"有多相关"。 }
         snippet: { type: string }
@@ -424,7 +456,15 @@ components:
         degraded:
           type: string
           nullable: true
-          description: 非 null 表示这次检索降级了（如 embedding_unavailable），UI 必须显示出来。
+          x-ddp-enum: degraded
+          enum: [no_hits, parse_mismatch, resource_index_unavailable, embedding_unavailable,
+                 vision_unavailable, crop_unsupported, crop_failed, client_aborted,
+                 upstream_error, upstream_interrupted, index_changed_during_answer,
+                 decision_unavailable, no_evidence_in_turn, inherited_evidence_incomplete,
+                 gate_rejected_all, citation_persist_failed, verification_unavailable,
+                 evidence_unavailable, schema_violation, rerank_unavailable, no_instruct_model,
+                 empty_query, answer_unavailable, keyword_unavailable]
+          description: 非 null 表示这次检索降级了（如 embedding_unavailable），UI 必须显示出来（手写 enum 由 generate.py --check 对拍）。
         groups:
           type: array
           items:
@@ -608,7 +648,15 @@ components:
         degraded:
           type: string
           nullable: true
-          description: 取值见 enums.yaml 的 `degraded`。
+          x-ddp-enum: degraded
+          enum: [no_hits, parse_mismatch, resource_index_unavailable, embedding_unavailable,
+                 vision_unavailable, crop_unsupported, crop_failed, client_aborted,
+                 upstream_error, upstream_interrupted, index_changed_during_answer,
+                 decision_unavailable, no_evidence_in_turn, inherited_evidence_incomplete,
+                 gate_rejected_all, citation_persist_failed, verification_unavailable,
+                 evidence_unavailable, schema_violation, rerank_unavailable, no_instruct_model,
+                 empty_query, answer_unavailable, keyword_unavailable]
+          description: 取值见 enums.yaml 的 `degraded`（手写 enum 由 generate.py --check 对拍）。
         confidence: { $ref: '#/components/schemas/RetrievalConfidence' }
 
     SSEError:

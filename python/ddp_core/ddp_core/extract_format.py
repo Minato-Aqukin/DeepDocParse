@@ -23,8 +23,11 @@
 跑完一轮抽取（N 次检索 + N 次模型调用）再说不合规，是在烧别人的钱。
 """
 import json
+import math
 import re
 from dataclasses import dataclass, field as dc_field
+
+from ddp_contracts.enums import DEGRADED_VALUES, FIELD_STATUS_VALUES
 
 EXTRACT_VERSION = "ddp-extract/1"
 
@@ -35,23 +38,14 @@ LEAF_TYPES = ("string", "number", "integer", "boolean")
 # format 只作抽取提示与格式校验，不做时区换算/本地化
 KNOWN_FORMATS = ("date", "date-time", "email", "uri")
 
-# 契约里的三态与降级取值，validate_result 照着它检查
-FIELD_STATUSES = ("found", "not_found", "error")
+# 字段三态与降级取值的**唯一来源**是契约生成物（packages/contracts/enums.yaml ->
+# ddp_contracts.enums）。这里只做兼容再导出：历史上 DEGRADED_VALUES 手抄过一份，
+# `rerank_unavailable` 曾经只加在一边，于是合法结果在另一边被判成不合规 ——
+# 同样的漂移不许再发生（tests/test_extract_guards.py 断言两侧同源）。
+FIELD_STATUSES = FIELD_STATUS_VALUES
+# 抽取结果的整体三态（ok/partial/failed）是 DDP-Extract 契约自己的词汇，
+# enums.yaml 里没有同名枚举：保留这份本地定义，新增取值在这里加。
 RESULT_STATUSES = ("ok", "partial", "failed")
-DEGRADED_VALUES = (
-    "no_hits", "embedding_unavailable", "vision_unavailable", "crop_unsupported",
-    "crop_failed", "parse_mismatch", "upstream_error", "schema_violation",
-    # 第九种：配了精排但上游没注册 rerank 模型。**必须在词汇表里** ——
-    # 产品层会真的产出它，不收录的话 validate_result 会把一份合法结果判成不合规
-    # （service 侧的 run_extraction 因此会直接把任务标 failed）
-    "rerank_unavailable",
-    # 第十种：注册表里没有会遵循指令的模型（只有 OCR 专用模型，或 vqa_models 为空）。
-    # 它守的是抽取平面的一个塌陷点：OCR 专用模型只会抄字，拿它抽值抽不出东西，
-    # 而抽不出来会被记成 not_found —— **系统能力缺失伪装成"文档里没有"**。
-    # 判据是注册表能力词 no_instruct，见 services/extraction.py。
-    "no_instruct_model",
-)
-
 # 不支持的 JSON Schema 构造。**不是没来得及做**：每一条都会让"一个字段一次定位"
 # 这个前提失效，出处会指到多个互斥的块（理由逐条写在 docs/extract-format.md）
 _UNSUPPORTED_KEYS = ("oneOf", "anyOf", "allOf", "not", "$ref", "patternProperties")
@@ -133,7 +127,9 @@ def _validate_object(node: dict, *, path: str) -> list[str]:
         problems.append(f"{prefix}required 必须是数组")
         required = []
     for name in required:
-        if name not in properties:
+        if not isinstance(name, str):
+            problems.append(f"{prefix}required 里的 {name!r} 必须是字符串")
+        elif name not in properties:
             problems.append(f"{prefix}required 里的 {name!r} 不在 properties 中")
 
     for name, prop in properties.items():
@@ -239,8 +235,11 @@ def coerce_value(raw: object, spec: FieldSpec):
             number = float(cleaned)
         except ValueError as exc:
             raise CoerceError(f"无法从 {raw!r} 里解析出数字") from exc
+    if isinstance(number, float) and not math.isfinite(number):
+        raise CoerceError(f"字段声明为 {spec.type}，模型给的是非有限数值 {raw!r}")
     if spec.type == "integer":
-        if float(number) != int(number):
+        integral = number.is_integer() if isinstance(number, float) else True
+        if not integral:
             raise CoerceError(f"字段声明为 integer，但值 {raw!r} 有小数部分")
         number = int(number)
     _check_enum(number, spec)

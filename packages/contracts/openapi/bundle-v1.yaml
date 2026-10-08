@@ -46,6 +46,23 @@ paths:
         '410': {description: 授权副本已撤销或过期，source_unavailable}
         '404': {description: 资源不存在或无权访问}
         '503': {description: 本节点持久身份未配置}
+  /api/resources/{resource_id}/versions/{version_id}/bundle/licensed-source:
+    parameters:
+      - {in: path, name: resource_id, required: true, schema: {type: string}}
+      - {in: path, name: version_id, required: true, schema: {type: string}}
+    get:
+      operationId: getLicensedSource
+      responses:
+        '302':
+          description: "302 到短期直读 URL（Location，字节不经过应用进程）；响应头 X-DDP-Source-Digest、X-DDP-Source-Availability（offline_snapshot），有期限时另带 X-DDP-Source-Licence-Valid-Until；URL 寿命截到许可期限为止"
+          headers:
+            Location: {schema: {type: string}}
+            X-DDP-Source-Digest: {schema: {type: string}}
+            X-DDP-Source-Availability: {schema: {type: string}}
+            X-DDP-Source-Licence-Valid-Until: {schema: {type: string, format: date-time}}
+            Cache-Control: {schema: {type: string}}
+        '410': {description: 授权副本已撤销或过期，source_unavailable}
+        '404': {description: 资源不存在或无权访问}
   /api/resources/{resource_id}/versions/{version_id}/bundle/evidence:
     parameters:
       - {in: path, name: resource_id, required: true, schema: {type: string}}

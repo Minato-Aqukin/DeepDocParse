@@ -166,12 +166,14 @@ def probe_digest(probe: dict) -> str:
     return content_digest(canonical_bytes({key: value for key, value in probe.items() if key != "observed_at"}))
 
 
-def reusable(probe: dict, *, now, query_digest=None, index_revision=None, ttl_seconds=_DEFAULT_TTL_SECONDS) -> bool:
+def reusable(probe: dict, *, now, query_digest=None, task_spec_digest=None, index_revision=None,
+             ttl_seconds=_DEFAULT_TTL_SECONDS) -> bool:
     """探测结果只有满足有效期与修订一致才可复用；否则一律重新探测。
 
-    `query_digest` 可能来自持久行而不是纯契约对象；缺失按"对不上"处理，
-    不把不相关的旧检索洗成新证据。没有 `retrieval.index_revision` 的
-    能力探测对证据路不可复用。
+    复用限定在同一任务摘要（`task_spec_digest`，兼容旧 `query_digest`
+    位置参数）与同一索引修订。没有 `retrieval.index_revision` 的
+    能力探测对证据路不可复用。附带过期 offer 的探测不可复用：
+    短时可执行意向过期后只能重新探测，不能拿着旧意向去接单。
     """
     if not isinstance(probe, dict):
         reject(message="probe must be an object")
@@ -188,8 +190,17 @@ def reusable(probe: dict, *, now, query_digest=None, index_revision=None, ttl_se
         return False
     if age > ttl_seconds:
         return False
-    if query_digest is not None and probe.get("query_digest") != query_digest:
+    expected_spec = task_spec_digest if task_spec_digest is not None else query_digest
+    if expected_spec is not None and probe.get("task_spec_digest") != expected_spec:
         return False
+    offer = probe.get("offer")
+    if offer is not None:
+        try:
+            expiry = _epoch(offer["valid_until"], "offer valid_until")
+        except (ApplicationError, KeyError, TypeError):
+            return False
+        if now > expiry:
+            return False
     retrieval = probe.get("retrieval") or {}
     revision = retrieval.get("index_revision")
     if not revision:

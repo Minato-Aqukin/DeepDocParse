@@ -146,7 +146,19 @@ enums:
         summary: MCP `ask` 调上游生成时非 200，本轮没有答案（证据仍然返回）
         label: 生成服务不可用（证据已返回，结论未生成）
         severity: error
-
+      # 关键词路的可见降级（`ddp_core/search.py`）：关键词路失败（畸形查询等）时
+      # 只走向量路，与 `embedding_unavailable` 对称。静默退成纯向量与 M4a 的
+      # 静默退回 BM25 是同一类亏，必须可见。
+      - value: keyword_unavailable
+        summary: 关键词路失败（畸形查询等），本轮只走了向量路；与 embedding_unavailable 对称
+        label: 仅向量检索（关键词检索不可用）
+        severity: warn
+    contract_subset:
+      # 网关抽取结果的 `degraded` 只承诺抽取平面可达的这个子集
+      # （`gateway-v1.yaml` 的手写 enum 必须与它一字不差，由 generate.py --check 对拍）。
+      gateway_extract_degraded: [no_hits, embedding_unavailable, vision_unavailable,
+        crop_unsupported, crop_failed, parse_mismatch, upstream_error,
+        schema_violation, rerank_unavailable, no_instruct_model]
   # ------------------------------------------------------------------
   compile_degraded:
     description: |
@@ -1006,11 +1018,11 @@ enums:
         label: 凭证范围不覆盖该请求
         severity: error
       - value: node_unknown
-        summary: 签发节点不在本节点控制面的成员目录里，或尚未被管理员批准（401）
+        summary: 签发节点不在本节点控制面的成员目录里，或尚未被管理员批准（403）
         label: 未知或未批准的节点
         severity: error
       - value: node_revoked
-        summary: 签发节点已被管理员撤销。撤销对新请求生效的延迟以公钥缓存上限为界（401）
+        summary: 签发节点已被管理员撤销。撤销对新请求生效的延迟以公钥缓存上限为界（403）
         label: 节点已被撤销
         severity: error
       - value: node_identity_mismatch

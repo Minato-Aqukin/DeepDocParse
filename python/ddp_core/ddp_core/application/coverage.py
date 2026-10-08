@@ -498,11 +498,22 @@ def version_conflicts(evidence) -> list[dict]:
     out = []
     for key in sorted(groups, key=lambda value: tuple(str(part) for part in value)):
         items = groups[key]
-        versions = {item.get("source_version_id") for item in items}
-        digests = {item.get("excerpt_digest") for item in items}
+        # 版本/摘要缺失的条目不参与比较：None 本身不是一个版本，
+        # 把两个“都没写版本”的条目数成“两个版本”只会造出假矛盾。
+        # 同一 (version, digest) 只留一条引用：同版本同正文的重复回执
+        # 不是“两版写得不一样”，不能靠证据条数凑出矛盾。
+        seen: dict[tuple, str] = {}
+        for item in items:
+            version, digest = item.get("source_version_id"), item.get("excerpt_digest")
+            if not isinstance(version, str) or not version:
+                continue
+            if not isinstance(digest, str) or not digest:
+                continue
+            seen.setdefault((version, digest), item["evidence_id"])
+        versions = {version for version, _ in seen}
+        digests = {digest for _, digest in seen}
         if len(versions) >= 2 and len(digests) >= 2:
-            out.append(conflict("version_divergence",
-                                sorted({item["evidence_id"] for item in items})))
+            out.append(conflict("version_divergence", sorted(seen.values())))
     return out
 
 

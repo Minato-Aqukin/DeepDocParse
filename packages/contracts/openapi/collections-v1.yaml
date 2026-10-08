@@ -72,7 +72,7 @@ paths:
         '401': {description: Service or trusted caller context missing}
         '403': {description: Non-service actor}
         '409': {description: catalog_snapshot_changed; index/member revision changed, not a revocation}
-        '410': {description: catalog_snapshot_expired or catalog_snapshot_invalid. A bound unexpired owner may also receive revoked_collection_ids, restricted to original snapshot identities.}
+        '410': {description: catalog_snapshot_expired or catalog_snapshot_invalid. A bound unexpired owner may also receive revoked_collection_ids plus the snapshot's own snapshot_id/scope_id/caller_scope_hash/origin_node_id, restricted to original snapshot identities; an unbound 410 carries neither identities nor binding.}
         '429': {description: Caller snapshot storage bound reached}
         '507': {description: Authorized catalog too large; never claim complete}
   /internal/federation/published-collections:
@@ -93,7 +93,7 @@ paths:
         '401': {description: Missing service credentials or actor context}
         '403': {description: Non-service actor}
         '409': {description: catalog_snapshot_changed; never a revocation}
-        '410': {description: catalog_snapshot_expired or catalog_snapshot_invalid with the original revoked identities}
+        '410': {description: catalog_snapshot_expired or catalog_snapshot_invalid. A bound revocation repeats revoked_collection_ids plus the snapshot's own snapshot_id/scope_id/caller_scope_hash/origin_node_id; an unbound 410 carries neither identities nor binding.}
         '429': {description: Node snapshot storage bound reached}
         '503': {description: Persistent node identity unavailable; never emit origin-less descriptors}
         '507': {description: Authorized catalog too large; never claim complete}
@@ -113,10 +113,10 @@ paths:
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
       responses:
         '200': {description: Stable node catalog page; continuation cannot change the page size, content: {application/json: {schema: {$ref: '#/components/schemas/PeerCatalogPage'}}}}
-        '401': {description: 'credential_invalid, credential_expired or credential_replayed'}
+        '401': {description: 'credential_invalid, credential_expired or credential_replayed. Unverified callers uniformly receive credential_invalid with no membership disclosure'}
         '403': {description: 'node_unknown, node_revoked, credential_audience_mismatch or credential_scope_denied'}
         '409': {description: wrong_target or snapshot revision conflict}
-        '410': {description: Peer catalog snapshot expired or withdrawn; already observed targets are retained by the caller}
+        '410': {description: Peer catalog snapshot expired or withdrawn; a bound revocation repeats revoked_collection_ids plus snapshot_id/scope_id/caller_scope_hash/origin_node_id, an unbound 410 carries neither. Already observed targets are retained by the caller}
         '502': {description: Upstream corpus producer unavailable or inconsistent}
         '503': {description: Node identity or corpus connection unavailable}
         '507': {description: Authorized catalog too large; never claim complete}

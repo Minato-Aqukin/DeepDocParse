@@ -95,8 +95,20 @@ def render_crops(
                         for index in indices:
                             _, bbox, page_size = requests[index]
                             try:
-                                sx = img.width / (page_size[0] if page_size else page.get_width())
-                                sy = img.height / (page_size[1] if page_size else page.get_height())
+                                # page_size 缺失/畸形时**不许**退回 pdfium 页尺寸：
+                                # layout 坐标系与 pdfium 在 CropBox 偏移/旋转页上不一致，
+                                # 凑合换算会裁到错误区域 —— 出处图对不上原文是最恶劣的一种错。
+                                # 宁可返回 None（调用方记 crop_failed），不能给一张错图。
+                                if (
+                                    not isinstance(page_size, (list, tuple))
+                                    or len(page_size) != 2
+                                    or any(type(v) is bool or not isinstance(v, (int, float))
+                                           for v in page_size)
+                                    or not all(v > 0 for v in page_size)
+                                ):
+                                    continue
+                                sx = img.width / page_size[0]
+                                sy = img.height / page_size[1]
                                 x0, y0, x1, y1 = bbox
                                 box = (
                                     max(0, int((x0 - CROP_MARGIN) * sx)),
@@ -112,7 +124,7 @@ def render_crops(
                             except ImportError:
                                 raise
                             except Exception:
-                                # 畸形 bbox/page_size 只废掉这个原子。
+                                # 畸形 bbox 只废掉这个原子。
                                 continue
                 except ImportError:
                     raise

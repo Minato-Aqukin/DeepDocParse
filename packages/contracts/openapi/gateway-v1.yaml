@@ -32,7 +32,13 @@ paths:
               properties:
                 file_url:
                   type: string
-                  description: 文件的可下载 URL（backend 侧生成），不传文件流
+                  description: |
+                    文件的可下载 URL（backend 侧生成），不传文件流。
+                    抓取前执行出站目的地策略（SSRF 封锁）：非受信基座（FETCH_TRUSTED_BASE）
+                    之外的地址仅允许公网可路由目标，私网/回环/云元数据/DNS 失败一律 400
+                    fetch_not_allowed；响应声明或实际字节超过所选引擎的字节上限时
+                    413 file_too_large（一字节都不下载）。上限按引擎分开配：mineru 走
+                    MINERU_MAX_BYTES，borndigital 与 vlm-ocr 走 BORNDIGITAL_MAX_BYTES。
                 doc_id:
                   type: string
                   description: |
@@ -52,7 +58,11 @@ paths:
                   description: 引擎透传选项（如 mineru 的 backend=pipeline|vlm、语言等）
                 callback_url:
                   type: string
-                  description: 可选。任务完成后 gateway 回调 backend
+                  description: |
+                    可选。任务完成后 gateway 回调 backend，callback_url 原样保存（含 query，不归一化）。
+                    只允许 CALLBACK_ALLOWED_BASE 之下的地址（scheme+host+port 一致且路径在其之下）；
+                    未配置该基座（空）时拒绝一切 callback_url，越界时 400 callback_not_allowed。
+                    worker 在 POST 前会再验一次（受理后基座收紧即跳过回调，只记日志）。
       responses:
         "202":
           description: 已受理
@@ -62,6 +72,10 @@ paths:
                 type: object
                 properties:
                   task_id: { type: string }
+        "400":
+          description: callback_url 越界（callback_not_allowed）或 file_url 被目的地策略拒绝（fetch_not_allowed）
+        "413":
+          description: 文件超过所选引擎的字节上限（file_too_large；见上 file_url）
         "429":
           description: 队列已满，backend 应限流重试
 
@@ -124,7 +138,11 @@ paths:
       summary: VQA 平面（OpenAI Chat Completions 协议，支持流式）
       description: |
         完全遵循 OpenAI 协议：messages 支持 image_url content part。
-        model 字段路由到 models.yaml vqa_models；缺省用 default 模型。
+        model 字段路由到 models.yaml vqa_models；省略时按能力词在可用条目里挑
+        default：跳过带 no_instruct 的条目（OCR 专用模型只会抄字，不会遵指令），
+        有 image_url 部件的请求还要求 vision。一个会遵指令的条目都没有时 400
+        no_instruct_model，有图却没有 vision 条目时 400 vision_unavailable ——
+        都是可见失败，不会拿 OCR 模型硬答。未知 model 404 model_not_found。
         gateway 透传到对应运行时（deepseek-ocr.rs / vLLM）。
         注册表 options.chat_template_kwargs 若显式声明，作为请求的 chat_template_kwargs
         默认值透传（请求方显式提供的值优先）；未声明时不添加该运行时扩展参数。
@@ -134,6 +152,10 @@ paths:
       operationId: chatCompletions
       responses:
         "200": { description: OpenAI 兼容响应（含 SSE 流式） }
+        "400": { description: 无可用缺省（no_instruct_model / vision_unavailable）或请求体非法（invalid_json） }
+        "404": { description: 未知 model（model_not_found） }
+        "429": { description: VQA 并发满载（vqa_overloaded），调用方退避重试 }
+        "502": { description: VQA 运行时不可达（vqa_unreachable） }
 
   /v1/models:
     get:
@@ -144,8 +166,9 @@ paths:
         vision 条目的 default 标记是在 vision 子集内按 registry.default_of
         选出的唯一默认项（优先注册表 default，否则取该子集首项），与抽取视觉核对一致。
         非 vision 条目的 default 则表示它是否为整个 vqa_models 段的默认项。
-        因而纯文本全局默认项与视觉子集默认项可以同时为 true；此标记不代表全局唯一，
-        也不改变 /v1/chat/completions 省略 model 时按整个段选路的行为。
+        因而纯文本全局默认项与视觉子集默认项可以同时为 true；此标记不代表全局唯一。
+        注意缺省选路另做能力过滤：/v1/chat/completions 省略 model 时跳过 no_instruct
+        条目、有图时只在 vision 条目里挑（挑不到报 400，而不是按整个段取 default）。
         声明 vision 的条目提供解析后的 `transcribe_prompt`，取其注册表
         options.transcribe_prompt，缺省为通用逐字抄写指令；不暴露 endpoint 或密钥。
         注册不代表健康，实际请求失败仍必须显式降级。视觉核对消费者先按 vision
@@ -228,7 +251,10 @@ paths:
                   description: 抽取选项（max_records、verify 等）
                 callback_url:
                   type: string
-                  description: 可选。抽取完成后 gateway 回调
+                  description: |
+                    可选。抽取完成后 gateway 回调，callback_url 原样保存（含 query，不归一化）。
+                    只允许 CALLBACK_ALLOWED_BASE 之下的地址；未配置该基座（空）时拒绝一切
+                    callback_url，越界时 400 callback_not_allowed。worker 在 POST 前会再验一次。
       responses:
         "202":
           description: 已受理
@@ -242,7 +268,8 @@ paths:
                     type: string
                     enum: [pending, running]
                     description: 文档尚未解析时先触发解析，此处为 pending
-        "400": { description: schema 不合法（不支持的构造、字段缺 description 等） }
+        "400":
+          description: schema 不合法（invalid_schema 等）或 callback_url 越界（callback_not_allowed）
         "429": { description: 队列已满 }
 
   /v1/extract/{task_id}:
@@ -288,10 +315,13 @@ paths:
                   degraded:
                     type: string
                     nullable: true
+                    x-ddp-enum: degraded
+                    x-ddp-enum-subset: gateway_extract_degraded
                     enum: [no_hits, embedding_unavailable, vision_unavailable,
                            crop_unsupported, crop_failed, parse_mismatch,
                            upstream_error, schema_violation, rerank_unavailable,
                            no_instruct_model]
+                    description: 抽取平面可达的 degraded 子集（enums.yaml degraded.gateway_extract_degraded），由 generate.py --check 对拍。
                   fields:
                     type: object
                     description: 顶层 schema 是 object 时的字段表
@@ -302,7 +332,18 @@ paths:
                         value: { nullable: true }
                         citations: { type: array, items: { type: object } }
                         verified: { type: boolean }
-                        degraded: { type: string, nullable: true }
+                        degraded:
+                          type: string
+                          nullable: true
+                          x-ddp-enum: degraded
+                          enum: [no_hits, parse_mismatch, resource_index_unavailable, embedding_unavailable,
+                                 vision_unavailable, crop_unsupported, crop_failed, client_aborted,
+                                 upstream_error, upstream_interrupted, index_changed_during_answer,
+                                 decision_unavailable, no_evidence_in_turn, inherited_evidence_incomplete,
+                                 gate_rejected_all, citation_persist_failed, verification_unavailable,
+                                 evidence_unavailable, schema_violation, rerank_unavailable, no_instruct_model,
+                                 empty_query, answer_unavailable, keyword_unavailable]
+                          description: 单字段抽取的降级（顶层 degraded 只承诺 gateway_extract_degraded 子集，字段级由 generate.py --check 对拍全量 degraded）。
                         confidence: { type: object }
                   records:
                     type: array

@@ -19,7 +19,7 @@ class EnumMeta(TypedDict, total=False):
 #
 # **一次只报一个**（最先命中的那个）。需要同时报多个的场合请用
 # `compile_degraded` 那种列表形状，不要往这里塞逗号分隔串。
-Degraded = Literal["no_hits", "parse_mismatch", "resource_index_unavailable", "embedding_unavailable", "vision_unavailable", "crop_unsupported", "crop_failed", "client_aborted", "upstream_error", "upstream_interrupted", "index_changed_during_answer", "decision_unavailable", "no_evidence_in_turn", "inherited_evidence_incomplete", "gate_rejected_all", "citation_persist_failed", "verification_unavailable", "evidence_unavailable", "schema_violation", "rerank_unavailable", "no_instruct_model", "empty_query", "answer_unavailable"]
+Degraded = Literal["no_hits", "parse_mismatch", "resource_index_unavailable", "embedding_unavailable", "vision_unavailable", "crop_unsupported", "crop_failed", "client_aborted", "upstream_error", "upstream_interrupted", "index_changed_during_answer", "decision_unavailable", "no_evidence_in_turn", "inherited_evidence_incomplete", "gate_rejected_all", "citation_persist_failed", "verification_unavailable", "evidence_unavailable", "schema_violation", "rerank_unavailable", "no_instruct_model", "empty_query", "answer_unavailable", "keyword_unavailable"]
 
 DEGRADED_VALUES: Final[tuple[str, ...]] = (
     "no_hits",
@@ -45,6 +45,7 @@ DEGRADED_VALUES: Final[tuple[str, ...]] = (
     "no_instruct_model",
     "empty_query",
     "answer_unavailable",
+    "keyword_unavailable",
 )
 
 DEGRADED_META: Final[dict[str, EnumMeta]] = {
@@ -102,7 +103,12 @@ DEGRADED_META: Final[dict[str, EnumMeta]] = {
     "empty_query": {"value": "empty_query", "label": "查询词为空", "severity": "neutral"},
     # MCP `ask` 调上游生成时非 200，本轮没有答案（证据仍然返回）
     "answer_unavailable": {"value": "answer_unavailable", "label": "生成服务不可用（证据已返回，结论未生成）", "severity": "error"},
+    # 关键词路失败（畸形查询等），本轮只走了向量路；与 embedding_unavailable 对称
+    "keyword_unavailable": {"value": "keyword_unavailable", "label": "仅向量检索（关键词检索不可用）", "severity": "warn"},
 }
+
+# 契约 gateway_extract_degraded 只承诺这几个值
+DEGRADED_GATEWAY_EXTRACT_DEGRADED: Final[tuple[str, ...]] = ("no_hits", "embedding_unavailable", "vision_unavailable", "crop_unsupported", "crop_failed", "parse_mismatch", "upstream_error", "schema_violation", "rerank_unavailable", "no_instruct_model",)
 
 
 def degraded_label(value: str | None) -> str | None:
@@ -1737,9 +1743,9 @@ FEDERATION_ERROR_META: Final[dict[str, EnumMeta]] = {
     # scope_ref / task_spec_digest）不覆盖这次请求或它要读的那一行（403）；
     # 以别的协调者名义提交计划也是这个码。
     "credential_scope_denied": {"value": "credential_scope_denied", "label": "凭证范围不覆盖该请求", "severity": "error"},
-    # 签发节点不在本节点控制面的成员目录里，或尚未被管理员批准（401）
+    # 签发节点不在本节点控制面的成员目录里，或尚未被管理员批准（403）
     "node_unknown": {"value": "node_unknown", "label": "未知或未批准的节点", "severity": "error"},
-    # 签发节点已被管理员撤销。撤销对新请求生效的延迟以公钥缓存上限为界（401）
+    # 签发节点已被管理员撤销。撤销对新请求生效的延迟以公钥缓存上限为界（403）
     "node_revoked": {"value": "node_revoked", "label": "节点已被撤销", "severity": "error"},
     # 语料服务配置的节点身份（BUNDLE_NODE_ID）与控制面持久密钥派生的身份不一致，
     # 或控制面报告的本节点身份变了。**Fail Closed（503）**：否则本地目标会被当成远端

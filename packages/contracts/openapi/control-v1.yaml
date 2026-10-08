@@ -31,11 +31,13 @@ info:
       → `services/corpus-api`（Web 调用的读子集见 `content-v1.yaml`；
       注意旧的 `corpus-v1.yaml` 引用已失效，语料面没有这个文件）
     - `/v1/parse` `/v1/chat/completions` `/v1/embeddings` `/v1/extract` `/v1/rerank`
-      → `services/model-gateway`（见 `gateway-v1.yaml`）
+      → `services/model-gateway`（见 `gateway-v1.yaml`；`/v1/parse*` 实际先经语料 API 留 Document/ParseJob）
     - `/mcp` → `services/mcp`
 
-    代理**不是透明的**：它验身份、扣配额、限速、记计量与审计，并把
-    actor 上下文以内部头下发给上游（见下面的「内部头」一节）。
+    每个 `/v1/*` 平面各要自己的 key 作用域（parse / chat / embeddings /
+    extract / rerank；`GET /v1/models` 只要 read）。未知平面 404。
+    计费平面只有 parse 与 extract（按页扣配额）；chat / embeddings /
+    rerank / models 不查配额。
 
     ## 内部头（服务间，不对外）
 
@@ -47,12 +49,12 @@ info:
         X-DDP-Organization      组织 ID（单组织部署也必须带，值为默认组织）
         X-DDP-Actor             user id 或 api key id
         X-DDP-User              已验证用户 ID；API key 时为该 key 的所有者
-        X-DDP-Actor-Kind        user | api_key | service
+        X-DDP-Actor-Kind        user | api_key | service | peer
         X-DDP-Role              该 actor 在该组织内的角色
         Idempotency-Key         写操作必带
 
     **这组头绝不能来自客户端。** 入口无条件剥掉客户端传来的同名头再填自己的
-    —— 否则任何人都能伪造 `X-DDP-Role: admin`。有守卫钉着这件事。
+    —— 否则任何人都能伪造 `X-DDP-Role: admin`。入口中间件对此有回归测试。
 
     ## 错误体
 
@@ -101,14 +103,17 @@ components:
 
     Role:
       type: string
+      x-ddp-enum: role
       description: |
         组织内角色。取值与语义由 `packages/contracts/enums.yaml` 的 `role` 生成，
-        **不要在这里另抄一份** —— 这个 enum 列表由 CI 校验与生成物一致。
+        **不要在这里另抄一份** —— 这个 enum 列表由 generate.py --check 与生成物对拍。
       enum: [viewer, contributor, reviewer, admin]
 
     ActorKind:
       type: string
-      enum: [user, api_key, service]
+      x-ddp-enum: actor_kind
+      description: 调用者身份类型，取值与语义由 `packages/contracts/enums.yaml` 的 `actor_kind` 生成（含联邦节点主体 `peer`），由 generate.py --check 与生成物对拍。
+      enum: [user, api_key, service, peer]
 
     UploadStatus:
       type: string
@@ -182,7 +187,7 @@ components:
             空数组等于全部禁用（不是全部允许 —— 默认拒绝）。
         quota_pages: { type: integer, nullable: true, description: null = 不限 }
         used_pages: { type: integer }
-        rate_limit_per_min: { type: integer }
+        rate_limit_per_min: { type: integer, minimum: 1 }
         expires_at: { type: string, format: date-time, nullable: true }
         revoked_at: { type: string, format: date-time, nullable: true }
         last_used_at: { type: string, format: date-time, nullable: true }
@@ -209,8 +214,8 @@ components:
         kind:
           type: string
           enum: [parse, chat, embeddings, mcp, qa, embed, compile_vision, extract]
-        pages: { type: integer }
-        requests: { type: integer }
+        pages: { type: integer, minimum: 0 }
+        requests: { type: integer, minimum: 0 }
 
     Quota:
       type: object
@@ -231,7 +236,12 @@ components:
         action: { type: string, description: 如 document.delete、apikey.revoke }
         target: { type: string, nullable: true }
         request_id: { type: string, nullable: true }
-        detail: { type: object }
+        detail:
+          type: object
+          description: |
+            联邦关联元组：联邦生命周期事件在这里带 root_task_id、step_id、
+            probe_id、admission_id、attempt、coverage_ref、delivery_state 七个键
+            （缺省省略，无一律不写空串）。密钥类字段照旧脱敏。
     UploadPurpose:
       type: string
       enum: [permanent, temporary_compute]
@@ -515,7 +525,7 @@ paths:
                   description: 缺省给该角色允许的全部作用域
                 expires_in_days: { type: integer, nullable: true }
                 quota_pages: { type: integer, nullable: true }
-                rate_limit_per_min: { type: integer, nullable: true }
+                rate_limit_per_min: { type: integer, minimum: 1, nullable: true }
       responses:
         "201":
           description: 已创建（明文 key 只在这里出现一次）
@@ -720,9 +730,9 @@ paths:
         实现是 **302 到对象存储的短期签名 URL**，而不是由本进程转发字节流
         （不变式 6）。短期签名只出现在 `Location` 里，不改变本路径。
 
-        token 本身即凭证（32 字节随机），可撤销、可设过期。v3 凭证绑定
+        token 本身即凭证（32 字节随机），可撤销、可设过期：稳定授权缺省
+        24 小时有界寿命，到期按 404 拒绝；换发即新 token。v3 凭证绑定
         subject_id/resource_id，每次兑换重查主体成员资格与资源ACL；地址不会
-        因普通重试变化。旧无主体凭证拒绝兑换，须重新授权；证据身份保持不变。
       parameters:
         - { name: token, in: path, required: true, schema: { type: string } }
       responses:

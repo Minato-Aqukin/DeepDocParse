@@ -52,13 +52,18 @@
           "required": ["width", "height"], "additionalProperties": false
         }
       },
-      "required": ["kind", "physical_page_index", "seq"],
+      "required": ["kind", "seq"],
       "additionalProperties": false,
       "allOf": [
         {
           "$comment": "**有 bbox 就必须有 page_size**。没有 page_size 的 bbox 在 CropBox 偏移或旋转页上会裁到错的区域，而裁图与原文对不上正是 parse_mismatch 想抓的那类假出处。",
           "if": { "properties": { "bbox": { "type": "array" } }, "required": ["bbox"] },
           "then": { "properties": { "page_size": { "type": "object" } }, "required": ["page_size"] }
+        },
+        {
+          "$comment": "PDF 用既有真实坐标约定，必须带物理页序；非 PDF 不伪造页码（§4.3）。运行时另按来源 mime 判定该条证据是否 PDF。",
+          "if": { "properties": { "kind": { "enum": ["page_block", "table_cell"] } } },
+          "then": { "required": ["physical_page_index"] }
         }
       ]
     },

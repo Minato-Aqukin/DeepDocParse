@@ -252,11 +252,17 @@ def _source_identity(value):
 
 
 def _validate_locator(loc):
-    _object(loc, ("kind", "physical_page_index", "seq"),
-            ("bbox", "page_size", "printed_page_label"))
+    _object(loc, ("kind", "seq"),
+            ("physical_page_index", "bbox", "page_size", "printed_page_label"))
     if loc["kind"] not in ("page_block", "table_cell", "paragraph"):
         fail("invalid evidence locator kind")
-    if any(type(loc[k]) is not int or loc[k] < 0 for k in ("physical_page_index", "seq")):
+    if loc["kind"] in ("page_block", "table_cell") and "physical_page_index" not in loc:
+        fail("invalid evidence page or sequence")
+    if "physical_page_index" in loc and (
+        type(loc["physical_page_index"]) is not int or loc["physical_page_index"] < 0
+    ):
+        fail("invalid evidence page or sequence")
+    if type(loc["seq"]) is not int or loc["seq"] < 0:
         fail("invalid evidence page or sequence")
     if loc.get("printed_page_label") is not None and not isinstance(loc["printed_page_label"], str):
         fail("invalid printed page label")
@@ -601,7 +607,10 @@ def _validate_evidence(records, source):
             fail("duplicate evidence identity")
         loc = e["locator"]
         _validate_locator(loc)
-        if source["mime"] != "application/pdf" or loc["kind"] not in ("page_block", "table_cell"):
+        if source["mime"] == "application/pdf":
+            if "physical_page_index" not in loc:
+                fail("PDF evidence locator requires a page", "bundle_schema_unsupported")
+        elif "physical_page_index" in loc:
             fail("unsupported non-PDF locator", "bundle_schema_unsupported")
         if e["source_type"] == "source":
             if e.get("derived_from") is not None:
@@ -710,17 +719,23 @@ def validate_parts(manifest: dict, files: dict[str, bytes]) -> VerifiedBundle:
             pages[page["page_idx"]] = page
         for record in evidence:
             locator = record["evidence"]["locator"]
+            if "physical_page_index" not in locator:
+                continue
             if locator["physical_page_index"] not in pages:
                 fail("evidence page missing from fixed layout")
             page = pages[locator["physical_page_index"]]
             expected = page.get("page_size")
             if isinstance(expected, list) and len(expected) == 2:
                 expected = {"width": expected[0], "height": expected[1]}
+            if not (
+                isinstance(expected, dict)
+                and _number(expected.get("width")) and expected["width"] > 0
+                and _number(expected.get("height")) and expected["height"] > 0
+            ):
+                fail("invalid fixed layout page size")
             actual = locator.get("page_size")
-            if (
-                actual
-                and isinstance(expected, dict)
-                and any(actual.get(axis) != expected.get(axis) for axis in ("width", "height"))
+            if actual and any(
+                actual.get(axis) != expected.get(axis) for axis in ("width", "height")
             ):
                 fail("evidence page size differs from fixed layout")
     if not isinstance(parse_json(files["provenance.json"]), list):

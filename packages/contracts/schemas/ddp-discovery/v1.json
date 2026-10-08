@@ -29,6 +29,7 @@
       "description": "已批准同伴的有界递归目录快照；路由相对响应者，消耗为整份快照实际出站请求数（每页重复，不累加）。",
       "properties": {
         "authority_node_id": { "$ref": "#/$defs/node_id" },
+        "operation": { "type": "string", "minLength": 1 },
         "snapshot_id": { "type": "string", "minLength": 1 },
         "created_at": { "$ref": "#/$defs/instant" },
         "valid_until": { "$ref": "#/$defs/instant" },
@@ -79,7 +80,7 @@
         "next_cursor": { "type": ["string", "null"] },
         "complete": { "type": "boolean" }
       },
-      "required": ["authority_node_id", "snapshot_id", "created_at", "valid_until", "first_cursor", "terminal_cursor", "targets", "registry_revision_vector", "unexpanded_subtrees", "enumeration_state", "consumption", "next_cursor", "complete"],
+      "required": ["authority_node_id", "operation", "snapshot_id", "created_at", "valid_until", "first_cursor", "terminal_cursor", "targets", "registry_revision_vector", "unexpanded_subtrees", "enumeration_state", "consumption", "next_cursor", "complete"],
       "additionalProperties": false
     },
     "NodeDescriptor": {

@@ -58,7 +58,7 @@ paths:
       responses:
         '200': {description: Current local generation observations or honest unknown, content: {application/json: {schema: {$ref: '#/components/schemas/GenerationDescriptor'}}}}
         '400': {description: invalid_generation_descriptor — query parameters are not accepted}
-        '401': {description: Invalid, expired or replayed node credential}
+        '401': {description: 'Invalid, expired or replayed node credential. Unverified callers uniformly receive credential_invalid with no membership disclosure; unapproved-issuer codes appear only after full signature verification'}
         '403': {description: Unapproved issuer or credential scope mismatch}
         '409': {description: wrong_target — receiver identity differs from the authenticated target}
         '503': {description: node_identity_unavailable or credential_store_unavailable}
@@ -84,7 +84,7 @@ paths:
       responses:
         '200': {description: Honest bounded subtree page, content: {application/json: {schema: {$ref: '../schemas/ddp-discovery/v1.json#/$defs/SubtreeSnapshotPage'}}}}
         '400': {description: Invalid path, budget, snapshot or pagination}
-        '401': {description: Invalid, expired or replayed node credential}
+        '401': {description: 'Invalid, expired or replayed node credential. Unverified callers uniformly receive credential_invalid with no membership disclosure; unapproved-issuer codes appear only after full signature verification'}
         '403': {description: Unapproved issuer or operation/audience/query mismatch}
         '410': {description: Frozen subtree snapshot expired}
   /api/v1/federation/members:
@@ -107,7 +107,7 @@ paths:
       responses:
         '200': {description: Stable member page with a separate empty terminal proof, content: {application/json: {schema: {$ref: '#/components/schemas/PeerMemberPage'}}}}
         '400': {description: Invalid page options or cursor without snapshot_id}
-        '401': {description: 'credential_invalid, credential_expired or credential_replayed'}
+        '401': {description: 'credential_invalid, credential_expired or credential_replayed. Unverified callers uniformly receive credential_invalid with no membership disclosure'}
         '403': {description: 'node_unknown, node_revoked, credential_audience_mismatch or credential_scope_denied'}
         '409': {description: wrong_target; X-DDP-Target-Node names another node}
         '410': {description: Peer snapshot expired; create a new one}
@@ -292,7 +292,7 @@ components:
         state: {type: string, const: approved}
         descriptor_valid_until: {type: string, format: date-time}
         operation: {$ref: '#/components/schemas/GenerationOperation'}
-        readiness: {type: string, x-ddp-enum: capability_readiness}
+        readiness: {type: string, x-ddp-enum: capability_readiness, enum: [configured, ready, draining, unhealthy, unknown]}
         accepting_admissions: {type: boolean, description: True only for a fresh ready producer observation explicitly accepting this operation}
         observed_at: {type: string, format: date-time}
         valid_until: {type: string, format: date-time}

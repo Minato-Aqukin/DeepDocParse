@@ -57,17 +57,19 @@ payload 逐字节相等**：重复键、空白、换序、非规范 base64 一�
 | 3 | `issued_at ≤ now+30s` 且 `expires_at > now` | 401 `credential_expired` |
 | 4 | `operation` 等于端点的 `x-ddp-node-credential-operation` | 403 `credential_operation_denied` |
 | 5 | `request` 的方法 / 路由路径 / 正文 sha256 等于这次请求 | 403 `credential_scope_denied` |
-| 6 | 向本节点控制面取 `PeerTrust`：未登记或 pending | 401 `node_unknown` |
-| 7 | 　　revoked | 401 `node_revoked` |
-| 8 | 　　`authority_node_id` 不等于本节点绑定身份 | 503 `node_identity_mismatch` |
-| 9 | 公钥派生的 node_id 等于 issuer（防改坏的成员行） | 401 `node_unknown` |
-| 10 | Ed25519 验签 | 401 `credential_invalid` |
-| 11 | 持久记下 `jti` 直到 `expires_at`（唯一约束仲裁并发） | 401 `credential_replayed` |
-| 12 | 端点把被读写的行与 `constraints` 逐字比对 | 403 `credential_scope_denied` |
-| 13 | **执行者自己的资源 ACL** | 照旧同形 404 |
+| 6 | 向本节点控制面取 `PeerTrust`：未登记或查询失败 | 401 `credential_invalid`（中性拒绝，不披露成员状态、不记审计） |
+| 7 | 公钥派生的 node_id 等于 issuer（防改坏的成员行），随后 Ed25519 验签（含 2–5 的 audience / 有效期 / operation / 请求绑定全量核对） | 失败按原码（`credential_invalid` / `credential_expired` / `credential_audience_mismatch` / `credential_operation_denied` / `credential_scope_denied` …），不查成员状态、不记审计 |
+| 8 | `authority_node_id` 不等于本节点绑定身份 | 503 `node_identity_mismatch` |
+| 9 | 仅当签名与全部声明校验通过后，再看成员状态：pending 或其他非 approved → `node_unknown`；revoked → `node_revoked`（403，可记审计） | 403 `node_unknown` / `node_revoked` |
+| 10 | 持久记下 `jti` 直到 `expires_at`（唯一约束仲裁并发） | 401 `credential_replayed` |
+| 11 | 端点把被读写的行与 `constraints` 逐字比对 | 403 `credential_scope_denied` |
+| 12 | **执行者自己的资源 ACL** | 照旧同形 404 |
 
 1–5 不需要公钥，只能导致拒绝、不能导致放行；它们放在前面是为了不让发错地方的凭证
-触发控制面查询。成员状态先于签名：已撤销节点的有效签名也不放行。
+触发控制面查询。签名先于成员状态：先用登记公钥验签并核对全部声明，未知签发者或任何
+校验失败一律中性 `credential_invalid`（不披露成员状态、不记审计）；只有签名与声明全部
+通过后，才按成员状态返回 `node_unknown` / `node_revoked`（此时可记审计）。已撤销节点的
+有效签名仍不放行，只是在可归因的已认证路径上拒绝。
 
 ## 远端主体如何落到本地
 

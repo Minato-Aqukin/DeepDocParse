@@ -322,6 +322,23 @@ def render_generation_candidates_ts(spec: dict) -> str:
     return "\n".join(out)
 
 
+OPENAPI_DIR = CONTRACTS / "openapi"
+SCHEMAS_RESOLVED = CONTRACTS / "generated" / "schemas-resolved.json"
+
+#: generate.py --check 要对拍的 OpenAPI 文件。content/gateway/control 三平面的
+#: x-ddp-enum 必须全部对拍，discovery/federation-tasks 的既有枚举一并校验，
+#: bundle 的路径结构一并校验（它没有枚举绑定，但截断/合并曾让它的路径项
+#: 只剩 parameters 而门禁全绿），否则 walker 只扫一半，"别处手写 enum
+#: 漂了/路径项截断了"照样绿。
+OPENAPI_CHECK_FILES = (
+    "content-v1.yaml",
+    "gateway-v1.yaml",
+    "control-v1.yaml",
+    "discovery-v1.yaml",
+    "federation-tasks-v1.yaml",
+    "bundle-v1.yaml",
+)
+
 TARGETS = {
     "ts": (CONTRACTS / "generated" / "ts" / "enums.ts", render_ts),
     "go": (ROOT / "services" / "control-api" / "internal" / "contracts" / "enums.go",
@@ -330,6 +347,164 @@ TARGETS = {
     "generation_candidates_ts": (CONTRACTS / "generated" / "ts" / "generation-candidates.ts",
                                  render_generation_candidates_ts),
 }
+
+
+def _walk_openapi_enums(node, path: str, out: list[tuple[str, dict]]) -> None:
+    """收集 OpenAPI 文档里全部 x-ddp-enum 标注点（含 paths 下的内联 schema）。"""
+    if isinstance(node, list):
+        for i, item in enumerate(node):
+            _walk_openapi_enums(item, f"{path}[{i}]", out)
+        return
+    if not isinstance(node, dict):
+        return
+    if "x-ddp-enum" in node:
+        out.append((path, node))
+    for key, child in node.items():
+        _walk_openapi_enums(child, f"{path}/{key}", out)
+
+
+#: 属性名即枚举名的字段。OpenAPI 里一个叫 `degraded` 的 string 属性，
+#: 不管有没有标注，都只能装 `degraded` 枚举的取值 —— 否则生产者换个名字
+#: 写法（或漏掉标注行），约束就静默消失了。
+ENUM_NAMED_PROPERTIES = ("degraded", "compile_degraded")
+
+
+def _walk_named_enum_properties(node, path: str,
+                                out: list[tuple[str, str, dict]]) -> None:
+    """收集 `properties:` 下名字落在 ENUM_NAMED_PROPERTIES 里的属性节点。"""
+    if isinstance(node, list):
+        for i, item in enumerate(node):
+            _walk_named_enum_properties(item, f"{path}[{i}]", out)
+        return
+    if not isinstance(node, dict):
+        return
+    props = node.get("properties")
+    if isinstance(props, dict):
+        for name, schema in props.items():
+            if name in ENUM_NAMED_PROPERTIES and isinstance(schema, dict):
+                out.append((f"{path}/properties/{name}", name, schema))
+    for key, child in node.items():
+        _walk_named_enum_properties(child, f"{path}/{key}", out)
+
+
+def check_openapi_parity(spec: dict) -> list[str]:
+    """校验 openapi/*.yaml 的枚举绑定与 enums.yaml 一致。
+
+    五条规则（与 schemas/*.json 的守卫 `check_federation_contracts.py` 同构，
+    但 openapi 侧此前没有任何守卫 —— 自由文本 `description: 取值见 enums.yaml`
+    不是约束，改了枚举这边不会红）：
+
+    1. `x-ddp-enum` 必须指向 enums.yaml 里真实存在的枚举。
+    2. 带 `x-ddp-enum` 的节点必须同时手写 `enum`，且与 enums.yaml 一字不差
+       （顺序都要一致）。光有标注没有列表，OpenAPI 侧仍是 `type: string`，
+       生产者照样能打出契约外的取值 —— 标注不是约束，列表才是。
+       例外：带 `x-ddp-enum-subset` 的节点声明的是 contract_subset 子集，
+       此时手写 `enum` 必须与该子集一字不差（顺序都要一致）。
+    3. `x-ddp-enum-subset` 引用的子集必须在该枚举的 `contract_subset` 里声明，
+       且子集里的每个值都必须在该枚举的 values 里存在。
+    4. 名字落在 ENUM_NAMED_PROPERTIES 里的属性（`degraded` /
+       `compile_degraded`），必须带上同名的 `x-ddp-enum` 标注 —— 漏掉标注
+       行不能让约束静默消失。
+    5. 路径条目必须至少声明一个操作（get/post/…）：只有 `parameters` 没有
+       操作的路径项是截断/合并事故，不是合法契约。
+    """
+    errors: list[str] = []
+    methods = ("get", "post", "put", "patch", "delete", "head", "options")
+    for filename in OPENAPI_CHECK_FILES:
+        doc = contract_yaml.load(OPENAPI_DIR / filename)
+        sites: list[tuple[str, dict]] = []
+        _walk_openapi_enums(doc, filename, sites)
+        for path, node in sites:
+            name = node.get("x-ddp-enum")
+            block = spec["enums"].get(name) if isinstance(name, str) else None
+            if block is None:
+                errors.append(f"{path}: x-ddp-enum 指向不存在的枚举 {name!r}")
+                continue
+            declared = [v["value"] for v in block["values"]]
+            subset_key = node.get("x-ddp-enum-subset")
+            hand = node.get("enum")
+            if subset_key is not None:
+                subsets = block.get("contract_subset") or {}
+                if subset_key not in subsets:
+                    errors.append(f"{path}: x-ddp-enum-subset {subset_key!r} "
+                                  f"不在 enums.yaml {name}.contract_subset 里")
+                    continue
+                want = list(subsets[subset_key])
+                unknown = [v for v in want if v not in declared]
+                if unknown:
+                    errors.append(f"{path}: contract_subset {name}.{subset_key} "
+                                  f"里有未定义的值：{sorted(unknown)}")
+                    continue
+                if hand != want:
+                    errors.append(f"{path}: 手写 enum 与 enums.yaml "
+                                  f"{name}.contract_subset.{subset_key} 不一致")
+                continue
+            if node.get("x-ddp-enum-items") is True:
+                # 数组形枚举：标注落在数组节点上，手写 enum 落在 items 上
+                # （compile_degraded 那种列表形状）。数组节点自己不写 enum。
+                items = node.get("items")
+                items_hand = items.get("enum") if isinstance(items, dict) else None
+                if hand is not None or items_hand is None:
+                    errors.append(f"{path}: x-ddp-enum-items 的手写 enum 必须写在 "
+                                  f"items 下（数组节点不写 enum）")
+                elif items_hand != declared:
+                    errors.append(f"{path}/items: 手写 enum 与 enums.yaml {name} "
+                                  f"不一致，取值必须只由 enums.yaml 决定")
+                continue
+            if node.get("x-ddp-enum-nullable") is True:
+                # 可空枚举：手写 enum 是"取值 + null"（与 schemas 侧注入逻辑
+                # check_federation_contracts.walk 同构：它也是可空则追加 None）。
+                # JSON Schema 的 enum 不管 type —— 不把 null 写进列表，
+                # degraded: null 的合法响应就验不过了。
+                if hand != declared + [None]:
+                    errors.append(f"{path}: x-ddp-enum-nullable 的手写 enum 必须是 "
+                                  f"enums.yaml {name} 的取值 + null（顺序一致）")
+                continue
+            if hand is None:
+                errors.append(f"{path}: x-ddp-enum {name} 缺少手写 enum —— "
+                              f"取值必须同时落在 OpenAPI 的 enum 列表里")
+            elif hand != declared:
+                errors.append(f"{path}: 手写 enum 与 enums.yaml {name} 不一致，"
+                              f"取值必须只由 enums.yaml 决定")
+        named: list[tuple[str, str, dict]] = []
+        _walk_named_enum_properties(doc, filename, named)
+        for path, wanted, node in named:
+            if node.get("x-ddp-enum") != wanted:
+                errors.append(f"{path}: 名为 {wanted} 的属性必须带 "
+                              f"x-ddp-enum: {wanted}（连同手写 enum），"
+                              f"否则约束静默缺失")
+        for route, item in (doc.get("paths") or {}).items():
+            if not isinstance(item, dict) or not any(m in item for m in methods):
+                errors.append(f"{filename}: 路径项 {route} 没有声明任何操作 —— "
+                              f"疑似截断，请补全后再跑 --check")
+    return errors
+
+
+def check_schemas_resolved_fresh(spec: dict) -> list[str]:
+    """校验 generated/schemas-resolved.json 与当前 enums.yaml + schemas/ 一致。
+
+    复用 `scripts/check_federation_contracts.py` 的同一套注入逻辑：把
+    schemas/*.json 按 x-ddp-enum 注入后的 bundle 字节与入库文件逐字节比对。
+    不在这里另写一套注入 —— 两套注入的后果是它们先互相漂移。
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import check_federation_contracts as fed
+    fed.problems.clear()
+    enums = fed.load_enums()
+    schemas = fed.load_schemas(enums, inject=True)
+    if fed.problems:
+        return [f"schemas 解析失败：{p}" for p in list(fed.problems)]
+    want = fed.bundle_bytes(schemas)
+    if not SCHEMAS_RESOLVED.exists():
+        return [f"{SCHEMAS_RESOLVED.relative_to(ROOT)} 不存在，"
+                f"跑 python scripts/check_federation_contracts.py --write 生成"]
+    if SCHEMAS_RESOLVED.read_bytes() != want:
+        return [f"{SCHEMAS_RESOLVED.relative_to(ROOT)} 已过期，"
+                f"跑 python scripts/check_federation_contracts.py --write 重新生成"]
+    # load_enums 从 enums.yaml 现场读：上面的 inject 已经把新取值带进了比对，
+    # 这里再确认 generate.py 自己的 load() 看到的枚举与守卫看到的一致。
+    _ = spec
+    return []
 
 
 def main() -> int:
@@ -350,15 +525,32 @@ def main() -> int:
         path.write_text(content, encoding="utf-8")
         print(f"已写入 {path.relative_to(ROOT)}")
 
+    if args.check:
+        # --check 之前只看 enums 输出（ts/go/py）：openapi 手写 enum 漂了、
+        # schemas-resolved.json 过期了照样绿。拓宽到三处，默认 generate
+        # 行为不变（仍只写 TARGETS）。
+        openapi_errors = check_openapi_parity(spec)
+        bundle_errors = check_schemas_resolved_fresh(spec)
+        for err in openapi_errors + bundle_errors:
+            print(f"::error::{err}")
+        if stale:
+            for p in stale:
+                print(f"::error::{p} 与 packages/contracts/enums.yaml 不同步")
+            print("\n重跑 `npm run contracts:gen`（或 python "
+                  "packages/contracts/scripts/generate.py）", file=sys.stderr)
+        if stale or openapi_errors or bundle_errors:
+            return 1
+        total = sum(len(b["values"]) for b in spec["enums"].values())
+        print(f"契约枚举是最新的：{len(spec['enums'])} 组 / {total} 个取值；"
+              f"schemas-resolved.json 新鲜；openapi 枚举对拍通过")
+        return 0
+
     if stale:
         for p in stale:
             print(f"::error::{p} 与 packages/contracts/enums.yaml 不同步")
         print("\n重跑 `npm run contracts:gen`（或 python "
               "packages/contracts/scripts/generate.py）", file=sys.stderr)
         return 1
-    if args.check:
-        total = sum(len(b["values"]) for b in spec["enums"].values())
-        print(f"契约枚举是最新的：{len(spec['enums'])} 组 / {total} 个取值")
     return 0
 
 

@@ -119,18 +119,31 @@ def test_operation_and_request_binding_must_match_the_endpoint():
 def test_unknown_pending_and_revoked_issuers_are_distinct_refusals():
     decoded = _inspect(VECTOR["credential"])
     assert _code(lambda: nc.authenticate(decoded, trust=None,
-                                         verify_signature=ed25519_verify)) == "node_unknown"
+                                         verify_signature=ed25519_verify)) == "credential_invalid"
     assert _code(lambda: nc.authenticate(decoded, trust=_trust(state="pending"),
                                          verify_signature=ed25519_verify)) == "node_unknown"
     assert _code(lambda: nc.authenticate(decoded, trust=_trust(state="revoked"),
                                          verify_signature=ed25519_verify)) == "node_revoked"
     assert _code(lambda: nc.authenticate(
         decoded, trust=_trust(node_id="node-" + "8" * 48),
-        verify_signature=ed25519_verify)) == "node_unknown"
+        verify_signature=ed25519_verify)) == "credential_invalid"
+
+
+def test_unauthenticated_caller_learns_nothing_about_membership():
+    # 验证顺序 6–9：签名验不过时，revoked 与 unknown 返回同一个中性码 ——
+    # 攻击者拿一张伪造凭证探"这个节点是没登记还是被撤销了"，答案永远一样。
+    attacker = Ed25519PrivateKey.from_private_bytes(b"\x09" * 32)
+    decoded = _inspect(_sign(VECTOR["claims"], attacker))
+    assert _code(lambda: nc.authenticate(decoded, trust=None,
+                                         verify_signature=ed25519_verify)) == "credential_invalid"
+    assert _code(lambda: nc.authenticate(decoded, trust=_trust(state="revoked"),
+                                         verify_signature=ed25519_verify)) == "credential_invalid"
+    assert _code(lambda: nc.authenticate(decoded, trust=_trust(state="pending"),
+                                         verify_signature=ed25519_verify)) == "credential_invalid"
 
 
 def test_revoked_issuer_is_refused_even_with_a_perfect_signature():
-    """成员状态先于签名：签名成立不能替撤销翻案。"""
+    """已撤销节点的有效签名仍不放行 —— 只是现在走已认证路径拒绝。"""
     decoded = _inspect(VECTOR["credential"])
     calls = []
 
@@ -140,8 +153,7 @@ def test_revoked_issuer_is_refused_even_with_a_perfect_signature():
 
     assert _code(lambda: nc.authenticate(decoded, trust=_trust(state="revoked"),
                                          verify_signature=verifier)) == "node_revoked"
-    assert calls == []
-
+    assert len(calls) == 1
 
 def test_trust_record_whose_key_does_not_derive_the_node_id_is_not_trusted():
     """一行被改坏的成员记录（换了公钥）不能让任意密钥冒充这个节点。"""
@@ -151,7 +163,7 @@ def test_trust_record_whose_key_does_not_derive_the_node_id_is_not_trusted():
     decoded = _inspect(forged)
     trust = _trust(public_key=base64.b64encode(raw).decode())
     assert _code(lambda: nc.authenticate(decoded, trust=trust,
-                                         verify_signature=ed25519_verify)) == "node_unknown"
+                                         verify_signature=ed25519_verify)) == "credential_invalid"
 
 
 def test_signature_from_another_key_is_invalid():

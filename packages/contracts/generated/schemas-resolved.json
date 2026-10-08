@@ -1150,6 +1150,24 @@
                   "page_size"
                 ]
               }
+            },
+            {
+              "$comment": "PDF 用既有真实坐标约定，必须带物理页序；非 PDF 不伪造页码（§4.3）。运行时另按来源 mime 判定该条证据是否 PDF。",
+              "if": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "page_block",
+                      "table_cell"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "physical_page_index"
+                ]
+              }
             }
           ],
           "description": "原文位置。",
@@ -1222,7 +1240,6 @@
           },
           "required": [
             "kind",
-            "physical_page_index",
             "seq"
           ],
           "type": "object",
@@ -1920,6 +1937,10 @@
                 "null"
               ]
             },
+            "operation": {
+              "minLength": 1,
+              "type": "string"
+            },
             "registry_revision_vector": {
               "items": {
                 "additionalProperties": false,
@@ -2016,6 +2037,7 @@
           },
           "required": [
             "authority_node_id",
+            "operation",
             "snapshot_id",
             "created_at",
             "valid_until",
@@ -2411,6 +2433,7 @@
                 "no_instruct_model",
                 "empty_query",
                 "answer_unavailable",
+                "keyword_unavailable",
                 null
               ],
               "type": [
@@ -2650,6 +2673,24 @@
                   "page_size"
                 ]
               }
+            },
+            {
+              "$comment": "PDF 用既有真实坐标约定，必须带物理页序；非 PDF 不伪造页码（§4.3）。运行时另按来源 mime 判定该条证据是否 PDF。",
+              "if": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "page_block",
+                      "table_cell"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "physical_page_index"
+                ]
+              }
             }
           ],
           "description": "原文位置。",
@@ -2722,7 +2763,6 @@
           },
           "required": [
             "kind",
-            "physical_page_index",
             "seq"
           ],
           "type": "object",
@@ -5370,6 +5410,27 @@
                 },
                 "output_schema": {
                   "type": "string"
+                },
+                "query_plan": {
+                  "additionalProperties": false,
+                  "description": "Composite-question decomposition: one ledger entry is written per (target, subquery_digest), and the coverage all-must-succeed rule then enforces per-subquery completion.",
+                  "properties": {
+                    "subqueries": {
+                      "items": {
+                        "maxLength": 2000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 8,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  },
+                  "required": [
+                    "subqueries"
+                  ],
+                  "type": "object"
                 },
                 "wiki": {
                   "additionalProperties": false,

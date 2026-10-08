@@ -122,11 +122,26 @@ def _or_tsquery(query: str) -> str:
 
 
 
+class SearchHits(list):
+    """Hit 列表 + 可见的降级标记。
+
+    关键词路失败（畸形查询等）不再静默退成纯向量：`PgVectorIndex.search` 把那条腿
+    包进 savepoint，失败时标 `degraded="keyword_unavailable"`，向量结果与外层事务
+    照常可用。取值字面量以契约 enums.yaml 为准。
+    """
+
+    degraded: str | None
+
+    def __init__(self, iterable=(), *, degraded: str | None = None):
+        super().__init__(iterable)
+        self.degraded = degraded
+
+
 class SearchIndex(Protocol):
     async def search(self, session: AsyncSession, *, vector: list[float] | None, query: str,
                      document_id: str | None, limit: int, candidates: int,
                      min_similarity: float, authorized_document_ids: list[str] | None = None,
-                     authorized_parse_job_ids: list[str] | None = None) -> list[Hit]: ...
+                     authorized_parse_job_ids: list[str] | None = None) -> SearchHits: ...
 
 
 # "and which/what/how many/how much …" coordinates questions. A bare comma starts a new
@@ -208,13 +223,16 @@ async def _search_query(
     except Exception:
         vectors = [None] * len(queries)
         degraded = "embedding_unavailable"
-    ranked = []
+    ranked: list[SearchHits] = []
     for part, vector in zip(queries, vectors, strict=True):
         ranked.append(await index.search(
             session, vector=vector, query=part, document_id=document_id,
             limit=fetch_limit, candidates=candidates * (2 if len(queries) > 1 else 1),
             min_similarity=min_similarity, authorized_document_ids=authorized_document_ids,
             authorized_parse_job_ids=authorized_parse_job_ids))
+    # 向量化失败比关键词路失败严重得多，不能被后者盖掉 —— 前者意味着整条语义路没跑。
+    if degraded is None and any(getattr(hits, "degraded", None) for hits in ranked):
+        degraded = "keyword_unavailable"
     if len(ranked) == 1:
         return ranked[0][:limit], degraded, len(ranked[0]) > limit
     best: dict[str, Hit] = {}
@@ -269,18 +287,18 @@ class PgVectorIndex:
     async def search(self, session: AsyncSession, *, vector: list[float] | None, query: str,
                      document_id: str | None, limit: int, candidates: int,
                      min_similarity: float, authorized_document_ids: list[str] | None = None,
-                     authorized_parse_job_ids: list[str] | None = None) -> list[Hit]:
+                     authorized_parse_job_ids: list[str] | None = None) -> SearchHits:
         # **不再按用户收作用域**（1b）：一次部署 = 一份语料，检索天然跨全语料。
         # 不指定 document_id 就是"在整份语料里搜"，`TRUE` 是有意写成常量的 ——
         # 让 SQL 结构与指定文档时保持一致，免得两条分支各长一个样
         scope = "c.document_id = :document_id" if document_id else "TRUE"
         if authorized_document_ids is not None:
             if not authorized_document_ids:
-                return []
+                return SearchHits()
             scope += " AND c.document_id IN :authorized_ids"
         if authorized_parse_job_ids is not None:
             if not authorized_parse_job_ids:
-                return []
+                return SearchHits()
             scope += " AND c.parse_job_id IN :authorized_job_ids"
         params = {"document_id": document_id,
                   "qvec": str(list(vector)) if vector else None,
@@ -361,31 +379,38 @@ class PgVectorIndex:
             for cid, dist in (await session.execute(vec_sql, params)).all():
                 vec_ids.append(cid)
                 similarity[cid] = 1.0 - float(dist)      # <=> 是余弦距离
+        # 关键词路失败（畸形查询等）不拖垮整个检索：savepoint 只回滚这一条腿，
+        # 向量结果与外层事务照常可用，但降级必须可见（调用方透出 keyword_unavailable）。
+        # 这里绝不能 `session.rollback()` —— 那会连外层事务一起杀掉。
+        degraded: str | None = None
         try:
-            kw_ids = []
-            keyword_rows = (await session.execute(kw_sql, params)).all()
-            for cid, dist, _block_type, _source_text in keyword_rows:
-                kw_ids.append(cid)
-                if dist is not None:
-                    similarity.setdefault(cid, 1.0 - float(dist))
-            code_ids = exact_code_ids(
-                [(cid, block_type, source_text) for cid, _, block_type, source_text
-                 in keyword_rows], query)
-        except Exception:       # 关键词路失败（畸形查询等）不该拖垮整个检索
-            await session.rollback()
+            async with session.begin_nested():
+                kw_ids = []
+                keyword_rows = (await session.execute(kw_sql, params)).all()
+                for cid, dist, _block_type, _source_text in keyword_rows:
+                    kw_ids.append(cid)
+                    if dist is not None:
+                        similarity.setdefault(cid, 1.0 - float(dist))
+                code_ids = exact_code_ids(
+                    [(cid, block_type, source_text) for cid, _, block_type, source_text
+                     in keyword_rows], query)
+        except Exception:
+            degraded = "keyword_unavailable"
             kw_ids = []
             code_ids = []
 
         # 标识符精确命中的 code 路按固定权重多贡献 RRF 名次，等价于
         # “精确词面比 dense/通用关键词更强”，但不把不可比较的关键词覆盖分与
-        # 余弦分数硬相加。权重 2 由同集合改造前后评测钉着。
+        # 余弦分数硬相加。权重 2 是同集合改造前后评测定下的：改大改小都会让标识符
+        # 查询的召回名次回退（见该评测的 code 路用例）。
         scores = _rrf([vec_ids, kw_ids, *([code_ids] * EXACT_CODE_WEIGHT)])
         if not scores:
-            return []
+            return SearchHits(degraded=degraded)
         # RRF 分只由名次决定，并列常见（两路都排第一恒为 0.0328）：并列保 id，
         # 否则同一输入每次刷新都可能换位置（见 citations 表 rank 列的注释）。
         top_ids = sorted(scores, key=lambda cid: (-scores[cid], cid))[:limit]
-        return await _load_hits(session, top_ids, scores, similarity)
+        return SearchHits(await _load_hits(session, top_ids, scores, similarity),
+                          degraded=degraded)
 
 
 async def _load_hits(session: AsyncSession, chunk_ids: list[str], scores: dict[str, float],
@@ -438,7 +463,7 @@ class MemoryIndex:
     async def search(self, session: AsyncSession, *, vector: list[float] | None, query: str,
                      document_id: str | None, limit: int, candidates: int,
                      min_similarity: float, authorized_document_ids: list[str] | None = None,
-                     authorized_parse_job_ids: list[str] | None = None) -> list[Hit]:
+                     authorized_parse_job_ids: list[str] | None = None) -> SearchHits:
         from sqlalchemy import select
 
         from ddp_core.models import Chunk, Document
@@ -463,8 +488,10 @@ class MemoryIndex:
             scored_vec = [(c.id, _cosine(vector, c.embedding)) for c, _ in rows if c.embedding]
             similarity = dict(scored_vec)
             similar_enough = {cid: s > min_similarity for cid, s in scored_vec}
+            # 与 PG 的 `ORDER BY 距离, c.id ASC` 对齐：相似度并列时按 id 取候选，
+            # 否则同一输入每次候选集都可能不同（PG 侧已按 id 次序）。
             vec_ids = [cid for cid, s in
-                       sorted(scored_vec, key=lambda p: p[1], reverse=True)[:candidates]
+                       sorted(scored_vec, key=lambda p: (-p[1], p[0]))[:candidates]
                        if s > min_similarity]
 
         # 与 PG 共用 tokenizer，按授权块的查询词覆盖度计分，而非反复出现的词频。
@@ -485,9 +512,9 @@ class MemoryIndex:
             [(cid, by_id[cid].block_type, by_id[cid].text) for cid in kw_ids], query)
         scores = _rrf([vec_ids, kw_ids, *([code_ids] * EXACT_CODE_WEIGHT)])
         if not scores:
-            return []
+            return SearchHits()
         top_ids = sorted(scores, key=lambda cid: (-scores[cid], cid))[:limit]
-        return [Hit(chunk_id=cid, document_id=by_id[cid].document_id,
+        return SearchHits([Hit(chunk_id=cid, document_id=by_id[cid].document_id,
                     parse_job_id=by_id[cid].parse_job_id, seq=by_id[cid].seq,
                     page_idx=by_id[cid].page_idx, bbox=by_id[cid].bbox,
                     page_size=by_id[cid].page_size, text=by_id[cid].text,
@@ -499,7 +526,7 @@ class MemoryIndex:
                     table_html=getattr(by_id[cid], "table_html", None),
                     score=round(scores[cid], 6),
                     similarity=_round_or_none(similarity.get(cid)))
-                for cid in top_ids if cid in by_id]
+                for cid in top_ids if cid in by_id])
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

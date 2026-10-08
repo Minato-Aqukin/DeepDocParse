@@ -278,28 +278,32 @@ def authenticate(decoded: Decoded, *, trust, verify_signature: SignatureVerifier
     """用本节点控制面给的信任记录认证签发节点与签名。
 
     `trust` 是 `PeerTrust` 形状的 dict，或 None（控制面说没登记）。
-    **成员状态先于签名**：已撤销节点的有效签名也不放行。**公钥派生复核**：
-    记录里的 node_id 必须由记录里的公钥派生而来 —— 否则一行被改坏的成员
-    记录就能让任意公钥冒充这个节点。
+    **签名与声明先于成员状态**（契约 node-credential-format.md 的验证顺序
+    6–9）：未验证的调用方一律中性 `credential_invalid` —— 不披露它是没登记、
+    待批准还是已撤销，也不记审计。只有签名与声明全部通过后，才按成员状态
+    返回 `node_unknown` / `node_revoked`。已撤销节点的有效签名仍不放行，
+    只是在可归因的已认证路径上拒绝。**公钥派生复核**：记录里的 node_id
+    必须由记录里的公钥派生而来 —— 否则一行被改坏的成员记录就能让任意公钥
+    冒充这个节点。
     """
     claims = decoded.claims
     issuer = claims["issuer_node_id"]
     if trust is None or not isinstance(trust, dict) or trust.get("node_id") != issuer:
-        raise ApplicationError("node_unknown", "issuer node is not a registered member")
+        raise _invalid("issuer node is not verifiable with this trust record")
+    try:
+        derived = node_id_for_public_key(trust.get("public_key"))
+    except ApplicationError:
+        raise _invalid("issuer trust record has no usable key") from None
+    if derived != issuer:
+        raise _invalid("issuer trust record key does not derive its id")
+    if not verify_signature(public_key_bytes(trust["public_key"]),
+                            DOMAIN + decoded.payload, decoded.signature):
+        raise _invalid("credential signature does not verify")
     state = trust.get("state")
     if state == "revoked":
         raise ApplicationError("node_revoked", "issuer node has been revoked")
     if state != "approved":
         raise ApplicationError("node_unknown", "issuer node is not approved")
-    try:
-        derived = node_id_for_public_key(trust.get("public_key"))
-    except ApplicationError:
-        raise ApplicationError("node_unknown", "issuer trust record has no usable key") from None
-    if derived != issuer:
-        raise ApplicationError("node_unknown", "issuer trust record key does not derive its id")
-    if not verify_signature(public_key_bytes(trust["public_key"]),
-                            DOMAIN + decoded.payload, decoded.signature):
-        raise _invalid("credential signature does not verify")
     return claims
 
 

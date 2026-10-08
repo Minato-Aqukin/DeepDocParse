@@ -40,9 +40,11 @@ resource_id,source_version_id,source_digest,origin_node_id,authority_node_id,
 policy_revision,valid_until,revoked_at,availability}]}`，availability 的封闭集合为
 `bundle_replica_availability`（enums.yaml）：`licensed_copy` 表示仍有效的许可离线副本，
 `unavailable` 表示已撤销或已到期；不表示来源节点在线。
-`GET .../bundle/licensed-source` 原件响应携带 `X-DDP-Source-Digest`、
-`X-DDP-Source-Availability: offline_snapshot`，有期限时另携带
-`X-DDP-Source-Licence-Valid-Until`。撤销端点为
+`GET .../bundle/licensed-source` 返回 302 到短期直读 URL（`Location`，字节不经过
+应用进程），响应头携带 `X-DDP-Source-Digest`、
+`X-DDP-Source-Availability: offline_snapshot`（`Cache-Control: private, no-store`），
+有期限时另携带 `X-DDP-Source-Licence-Valid-Until`（URL 寿命截到许可期限为止）。
+撤销端点为
 `POST .../bundle/replicas/{replica_id}/revoke`，空正文且必须 Idempotency-Key；
 同键同副本重放幂等，冲突 409，非空正文 400。
 

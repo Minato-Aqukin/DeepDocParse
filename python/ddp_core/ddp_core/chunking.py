@@ -95,10 +95,35 @@ _FURNITURE_MIN_PAGES = 3
 _FURNITURE_MAX_CHARS = 120
 
 
+def _valid_box(box: object) -> bool:
+    """bbox 形状守卫：必须是 4 个全数值的坐标。
+
+    版面是外部输入（mineru / vlm-ocr / 老归档），缺位、截断、字符串混入都见过。
+    不满足就返回 False，调用方按“没坐标”处理 —— 出处可以没有框，
+    但不能在这里 IndexError/TypeError 炸掉整篇分块。
+    """
+    return (
+        isinstance(box, (list, tuple))
+        and len(box) == 4
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool) and v == v for v in box)
+    )
+
+
+def _valid_size(size: object) -> bool:
+    """page_size 形状守卫：[w, h] 全数值且都 > 0（h == 0 会除零，0 宽同样无意义）。"""
+    return (
+        isinstance(size, (list, tuple))
+        and len(size) == 2
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool) and v == v for v in size)
+        and size[0] > 0
+        and size[1] > 0
+    )
+
+
 def _furniture_key(block: dict, page: dict) -> tuple[str, str] | None:
     box, size = block.get("bbox"), page.get("page_size")
     text = _block_text(block)
-    if not box or not size or not size[1] or not text or len(text) > _FURNITURE_MAX_CHARS:
+    if not _valid_box(box) or not _valid_size(size) or not text or len(text) > _FURNITURE_MAX_CHARS:
         return None
     centre = (box[1] + box[3]) / 2 / size[1]
     band = "top" if centre < _FURNITURE_BAND else "bottom" if centre > 1 - _FURNITURE_BAND else None
@@ -118,7 +143,7 @@ def _running_furniture(pages: list[dict]) -> set[tuple[str, str]]:
 
 def _line_height(block: dict) -> float:
     box = block.get("bbox")
-    if not box:
+    if not _valid_box(box):
         return 0.0
     return max(box[3] - box[1], 0.0) / max(len(block.get("lines") or []), 1)
 
@@ -128,8 +153,8 @@ def _adjacent(prev: dict, block: dict) -> bool:
     a, b = prev.get("bbox"), block.get("bbox")
     if not a and not b:
         return True        # 都没坐标：无从判断，维持按字数合并
-    if not a or not b:
-        return False       # 有坐标与没坐标不混
+    if not _valid_box(a) or not _valid_box(b):
+        return False       # 有坐标与没坐标（或畸形坐标）不混
     unit = max(_line_height(prev), _line_height(block), 1.0)
     gap = b[1] - a[3]
     if gap > _MAX_GAP_LINES * unit or gap < -0.5 * unit:
@@ -143,6 +168,8 @@ def _split_oversized(text: str, max_chars: int) -> list[str]:
     优先在句读/空白处断；断点太靠前（会切出一堆碎片）就退回硬切。
     切出来的每段都 <= max_chars，因此后续合并逻辑无需再关心超限块。
     """
+    if type(max_chars) is not int or max_chars < 1:
+        raise ValueError(f"max_chars 必须是不小于 1 的整数（收到 {max_chars!r}）")
     if len(text) <= max_chars:
         return [text]
 
@@ -161,9 +188,9 @@ def _split_oversized(text: str, max_chars: int) -> list[str]:
 
 
 def _union_bbox(a: list | None, b: list | None) -> list | None:
-    if not a:
-        return b
-    if not b:
+    if not _valid_box(a):
+        return b if _valid_box(b) else None
+    if not _valid_box(b):
         return a
     return [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
 
@@ -171,6 +198,8 @@ def _union_bbox(a: list | None, b: list | None) -> list | None:
 def layout_to_chunks(layout_json: dict[str, Any], max_chars: int = 800) -> list[dict]:
     """返回 [{seq, text, page_idx, bbox, page_size, char_len, block_type,
               table_html, text_tokenized}]，seq 为全文档顺序。"""
+    if type(max_chars) is not int or max_chars < 1:
+        raise ValueError(f"max_chars 必须是不小于 1 的整数（收到 {max_chars!r}）")
     chunks: list[dict] = []
 
     pages = layout_json.get("pdf_info") or []

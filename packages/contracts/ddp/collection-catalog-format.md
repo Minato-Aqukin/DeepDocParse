@@ -72,9 +72,12 @@ page, with next_cursor=null; an empty catalog still has that terminal proof. New
 do not enter old snapshots. Every page rechecks every frozen collection's current publication,
 revision, all source permissions and index fingerprint. Source withdrawal and collection revocation return 410 `catalog_snapshot_invalid`; only
 a matching unexpired snapshot caller receives `revoked_collection_ids`, restricted to
-identities already in that snapshot. Wrong scope/caller/cursor returns the generic 410
-without identities. Expiry returns 410 `catalog_snapshot_expired`; changed index or metadata
-revision returns 409 `catalog_snapshot_changed`. None silently replaces a page or its scope.
+identities already in that snapshot, and that bound 410 also repeats the snapshot's own
+`snapshot_id`, `scope_id`, `caller_scope_hash` and `origin_node_id` so the reader can verify
+which snapshot was revoked before trusting the identities. Wrong scope/caller/cursor returns
+the generic 410 without identities or binding. Expiry returns 410 `catalog_snapshot_expired`;
+changed index or metadata revision returns 409 `catalog_snapshot_changed`. None silently
+replaces a page or its scope.
 Snapshots are bounded to 10,000 collections, 8 MiB of authorized descriptors and 32 live
 snapshots per caller binding. Exceeding a bound fails explicitly, never truncates to complete.
 
