@@ -4,7 +4,7 @@
 
     X-DDP-Organization   组织 ID
     X-DDP-Actor          user id 或 api key id
-    X-DDP-Actor-Kind     user | api_key | service
+    X-DDP-Actor-Kind     user | api_key | service | guest（peer 只在节点凭据面内部构造）
     X-DDP-Role           该 actor 在该组织内的角色
     X-DDP-Api-Key        api_key 时的 key id（可选）
     X-Request-Id         请求 ID
@@ -31,7 +31,7 @@ from dataclasses import dataclass
 
 from fastapi import Depends, Header, Request
 
-from ddp_contracts import ROLE_VALUES
+from ddp_contracts import ACTOR_KIND_VALUES, ROLE_VALUES
 from ddp_corpus.config import settings
 from ddp_corpus.errors import APIError
 
@@ -151,10 +151,13 @@ async def current_actor(
     if x_ddp_role not in _ROLE_RANK:
         raise APIError(403, f"未知角色 {x_ddp_role}（已知：{list(_ROLE_RANK)}）",
                        "permission_error", "unknown_role")
-    if x_ddp_actor_kind not in ("user", "api_key", "service"):
+    if x_ddp_actor_kind not in ACTOR_KIND_VALUES or x_ddp_actor_kind == "peer":
         raise APIError(401, f"未知的 actor 类型 {x_ddp_actor_kind}",
                        "authentication_error", "unknown_actor_kind")
-
+    if x_ddp_actor_kind == "guest" and request.method not in ("GET", "HEAD"):
+        # 游客只读：网关 allowlist 之外的方法在这里兜底挡住，写操作一律 403。
+        raise APIError(403, "游客模式只允许读取已发布内容",
+                       "permission_error", "guest_read_only")
     return Actor(
         id=x_ddp_actor,
         kind=x_ddp_actor_kind,

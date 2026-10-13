@@ -65,6 +65,22 @@ model-gateway 不签对象 URL，没有对应公共 TLS 开关。
 `infra/autodl/stack.bash` 的 nginx 已配置这些边界；不要把 corpus-api 另行暴露
 到公网。
 
+## 游客模式（GUEST_MODE=read）
+
+`GUEST_MODE=read` 允许未登录访客经入口白名单只读浏览本站已发布内容
+（资源、文档、检索、证据、版本化 Wiki 的 GET；白名单与门控规则见
+control-v1.yaml「游客模式」一节）。**打开它等于把组织全部已发布内容
+（`publication = published` 的"本站公开"集合）向互联网公开** ——
+发布出去的东西默认就是给游客看的，没有第二道可见性开关。
+缺省 `off`：未登录一律 401。
+
+游客按客户端 IP 限速（`GUEST_RATE_PER_MIN` 缺省 300 次/分钟，
+检索另有 `GUEST_SEARCH_RATE_PER_MIN` 缺省 30 次/分钟），IP 取自
+`X-Forwarded-For` 还是直连地址由 `TRUSTED_PROXIES` 决定。
+**反向代理或隧道后面必须正确设置 `TRUSTED_PROXIES`**：不认代理时所有
+访客挤在代理的出口 IP 上共用一份配额（一个人刷、所有人被限）；
+认错了（把公网写进信任集）则访客可以按请求伪造 IP，限速形同虚设。
+
 ## 中心间联邦
 
 每个中心只需要同一个 HTTPS 统一入口，无需额外的 TLS facade。入口精确转发

@@ -34,6 +34,11 @@ export async function authGuard(to: RouteLocationNormalized) {
     }
   }
   if (!to.meta.public && !auth.isAuthenticated) {
+    // 未登录：游客模式开着且目标路由标了 `meta.guest` 就放行，
+    // 否则回登录页（带 redirect，登录后回来）。`/api/auth/me` 不许为游客调 ——
+    // 上面的 fetchProfile 只在有 token 时跑。
+    const enabled = await auth.loadGuestMode()
+    if (enabled && to.meta.guest) return true
     return { name: 'login', query: { redirect: to.fullPath } }
   }
   if (to.name === 'login' && auth.isAuthenticated) return { name: 'documents' }

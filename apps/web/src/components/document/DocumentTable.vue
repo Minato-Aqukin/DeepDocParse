@@ -20,8 +20,10 @@ withDefaults(
     items: DocumentInfo[]
     loading?: boolean
     selectable?: boolean
+    /** 游客：只剩打开与下载，重解析/重建索引/删除三项不画（调用方可能仍复用 emit 名）。 */
+    guest?: boolean
   }>(),
-  { selectable: false },
+  { selectable: false, guest: false },
 )
 
 const emit = defineEmits<{
@@ -123,7 +125,10 @@ function onCommand(command: string, doc: DocumentInfo) {
                 </template>
                 <el-dropdown-item command="dl:source">下载原件</el-dropdown-item>
                 <el-dropdown-item v-if="onReadOnlySource" divided disabled>{{ approvedPlanLabel() }}</el-dropdown-item>
-                <template v-else>
+                <!-- 游客只读：重解析/重建索引/删除不画。注意"换参数重解析"对登录用户是
+                     进 VersionsView 只读页的入口之一，但游客从打开→工作台→解析版本
+                     同样能到，不缺路。 -->
+                <template v-else-if="!guest">
                   <template v-if="!onLocalSource">
                     <el-dropdown-item command="reparse" divided>换参数重解析</el-dropdown-item>
                     <el-dropdown-item command="reindex" :disabled="row.status !== 'succeeded'">

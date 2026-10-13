@@ -693,6 +693,11 @@ async def source_url(document_id: str, request: Request,
     （control-api 的 `/api/documents/{id}/download-url`），两者刻意分开。
     """
     document = await _visible(document_id, session, actor)
+    if actor.kind == "guest":
+        # 游客没有用户身份，control 侧签不出 subject 凭证；浏览器的短期下载地址
+        # 走 control-api 的 `/api/documents/{id}/download-url`（直接预签）。
+        raise APIError(403, "游客模式不签发稳定文件地址",
+                       "permission_error", "guest_read_only")
     object_key = await document_source_key(session, actor, document, storage)
     if not object_key:
         raise APIError(404, "no active file link for this document", "invalid_request_error",

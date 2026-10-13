@@ -43,8 +43,12 @@ export function expireRejectedSession(authorization: unknown): void {
     goDesktopSources('source_signed_out')
     return
   }
+  // 游客（请求没带 token）：本来就没会话可清，也别弹 toast、别跳登录 ——
+  // 游客页面的只读请求不该 401，偶发的一次由调用方的行内错误说明，
+  // 跳登录只会打断浏览还可能和守卫互相踢。
+  if (!auth.token || !authorization) return
   // An old request must not invalidate a newer login.
-  if (!auth.token || authorization !== `Bearer ${auth.token}`) return
+  if (authorization !== `Bearer ${auth.token}`) return
   auth.logout()
   if (location.hash !== '#/login') location.hash = '#/login'
 }

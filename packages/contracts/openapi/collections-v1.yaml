@@ -18,6 +18,8 @@ paths:
     parameters: [{$ref: '#/components/parameters/CollectionId'}]
     get:
       operationId: readExplicitCollection
+      security: [{session: []}, {userKey: []}, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       responses:
         '200': {description: Current authorized metadata and fixed version_ids; source ACL rechecked}
         '404': {description: Collection or source is not readable}

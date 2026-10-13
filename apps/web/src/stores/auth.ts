@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 
 import { TOKEN_KEY, authApi } from '@/api'
 import { bootSource, getActiveSource, isDesktop } from '@/platform/desktop'
-import type { Profile } from '@/types/api'
+import type { GuestMode, Profile } from '@/types/api'
 import { ROLE_VALUES, type Role } from '@deepdocparse/contracts'
 
 const NAME_KEY = 'ddp.username'
@@ -13,6 +13,12 @@ export const useAuthStore = defineStore('auth', () => {
   const username = ref<string>(localStorage.getItem(NAME_KEY) || '')
   const profile = ref<Profile | null>(null)
   const profileError = ref<'unavailable' | null>(null)
+  // 游客模式开关：部署级（`GET /api/auth/guest`）。只在浏览器（web）问一次，
+  // 桌面（Electron）永远 false。网络失败按 false 处理 —— 回落到登录页，
+  // 绝不因为"问不到开关"就放行。
+  const guestEnabled = ref(false)
+  const guestLoaded = ref(false)
+  let guestFlight: Promise<boolean> | null = null
 
   // 桌面：已认证 = 当前源可用（profile 照常经代理从 /api/auth/me 拿）。
   // 浏览器：有 token（原有行为，不变）。
@@ -21,6 +27,13 @@ export const useAuthStore = defineStore('auth', () => {
     if (isDesktop()) return (getActiveSource() ?? bootSource.value)?.state === 'ready'
     return Boolean(token.value)
   })
+
+  /**
+   * 访客：没登录但浏览器部署开了游客模式。role 保持 null，
+   * 所以下面的**全部**能力 getter 对游客都是 false，
+   * 不需要逐个加 `&& !isGuest`。
+   */
+  const isGuest = computed(() => !isAuthenticated.value && guestEnabled.value)
 
   /**
    * 只读（中心源）。读启动时的当前源：切换即整页重载，启动后它不变。
@@ -53,6 +66,35 @@ export const useAuthStore = defineStore('auth', () => {
   const canUpload = computed(() => !readOnly.value && atLeast('contributor'))
   const canReview = computed(() => atLeast('reviewer'))
   const canManageOrg = computed(() => atLeast('admin'))
+
+  /**
+   * 问一次游客模式开关。幂等：并发或重复调用只发一个请求，
+   * 问过的不再问（开关于启动后不变，`GUEST_MODE` 是环境变量）。
+   * 桌面直接 false，不发请求。
+   */
+  async function loadGuestMode(): Promise<boolean> {
+    if (isDesktop()) {
+      guestEnabled.value = false
+      guestLoaded.value = true
+      return false
+    }
+    if (guestLoaded.value) return guestEnabled.value
+    if (guestFlight) return guestFlight
+    guestFlight = (async () => {
+      try {
+        const { data } = await authApi.guest()
+        guestEnabled.value = (data as GuestMode).enabled === true
+      } catch {
+        // 问不到开关 = 按关处理（回落登录），不弹 toast（api 层已 suppress）。
+        guestEnabled.value = false
+      } finally {
+        guestLoaded.value = true
+        guestFlight = null
+      }
+      return guestEnabled.value
+    })()
+    return guestFlight
+  }
 
   function persist(t: string, name: string) {
     token.value = t
@@ -127,7 +169,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    token, username, profile, profileError, role, isAuthenticated, readOnly,
+    token, username, profile, profileError, role, isAuthenticated, isGuest,
+    guestEnabled, loadGuestMode, readOnly,
     canUpload, canReview, canManageOrg, atLeast,
     login, register, fetchProfile, logout, markSourceSignedOut,
   }

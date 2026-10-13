@@ -173,6 +173,12 @@ services:
       # 它在容器里，解析不了 127.0.0.1
       INTERNAL_BASE_URL: http://control-api:8080
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      # 游客模式：off 缺省（未登录一律 401）；read 允许未登录访客经白名单
+      # 只读浏览本站已发布内容。打开它等于把已发布内容向公网开放 —— 开之前
+      # 先读 docs/DEPLOY.md「游客模式」一节。
+      GUEST_MODE: ${GUEST_MODE:-off}
+      GUEST_RATE_PER_MIN: ${GUEST_RATE_PER_MIN:-300}
+      GUEST_SEARCH_RATE_PER_MIN: ${GUEST_SEARCH_RATE_PER_MIN:-30}
       FEDERATION_PEERS: ${FEDERATION_PEERS:-}
       FEDERATION_ALLOW_LOOPBACK: ${FEDERATION_ALLOW_LOOPBACK:-false}
     volumes: [control_identity:/var/lib/ddp/node-identity]

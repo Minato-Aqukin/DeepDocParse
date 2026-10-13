@@ -33,7 +33,12 @@ const menus = computed(() =>
     items: router
       .getRoutes()
       .filter((r) => r.meta?.nav && r.meta?.group === (group.key as NavGroup))
-      .filter((r) => !missingFeatures(r.meta?.features as string[] | undefined, features.value).length)
+      // 游客只看到访客路由（`meta.guest`），点的每个都在守卫放行集里 ——
+      // 未标的进了也只会被守卫踢去登录，不如一开始就不给。
+      .filter((r) => desktop || !auth.isGuest || r.meta?.guest)
+      // 内容能力只在桌面有意义（当前源声明它能提供什么）；浏览器没有"源"，features 恒为空，
+      // 不加 desktop 判断的话资源库/文档库/检索/Wiki 这些带 features 的菜单在 Web 上全部消失。
+      .filter((r) => !desktop || !missingFeatures(r.meta?.features as string[] | undefined, features.value).length)
       .map((r) => ({ path: r.path, title: r.meta.title as string, icon: r.meta.icon as string })),
   })).filter((group) => group.items.length),
 )
@@ -91,6 +96,11 @@ function logout() {
   if (desktop) router.push({ name: 'sources' })
   else router.push({ name: 'login' })
 }
+
+/** 游客点登录：带上当前位置，登完回来继续看本站公开。 */
+function guestLogin() {
+  router.push({ name: 'login', query: { redirect: route.fullPath } })
+}
 </script>
 
 <template>
@@ -131,7 +141,15 @@ function logout() {
             <el-icon><component :is="isDark ? 'Sunny' : 'Moon'" /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-dropdown v-if="!desktop">
+        <!-- 游客：没有用户菜单（无账号可设、无会话可退），只有身份标识和登录入口。 -->
+        <template v-if="!desktop && auth.isGuest">
+          <span class="guest-badge" role="status">
+            <el-icon><component is="User" /></el-icon>
+            游客
+          </span>
+          <el-button size="small" @click="guestLogin">登录</el-button>
+        </template>
+        <el-dropdown v-else-if="!desktop">
           <span class="user">
             <el-icon><component is="User" /></el-icon>
             {{ auth.username || '未登录' }}
@@ -156,7 +174,6 @@ function logout() {
           </template>
         </el-dropdown>
       </el-header>
-
       <el-main class="main">
         <el-alert v-if="auth.profileError" type="error" :closable="false"
                   title="账号信息暂时不可用，写操作已禁用。请刷新页面重试。" />
@@ -266,6 +283,19 @@ function logout() {
   gap: 6px;
   cursor: pointer;
   color: var(--el-text-color-regular);
+}
+/* 游客身份标识：墨色浅底的纯文本徽标。不用彩色药丸（黑名单），
+   不用红（准则一：红只留给出处与出错）。 */
+.guest-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--ddp-accent-soft);
+  color: var(--ddp-ink-2);
+  font-size: 13px;
+  white-space: nowrap;
 }
 .egress {
   font-size: 12px;

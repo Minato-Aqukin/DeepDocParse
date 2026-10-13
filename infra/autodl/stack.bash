@@ -5,6 +5,7 @@
 #   bash infra/autodl/stack.bash migrate    # 两套迁移 + 授权
 #   bash infra/autodl/stack.bash start      # 起全部进程（幂等）
 #   bash infra/autodl/stack.bash tunnel     # 接 Cloudflare Tunnel（令牌见函数说明）
+#   bash infra/autodl/stack.bash up         # 开机一条命令：模型线（MODEL_LINE=1 时）+ start + tunnel
 #   bash infra/autodl/stack.bash doctor     # 体检，别跳过
 #   bash infra/autodl/stack.bash stop|status|logs <名字>
 #
@@ -27,8 +28,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="${SRC:-$(cd "$HERE/../.." && pwd)}"          # monorepo 根
 
 # ---------------------------------------------------------------- 配置面
-# 装到哪。AutoDL 系统盘小，有数据盘就用数据盘（建实例时 --disk 扩容）
-DDP_ROOT="${DDP_ROOT:-$( [ -d /root/autodl-tmp ] && echo /root/autodl-tmp || echo /root )/ddp}"
+# 装到哪（DDP_ROOT）与这台机器自己的取值（$DDP_ROOT/deploy.env）由 root.bash 决定：
+# 一律落系统盘，因为 AutoDL 存镜像只打包系统盘。
+# shellcheck source=root.bash
+source "$HERE/root.bash"
 VENV="${VENV:-$DDP_ROOT/appvenv}"                 # **与模型线的 venv 分开**：
                                                   # 那边装 torch/vLLM，两者互不相干
 LOG_DIR="${LOG_DIR:-$DDP_ROOT/logs}"
@@ -73,6 +76,9 @@ REGISTRATION_MODE="${REGISTRATION_MODE:-open}"
 # 点名仍是更稳的选择：default 指向一漂移（注册表改了一行）问答就悄悄换了模型，
 # 而这里写死名字至少"改了就是改了"，对得上。
 CHAT_MODEL="${CHAT_MODEL:-}"
+# **游客模式**：off | read。read = 未登录访客可浏览、检索本组织**已发布**的内容
+# （发布即对公网公开），一律只读、按客户端 IP 限速。缺省关，公网站点在 deploy.env 里显式打开。
+GUEST_MODE="${GUEST_MODE:-off}"
 OBJECT_BUCKET="${OBJECT_BUCKET:-deepdocparse}"
 
 CONDA_BIN="${CONDA_BIN:-/root/miniconda3/bin/conda}"   # 镜像自带，channel 指向 TUNA
@@ -310,10 +316,12 @@ do_migrate() {
 
   # 迁移用**属主身份**跑：建表要 DDL 权限，而长跑的服务恰恰不该有。
   # ALLOW_INSECURE_DEFAULTS：一次性动作，不需要真凭据（与 compose 同款逃生口）
+  # `export` 与命令之间必须断开：写成 `export A=1 B=2 sh ./migrate.sh` 的话，
+  # export 把 `sh`、`./migrate.sh` 当成变量名，迁移一步都没跑（只报 not a valid identifier）。
   ( cd "$SRC/database/corpus" \
     && export DATABASE_URL="postgresql+asyncpg://ddp:$POSTGRES_PASSWORD@127.0.0.1:$PG_PORT/deepdocparse" \
            ALLOW_INSECURE_DEFAULTS=true PATH="$VENV/bin:$PATH" \
-       sh ./migrate.sh ) > "$LOG_DIR/corpus-migrate.log" 2>&1 \
+    && sh ./migrate.sh ) > "$LOG_DIR/corpus-migrate.log" 2>&1 \
     && pass "corpus 迁移 + 授权（$(grep -c 'Running upgrade' "$LOG_DIR/corpus-migrate.log") 步）" \
     || fail "corpus 迁移失败（看 $LOG_DIR/corpus-migrate.log）"
   return $FAILS
@@ -448,7 +456,8 @@ do_start() {
              PUBLIC_BASE_URL="$PUBLIC_BASE" \
              INTERNAL_BASE_URL="http://127.0.0.1:$CONTROL_PORT" \
              CORS_ORIGINS="$PUBLIC_BASE" \
-             REGISTRATION_MODE="$REGISTRATION_MODE"
+             REGISTRATION_MODE="$REGISTRATION_MODE" \
+             GUEST_MODE="$GUEST_MODE"
       start_bg control-api "$RUN_DIR" "$BIN_DIR/control-api" )
   fi
   wait_http "http://127.0.0.1:$CONTROL_PORT/healthz" 60 \
@@ -584,6 +593,15 @@ do_status() {
     && printf '%-20s \033[32m在跑\033[0m\n' redis || printf '%-20s \033[31m没了\033[0m\n' redis
   su postgres -c "psql -p $PG_PORT -tAc 'SELECT 1'" >/dev/null 2>&1 \
     && printf '%-20s \033[32m在跑\033[0m\n' postgres || printf '%-20s \033[31m没了\033[0m\n' postgres
+  alive "[c]loudflared tunnel" && printf '%-20s \033[32m在跑\033[0m\n' cloudflared \
+    || printf '%-20s \033[33m没起\033[0m\n' cloudflared
+  [ "${MODEL_LINE:-0}" = 1 ] || return 0
+  ( source "$HERE/env.bash"
+    for kv in "ocr-vllm:$VLLM_PORT" "chat-vllm:$CHAT_PORT" "embed:$EMBED_PORT"; do
+      curl -fsS --max-time 3 --noproxy '*' "http://127.0.0.1:${kv#*:}/health" >/dev/null 2>&1 \
+        && printf '%-20s \033[32m健康\033[0m\n' "${kv%%:*}" \
+        || printf '%-20s \033[31m不健康\033[0m\n' "${kv%%:*}"
+    done )
 }
 
 # ================================================================ doctor
@@ -696,14 +714,63 @@ do_tunnel() {
   return $FAILS
 }
 
+# ================================================================ up
+# **开机一条命令。** 没有 systemd、AutoDL 也不替你拉进程：关机再开、或从镜像开出新实例，
+# 进程一个都不在。这里按依赖顺序全部拉回来，每一步都先看"是不是已经在跑"，可以重复执行。
+#
+# 模型线（OCR-2 + 指令模型 + bge-m3，要 GPU）起不起由 MODEL_LINE 决定（写在 deploy.env）。
+# 它排在应用面前面：网关的 /readyz 是 all(up)，注册表里写了的模型没起，探针恒 503。
+# vLLM 从进程起来到真正可服务要几分钟，所以最后会等它们的 /health（MODEL_WAIT_SECONDS）。
+models_up() {
+  ( source "$HERE/env.bash"
+    mkdir -p "$LOG_DIR"
+    healthy() { curl -fsS --max-time 3 --noproxy '*' "http://127.0.0.1:$1/health" >/dev/null 2>&1; }
+    launch() {  # launch <名字> <端口> <脚本>
+      if healthy "$2"; then pass "$1 已在跑（:$2）"; return 0; fi
+      # vLLM 进程在、/health 还没通 = 正在加载，别再起第二份（ocr.bash/chat.bash 不判重）
+      if [ "$1" != embed ] && alive "vllm serve .*--port $2"; then info "$1 正在加载（:$2）"; return 0; fi
+      if [ "$1" = embed ] && alive "embed_shim:app"; then info "$1 正在加载（:$2）"; return 0; fi
+      bash "$HERE/$3" --daemon >>"$LOG_DIR/up.log" 2>&1 \
+        && info "$1 已拉起（:$2，日志在 $LOG_DIR）" || fail "$1 拉不起来（看 $LOG_DIR/up.log）"
+    }
+    # 顺序是硬约束：chat.bash 自己会等 OCR 的 /health 通再起（共卡显存，见 env.bash）
+    launch ocr-vllm "$VLLM_PORT" ocr.bash
+    [ "$ENABLE_CHAT" = 1 ] && launch chat-vllm "$CHAT_PORT" chat.bash
+    launch embed "$EMBED_PORT" embed.bash
+    local ports=("$VLLM_PORT" "$EMBED_PORT") waited=0 limit="${MODEL_WAIT_SECONDS:-900}" p
+    [ "$ENABLE_CHAT" = 1 ] && ports+=("$CHAT_PORT")
+    for p in "${ports[@]}"; do
+      while ! healthy "$p" && [ "$waited" -lt "$limit" ]; do sleep 5; waited=$((waited + 5)); done
+      healthy "$p" && pass "模型端口 :$p 健康" || fail "模型端口 :$p ${limit}s 内没就绪（看 $LOG_DIR）"
+    done
+    exit "$FAILS" )
+}
+
+do_up() {
+  if [ "${MODEL_LINE:-0}" = 1 ]; then
+    section "0. 模型线"
+    models_up || FAILS=$((FAILS + $?))
+  fi
+  do_start
+  if [ -f "$DDP_ROOT/cloudflared.token" ]; then
+    section "4. 隧道"
+    do_tunnel
+  else
+    warn "没有 $DDP_ROOT/cloudflared.token，不接隧道（只有本机可达）"
+  fi
+  printf '\nup 完成，%s 项失败。\n' "$FAILS"
+  return $FAILS
+}
+
 case "${1:-start}" in
   install) do_install ;;
   tunnel)  do_tunnel ;;
   migrate) do_migrate ;;
   start)   do_start ;;
+  up)      do_up ;;
   stop)    do_stop ;;
   status)  do_status ;;
   doctor)  do_doctor ;;
   logs)    tail -n "${3:-200}" -f "$LOG_DIR/${2:?用法：stack.bash logs <名字>}.log" ;;
-  *) echo "用法：stack.bash {install|migrate|start|tunnel|stop|status|doctor|logs <名字>}" >&2; exit 1 ;;
+  *) echo "用法：stack.bash {install|migrate|start|up|tunnel|stop|status|doctor|logs <名字>}" >&2; exit 1 ;;
 esac

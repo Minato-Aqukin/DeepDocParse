@@ -284,6 +284,14 @@ function closeEvidence() {
 
 /** 当前中心权威身份：已有 `tasks.ts#identity`（`/api/v1/capabilities`）的握手，不另起名目。 */
 async function loadAuthority() {
+  // 游客：`/api/v1/*` 不在访客放行集里，不问。authorityNodeId 保持 null，
+  // 无 origin 的本地依赖照常打开（`resolveWikiEvidenceRef` 不看它），
+  // 有 origin 的一律按固定出处展示（`authority_unknown` 分支）。
+  if (auth.isGuest) {
+    authorityNodeId.value = null
+    identityError.value = ''
+    return
+  }
   try {
     const { data } = await tasksApi.identity()
     authorityNodeId.value = data.identity.authority_node_id
@@ -376,6 +384,9 @@ async function selectEvidence(evidence_id: string, cite = '') {
     version_id: resolved.dependency.source_version_id,
   } : undefined
   evidenceId.value = resolved.evidenceId
+  // 游客：`/api/knowledge` 不在访客放行集里，反链不查 ——
+  // 预览（`/api/evidence/*`，EvidencePreview 自己发）照常可用。
+  if (auth.isGuest) return
   try {
     const fetched = (await knowledgeApi.backlinks(resolved.evidenceId, evidenceContext.value)).data.backlinks
     // 晚到响应直接丢弃：不碰当前已选证据的任何状态。
@@ -539,7 +550,7 @@ onMounted(loadList)
       <p v-if="identityError" class="ddp-degraded" role="alert">{{ identityError }}</p>
       <EvidencePreview v-if="evidenceId" :key="evidenceId" :evidence-id="evidenceId" close-label="关闭证据"
                        :context="evidenceContext" @close="closeEvidence()" />
-      <section v-if="evidenceId" class="backlinks">
+      <section v-if="evidenceId && !auth.isGuest" class="backlinks">
         <h3>反链</h3>
         <p v-if="!backlinks.length">当前没有引用。</p>
         <article v-for="item in backlinks" :key="`${item.source_kind}:${item.revision_id ?? ''}:${item.source_id}`">

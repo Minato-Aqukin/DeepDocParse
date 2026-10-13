@@ -124,9 +124,11 @@ autodl create --gpu 4090d --disk 50 --ttl 4h --wait --name ddp-ocr2
 ```
 
 **`--disk 50` 不是可选项。** 系统盘缺省只有 30G，而 torch + vLLM 及其 CUDA 依赖约 10G、
-权重约 7G，pip 解包还要临时空间 —— 30G 会在最后一步撑爆。
-另外 `/root/autodl-tmp` 在 Pro 实例上**不是独立数据盘**（实测 `df` 里看不到独立挂载），
-指望它腾地方是没用的。
+权重约 16G（OCR-2 + Qwen3-4B + bge-m3），pip 解包还要临时空间 —— 30G 会在最后一步撑爆。
+
+**一切都装在系统盘 `/root/ddp`，不用数据盘 `/root/autodl-tmp`。** AutoDL「保存镜像」只打包
+系统盘，数据盘不进镜像：旧缺省"有数据盘就用数据盘"存出来的镜像里只剩 PostgreSQL，
+密钥、venv、权重、MinIO 数据、隧道令牌全丢，从镜像开出的实例起不来（理由与闸门见 `root.bash`）。
 
 **`--ttl` 也不是可选项。** AutoDL 按开机时长计费，与用不用 GPU 无关 ——
 一台跑完了忘记关的机器和一台满载的机器一样烧钱。
@@ -280,6 +282,68 @@ autodl stop pro-xxx                # 用完立刻关，数据保留
 
 关机保留数据，随时 `autodl start` 回来（**但连续关机 15 天会被平台释放并清空**）。
 装好的环境值钱：重开一台等于重下 17G，所以宁可关机留着也别随手 `rm`。
+
+## 实例级配置：`$DDP_ROOT/deploy.env`
+
+这台机器自己的取值写在 `/root/ddp/deploy.env`（系统盘，跟镜像走），一行一个 `KEY=VALUE`，
+`env.bash` 与 `stack.bash` 都经 `root.bash` 读它；外部 export 的同名变量优先。
+**注释只能独占一行**：值不做 shell 解析，`=` 后面的全部内容（含行尾 `# …`）都算值 ——
+`PUBLIC_SCHEME=https  # …` 会让 https 判断落空，预签名 URL 静默退回 http。公网部署的典型内容：
+
+```bash
+# 隧道域名（预签名 URL 的签名覆盖 host）
+PUBLIC_HOST=ddp.example.com
+# TLS 在 Cloudflare 边缘终结
+PUBLIC_SCHEME=https
+# Cloudflare 那侧 ingress 指向的本地端口
+EDGE_PORT=6006
+# 未登录访客可浏览/检索已发布内容（发布即公网公开）
+GUEST_MODE=read
+# up 时连模型线一起拉起（要 GPU）
+MODEL_LINE=1
+# 仓库那份注册表的副本，打开了 embedding_models 段
+MODELS_CONFIG=/root/ddp/models.deploy.yaml
+```
+
+## 开机一条命令：`stack.bash up`
+
+没有 systemd，关机再开或从镜像开出新实例时进程一个都不在。`up` 按依赖顺序拉回来，
+每一步先判"是不是已经在跑"，可以重复执行：模型线（`MODEL_LINE=1` 时：OCR-2 → 指令模型 →
+bge-m3，并等它们的 `/health`）→ 应用面（同 `start`）→ 隧道（有 `cloudflared.token` 时）。
+
+```bash
+autodl start <id> --wait
+autodl exec <id> 'bash /root/src/DeepDocParse/infra/autodl/stack.bash up && bash /root/src/DeepDocParse/infra/autodl/stack.bash doctor'
+```
+
+## 镜像备份与恢复
+
+```bash
+autodl stop <id>                       # 存镜像要先关机
+autodl image save <id> ddp-guest-tunnel
+autodl images                          # 等状态变 finished
+```
+
+从镜像恢复：`autodl create --image <镜像 UUID> --gpu 4090d --disk 50 --wait`，然后同上 `stack.bash up`
+（或建实例时直接带 `--start-command 'bash /root/src/DeepDocParse/infra/autodl/stack.bash up'`）。
+镜像里有 PostgreSQL 数据、MinIO 对象、`stack.env`（全部密钥）与 `cloudflared.token`
+—— **它就是这条隧道和这个站点的完整控制权**，只存私有镜像、别共享。
+**同一个令牌同时只让一台实例 `up`**：两台都连上时 Cloudflare 把公网请求分摊给两边，
+而两边各有一份互不相干的库，用户会在两份数据之间随机跳。
+镜像按总容量计费（30G 以上 ¥0.01/GB/日）。
+
+## 从数据盘迁到系统盘（旧部署）
+
+旧部署装在 `/root/autodl-tmp/ddp`。新缺省遇到它而 `/root/ddp` 不存在时直接拒绝运行，
+免得在空目录里生成一份新的 `stack.env`（与库里的角色口令对不上）。搬法：
+
+```bash
+mv /root/autodl-tmp/ddp /root/ddp
+# venv 里的脚本 shebang 写死了旧路径；只改 bin/ 下的文本文件就够（解释器按自身位置推导 prefix）
+for v in venv appvenv; do
+  grep -rlI /root/autodl-tmp/ddp /root/ddp/$v/bin | xargs -r sed -i 's#/root/autodl-tmp/ddp#/root/ddp#g'
+done
+```
 
 ## 排查：四处不会报错的失效
 

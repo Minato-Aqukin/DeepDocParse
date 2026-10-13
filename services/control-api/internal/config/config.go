@@ -143,6 +143,15 @@ type Config struct {
 	// 登录/注册这类未鉴权端点的限速（次/分钟/IP）。
 	// 目的不是精确公平，是让暴力破解从"几分钟"变成"几个月"
 	LoginRatePerMin int
+	// 游客模式：off（缺省，未登录一律 401）/ read（未登录访客可经白名单
+	// 只读浏览本站已发布内容）。非法值拒绝启动 —— 配错了静默回退到 off 会让
+	// "开了游客但访客进不来"变成一个无报错的故障，而回退到 read 则更糟
+	GuestMode string
+	// 游客请求限速（次/分钟/IP），只在 GuestMode=read 时用
+	GuestRatePerMin int
+	// 游客检索限速（次/分钟/IP），只在 GuestMode=read 时用。
+	// 与通用游客限速**分开**：检索一次要跑向量 + 重排，比读一条文档贵得多
+	GuestSearchRatePerMin int
 	// 问答限速（次/分钟/actor）。它会打一次 chat 模型 + 若干次视觉核对
 	QARatePerMin int
 	// 图谱/wiki 生成限速（次/分钟/actor）。**很贵**：一次要把几十条证据送进模型
@@ -220,6 +229,9 @@ func Load() (*Config, error) {
 		RedisURL:                 env("REDIS_URL", ""),
 		DefaultRatePerMin:        envInt("DEFAULT_RATE_LIMIT_PER_MIN", 60),
 		LoginRatePerMin:          envInt("LOGIN_RATE_LIMIT_PER_MIN", 10),
+		GuestMode:                env("GUEST_MODE", "off"),
+		GuestRatePerMin:          envInt("GUEST_RATE_PER_MIN", 300),
+		GuestSearchRatePerMin:    envInt("GUEST_SEARCH_RATE_PER_MIN", 30),
 		QARatePerMin:             envInt("QA_RATE_PER_MIN", 20),
 		KnowledgeRatePerMin:      envInt("KNOWLEDGE_RATE_PER_MIN", 2),
 		ExtractRatePerMin:        envInt("EXTRACT_RATE_PER_MIN", 6),
@@ -264,6 +276,11 @@ func (c *Config) validate() error {
 	case "open", "invite", "closed":
 	default:
 		problems = append(problems, "REGISTRATION_MODE 只认 open / invite / closed，收到 "+c.RegistrationMode)
+	}
+	switch c.GuestMode {
+	case "off", "read":
+	default:
+		problems = append(problems, "GUEST_MODE 只认 off / read，收到 "+c.GuestMode)
 	}
 	// 上传分片下限：S3 兼容实现要求非最后一片 >= 5MiB，写小了会在
 	// complete multipart 时才报错 —— 那时文件已经传完了

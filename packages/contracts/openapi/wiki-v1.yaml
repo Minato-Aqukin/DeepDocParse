@@ -7,6 +7,8 @@ paths:
   /api/wikis:
     get:
       operationId: listVersionedWikis
+      security: [{session: []}, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       responses: {'200': {description: Authorized Wiki revisions}}
     post:
       operationId: createVersionedWiki
@@ -18,6 +20,8 @@ paths:
     parameters: [{$ref: '#/components/parameters/WikiId'}]
     get:
       operationId: readVersionedWiki
+      security: [{session: []}, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       responses: {'200': {description: Authorized current or published revision}, '404': {description: Unavailable}}
   /api/wikis/{wiki_id}/revisions:
     parameters: [{$ref: '#/components/parameters/WikiId'}]
@@ -33,6 +37,8 @@ paths:
       - {name: revision_id, in: path, required: true, schema: {type: string}}
     get:
       operationId: readWikiRevision
+      security: [{session: []}, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       responses: {'200': {description: Fixed revision with dynamically checked staleness}, '404': {description: Unavailable}}
   /api/wikis/{wiki_id}/pages/{page_key}:
     parameters:

@@ -9,7 +9,12 @@ import type { EvidenceDetail } from '@/types/api'
 import { fetchAuthedImage } from '@/utils/markdown'
 import { formatPageLocator } from '@/utils/page-locator'
 import { approvedPlanLabel, onLocalSource, onReadOnlySource } from '@/platform/desktop'
+import { useAuthStore } from '@/stores/auth'
 
+// AskPanel 同款：只 mock @/api 的旧用例挂载时没有 Pinia，setup 顶层硬拿会崩。
+let panelAuth: ReturnType<typeof useAuthStore> | undefined
+try { panelAuth = useAuthStore() } catch { panelAuth = undefined }
+const isGuest = computed(() => panelAuth?.isGuest ?? false)
 const props = withDefaults(defineProps<{
   evidenceId: string; context?: ResourceContext; closeLabel?: string
 }>(), {
@@ -79,8 +84,8 @@ async function load() {
 }
 
 async function review(verdict: 'pass' | 'reject' | 'question') {
-  // 核对是 POST：桌面中心只读，宿主会拒绝；表单已禁用，这里再挡一次。
-  if (!detail.value || reviewing.value || onReadOnlySource.value) return
+  // 核对是 POST：桌面中心只读，宿主会拒绝；表单已禁用，这里再挡一次。游客同理。
+  if (!detail.value || reviewing.value || onReadOnlySource.value || isGuest.value) return
   reviewing.value = true
   const reasonCode = {
     pass: 'source_checked', reject: 'evidence_incorrect', question: 'needs_follow_up',
@@ -157,8 +162,8 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <!-- 本机工作区不记录人工核对（local-content-subset：verification 不支持），不给一个点了必失败的表单。 -->
-      <section v-if="!onLocalSource" class="review">
+      <!-- 游客只读不核对：核对是 POST，访客放行集里没有。核对记录（只读）照常展示。 -->
+      <section v-if="!onLocalSource && !isGuest" class="review">
         <div class="section-title"><span>人工核对</span><span>只做标注，不修改内容</span></div>
         <el-input
           v-model="reasonText" type="textarea" :rows="2"

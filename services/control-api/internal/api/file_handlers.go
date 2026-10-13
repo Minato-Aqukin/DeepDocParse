@@ -88,19 +88,26 @@ func (s *Server) handleDownloadURL(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 
-	grant, err := s.store.StableGrantFor(r.Context(), actor.OrganizationID, docID, actor.UserID, access.ResourceID, access.ObjectKey, access.MIME, access.Filename)
-	if err != nil || grant.ObjectKey == "" {
-		// 还没有凭证说明这份文档不属于本组织，或者还没归档完
-		return apierr.NotFound("no_such_document", "文档不存在或尚未归档")
+	// 游客没有 user id，StableGrantFor 的"按主体落凭证"那条路走不通 ——
+	// 而且给匿名访问落库本身就是错的（游客不计量、不落库）。游客分支
+	// 直接按已授权的 file-access 签名：授权已经由上面的 documentAccess
+	// 按 guest actor 查过一遍，这里的 access 只可能是已发布的。
+	objectKey, mime := access.ObjectKey, access.MIME
+	if actor.Kind != identity.KindGuest {
+		grant, err := s.store.StableGrantFor(r.Context(), actor.OrganizationID, docID, actor.UserID, access.ResourceID, access.ObjectKey, access.MIME, access.Filename)
+		if err != nil || grant.ObjectKey == "" {
+			// 还没有凭证说明这份文档不属于本组织，或者还没归档完
+			return apierr.NotFound("no_such_document", "文档不存在或尚未归档")
+		}
+		objectKey, mime = grant.ObjectKey, grant.MIME
 	}
-
 	disposition := r.URL.Query().Get("disposition")
 	if disposition != "attachment" {
 		disposition = "inline"
 	}
 	// inline 只对白名单类型开放。**这条不能省** ——
 	// 它是"上传 text/html 就是同源 XSS"那条铁律在新架构里的落点
-	if disposition == "inline" && !s.cfg.MIMEAllowed(grant.MIME) {
+	if disposition == "inline" && !s.cfg.MIMEAllowed(mime) {
 		disposition = "attachment"
 	}
 
@@ -111,8 +118,8 @@ func (s *Server) handleDownloadURL(w http.ResponseWriter, r *http.Request) error
 	if filename == "" {
 		filename = docID // 老凭证没存名字，退回旧行为而不是给个空名
 	}
-	url, expires, err := s.objects.PresignGet(r.Context(), grant.ObjectKey,
-		filename, grant.MIME, disposition, access.notAfter())
+	url, expires, err := s.objects.PresignGet(r.Context(), objectKey,
+		filename, mime, disposition, access.notAfter())
 	if err != nil {
 		return presignError(err)
 	}

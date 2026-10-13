@@ -16,6 +16,12 @@ declare module 'vue-router' {
     nav?: boolean
     /** 免登录 */
     public?: boolean
+    /**
+     * 游客可进。浏览器部署开了游客模式（`GET /api/auth/guest`）时，
+     * 未登录访客可以进标了它的路由；没标的一律回登录页（带 redirect）。
+     * 桌面不看它（`loadGuestMode()` 在桌面恒 false）。
+     */
+    guest?: boolean
     /** 下钻页回到哪个菜单项高亮 */
     activeMenu?: string
     /**
@@ -49,7 +55,7 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/resources', name: 'resources',
     component: () => import('@/views/ResourcesView.vue'),
-    meta: { title: '资源库', icon: 'Files', group: 'workspace', nav: true, features: ['resources'] },
+    meta: { title: '资源库', icon: 'Files', group: 'workspace', nav: true, features: ['resources'], guest: true },
   },
 
   {
@@ -63,19 +69,19 @@ export const routes: RouteRecordRaw[] = [
     path: '/documents',
     name: 'documents',
     component: () => import('@/views/DocumentsView.vue'),
-    meta: { title: '文档库', icon: 'Files', group: 'workspace', nav: true, features: ['documents'] },
+    meta: { title: '文档库', icon: 'Files', group: 'workspace', nav: true, features: ['documents'], guest: true },
   },
   {
     path: '/documents/:id',
     name: 'workbench',
     component: () => import('@/views/WorkbenchView.vue'),
-    meta: { title: '工作台', group: 'workspace', nav: false, activeMenu: '/documents', features: ['documents'] },
+    meta: { title: '工作台', group: 'workspace', nav: false, activeMenu: '/documents', features: ['documents'], guest: true },
   },
   {
     path: '/documents/:id/versions',
     name: 'versions',
     component: () => import('@/views/VersionsView.vue'),
-    meta: { title: '解析版本', group: 'workspace', nav: false, activeMenu: '/documents', features: ['documents'] },
+    meta: { title: '解析版本', group: 'workspace', nav: false, activeMenu: '/documents', features: ['documents'], guest: true },
   },
   {
     path: '/extractions',
@@ -87,7 +93,7 @@ export const routes: RouteRecordRaw[] = [
     path: '/search',
     name: 'search',
     component: () => import('@/views/SearchView.vue'),
-    meta: { title: '全文检索', icon: 'Search', group: 'workspace', nav: true, features: ['search'] },
+    meta: { title: '全文检索', icon: 'Search', group: 'workspace', nav: true, features: ['search'], guest: true },
   },
   {
     path: '/tasks',
@@ -117,7 +123,7 @@ export const routes: RouteRecordRaw[] = [
     path: '/wiki',
     name: 'wiki',
     component: () => import('@/views/WikiView.vue'),
-    meta: { title: '知识 Wiki', icon: 'Notebook', group: 'workspace', nav: true, features: ['wiki'] },
+    meta: { title: '知识 Wiki', icon: 'Notebook', group: 'workspace', nav: true, features: ['wiki'], guest: true },
   },
   {
     path: '/graph',

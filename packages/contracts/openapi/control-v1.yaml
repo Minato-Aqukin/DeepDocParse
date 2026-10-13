@@ -14,6 +14,34 @@ info:
     | `/v1/*`  | 第三方 SDK | API key（`Authorization: Bearer sk-…`） |
     | `/mcp`   | MCP 客户端 | API key |
 
+    ## 游客模式（GUEST_MODE=read，可选）
+
+    部署开关 `GUEST_MODE`（`off` 缺省 / `read`）决定未登录访客能不能只读
+    浏览本站已发布内容。入口门的行为（control-api `sessionOrGuest`）：
+
+    - 请求**带凭据**（Bearer 或 `ddp_session` cookie）：与平时完全一样走
+      会话校验 —— 凭据无效/过期是 401，**绝不静默降级成游客**。
+    - 请求**无凭据**、开关为 `read`、方法 GET/HEAD、路径落在游客白名单里
+      （见下）→ 以游客身份放行，按客户端 IP 限速（`GUEST_RATE_PER_MIN`，
+      检索另有 `GUEST_SEARCH_RATE_PER_MIN`），超限 429 `rate_limited`。
+    - 其余无凭据请求 → 照旧 401 `no_session`。
+
+    游客白名单（按路径段前缀匹配）：`/api/resources`、`/api/v1/resources`、
+    `/api/v1/collections`、`/api/documents`（含
+    `/api/documents/{id}/download-url`，游客分支不落库、直接按已授权的
+    file-access 签名）、`/api/search`、`/api/evidence/…`、`/api/wikis`。
+    不在白名单里：会话、抽取、知识、旧 `/api/wiki`、复核、任务/计划/
+    交付/远程计算、`/api/bundles`（导入）、上传、key、组织、计量、审计、
+    `/api/auth/me`、全部 `/v1/*` 与 `/mcp`。已发布资源自己的只读导出
+    （`/api/resources/{id}/versions/{v}/bundle*`）随 `/api/resources` 前缀放行，
+    但游客导出不附带 Wiki（`include_wiki=true` → 403 `guest_read_only`）。
+
+    游客的下游身份：`X-DDP-Actor-Kind: guest`，`X-DDP-Actor: guest`，
+    `X-DDP-User` 为空，`X-DDP-Organization` 为默认组织，
+    `X-DDP-Role: viewer`。游客不拥有任何资源，只能看到组织已发布
+    （`publication = published`，即"本站公开"）的内容 —— 打开这个开关
+    等于把已发布内容向公网开放，部署见 `docs/DEPLOY.md`。
+
     ## 哪些端点归本服务，哪些是转发
 
     本文件里**显式声明**的端点由 control-api 自己实现：组织、成员、角色、
@@ -47,9 +75,9 @@ info:
         traceparent             W3C trace context
         X-DDP-Service           调用方服务身份
         X-DDP-Organization      组织 ID（单组织部署也必须带，值为默认组织）
-        X-DDP-Actor             user id 或 api key id
-        X-DDP-User              已验证用户 ID；API key 时为该 key 的所有者
-        X-DDP-Actor-Kind        user | api_key | service | peer
+        X-DDP-Actor             user id、api key id 或 guest（游客固定填 guest）
+        X-DDP-User              已验证用户 ID；API key 时为该 key 的所有者；游客为空
+        X-DDP-Actor-Kind        user | api_key | service | peer | guest
         X-DDP-Role              该 actor 在该组织内的角色
         Idempotency-Key         写操作必带
 
@@ -112,8 +140,8 @@ components:
     ActorKind:
       type: string
       x-ddp-enum: actor_kind
-      description: 调用者身份类型，取值与语义由 `packages/contracts/enums.yaml` 的 `actor_kind` 生成（含联邦节点主体 `peer`），由 generate.py --check 与生成物对拍。
-      enum: [user, api_key, service, peer]
+      description: 调用者身份类型，取值与语义由 `packages/contracts/enums.yaml` 的 `actor_kind` 生成（含联邦节点主体 `peer` 与游客 `guest`），由 generate.py --check 与生成物对拍。
+      enum: [user, api_key, service, peer, guest]
 
     UploadStatus:
       type: string
@@ -418,6 +446,25 @@ paths:
       responses:
         "302": { description: 带上会话跳回前端 }
         "400": { description: state 校验失败 / code 无效 }
+
+  /api/auth/guest:
+    get:
+      tags: [auth]
+      summary: 本部署是否开启游客模式
+      description: |
+        无需鉴权。前端用它决定未登录访客进游客界面还是登录页。
+        `enabled` 为 true 当且仅当 `GUEST_MODE=read`。
+      security: []
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled]
+                properties:
+                  enabled: { type: boolean }
 
   # ---------------------------------------------------------- organization
   /api/org:
@@ -753,7 +800,9 @@ paths:
         绝不能拿它去喂 model-gateway —— 那会破坏 doc_hash 幂等。
         每次签发前向语料域检查当前主体的资源权限。组织内有文件凭证不代表可读。
         无权与不存在统一 404；权限服务不可用返回 502，不签发 URL。
-      security: [{ session: [] }]
+        游客（无会话）仅当 `GUEST_MODE=read` 时可调：游客无 user id，
+        不落文件凭证，直接按已授权的 file-access 签名。
+      security: [{ session: [] }, {}]
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string } }
         - { name: resource_id, in: query, schema: { type: string }, description: 旧文档映射多条可读资产时必填 }

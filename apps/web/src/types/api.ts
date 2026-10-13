@@ -398,6 +398,11 @@ export interface UsageSummary {
   total_pages: number
   total_requests: number
 }
+/** 游客模式开关（`GET /api/auth/guest`）：部署级决定，非个人偏好。 */
+export interface GuestMode {
+  enabled: boolean
+}
+
 
 export interface AuthToken {
   access_token: string

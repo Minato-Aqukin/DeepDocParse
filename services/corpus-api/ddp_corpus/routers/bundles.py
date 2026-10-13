@@ -557,6 +557,10 @@ async def export_bundle(
     licence_valid_until: str | None = None,
 ):
     resource, version = await _version(session, actor, resource_id, version_id)
+    if actor.kind == "guest" and include_wiki:
+        # 附带 Wiki 的导出要走 Wiki 自身的发布/授权判定（`revision_out`），而导出
+        # 参数目前不做那一层检查：游客只能读默认导出（原文 + 出处 + 版面）。
+        raise APIError(403, "游客导出不附带 Wiki", "permission_error", "guest_read_only")
     from ddp_corpus.bundle_source import licensed_version
 
     snapshot = await licensed_version(session, version)

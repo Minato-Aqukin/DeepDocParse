@@ -171,6 +171,35 @@ func TestBadRegistrationModeRejected(t *testing.T) {
 	}
 }
 
+// TestGuestModeDefaultsOff：不配 GUEST_MODE 时缺省是 off ——
+// 游客模式必须显式打开，不能靠"没配就放行"。
+func TestGuestModeDefaultsOff(t *testing.T) {
+	good(t)
+	c, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.GuestMode != "off" {
+		t.Fatalf("GuestMode 缺省 = %q，应为 off", c.GuestMode)
+	}
+	if c.GuestRatePerMin != 300 {
+		t.Fatalf("GuestRatePerMin 缺省 = %d，应为 300", c.GuestRatePerMin)
+	}
+	if c.GuestSearchRatePerMin != 30 {
+		t.Fatalf("GuestSearchRatePerMin 缺省 = %d，应为 30", c.GuestSearchRatePerMin)
+	}
+}
+
+// TestBadGuestModeRejected：非法值拒绝启动 —— 配错了静默回退到 off 会让
+// "开了游客但访客进不来"变成无报错的故障，而回退到 read 则更糟。
+func TestBadGuestModeRejected(t *testing.T) {
+	good(t)
+	t.Setenv("GUEST_MODE", "yes-please")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("非法的 GUEST_MODE 被接受了")
+	}
+}
+
 // TestObjectPublicSecureFollowsObjectSecure：不显式给 OBJECT_PUBLIC_SECURE 时，
 // 它必须**跟随** OBJECT_SECURE —— 这是这次改动对既有部署的向后兼容承诺，
 // 而承诺此前没有任何守卫。回归了的表现是：OBJECT_SECURE=true 的部署默默给

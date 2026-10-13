@@ -21,8 +21,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=env.bash
 source "$HERE/env.bash"
 
-EMBED_PORT="${EMBED_PORT:-18080}"
-EMBED_MODEL_DIR="${EMBED_MODEL_DIR:-$DDP_ROOT/models/bge-m3}"
 DAEMON=0
 [ "${1:-}" = "--daemon" ] && DAEMON=1
 

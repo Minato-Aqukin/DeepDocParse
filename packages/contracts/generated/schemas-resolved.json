@@ -2812,7 +2812,8 @@
                 "user",
                 "api_key",
                 "service",
-                "peer"
+                "peer",
+                "guest"
               ],
               "type": "string",
               "x-ddp-enum": "actor_kind"

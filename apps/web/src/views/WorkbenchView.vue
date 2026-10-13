@@ -171,7 +171,9 @@ function focusRequestedSource() {
   sourceFocusError.value = false
   const evidence = typeof route.query.evidence === 'string' && route.query.evidence
     ? route.query.evidence : undefined
-  if (evidence) {
+  // 游客不发 `/api/conversations*`，`/api/evidence/*` 也不经会话路径拿：
+  // evidence 参数直接忽略，用同 URL 上的 page/seq/chunk 做稳定定位。
+  if (evidence && !auth.isGuest) {
     void focusEvidence(evidence)
     return
   }
@@ -321,7 +323,7 @@ onUnmounted(() => {
             query: { resource_id: document?.resource_id ?? undefined } })">
           解析版本
         </el-button>
-        <template v-if="!onLocalSource">
+        <template v-if="!onLocalSource && !auth.isGuest">
           <!-- validate-index is a POST: a read-only desktop center rejects it (host 403) -->
           <el-button size="small" :disabled="!document || auth.readOnly" @click="validateIndex">校验版本</el-button>
           <el-button size="small" :disabled="!document || !auth.canUpload || !document.can_delete"
@@ -419,7 +421,10 @@ onUnmounted(() => {
       </section>
 
       <section class="pane ask">
-        <p v-if="route.query.job && document?.current_job_id !== route.query.job">
+        <p v-if="auth.isGuest" class="guest-ask" role="note">
+          登录后可问答<el-button link @click="router.push({ name: 'login', query: { redirect: route.fullPath } })">去登录</el-button>
+        </p>
+        <p v-else-if="route.query.job && document?.current_job_id !== route.query.job">
           当前显示固定的历史解析修订。问答索引已切换，请从资源库选择当前修订开始新的问答。
         </p>
         <AskPanel v-else-if="document" :document="document" @locate="locate" />
@@ -448,6 +453,15 @@ onUnmounted(() => {
   padding: 2px 10px;
   color: var(--ddp-ink-2);
   font-size: 13px;
+}
+/* 游客问答位：纯文字 + 链接按钮，不引入新色板。 */
+.guest-ask {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--ddp-ink-2);
+  font-size: 14px;
 }
 .validation { margin-left: auto; }
 .head {

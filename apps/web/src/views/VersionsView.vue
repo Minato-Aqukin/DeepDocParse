@@ -139,7 +139,8 @@ onBeforeUnmount(() => {
         <span class="name">{{ document?.filename }}</span>
       </div>
       <el-button :loading="loading" @click="load()">刷新</el-button>
-      <el-button v-if="!onLocalSource" type="primary" :disabled="!document || !auth.canUpload || !document.can_delete"
+      <!-- 游客只看版本列表：重解析入口不画（`canUpload` 已是 false，这里进一步连禁用态都不留）。 -->
+      <el-button v-if="!onLocalSource && !auth.isGuest" type="primary" :disabled="!document || !auth.canUpload || !document.can_delete"
                  @click="dialog = true">换参数重新解析</el-button>
     </div>
     <p v-if="onReadOnlySource" class="readonly-hint" role="note">{{ approvedPlanLabel() }}</p>
@@ -169,7 +170,7 @@ onBeforeUnmount(() => {
           <span class="ddp-num">{{ row.archived_at ? new Date(row.archived_at).toLocaleString('zh-CN') : '—' }}</span>
         </template>
       </el-table-column>
-      <el-table-column v-if="!onLocalSource" label="操作" width="120" fixed="right">
+      <el-table-column v-if="!onLocalSource && !auth.isGuest" label="操作" width="120" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary"
                      :disabled="row.is_current || row.status !== 'succeeded' || !auth.canUpload || !document?.can_delete"

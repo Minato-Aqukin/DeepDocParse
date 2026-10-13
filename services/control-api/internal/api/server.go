@@ -135,7 +135,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /api/auth/login", httpx.Wrap(s.handleLogin))
 	mux.Handle("GET /api/auth/oidc/login", httpx.Wrap(s.handleOIDCLogin))
 	mux.Handle("GET /api/auth/oidc/callback", httpx.Wrap(s.handleOIDCCallback))
-
+	mux.Handle("GET /api/auth/guest", httpx.Wrap(s.handleGuestStatus))
 	// 稳定文件 URL：token 即凭证，不需要会话。
 	// **路径必须永远稳定** —— 见 store.FileGrant 的注释
 	mux.Handle("GET /files/{token}", httpx.Wrap(s.handleFileByToken))
@@ -163,13 +163,13 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /api/uploads/{upload_id}/finalize", session(httpx.Wrap(s.handleFinalizeUpload)))
 
 	mux.Handle("GET /api/documents/{document_id}/download-url",
-		session(httpx.Wrap(s.handleDownloadURL)))
+		s.sessionOrGuest(httpx.Wrap(s.handleDownloadURL)))
 
-	// ---- 语料面：会话鉴权 + 领域限速后整段转发给 corpus-api ----
+	// ---- 语料面：会话/游客鉴权 + 领域限速后整段转发给 corpus-api ----
 	// **注意顺序**：上面那条更具体的 download-url 必须先注册。
 	// ServeMux 按最长模式匹配，所以其实与注册顺序无关 —— 但读代码的人
 	// 会按顺序理解，所以还是按具体到宽泛排
-	forward := session(s.domainThrottle(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	forward := s.sessionOrGuest(s.domainThrottle(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.corpus.ServeHTTP(w, r, "")
 	})))
 	for _, prefix := range corpusPrefixes {

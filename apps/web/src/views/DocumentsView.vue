@@ -129,10 +129,14 @@ onUnmounted(() => {
       />
       <div class="actions">
         <el-button :loading="store.loading" @click="reload">刷新</el-button>
+        <!-- 游客不给上传按钮（ResourcesView 同款：连禁用态都不给，另给登录入口）。 -->
+        <el-button v-if="auth.isGuest" @click="router.push({ name: 'login', query: { redirect: '/documents' } })">
+          <el-icon><component is="Upload" /></el-icon> 登录后上传
+        </el-button>
         <!-- 按**能力**显示，不按角色名。只读成员看不到这个按钮 ——
              让他点进去再吃一个 403 也能工作，但那会让人以为是自己操作错了。
              中心只读（桌面）：按钮留在界面上但禁用，文案换成联邦任务说明。 -->
-        <el-tooltip v-if="readonlyHint" :content="readonlyHint">
+        <el-tooltip v-else-if="readonlyHint" :content="readonlyHint">
           <span><el-button type="primary" disabled>
             <el-icon><component is="Upload" /></el-icon> 上传
           </el-button></span>
@@ -151,7 +155,8 @@ onUnmounted(() => {
     <DocumentTable
       :items="store.items"
       :loading="store.loading"
-      :selectable="!readonlyHint"
+      :selectable="!readonlyHint && !auth.isGuest"
+      :guest="auth.isGuest"
       @open="open"
       @download="download"
       @reparse="router.push({ name: 'versions', params: { id: $event.id },
@@ -160,12 +165,11 @@ onUnmounted(() => {
       @remove="remove"
       @selection="selected = $event"
     >
-      <template v-if="selected.length" #toolbar>
+      <template v-if="selected.length && !auth.isGuest" #toolbar>
         <span class="picked">已选 {{ selected.length }} 份</span>
         <el-button link type="danger" @click="removeSelected">批量删除</el-button>
       </template>
     </DocumentTable>
-
     <div class="pager">
       <el-button :disabled="store.page === 1 || store.loading" @click="store.goPage(store.page - 1)">
         上一页

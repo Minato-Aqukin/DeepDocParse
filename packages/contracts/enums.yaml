@@ -345,6 +345,7 @@ enums:
       - {value: api_key, summary: sk- 开头的对外 key,       label: API Key,  severity: neutral}
       - {value: service, summary: 服务间调用（服务凭据）,   label: 服务,     severity: neutral}
       - {value: peer, summary: 已验签节点请求派生的只读主体，可在已批准子图内向直接成员转委托；不继承本地用户权限, label: 联邦节点主体, severity: neutral}
+      - {value: guest, summary: 未登录访客（仅 GUEST_MODE=read 时存在）：不拥有任何资源，只能经入口白名单 GET 本组织已发布内容与检索；不计量、不落库, label: 游客, severity: neutral}
 
   role:
     description: |

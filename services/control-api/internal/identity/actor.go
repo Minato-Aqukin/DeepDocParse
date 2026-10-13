@@ -16,6 +16,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/contracts"
 	"github.com/Minato-Aqukin/deepdocparse/services/control-api/internal/rbac"
 )
 
@@ -52,10 +53,14 @@ var Inbound = []string{
 
 type Kind string
 
+// Kind 的取值来自 packages/contracts/enums.yaml 生成的 internal/contracts
+// （铁律 1：枚举只写一次）—— 这里用常量转一遍只是为了挂方法，
+// 绝不要手写字面量，见 rbac.Role 同一条注释。
 const (
-	KindUser    Kind = "user"
-	KindAPIKey  Kind = "api_key"
-	KindService Kind = "service"
+	KindUser    Kind = Kind(contracts.ActorKindUser)
+	KindAPIKey  Kind = Kind(contracts.ActorKindApiKey)
+	KindService Kind = Kind(contracts.ActorKindService)
+	KindGuest   Kind = Kind(contracts.ActorKindGuest)
 )
 
 // Actor 是一次请求的调用者。

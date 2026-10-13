@@ -597,6 +597,8 @@ const (
 	ActorKindService ActorKind = "service"
 	// 已验签节点请求派生的只读主体，可在已批准子图内向直接成员转委托；不继承本地用户权限
 	ActorKindPeer ActorKind = "peer"
+	// 未登录访客（仅 GUEST_MODE=read 时存在）：不拥有任何资源，只能经入口白名单 GET 本组织已发布内容与检索；不计量、不落库
+	ActorKindGuest ActorKind = "guest"
 )
 
 // ActorKindValues 保持 enums.yaml 里的声明顺序。
@@ -605,6 +607,7 @@ var ActorKindValues = []ActorKind{
 	ActorKindApiKey,
 	ActorKindService,
 	ActorKindPeer,
+	ActorKindGuest,
 }
 
 var ActorKindMeta = map[ActorKind]EnumMeta{
@@ -612,6 +615,7 @@ var ActorKindMeta = map[ActorKind]EnumMeta{
 	ActorKindApiKey:  {Value: "api_key", Label: "API Key", Severity: SeverityNeutral},
 	ActorKindService: {Value: "service", Label: "服务", Severity: SeverityNeutral},
 	ActorKindPeer:    {Value: "peer", Label: "联邦节点主体", Severity: SeverityNeutral},
+	ActorKindGuest:   {Value: "guest", Label: "游客", Severity: SeverityNeutral},
 }
 
 // Valid 报告 s 是不是一个已知的 actor_kind 取值。

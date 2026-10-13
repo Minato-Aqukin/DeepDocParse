@@ -503,13 +503,14 @@ def usage_kind_label(value: str | None) -> str | None:
 
 # 调用者身份类型。corpus-api **不自己验用户凭据**，它只信任 control-api
 # 在内部调用里下发的 `X-DDP-Actor-Kind` + `X-DDP-Actor`。
-ActorKind = Literal["user", "api_key", "service", "peer"]
+ActorKind = Literal["user", "api_key", "service", "peer", "guest"]
 
 ACTOR_KIND_VALUES: Final[tuple[str, ...]] = (
     "user",
     "api_key",
     "service",
     "peer",
+    "guest",
 )
 
 ACTOR_KIND_META: Final[dict[str, EnumMeta]] = {
@@ -521,6 +522,8 @@ ACTOR_KIND_META: Final[dict[str, EnumMeta]] = {
     "service": {"value": "service", "label": "服务", "severity": "neutral"},
     # 已验签节点请求派生的只读主体，可在已批准子图内向直接成员转委托；不继承本地用户权限
     "peer": {"value": "peer", "label": "联邦节点主体", "severity": "neutral"},
+    # 未登录访客（仅 GUEST_MODE=read 时存在）：不拥有任何资源，只能经入口白名单 GET 本组织已发布内容与检索；不计量、不落库
+    "guest": {"value": "guest", "label": "游客", "severity": "neutral"},
 }
 
 

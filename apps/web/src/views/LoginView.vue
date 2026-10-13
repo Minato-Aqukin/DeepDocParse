@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
@@ -12,6 +12,13 @@ const router = useRouter()
 const mode = ref<'login' | 'register'>('login')
 const form = ref({ username: '', password: '' })
 const loading = ref(false)
+
+// 游客模式开着时，给一条回到公开浏览的路：守卫把游客挡到登录页，
+// 没有这条路就只能干瞪眼（没有账号、没有返回）。
+const guestBack = computed(() =>
+  (typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/')
+    ? route.query.redirect : '/resources'))
+onMounted(() => { void auth.loadGuestMode() })
 
 async function submit() {
   if (form.value.username.length < 3 || form.value.password.length < 8) {
@@ -61,6 +68,9 @@ async function submit() {
       <el-button type="primary" :loading="loading" style="width: 100%" @click="submit">
         {{ mode === 'login' ? '登录' : '注册并登录' }}
       </el-button>
+      <p v-if="auth.guestEnabled" class="guest-back">
+        <el-button link @click="router.push(guestBack)">以游客身份浏览</el-button>
+      </p>
     </el-form>
   </el-card>
 </template>
@@ -75,7 +85,10 @@ async function submit() {
   justify-content: space-between;
 }
 .title {
-  font-size: 18px;
   font-weight: 600;
+}
+.guest-back {
+  margin: 16px 0 0;
+  text-align: center;
 }
 </style>

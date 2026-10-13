@@ -16,7 +16,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from transformers import AutoModel, AutoTokenizer
 
-MODEL_DIR = os.environ.get("EMBED_MODEL_DIR") or "/root/autodl-tmp/ddp/models/bge-m3"
+# 由 embed.bash 传入（缺省值在 env.bash）；这里不再写第二份路径
+MODEL_DIR = os.environ["EMBED_MODEL_DIR"]
 SERVED = "bge-m3"
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)

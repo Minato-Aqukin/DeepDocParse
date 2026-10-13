@@ -21,7 +21,7 @@ const readonlyHint = computed(() => (desktop && auth.readOnly ? approvedPlanLabe
 function proposeUploadAsTask() {
   router.push(federationTaskNewLocation('上传资料到中心'))
 }
-const scope = ref<'mine' | 'site_public'>('mine')
+const scope = ref<'mine' | 'site_public'>(auth.isGuest ? 'site_public' : 'mine')
 const resources = ref<Resource[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -195,7 +195,9 @@ onUnmounted(() => { generation++ })
 <template>
   <section class="resources">
     <header><div><h1>资源库</h1><p>每份资源保留自己的归属、固定版本和原始出处。</p></div>
-      <el-tooltip v-if="!auth.canUpload && !readonlyHint" content="只读成员不能上传文档">
+      <!-- 游客没有"我的"可言：不给上传按钮（连禁用态都不给，省得以为登录了就能点这个）。 -->
+      <el-button v-if="auth.isGuest" @click="router.push({ name: 'login', query: { redirect: '/resources' } })">登录后上传</el-button>
+      <el-tooltip v-else-if="!auth.canUpload && !readonlyHint" content="只读成员不能上传文档">
         <span><el-button type="primary" disabled>上传资料</el-button></span>
       </el-tooltip>
       <el-tooltip v-else-if="readonlyHint" :content="readonlyHint">
@@ -204,7 +206,9 @@ onUnmounted(() => { generation++ })
       <el-button v-else type="primary" @click="openUpload()">上传资料</el-button>
     </header>
     <nav aria-label="资源范围">
-      <el-radio-group v-model="scope"><el-radio-button value="mine">我的资源</el-radio-button><el-radio-button value="site_public">本站公开</el-radio-button></el-radio-group>
+      <!-- 游客只能看本站公开：scope 单选整个不画，默认值在 setup 里就是 site_public。 -->
+      <el-radio-group v-if="!auth.isGuest" v-model="scope"><el-radio-button value="mine">我的资源</el-radio-button><el-radio-button value="site_public">本站公开</el-radio-button></el-radio-group>
+      <span v-else class="state">本站公开</span>
       <el-button @click="load">刷新</el-button>
     </nav>
     <p v-if="error" role="alert" class="error">{{ error }}</p>
@@ -249,11 +253,11 @@ onUnmounted(() => { generation++ })
             <el-tooltip v-if="readonlyHint" :content="readonlyHint">
               <span><el-button link type="danger" disabled>撤销副本</el-button></span>
             </el-tooltip>
-            <el-button v-else link type="danger" @click="revokeReplica(resource, version, replica.replica_id)">撤销副本</el-button>
+            <el-button v-else-if="!auth.isGuest" link type="danger" @click="revokeReplica(resource, version, replica.replica_id)">撤销副本</el-button>
           </li>
         </ul>
       </div>
-      <footer v-if="scope === 'mine' && resource.owner_id === auth.profile?.id && (auth.canUpload || readonlyHint)">
+      <footer v-if="!auth.isGuest && scope === 'mine' && resource.owner_id === auth.profile?.id && (auth.canUpload || readonlyHint)">
         <el-tooltip v-if="readonlyHint" :content="readonlyHint">
           <span>
             <el-button disabled>追加版本</el-button>

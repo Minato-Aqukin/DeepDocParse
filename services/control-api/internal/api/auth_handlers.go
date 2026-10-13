@@ -130,6 +130,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) error {
 	return httpx.JSON(w, http.StatusOK, user)
 }
 
+// handleGuestStatus 告诉未登录的浏览器本部署开没开游客模式。
+// 无需鉴权 —— 它回答的正是"没凭据能干什么"。
+// 只读一个启动时就定死的配置项，没有任何分支可以配错。
+func (s *Server) handleGuestStatus(w http.ResponseWriter, r *http.Request) error {
+	return httpx.JSON(w, http.StatusOK, map[string]bool{"enabled": s.cfg.GuestMode == "read"})
+}
+
 // limitByIP 给未鉴权的端点限速。
 //
 // 按 IP 是一个已知不完美的维度（NAT 后面的一群人共用一个），

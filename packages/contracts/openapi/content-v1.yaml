@@ -21,6 +21,13 @@ info:
     其余端点由 corpus-api 实现（`services/corpus-api/ddp_corpus/routers/*.py`），
     经 control-api 的 `corpusPrefixes` 转发。
 
+    ## 游客模式（`GUEST_MODE=read`，可选）
+
+    标 `security: [{ session: [] }, {}]` 的 GET 操作在部署开启游客模式时允许
+    匿名访问：入口按路径段白名单放行只读游客（`X-DDP-Actor-Kind: guest`），
+    游客只能读本组织已发布内容。开关关闭时这些操作的匿名访问不存在，
+    无凭据请求照旧 401。完整门控规则见 control-v1.yaml。
+
     ## 错误体
 
     corpus-api：`{"error": {"message": "...", "type": "...", "code": "..."}}`
@@ -697,7 +704,8 @@ paths:
       tags: [resources]
       operationId: listResources
       summary: 资源列表
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       parameters:
         - name: scope
           in: query
@@ -813,7 +821,8 @@ paths:
       tags: [documents]
       operationId: listDocuments
       summary: 文档列表
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       parameters:
         - { name: q, in: query, schema: { type: string, default: '' }, description: 按文件名过滤。 }
         - { name: status, in: query, schema: { type: string, default: '' }, description: 按当前解析任务状态过滤（pending 含 null）。 }
@@ -833,7 +842,8 @@ paths:
       tags: [documents]
       operationId: getDocumentStats
       summary: 文档统计
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       responses:
         '200':
           description: ok
@@ -848,7 +858,8 @@ paths:
       tags: [documents]
       operationId: getDocument
       summary: 文档详情
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       parameters:
         - { $ref: '#/components/parameters/ResourceContext' }
         - { $ref: '#/components/parameters/VersionContext' }
@@ -874,7 +885,8 @@ paths:
       tags: [documents]
       operationId: listDocumentJobs
       summary: 文档的解析任务
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string } }
         - { $ref: '#/components/parameters/ResourceContext' }
@@ -893,7 +905,8 @@ paths:
       tags: [documents]
       operationId: getDocumentResult
       summary: 解析产物（markdown + 图片名）
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string } }
         - { name: job, in: query, schema: { type: string, default: '' } }
@@ -909,7 +922,8 @@ paths:
       tags: [documents]
       operationId: getDocumentPages
       summary: 按页分组的块（左右栏对齐与 bbox 高亮的数据源）
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string } }
         - { name: job, in: query, schema: { type: string, default: '' } }
@@ -925,7 +939,8 @@ paths:
       tags: [documents]
       operationId: getDocumentLayout
       summary: 版面 layout.json 原样返回
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string } }
         - { name: job, in: query, schema: { type: string, default: '' } }
@@ -941,8 +956,8 @@ paths:
       tags: [documents]
       operationId: getDocumentDownloadUrl
       summary: 浏览器用的短期下载/预览地址
-      security: [{ session: [] }]
-      description: 由 control-api 实现（`handleDownloadURL`，跨源对象存储直读，支持 Range）。
+      security: [{ session: [] }, {}]
+      description: 由 control-api 实现（`handleDownloadURL`，跨源对象存储直读，支持 Range）。匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容，游客分支不落文件凭证。
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string } }
         - { name: disposition, in: query, schema: { type: string, enum: [inline, attachment], default: inline } }
@@ -958,11 +973,12 @@ paths:
       tags: [documents]
       operationId: getDocumentSource
       summary: 原件 PDF 字节（本机工作区的同源直传形态）
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
       description: |
         中心实现是两条分开的路（corpus `/api/documents/{id}/source-url` 的稳定 URL +
         control `/api/documents/{id}/download-url` 的短期 URL）；本机工作区用这条
         同源路径直接返回原件字节。中心不实现这条。
+        匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string } }
       responses:
@@ -973,10 +989,11 @@ paths:
       tags: [documents]
       operationId: getCrop
       summary: 出处区域截图（PNG，本进程直出以保缓存命中）
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
       description: |
         键里带 bbox 摘要 ⇒ 内容不可变 ⇒ `Cache-Control: private, max-age=31536000, immutable`；
         `ETag` + `If-None-Match` 复访 304。裁图是几十 KB 的 PNG，直出的内存代价与缓存收益不成比例。
+        匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string } }
         - { name: job_id, in: path, required: true, schema: { type: string } }
@@ -1003,7 +1020,8 @@ paths:
         score 是查询内的 RRF 分，不承诺全局按 score 排序；
         similarity 取命中子问题中的最高余弦相似度。普通问题保持原有单路编排。
         向量化失败时所有子问题均走关键词路并返回 embedding_unavailable。
-      security: [{ session: [] }]
+        匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容，游客检索按 IP 另行限速（`GUEST_SEARCH_RATE_PER_MIN`）。
+      security: [{ session: [] }, {}]
       parameters:
         - { name: q, in: query, schema: { type: string, default: '' } }
         - { name: doc, in: query, schema: { type: string, default: '' }, description: 限定单个文档。 }
@@ -1128,7 +1146,8 @@ paths:
       tags: [evidence]
       operationId: getEvidence
       summary: 证据详情
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       parameters:
         - { name: evidence_id, in: path, required: true, schema: { type: string } }
         - { $ref: '#/components/parameters/ResourceContext' }
@@ -1146,7 +1165,8 @@ paths:
       tags: [evidence]
       operationId: getEvidenceBacklinks
       summary: 引用该证据的断言/字段/边/句子/Wiki claim
-      description: citations 表的行加 wiki_claim_bindings 的版本化 Wiki claim（wiki_claim 来源带 wiki_id、wiki_title、revision_id）。
+      security: [{ session: [] }, {}]
+      description: citations 表的行加 wiki_claim_bindings 的版本化 Wiki claim（wiki_claim 来源带 wiki_id、wiki_title、revision_id）。匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       parameters:
         - { name: evidence_id, in: path, required: true, schema: { type: string } }
         - { $ref: '#/components/parameters/ResourceContext' }
@@ -1164,8 +1184,8 @@ paths:
       tags: [wiki]
       operationId: listWikis
       summary: 版本化 Wiki 列表
-      security: [{ session: [] }]
-      description: 完整写入形状见 `openapi/wiki-v1.yaml`；读回形状见 WikiRevisionDocument。
+      security: [{ session: [] }, {}]
+      description: 完整写入形状见 `openapi/wiki-v1.yaml`；读回形状见 WikiRevisionDocument。匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       responses:
         '200':
           description: ok
@@ -1216,7 +1236,8 @@ paths:
       tags: [wiki]
       operationId: readWiki
       summary: 读 Wiki 当前（或已发布）修订
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       responses:
         '200':
           description: ok
@@ -1267,7 +1288,8 @@ paths:
       tags: [wiki]
       operationId: readWikiRevision
       summary: 读固定修订（含动态计算的过期原因）
-      security: [{ session: [] }]
+      security: [{ session: [] }, {}]
+      description: 匿名访问仅当 `GUEST_MODE=read` 时存在；游客只能读本组织已发布内容。
       parameters:
         - { name: wiki_id, in: path, required: true, schema: { type: string } }
         - { name: revision_id, in: path, required: true, schema: { type: string } }

@@ -42,41 +42,14 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			apierr.Write(w, r, apierr.Unauthorized("no_session", "缺少会话凭据"))
 			return
 		}
-		// API key 走错了门：给一句说得清的错，而不是"会话无效"
-		if auth.LooksLikeAPIKey(token) {
-			apierr.Write(w, r, apierr.Unauthorized("api_key_on_session_route",
-				"/api/* 用浏览器会话，API key 请调 /v1/*"))
-			return
-		}
-		claims, err := s.sessions.Verify(token)
+		// 校验走共享实现（guest.go）：会话语义只有一份，改了一处两处都变
+		actor, err := s.authenticateSession(r.Context(), token)
 		if err != nil {
-			apierr.Write(w, r, apierr.Unauthorized("invalid_session", "会话无效或已过期").WithCause(err))
-			return
-		}
-		user, err := s.store.UserByID(r.Context(), claims.OrganizationID, claims.Subject)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				// 用户被移出组织后，他手上的 token 立刻失效 —— 这正是每次回查的意义
-				apierr.Write(w, r, apierr.Unauthorized("membership_revoked", "账号已不在该组织内"))
-				return
-			}
 			apierr.Write(w, r, err)
 			return
 		}
-		if !user.Active() {
-			apierr.Write(w, r, apierr.Forbidden("account_disabled", "账号已停用"))
-			return
-		}
-
-		actor := &identity.Actor{
-			Kind:           identity.KindUser,
-			ID:             user.ID,
-			UserID:         user.ID,
-			OrganizationID: user.OrganizationID,
-			Role:           user.Role,
-			RequestID:      r.Header.Get(identity.HeaderRequestID),
-		}
-		s.store.TouchLastSeen(r.Context(), user.ID)
+		actor.RequestID = r.Header.Get(identity.HeaderRequestID)
+		s.store.TouchLastSeen(r.Context(), actor.UserID)
 		next.ServeHTTP(w, r.WithContext(identity.With(r.Context(), actor)))
 	})
 }
@@ -266,8 +239,17 @@ func (s *Server) domainThrottle(next http.Handler) http.Handler {
 			if l.suffix != "" && !strings.HasSuffix(r.URL.Path, l.suffix) {
 				continue
 			}
+			// 游客没有身份：所有游客的 actor.ID 都是同一个占位，按它分桶等于
+			// 全站游客共享一个配额 —— 一个 IP 把桶刷满，所有游客一起被限。
+			// 所以游客按客户端 IP 分桶（与 limitGuest 同一个键函数）。
+			// 游客到不了任何一条贵操作（白名单里没有 POST），这条分支今天跑不到，
+			// 但"跑不到所以写错也行"是下一次事故的写法 —— 保持它正确。
+			key := actor.ID
+			if actor.Kind == identity.KindGuest {
+				key = "ip:" + clientIPVia(r, s.cfg.TrustedProxies)
+			}
 			allowed, remaining, err := s.limiter.Allow(r.Context(),
-				l.bucket+":"+actor.ID, l.limit, time.Minute)
+				l.bucket+":"+key, l.limit, time.Minute)
 			if err != nil {
 				// 与按 key 的限速同一个取舍：限速器坏了放行并记日志，
 				// 而不是让 Redis 抖动变成全站不可用

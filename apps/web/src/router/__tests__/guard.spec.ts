@@ -18,6 +18,10 @@ const profileResponse = () => ({
   data: profile, status: 200, statusText: 'OK', headers: {},
   config: { headers: new AxiosHeaders() },
 })
+const guestResponse = (enabled: boolean) => ({
+  data: { enabled }, status: 200, statusText: 'OK', headers: {},
+  config: { headers: new AxiosHeaders() },
+})
 /**
  * 用例 6：**未登录访问受保护路由 → 跳登录并带 redirect。**
  * 用例 5 的一半：**每条路由都声明齐全**（见文件末尾那组）。
@@ -38,6 +42,8 @@ describe('路由守卫', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     vi.spyOn(authApi, 'me').mockResolvedValue(profileResponse())
+    // 默认关着游客模式：老用例测的都是"关着时的行为"，不能因为守卫多问了一次开关就变。
+    vi.spyOn(authApi, 'guest').mockResolvedValue(guestResponse(false))
     setActivePinia(createPinia())
     localStorage.clear()
   })
@@ -125,8 +131,79 @@ describe('路由守卫', () => {
     resolve(profileResponse())
     await pending
     expect(auth.isAuthenticated).toBe(false)
-    expect(auth.canUpload).toBe(false)
     expect(auth.username).toBe('')
+  })
+})
+
+describe('游客模式守卫（浏览器）', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.spyOn(authApi, 'me').mockResolvedValue(profileResponse())
+    setActivePinia(createPinia())
+    localStorage.clear()
+  })
+
+  function mockGuest(enabled: boolean) {
+    vi.spyOn(authApi, 'guest').mockResolvedValue(guestResponse(enabled))
+  }
+
+  it('开着时未登录进访客路由不跳登录（/resources、/search、/documents/:id）', async () => {
+    mockGuest(true)
+    const router = makeRouter()
+    await router.push('/resources')
+    expect(router.currentRoute.value.name).toBe('resources')
+    await router.push('/search?q=手册')
+    expect(router.currentRoute.value.name).toBe('search')
+    await router.push('/documents/abc123')
+    expect(router.currentRoute.value.name).toBe('workbench')
+    // 游客不许调 /api/auth/me：上面三段导航一个 me 请求都不该有。
+    expect(authApi.me).not.toHaveBeenCalled()
+    expect(useAuthStore().isGuest).toBe(true)
+  })
+
+  it('开着时未登录进非访客路由回登录并带 redirect', async () => {
+    mockGuest(true)
+    const router = makeRouter()
+    for (const [path, name] of [['/keys', 'keys'], ['/members', 'members'],
+      ['/tasks', 'federation-tasks']] as const) {
+      await router.push(path)
+      expect(router.currentRoute.value.name).toBe('login')
+      expect(router.currentRoute.value.query.redirect).toBe(path)
+      expect(name).toBe(router.getRoutes().find((r) => r.path === path)?.name)
+    }
+  })
+
+  it('关着时未登录进访客路由也回登录（老行为不变）', async () => {
+    mockGuest(false)
+    const router = makeRouter()
+    await router.push('/resources')
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/resources')
+    await router.push('/search')
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/search')
+  })
+
+  it('开关问不到时按关处理，回登录', async () => {
+    vi.spyOn(authApi, 'guest').mockRejectedValue(new Error('network down'))
+    const router = makeRouter()
+    await router.push('/resources')
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(useAuthStore().guestEnabled).toBe(false)
+  })
+
+  it('游客进登录页不跳转；带着 redirect 登录后能回去', async () => {
+    mockGuest(true)
+    const router = makeRouter()
+    await router.push({ name: 'login', query: { redirect: '/resources' } })
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/resources')
+  })
+
+  it('访客路由就是 resources / documents / workbench / versions / search / wiki 六个', () => {
+    const guestNames = routes.filter((r) => r.meta?.guest).map((r) => String(r.name)).sort()
+    expect(guestNames).toEqual(
+      ['documents', 'resources', 'search', 'versions', 'wiki', 'workbench'].sort())
   })
 })
 

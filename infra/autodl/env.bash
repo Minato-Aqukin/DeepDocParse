@@ -5,13 +5,11 @@
 # （下面全部用 `${VAR:-默认值}`，外部值优先）。
 
 # ---------------------------------------------------------------- 路径
-# 装到哪。AutoDL 的系统盘只有 30G，torch + vLLM + 权重加起来要 ~20G，
-# 装在系统盘上很容易在最后一步撑爆。有数据盘就用数据盘。
-#
-# **注意**：`/root/autodl-tmp` 在 Pro 实例上不一定是独立分区 —— 2026-08-25 实测
-# 它只是系统盘上的一个目录（`df` 里看不到独立挂载）。所以真正的解法是
-# 建实例时带 `--disk 50`，这个变量只决定放在哪个目录下。
-DDP_ROOT="${DDP_ROOT:-$( [ -d /root/autodl-tmp ] && echo /root/autodl-tmp || echo /root )/ddp}"
+# 装到哪、实例级配置（deploy.env）都由 root.bash 决定：一律落系统盘 /root/ddp，
+# 因为 AutoDL 存镜像只打包系统盘（理由见 root.bash）。torch + vLLM + 三份权重约 25G，
+# 建实例时带 `--disk 50` 给系统盘扩容。
+# shellcheck source=root.bash
+source "$(dirname "${BASH_SOURCE[0]}")/root.bash"
 
 VENV_DIR="${VENV_DIR:-$DDP_ROOT/venv}"
 MODEL_DIR="${MODEL_DIR:-$DDP_ROOT/models/DeepSeek-OCR-2}"
@@ -66,6 +64,11 @@ CHAT_MAX_MODEL_LEN="${CHAT_MAX_MODEL_LEN:-4096}"
 # 设了它就不再看 gpu-memory-utilization —— 这是共卡时唯一算得清的办法，
 # 理由见下面「两个服务共卡时」那段。0 = 不写死，回到 utilization 那套。
 CHAT_KV_CACHE_BYTES="${CHAT_KV_CACHE_BYTES:-3221225472}"
+
+# ---------------------------------------------------------------- bge-m3（CPU，embed.bash）
+# TEI 的替身，见 embed.bash。端口与注册表 embedding_models 段的 endpoint 一致
+EMBED_PORT="${EMBED_PORT:-18080}"
+EMBED_MODEL_DIR="${EMBED_MODEL_DIR:-$DDP_ROOT/models/bge-m3}"
 
 # ---------------------------------------------------------------- 显存与吞吐
 # 以下是**推理优化的旋钮**，含义与取值理由见 README 的「推理优化」一节。

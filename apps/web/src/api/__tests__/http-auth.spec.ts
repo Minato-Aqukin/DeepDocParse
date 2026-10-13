@@ -104,4 +104,17 @@ describe('HTTP authentication boundary', () => {
     expect(localStorage.getItem(TOKEN_KEY)).toBe('new-session')
     expect(location.hash).toBe('#/resources')
   })
+
+  it('游客请求吃到 401：不跳登录、不清状态，错误交给调用方行内说明', async () => {
+    // 游客：store 里没有 token，请求自然也不带 Authorization。
+    useAuthStore().token = null
+    localStorage.removeItem(TOKEN_KEY)
+    location.hash = '#/resources'
+    http.defaults.adapter = async config => { throw unauthorized(config) }
+    await expect(http.get('/api/resources', { suppressErrorToast: true }))
+      .rejects.toBeInstanceOf(AxiosError)
+    expect(location.hash).toBe('#/resources')
+    expect(useAuthStore().isAuthenticated).toBe(false)
+    expect(useAuthStore().isGuest).toBe(false)
+  })
 })
