@@ -319,10 +319,22 @@ autodl exec <id> 'bash /root/src/DeepDocParse/infra/autodl/stack.bash up && bash
 ## 镜像备份与恢复
 
 ```bash
+# 先干净停：PostgreSQL 正常关库，镜像里的数据目录才一致（stack.bash stop 不管模型线，模型进程关机时自然消失）
+autodl exec <id> 'bash /root/src/DeepDocParse/infra/autodl/stack.bash stop'
 autodl stop <id>                       # 存镜像要先关机
+sleep 90                               # 见下：关机刚返回就存，存出来可能是空镜像
 autodl image save <id> ddp-guest-tunnel
-autodl images                          # 等状态变 finished
+autodl images --json                   # 等 status=finished，再看 sizeBytes
 ```
+
+**存完必须看大小，最好再开一台验证。** 2026-10-14 实测：关机状态刚变 `shutdown` 就提交保存，
+镜像照样 `finished`，`sizeBytes` 却只有 10240 —— 从它开出的实例系统盘是空的（53M），
+全程没有任何报错。同一台机器干净停服务、关机后等 90 秒再存，得到 27.5GB 的镜像，
+开新实例后 `/root/ddp`、PostgreSQL、MinIO、密钥与令牌齐全，`stack.bash up` 一条命令回到公网可用。
+
+**Pro 实例没有独立数据盘**（`dataDiskTotalBytes=0`），`/root/autodl-tmp` 只是系统盘上的目录，
+实测会被打进镜像（1GB 探针文件在镜像里）。普通实例上它是独立数据盘、不进镜像 ——
+两种实例都把东西放 `/root/ddp`，行为才一致。
 
 从镜像恢复：`autodl create --image <镜像 UUID> --gpu 4090d --disk 50 --wait`，然后同上 `stack.bash up`
 （或建实例时直接带 `--start-command 'bash /root/src/DeepDocParse/infra/autodl/stack.bash up'`）。

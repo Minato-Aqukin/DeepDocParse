@@ -4,11 +4,13 @@
 #
 # ## 为什么一律落系统盘（/root/ddp）
 #
-# AutoDL 的「保存镜像」**只打包系统盘**；数据盘 `/root/autodl-tmp` 不进镜像
+# AutoDL 的「保存镜像」**只打包系统盘**；普通实例的数据盘 `/root/autodl-tmp` 不进镜像
 # （官方文档：数据盘"不能保存至镜像中"）。旧缺省是"有数据盘就用数据盘"，于是 venv、
 # 权重、stack.env 里的全部密钥、MinIO 数据、隧道令牌都躺在数据盘上 —— 存出来的镜像里
 # 只剩 PostgreSQL（/var/lib/postgresql 在系统盘）：库里的口令对不上新生成的 stack.env，
 # 节点身份文件也不见了，从镜像开出来的实例起不来，而存镜像那一步不报任何错。
+# （Pro 实例没有独立数据盘，`/root/autodl-tmp` 只是系统盘上的目录、会进镜像；放 /root/ddp
+# 才让两种实例的行为一致。）
 #
 # 旧部署要先搬家：`mv /root/autodl-tmp/ddp /root/ddp`，venv 再按 README「从数据盘迁到系统盘」
 # 改写解释器路径。下面那道闸就是拦"没搬家就用新缺省"的：那样 install 会在空目录里
