@@ -1,13 +1,42 @@
 import { expect, test, type Page } from '@playwright/test'
 import { realErrors, watchErrors } from './console-guard'
 
+/**
+ * 未登录浏览器先问一次 `/api/auth/guest`（部署开没开游客模式，免鉴权），
+ * 这是它唯一允许发出的 `/api/` 请求；游客模式关着时落到登录页，不碰任何业务 API。
+ */
+async function guestSwitch(page: Page, enabled: boolean) {
+  await page.route((url) => url.pathname === '/api/auth/guest',
+    (route) => route.fulfill({ json: { enabled } }))
+}
+
 test('无桌面宿主的未登录浏览器只能看到登录入口，不请求任何业务 API', async ({ page }) => {
   const errors = watchErrors(page), requests: string[] = []
-  page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(request.url()) })
+  page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(new URL(request.url()).pathname) })
+  await guestSwitch(page, false)
   await page.goto('/#/sources')
   await expect(page.getByRole('heading', { name: '数据源' })).toHaveCount(0)
   await expect(page).toHaveURL(/#\/login\?redirect=/)
-  expect(requests).toEqual([])
+  expect(requests).toEqual(['/api/auth/guest'])
+  expect(realErrors(errors)).toEqual([])
+})
+
+test('游客模式开着：未登录直接进本站公开资源库，只发白名单内的只读请求', async ({ page }) => {
+  const errors = watchErrors(page), requests: string[] = []
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (url.pathname.startsWith('/api/')) requests.push(`${request.method()} ${url.pathname}${url.search}`)
+  })
+  await guestSwitch(page, true)
+  await page.route((url) => url.pathname === '/api/resources',
+    (route) => route.fulfill({ json: { items: [], offset: 0, limit: 50, has_more: false,
+      coverage: { scope: 'site_public', complete: true, watermark: null, snapshot_complete: false } } }))
+  await page.goto('/')
+  await expect(page).toHaveURL(/#\/resources$/)
+  await expect(page.getByRole('status').filter({ hasText: '游客' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible()
+  await expect(page.getByRole('radio', { name: '我的资源' })).toHaveCount(0)
+  expect(requests).toEqual(['GET /api/auth/guest', 'GET /api/resources?scope=site_public&offset=0&limit=50'])
   expect(realErrors(errors)).toEqual([])
 })
 
