@@ -79,8 +79,9 @@ Wiki 任务的结果区显示“Wiki 生成”并指向下方“Wiki 修订”�
 - **加接口**：在 `api/` 下按域加模块并挂到 `api/index.ts`；类型放 `types/api.ts`
 - **加状态值**：解析/索引状态、问答降级说明统一在 `constants/status.ts`，
   改一处全站生效（标签、筛选下拉、气泡文案都由它派生）
-- **加解析引擎或参数**：只改 `constants/engines.ts` 的 schema，
-  上传对话框与重解析共用 `components/engine/EngineOptionsForm.vue`，两处同时生效
+- **加解析引擎或参数**：存在性与缺省值来自 `GET /api/parse-engines`（注册表驱动），
+  参数 schema 加在 `constants/engines.ts`；上传对话框、重解析与设置页共用
+  `components/engine/EngineOptionsForm.vue`，三处同时生效
 - **轮询**：用 `composables/usePolling.ts`，不要再手写 `setInterval` + 清理
 - **页面文件加载失败**：全局路由错误处理会持续显示「界面文件已变更或缺失」，
   并提供「重新加载窗口」。浏览器与桌面都只在用户点击后重载，不自动重载或重试；

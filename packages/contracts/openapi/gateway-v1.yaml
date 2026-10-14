@@ -390,7 +390,7 @@ paths:
 
   /v1/capabilities:
     get:
-      summary: 能力清单（注册表 + 当前健康，v1.2 新增；v1.3 加 model_channels）
+      summary: 能力清单（注册表 + 当前健康，v1.2 新增；v1.3 加 model_channels；v1.4 加 parse 通道）
       description: |
         只由 models.yaml 注册表与**当前**健康探测驱动 —— **注册不等于就绪**。
         响应分成两半，分别回答两个不同的问题。
@@ -420,7 +420,7 @@ paths:
         选路不看健康，所以"另有一个健康的兄弟条目"不能把死掉的默认条目救成
         ready。一个候选都没有时该 operation 直接不出现（不编造 `configured`）。
 
-        ### `model_channels`：chat / embedding / rerank 通道的原料
+        ### `model_channels`：chat / embedding / rerank / parse 通道的原料
 
         **不是能力声明**，而是 corpus-api 组合语料侧就绪度用的原料：语料侧会
         请求哪个 model 由**它自己的配置**决定（`CHAT_MODEL` 留空就是本网关的
@@ -429,6 +429,12 @@ paths:
         `services/extraction.py` 的选路一字不差，段名补出来的老条目照样算），
         `vision` 的判据是写了 `vision`。两者不互相顶替 —— OCR 专用模型看得见
         图但不听指令，拿它去抽值会抽出一堆假的 `not_found`。
+
+        `parse` 通道列出 `parse_engines` 段的**每个**解析引擎（v1.4 新增，纯增量）：
+        `profile` 是调用方填在 `/v1/parse` `engine` 上的条目名，`model` 是它真正请求的
+        模型 id（vlm-ocr 取 `options.model`），`supports.vision` 表示它看图识别。
+        这是上传/重解析表单"能选哪些引擎"的唯一来源（语料侧 `GET /api/parse-engines`），
+        前端不再写死引擎表。`doc.parse` profile 仍只描述缺省选路会挑中的那一个。
 
         `accepting_admissions` 恒为 false：admission 受理器尚未实现，能力就绪
         不等于会接单（I06）。**队列满属于接单问题，不进 readiness。**
@@ -468,7 +474,7 @@ paths:
                       required: [channel, model, profile, default, readiness, supports,
                                  observed_at, valid_until]
                       properties:
-                        channel: { type: string, enum: [chat, embedding, rerank] }
+                        channel: { type: string, enum: [chat, embedding, rerank, parse] }
                         model:
                           type: string
                           description: 真实请求里会填在 `model` 字段上的 id（可能来自 options.model / adapter）

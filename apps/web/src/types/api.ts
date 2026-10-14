@@ -9,6 +9,7 @@
  * 界面上出现原始英文枚举，或者某条降级在 UI 上干脆不存在。
  */
 export type {
+  CapabilityReadiness,
   CodeDetection,
   CompileStatus,
   Degraded,
@@ -23,6 +24,7 @@ export type {
 // `export type { ... } from` 只是转发，不会把名字带进本文件的作用域，
 // 而下面的接口定义要用它们 —— 所以再 import 一次
 import type {
+  CapabilityReadiness,
   CodeDetection,
   CompileStatus,
   Degraded,
@@ -450,6 +452,27 @@ export interface Member {
 export interface EngineChoice {
   engine: string
   options: Record<string, unknown>
+}
+
+/**
+ * `GET /api/parse-engines` 的一个条目：注册表里的引擎 + 网关本次探测的健康。
+ * 顺序就是注册表的顺序，前端照原样列，不重排。
+ */
+export interface ParseEngineEntry {
+  engine: string
+  model: string
+  readiness: CapabilityReadiness
+}
+
+/**
+ * `GET /api/parse-engines`：本站可选引擎的唯一来源（注册表驱动）。
+ * `capability_status` 为 unknown 时 `engines` 为空 —— 此时不要自己猜一张表，
+ * 按"服务端缺省引擎"提交（`engine: ''`）。
+ */
+export interface ParseEngines {
+  default_engine: string
+  capability_status: 'observed' | 'unknown'
+  engines: ParseEngineEntry[]
 }
 
 

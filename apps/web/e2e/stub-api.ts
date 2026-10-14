@@ -120,6 +120,22 @@ export async function stubApi(page: Page): Promise<void> {
           headers: SOURCE_HEADER,
         })
       }
+      // 解析引擎清单（ParseEngines 形状）。打桩照 AutoDL 的真实形状：
+      // vlm-ocr 排前面而缺省是 borndigital —— e2e 里打开上传对话框/设置页，
+      // 走的就是"缺省不是第一条"这条分支。形状必须与 types/api.ts 的
+      // ParseEngines 一致：给错只会让表单静默回落到服务端缺省，不红但掉覆盖
+      if (path === '/api/parse-engines') {
+        return route.fulfill({
+          json: {
+            default_engine: 'borndigital', capability_status: 'observed',
+            engines: [
+              { engine: 'vlm-ocr', model: 'deepseek-ocr-2', readiness: 'ready' },
+              { engine: 'borndigital', model: 'borndigital', readiness: 'ready' },
+            ],
+          },
+          headers: SOURCE_HEADER,
+        })
+      }
       if (/\/documents\/[^/]+\/versions$/.test(path)) return route.fulfill({ json: [], headers: SOURCE_HEADER })
       if (/\/documents\/[^/]+$/.test(path)) {
         return route.fulfill({

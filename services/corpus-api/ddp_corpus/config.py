@@ -75,7 +75,8 @@ class Settings(BaseSettings):
     # 上传/重解析没有显式指定引擎时用哪个。**名字必须在 service 的 models.yaml 里存在**，
     # 否则 service 返回 404 unknown_engine —— 这正是无 GPU 环境踩到的：
     # models.cpu.yaml 只注册了 borndigital，本层却按名字写死 mineru，第一步就断。
-    # 与注册表驱动一致：换引擎 = 改这一行配置，不改代码
+    # 与注册表驱动一致：换引擎 = 改这一行配置，不改代码。Web 的引擎选择框也以它为缺省
+    # （`GET /api/parse-engines` 的 default_engine），前端不再另配一份
     default_parse_engine: str = "mineru"
     # 解析平面必须走 service（那是它的本职）；但 embedding 与 chat 只要求 OpenAI 兼容，
     # 留独立配置以免把本层绑死在 DeepDocParse 的部署形态上（ADR #17）。

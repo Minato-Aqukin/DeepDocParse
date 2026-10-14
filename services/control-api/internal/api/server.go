@@ -285,6 +285,8 @@ var corpusPrefixes = []string{
 	"/api/conversations",
 	"/api/conversations/",
 	"/api/search",
+	// 上传/重解析表单的可选引擎（网关注册表投影）；不进游客白名单：游客不能上传
+	"/api/parse-engines",
 	"/api/evidence/",
 	"/api/extractions/",
 	"/api/knowledge/",

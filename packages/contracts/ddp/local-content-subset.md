@@ -46,6 +46,8 @@
 - `PATCH /api/resources/{id}` publication（本机无公开/组织，无处可发布）。
 - `POST /api/wikis/{id}/publish`（同上）。
 - reparse / reindex（若本机运行时无此概念）。
+- `GET /api/parse-engines`（本机只有进程内 borndigital 一种解析，没有引擎可选；
+  Web 拿到 404 时不显示引擎选择，按服务端缺省解析）。
 - 其余 Web 可能调用的 `/api/*`：一律 404 `not_supported_locally`。
 
 ## 本机语义差异

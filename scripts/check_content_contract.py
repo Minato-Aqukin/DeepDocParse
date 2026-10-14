@@ -42,6 +42,7 @@ GUARDED_PREFIXES = (
     "/api/documents",
     "/api/conversations",
     "/api/search",
+    "/api/parse-engines",
     "/api/evidence",
     "/api/wikis",
 )

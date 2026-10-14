@@ -6,7 +6,8 @@ import { computed, ref } from 'vue'
 
 import { ingestStatusOf, uploadDirect, waitForIngest, waitForVerification } from '@/api/uploads'
 import EngineOptionsForm from '@/components/engine/EngineOptionsForm.vue'
-import { DEFAULT_ENGINE, defaultOptions, pruneOptions } from '@/constants/engines'
+import { useParseEngines } from '@/composables/useParseEngines'
+import { defaultOptions, pruneOptions } from '@/constants/engines'
 import { loadEnginePreference } from '@/utils/preferences'
 import type { EngineChoice } from '@/types/api'
 
@@ -240,7 +241,11 @@ function stageLabel(entry: UploadEntry): string {
 }
 
 function resetOptions() {
-  choice.value = { engine: DEFAULT_ENGINE, options: defaultOptions(DEFAULT_ENGINE) }
+  // 「恢复默认」= 回到服务端的缺省引擎（清单还没到时先回空串，表单就绪后会自己落过去）
+  const serverDefault = useParseEngines().defaultEngine.value
+  choice.value = serverDefault
+    ? { engine: serverDefault, options: defaultOptions(serverDefault) }
+    : { engine: '', options: {} }
 }
 </script>
 

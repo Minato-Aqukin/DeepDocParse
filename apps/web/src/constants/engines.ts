@@ -1,13 +1,15 @@
 /**
- * 解析引擎与其可调参数的 schema。
+ * 已知引擎的**参数 schema 目录**（catalog），按注册表名索引。
  *
- * **加一个引擎 = 在这里加一条配置**，上传对话框与重解析表单会自动长出对应的字段——
- * 它们共用 EngineOptionsForm，按 schema 渲染，表单本身不认识任何具体引擎。
+ * 注意这张表**不是**"本站有哪些引擎" —— 那个问题的唯一答案是
+ * `GET /api/parse-engines`（见 `composables/useParseEngines.ts`），注册表里有
+ * 什么前端就列什么。以前这张表同时干这两件事，写死的后果是无 GPU 部署
+ * 也列 mineru、有 DeepSeek-OCR-2 的部署却选不到它，选了没注册的引擎
+ * 在网关侧收 404 unknown_engine —— 现在存在性由服务端说了算。
  *
- * 但**这张表自己就是一处硬编码**：它是手工维护的，与后端 DEFAULT_PARSE_ENGINE、
- * service 的 models.yaml 三处必须人工对齐，对不上就是上传时的 404 unknown_engine。
- * 真正的解法是让 service 的 /v1/models 把 parse_engines 也列出来、由前端动态生成，
- * 那是向后兼容的新增，但契约目前没有这个能力（见 openapi.yaml）。
+ * 这张表只回答"一个引擎有哪些可调参数、中文名叫什么"。服务端返回的引擎
+ * 即使在这里没有 schema（注册表加了新引擎但前端还没跟上）**仍然可选**，
+ * 只是按"名字本身、无参数"渲染 —— 加引擎不再需要前端发版。
  *
  * 参数名要与 service 侧 models.yaml 的引擎透传选项对齐：后端只是原样转发 options。
  */
@@ -64,15 +66,23 @@ export const ENGINES: EngineSchema[] = [
     // 没有可调参数：抽的是文字层本身，没有后端/语言可选
     fields: [],
   },
+  {
+    engine: 'vlm-ocr',
+    label: '大模型 OCR',
+    description:
+      '逐页送多模态 OCR 模型识别，适合扫描件/表格/公式；每页一次模型调用、较慢、要 GPU；坐标来自模型输出',
+    // 模型由注册表那一行的 options.model 决定，不是用户可调的参数
+    fields: [],
+  },
 ]
 
 /**
- * 缺省引擎。**必须与后端 DEFAULT_PARSE_ENGINE、service 的 models.yaml 三者对齐**——
- * 任一处对不上，上传会在 service 侧收 404 unknown_engine。
- * 无 GPU 部署（models.cpu.yaml）把它设成 borndigital。
+ * **没有前端的缺省引擎。** 服务端的 `default_engine` 才是权威的：
+ * 存在性与缺省值都在 `GET /api/parse-engines` 里，前端只做"没清单时传空串
+ * 让服务端决定"。以前这里有个 `DEFAULT_ENGINE`（可被 `VITE_DEFAULT_ENGINE`
+ * 覆盖）与后端 `DEFAULT_PARSE_ENGINE`、models.yaml 三处人工对齐 ——
+ * 对不上就是上传时的 404 unknown_engine，现在这三处只剩一处。
  */
-export const DEFAULT_ENGINE =
-  (import.meta.env.VITE_DEFAULT_ENGINE as string | undefined) || ENGINES[0]!.engine
 
 export function schemaOf(engine: string): EngineSchema | undefined {
   return ENGINES.find((e) => e.engine === engine)

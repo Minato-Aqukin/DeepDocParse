@@ -412,6 +412,41 @@ async def test_shipped_registry_projects_without_fabricating(client, app_state):
 
 
 @respx.mock
+async def test_parse_channel_lists_every_registered_engine_with_its_health(client, app_state):
+    """parse 通道是上传表单"能选哪些引擎"的唯一来源：注册表里每个解析引擎都要出现，
+    `profile` 是要填在 `engine` 上的条目名，`model` 是它真请求的模型，健康如实报。
+
+    前端曾经写死 mineru + borndigital：有 DeepSeek-OCR-2 的部署选不到 vlm-ocr，
+    没有 mineru 的部署默认却选中 mineru，提交即 404 unknown_engine。
+    """
+    vlm = ModelEntry(endpoint="http://ocr:8000", runtime="vlm-ocr", capabilities=["parse", "vision"],
+                     options={"model": "deepseek-ocr-2"})
+    stale = ModelEntry(endpoint="http://ocr2:8000", runtime="vlm-ocr", capabilities=["parse", "vision"],
+                       options={"model": "deepseek-ocr-2"})
+    mineru = ModelEntry(endpoint="http://mineru:8000", runtime="mineru-api", capabilities=["parse"])
+    app_state.registry = Registry(parse_engines={
+        "vlm-ocr": vlm, "vlm-stale": stale, "borndigital": BORNDIGITAL, "mineru": mineru})
+    respx.get("http://ocr:8000/v1/models").mock(
+        return_value=Response(200, json=models_body("deepseek-ocr-2")))
+    # 运行时活着却服务着别的模型：每个真实请求都会 404，不能报 ready
+    respx.get("http://ocr2:8000/v1/models").mock(
+        return_value=Response(200, json=models_body("something-else")))
+    respx.get("http://mineru:8000/health").mock(side_effect=httpx.ConnectError("down"))
+
+    body = (await client.get("/v1/capabilities")).json()
+    parse = {c["profile"]: c for c in body["model_channels"] if c["channel"] == "parse"}
+    assert list(parse) == ["vlm-ocr", "vlm-stale", "borndigital", "mineru"], "按注册表顺序、一个不漏"
+    assert parse["vlm-ocr"]["model"] == "deepseek-ocr-2"
+    assert parse["vlm-ocr"]["readiness"] == "ready"
+    assert parse["vlm-ocr"]["supports"] == {"vision": True}
+    assert parse["vlm-stale"]["readiness"] == "unhealthy"
+    assert parse["borndigital"]["readiness"] == "ready"
+    assert parse["borndigital"]["supports"] == {"vision": False}
+    assert parse["mineru"]["readiness"] == "unhealthy"
+    assert [c["default"] for c in parse.values()].count(True) == 1
+
+
+@respx.mock
 async def test_response_matches_the_openapi_contract(client, app_state):
     """整个响应体（含 model_channels）必须能过契约里的 200 schema。
 

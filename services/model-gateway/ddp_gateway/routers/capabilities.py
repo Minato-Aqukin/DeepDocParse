@@ -13,7 +13,8 @@
     profiles 里，而网关一行编译/检索代码都没有）。
 
 `model_channels`
-    chat / embedding / rerank 三条通道里**每个注册条目**的真实健康与派生能力。
+    chat / embedding / rerank / parse 四条通道里**每个注册条目**的真实健康与派生能力
+    （parse 通道另有一个消费方：上传/重解析表单列可选引擎）。
     **它不是能力声明**，而是 corpus-api 组合语料侧就绪度的原料：语料侧知道
     自己会请求哪个 model（`CHAT_MODEL` 留空就是网关的 default），所以必须由
     它去挑 —— 网关不能替它断言「有一个 instruct 条目」就等于「你会拿到它」。
@@ -108,11 +109,15 @@ _OPERATIONS: tuple[tuple[str, str, object, str, bool], ...] = (
 
 #: 通道名 ->（注册表段, 探针缺省路径, 派生能力判据）。
 #: 这里列的是**通道里每个条目**，不做选路 —— 谁会被挑中由消费方按自己的配置决定。
+#: `parse` 是上传/重解析表单"能选哪些引擎"的唯一来源（语料侧 /api/parse-engines）：
+#: 前端写死引擎表的后果是有 DeepSeek-OCR-2 的部署选不到 vlm-ocr、没有 mineru 的部署
+#: 却默认选中 mineru，提交即 404 unknown_engine。
 _CHANNELS: tuple[tuple[str, str, str, dict], ...] = (
     ("chat", "vqa_models", _MODELS_PATH,
      {"instruct": _follows_instructions, "vision": _sees_images}),
     ("embedding", "embedding_models", "/health", {"dense": _has("dense")}),
     ("rerank", "rerank_models", "/health", {"rerank": _has("rerank")}),
+    ("parse", "parse_engines", "/health", {"vision": _sees_images}),
 )
 
 #: 真实配置里的限额，没有对应配置项就不填。

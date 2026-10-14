@@ -29,7 +29,7 @@ from ddp_corpus.errors import install_error_handlers
 from ddp_corpus.outbox import deliver_loop, outbox_backlog
 from ddp_corpus.reconcile import reconcile_loop, sweep_federation_loop
 from ddp_corpus.routers import (
-    conversations, documents, external, extractions, internal, knowledge, search, file_access, resources, bundles, bundle_replicas, mcp_tools,
+    conversations, documents, external, extractions, internal, knowledge, search, file_access, resources, bundles, bundle_replicas, mcp_tools, parse_engines,
 )
 from ddp_corpus.routers import client as client_router
 from ddp_corpus.routers import collections as collections_router
@@ -120,6 +120,7 @@ install_error_handlers(app)
 app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
 app.include_router(conversations.router, prefix="/api", tags=["qa"])
 app.include_router(search.router, prefix="/api", tags=["search"])
+app.include_router(parse_engines.router, tags=["documents"])
 app.include_router(bundles.router, tags=["bundles"])
 app.include_router(bundle_replicas.router, tags=["bundles"])
 app.include_router(resources.router, prefix="/api/resources", tags=["resources"])

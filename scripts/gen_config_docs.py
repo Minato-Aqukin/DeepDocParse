@@ -104,10 +104,9 @@ user_id 伪造一个有效会话，且运行时不报任何错。一次性容器
 `services/control-api`（Go），见 `services/control-api/CONFIG.md`。
 
 前端另有构建期变量（`apps/web/.env*`，不在下表）：`VITE_API_TARGET`
-（dev server 代理到的后端地址）、`VITE_API_BASE`（打包后请求的前缀），
-以及 `VITE_DEFAULT_ENGINE`（上传对话框预选的解析引擎，留空取 `ENGINES` 第一条）。
-**`VITE_DEFAULT_ENGINE` 要与 `DEFAULT_PARSE_ENGINE`、`infra/registry/models.yaml`
-三者对齐** —— 任一处对不上，上传会在网关侧收 404 unknown_engine。
+（dev server 代理到的后端地址）、`VITE_API_BASE`（打包后请求的前缀）。
+前端**不再有**写死的引擎表与 `VITE_DEFAULT_ENGINE`：上传/重解析可选的引擎与缺省值
+都来自 `GET /api/parse-engines`（网关注册表 + 下表的 `DEFAULT_PARSE_ENGINE`）。
 """,
     ),
 )

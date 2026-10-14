@@ -8,6 +8,7 @@ import type {
   EngineChoice,
   JobInfo,
   IndexValidation,
+  ParseEngines,
   SourceUrl,
 } from '@/types/api'
 
@@ -24,6 +25,11 @@ export interface DocumentQuery {
 
 export const documentsApi = {
   list: (params: DocumentQuery = {}) => http.get<DocumentInfo[]>('/api/documents', { params }),
+  /**
+   * 本站可选的解析引擎（注册表驱动，语料侧不缓存）。
+   * 失败由调用方按"服务端缺省引擎"回落，不弹全局 toast。
+   */
+  parseEngines: () => http.get<ParseEngines>('/api/parse-engines', { suppressErrorToast: true }),
   get: (id: string, context?: ResourceContext) =>
     http.get<DocumentInfo>(`/api/documents/${id}`, { params: context }),
   stats: () => http.get<DocumentStats>('/api/documents/stats/summary'),

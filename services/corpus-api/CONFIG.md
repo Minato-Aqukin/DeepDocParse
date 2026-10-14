@@ -11,10 +11,9 @@
 `services/control-api`（Go），见 `services/control-api/CONFIG.md`。
 
 前端另有构建期变量（`apps/web/.env*`，不在下表）：`VITE_API_TARGET`
-（dev server 代理到的后端地址）、`VITE_API_BASE`（打包后请求的前缀），
-以及 `VITE_DEFAULT_ENGINE`（上传对话框预选的解析引擎，留空取 `ENGINES` 第一条）。
-**`VITE_DEFAULT_ENGINE` 要与 `DEFAULT_PARSE_ENGINE`、`infra/registry/models.yaml`
-三者对齐** —— 任一处对不上，上传会在网关侧收 404 unknown_engine。
+（dev server 代理到的后端地址）、`VITE_API_BASE`（打包后请求的前缀）。
+前端**不再有**写死的引擎表与 `VITE_DEFAULT_ENGINE`：上传/重解析可选的引擎与缺省值
+都来自 `GET /api/parse-engines`（网关注册表 + 下表的 `DEFAULT_PARSE_ENGINE`）。
 
 共 **97** 项。
 
@@ -41,7 +40,7 @@
 | `CONTROL_URL` | `str` | `'http://127.0.0.1:8090'` | 控制面（services/control-api）。本服务向它要两样东西： 稳定文件 URL 的凭证、actor 显示名 —— 两者都住在 control schema， 而 corpus 对那个 schema 没有任何权限（企业边界 5） |
 | `SERVICE_TOKEN` | `str` | `'change-me'` | 内网服务凭据，**三个服务必须一致**（control-api / model-gateway / 本服务）。 它是本服务唯一的门禁：actor 上下文头之所以可信，前提就是 "只有持有它的调用方能进来"。占位值会被拒绝启动 |
 | `BUNDLE_NODE_ID` | `str` | `''` | Persistent node identity for portable source evidence. Empty disables native Bundle exports until deployment config assigns a unique identity; never invent a shared node. |
-| `DEFAULT_PARSE_ENGINE` | `str` | `'mineru'` | 上传/重解析没有显式指定引擎时用哪个。**名字必须在 service 的 models.yaml 里存在**， 否则 service 返回 404 unknown_engine —— 这正是无 GPU 环境踩到的： models.cpu.yaml 只注册了 borndigital，本层却按名字写死 mineru，第一步就断。 与注册表驱动一致：换引擎 = 改这一行配置，不改代码 |
+| `DEFAULT_PARSE_ENGINE` | `str` | `'mineru'` | 上传/重解析没有显式指定引擎时用哪个。**名字必须在 service 的 models.yaml 里存在**， 否则 service 返回 404 unknown_engine —— 这正是无 GPU 环境踩到的： models.cpu.yaml 只注册了 borndigital，本层却按名字写死 mineru，第一步就断。 与注册表驱动一致：换引擎 = 改这一行配置，不改代码。Web 的引擎选择框也以它为缺省 （`GET /api/parse-engines` 的 default_engine），前端不再另配一份 |
 | `EMBEDDING_URL` | `str` | `''` | 解析平面必须走 service（那是它的本职）；但 embedding 与 chat 只要求 OpenAI 兼容， 留独立配置以免把本层绑死在 DeepDocParse 的部署形态上（ADR #17）。 留空则回落到 {service_url}/v1/...，dev 下什么都不用配。 如直连 TEI：http://127.0.0.1:18080/v1/embeddings |
 | `EMBEDDING_TOKEN` | `str` | `''` | 留空用 service_token |
 | `EMBEDDING_MODEL` | `str` | `''` | 留空由上游注册表选 default |

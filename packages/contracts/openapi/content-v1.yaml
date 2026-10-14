@@ -204,6 +204,34 @@ components:
         pages: { type: integer }
         askable: { type: integer }
 
+    ParseEngines:
+      type: object
+      required: [default_engine, capability_status, engines]
+      additionalProperties: false
+      properties:
+        default_engine:
+          type: string
+          description: 上传/重解析不指定引擎时本站用哪个（`DEFAULT_PARSE_ENGINE`）。不保证在 `engines` 里 —— 不在就是部署配错了。
+        capability_status:
+          type: string
+          enum: [observed, unknown]
+          description: observed = 本次真从模型网关拿到了引擎清单；unknown = 拿不到（网关不可达或版本太旧），`engines` 为空，客户端应按服务端缺省引擎解析而不是自己猜一张表。
+        engines:
+          type: array
+          description: 模型网关注册表里的**全部**解析引擎（`models.yaml` 的 `parse_engines` 段），按注册表顺序。
+          items:
+            type: object
+            required: [engine, model, readiness]
+            additionalProperties: false
+            properties:
+              engine: { type: string, description: 注册表条目名，上传/重解析时原样填在 `engine` 上 }
+              model: { type: string, description: 引擎真正请求的模型 id（vlm-ocr 是 `options.model`，进程内引擎就是条目名） }
+              readiness:
+                type: string
+                x-ddp-enum: capability_readiness
+                enum: [configured, ready, draining, unhealthy, unknown]
+                description: 网关本次探测的健康；过期或不认识的取值报 unknown。unhealthy / draining 的引擎现在提交必然失败。
+
     DocumentResult:
       type: object
       required: [document_id, job_id, filename, page_count, markdown, images]
@@ -1032,6 +1060,24 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SearchResult' }
+
+  /api/parse-engines:
+    get:
+      tags: [documents]
+      operationId: listParseEngines
+      summary: 本站可选的解析引擎（来自模型网关注册表 + 当前健康）
+      description: |
+        上传与重解析表单选引擎的唯一来源：注册表里有什么就列什么，**不在前端写死引擎表**
+        （写死的后果是无 GPU 部署也列 mineru、有 DeepSeek-OCR-2 的部署却选不到它，
+        选了没注册的引擎在网关收 404 `unknown_engine`）。语料侧按网关
+        `GET /v1/capabilities` 的 `model_channels[channel=parse]` 投影，不缓存。
+      security: [{ session: [] }]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ParseEngines' }
 
   /api/documents/{document_id}/conversations:
     post:

@@ -362,6 +362,37 @@ async def _fetch_gateway(http: httpx.AsyncClient) -> dict | None:
     return body
 
 
+async def parse_engine_options(http: httpx.AsyncClient | None, *,
+                               now: datetime | None = None) -> tuple[list[dict], str]:
+    """网关注册了哪些解析引擎、各自现在能不能用 —— 上传/重解析选引擎的唯一来源。
+
+    投影网关 `model_channels[channel=parse]`，返回 `(engines, capability_status)`。
+    规则与本模块其余部分一致：取不到、网关自己没证据、一个 parse 条目都没有
+    （网关太旧，还没有这条通道）都报 `unknown` 且不给清单 —— 宁可让客户端退回
+    服务端缺省引擎，也不让它拿一张猜出来的表去选；过期或不认识的 readiness 报 unknown。
+    """
+    now = now or datetime.now(timezone.utc)
+    gateway = await _fetch_gateway(http) if http is not None else None
+    channels = gateway.get("model_channels") if gateway else None
+    if not isinstance(channels, list):
+        return [], "unknown"
+    engines: list[dict] = []
+    seen: set[str] = set()
+    for channel in channels:
+        if not isinstance(channel, dict) or channel.get("channel") != "parse":
+            continue
+        name, model = channel.get("profile"), channel.get("model")
+        if not isinstance(name, str) or not name or name in seen:
+            continue
+        seen.add(name)
+        engines.append({"engine": name,
+                        "model": model if isinstance(model, str) and model else name,
+                        "readiness": _upstream_readiness(channel, now)})
+    if not engines:
+        return [], "unknown"
+    return engines, "observed"
+
+
 # --------------------------------------------------------------------------
 # 本层 operation 的组合
 # --------------------------------------------------------------------------
