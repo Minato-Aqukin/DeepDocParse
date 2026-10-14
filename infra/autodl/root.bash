@@ -27,7 +27,8 @@ fi
 
 # ---- 平台注入的线程数 ----
 # AutoDL 把 OMP_NUM_THREADS / MKL_NUM_THREADS 写进容器环境（PID 1、开机钩子、SSH 会话全都继承）。
-# 2026-10-14 实测：无卡模式开过一次之后它是 0，再有卡开机（cgroup 配额 16 核）也还是 0。
+# 2026-10-14 实测：无卡模式开过一次之后它是 0，紧接着那次有卡开机（cgroup 配额 16 核）也还是 0；
+# 再下一次有卡开机又是 16 —— 平台行为不确定，所以每次都检查。
 # vLLM 拿它去 torch.set_num_threads(0)，OCR 当场崩（"set_num_threads expects a positive integer"），
 # 指令模型跟着等满 10 分钟，网站和隧道排在后面迟迟起不来。
 # 只修坏值（0、空、非数字）：按 cgroup 实际 CPU 配额重算，至少 1；没设置的保持没设置。
