@@ -333,6 +333,14 @@ bash /root/src/DeepDocParse/infra/autodl/stack.bash autostart off   # 摘掉
 ```
 
 挂上之后要**重新存镜像**才会进镜像（见下一节）。已存在、且不是本项目写的 `/etc/autodl.sh` 不会被覆盖。
+2026-10-14 冷启动实测：挂上后存的镜像开新实例、不带 `--start-command`，无人干预，开机约 2 分钟
+`up 完成，0 项失败`，公网恢复；`/tmp/autodl.sh.log` 里不再有"No such file"。
+
+**从镜像开出的实例会沿用原实例的 `start_command`**（2026-10-14 实测一次）：新实例没传开机命令，
+`customer.cmd.sh` 末尾却是原实例的那条 —— 所以两个钩子都跑了（`boot.log` 里同一秒两条"开机自启动"，
+被 `up` 的锁串行，各自 0 失败）。原实例的开机命令里若埋过 `--ttl` 定时关机，
+从它存的镜像开出的实例很可能也会按时关机。存镜像前先清掉：关机 → `autodl start <id> --start-command true`
+开一次 → 再关机存镜像。
 
 **二、随实例走：`start_command`。** Pro 实例的 `start_command` 随实例保存，**每次开机都会执行**，
 直到某次开机显式传入新命令把它覆盖。2026-10-14 实测：一次 `autodl start --ttl 3h` 留下的定时关机命令，
