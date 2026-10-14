@@ -7,6 +7,7 @@
 #   bash infra/autodl/stack.bash tunnel     # 接 Cloudflare Tunnel（令牌见函数说明）
 #   bash infra/autodl/stack.bash up         # 开机一条命令：模型线（MODEL_LINE=1 时）+ start + tunnel（带串行锁）
 #   bash infra/autodl/boot.bash             # 开机自启动入口：补环境、脱离、日志落 boot.log，再跑 up
+#   bash infra/autodl/stack.bash autostart  # 把 boot.bash 挂到 /etc/autodl.sh（平台每次开机执行，随镜像走）
 #   bash infra/autodl/stack.bash doctor     # 体检，别跳过
 #   bash infra/autodl/stack.bash stop|status|logs <名字>
 #
@@ -763,6 +764,38 @@ do_up() {
   return $FAILS
 }
 
+# ================================================================ autostart
+# **随镜像走的开机自启动。** AutoDL 每次开机由平台注入的 /init/bin/customer.cmd.sh 先执行
+# `bash /etc/autodl.sh`（日志 /tmp/autodl.sh.log），再执行实例的 start_command
+# （2026-10-14 在实例上读到的脚本原文）。/etc/autodl.sh 在系统盘上、会进镜像，
+# 所以把 boot.bash 挂在这里，从镜像开出的任何实例 —— 不管经 CLI、API 还是网页控制台、
+# 带没带 --start-command —— 开机都会自己把整站拉起来。start_command 里再挂一份也无妨：
+# 两份都走 boot.bash → `up`，有串行锁，后到的那份只会看到"已在跑"。
+AUTOSTART_HOOK=/etc/autodl.sh
+AUTOSTART_MARK="# ddp-autostart"
+do_autostart() {
+  need_root
+  case "${1:-on}" in
+    on)
+      # 别人（基础镜像/别的项目）的 /etc/autodl.sh 不覆盖：那是它们的开机逻辑
+      if [ -f "$AUTOSTART_HOOK" ] && ! qgrep -F "$AUTOSTART_MARK" "$AUTOSTART_HOOK"; then
+        fail "$AUTOSTART_HOOK 已存在且不是本项目写的，不覆盖；手动把这一行并进去：bash $HERE/boot.bash"
+        return 1
+      fi
+      printf '#!/bin/bash\n%s（infra/autodl/stack.bash autostart 写入；关掉：stack.bash autostart off）\nbash %s\n' \
+        "$AUTOSTART_MARK" "$HERE/boot.bash" > "$AUTOSTART_HOOK"
+      chmod 755 "$AUTOSTART_HOOK"
+      pass "开机自启动已挂上：$AUTOSTART_HOOK → $HERE/boot.bash（日志 $LOG_DIR/boot.log）" ;;
+    off)
+      if [ -f "$AUTOSTART_HOOK" ] && qgrep -F "$AUTOSTART_MARK" "$AUTOSTART_HOOK"; then
+        rm -f "$AUTOSTART_HOOK" && pass "已摘掉 $AUTOSTART_HOOK"
+      else
+        warn "$AUTOSTART_HOOK 不是本项目挂的（或不存在），不动它"
+      fi ;;
+    *) echo "用法：stack.bash autostart [on|off]" >&2; return 2 ;;
+  esac
+}
+
 case "${1:-start}" in
   install) do_install ;;
   tunnel)  do_tunnel ;;
@@ -783,6 +816,7 @@ case "${1:-start}" in
   stop)    do_stop ;;
   status)  do_status ;;
   doctor)  do_doctor ;;
+  autostart) do_autostart "${2:-on}" ;;
   logs)    tail -n "${3:-200}" -f "$LOG_DIR/${2:?用法：stack.bash logs <名字>}.log" ;;
-  *) echo "用法：stack.bash {install|migrate|start|up|tunnel|stop|status|doctor|logs <名字>}" >&2; exit 1 ;;
+  *) echo "用法：stack.bash {install|migrate|start|up|autostart [on|off]|tunnel|stop|status|doctor|logs <名字>}" >&2; exit 1 ;;
 esac

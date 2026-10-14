@@ -318,27 +318,37 @@ autodl exec <id> 'bash /root/src/DeepDocParse/infra/autodl/stack.bash up && bash
 
 ## 开机自启动：`boot.bash`
 
-AutoDL Pro 实例的 `start_command` **随实例保存，每次开机都会执行**，直到某次开机显式传入新命令
-把它覆盖。2026-10-14 实测：一次 `autodl start --ttl 3h` 留下的定时关机命令，在后来不带参数的
-`autodl start` 里照样生效，实例开机整 3 小时后自己关了。开机自启动就挂在这个位置：
+`boot.bash` 补齐开机时近乎空的环境（没有 `HOME`）、立刻脱离调用方、输出落到 `$DDP_ROOT/logs/boot.log`，
+然后跑 `stack.bash up`。`up` 自带串行锁：两处开机钩子、手敲的 `up` 撞在一起都不会各起一份 vLLM。
+它有两个挂法，**正式镜像用第一种**：
+
+**一、随镜像走：`/etc/autodl.sh`。** AutoDL 每次开机由平台注入的 `/init/bin/customer.cmd.sh`
+先执行 `bash /etc/autodl.sh`（日志 `/tmp/autodl.sh.log`），再执行实例的 `start_command`
+（2026-10-14 在实例上读到的脚本原文）。`/etc/autodl.sh` 在系统盘上，存镜像会带走，所以从镜像开出的
+任何实例 —— 不管经 CLI、API 还是网页控制台，带没带开机命令 —— 都会自己起来：
 
 ```bash
-# 新实例（从镜像开）
-autodl create --image <镜像 UUID> --gpu 4090d --disk 50 --wait \
-  --start-command 'bash /root/src/DeepDocParse/infra/autodl/boot.bash'
-# 已有实例：开机时带一次，之后每次开机都会执行
-autodl start <id> --wait --start-command 'bash /root/src/DeepDocParse/infra/autodl/boot.bash'
+bash /root/src/DeepDocParse/infra/autodl/stack.bash autostart       # 写 /etc/autodl.sh
+bash /root/src/DeepDocParse/infra/autodl/stack.bash autostart off   # 摘掉
 ```
 
-`boot.bash` 补齐开机时近乎空的环境（没有 `HOME`）、立刻脱离调用方、输出落到 `$DDP_ROOT/logs/boot.log`，
-然后跑 `stack.bash up`。`up` 自带串行锁：开机这一份与手敲的 `up` 撞在一起不会各起一份 vLLM。
+挂上之后要**重新存镜像**才会进镜像（见下一节）。已存在、且不是本项目写的 `/etc/autodl.sh` 不会被覆盖。
 
-两个坑：
+**二、随实例走：`start_command`。** Pro 实例的 `start_command` 随实例保存，**每次开机都会执行**，
+直到某次开机显式传入新命令把它覆盖。2026-10-14 实测：一次 `autodl start --ttl 3h` 留下的定时关机命令，
+在后来不带参数的 `autodl start` 里照样生效，实例开机整 3 小时后自己关了。
 
-- **`autodl start <id> --ttl 2h` 不带 `--start-command` 会把存着的命令换成"只有定时关机"**，自启动就没了。
+```bash
+autodl create --image <镜像 UUID> --gpu 4090d --disk 50 --wait \
+  --start-command 'bash /root/src/DeepDocParse/infra/autodl/boot.bash'
+```
+
+这个位置有两个坑（挂法一的自启动不受影响，但下面埋进去的定时关机照样生效）：
+
+- **`autodl start <id> --ttl 2h` 不带 `--start-command` 会把存着的命令换成"只有定时关机"**。
   要定时关机就两个一起带（CLI 会把两段拼在一起）。
 - 反过来，带过 `--ttl` 的实例以后每次开机都会再埋一个定时关机 —— 正式站点开机时要显式带上
-  `--start-command` 覆盖掉它。
+  `--start-command` 覆盖掉它（比如 `--start-command true`）。
 
 **关机会释放 GPU。** 再开机要等原主机有空卡，高峰期可能连续几个小时"暂无库存"
 （2026-10-14 白天 4090D / 4090-48G / 5090 / 4080S 全部无货）。正式站点不要随手关机；
