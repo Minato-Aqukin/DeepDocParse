@@ -316,6 +316,34 @@ autodl start <id> --wait
 autodl exec <id> 'bash /root/src/DeepDocParse/infra/autodl/stack.bash up && bash /root/src/DeepDocParse/infra/autodl/stack.bash doctor'
 ```
 
+## 开机自启动：`boot.bash`
+
+AutoDL Pro 实例的 `start_command` **随实例保存，每次开机都会执行**，直到某次开机显式传入新命令
+把它覆盖。2026-10-14 实测：一次 `autodl start --ttl 3h` 留下的定时关机命令，在后来不带参数的
+`autodl start` 里照样生效，实例开机整 3 小时后自己关了。开机自启动就挂在这个位置：
+
+```bash
+# 新实例（从镜像开）
+autodl create --image <镜像 UUID> --gpu 4090d --disk 50 --wait \
+  --start-command 'bash /root/src/DeepDocParse/infra/autodl/boot.bash'
+# 已有实例：开机时带一次，之后每次开机都会执行
+autodl start <id> --wait --start-command 'bash /root/src/DeepDocParse/infra/autodl/boot.bash'
+```
+
+`boot.bash` 补齐开机时近乎空的环境（没有 `HOME`）、立刻脱离调用方、输出落到 `$DDP_ROOT/logs/boot.log`，
+然后跑 `stack.bash up`。`up` 自带串行锁：开机这一份与手敲的 `up` 撞在一起不会各起一份 vLLM。
+
+两个坑：
+
+- **`autodl start <id> --ttl 2h` 不带 `--start-command` 会把存着的命令换成"只有定时关机"**，自启动就没了。
+  要定时关机就两个一起带（CLI 会把两段拼在一起）。
+- 反过来，带过 `--ttl` 的实例以后每次开机都会再埋一个定时关机 —— 正式站点开机时要显式带上
+  `--start-command` 覆盖掉它。
+
+**关机会释放 GPU。** 再开机要等原主机有空卡，高峰期可能连续几个小时"暂无库存"
+（2026-10-14 白天 4090D / 4090-48G / 5090 / 4080S 全部无货）。正式站点不要随手关机；
+原实例开不起来时，用镜像在别的主机开一台新的（同一个隧道令牌，旧实例别再开）。
+
 ## 镜像备份与恢复
 
 ```bash
@@ -337,7 +365,7 @@ autodl images --json                   # 等 status=finished，再看 sizeBytes
 两种实例都把东西放 `/root/ddp`，行为才一致。
 
 从镜像恢复：`autodl create --image <镜像 UUID> --gpu 4090d --disk 50 --wait`，然后同上 `stack.bash up`
-（或建实例时直接带 `--start-command 'bash /root/src/DeepDocParse/infra/autodl/stack.bash up'`）。
+（或建实例时直接带 `--start-command 'bash /root/src/DeepDocParse/infra/autodl/boot.bash'`，见「开机自启动」）。
 镜像里有 PostgreSQL 数据、MinIO 对象、`stack.env`（全部密钥）与 `cloudflared.token`
 —— **它就是这条隧道和这个站点的完整控制权**，只存私有镜像、别共享。
 **同一个令牌同时只让一台实例 `up`**：两台都连上时 Cloudflare 把公网请求分摊给两边，

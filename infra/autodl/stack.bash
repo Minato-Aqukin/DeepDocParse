@@ -5,7 +5,8 @@
 #   bash infra/autodl/stack.bash migrate    # 两套迁移 + 授权
 #   bash infra/autodl/stack.bash start      # 起全部进程（幂等）
 #   bash infra/autodl/stack.bash tunnel     # 接 Cloudflare Tunnel（令牌见函数说明）
-#   bash infra/autodl/stack.bash up         # 开机一条命令：模型线（MODEL_LINE=1 时）+ start + tunnel
+#   bash infra/autodl/stack.bash up         # 开机一条命令：模型线（MODEL_LINE=1 时）+ start + tunnel（带串行锁）
+#   bash infra/autodl/boot.bash             # 开机自启动入口：补环境、脱离、日志落 boot.log，再跑 up
 #   bash infra/autodl/stack.bash doctor     # 体检，别跳过
 #   bash infra/autodl/stack.bash stop|status|logs <名字>
 #
@@ -767,7 +768,18 @@ case "${1:-start}" in
   tunnel)  do_tunnel ;;
   migrate) do_migrate ;;
   start)   do_start ;;
-  up)      do_up ;;
+  up)
+    # **串行化。** 开机自启动（boot.bash）与手敲的 `up` 可能同时跑；判重是"看端口/进程在不在"，
+    # 两份同时判都是"不在"，于是各起一份 vLLM —— 后起的那份在共卡预算下必然 OOM。
+    # 等锁而不是失败退出：后来的那份拿到锁时前一份已经拉起，它只会看到"已在跑"。
+    # 用 `flock -o` 而不是 `exec 9>lock; flock 9`：后者的 fd 会被 setsid -f 拉起的常驻进程继承，
+    # up 退出了锁也不放（持锁的是 vLLM、postgres 这些活到关机的进程），下一次 up 永远等下去。
+    # -o 在执行命令前关掉锁 fd，锁只由 flock 进程自己持有，命令一退就释放。
+    if [ -z "${DDP_UP_LOCKED:-}" ]; then
+      mkdir -p "$RUN_DIR"
+      DDP_UP_LOCKED=1 exec flock -o "$RUN_DIR/up.lock" bash "${BASH_SOURCE[0]}" up
+    fi
+    do_up ;;
   stop)    do_stop ;;
   status)  do_status ;;
   doctor)  do_doctor ;;
