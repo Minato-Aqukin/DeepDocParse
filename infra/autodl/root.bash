@@ -25,6 +25,31 @@ if [ "$DDP_ROOT" = /root/ddp ] && [ ! -e /root/ddp ] && [ -d /root/autodl-tmp/dd
   exit 1
 fi
 
+# ---- 平台注入的线程数 ----
+# AutoDL 把 OMP_NUM_THREADS / MKL_NUM_THREADS 写进容器环境（PID 1、开机钩子、SSH 会话全都继承）。
+# 2026-10-14 实测：无卡模式开过一次之后它是 0，再有卡开机（cgroup 配额 16 核）也还是 0。
+# vLLM 拿它去 torch.set_num_threads(0)，OCR 当场崩（"set_num_threads expects a positive integer"），
+# 指令模型跟着等满 10 分钟，网站和隧道排在后面迟迟起不来。
+# 只修坏值（0、空、非数字）：按 cgroup 实际 CPU 配额重算，至少 1；没设置的保持没设置。
+_ddp_cpu_quota() {
+  local quota period
+  if { read -r quota period < /sys/fs/cgroup/cpu.max; } 2>/dev/null; then :
+  else
+    quota="$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null)"
+    period="$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null)"
+  fi
+  case "$quota:$period" in
+    max:*|-1:*|:*|*:) nproc ;;
+    *) echo $(( quota / period > 0 ? quota / period : 1 )) ;;
+  esac
+}
+for _var in OMP_NUM_THREADS MKL_NUM_THREADS; do
+  if [ -n "${!_var+x}" ]; then
+    case "${!_var}" in ''|*[!0-9]*|0|00*) export "$_var=$(_ddp_cpu_quota)" ;; esac
+  fi
+done
+unset _var
+
 # ---- 实例级配置：$DDP_ROOT/deploy.env ----
 # 这台机器自己的取值（公网域名、游客模式、注册表、要不要起模型线……）。
 # 它在系统盘上，跟着镜像走：从镜像开出来的实例 `stack.bash up` 一条命令就回到原样，

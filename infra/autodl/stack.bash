@@ -132,6 +132,12 @@ wait_http() {  # wait_http <url> <秒数> —— 起进程与"真的能服务"�
   return 1
 }
 
+# 这次开机有没有能用的 GPU。AutoDL 控制台可以「无卡模式」开机（没有 GPU、2G 内存），
+# 那时模型线一个都起不来：vLLM 立刻退出，chat.bash 却会等 OCR 的 /health 等满 10 分钟，
+# models_up 再等满 15 分钟 —— 网站与隧道排在它们后面，整整 25 分钟公网 530（2026-10-14 实测
+# 开机 7 分钟内一直打不开）。bge-m3 的 CPU 垫片单是 fp32 权重就超过 2G，在无卡模式下也只会被 OOM。
+gpu_present() { command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | qgrep '^GPU '; }
+
 need_root() { [ "$(id -u)" = 0 ] || { echo "要 root（AutoDL 上本来就是）" >&2; exit 1; }; }
 
 # ================================================================ install
@@ -598,6 +604,10 @@ do_status() {
   alive "[c]loudflared tunnel" && printf '%-20s \033[32m在跑\033[0m\n' cloudflared \
     || printf '%-20s \033[33m没起\033[0m\n' cloudflared
   [ "${MODEL_LINE:-0}" = 1 ] || return 0
+  if ! gpu_present; then
+    printf '%-20s \033[33m无卡，模型线已跳过\033[0m\n' 模型线
+    return 0
+  fi
   ( source "$HERE/env.bash"
     for kv in "ocr-vllm:$VLLM_PORT" "chat-vllm:$CHAT_PORT" "embed:$EMBED_PORT"; do
       curl -fsS --max-time 3 --noproxy '*' "http://127.0.0.1:${kv#*:}/health" >/dev/null 2>&1 \
@@ -735,6 +745,9 @@ models_up() {
       bash "$HERE/$3" --daemon >>"$LOG_DIR/up.log" 2>&1 \
         && info "$1 已拉起（:$2，日志在 $LOG_DIR）" || fail "$1 拉不起来（看 $LOG_DIR/up.log）"
     }
+    model_alive() {  # 该端口背后的模型进程还在不在（在 = 可能还在加载，值得等）
+      if [ "$1" = "$EMBED_PORT" ]; then alive "embed_shim:app"; else alive "vllm serve .*--port $1"; fi
+    }
     # 顺序是硬约束：chat.bash 自己会等 OCR 的 /health 通再起（共卡显存，见 env.bash）
     launch ocr-vllm "$VLLM_PORT" ocr.bash
     [ "$ENABLE_CHAT" = 1 ] && launch chat-vllm "$CHAT_PORT" chat.bash
@@ -742,8 +755,11 @@ models_up() {
     local ports=("$VLLM_PORT" "$EMBED_PORT") waited=0 limit="${MODEL_WAIT_SECONDS:-900}" p
     [ "$ENABLE_CHAT" = 1 ] && ports+=("$CHAT_PORT")
     for p in "${ports[@]}"; do
-      while ! healthy "$p" && [ "$waited" -lt "$limit" ]; do sleep 5; waited=$((waited + 5)); done
-      healthy "$p" && pass "模型端口 :$p 健康" || fail "模型端口 :$p ${limit}s 内没就绪（看 $LOG_DIR）"
+      # 进程已经没了就别再等：等满 limit 只会把网站和隧道一起拖住
+      while ! healthy "$p" && [ "$waited" -lt "$limit" ] && model_alive "$p"; do sleep 5; waited=$((waited + 5)); done
+      if healthy "$p"; then pass "模型端口 :$p 健康"
+      elif model_alive "$p"; then fail "模型端口 :$p ${limit}s 内没就绪（看 $LOG_DIR）"
+      else fail "模型端口 :$p 的进程已经退出（看 $LOG_DIR）"; fi
     done
     exit "$FAILS" )
 }
@@ -751,7 +767,13 @@ models_up() {
 do_up() {
   if [ "${MODEL_LINE:-0}" = 1 ]; then
     section "0. 模型线"
-    models_up || FAILS=$((FAILS + $?))
+    if gpu_present; then
+      models_up || FAILS=$((FAILS + $?))
+    else
+      # 不算失败：这是开机方式决定的，不是部署坏了。降级照常可见 ——
+      # 检索退回关键词并标 degraded，问答/抽取/OCR 解析如实报模型不可用
+      warn "没有可用的 GPU（无卡模式开机？）—— 跳过模型线：问答、抽取、OCR 解析不可用，检索退回关键词；网站照常起"
+    fi
   fi
   do_start
   if [ -f "$DDP_ROOT/cloudflared.token" ]; then

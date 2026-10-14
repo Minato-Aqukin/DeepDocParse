@@ -68,6 +68,11 @@ except Exception:
       echo "[chat] OCR 服务已就绪（等了 ${waited}s），开始起指令模型"
       return 0
     fi
+    # OCR 进程已经退出（比如无卡开机，vLLM 起来就崩）就别等满 limit：那只会把整个 up 拖住 10 分钟
+    if [ -f "$LOG_DIR/vllm.pid" ] && ! kill -0 "$(cat "$LOG_DIR/vllm.pid")" 2>/dev/null; then
+      echo "[chat] OCR 进程（pid $(cat "$LOG_DIR/vllm.pid")）已经退出，不等了 —— 看 $LOG_DIR/vllm.log" >&2
+      return 1
+    fi
     sleep 5
     waited=$(( waited + 5 ))
   done
