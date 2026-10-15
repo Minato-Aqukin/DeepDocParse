@@ -3,11 +3,12 @@
 gateway 不 import 任何模型代码——只认 models.yaml 里的 endpoint。
 """
 import os
+import re
 from pathlib import Path
 
 import yaml
 from ddp_core.fetch_policy import FetchPolicyConfig, is_trusted
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -151,7 +152,7 @@ class ModelEntry(BaseModel):
 
     endpoint: str
     default: bool = False
-    # 引擎级默认透传选项（如 mineru 的 backend=pipeline|vlm），请求方 options 可覆盖。
+    # 引擎级默认透传选项（如 mineru 的 backend=pipeline|hybrid-engine|vlm-engine），请求方 options 可覆盖。
     # 放注册表而非代码：dev/prod 换后端 = 改一行配置（铁律 3）
     options: dict = {}
     # 用哪个适配器/协议说话。解析引擎见 services/engines.py（mineru-api | borndigital | vlm-ocr），
@@ -165,15 +166,110 @@ class ModelEntry(BaseModel):
     # 视觉核对（原样抄写）不受影响，那正是它们的本行。见 services/extraction.py。
     capabilities: list[str] = []
     # 预留接缝：LoRA / 缝合模型在同一个 endpoint 上靠这个字段区分，
-    # 请求时作为 model 字段传给运行时。**只是接缝，本轮不实现**
+    # 请求时作为 model 字段传给运行时。现在也是外部 OpenAI 兼容服务的
+    # provider 侧模型 id（"request model field"）：条目名是我们的稳定 id
+    # （语料/界面看到的那个），请求体里的 model 填 `adapter or 条目名`
+    # （见 request_model_id）。自建 vLLM 的 served-model-name 与条目名一致，
+    # adapter 留空照跑；外部服务两边不一样，不写 adapter 每次请求都是 404。
     adapter: str | None = None
+    # 外部 OpenAI 兼容服务（DeepSeek / Kimi / OpenAI / Claude 中继）的密钥来源：
+    # **环境变量的名字，不是密钥本身**。密钥永不进 YAML、日志、错误体或响应。
+    # 本字段非空时，该条目的每一次出站调用都带
+    # `Authorization: Bearer <os.environ[<本字段>]>`（见 upstream_auth_headers）。
+    # 调用时环境里没有这个变量 = 可见失败：同步平面 503 provider_key_missing，
+    # 探针报 unhealthy，异步链落对应降级 —— 绝不无鉴权裸调（那会把 401 伪装成上游故障）。
+    api_key_env: str = ""
+
+    @field_validator("api_key_env")
+    @classmethod
+    def _env_name_must_look_like_one(cls, value: str) -> str:
+        """api_key_env 必须是合法的环境变量名 —— 它会被拿去查 os.environ。
+
+        配错的后果不是报错而是**永远查不到**：比如写成带横线的名字，
+        环境里永远不会有同名变量，每一次调用都是 provider_key_missing，
+        排查时还以为是密钥没配。注册表加载时直接拦住。
+        """
+        if value and not re.fullmatch(r"[A-Z_][A-Z0-9_]*", value):
+            raise ValueError(
+                f"api_key_env 必须是环境变量名（^[A-Z_][A-Z0-9_]*$），实得 {value!r}")
+        return value
+
+    @field_validator("options")
+    @classmethod
+    def _request_extras_must_not_shadow_envelope(cls, options: dict) -> dict:
+        """`options.request_extras` 不许出现 model/messages/stream。
+
+        这三个是请求信封（选路与协议决定），不是可声明的扩展：允许覆盖的话，
+        一行注册表就能让"请求 A 模型"变成"请求 B 模型"（探针照样核对 A，
+        于是又是假绿），或把 messages 换掉让抽取平面问出别的东西。
+        放这里而不是 chat_request_defaults 里拦：**部署时就炸**，
+        不等到第一次调用才发现。
+        """
+        extras = (options or {}).get("request_extras")
+        if extras is None:
+            return options
+        if not isinstance(extras, dict):
+            raise ValueError("options.request_extras 必须是 dict（声明式请求扩展）")
+        shadowed = {"model", "messages", "stream"} & set(extras)
+        if shadowed:
+            raise ValueError(
+                "options.request_extras 不许声明 "
+                f"{sorted(shadowed)}（请求信封由选路决定，不可覆盖）")
+        return options
+
+
+def request_model_id(name: str, entry: ModelEntry) -> str:
+    """真实请求里填在 `model` 字段上的那个 id：`adapter or 条目名`。
+
+    条目名是我们的稳定 id（语料/界面看到的那个），adapter 是对端认识的 id。
+    自建 vLLM 的 served-model-name 与条目名一致，adapter 留空照跑；
+    外部服务两边不一样，必须在注册表里写 adapter，否则每一次请求都是 404。
+    **唯一的例外是 vlm-ocr**：历史原因它用 `options.model`，
+    见 capabilities._requested_model（探针与调用路径必须同源）。
+    """
+    return entry.adapter or name
+
+
+#: 上游鉴权缺失时的可见失败码。同步平面 503，探针 unhealthy，异步链 upstream_error。
+PROVIDER_KEY_MISSING = "provider_key_missing"
+
+
+def upstream_auth_headers(entry: ModelEntry) -> dict[str, str]:
+    """该条目出站调用要带的鉴权头。没有 api_key_env 的条目返回空 dict（行为不变）。
+
+    密钥只在调用瞬间从环境里取，**永不进日志/异常/响应**：抛出的 LookupError
+    只点环境变量的**名**。调用方（路由/服务/探针）各自把它翻译成自己平面的
+    可见失败 —— 401/404/5xx 照旧是上游的问题，绝不因为没带上 key 而伪装成它们。
+    """
+    env_name = entry.api_key_env or ""
+    if not env_name:
+        return {}
+    key = os.environ.get(env_name, "")
+    if not key:
+        raise LookupError(
+            f"provider key missing: environment variable {env_name} is not set "
+            f"(declared by registry entry api_key_env)")
+    return {"Authorization": f"Bearer {key}"}
 
 
 def chat_request_defaults(options: dict) -> dict:
-    """Select declared chat extensions only; engine metadata is not a chat payload."""
+    """Select declared chat extensions only; engine metadata is not a chat payload.
+
+    边界（两条，缺一不可）：
+    - `chat_template_kwargs`：vLLM 系的模板扩展，只在注册表显式声明时透传；
+    - `request_extras`：外部 OpenAI 兼容服务的声明式扩展（如 DeepSeek 的
+      `{"thinking": {"type": "disabled"}}`、Kimi 的 `{"reasoning_effort": "low"}`），
+      原样并进 chat 请求体。model/messages/stream 不可能出现在这里 ——
+      ModelEntry 的 validator 在注册表加载时已经拦下。
+    transcribe_prompt、凭据等其它 options 永不进入 chat 请求体。
+    """
+    out: dict = {}
     if "chat_template_kwargs" in options:
-        return {"chat_template_kwargs": options["chat_template_kwargs"]}
-    return {}
+        out["chat_template_kwargs"] = options["chat_template_kwargs"]
+    extras = options.get("request_extras")
+    if isinstance(extras, dict):
+        out.update(extras)
+    return out
 
 
 # 段名 -> 该段条目缺省具备的能力。**只是缺省值**：条目自己写了 capabilities 就以它为准

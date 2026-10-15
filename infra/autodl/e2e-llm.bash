@@ -40,7 +40,7 @@ trap cleanup EXIT
 section "0. 起依赖（redis / gateway / worker / fixtures）"
 
 # Redis：任务状态与结果暂存。focal 自带的是 5.0.7，**没有 RediSearch** ——
-# 解析与抽取用不到它，向量检索才要（这套部署本来也没注册 embedding，见 models.autodl.yaml）
+# 解析与抽取用不到它，向量检索才要（embedding_models 见 models.autodl.yaml 末段）
 if ! redis-cli ping >/dev/null 2>&1; then
   # **`apt-get update` 不能省**：AutoDL 基础镜像里的 apt 索引是空的，
   # 直接 install 会静默失败（装完 redis-cli 还是 command not found）

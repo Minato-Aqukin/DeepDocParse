@@ -70,6 +70,33 @@ CHAT_KV_CACHE_BYTES="${CHAT_KV_CACHE_BYTES:-3221225472}"
 EMBED_PORT="${EMBED_PORT:-18080}"
 EMBED_MODEL_DIR="${EMBED_MODEL_DIR:-$DDP_ROOT/models/bge-m3}"
 
+# ---------------------------------------------------------------- MinerU（mineru.bash）
+# 版面解析引擎（注册表 parse_engines.mineru，runtime mineru-api）。**只装 pipeline 后端**：
+# 版面/公式/表格/OCR 一组小模型，显存按需分配；vlm/hybrid 后端要再起一套 vLLM，
+# 这张卡已经被 OCR-2 + 指令模型占满，放不下。
+# 独立 venv：mineru 钉的 torch/transformers 与 vLLM 0.27.1 那套不是同一组版本，
+# 装进同一个环境迟早互相覆盖。
+ENABLE_MINERU="${ENABLE_MINERU:-1}"              # 0 = 不装不起，选择器里就不出现 MinerU
+MINERU_VERSION="${MINERU_VERSION:-3.4.4}"        # 与 docs/upstream/mineru-api-contract.md 实测版本一致
+MINERU_VENV_DIR="${MINERU_VENV_DIR:-$DDP_ROOT/mineru-venv}"
+MINERU_MODELS_DIR="${MINERU_MODELS_DIR:-$DDP_ROOT/models/mineru}"
+# mineru 读模型路径的配置文件。缺省是 ~/mineru.json；钉到 DDP_ROOT 下，跟其余部署状态放一起
+export MINERU_TOOLS_CONFIG_JSON="${MINERU_TOOLS_CONFIG_JSON:-$DDP_ROOT/mineru.json}"
+MINERU_PORT="${MINERU_PORT:-18000}"             # 项目端口约定：18000 = mineru
+# pipeline 推理的显存上限（GiB），mineru 按它定批大小。两套 vLLM 已经预分配完，
+# 留给它的只有余量（4090D 上 ~2.8 GiB，`stack.bash status` 看实测）；
+# 超了是这一次解析任务 OOM 失败（可见），不会挤掉 vLLM —— 它们的显存早已占住。
+# 2026-10-15 实测（4090D，上限 2）：模型常驻 1.3 GiB，15 页论文峰值再 +0.7，39 秒
+MINERU_VRAM_GB="${MINERU_VRAM_GB:-2}"
+# 同时跑几份任务（mineru 缺省 3）。每份任务各占一份批显存，余量只够一份；
+# 多出来的在 mineru 自己的队列里排着，不会失败
+MINERU_CONCURRENCY="${MINERU_CONCURRENCY:-1}"
+# mineru-api 的任务产物目录与保留时长。网关的 worker 在任务完成后立刻取结果归档
+# （结果在 Redis 暂存 24h），这里留 1 小时足够；缺省 24h 会让产物在系统盘上堆积 ——
+# 而系统盘会进镜像。
+MINERU_OUTPUT_DIR="${MINERU_OUTPUT_DIR:-$DDP_ROOT/mineru-output}"
+MINERU_RETENTION_SECONDS="${MINERU_RETENTION_SECONDS:-3600}"
+
 # ---------------------------------------------------------------- 显存与吞吐
 # 以下是**推理优化的旋钮**，含义与取值理由见 README 的「推理优化」一节。
 #

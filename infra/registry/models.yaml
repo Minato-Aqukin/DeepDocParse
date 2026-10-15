@@ -6,7 +6,27 @@
 #   1. OpenAI 协议（vqa_models / embedding_models）
 #   2. mineru-api 任务协议（parse_engines）
 # endpoint 主机名 = docker compose 服务名。
-
+#
+# ---- 外部 OpenAI 兼容服务（DeepSeek / Kimi / OpenAI / Claude 中继）----
+# VQA 平面的条目可以指向托管 API 而不是自建容器，三个字段配合：
+#   endpoint:    服务基座（不带 /v1 后缀），如 https://api.deepseek.com
+#   adapter:     对端认识的模型 id（请求体里的 model 填这个，不是条目名）。
+#                条目名是我们的稳定 id（语料/界面看到的那个）。
+#   api_key_env: 密钥所在**环境变量的名字**（不是密钥本身！）。
+#                该条目的每一次出站调用（chat/抽取/vlm-ocr/embedding/rerank/探针）
+#                都带 `Authorization: Bearer $<api_key_env>`。
+#                密钥永不进 YAML、日志、错误体或响应；调用时环境里没有 = 可见失败
+#                （同步平面 503 provider_key_missing，探针 unhealthy）。
+#   options.request_extras: 声明式请求扩展（dict），原样并进该条目的 chat 请求体。
+#                如 DeepSeek deepseek-flash 关 thinking：
+#                  request_extras: {thinking: {type: disabled}}
+#                Kimi kimi-k3（常开 thinking，调低推理量）：
+#                  request_extras: {reasoning_effort: low}
+#                model/messages/stream 不许出现在这里（加载时直接 ValueError）。
+# 外部条目示例见本文件末尾（注释掉的 provider 段）。
+#
+# 连通性实测（2026-10 AutoDL）：OpenAI 直连不通、Anthropic 回 403（地域限制）。
+# OpenAI/Claude 先配着（base 可换 OpenAI 兼容中继）。示例全部注释掉：有 key 的部署才去注释。
 vqa_models:
   # DeepSeek-OCR-2（2026-01 发布，3B，DeepEncoder V2 + DeepSeek-V2 MoE）。
   # 名字必须与运行时的 --served-model-name 一致，否则 model 字段对不上（404）。
@@ -52,6 +72,53 @@ vqa_models:
   # paddleocr-vl:                       # deepseek-ocr.rs 多后端本身支持
   #   endpoint: "http://vqa-paddle:8000"
 
+  # ---- 外部 OpenAI 兼容服务（密钥 export 在 gateway/worker 进程的环境里）----
+  # 本地 UI 想走托管 API 时，把下面要用的段去注释；自建容器条目不动。
+  # 同一条目可同时出现在 vqa_models 与 parse_engines（vlm-ocr）：内网/托管二选一。
+  #
+  # DeepSeek：deepseek-flash（视觉，默认 thinking，用 request_extras 关掉）。
+  # 文档只有 chat/completions 与 models 两个端点，没有 embeddings/rerank ——
+  # 别给 DeepSeek 条目配 embedding 段。
+  # deepseek-flash:
+  #   endpoint: "https://api.deepseek.com"
+  #   adapter: "deepseek-flash"
+  #   api_key_env: "DEEPSEEK_API_KEY"
+  #   capabilities: [vision]
+  #   options:
+  #     request_extras: {thinking: {type: disabled}}
+  #
+  # # DeepSeek 纯文本（抽取平面的指令模型，不会看图，别标 vision）：
+  # deepseek-v4-pro:
+  #   endpoint: "https://api.deepseek.com"
+  #   adapter: "deepseek-v4-pro"
+  #   api_key_env: "DEEPSEEK_API_KEY"
+  #   capabilities: [instruct]
+  #   options:
+  #     request_extras: {thinking: {type: disabled}}
+  #
+  # # Kimi/Moonshot：kimi-k3（视觉 + 常开 thinking，调低推理量省钱省时间）。
+  # # moonshot-v1-* 已退役，别配。
+  # kimi-k3:
+  #   endpoint: "https://api.moonshot.cn"
+  #   adapter: "kimi-k3"
+  #   api_key_env: "MOONSHOT_API_KEY"
+  #   capabilities: [vision]
+  #   options:
+  #     request_extras: {reasoning_effort: low}
+  #
+  # # OpenAI（AutoDL 直连不通：换中继 base 或等网络放开再去注释）：
+  # gpt-5-mini:
+  #   endpoint: "https://api.openai.com"
+  #   adapter: "gpt-5-mini"
+  #   api_key_env: "OPENAI_API_KEY"
+  #   capabilities: [vision]
+  #
+  # # Claude（OpenAI SDK 兼容层，Bearer 鉴权；AutoDL 回 403：同上换中继）：
+  # claude-opus-4-6:
+  #   endpoint: "https://api.anthropic.com"
+  #   adapter: "claude-opus-4-6"
+  #   api_key_env: "ANTHROPIC_API_KEY"
+  #   capabilities: [vision]
 parse_engines:
   mineru:
     # dev: 直连单个 mineru-api worker；prod: 指向 mineru-router（接口完全兼容，只改 URL）
@@ -92,6 +159,20 @@ parse_engines:
 
       scale: 2.0              # 页面渲染倍率（72dpi 基准，2.0 = 144dpi，与官方脚本一致）
       concurrency: 2          # 同时打几页，受显存约束
+
+  # 托管 API 做整页识别：与上面同构，只是 endpoint 换成外部服务 + 带上 key。
+  # **必须 generic-json**：deepseek-ocr2 方言发的 skip_special_tokens/vllm_xargs
+  # 是 vLLM 私有字段，托管 API 会 400。model 填对端认识的 id（与 vqa 段 adapter 同值）。
+  # vlm-ocr-kimi:
+  #   endpoint: "https://api.moonshot.cn"
+  #   runtime: vlm-ocr
+  #   api_key_env: "MOONSHOT_API_KEY"
+  #   capabilities: [parse, vision]
+  #   options:
+  #     model: kimi-k3
+  #     request_extras: {reasoning_effort: low}
+  #     scale: 2.0
+  #     concurrency: 2
 
 # ---- v2（M4）：注册即启用分块索引链与向量检索；删除本段则全链路回退 BM25 ----
 embedding_models:

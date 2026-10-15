@@ -26,7 +26,9 @@ import httpx
 import redis.asyncio as redis
 from arq.connections import RedisSettings
 
-from ddp_gateway.config import load_registry, settings
+from ddp_gateway.config import (
+    load_registry, request_model_id, settings, upstream_auth_headers,
+)
 from ddp_gateway.services import extraction
 from ddp_core import extract_format
 from ddp_core.chunking import layout_to_chunks
@@ -176,6 +178,12 @@ async def _chunk_and_index(ctx: dict, task_id: str) -> None:
         return
 
     name, entry = registry.default_of(registry.embedding_models)
+    try:
+        embed_headers = upstream_auth_headers(entry)
+    except LookupError as exc:
+        # 与 _chat 同一规则：密钥缺失是可见失败，不裸调。整条索引链停在这里，
+        # retrieve 会打 embedding_unavailable —— 检索退关键词路，但降级看得见。
+        raise RuntimeError(str(exc))
     # 分批：embedding 运行时对单请求条数有上限（TEI 的 max-client-batch-size），
     # 长文档一次性提交会被整批拒绝，故按 embedding_batch_size 切分后按序拼接
     vectors: list[list[float]] = []
@@ -184,7 +192,8 @@ async def _chunk_and_index(ctx: dict, task_id: str) -> None:
         texts = [c["text"] for c in chunks[start:start + batch]]
         resp = await ctx["http"].post(
             f"{entry.endpoint}/v1/embeddings",
-            json={"model": name, "input": texts},
+            json={"model": request_model_id(name, entry), "input": texts},
+            headers=embed_headers,
         )
         resp.raise_for_status()
         data = sorted(resp.json()["data"], key=lambda d: d["index"])

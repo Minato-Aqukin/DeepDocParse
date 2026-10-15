@@ -13,7 +13,7 @@ from dataclasses import dataclass, field as dc_field
 
 import httpx
 
-from ddp_gateway.config import settings
+from ddp_gateway.config import request_model_id, settings, upstream_auth_headers
 from ddp_gateway.services.task_store import TaskStore
 from ddp_core.tokenize import whole_text_bigrams
 
@@ -60,7 +60,9 @@ async def embed_query(http: httpx.AsyncClient, registry, query: str) -> list[flo
     try:
         name, entry = registry.default_of(registry.embedding_models)
         resp = await http.post(f"{entry.endpoint}/v1/embeddings",
-                               json={"model": name, "input": [query]})
+                               json={"model": request_model_id(name, entry),
+                                     "input": [query]},
+                               headers=upstream_auth_headers(entry))
         resp.raise_for_status()
         return resp.json()["data"][0]["embedding"]
     except Exception:

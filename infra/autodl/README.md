@@ -8,9 +8,10 @@
 > ./start.sh autodl doctor                 # 六项，别跳过
 > ```
 >
-> **起了 embed.bash 就要把 `models.autodl.yaml` 的 `embedding_models` 段打开**
-> （默认注释掉）。不打开的话索引会失败并写 `index_error`、检索退回 BM25 并标
-> `degraded=embedding_unavailable` —— 那是可见降级，不是坏了，但问答就没东西可检索。
+> **`models.autodl.yaml` 注册的每个本地端点都要真的起来**（`stack.bash up` 在模型线上
+> 会起全：OCR-2、指令模型、bge-m3、MinerU）。不起 embed.bash 的话索引会失败并写
+> `index_error`、检索退回 BM25 并标 `degraded=embedding_unavailable` —— 可见降级，
+> 但问答就没东西可检索；网关 `/readyz` 也会因为注册了没起而一直不绿。
 >
 > **MinIO 要自己准备**：上游已撤回全部社区发行（dl.min.io 410，Docker Hub 与
 > quay.io 都拉不到）。本地按 `infra/images/minio.Dockerfile` 钉住的模块版本编：
@@ -33,6 +34,7 @@
 | `e2e-llm.bash` | 真机全链路：解析 → 出处 bbox → 抽取 → 视觉核对 |
 | `stack.bash` | **应用侧全栈**（PG + MinIO + Redis + control-api + corpus-api/worker + gateway/worker + mcp + nginx）。取代合仓前的 `web.bash`（已删除；那份按两个仓库并列的旧布局写，已失效） |
 | `embed.bash` + `embed_shim.py` | bge-m3 的 CPU `/v1/embeddings`。**TEI 的替身，不是等价物** —— 不起它索引会失败、检索退 BM25（可见降级） |
+| `mineru.bash` | 起 MinerU 3.4.4 的 `mineru-api`（pipeline 后端，独立 venv，:18000）。显存用两套 vLLM 剩下的余量，见下文「MinerU」 |
 | `chat-template-deepseek-ocr2.jinja` | 模型自己没带 chat template，不给就每个请求 400 |
 | `../../models.autodl.yaml` | 配套注册表（endpoint 全是回环地址） |
 | `../../scripts/calibrate_verify_threshold.py` | 标定视觉核对阈值（换文档类型就该重标） |
@@ -191,6 +193,56 @@ autodl create --gpu 4090d --disk 50 --ttl 4h --wait --name ddp-ocr2
 
 `env.bash` 会按 `ENABLE_CHAT` 自动选这套值（独占卡时 OCR 回到 0.85），一般不用手动改。
 
+## MinerU（parse_engines.mineru）
+
+`bootstrap.bash` 在 `ENABLE_MINERU=1`（缺省）时多做两件事：建独立 venv `$DDP_ROOT/mineru-venv`
+装 `mineru[core]==3.4.4`（它钉的 torch/transformers 与 vLLM 那套不同，装一起会互相覆盖），
+再用 mineru 自己的下载器从 ModelScope 取 **pipeline** 模型（~2.5G，`$DDP_ROOT/models/mineru`，
+路径写进 `$DDP_ROOT/mineru.json`）。`stack.bash up` 在模型线上用 `mineru.bash` 起
+`mineru-api`（127.0.0.1:18000），网关注册表里是 `runtime: mineru-api` + `backend: pipeline`。
+
+**显存只用余量，不靠顺序分。** pipeline 的模型在第一份任务时才上卡，起进程不占显存；
+两套 vLLM 起来时早已把各自的显存预分配完，所以 MinerU 永远拿不走它们的份额。
+2026-10-15 在 4090D 上实测（两套 vLLM 常驻 21.2 GiB）：
+
+| | 显存 | 耗时 |
+|---|---|---|
+| 起进程 | 0 | `/health` 约 8 秒通 |
+| 第一份任务后常驻 | 1.3 GiB | — |
+| 15 页论文（公式/表格/图）峰值 | +0.7 GiB（全卡 23.2 / 24.0 GiB） | 39 秒（含加载模型）；经网站全链路 74 秒 |
+
+余量只够一份任务，所以 `MINERU_CONCURRENCY=1`（mineru 缺省 3），多余的在它自己的队列里排着。
+超了显存是那一次解析失败（可见），不会挤掉 vLLM。
+
+**只装了 pipeline。** `backend` 填 `vlm-engine` / `hybrid-engine` 时 mineru 立即报
+`Local path for repo_mode 'vlm' is not configured`，任务如实失败；它们要再起一套 VLM 推理，
+这张卡放不下。无卡模式开机时 MinerU 与其余模型一样跳过，选择器里照列但置灰（探针 unhealthy）。
+
+## 托管 API 的多模态模型（DeepSeek / Kimi）
+
+网关能把注册表条目指向 OpenAI 兼容的托管 API：`endpoint` 填服务基座（不带 `/v1`），
+`adapter` 填对端的模型 id，`api_key_env` 填**存密钥的环境变量名**（字段说明见
+`infra/registry/models.yaml` 头注释）。`models.autodl.yaml` 里 DeepSeek / Kimi 的问答条目与
+整页识别引擎（`vlm-ocr-deepseek` / `vlm-ocr-kimi`）都写好了、注释着，有 key 才去注释：
+
+```bash
+# 密钥：一行一个 KEY=VALUE，= 两边不要空格（这个文件按 shell 赋值读）
+umask 077; cat > /root/ddp/provider.env <<'EOF'
+DEEPSEEK_API_KEY=sk-...
+MOONSHOT_API_KEY=sk-...
+EOF
+# 注册表：在 models.deploy.yaml 里去注释要用的条目，再重启网关与它的 worker（stack.bash start 只补没在跑的）
+```
+
+- 密钥只注入网关与网关 worker；不在 YAML、日志、错误体里出现。条目写了 key 却没给：
+  调用 503 `provider_key_missing`，探针 unhealthy，选择器里置灰 —— 可见，不会无鉴权裸调。
+- 托管 API 不占本机 GPU，**无卡模式开机也能用**（`vlm-ocr-*` 在 CPU 上渲染页面再发图）。
+- 整页识别必须用 `generic-json` 方言（缺省）：`deepseek-ocr2` 方言带 vLLM 私有字段，托管 API 会 400。
+- DeepSeek `deepseek-flash` 缺省开 thinking，条目里用 `request_extras: {thinking: {type: disabled}}` 关掉；
+  Kimi `kimi-k3` thinking 常开，只能 `reasoning_effort: low`。
+- 2026-10 在 AutoDL 上实测连通：DeepSeek、Kimi 直连可达；OpenAI 超时、Anthropic 返回 403（地域），
+  这两家要换成 OpenAI 兼容中继的基座才能用（`models.yaml` 的 `vqa_models` 段末尾有注释掉的示例）。
+
 ## 推理优化
 
 ### FlashAttention：用上了，但**不要装 `flash-attn`**
@@ -266,9 +318,10 @@ MODELS_CONFIG=../models.autodl.yaml SERVICE_TOKEN=... REDIS_URL=redis://localhos
 ```
 
 `/readyz` 是 `all(up)`：注册表里注册了什么，就得起什么。`models.autodl.yaml`
-注册了**两个**远端 —— OCR-2（:18001，同时兼 vlm-ocr 解析引擎）与指令模型（:18002），
-两个都得活着探针才绿。`ENABLE_CHAT=0` 那档只起前一个，
-**要连带把 `qwen3-4b-instruct` 那段注释掉**，否则 `/readyz` 恒 503、副本永不接流量。
+注册了**四个**本地端点 —— OCR-2（:18001，同时兼 vlm-ocr 解析引擎）、指令模型（:18002）、
+bge-m3（:18080）与 MinerU（:18000），都得活着探针才绿。`ENABLE_CHAT=0` / `ENABLE_MINERU=0`
+**要连带把对应那段注释掉**（`qwen3-4b-instruct` / `mineru`），否则 `/readyz` 恒 503、副本永不接流量。
+去注释的托管 API 条目同理：key 不在或对端不通，探针就不绿。
 
 ## 成本控制
 
@@ -301,7 +354,7 @@ EDGE_PORT=6006
 GUEST_MODE=read
 # up 时连模型线一起拉起（要 GPU）
 MODEL_LINE=1
-# 仓库那份注册表的副本，打开了 embedding_models 段
+# 仓库 models.autodl.yaml 的副本；托管 API 条目在这份副本里去注释
 MODELS_CONFIG=/root/ddp/models.deploy.yaml
 ```
 
@@ -309,7 +362,7 @@ MODELS_CONFIG=/root/ddp/models.deploy.yaml
 
 没有 systemd，关机再开或从镜像开出新实例时进程一个都不在。`up` 按依赖顺序拉回来，
 每一步先判"是不是已经在跑"，可以重复执行：模型线（`MODEL_LINE=1` 时：OCR-2 → 指令模型 →
-bge-m3，并等它们的 `/health`）→ 应用面（同 `start`）→ 隧道（有 `cloudflared.token` 时）。
+bge-m3 → MinerU，并等它们的 `/health`）→ 应用面（同 `start`）→ 隧道（有 `cloudflared.token` 时）。
 
 ```bash
 autodl start <id> --wait

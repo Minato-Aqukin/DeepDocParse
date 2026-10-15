@@ -50,7 +50,7 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 
 from ddp_gateway.auth import require_service_token
-from ddp_gateway.config import settings
+from ddp_gateway.config import request_model_id, settings, upstream_auth_headers
 from ddp_gateway.routers.health import _probe_path
 from ddp_gateway.services.engines import is_inprocess
 # 能力词只有一份：判据必须与真实选路同源，抄第二份就是本项目静默出错过三次的形状
@@ -146,16 +146,15 @@ _CHANNEL_LIMITS = {
 def _requested_model(section: str, name: str, entry) -> str:
     """真实请求里填在 `model` 字段上的那个 id。**按调用路径取，不能一律用条目名**：
 
-    - `vlm-ocr` 解析引擎填 `options.model`（`services/engines.py` 缺它直接报错）；
-    - chat / embedding / rerank 反代填条目名（`routers/chat.py` 等）；
-    - `adapter` 是预留接缝，抽取平面已经优先用它（`services/extraction.py`）。
+    - `vlm-ocr` 解析引擎填 `adapter or options.model`（`services/engines.py` 缺它直接报错）；
+    - 其余一律 `adapter or 条目名`（`config.request_model_id`，与各调用路径同源）。
 
     取错的后果不是报错而是**假绿**：探针对着一个不会被请求的 id 去核对，
     核对通过，而真实请求照旧 404。
     """
     if section == "parse_engines":
         return entry.adapter or str((entry.options or {}).get("model") or "") or name
-    return entry.adapter or name
+    return request_model_id(name, entry)
 
 
 def _serves(resp: httpx.Response, model_id: str) -> bool:
@@ -172,16 +171,23 @@ def _serves(resp: httpx.Response, model_id: str) -> bool:
     if not isinstance(data, list):
         return False
     return any(isinstance(m, dict) and m.get("id") == model_id for m in data)
-
-
-async def _probe(http: httpx.AsyncClient, url: str, model_id: str | None) -> str:
+ 
+ 
+async def _probe(http: httpx.AsyncClient, url: str, model_id: str | None,
+                 entry=None) -> str:
     """严格健康：只有 2xx 算数；重定向不跟随；OpenAI 协议还要核对 model id。
 
     **不复用 readyz 的判据**：那条把 `<500` 都算 up（进程该不该接流量是另一个
-    问题），401/404/302 会被报成健康。
+    问题），401/404/302 会被报成健康。带 api_key_env 的条目带上鉴权去探；
+    密钥缺失直接 unhealthy —— 没有 key 时"裸探"只会收到 401，那答的不是
+    "模型服务着吗"而是"没 key 进得去吗"。
     """
     try:
-        resp = await http.get(url, timeout=3.0, follow_redirects=False)
+        headers = upstream_auth_headers(entry) if entry is not None else {}
+        resp = await http.get(url, timeout=3.0, follow_redirects=False,
+                              headers=headers)
+    except LookupError:
+        return "unhealthy"
     except httpx.HTTPError:
         return "unhealthy"
     if not (200 <= resp.status_code < 300):
@@ -197,23 +203,31 @@ class _Prober:
     `vlm-ocr` 与 vqa 条目可以指向同一个容器（注册表允许一个 endpoint 出现在
     多个段里），模型容器的健康检查往往不便宜。键里带 model id：同一个容器被
     问"你服务 A 吗 / 你服务 B 吗"是两个问题，合并会把其中一个答错。
+    键里也带鉴权（有没有 key / 哪个 key）：同一个容器被"带 key 探"和"裸探"
+    是两个问题，裸探的 401 不能替带 key 的那次回答，反过来也不行。
     """
 
     def __init__(self, http: httpx.AsyncClient):
         self._http = http
-        self._tasks: dict[tuple[str, str | None], asyncio.Task] = {}
+        self._tasks: dict[tuple[str, str | None, str], asyncio.Task] = {}
 
     async def state(self, section: str, name: str, entry, fallback: str) -> str:
         if is_inprocess(entry):
             # 进程内引擎（borndigital）没有远端可探：就绪性等于本进程
             return "ready"
+        try:
+            auth = (upstream_auth_headers(entry) or {}).get("Authorization", "")
+        except LookupError:
+            # 密钥缺失直接 unhealthy，连探都不用探：裸探只会收到 401，
+            # 答的不是"模型服务着吗"而是"没 key 进得去吗"
+            return "unhealthy"
         path = _probe_path(entry, fallback)
         url = f"{entry.endpoint}{path}"
         model_id = _requested_model(section, name, entry) if path == _MODELS_PATH else None
-        key = (url, model_id)
+        key = (url, model_id, auth)
         task = self._tasks.get(key)
         if task is None:
-            task = asyncio.ensure_future(_probe(self._http, url, model_id))
+            task = asyncio.ensure_future(_probe(self._http, url, model_id, entry))
             self._tasks[key] = task
         return await task
 

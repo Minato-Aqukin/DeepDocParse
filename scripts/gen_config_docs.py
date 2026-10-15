@@ -59,10 +59,16 @@ TARGETS = (
 模型请求扩展由 `MODELS_CONFIG` 指向的注册表声明，不按模型名字猜测。
 在 `vqa_models` 条目的 `options.chat_template_kwargs` 中写
 `{enable_thinking: false}`，网关会把它作为 `/v1/chat/completions` 的模板默认值
-发送给运行时（请求显式提供的 `chat_template_kwargs` 优先）。抽取及视觉出处核对
-使用所选 `vqa_models` 条目；VLM OCR 使用对应 `parse_engines` 条目的同名选项。
+发送给运行时（请求显式提供的 `chat_template_kwargs` 优先）。`options.request_extras`
+（dict）原样并进该条目的 chat 请求体，供外部 OpenAI 兼容服务声明扩展参数
+（如 DeepSeek 的 `{thinking: {type: disabled}}`、Kimi 的 `{reasoning_effort: low}`）；
+`model`/`messages`/`stream` 不许出现在其中（注册表加载时直接拒绝）。
+抽取及视觉出处核对使用所选 `vqa_models` 条目；VLM OCR 使用对应 `parse_engines` 条目的同名选项。
 各路径复用同一声明边界，未声明的模型不添加该参数；`transcribe_prompt`、凭据等
-其他 options 不会被当成 chat 参数发送。JSON 和 SSE 正文仍原样透传，不清洗
+其他 options 不会被当成 chat 参数发送。外部服务的密钥由条目 `api_key_env`
+点名的环境变量提供（密钥本身永不进 YAML/日志/错误体/响应），每次出站调用
+以 `Authorization: Bearer` 发送；缺失时同步平面 503 `provider_key_missing`、
+探针报 unhealthy。JSON 和 SSE 正文仍原样透传，不清洗
 `</think>`。仅对确认支持该扩展的运行时声明。
 语料 API 的 `CHAT_URL` 留空、`CHAT_MODEL` 选对应注册表条目时，问答和联邦 Wiki
 共享此网关边界；显式直连 `CHAT_URL` 绕过注册表，模板策略须由所接运行时配置。

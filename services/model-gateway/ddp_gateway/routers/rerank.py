@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ddp_gateway.auth import require_service_token
+from ddp_gateway.config import PROVIDER_KEY_MISSING, upstream_auth_headers
 from ddp_gateway.errors import APIError
 
 router = APIRouter(tags=["rerank"], dependencies=[Depends(require_service_token)])
@@ -47,9 +48,15 @@ async def rerank_documents(req: RerankRequest, request: Request):
         raise APIError(404, f"model not found: {model}", "invalid_request_error",
                        "model_not_found")
 
+    try:
+        upstream_headers = upstream_auth_headers(entry)
+    except LookupError as exc:
+        raise APIError(503, str(exc), "upstream_error", PROVIDER_KEY_MISSING)
+
     payload = {"query": req.query, "texts": req.texts, **entry.options}
     try:
-        upstream = await state.http.post(f"{entry.endpoint}/rerank", json=payload)
+        upstream = await state.http.post(f"{entry.endpoint}/rerank", json=payload,
+                                         headers=upstream_headers)
         upstream.raise_for_status()
         data = upstream.json()
     except (httpx.HTTPError, json.JSONDecodeError) as exc:

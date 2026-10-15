@@ -40,18 +40,21 @@ export const ENGINES: EngineSchema[] = [
     description: '版面解析 + OCR，输出 Markdown 与带页码/坐标的版面结构',
     fields: [
       {
+        // 取值是 mineru-api 3.4.4 的 backend 枚举（不认识的值它直接 400 Invalid backend）
         key: 'backend',
         label: '解析后端',
         type: 'select',
         default: 'pipeline',
         choices: [
           { value: 'pipeline', label: 'pipeline（小模型流水线，省显存）' },
-          { value: 'vlm', label: 'vlm（多模态大模型，效果更好）' },
+          { value: 'hybrid-engine', label: 'hybrid（流水线 + 多模态大模型）' },
+          { value: 'vlm-engine', label: 'vlm（多模态大模型）' },
         ],
-        hint: 'dev 机显存有限时用 pipeline',
+        hint: 'hybrid / vlm 要部署侧装了 MinerU 的多模态模型，没装时任务会直接失败',
       },
       {
-        key: 'lang',
+        // mineru 的表单字段叫 lang_list；写成 lang 会被它静默忽略
+        key: 'lang_list',
         label: '语言',
         type: 'text',
         default: '',
@@ -72,6 +75,22 @@ export const ENGINES: EngineSchema[] = [
     description:
       '逐页送多模态 OCR 模型识别，适合扫描件/表格/公式；每页一次模型调用、较慢、要 GPU；坐标来自模型输出',
     // 模型由注册表那一行的 options.model 决定，不是用户可调的参数
+    fields: [],
+  },
+  // 托管 API 上的多模态模型（注册表 api_key_env 条目，见 infra/registry/models.autodl.yaml）。
+  // 不占本机 GPU，无卡模式开机也能用；按页计 token 费
+  {
+    engine: 'vlm-ocr-deepseek',
+    label: '大模型 OCR · DeepSeek API',
+    description:
+      '逐页把页面图发给 DeepSeek 的多模态模型识别；不占本机 GPU，按页计费；坐标来自模型输出，精度不如版面模型',
+    fields: [],
+  },
+  {
+    engine: 'vlm-ocr-kimi',
+    label: '大模型 OCR · Kimi API',
+    description:
+      '逐页把页面图发给 Kimi 的多模态模型识别；不占本机 GPU，按页计费；坐标来自模型输出，精度不如版面模型',
     fields: [],
   },
 ]

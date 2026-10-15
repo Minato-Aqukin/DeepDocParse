@@ -13,7 +13,10 @@ from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
 from ddp_gateway.auth import require_service_token
-from ddp_gateway.config import chat_request_defaults
+from ddp_gateway.config import (
+    PROVIDER_KEY_MISSING, chat_request_defaults, request_model_id,
+    upstream_auth_headers,
+)
 from ddp_gateway.errors import APIError
 from ddp_gateway.services.extraction import NO_INSTRUCT, VISION
 
@@ -94,7 +97,19 @@ async def chat_completions(request: Request):
     if entry is None:
         raise APIError(404, f"model not found: {model}", "invalid_request_error", "model_not_found")
 
-    body = {**chat_request_defaults(entry.options), **body}
+    # 上游鉴权：只在调用瞬间从环境取 key。环境里没有 = 503 可见失败，
+    # 绝不无鉴权裸调（否则对端 401 会被伪装成运行时故障）。
+    # 取 key 放并发闸之前：配错密钥时直接失败，不占 VQA 并发位。
+    try:
+        upstream_headers = upstream_auth_headers(entry)
+    except LookupError as exc:
+        raise APIError(503, str(exc), "upstream_error", PROVIDER_KEY_MISSING)
+
+    # 条目名是我们的稳定 id，对端只认 adapter：上游请求体里的 model 填
+    # `adapter or 条目名`。自建 vLLM 两边一致，改写是空操作；外部服务
+    # （deepseek-flash 之类）不改写的话每一个请求都是 404。
+    body = {**chat_request_defaults(entry.options), **body,
+            "model": request_model_id(model, entry)}
 
     # 并发上限：满载快速失败（挡洪峰；真正的推理排队在运行时自己的 batch 里）。
     # locked() 与 acquire() 之间没有 await：asyncio 单线程里 locked() 为假时
@@ -116,6 +131,7 @@ async def chat_completions(request: Request):
     try:
         upstream_req = state.http.build_request(
             "POST", f"{entry.endpoint}/v1/chat/completions", json=body,
+            headers=upstream_headers,
         )
         upstream = await state.http.send(upstream_req, stream=True)
     except httpx.HTTPError as exc:

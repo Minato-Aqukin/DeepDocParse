@@ -20,7 +20,9 @@ import json
 
 import httpx
 
-from ddp_gateway.config import chat_request_defaults, settings
+from ddp_gateway.config import (
+    chat_request_defaults, request_model_id, settings, upstream_auth_headers,
+)
 from ddp_core import extract_format as fmt
 from ddp_core import crops
 from ddp_core.extract_format import CoerceError, FieldSpec, SchemaSpec, coerce_value
@@ -172,17 +174,20 @@ def _transcribe_prompt(ctx: ExtractContext) -> str:
 
 async def _chat(ctx: ExtractContext, messages: list[dict], *,
                 instruct: bool = True) -> str | None:
-    """调 VQA 平面（OpenAI 协议）。不可达/非 200 返回 None -> 字段判 error。"""
+    """调 VQA 平面（OpenAI 协议）。不可达/非 200/无密钥返回 None -> 字段判 error。"""
     picked = _pick_chat(ctx, instruct=instruct)
     if picked is None:
         return None
     try:
         name, entry = picked
+        headers = upstream_auth_headers(entry)
         ctx.usage["chat_calls"] += 1
         resp = await ctx.http.post(
             f"{entry.endpoint}/v1/chat/completions",
             json={**chat_request_defaults(entry.options),
-                  "model": entry.adapter or name, "messages": messages, "stream": False},
+                  "model": request_model_id(name, entry),
+                  "messages": messages, "stream": False},
+            headers=headers,
         )
         if resp.status_code != 200:
             return None

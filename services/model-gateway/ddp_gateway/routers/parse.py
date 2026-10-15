@@ -32,7 +32,7 @@ class ParseRequest(BaseModel):
     # 认识具体引擎（违反铁律 3），且会架空 models.yaml 的 default 标记 ——
     # models.cpu.yaml 只注册 borndigital 时，写死的 "mineru" 会让缺省请求 404
     engine: str = ""
-    options: dict = {}     # 引擎透传选项（mineru: backend=pipeline|vlm 等）
+    options: dict = {}     # 引擎透传选项（mineru: backend=pipeline|hybrid-engine|vlm-engine 等）
     callback_url: str | None = None
 
 

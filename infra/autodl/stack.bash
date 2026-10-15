@@ -69,7 +69,7 @@ PUBLIC_SCHEME="${PUBLIC_SCHEME:-http}"            # 隧道 / 反代终结 TLS �
 # `http://embed:8080`（compose 的内部 DNS），这台机器上解析不了 ——
 # 而网关的 /readyz 是 all(up)：注册了却没起的东西会让探针恒 503，
 # 副本永远不接流量。注册表里写了什么就得真的起什么。
-# 起了模型线之后换成 models.autodl.yaml（OCR-2 + 指令模型 + 可选 bge-m3）。
+# 起了模型线之后换成 models.autodl.yaml（OCR-2 + 指令模型 + bge-m3 + MinerU）的副本。
 MODELS_CONFIG="${MODELS_CONFIG:-$SRC/infra/registry/models.local.yaml}"
 DEFAULT_PARSE_ENGINE="${DEFAULT_PARSE_ENGINE:-borndigital}"
 REGISTRATION_MODE="${REGISTRATION_MODE:-open}"
@@ -88,6 +88,11 @@ PIP_INDEX="${PIP_INDEX:-https://mirrors.aliyun.com/pypi/simple}"
 PIP_FALLBACK_INDEX="${PIP_FALLBACK_INDEX:-https://mirrors.ustc.edu.cn/pypi/simple}"
 
 STACK_ENV="$DDP_ROOT/stack.env"                   # 生成一次就复用（含全部密钥）
+# **托管模型 API 的密钥**（DeepSeek / Kimi …），一行一个 `KEY=VALUE`，600，**不进 git**。
+# 注册表条目用 `api_key_env: DEEPSEEK_API_KEY` 点名取哪个；只注入网关与它的 worker ——
+# 其余进程用不到，也不该看得到。没有这个文件就是没接托管 API，注册表里也别写那些条目
+# （写了 key 却没给：调用 503 provider_key_missing、探针 unhealthy，可见但没用）。
+PROVIDER_ENV="$DDP_ROOT/provider.env"
 
 # ---------------------------------------------------------------- 小工具
 FAILS=0
@@ -380,6 +385,11 @@ do_start() {
            CALLBACK_ALLOWED_BASE="http://127.0.0.1:$CORPUS_PORT/internal/" \
            FETCH_ALLOW_REDIRECTS=false \
            FETCH_TRUSTED_BASE="http://127.0.0.1:$CONTROL_PORT/files/,http://127.0.0.1:$MINIO_PORT/$OBJECT_BUCKET/"
+    # 托管 API 密钥只进网关这一侧（理由见 PROVIDER_ENV 的注释）
+    if [ -f "$PROVIDER_ENV" ]; then
+      [ "$(stat -c %a "$PROVIDER_ENV")" = 600 ] || warn "$PROVIDER_ENV 不是 600（里面是 API 密钥）"
+      set -a; . "$PROVIDER_ENV"; set +a
+    fi
   }
   if ! alive "ddp_gateway.main:app"; then
     ( gateway_env
@@ -609,11 +619,15 @@ do_status() {
     return 0
   fi
   ( source "$HERE/env.bash"
-    for kv in "ocr-vllm:$VLLM_PORT" "chat-vllm:$CHAT_PORT" "embed:$EMBED_PORT"; do
+    services=("ocr-vllm:$VLLM_PORT" "chat-vllm:$CHAT_PORT" "embed:$EMBED_PORT")
+    [ "$ENABLE_MINERU" = 1 ] && services+=("mineru:$MINERU_PORT")
+    for kv in "${services[@]}"; do
       curl -fsS --max-time 3 --noproxy '*' "http://127.0.0.1:${kv#*:}/health" >/dev/null 2>&1 \
         && printf '%-20s \033[32m健康\033[0m\n' "${kv%%:*}" \
         || printf '%-20s \033[31m不健康\033[0m\n' "${kv%%:*}"
-    done )
+    done
+    # MinerU 只能用两套 vLLM 剩下的显存（MINERU_VRAM_GB 按这个余量定）
+    printf '%-20s %s\n' 显存 "$(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader 2>/dev/null)" )
 }
 
 # ================================================================ doctor
@@ -730,30 +744,37 @@ do_tunnel() {
 # **开机一条命令。** 没有 systemd、AutoDL 也不替你拉进程：关机再开、或从镜像开出新实例，
 # 进程一个都不在。这里按依赖顺序全部拉回来，每一步都先看"是不是已经在跑"，可以重复执行。
 #
-# 模型线（OCR-2 + 指令模型 + bge-m3，要 GPU）起不起由 MODEL_LINE 决定（写在 deploy.env）。
+# 模型线（OCR-2 + 指令模型 + bge-m3 + MinerU，要 GPU）起不起由 MODEL_LINE 决定（写在 deploy.env）。
 # 它排在应用面前面：网关的 /readyz 是 all(up)，注册表里写了的模型没起，探针恒 503。
 # vLLM 从进程起来到真正可服务要几分钟，所以最后会等它们的 /health（MODEL_WAIT_SECONDS）。
 models_up() {
   ( source "$HERE/env.bash"
     mkdir -p "$LOG_DIR"
     healthy() { curl -fsS --max-time 3 --noproxy '*' "http://127.0.0.1:$1/health" >/dev/null 2>&1; }
+    proc_pat() {  # 端口背后那个模型进程的 ps 模式
+      case "$1" in
+        "$EMBED_PORT")  echo "embed_shim:app" ;;
+        "$MINERU_PORT") echo "mineru-api .*--port $1" ;;
+        *)              echo "vllm serve .*--port $1" ;;
+      esac
+    }
     launch() {  # launch <名字> <端口> <脚本>
       if healthy "$2"; then pass "$1 已在跑（:$2）"; return 0; fi
-      # vLLM 进程在、/health 还没通 = 正在加载，别再起第二份（ocr.bash/chat.bash 不判重）
-      if [ "$1" != embed ] && alive "vllm serve .*--port $2"; then info "$1 正在加载（:$2）"; return 0; fi
-      if [ "$1" = embed ] && alive "embed_shim:app"; then info "$1 正在加载（:$2）"; return 0; fi
+      # 进程在、/health 还没通 = 正在加载，别再起第二份（各启动脚本不判重）
+      if alive "$(proc_pat "$2")"; then info "$1 正在加载（:$2）"; return 0; fi
       bash "$HERE/$3" --daemon >>"$LOG_DIR/up.log" 2>&1 \
         && info "$1 已拉起（:$2，日志在 $LOG_DIR）" || fail "$1 拉不起来（看 $LOG_DIR/up.log）"
     }
-    model_alive() {  # 该端口背后的模型进程还在不在（在 = 可能还在加载，值得等）
-      if [ "$1" = "$EMBED_PORT" ]; then alive "embed_shim:app"; else alive "vllm serve .*--port $1"; fi
-    }
-    # 顺序是硬约束：chat.bash 自己会等 OCR 的 /health 通再起（共卡显存，见 env.bash）
+    model_alive() { alive "$(proc_pat "$1")"; }  # 在 = 可能还在加载，值得等
+    # 顺序是硬约束：chat.bash 自己会等 OCR 的 /health 通再起（共卡显存，见 env.bash）。
+    # MinerU 不受这条约束：它的模型在第一份任务时才上卡（见 mineru.bash）
     launch ocr-vllm "$VLLM_PORT" ocr.bash
     [ "$ENABLE_CHAT" = 1 ] && launch chat-vllm "$CHAT_PORT" chat.bash
     launch embed "$EMBED_PORT" embed.bash
+    [ "$ENABLE_MINERU" = 1 ] && launch mineru "$MINERU_PORT" mineru.bash
     local ports=("$VLLM_PORT" "$EMBED_PORT") waited=0 limit="${MODEL_WAIT_SECONDS:-900}" p
     [ "$ENABLE_CHAT" = 1 ] && ports+=("$CHAT_PORT")
+    [ "$ENABLE_MINERU" = 1 ] && ports+=("$MINERU_PORT")
     for p in "${ports[@]}"; do
       # 进程已经没了就别再等：等满 limit 只会把网站和隧道一起拖住
       while ! healthy "$p" && [ "$waited" -lt "$limit" ] && model_alive "$p"; do sleep 5; waited=$((waited + 5)); done

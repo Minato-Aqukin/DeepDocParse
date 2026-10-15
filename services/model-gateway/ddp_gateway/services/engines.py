@@ -161,7 +161,7 @@ class VlmOcrEngine:
                 " —— 缺它时运行时会自己挑一个，识别质量无从复现")
         layout_json = await vlm_ocr.recognize(
             self._http, endpoint=endpoint, model=model,
-            pdf_bytes=pdf_bytes, options=options)
+            pdf_bytes=pdf_bytes, options=options, entry=self._entry)
         return {
             "markdown": vlm_ocr.to_markdown(layout_json),
             "layout_json": layout_json,

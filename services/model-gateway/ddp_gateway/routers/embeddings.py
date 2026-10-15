@@ -10,6 +10,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from ddp_gateway.auth import require_service_token
+from ddp_gateway.config import (
+    PROVIDER_KEY_MISSING, request_model_id, upstream_auth_headers,
+)
 from ddp_gateway.errors import APIError
 
 router = APIRouter(tags=["embeddings"], dependencies=[Depends(require_service_token)])
@@ -39,8 +42,16 @@ async def create_embeddings(request: Request):
     if entry is None:
         raise APIError(404, f"model not found: {model}", "invalid_request_error", "model_not_found")
 
+    # 与 chat 反代同一规则：上游请求体里的 model 填 `adapter or 条目名`。
+    body["model"] = request_model_id(model, entry)
     try:
-        upstream = await state.http.post(f"{entry.endpoint}/v1/embeddings", json=body)
+        upstream_headers = upstream_auth_headers(entry)
+    except LookupError as exc:
+        raise APIError(503, str(exc), "upstream_error", PROVIDER_KEY_MISSING)
+
+    try:
+        upstream = await state.http.post(f"{entry.endpoint}/v1/embeddings", json=body,
+                                         headers=upstream_headers)
         payload = upstream.json()
     except (httpx.HTTPError, json.JSONDecodeError) as exc:
         raise APIError(502, f"embedding runtime unreachable: {exc}", "upstream_error",

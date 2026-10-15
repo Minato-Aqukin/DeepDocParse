@@ -206,9 +206,9 @@ bash infra/autodl/stack.bash doctor      # 别跳过
 不接流量。所以缺省的 `MODELS_CONFIG` 是 `models.local.yaml`（只有进程内的
 borndigital），起了模型线之后再换。
 
-`models.autodl.yaml` 默认把 `embedding_models` 段注释着 —— 起了 `embed.bash`
-就要打开它。**别直接改仓库里那份**：下一次推代码会把它盖回去，而后果是索引
-静默退回失败。把它复制一份到仓库之外（例如 `$DDP_ROOT/models.deploy.yaml`）
+`models.autodl.yaml` 已经注册了 `embedding_models`（bge-m3，`embed.bash`）与 MinerU，
+模型线上都会起。要改注册表（比如去注释托管 API 条目）时**别直接改仓库里那份**：
+下一次推代码会把它盖回去。把它复制一份到仓库之外（例如 `$DDP_ROOT/models.deploy.yaml`）
 再把 `MODELS_CONFIG` 指过去。
 
 解析引擎另说：`models.autodl.yaml` 里 `vlm-ocr` 标着 `default: true`，那是

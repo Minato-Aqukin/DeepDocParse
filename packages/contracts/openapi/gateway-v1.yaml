@@ -14,6 +14,14 @@ info:
     两者都是纯新增端点，既有调用方一字不用改。版面结果 `layout_json` 同步把
     `para_blocks[].type` 升进承诺字段（见 packages/contracts/ddp/layout-format.md），也是向后兼容的加法。
 
+    **v1.5（2026-10-15）新增（纯加法）**：注册表条目可声明 `adapter`（上游
+    请求体里的 model 填 `adapter or 条目名`）与 `api_key_env`（出站调用带
+    `Authorization: Bearer`，key 取自点名的环境变量，永不进响应/日志）；
+    缺 key 时同步平面 503 `provider_key_missing`（新增响应码，不改变既有语义），
+    探针 unhealthy；`options.request_extras` 原样并进 chat 请求体
+    （`model`/`messages`/`stream` 不许声明）。自建运行时不声明这两个字段，
+    行为与此前逐字一致。
+
 servers:
   - url: http://model-gateway:9000
 
@@ -55,7 +63,7 @@ paths:
                     这是向后兼容的放宽：注册了 mineru 为 default 的部署行为不变。
                 options:
                   type: object
-                  description: 引擎透传选项（如 mineru 的 backend=pipeline|vlm、语言等）
+                  description: 引擎透传选项（如 mineru 的 backend=pipeline|hybrid-engine|vlm-engine、lang_list 等）
                 callback_url:
                   type: string
                   description: |
@@ -143,12 +151,18 @@ paths:
         有 image_url 部件的请求还要求 vision。一个会遵指令的条目都没有时 400
         no_instruct_model，有图却没有 vision 条目时 400 vision_unavailable ——
         都是可见失败，不会拿 OCR 模型硬答。未知 model 404 model_not_found。
-        gateway 透传到对应运行时（deepseek-ocr.rs / vLLM）。
+        gateway 透传到对应运行时（deepseek-ocr.rs / vLLM / 外部 OpenAI 兼容服务）。
+        上游请求体里的 model 填 `adapter or 条目名`：条目名是网关的稳定 id，
+        adapter 是对端认识的模型 id（自建运行时两边一致，改写是空操作）。
         注册表 options.chat_template_kwargs 若显式声明，作为请求的 chat_template_kwargs
         默认值透传（请求方显式提供的值优先）；未声明时不添加该运行时扩展参数。
         例如混合推理模型的非推理生成可声明 {enable_thinking: false}，
-        避免模板的 </think> 标记进入正文。其他注册表选项不作为 chat 参数发送；
+        避免模板的 </think> 标记进入正文。options.request_extras（dict）原样并进
+        请求体（调用方同名键优先），供外部服务声明扩展参数；model/messages/stream
+        不许出现在其中。其他注册表选项不作为 chat 参数发送；
         JSON/SSE 响应仍原样透传，不清洗生成内容。
+        条目若声明 api_key_env，出站调用带 `Authorization: Bearer`（key 来自点名的
+        环境变量，永不进响应/日志）；环境里没有该变量时 503 provider_key_missing。
       operationId: chatCompletions
       responses:
         "200": { description: OpenAI 兼容响应（含 SSE 流式） }
@@ -156,6 +170,7 @@ paths:
         "404": { description: 未知 model（model_not_found） }
         "429": { description: VQA 并发满载（vqa_overloaded），调用方退避重试 }
         "502": { description: VQA 运行时不可达（vqa_unreachable） }
+        "503": { description: 条目声明了 api_key_env 但环境里没有该变量（provider_key_missing） }
 
   /v1/models:
     get:
@@ -184,7 +199,10 @@ paths:
       description: |
         完全遵循 OpenAI 协议：input 为 string 或 string[]。
         model 字段路由到 models.yaml embedding_models；缺省用 default 模型。
+        上游请求体里的 model 填 `adapter or 条目名`（与 chat 平面同一规则）。
         gateway 透传到对应运行时（TEI）。内部消费方：worker 分块索引、ask_document 检索。
+        条目若声明 api_key_env，出站调用带 `Authorization: Bearer`；环境里没有
+        该变量时 503 provider_key_missing（key 值永不进响应/日志）。
       operationId: createEmbeddings
       requestBody:
         required: true
@@ -203,6 +221,7 @@ paths:
         "200": { description: "OpenAI 兼容 embeddings 响应（data[].embedding）" }
         "404": { description: 未注册的 model }
         "502": { description: embedding 运行时不可达 }
+        "503": { description: 条目声明了 api_key_env 但环境里没有该变量（provider_key_missing） }
 
   /v1/extract:
     post:
@@ -361,6 +380,8 @@ paths:
 
         内部消费方：抽取平面的字段定位、问答平面的候选精排。
         **未注册 rerank_models 时返回 404**，调用方据此退回不重排（可见降级，不是静默跳过）。
+        条目若声明 api_key_env，出站调用带 `Authorization: Bearer`；环境里没有
+        该变量时 503 provider_key_missing（key 值永不进响应/日志）。
       operationId: rerankDocuments
       requestBody:
         required: true
@@ -387,6 +408,7 @@ paths:
                     score: { type: number }
         "404": { description: 未注册 rerank 模型 }
         "502": { description: rerank 运行时不可达 }
+        "503": { description: 条目声明了 api_key_env 但环境里没有该变量（provider_key_missing） }
 
   /v1/capabilities:
     get:
@@ -412,6 +434,8 @@ paths:
         - **OpenAI 协议的条目还要在 `/v1/models` 的 `data[].id` 里真找到本网关
           会请求的那个 id**。200 只说明运行时活着，而 vLLM 只认自己
           `--served-model-name` 的那一个 id，对不上时每一次真实请求都是 404；
+        - 条目若声明 api_key_env，探针带 `Authorization: Bearer` 去探；
+          环境里没有该变量直接 unhealthy（不裸探：裸探的 401 答的不是健康）；
         - 解析与抽取是异步任务，受理第一步就要读 Redis 在途水位，
           任务存储不通时模型再健康也受理不了；
         - 进程内 CPU 解析（borndigital）没有远端可探，就绪性等于本进程。

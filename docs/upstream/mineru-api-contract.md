@@ -1,6 +1,6 @@
 # mineru-api 实测契约（锁定版本 3.4.4）
 
-> 来源：官方镜像（本仓库 `docker/mineru/Dockerfile`，基于 vllm-openai:v0.21.0 + `mineru[core]==3.4.4`）
+> 来源：官方镜像（本仓库 `infra/images/mineru.Dockerfile`，基于 vllm-openai:v0.21.0 + `mineru[core]==3.4.4`）
 > 实测方式：容器 `mineru-api --host 0.0.0.0 --port 8000`，抓取 `/openapi.json` 并真实提交任务验证。
 > 实测日期：2026-07-14。升级 mineru 版本前必须先按本文档跑绿 `tests/`（铁律 4）。
 
@@ -23,8 +23,8 @@
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | `files` | file[] | 必填 | 可多文件；gateway 每任务只传一个 |
-| `backend` | str | `hybrid-engine` | dev 用 `pipeline`（8GB 显存）；prod 用 vlm 系 |
-| `lang_list` | str[] | `['ch']` | 语言 |
+| `backend` | str | `hybrid-engine` | 取值 `pipeline \| vlm-engine \| hybrid-engine \| vlm-http-client \| hybrid-http-client`，其余 400 `Invalid backend`（2026-10-15 实测；`vlm-auto-engine` 被归一成 `vlm-engine`）。只装 pipeline 模型时 vlm/hybrid 任务立即 failed：`Local path for repo_mode 'vlm' is not configured` |
+| `lang_list` | str[] | `['ch']` | 语言。**字段名就是 `lang_list`**：写成 `lang` 会被静默忽略 |
 | `parse_method` | str | `auto` | |
 | `formula_enable` / `table_enable` / `image_analysis` | bool | true | |
 | `return_md` | bool | true | **gateway 显式传 true** |
@@ -67,7 +67,7 @@
 - `404`：任务不存在
 - `409`：任务失败（源码确认；未现场复现）→ 客户端抛 `RuntimeError`
 
-## 与 gateway 的映射（app/services/mineru_client.py）
+## 与 gateway 的映射（services/model-gateway/ddp_gateway/services/mineru_client.py）
 
 - `submit()`：下载 file_url → `POST /tasks`（options 透传覆盖表单默认值，return_* 四项恒为 true）→ 存 `task_id`
 - `status()`：`GET /tasks/{id}` → 状态归一化四态

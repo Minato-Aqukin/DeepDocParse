@@ -47,7 +47,7 @@ import re
 
 import httpx
 
-from ddp_gateway.config import chat_request_defaults
+from ddp_gateway.config import chat_request_defaults, upstream_auth_headers
 from ddp_gateway.services import dsocr2, layout
 from ddp_core import crops
 
@@ -292,8 +292,19 @@ def plain_text_page(text: str, page_idx: int, page_w: float, page_h: float) -> d
 
 
 async def recognize(http: httpx.AsyncClient, *, endpoint: str, model: str,
-                    pdf_bytes: bytes, options: dict) -> dict:
-    """整份 PDF -> layout_json（DDP-Layout v1）。"""
+                    pdf_bytes: bytes, options: dict, entry=None) -> dict:
+    """整份 PDF -> layout_json（DDP-Layout v1）。
+
+    `entry` 是注册表条目（只用来取上游鉴权头）：给了且带 api_key_env 就鉴权，
+    没给（旧调用/测试直调）行为不变。鉴权缺失在这里是可见失败 RuntimeError ——
+    单页失败是静默吞的，key 缺了不能也吞进"模型不可达"里，那会把配置错报成网络错。
+    """
+    headers: dict[str, str] = {}
+    if entry is not None:
+        try:
+            headers = upstream_auth_headers(entry)
+        except LookupError as exc:
+            raise RuntimeError(str(exc))
     scale = float(options.get("scale") or crops.RENDER_SCALE)
     max_pages = int(options.get("max_pages") or 0)
     concurrency = int(options.get("concurrency") or 2)
@@ -312,7 +323,7 @@ async def recognize(http: httpx.AsyncClient, *, endpoint: str, model: str,
     async def one(page_idx: int, size: tuple[float, float]) -> tuple[dict, bool]:
         async with semaphore:
             return await _recognize_page(http, endpoint, model, pdf_bytes,
-                                         page_idx, size, scale,
+                                         page_idx, size, scale, headers,
                                          dialect=dialect, prompt=prompt, extra=extra)
 
     results = await asyncio.gather(*(one(i, s) for i, s in enumerate(sizes)))
@@ -370,7 +381,8 @@ def _engine_notes(dialect: str, options: dict,
 
 async def _recognize_page(http: httpx.AsyncClient, endpoint: str, model: str,
                           pdf_bytes: bytes, page_idx: int,
-                          size: tuple[float, float], scale: float, *,
+                          size: tuple[float, float], scale: float,
+                          headers: dict[str, str], *,
                           dialect: str, prompt: str, extra: dict) -> tuple[dict, bool]:
     """一页 -> (DDP-Layout 的一页, 是否走通了 grounding)。
 
@@ -385,6 +397,8 @@ async def _recognize_page(http: httpx.AsyncClient, endpoint: str, model: str,
 
     uri = "data:image/png;base64," + base64.b64encode(png).decode()
     body = {
+        **extra,
+        # 信封放最后：request_extras 在加载时已禁止这三个键，这里再保证它们盖不掉
         "model": model,
         "messages": [{"role": "user", "content": [
             # 顺序有讲究：图片在前、文字在后。vLLM 按部件出现的位置插入 `<image>`
@@ -393,14 +407,24 @@ async def _recognize_page(http: httpx.AsyncClient, endpoint: str, model: str,
             {"type": "text", "text": prompt},
         ]}],
         "stream": False,
-        **extra,
     }
     try:
-        resp = await http.post(f"{endpoint}/v1/chat/completions", json=body)
+        resp = await http.post(f"{endpoint}/v1/chat/completions", json=body,
+                               headers=headers)
         resp.raise_for_status()
         raw = resp.json()["choices"][0]["message"]["content"] or ""
     except Exception:
         # 单页失败不拖垮整份文档：出一页空的，最后由 recognize 判断是不是全空
+        return empty, False
+
+    if not raw.strip():
+        # thinking 模型可能把 max_tokens 全花在推理上，content 空着回来
+        # （推理在 reasoning_content 里，我们只读 content）。两种方言都一样：
+        # **空串不能进 plain_text_page**：那会产出一个"有块无字"的页，
+        # recognize 的"全空检查"只看 para_blocks 有没有，只要有一页这样，
+        # 整份文档就通过检查交出去 —— 一份看起来解析成功、实际一个字都没有的
+        # 版面，而下游只会看到"这段原文检索不到"，没有任何报错。
+        # 按"这一页没识别出来"处理：整份全空时 recognize 会抛 RuntimeError。
         return empty, False
 
     if dialect == DEEPSEEK_OCR2:

@@ -55,6 +55,26 @@ vqa_models:
       chat_template_kwargs:
         enable_thinking: false
 
+  # ---- 托管 API 的多模态模型（有 key 的部署才去注释）----
+  # 密钥放 $DDP_ROOT/provider.env（600，一行一个 KEY=VALUE），stack.bash 只注入网关与它的 worker；
+  # api_key_env 写的是**变量名**。字段含义见 models.yaml 头注释。不占本机 GPU，
+  # 无卡模式开机也能用。排在本地条目之后且不标 default：问答缺省仍是本地模型，
+  # 只有带图的问答（本地没有会遵指令又看得见图的模型）会落到这里。
+  # deepseek-flash:
+  #   endpoint: "https://api.deepseek.com"
+  #   adapter: "deepseek-flash"
+  #   api_key_env: "DEEPSEEK_API_KEY"
+  #   capabilities: [vision]
+  #   options:
+  #     request_extras: {thinking: {type: disabled}}   # 缺省开 thinking：慢且贵
+  # kimi-k3:
+  #   endpoint: "https://api.moonshot.cn"
+  #   adapter: "kimi-k3"
+  #   api_key_env: "MOONSHOT_API_KEY"
+  #   capabilities: [vision]
+  #   options:
+  #     request_extras: {reasoning_effort: low}        # thinking 常开，只能调低
+
 parse_engines:
   # ---- 「基于大语言模型的文字识别」这条线的落点 ----
   # endpoint 与上面的 vqa 条目**是同一个进程**：一个 vLLM 同时服务
@@ -93,6 +113,43 @@ parse_engines:
       # window_size: 50
       # table_token_ids: [128821, 128822]   # <td> / </td>，表格里本就该重复出现，要放行
 
+  # ---- 托管 API 做整页识别（有 key 的部署才去注释；名字与前端引擎目录对齐）----
+  # **必须 generic-json**（缺省方言）：deepseek-ocr2 方言发的 skip_special_tokens /
+  # vllm_xargs 是 vLLM 私有字段，托管 API 会 400。bbox 由模型自报，精度不如版面模型。
+  # vlm-ocr-deepseek:
+  #   endpoint: "https://api.deepseek.com"
+  #   runtime: vlm-ocr
+  #   api_key_env: "DEEPSEEK_API_KEY"
+  #   capabilities: [parse, vision]
+  #   options:
+  #     model: deepseek-flash
+  #     request_extras: {thinking: {type: disabled}}
+  #     scale: 2.0
+  #     concurrency: 4
+  # vlm-ocr-kimi:
+  #   endpoint: "https://api.moonshot.cn"
+  #   runtime: vlm-ocr
+  #   api_key_env: "MOONSHOT_API_KEY"
+  #   capabilities: [parse, vision]
+  #   options:
+  #     model: kimi-k3
+  #     request_extras: {reasoning_effort: low}
+  #     scale: 2.0
+  #     concurrency: 2
+
+  # ---- 版面解析：MinerU pipeline ----
+  # 由 infra/autodl/mineru.bash 起的 mineru-api（独立 venv，见 env.bash）。
+  # 版面模型给的是真坐标，表格结构/公式也认得 —— 扫描件和复杂版面首选它；
+  # 代价是比 borndigital 慢（每页要过几个小模型）。
+  mineru:
+    endpoint: "http://127.0.0.1:18000"
+    runtime: mineru-api
+    capabilities: [parse]
+    options:
+      # 只装了 pipeline 模型（vlm/hybrid 后端要再起一套 vLLM，这张卡放不下）。
+      # 请求方把 backend 改成别的会在 mineru 那侧失败，不会静默换后端
+      backend: pipeline
+
   # ---- 无模型兜底 ----
   # 有文字层的 PDF 走这条：pypdfium2 抽文字层 + 坐标，进程内跑、不占显存。
   # 出处三件套（页码/bbox/截图）一样齐全，而且比 vlm-ocr 的 bbox 更准
@@ -102,15 +159,13 @@ parse_engines:
     runtime: borndigital
     capabilities: [parse]
 
-# ---- 没有 embedding_models：这台机器上没起 TEI ----
-# 后果是**可见的既有降级**，不是坏了：
-#   - DeepDocParse-Web 的文档索引会失败并显式写 index_error
-#   - 检索退回 BM25，并标 degraded=embedding_unavailable
-# 要补齐就另起一个 TEI 进程（同样不能用 docker，得下 TEI 的裸二进制或用
-# sentence-transformers 包一个 /v1/embeddings），再把这段打开：
-# embedding_models:
-#   bge-m3:
-#     endpoint: "http://127.0.0.1:18080"
-#     default: true
-#     runtime: tei
-#     capabilities: [dense]
+# ---- 向量：bge-m3（CPU）----
+# 由 infra/autodl/embed.bash 起（TEI 的替身，见该脚本）。stack.bash up 在模型线上总会起它；
+# 不起时是可见的既有降级：文档索引失败并写 index_error，检索退回 BM25 并标
+# degraded=embedding_unavailable。
+embedding_models:
+  bge-m3:
+    endpoint: "http://127.0.0.1:18080"
+    default: true
+    runtime: tei
+    capabilities: [dense]

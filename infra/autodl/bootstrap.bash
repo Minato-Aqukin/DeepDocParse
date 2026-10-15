@@ -33,10 +33,20 @@ fi
 
 mkdir -p "$DDP_ROOT" "$LOG_DIR"
 avail_gb=$(df -BG --output=avail "$DDP_ROOT" | tail -1 | tr -dc '0-9')
+# 只算**还没装的**那几样：在已经装好的实例上补装一个组件（比如后加的 MinerU）时，
+# 按全量去要空间会把一台本来够用的机器拒掉。
 # torch + vLLM 及其 CUDA 依赖 ~10G，OCR-2 权重 ~7G，指令模型 ~8G，
-# pip 解包过程还要临时空间。
-need_gb=25
-[ "$ENABLE_CHAT" = "1" ] && need_gb=35
+# MinerU 的独立 venv（自带一份 torch）~9G + pipeline 模型 ~3G；另留 ~10G 给解包临时空间。
+need_gb=10
+[ -x "$VENV_DIR/bin/vllm" ] || need_gb=$((need_gb + 10))
+[ -f "$MODEL_DIR/.ddp-download-complete" ] || need_gb=$((need_gb + 7))
+if [ "$ENABLE_CHAT" = "1" ] && [ ! -f "$CHAT_MODEL_DIR/.ddp-download-complete" ]; then
+  need_gb=$((need_gb + 8))
+fi
+if [ "$ENABLE_MINERU" = "1" ]; then
+  [ -x "$MINERU_VENV_DIR/bin/mineru-api" ] || need_gb=$((need_gb + 9))
+  [ -f "$MINERU_MODELS_DIR/.ddp-download-complete" ] || need_gb=$((need_gb + 3))
+fi
 log "安装目录 $DDP_ROOT，可用 ${avail_gb}G（需要 ${need_gb}G）"
 if [ "${avail_gb:-0}" -lt "$need_gb" ]; then
   die "可用空间不足 ${need_gb}G（当前 ${avail_gb}G）。AutoDL 系统盘缺省只有 30G ——
@@ -170,7 +180,40 @@ else
   warn "ENABLE_CHAT=0：不下指令模型，/v1/extract 会一律报 no_instruct_model"
 fi
 
+# ---------------------------------------------------------------- 5. MinerU（pipeline）
+# 独立 venv 的理由见 env.bash。模型由 mineru 自己的下载器取（它顺带写好
+# MINERU_TOOLS_CONFIG_JSON 里的本地路径，mineru.bash 以 MINERU_MODEL_SOURCE=local 只认这份）。
+if [ "$ENABLE_MINERU" = "1" ]; then
+  MPY="$MINERU_VENV_DIR/bin/python"
+  [ -x "$MPY" ] || uv venv --python "$PYTHON_VERSION" "$MINERU_VENV_DIR"
+  if [ "$("$MPY" -c 'import mineru.version as v; print(v.__version__)' 2>/dev/null)" != "$MINERU_VERSION" ]; then
+    log "装 MinerU $MINERU_VERSION -> $MINERU_VENV_DIR"
+    uv pip install --python "$MPY" --index-url "$PIP_INDEX_URL" "mineru[core]==$MINERU_VERSION"
+  else
+    log "MinerU $MINERU_VERSION 已装，跳过"
+  fi
+  if [ -f "$MINERU_MODELS_DIR/.ddp-download-complete" ] && [ -f "$MINERU_TOOLS_CONFIG_JSON" ]; then
+    log "MinerU pipeline 模型已在 $MINERU_MODELS_DIR，跳过下载"
+  else
+    mkdir -p "$MINERU_MODELS_DIR"
+    case "$WEIGHTS_SOURCE" in
+      modelscope) msrc=modelscope ;;
+      hf)         msrc=huggingface ;;
+      *) die "WEIGHTS_SOURCE 只认 modelscope / hf，收到 $WEIGHTS_SOURCE" ;;
+    esac
+    log "下 MinerU pipeline 模型（$msrc）-> $MINERU_MODELS_DIR"
+    MODELSCOPE_CACHE="$MINERU_MODELS_DIR" HF_HOME="$MINERU_MODELS_DIR" HF_ENDPOINT="$HF_ENDPOINT" \
+      "$MINERU_VENV_DIR/bin/mineru-models-download" -s "$msrc" -m pipeline
+    grep -q '"pipeline": *"/' "$MINERU_TOOLS_CONFIG_JSON" \
+      || die "$MINERU_TOOLS_CONFIG_JSON 里没写上 pipeline 模型路径，MinerU 模型下载没成功"
+    touch "$MINERU_MODELS_DIR/.ddp-download-complete"
+  fi
+else
+  warn "ENABLE_MINERU=0：不装 MinerU，注册表里别留 parse_engines.mineru"
+fi
+
 log "完成。下一步："
 log "  bash $HERE/ocr.bash --daemon     # 识别/VQA 线"
 [ "$ENABLE_CHAT" = "1" ] && log "  bash $HERE/chat.bash --daemon      # 抽取线"
+[ "$ENABLE_MINERU" = "1" ] && log "  bash $HERE/mineru.bash --daemon    # MinerU 解析引擎"
 log "  bash $HERE/verify.bash                  # 验证（别跳过）"

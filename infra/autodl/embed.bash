@@ -44,7 +44,6 @@ if [ "$DAEMON" = "1" ]; then
   ( cd "$HERE" && EMBED_MODEL_DIR="$EMBED_MODEL_DIR" \
     setsid -f "${CMD[@]}" > "$LOG_DIR/embed.log" 2>&1 < /dev/null )
   echo "[embed] 后台启动 -> http://127.0.0.1:$EMBED_PORT，日志 $LOG_DIR/embed.log"
-  echo "[embed] 记得把 models.autodl.yaml 的 embedding_models 段打开（默认是注释掉的）"
 else
   cd "$HERE" && EMBED_MODEL_DIR="$EMBED_MODEL_DIR" exec "${CMD[@]}"
 fi

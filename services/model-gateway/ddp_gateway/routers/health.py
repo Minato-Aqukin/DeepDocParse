@@ -3,7 +3,7 @@ import asyncio
 
 import httpx
 from fastapi import APIRouter, Request, Response
-
+from ddp_gateway.config import upstream_auth_headers
 from ddp_gateway.services.engines import is_inprocess
 
 router = APIRouter(tags=["health"])
@@ -14,10 +14,18 @@ async def healthz():
     return {"status": "ok"}
 
 
-async def _probe(http: httpx.AsyncClient, url: str) -> str:
+async def _probe(http: httpx.AsyncClient, url: str, entry=None) -> str:
+    """该条目的远端活着没。带 api_key_env 的条目带上鉴权去探。
+
+    鉴权缺失也是 down（"这个条目现在不可用"是就绪探针该说的真话），
+    但**消息里只有环境变量名** —— key 值永不进探针响应。
+    """
     try:
-        resp = await http.get(url, timeout=3.0)
+        headers = upstream_auth_headers(entry) if entry is not None else {}
+        resp = await http.get(url, timeout=3.0, headers=headers)
         return "up" if resp.status_code < 500 else f"down ({resp.status_code})"
+    except LookupError as exc:
+        return f"down ({exc})"
     except httpx.HTTPError as exc:
         return f"down ({type(exc).__name__})"
 
@@ -62,7 +70,7 @@ async def readyz(request: Request, response: Response):
     # httpx 会对 inproc:// 抛 UnsupportedProtocol（HTTPError 子类），这一项永远 down、
     # /readyz 恒 503 —— 而 models.cpu.yaml 里 born-digital 是唯一的解析引擎，
     # 无 GPU 路径的就绪探针会永远红。四段都走同一判据，别只修用到的那一段
-    probes: dict[str, str] = {}
+    probes: dict[str, tuple[str, object]] = {}
     for prefix, section, fallback in (
         ("engine", state.registry.parse_engines, "/health"),
         ("vqa", state.registry.vqa_models, "/v1/models"),
@@ -73,15 +81,29 @@ async def readyz(request: Request, response: Response):
             if is_inprocess(entry):
                 checks[f"{prefix}:{name}"] = "up"
             else:
-                probes[f"{prefix}:{name}"] = f"{entry.endpoint}{_probe_path(entry, fallback)}"
+                probes[f"{prefix}:{name}"] = (
+                    f"{entry.endpoint}{_probe_path(entry, fallback)}", entry)
 
     # 同一个 endpoint 只探一次。**vlm-ocr 与 vqa 指向同一个容器**（注册表允许
     # 一个 endpoint 出现在多个段里），不去重就是对同一个模型容器每次探两遍 ——
-    # 而模型容器的健康检查往往不便宜
-    unique = {url: None for url in probes.values()}
+    # 而模型容器的健康检查往往不便宜。键里带上鉴权头：同一个容器被"带 key 探"
+    # 和"不带 key 探"是两个问题（后者 401，前者 200），合并会把其中一个答错。
+    dedup: dict[str, tuple[str, str, object]] = {}
+    for check_name, (url, entry) in probes.items():
+        try:
+            auth = (upstream_auth_headers(entry) or {}).get("Authorization", "")
+        except LookupError:
+            # 密钥缺失的条目不参与"只探一次"的合并：它的结果是固定的 down，
+            # 也不该替别的同 endpoint 条目省掉那一次探测
+            auth = f"missing:{check_name}"
+        dedup[check_name] = (url, auth, entry)
+    unique: dict[tuple[str, str], tuple[str, object]] = {}
+    for url, auth, entry in dedup.values():
+        unique.setdefault((url, auth), (url, entry))
     results = dict(zip(unique, await asyncio.gather(
-        *(_probe(state.http, url) for url in unique))))
-    checks.update({name: results[url] for name, url in probes.items()})
+        *(_probe(state.http, url, entry) for url, entry in unique.values()))))
+    checks.update({name: results[(url, auth)]
+                   for name, (url, auth, _) in dedup.items()})
 
     ready = all(v == "up" for v in checks.values())
     if not ready:
