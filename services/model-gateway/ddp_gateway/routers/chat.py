@@ -14,7 +14,7 @@ from starlette.background import BackgroundTask
 
 from ddp_gateway.auth import require_service_token
 from ddp_gateway.config import (
-    PROVIDER_KEY_MISSING, chat_request_defaults, request_model_id,
+    PROVIDER_KEY_MISSING, adapt_structured_output, chat_request_defaults, request_model_id,
     upstream_auth_headers,
 )
 from ddp_gateway.errors import APIError
@@ -110,6 +110,8 @@ async def chat_completions(request: Request):
     # （deepseek-flash 之类）不改写的话每一个请求都是 404。
     body = {**chat_request_defaults(entry.options), **body,
             "model": request_model_id(model, entry)}
+    # 只有 JSON mode 的托管 API（注册表 structured_output: json_object）收不了 json_schema
+    body = adapt_structured_output(body, entry.options)
 
     # 并发上限：满载快速失败（挡洪峰；真正的推理排队在运行时自己的 batch 里）。
     # locked() 与 acquire() 之间没有 await：asyncio 单线程里 locked() 为假时

@@ -19,7 +19,9 @@ info:
     `Authorization: Bearer`，key 取自点名的环境变量，永不进响应/日志）；
     缺 key 时同步平面 503 `provider_key_missing`（新增响应码，不改变既有语义），
     探针 unhealthy；`options.request_extras` 原样并进 chat 请求体
-    （`model`/`messages`/`stream` 不许声明）。自建运行时不声明这两个字段，
+    （`model`/`messages`/`stream` 不许声明）；`options.structured_output: json_object`
+    的条目把请求里的 `response_format: json_schema` 改写成 `json_object` 并把 schema
+    写进 system 消息（上游只有 JSON mode 时用）。自建运行时不声明这些字段，
     行为与此前逐字一致。
 
 servers:
@@ -159,8 +161,10 @@ paths:
         例如混合推理模型的非推理生成可声明 {enable_thinking: false}，
         避免模板的 </think> 标记进入正文。options.request_extras（dict）原样并进
         请求体（调用方同名键优先），供外部服务声明扩展参数；model/messages/stream
-        不许出现在其中。其他注册表选项不作为 chat 参数发送；
-        JSON/SSE 响应仍原样透传，不清洗生成内容。
+        不许出现在其中。options.structured_output 为 json_object 的条目：
+        response_format.type=json_schema 改写为 json_object，schema 原文追加进
+        system 消息（约束从解码期退到提示词，调用方仍须自行校验）。其他注册表选项不作为
+        chat 参数发送；JSON/SSE 响应仍原样透传，不清洗生成内容。
         条目若声明 api_key_env，出站调用带 `Authorization: Bearer`（key 来自点名的
         环境变量，永不进响应/日志）；环境里没有该变量时 503 provider_key_missing。
       operationId: chatCompletions

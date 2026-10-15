@@ -9,6 +9,7 @@ from tests.conftest import ACTOR, ORG
 3. **导出的 CSV 不能是可执行文件**。抽取结果来自文档内容（不可信输入），
    Excel 会把 `=`/`+`/`-`/`@` 开头的单元格当公式执行
 """
+import asyncio
 import json
 
 import pytest
@@ -463,6 +464,47 @@ async def test_one_field_blowing_up_does_not_lose_the_others(session, app_state)
     # 关键：另一个字段的结果没被连累
     assert outcome.fields["buyer"]["status"] == "found"
     assert outcome.fields["buyer"]["value"] == "北极星科技有限公司"
+
+
+@respx.mock
+async def test_concurrent_fields_do_not_share_the_session_at_once(session, app_state):
+    """回归：字段并发检索时不能同时动同一个 AsyncSession。
+
+    真库上后到的那个字段在 SQLAlchemy 里炸（"Can't operate on closed transaction
+    inside context manager"），被兜底吞成 upstream_error：两字段的 schema 稳定丢一个
+    （2026-10-15 生产实测）。MemoryIndex 不碰 session，所以这里用一个会在并发进入时
+    报错的 index 模拟真库的约束。
+    """
+    document, job = await _seed_document(session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(return_value=Response(200, json={
+        "data": [{"index": 0, "embedding": [1.0, 0.0]}]}))
+    respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
+        {"found": True, "value": "北极星科技有限公司", "source": 1}))
+
+    class OneAtATimeIndex(MemoryIndex):
+        in_use = False
+
+        async def search(self, session, **kwargs):        # noqa: ANN001
+            if self.in_use:
+                raise RuntimeError("concurrent operations on one AsyncSession")
+            self.in_use = True
+            try:
+                await asyncio.sleep(0.01)                 # 一次真库往返期间会让出事件循环
+                return await super().search(session, **kwargs)
+            finally:
+                self.in_use = False
+
+    ctx = ExtractContext(session=session, index=OneAtATimeIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "object", "properties": {
+        "buyer": {"type": "string", "description": "买方单位全称"},
+        "seller": {"type": "string", "description": "卖方单位全称"},
+    }}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    assert {name: f["status"] for name, f in outcome.fields.items()} == {
+        "buyer": "found", "seller": "found"}
 
 
 # --------------------------------------------------------------------- 验收回归（M9 三轮）

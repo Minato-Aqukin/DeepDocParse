@@ -183,15 +183,53 @@ fi
 # ---------------------------------------------------------------- 5. MinerU（pipeline）
 # 独立 venv 的理由见 env.bash。模型由 mineru 自己的下载器取（它顺带写好
 # MINERU_TOOLS_CONFIG_JSON 里的本地路径，mineru.bash 以 MINERU_MODEL_SOURCE=local 只认这份）。
+#
+# **torch 一家子钉成 vLLM venv 里的同一版本，再把两边逐字节相同的文件硬链接起来。**
+# 不这么做时 MinerU 的 venv 自带另一版 torch + CUDA 库（~5G），而 AutoDL 私有镜像
+# 上限 30G —— 2026-10-15 加上 MinerU 后存镜像直接被拒（"镜像大小超过30G限制"）。
+# 只钉 torch/torchvision/triton/nvidia-*：transformers 等两边要的版本不同，
+# 这正是不能装进同一个 venv 的原因（vLLM 0.27.1 用 transformers 5.x，mineru 会把它换掉）。
 if [ "$ENABLE_MINERU" = "1" ]; then
   MPY="$MINERU_VENV_DIR/bin/python"
   [ -x "$MPY" ] || uv venv --python "$PYTHON_VERSION" "$MINERU_VENV_DIR"
-  if [ "$("$MPY" -c 'import mineru.version as v; print(v.__version__)' 2>/dev/null)" != "$MINERU_VERSION" ]; then
-    log "装 MinerU $MINERU_VERSION -> $MINERU_VENV_DIR"
-    uv pip install --python "$MPY" --index-url "$PIP_INDEX_URL" "mineru[core]==$MINERU_VERSION"
+  torch_of() { "$1" -c 'import torch; print(torch.__version__)' 2>/dev/null; }
+  if [ "$("$MPY" -c 'import mineru.version as v; print(v.__version__)' 2>/dev/null)" != "$MINERU_VERSION" ] \
+     || [ "$(torch_of "$MPY")" != "$(torch_of "$PY")" ]; then
+    log "装 MinerU $MINERU_VERSION -> $MINERU_VENV_DIR（torch 与 vLLM venv 同版：$(torch_of "$PY")）"
+    constraints="$MINERU_VENV_DIR/torch-constraints.txt"
+    uv pip freeze --python "$PY" | grep -E '^(torch|torchvision|triton|nvidia-[A-Za-z0-9_.-]+)==' > "$constraints"
+    uv pip install --python "$MPY" --index-url "$PIP_INDEX_URL" -c "$constraints" "mineru[core]==$MINERU_VERSION"
   else
-    log "MinerU $MINERU_VERSION 已装，跳过"
+    log "MinerU $MINERU_VERSION 已装（torch 与 vLLM venv 同版），跳过"
   fi
+  # 同一相对路径、逐字节相同才链（幂等：已是同一 inode 的跳过）。替换走"先链到临时名再 rename"，
+  # 中途断掉也不会留下缺文件的 venv。之后任何一边升级包都是写新文件、不改旧 inode，互不影响
+  "$MPY" - "$VENV_DIR" "$MINERU_VENV_DIR" <<'PYEOF'
+import filecmp, os, sys
+from pathlib import Path
+src, dst = (Path(p) / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+            for p in sys.argv[1:3])
+saved = linked = 0
+for top in ("torch", "torchvision", "triton", "nvidia"):
+    for path in (dst / top).rglob("*"):
+        if path.is_symlink() or not path.is_file():
+            continue
+        twin = src / path.relative_to(dst)
+        try:
+            a, b = path.stat(), twin.stat()
+        except FileNotFoundError:
+            continue
+        if (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino) or a.st_size != b.st_size \
+                or not filecmp.cmp(path, twin, shallow=False):
+            continue
+        tmp = path.with_name(path.name + ".ddp-link")
+        tmp.unlink(missing_ok=True)  # 上一次中途断掉留下的
+        os.link(twin, tmp)
+        os.replace(tmp, path)
+        saved += a.st_size
+        linked += 1
+print(f"  与 vLLM venv 硬链接 {linked} 个文件，省 {saved / 2**30:.2f} GiB")
+PYEOF
   if [ -f "$MINERU_MODELS_DIR/.ddp-download-complete" ] && [ -f "$MINERU_TOOLS_CONFIG_JSON" ]; then
     log "MinerU pipeline 模型已在 $MINERU_MODELS_DIR，跳过下载"
   else

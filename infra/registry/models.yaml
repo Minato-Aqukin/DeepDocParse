@@ -23,6 +23,10 @@
 #                Kimi kimi-k3（常开 thinking，调低推理量）：
 #                  request_extras: {reasoning_effort: low}
 #                model/messages/stream 不许出现在这里（加载时直接 ValueError）。
+#   options.structured_output: json_schema（缺省）| json_object。上游只有 JSON mode
+#                （DeepSeek：json_schema 回 400 "response_format type is unavailable"）时写
+#                json_object —— 网关把问答/wiki 发来的 json_schema 改写成 json_object，
+#                schema 写进 system 消息。写错取值加载时就拒。
 # 外部条目示例见本文件末尾（注释掉的 provider 段）。
 #
 # 连通性实测（2026-10 AutoDL）：OpenAI 直连不通、Anthropic 回 403（地域限制）。
@@ -86,6 +90,7 @@ vqa_models:
   #   capabilities: [vision]
   #   options:
   #     request_extras: {thinking: {type: disabled}}
+  #     structured_output: json_object     # 只有 JSON mode，没有 json_schema
   #
   # # DeepSeek 纯文本（抽取平面的指令模型，不会看图，别标 vision）：
   # deepseek-v4-pro:
@@ -95,6 +100,7 @@ vqa_models:
   #   capabilities: [instruct]
   #   options:
   #     request_extras: {thinking: {type: disabled}}
+  #     structured_output: json_object
   #
   # # Kimi/Moonshot：kimi-k3（视觉 + 常开 thinking，调低推理量省钱省时间）。
   # # moonshot-v1-* 已退役，别配。

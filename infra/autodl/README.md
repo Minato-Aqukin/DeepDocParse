@@ -196,7 +196,8 @@ autodl create --gpu 4090d --disk 50 --ttl 4h --wait --name ddp-ocr2
 ## MinerU（parse_engines.mineru）
 
 `bootstrap.bash` 在 `ENABLE_MINERU=1`（缺省）时多做两件事：建独立 venv `$DDP_ROOT/mineru-venv`
-装 `mineru[core]==3.4.4`（它钉的 torch/transformers 与 vLLM 那套不同，装一起会互相覆盖），
+装 `mineru[core]==3.4.4`（它要的 transformers 与 vLLM 0.27.1 那套不同，装一起会把 vLLM 的换掉；
+torch / triton / nvidia-* 钉成与 vLLM venv 同版并硬链接共用，只多占 0.8G —— 理由见「30G 上限」），
 再用 mineru 自己的下载器从 ModelScope 取 **pipeline** 模型（~2.5G，`$DDP_ROOT/models/mineru`，
 路径写进 `$DDP_ROOT/mineru.json`）。`stack.bash up` 在模型线上用 `mineru.bash` 起
 `mineru-api`（127.0.0.1:18000），网关注册表里是 `runtime: mineru-api` + `backend: pipeline`。
@@ -240,8 +241,29 @@ EOF
 - 整页识别必须用 `generic-json` 方言（缺省）：`deepseek-ocr2` 方言带 vLLM 私有字段，托管 API 会 400。
 - DeepSeek `deepseek-flash` 缺省开 thinking，条目里用 `request_extras: {thinking: {type: disabled}}` 关掉；
   Kimi `kimi-k3` thinking 常开，只能 `reasoning_effort: low`。
+- DeepSeek 只有 JSON mode：问答 / wiki 发的 `response_format: json_schema` 它回 400
+  `This response_format type is unavailable now`。条目写 `structured_output: json_object`，
+  网关改写成 `json_object` 并把 schema 写进 system 消息；形状由语料层照常校验。
 - 2026-10 在 AutoDL 上实测连通：DeepSeek、Kimi 直连可达；OpenAI 超时、Anthropic 返回 403（地域），
   这两家要换成 OpenAI 兼容中继的基座才能用（`models.yaml` 的 `vqa_models` 段末尾有注释掉的示例）。
+
+### 不跑本地指令模型（抽取 / 文字问答走托管 API）
+
+`ddp.cauc.moe` 这台从 2026-10-15 起就是这种形态：镜像放不下 Qwen3-4B（见下文「30G 上限」），
+抽取与文字问答改走 `deepseek-flash`。三处配置，缺一处就会有一条线悄悄落空：
+
+```bash
+# deploy.env：不下、不起指令模型；问答点名托管条目
+ENABLE_CHAT=0
+CHAT_MODEL=deepseek-flash
+# models.deploy.yaml：删掉 qwen3-4b-instruct（注册了没起 = 探针恒红），去注释 deepseek-flash
+```
+
+- `ENABLE_CHAT=0` 时 OCR-2 的 `GPU_MEMORY_UTILIZATION` 缺省变成 0.75（有 MinerU 时）：4090D 上 OCR 进程占 19.2 GiB，
+  给 MinerU 剩 4.8 GiB（它常驻 1.3 GiB、峰值再 +0.7 GiB）。
+- 抽取挑"会遵指令"的条目，删掉 Qwen 后唯一的候选就是 `deepseek-flash`；视觉核对仍走本地 OCR-2。
+- 实测（attention 论文）：问答答出 28.4 BLEU 并引用第 8 页；字段抽取 `found` + `verified`。
+- 代价：按量付费、文档片段发往 DeepSeek；好处：无卡模式开机问答与抽取照样能用（检索退回关键词，标 degraded）。
 
 ## 推理优化
 
@@ -441,6 +463,19 @@ autodl images --json                   # 等 status=finished，再看 sizeBytes
 镜像照样 `finished`，`sizeBytes` 却只有 10240 —— 从它开出的实例系统盘是空的（53M），
 全程没有任何报错。同一台机器干净停服务、关机后等 90 秒再存，得到 27.5GB 的镜像，
 开新实例后 `/root/ddp`、PostgreSQL、MinIO、密钥与令牌齐全，`stack.bash up` 一条命令回到公网可用。
+
+**私有镜像上限 30G。** 2026-10-15 加上 MinerU 后（独立 venv 6.0G + 模型 2.5G）存镜像直接被拒：
+`镜像大小超过30G限制，无法进行保存`。实测镜像大小 ≈ 我们装进系统盘的东西（`df` 已用）+ ~1.5G，
+基础镜像自带的 `/usr`、`/root/miniconda3` 不算。现在的预算（`df` 已用 22G）：
+
+| 项 | 大小 |
+|---|---|
+| DeepSeek-OCR-2 / bge-m3 / MinerU 模型 | 6.4G / 2.2G / 2.5G |
+| vLLM venv | 8.0G |
+| MinerU venv（torch 与 vLLM venv 硬链接共用，见 bootstrap.bash） | 0.8G |
+
+Qwen3-4B（7.6G）放不进来，所以这台走托管 API（上文「不跑本地指令模型」）。
+加东西之前先算账：`df -h /` 的已用量过 28G 就存不了。
 
 **Pro 实例没有独立数据盘**（`dataDiskTotalBytes=0`），`/root/autodl-tmp` 只是系统盘上的目录，
 实测会被打进镜像（1GB 探针文件在镜像里）。普通实例上它是独立数据盘、不进镜像 ——

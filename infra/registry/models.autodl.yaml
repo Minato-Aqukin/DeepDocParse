@@ -67,6 +67,7 @@ vqa_models:
   #   capabilities: [vision]
   #   options:
   #     request_extras: {thinking: {type: disabled}}   # 缺省开 thinking：慢且贵
+  #     structured_output: json_object                 # 只有 JSON mode：问答的 json_schema 会被改写
   # kimi-k3:
   #   endpoint: "https://api.moonshot.cn"
   #   adapter: "kimi-k3"

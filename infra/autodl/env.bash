@@ -74,8 +74,8 @@ EMBED_MODEL_DIR="${EMBED_MODEL_DIR:-$DDP_ROOT/models/bge-m3}"
 # 版面解析引擎（注册表 parse_engines.mineru，runtime mineru-api）。**只装 pipeline 后端**：
 # 版面/公式/表格/OCR 一组小模型，显存按需分配；vlm/hybrid 后端要再起一套 vLLM，
 # 这张卡已经被 OCR-2 + 指令模型占满，放不下。
-# 独立 venv：mineru 钉的 torch/transformers 与 vLLM 0.27.1 那套不是同一组版本，
-# 装进同一个环境迟早互相覆盖。
+# 独立 venv：mineru 要的 transformers 与 vLLM 0.27.1 那套不是同一版，装进同一个环境会把
+# vLLM 的换掉。torch 一家子则钉成同版、与 vLLM venv 硬链接共用（bootstrap.bash 第 5 步）。
 ENABLE_MINERU="${ENABLE_MINERU:-1}"              # 0 = 不装不起，选择器里就不出现 MinerU
 MINERU_VERSION="${MINERU_VERSION:-3.4.4}"        # 与 docs/upstream/mineru-api-contract.md 实测版本一致
 MINERU_VENV_DIR="${MINERU_VENV_DIR:-$DDP_ROOT/mineru-venv}"
@@ -131,8 +131,14 @@ if [ "${ENABLE_CHAT:-1}" = "1" ]; then
   # chat 的 KV 由上面的 CHAT_KV_CACHE_BYTES 写死，不看它
   CHAT_GPU_MEMORY_UTILIZATION="${CHAT_GPU_MEMORY_UTILIZATION:-0.55}"
 else
-  # 只跑识别线时独占整卡
-  GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
+  # 不起本地指令模型（抽取/问答走托管 API，见 README「不跑本地指令模型」）时 OCR 独占大头。
+  # 有 MinerU 时给它留余量（它在第一份任务时才上卡，用的就是这份余量；4090D 实测 OCR 进程
+  # 占 19.2 GiB，剩 4.8 GiB，MinerU 常驻 1.3 GiB + 峰值 0.7 GiB）；没有就 0.85
+  if [ "${ENABLE_MINERU:-1}" = "1" ]; then
+    GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.75}"
+  else
+    GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
+  fi
   CHAT_GPU_MEMORY_UTILIZATION="${CHAT_GPU_MEMORY_UTILIZATION:-0.55}"
 fi
 

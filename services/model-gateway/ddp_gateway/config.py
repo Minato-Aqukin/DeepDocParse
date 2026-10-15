@@ -2,6 +2,7 @@
 
 gateway 不 import 任何模型代码——只认 models.yaml 里的 endpoint。
 """
+import json
 import os
 import re
 from pathlib import Path
@@ -140,6 +141,12 @@ class Settings(BaseSettings):
         )
 
 
+#: `options.structured_output` 的取值：上游认哪种 response_format。
+#: json_schema（缺省）= 原样透传；json_object = 上游只有 JSON mode（DeepSeek 实测：
+#: json_schema 回 400 "This response_format type is unavailable now"），见 adapt_structured_output
+STRUCTURED_OUTPUT_MODES = frozenset({"json_schema", "json_object"})
+
+
 class ModelEntry(BaseModel):
     """注册表里的一行。
 
@@ -217,6 +224,20 @@ class ModelEntry(BaseModel):
                 f"{sorted(shadowed)}（请求信封由选路决定，不可覆盖）")
         return options
 
+    @field_validator("options")
+    @classmethod
+    def _structured_output_must_be_known(cls, options: dict) -> dict:
+        """`options.structured_output`：上游认哪种 response_format（缺省 json_schema）。
+
+        写错（比如 `json-object`）不能被当成缺省悄悄放过 —— 那会把 json_schema 原样发给
+        只认 json_object 的托管 API，每个问答都 400。加载时就拒。
+        """
+        mode = (options or {}).get("structured_output")
+        if mode is not None and mode not in STRUCTURED_OUTPUT_MODES:
+            raise ValueError(
+                f"options.structured_output 只认 {sorted(STRUCTURED_OUTPUT_MODES)}，实得 {mode!r}")
+        return options
+
 
 def request_model_id(name: str, entry: ModelEntry) -> str:
     """真实请求里填在 `model` 字段上的那个 id：`adapter or 条目名`。
@@ -270,6 +291,33 @@ def chat_request_defaults(options: dict) -> dict:
     if isinstance(extras, dict):
         out.update(extras)
     return out
+
+
+def adapt_structured_output(body: dict, options: dict) -> dict:
+    """把 json_schema 请求改写成上游认得的 JSON mode（只对声明了 json_object 的条目）。
+
+    语料层的问答 / 联邦 / wiki 一律发 `response_format: json_schema`（strict）。只有 JSON mode
+    的托管 API 收到它直接 400，问答整条线不可用。改写成 `{"type": "json_object"}`，并把 schema
+    原文写进 system 消息 —— JSON mode 只保证"是 JSON"，不保证形状，形状要靠模型照着 schema 写；
+    DeepSeek 还要求 prompt 里出现 "json" 字样。**约束从解码期退到了提示词**：输出仍由语料层
+    按 schema 校验，不合规是可见失败（schema_violation），不会被当成合法答案。
+    """
+    if options.get("structured_output") != "json_object":
+        return body
+    fmt = body.get("response_format")
+    if not isinstance(fmt, dict) or fmt.get("type") != "json_schema":
+        return body
+    schema = (fmt.get("json_schema") or {}).get("schema")
+    instruction = ("Reply with exactly one JSON object (json) that conforms to this JSON Schema. "
+                   "No prose, no code fences.\nJSON Schema:\n"
+                   + json.dumps(schema, ensure_ascii=False))
+    messages = list(body.get("messages") or [])
+    first = messages[0] if messages else None
+    if isinstance(first, dict) and first.get("role") == "system" and isinstance(first.get("content"), str):
+        messages[0] = {**first, "content": f"{first['content']}\n\n{instruction}"}
+    else:
+        messages.insert(0, {"role": "system", "content": instruction})
+    return {**body, "messages": messages, "response_format": {"type": "json_object"}}
 
 
 # 段名 -> 该段条目缺省具备的能力。**只是缺省值**：条目自己写了 capabilities 就以它为准

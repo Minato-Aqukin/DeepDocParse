@@ -138,6 +138,63 @@ async def test_chat_proxy_decodes_compressed_upstream_body(client, app_state, mo
     assert raw == plain
 
 
+_SCHEMA_REQUEST = {
+    "model": "deepseek", "stream": False,
+    "messages": [{"role": "system", "content": "Answer from evidence only."},
+                 {"role": "user", "content": "q"}],
+    "response_format": {"type": "json_schema", "json_schema": {
+        "name": "grounded_answer", "strict": True,
+        "schema": {"type": "object", "properties": {"claims": {"type": "array"}},
+                   "required": ["claims"]}}},
+}
+
+
+@respx.mock
+async def test_chat_proxy_downgrades_json_schema_for_json_object_providers(
+        client, app_state, monkeypatch):
+    """声明了 structured_output: json_object 的条目：json_schema 改写成 JSON mode，
+    schema 原文进 system 消息（形状靠模型照着写，语料层仍按 schema 校验）。
+    不改写的话 DeepSeek 对每个问答回 400 "response_format type is unavailable"。"""
+    monkeypatch.setenv(ENV, KEY)
+    app_state.registry = Registry(vqa_models={"deepseek": _provider_entry(
+        options={"structured_output": "json_object"})})
+    route = respx.post("https://api.deepseek.com/v1/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": "{}"}}]}))
+
+    resp = await client.post("/v1/chat/completions", json=_SCHEMA_REQUEST)
+    assert resp.status_code == 200, resp.text
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["response_format"] == {"type": "json_object"}
+    system = sent["messages"][0]
+    assert system["role"] == "system"
+    assert system["content"].startswith("Answer from evidence only.")
+    assert "json" in system["content"]
+    schema = _SCHEMA_REQUEST["response_format"]["json_schema"]["schema"]
+    assert json.dumps(schema, ensure_ascii=False) in system["content"]
+    assert sent["messages"][1:] == _SCHEMA_REQUEST["messages"][1:]
+
+
+@respx.mock
+async def test_chat_proxy_keeps_json_schema_by_default(client, app_state, monkeypatch):
+    """没声明的条目（自建 vLLM、支持 json_schema 的托管 API）原样透传。"""
+    monkeypatch.setenv(ENV, KEY)
+    app_state.registry = Registry(vqa_models={"deepseek": _provider_entry()})
+    route = respx.post("https://api.deepseek.com/v1/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": "{}"}}]}))
+
+    resp = await client.post("/v1/chat/completions", json=_SCHEMA_REQUEST)
+    assert resp.status_code == 200, resp.text
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["response_format"] == _SCHEMA_REQUEST["response_format"]
+    assert sent["messages"] == _SCHEMA_REQUEST["messages"]
+
+
+def test_unknown_structured_output_mode_is_rejected_at_load():
+    """写错的取值不能被当成缺省（json_schema）放过：那等于每个问答都 400。"""
+    with pytest.raises(ValueError, match="structured_output"):
+        _provider_entry(options={"structured_output": "json-object"})
+
+
 @respx.mock
 async def test_chat_proxy_without_api_key_env_sends_no_auth_header(client, app_state):
     """自建运行时（没声明 api_key_env）不带鉴权头 —— 别把内网调用变成"带了个空 key"。"""

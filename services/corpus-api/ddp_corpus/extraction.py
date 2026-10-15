@@ -113,6 +113,12 @@ class ExtractContext:
         # 而"甲方名称"和"甲方地址"命中同一段是常态
         self._crop_cache: dict[tuple[str, int],
                               tuple[str | None, bool | None, bool]] = {}
+        # **字段并发跑，但 `session` 只有一个。** AsyncSession 不允许并发操作：两个字段
+        # 同时检索时，后到的那个在 SQLAlchemy 里炸（"Can't operate on closed transaction
+        # inside context manager"），被 run() 的兜底吞成 upstream_error —— 2026-10-15 在
+        # 真库 + 真 embedding 上实测，两字段的 schema 稳定丢一个字段。检索串行化，
+        # 模型调用（大头）仍然并发
+        self._session_lock = asyncio.Lock()
 
     async def check_access(self) -> None:
         if self._authorize is not None:
@@ -158,12 +164,13 @@ async def _retrieve(ctx: ExtractContext, query: str, *, k: int,
     # 与问答 /api/search 同一条共享检索：search_query 负责分面拆查 + 批量向量化，
     # 向量化挂了它自己退回关键词路并打标（铁律 3 那条绝不能拿零向量顶上，
     # 在它内部已经处理，见 ddp_core/search.py::_search_query）
-    hits, degraded = await search_query(
-        ctx.session, ctx.index, embed=lambda texts: embed_batched(ctx.http, texts),
-        query=query, document_id=ctx.document.id,
-        authorized_parse_job_ids=ctx.authorized_parse_job_ids,
-        limit=candidates, candidates=candidates,
-        min_similarity=settings.qa_min_similarity)
+    async with ctx._session_lock:
+        hits, degraded = await search_query(
+            ctx.session, ctx.index, embed=lambda texts: embed_batched(ctx.http, texts),
+            query=query, document_id=ctx.document.id,
+            authorized_parse_job_ids=ctx.authorized_parse_job_ids,
+            limit=candidates, candidates=candidates,
+            min_similarity=settings.qa_min_similarity)
     if not hits:
         return [], degraded or "no_hits"
 
