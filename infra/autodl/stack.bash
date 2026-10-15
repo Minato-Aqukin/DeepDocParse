@@ -619,14 +619,17 @@ do_status() {
     return 0
   fi
   ( source "$HERE/env.bash"
-    services=("ocr-vllm:$VLLM_PORT" "chat-vllm:$CHAT_PORT" "embed:$EMBED_PORT")
+    # 没起的就不列：ENABLE_CHAT=0 时把 chat-vllm 报成"不健康"会被当成故障去查
+    services=("ocr-vllm:$VLLM_PORT")
+    [ "$ENABLE_CHAT" = 1 ] && services+=("chat-vllm:$CHAT_PORT")
+    services+=("embed:$EMBED_PORT")
     [ "$ENABLE_MINERU" = 1 ] && services+=("mineru:$MINERU_PORT")
     for kv in "${services[@]}"; do
       curl -fsS --max-time 3 --noproxy '*' "http://127.0.0.1:${kv#*:}/health" >/dev/null 2>&1 \
         && printf '%-20s \033[32m健康\033[0m\n' "${kv%%:*}" \
         || printf '%-20s \033[31m不健康\033[0m\n' "${kv%%:*}"
     done
-    # MinerU 只能用两套 vLLM 剩下的显存（MINERU_VRAM_GB 按这个余量定）
+    # MinerU 只能用其余模型剩下的显存（MINERU_VRAM_GB 按这个余量定）
     printf '%-20s %s\n' 显存 "$(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader 2>/dev/null)" )
 }
 
