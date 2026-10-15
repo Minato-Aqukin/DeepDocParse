@@ -118,6 +118,27 @@ async def test_chat_proxy_sends_auth_and_adapter_model(client, app_state, monkey
 
 
 @respx.mock
+async def test_chat_proxy_decodes_compressed_upstream_body(client, app_state, monkeypatch):
+    """托管 API 回 gzip（DeepSeek 实测）时，调用方拿到的必须是明文 JSON、且不带
+    content-encoding —— 调用方从没声明过 gzip，原样透传压缩体就是给它一串二进制。"""
+    import gzip
+
+    monkeypatch.setenv(ENV, KEY)
+    app_state.registry = Registry(vqa_models={"deepseek": _provider_entry()})
+    plain = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+    respx.post("https://api.deepseek.com/v1/chat/completions").mock(
+        return_value=Response(200, content=gzip.compress(plain), headers={
+            "content-type": "application/json", "content-encoding": "gzip"}))
+
+    async with client.stream("POST", "/v1/chat/completions", json={
+            "model": "deepseek", "messages": [], "stream": False}) as resp:
+        raw = b"".join([chunk async for chunk in resp.aiter_raw()])
+        assert resp.status_code == 200
+        assert "content-encoding" not in resp.headers
+    assert raw == plain
+
+
+@respx.mock
 async def test_chat_proxy_without_api_key_env_sends_no_auth_header(client, app_state):
     """自建运行时（没声明 api_key_env）不带鉴权头 —— 别把内网调用变成"带了个空 key"。"""
     app_state.registry = Registry(vqa_models={

@@ -149,13 +149,19 @@ async def chat_completions(request: Request):
         # 清理放 finally：上游中途断流（ReadError 等）时 Starlette 不会执行
         # BackgroundTask，只有这里能保证 permit 归还 + 连接关闭（验收回归项）
         try:
-            async for chunk in upstream.aiter_raw():
+            # **解码后的字节，不是 aiter_raw。** 我们的 http 客户端向上游声明了
+            # Accept-Encoding: gzip，托管 API（DeepSeek 实测）就回 gzip；原样透传等于
+            # 把调用方没要过的压缩体塞给它 —— 没声明 gzip 的客户端（urllib、
+            # 不带 --compressed 的 curl）拿到的是一串二进制，自建 vLLM 不压缩所以从没暴露过。
+            async for chunk in upstream.aiter_bytes():
                 yield chunk
         finally:
             await cleanup()
 
-    # SSE / JSON 原样透传（状态码、content-type 一并保留）
-    headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
+    # SSE / JSON 透传（状态码、content-type 一并保留）。content-encoding 不转：
+    # 体已经在上面解过码了，再带着它就是谎报编码
+    headers = {k: v for k, v in upstream.headers.items()
+               if k.lower() not in _HOP_BY_HOP and k.lower() != "content-encoding"}
     return StreamingResponse(
         relay(),
         status_code=upstream.status_code,
