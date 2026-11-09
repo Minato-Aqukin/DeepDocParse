@@ -286,7 +286,7 @@ class ModelStub:
             if evidence_ids:
                 claims.append({"text": claim.text, "evidence_ids": evidence_ids})
         return json.dumps({
-            "status": "answered" if claims else "insufficient_evidence",
+            "unanswered": [] if claims else ["The supplied evidence is insufficient to answer the question."],
             "claims": claims,
         })
 

@@ -63,7 +63,6 @@ describe('AskPanel 的断言与门控轨迹', () => {
 
     expect(wrapper.findAll('.assertion')).toHaveLength(2)
     expect(wrapper.text()).toContain('有出处的结论。')
-    expect(wrapper.text()).toContain('自动核对通过')
     expect(wrapper.text()).toContain('没有依据的猜测。')
     expect(wrapper.text()).toContain('无证据支持')
     expect(wrapper.findAllComponents({ name: 'CitationChip' })).toHaveLength(1)

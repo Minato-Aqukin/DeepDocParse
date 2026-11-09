@@ -18,6 +18,13 @@ parse_engines:
     default: true
     capabilities: [parse]
 
+  # 同一文字层 + 线框单元格；保留合并格结构。不覆盖扫描件/无线框表格。
+  # 可选而非全局缺省；表格恢复受限时在 engine_notes 中披露并保留文字。
+  borndigital-tables:
+    endpoint: "inproc://borndigital-tables"
+    runtime: borndigital-tables
+    capabilities: [parse]
+
   # 需要 OCR / 表格 / 公式时启用（compose.cpu.yml 里的 mineru 服务同时打开）。
   # CPU 上很慢（比 GPU 慢一到两个数量级），适合小批量试用而不是日常迭代。
   # mineru:

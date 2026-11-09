@@ -7,26 +7,28 @@ Licensed under the Apache License, Version 2.0 (see LICENSE).
 MinerU attribution (required -- do not remove)
 --------------------------------------------------------------------------------
 
-Document parsing in DeepDocParse is powered by MinerU
-(https://github.com/opendatalab/MinerU).
+When the MinerU engine is enabled, document parsing in DeepDocParse is powered
+by MinerU (https://github.com/opendatalab/MinerU). Native CPU parsing paths do
+not call MinerU.
 
 MinerU adds terms on top of Apache-2.0. Section 2 requires that any product
 providing an online service built on MinerU state clearly and prominently, in
 the product UI or in public documentation, that it uses MinerU; section 3
 terminates the license automatically -- without notice -- on violation.
-DeepDocParse is exactly such a service, so this attribution appears in:
+Deployments using MinerU are such services. This attribution is retained in:
 
   - this NOTICE file
   - README.md, at the top of the page
-  - the DeepDocParse-Web product UI, in a footer shown on every page
+  - the apps/web product UI, in a footer shown on every page
 
 --------------------------------------------------------------------------------
 Third-party components
 --------------------------------------------------------------------------------
 
-This repository is a thin orchestration layer. It talks to every engine over
-HTTP and vendors or links none of their code (see CLAUDE.md, rules 1 and 3), so
-the engines below are dependencies of a deployment, not derivative works of it.
+Model runtimes such as MinerU and DeepSeek-OCR are accessed over HTTP. Native
+CPU parsing runs in process using PDFium and, for ruled tables, pdfplumber.
+Component availability depends on deployment; each component retains its own
+license and bundled dependency notices.
 
   MinerU (OpenDataLab)         Apache-2.0 + additional terms
                                https://github.com/opendatalab/MinerU
@@ -38,3 +40,9 @@ the engines below are dependencies of a deployment, not derivative works of it.
                                https://github.com/huggingface/text-embeddings-inference
   BAAI/bge-m3 (FlagEmbedding)  MIT
                                https://huggingface.co/BAAI/bge-m3
+  pdfplumber (Jeremy Singer-Vine)  MIT
+                               https://github.com/jsvine/pdfplumber
+  pdfminer.six (pdfplumber dependency)  MIT
+                               https://github.com/pdfminer/pdfminer.six
+  pypdfium2 / bundled PDFium   BSD-3-Clause, Apache-2.0 and dependency licenses
+                               See the installed distribution's license bundle.

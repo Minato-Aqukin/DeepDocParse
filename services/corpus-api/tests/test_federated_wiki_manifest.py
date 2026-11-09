@@ -19,6 +19,8 @@ HTTP wiki routes): federated evidence is foreign envelopes, not local sources.
 """
 import hashlib
 
+import pytest
+
 from ddp_corpus import federated_wiki as federated_wiki_plane
 from ddp_corpus import wiki as wiki_plane
 from ddp_corpus.deps import Actor
@@ -79,14 +81,14 @@ def _result(*, cited_ref):
             "page_key": "overview", "title": "Overview",
             "generated_sections": [{
                 "heading": "Facts",
-                "sentences": [{"text": "Public fact.", "evidence_ids": [cited_ref]}],
+                "sentences": [{"text": "Public fact.", "evidence_ids": [cited_ref],
+                               "support": [{"evidence_id": cited_ref, "quote": "Public fact."}]}],
             }],
         }],
         "relations": [],
         "provider": {"model": "test", "kind": "federated_wiki_generation"},
         "limits": {"max_pages": 2},
     }
-
 
 def _actor():
     return Actor(id=ACTOR, kind="user", organization_id=ORG, role="contributor")
@@ -141,3 +143,47 @@ async def test_revoke_of_uncited_private_source_stales_page(session, monkeypatch
     stale = await wiki_plane.dependency_state(
         session, _actor(), wiki, deps, federated_recheck=revoked_recheck)
     assert stale == {"overview": ["permission_unresolved"]}
+
+
+async def test_federated_misattributed_support_quote_fails_closed(session, monkeypatch):
+    """C's claim cites the public ref but quotes the private excerpt: the coordinator
+    must reject the commit instead of rebinding the claim to the private original."""
+    from ddp_corpus import node_identity as node_identity_plane
+    from ddp_corpus.errors import APIError
+
+    evidence, public_text, private_text = _evidence()
+    refs = [item["evidence_id"] for item in evidence]
+    result = _result(cited_ref=refs[0])
+    result["pages"][0]["generated_sections"][0]["sentences"][0]["support"] = [
+        {"evidence_id": refs[0], "quote": private_text}]
+    monkeypatch.setattr(node_identity_plane, "local_node_id", lambda: "node-local-test")
+    try:
+        await federated_wiki_plane.commit_federated_revision(
+            session, _actor(), root_task_id="federated-misattributed-quote",
+            task_spec=_spec(title="Federated mismatch"), result=result, evidence=evidence)
+    except APIError as rejected:
+        assert rejected.code == "unsupported_generation"
+    else:
+        raise AssertionError("misattributed federated quote must not commit")
+    assert public_text != private_text
+
+
+@pytest.mark.parametrize("identifier", ["unknown-original-evidence", None])
+async def test_explicit_invalid_support_identity_cannot_fall_back_to_reference(
+        session, monkeypatch, identifier):
+    from ddp_corpus import node_identity as node_identity_plane
+    from ddp_corpus.errors import APIError
+
+    evidence, public_text, _ = _evidence()
+    result = _result(cited_ref=evidence[0]["evidence_id"])
+    result["pages"][0]["generated_sections"][0]["sentences"][0]["support"] = [{
+        "evidence_id": identifier, "reference": 1, "quote": public_text,
+    }]
+    monkeypatch.setattr(node_identity_plane, "local_node_id", lambda: "node-local-test")
+
+    with pytest.raises(APIError) as rejected:
+        await federated_wiki_plane.commit_federated_revision(
+            session, _actor(), root_task_id="invalid-explicit-support-identity",
+            task_spec=_spec(), result=result, evidence=evidence)
+
+    assert rejected.value.code == "unsupported_generation"

@@ -8,6 +8,9 @@ dependencies = [
     "ddp-contracts",
     "httpx>=0.27",       # rerank.py 调上游交叉编码器
     "pypdfium2>=4.30",   # crops.py 渲染裁图（PDF 库，不是模型运行时）
+    # borndigital-tables 剖面的线框表格几何（MIT，源码见 NOTICE 第三方组件）。
+    # 只用显式线框边做几何，容差保持缺省；单元格文字仍来自 pypdfium2。
+    "pdfplumber>=0.11",
     # crops.py 的 `.to_pil()` 要它。**不是可选的**：漏装的表现曾经是
     # 每一页都"渲染不出来"，而不是报错（见 crops.py 的 _DEP_NOTE）
     "pillow>=10.0",
@@ -39,8 +42,11 @@ federation = ["cryptography>=42"]
 # pyproject 的 [tool.ruff.lint]）。装在这里是因为 check.sh 用的就是
 # 这个 venv —— 不声明的话本机跑门禁会 "No module named ruff" 而 CI 是绿的
 # aiosqlite：ORM 用例走 SQLite in-memory（tests/conftest.py 的 sqlite_sessionmaker）
+# reportlab + pypdf：test_borndigital_tables 现场生成线框/CropBox/旋转夹具。
+# ddp-local 的 dev 里 reportlab 已有先例；pypdf 只改页字典盒子，不进产品依赖。
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21", "aiosqlite>=0.20",
-       "ruff>=0.6", "ddp-core[db,cjk,federation]"]
+       "ruff>=0.6", "reportlab>=4", "pypdf>=4",
+       "ddp-core[db,cjk,federation]"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

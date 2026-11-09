@@ -98,9 +98,9 @@ step "alembic heads" run_alembic heads
 
 step "P5/P6 federation PostgreSQL suites (new)" \
   run_pytest tests/test_federation_pg.py tests/test_federation_concurrency_pg.py
-step "existing opt-in PG suites (regression: collection/client/cache)" \
+step "existing opt-in PG suites (regression: collection/client/cache/parse-engine)" \
   run_pytest tests/test_collection_catalog_pg.py tests/test_client_projection_pg.py \
-  tests/test_cache_pg.py
+  tests/test_cache_pg.py tests/test_parse_engine_pg.py
 
 # ---------------------------------------------------------------- summary
 printf '\n================ check_federation_pg summary ================\n'

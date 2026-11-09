@@ -1,0 +1,1077 @@
+{
+  "date": "2026-11-06",
+  "kind": "real_repaired_runtime_and_real_tcp_http_not_human_evaluation",
+  "paper_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+  "model": "Qwen3-4B-Instruct-2507-Q4_K_M",
+  "model_sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+  "runtime": "llama.cpp b10809，CPU 8线程，8192上下文，单并发，temperature=0",
+  "implementation_sha256": {
+    "python/ddp_core/ddp_core/answer.py": "6158961c6f308e651b45328ebcdfdc865787c0cca6611d706707209663e19be2",
+    "python/ddp_core/ddp_core/application/workflows.py": "7d81051e03145811828fb14adec0b3a09d6b6f473ab86d1de138548a69dfa65b",
+    "python/ddp_local/ddp_local/providers.py": "3e32d11a097f7a15c6d2a5b4a7eadc588fca8e73fc9363014fe622dc7d0f9947",
+    "python/ddp_local/ddp_local/runtime.py": "5536ec54794a36a91cb7f727dc8265525265e55c2091adf3a1389a4df3c780ec",
+    "python/ddp_local/ddp_local/content_http.py": "ecc40e5c42d04476ab57483343e26c5ae1c267dc9768595dac60ce0bb817cded"
+  },
+  "original_protocol_sha256": "5068b834d13f272be47c2d80e2994c67fb102164957c1e52c67292ba48dd36cf",
+  "repair_protocol_sha256": "b0a436d0851f60c599bc2b90c0a257cccfec692b5fed7e3b73bbea6f82bdef66",
+  "before_repair": {
+    "evidence": "Frozen pre-repair record; source checksums retained by the competition work directory, not a new portable dataset.",
+    "attempts": 6,
+    "returned": 2,
+    "rejected": 4,
+    "revenue_text_state_mismatch": true,
+    "baseline_not_replaced_by_later_diagnosis": true
+  },
+  "repeated_runtime": {
+    "summary": {
+      "attempts": 18,
+      "program_checks_passed": 18,
+      "expected_attempts": 18,
+      "human_semantic_verification": "not_performed",
+      "all_results_retained": true
+    },
+    "results": [
+      {
+        "id": "encoder_layers",
+        "query": "In Encoder and Decoder Stacks, how many identical layers are in the encoder stack? Give the number and cite the original evidence.",
+        "repetition": 1,
+        "elapsed_s": 17.106,
+        "ok": true,
+        "checks": {
+          "expected_number_in_answer": true,
+          "supported_structure": true,
+          "bound_original_evidence": true,
+          "reference_pdf_page_used": true,
+          "state_sufficient": true
+        },
+        "answer": "The encoder stack contains 6 identical layers. [1]",
+        "evidence_sufficiency": "sufficient",
+        "assertions": [
+          {
+            "position": 0,
+            "text": "The encoder stack contains 6 identical layers.",
+            "evidence_ids": [
+              "aa7ce7527673e66748a7434261c7f084"
+            ],
+            "unsupported": false
+          }
+        ],
+        "error": null,
+        "used_original_ids": [
+          "aa7ce7527673e66748a7434261c7f084"
+        ]
+      },
+      {
+        "id": "attention_heads",
+        "query": "In Multi-Head Attention, how many parallel attention layers or heads h are employed? Cite the original evidence.",
+        "repetition": 1,
+        "elapsed_s": 12.598,
+        "ok": true,
+        "checks": {
+          "expected_number_in_answer": true,
+          "supported_structure": true,
+          "bound_original_evidence": true,
+          "reference_pdf_page_used": true,
+          "state_sufficient": true
+        },
+        "answer": "In Multi-Head Attention, h = 8 parallel attention layers or heads are employed. [1]",
+        "evidence_sufficiency": "sufficient",
+        "assertions": [
+          {
+            "position": 0,
+            "text": "In Multi-Head Attention, h = 8 parallel attention layers or heads are employed.",
+            "evidence_ids": [
+              "f657b95ffb8589b0adf0ed80549590ef"
+            ],
+            "unsupported": false
+          }
+        ],
+        "error": null,
+        "used_original_ids": [
+          "f657b95ffb8589b0adf0ed80549590ef"
+        ]
+      },
+      {
+        "id": "model_dimension",
+        "query": "What value of d_model is used for the output dimension of all sub-layers and embedding layers? Cite the original evidence.",
+        "repetition": 1,
+        "elapsed_s": 18.063,
+        "ok": true,
+        "checks": {
+          "expected_number_in_answer": true,
+          "supported_structure": true,
+          "bound_original_evidence": true,
+          "reference_pdf_page_used": true,
+          "state_sufficient": true
+        },
+        "answer": "The value of d_model used for the output dimension of all sub-layers and embedding layers is 512. [1]",
+        "evidence_sufficiency": "sufficient",
+        "assertions": [
+          {
+            "position": 0,
+            "text": "The value of d_model used for the output dimension of all sub-layers and embedding layers is 512.",
+            "evidence_ids": [
+              "aa7ce7527673e66748a7434261c7f084"
+            ],
+            "unsupported": false
+          }
+        ],
+        "error": null,
+        "used_original_ids": [
+          "aa7ce7527673e66748a7434261c7f084"
+        ]
+      },
+      {
+        "id": "label_smoothing",
+        "query": "What value is used for label smoothing during training? Cite the original evidence.",
+        "repetition": 1,
+        "elapsed_s": 16.807,
+        "ok": true,
+        "checks": {
+          "expected_number_in_answer": true,
+          "supported_structure": true,
+          "bound_original_evidence": true,
+          "reference_pdf_page_used": true,
+          "state_sufficient": true
+        },
+        "answer": "The value used for label smoothing during training is ϵls = 0.1. [1]",
+        "evidence_sufficiency": "sufficient",
+        "assertions": [
+          {
+            "position": 0,
+            "text": "The value used for label smoothing during training is ϵls = 0.1.",
+            "evidence_ids": [
+              "f83928c5fbaa03cc738dd99fc8b4cf5f"
+            ],
+            "unsupported": false
+          }
+        ],
+        "error": null,
+        "used_original_ids": [
+          "f83928c5fbaa03cc738dd99fc8b4cf5f"
+        ]
+      },
+      {
+        "id": "missing_revenue",
+        "query": "What was the project's customer revenue in 2026? Use only this document and state when evidence is insufficient.",
+        "repetition": 1,
+        "elapsed_s": 11.9,
+        "ok": true,
+        "checks": {
+          "state_insufficient": true,
+          "no_factual_claims": true,
+          "no_primary_evidence": true,
+          "no_misleading_answer_text": true
+        },
+        "answer": "",
+        "evidence_sufficiency": "insufficient",
+        "assertions": [],
+        "error": null,
+        "used_original_ids": []
+      },
+      {
+        "id": "missing_credentials",
+        "query": "What are the named authors' personal email passwords? Use only this document and do not infer missing secrets.",
+        "repetition": 1,
+        "elapsed_s": 10.995,
+        "ok": true,
+        "checks": {
+          "state_insufficient": true,
+          "no_factual_claims": true,
+          "no_primary_evidence": true,
+          "no_misleading_answer_text": true
+        },
+        "answer": "",
+        "evidence_sufficiency": "insufficient",
+        "assertions": [],
+        "error": null,
+        "used_original_ids": []
+      },
+      {
+        "id": "encoder_layers",
+        "query": "In Encoder and Decoder Stacks, how many identical layers are in the encoder stack? Give the number and cite the original evidence.",
+        "repetition": 2,
+        "elapsed_s": 4.995,
+        "ok": true,
+        "checks": {
+          "expected_number_in_answer": true,
+          "supported_structure": true,
+          "bound_original_evidence": true,
+          "reference_pdf_page_used": true,
+          "state_sufficient": true
+        },
+        "answer": "The encoder stack contains 6 identical layers. [1]",
+        "evidence_sufficiency": "sufficient",
+        "assertions": [
+          {
+            "position": 0,
+            "text": "The encoder stack contains 6 identical layers.",
+            "evidence_ids": [
+              "aa7ce7527673e66748a7434261c7f084"
+            ],
+            "unsupported": false
+          }
+        ],
+        "error": null,
+        "used_original_ids": [
+          "aa7ce7527673e66748a7434261c7f084"
+        ]
+      },
+      {
+        "id": "attention_heads",
+        "query": "In Multi-Head Attention, how many parallel attention layers or heads h are employed? Cite the original evidence.",
+        "repetition": 2,
+        "elapsed_s": 5.167,
+        "ok": true,
+        "checks": {
+          "expected_number_in_answer": true,
+          "supported_structure": true,
+          "bound_original_evidence": true,
+          "reference_pdf_page_used": true,
+          "state_sufficient": true
+        },
+        "answer": "In Multi-Head Attention, h = 8 parallel attention layers or heads are employed. [1]",
+        "evidence_sufficiency": "sufficient",
+        "assertions": [
+          {
+            "position": 0,
+            "text": "In Multi-Head Attention, h = 8 parallel attention layers or heads are employed.",
+            "evidence_ids": [
+              "f657b95ffb8589b0adf0ed80549590ef"
+            ],
+            "unsupported": false
+          }
+        ],
+        "error": null,
+        "used_original_ids": [
+          "f657b95ffb8589b0adf0ed80549590ef"
+        ]
+      },
+      {
+        "id": "model_dimension",
+        "query": "What value of d_model is used for the output dimension of all sub-layers and embedding layers? Cite the original evidence.",
+        "repetition": 2,
+        "elapsed_s": 6.887,
+        "ok": true,
+        "checks": {
+          "expected_number_in_answer": true,
+          "supported_structure": true,
+          "bound_original_evidence": true,
+          "reference_pdf_page_used": true,
+          "state_sufficient": true
+        },
+        "answer": "The value of d_model used for the output dimension of all sub-layers and embedding layers is 512. [1]",
+        "evidence_sufficiency": "sufficient",
+        "assertions": [
+          {
+            "position": 0,
+            "text": "The value of d_model used for the output dimension of all sub-layers and embedding layers is 512.",
+            "evidence_ids": [
+              "aa7ce7527673e66748a7434261c7f084"
+            ],
+            "unsupported": false
+          }
+        ],
+        "error": null,
+        "used_original_ids": [
+          "aa7ce7527673e66748a7434261c7f084"
+        ]
+      },
+      {
+        "id": "label_smoothing",
+        "query": "What value is used for label smoothing during training? Cite the original evidence.",
+        "repetition": 2,
+        "elapsed_s": 5.981,
+        "ok": true,
+        "checks": {
+          "expected_number_in_answer": true,
+          "supported_structure": true,
+          "bound_original_evidence": true,
+          "reference_pdf_page_used": true,
+          "state_sufficient": true
+        },
+        "answer": "The value used for label smoothing during training is ϵls = 0.1. [1]",
+        "evidence_sufficiency": "sufficient",
+        "assertions": [
+          {
+            "position": 0,
+            "text": "The value used for label smoothing during training is ϵls = 0.1.",
+            "evidence_ids": [
+              "f83928c5fbaa03cc738dd99fc8b4cf5f"
+            ],
+            "unsupported": false
+          }
+        ],
+        "error": null,
+        "used_original_ids": [
+          "f83928c5fbaa03cc738dd99fc8b4cf5f"
+        ]
+      },
+      {
+        "id": "missing_revenue",
+        "query": "What was the project's customer revenue in 2026? Use only this document and state when evidence is insufficient.",
+        "repetition": 2,
+        "elapsed_s": 1.161,
+        "ok": true,
+        "checks": {
+          "state_insufficient": true,
+          "no_factual_claims": true,
+          "no_primary_evidence": true,
+          "no_misleading_answer_text": true
+        },
+        "answer": "",
+        "evidence_sufficiency": "insufficient",
+        "assertions": [],
+        "error": null,
+        "used_original_ids": []
+      },
+      {
+        "id": "missing_credentials",
+        "query": "What are the named authors' personal email passwords? Use only this document and do not infer missing secrets.",
+        "repetition": 2,
+        "elapsed_s": 1.231,
+        "ok": true,
+        "checks": {
+          "state_insufficient": true,
+          "no_factual_claims": true,
+          "no_primary_evidence": true,
+          "no_misleading_answer_text": true
+        },
+        "answer": "",
+        "evidence_sufficiency": "insufficient",
+        "assertions": [],
+        "error": null,
+        "used_original_ids": []
+      },
+      {
+        "id": "encoder_layers",
+        "query": "In Encoder and Decoder Stacks, how many identical layers are in the encoder stack? Give the number and cite the original evidence.",
+        "repetition": 3,
+        "elapsed_s": 5.191,
+        "ok": true,
+        "checks": {
+          "expected_number_in_answer": true,
+          "supported_structure": true,
+          "bound_original_evidence": true,
+          "reference_pdf_page_used": true,
+          "state_sufficient": true
+        },
+        "answer": "The encoder stack contains 6 identical layers. [1]",
+        "evidence_sufficiency": "sufficient",
+        "assertions": [
+          {
+            "position": 0,
+            "text": "The encoder stack contains 6 identical layers.",
+            "evidence_ids": [
+              "aa7ce7527673e66748a7434261c7f084"
+            ],
+            "unsupported": false
+          }
+        ],
+        "error": null,
+        "used_original_ids": [
+          "aa7ce7527673e66748a7434261c7f084"
+        ]
+      },
+      {
+        "id": "attention_heads",
+        "query": "In Multi-Head Attention, how many parallel attention layers or heads h are employed? Cite the original evidence.",
+        "repetition": 3,
+        "elapsed_s": 5.437,
+        "ok": true,
+        "checks": {
+          "expected_number_in_answer": true,
+          "supported_structure": true,
+          "bound_original_evidence": true,
+          "reference_pdf_page_used": true,
+          "state_sufficient": true
+        },
+        "answer": "In Multi-Head Attention, h = 8 parallel attention layers or heads are employed. [1]",
+        "evidence_sufficiency": "sufficient",
+        "assertions": [
+          {
+            "position": 0,
+            "text": "In Multi-Head Attention, h = 8 parallel attention layers or heads are employed.",
+            "evidence_ids": [
+              "f657b95ffb8589b0adf0ed80549590ef"
+            ],
+            "unsupported": false
+          }
+        ],
+        "error": null,
+        "used_original_ids": [
+          "f657b95ffb8589b0adf0ed80549590ef"
+        ]
+      },
+      {
+        "id": "model_dimension",
+        "query": "What value of d_model is used for the output dimension of all sub-layers and embedding layers? Cite the original evidence.",
+        "repetition": 3,
+        "elapsed_s": 6.893,
+        "ok": true,
+        "checks": {
+          "expected_number_in_answer": true,
+          "supported_structure": true,
+          "bound_original_evidence": true,
+          "reference_pdf_page_used": true,
+          "state_sufficient": true
+        },
+        "answer": "The value of d_model used for the output dimension of all sub-layers and embedding layers is 512. [1]",
+        "evidence_sufficiency": "sufficient",
+        "assertions": [
+          {
+            "position": 0,
+            "text": "The value of d_model used for the output dimension of all sub-layers and embedding layers is 512.",
+            "evidence_ids": [
+              "aa7ce7527673e66748a7434261c7f084"
+            ],
+            "unsupported": false
+          }
+        ],
+        "error": null,
+        "used_original_ids": [
+          "aa7ce7527673e66748a7434261c7f084"
+        ]
+      },
+      {
+        "id": "label_smoothing",
+        "query": "What value is used for label smoothing during training? Cite the original evidence.",
+        "repetition": 3,
+        "elapsed_s": 5.862,
+        "ok": true,
+        "checks": {
+          "expected_number_in_answer": true,
+          "supported_structure": true,
+          "bound_original_evidence": true,
+          "reference_pdf_page_used": true,
+          "state_sufficient": true
+        },
+        "answer": "The value used for label smoothing during training is ϵls = 0.1. [1]",
+        "evidence_sufficiency": "sufficient",
+        "assertions": [
+          {
+            "position": 0,
+            "text": "The value used for label smoothing during training is ϵls = 0.1.",
+            "evidence_ids": [
+              "f83928c5fbaa03cc738dd99fc8b4cf5f"
+            ],
+            "unsupported": false
+          }
+        ],
+        "error": null,
+        "used_original_ids": [
+          "f83928c5fbaa03cc738dd99fc8b4cf5f"
+        ]
+      },
+      {
+        "id": "missing_revenue",
+        "query": "What was the project's customer revenue in 2026? Use only this document and state when evidence is insufficient.",
+        "repetition": 3,
+        "elapsed_s": 1.248,
+        "ok": true,
+        "checks": {
+          "state_insufficient": true,
+          "no_factual_claims": true,
+          "no_primary_evidence": true,
+          "no_misleading_answer_text": true
+        },
+        "answer": "",
+        "evidence_sufficiency": "insufficient",
+        "assertions": [],
+        "error": null,
+        "used_original_ids": []
+      },
+      {
+        "id": "missing_credentials",
+        "query": "What are the named authors' personal email passwords? Use only this document and do not infer missing secrets.",
+        "repetition": 3,
+        "elapsed_s": 1.242,
+        "ok": true,
+        "checks": {
+          "state_insufficient": true,
+          "no_factual_claims": true,
+          "no_primary_evidence": true,
+          "no_misleading_answer_text": true
+        },
+        "answer": "",
+        "evidence_sufficiency": "insufficient",
+        "assertions": [],
+        "error": null,
+        "used_original_ids": []
+      }
+    ]
+  },
+  "real_http": {
+    "summary": {
+      "attempts": 6,
+      "checks_passed": 6,
+      "no_token_is_denied": true,
+      "human_semantic_verification": "not_performed"
+    },
+    "results": [
+      {
+        "id": "encoder_layers",
+        "query": "In Encoder and Decoder Stacks, how many identical layers are in the encoder stack? Give the number and cite the original evidence.",
+        "ok": true,
+        "checks": {
+          "persisted_state_matches_sse": true,
+          "primary_citations_are_exactly_used_evidence": true,
+          "unverified": true,
+          "expected_number": true,
+          "state_sufficient": true,
+          "supported_structure": true,
+          "reference_pdf_page": true,
+          "original_evidence_readable": true
+        },
+        "elapsed_s": 5.19,
+        "persisted_evidence_sufficiency": "sufficient",
+        "persisted_verified": false,
+        "error": null,
+        "evidence_sufficiency": "sufficient",
+        "candidate_evidence_ids": [
+          "aa7ce7527673e66748a7434261c7f084",
+          "25b7df329ec0a332636718c4e37df8b0",
+          "dd731924d2454e9c626629f0d4968e3d",
+          "4197ec0538c9722748de32a46018587b",
+          "e564e89bc69a9a465f641b1b6eb6098f",
+          "ca0a0e8e9e0f5f368f0c35b51454042d",
+          "e25b94c0603c0b48c4696df7ed2d00f8",
+          "ec9bb5a6c144818b8ccd67a3c4f36b5d"
+        ],
+        "assertions": [
+          {
+            "position": 0,
+            "text": "The encoder stack contains 6 identical layers.",
+            "evidence_ids": [
+              "aa7ce7527673e66748a7434261c7f084"
+            ],
+            "unsupported": false
+          }
+        ],
+        "citations": [
+          {
+            "evidence_id": "aa7ce7527673e66748a7434261c7f084",
+            "page_idx": 2,
+            "bbox": [
+              107.85356140136719,
+              483.743896484375,
+              505.1749572753906,
+              666.8078842163086
+            ],
+            "snippet": "3.1 Encoder and Decoder Stacks Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head self-attention mechanism, and the second ",
+            "resolved": true
+          }
+        ]
+      },
+      {
+        "id": "attention_heads",
+        "query": "In Multi-Head Attention, how many parallel attention layers or heads h are employed? Cite the original evidence.",
+        "ok": true,
+        "checks": {
+          "persisted_state_matches_sse": true,
+          "primary_citations_are_exactly_used_evidence": true,
+          "unverified": true,
+          "expected_number": true,
+          "state_sufficient": true,
+          "supported_structure": true,
+          "reference_pdf_page": true,
+          "original_evidence_readable": true
+        },
+        "elapsed_s": 5.387,
+        "persisted_evidence_sufficiency": "sufficient",
+        "persisted_verified": false,
+        "error": null,
+        "evidence_sufficiency": "sufficient",
+        "candidate_evidence_ids": [
+          "f657b95ffb8589b0adf0ed80549590ef",
+          "f5849da282f9ef64c81f9b79ead679c2",
+          "727ade5d3884f80611e1966343fc64f7",
+          "ed0dcf39800544b310def668834428f0",
+          "2937d37ac095d9b3c4d840b7d902a08f",
+          "ca0a0e8e9e0f5f368f0c35b51454042d",
+          "e40bfeacabfb5a30b5d43733469e7861",
+          "25b7df329ec0a332636718c4e37df8b0"
+        ],
+        "assertions": [
+          {
+            "position": 0,
+            "text": "In Multi-Head Attention, h = 8 parallel attention layers or heads are employed.",
+            "evidence_ids": [
+              "f657b95ffb8589b0adf0ed80549590ef"
+            ],
+            "unsupported": false
+          }
+        ],
+        "citations": [
+          {
+            "evidence_id": "f657b95ffb8589b0adf0ed80549590ef",
+            "page_idx": 4,
+            "bbox": [
+              107.58081817626953,
+              206.5035400390625,
+              504.0072021484375,
+              265.90887451171875
+            ],
+            "snippet": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ h = 8 parallel attention layers, or heads. For each of these we use dk = dv = dmodel/h = 64. Due to the reduc",
+            "resolved": true
+          }
+        ]
+      },
+      {
+        "id": "model_dimension",
+        "query": "What value of d_model is used for the output dimension of all sub-layers and embedding layers? Cite the original evidence.",
+        "ok": true,
+        "checks": {
+          "persisted_state_matches_sse": true,
+          "primary_citations_are_exactly_used_evidence": true,
+          "unverified": true,
+          "expected_number": true,
+          "state_sufficient": true,
+          "supported_structure": true,
+          "reference_pdf_page": true,
+          "original_evidence_readable": true
+        },
+        "elapsed_s": 6.757,
+        "persisted_evidence_sufficiency": "sufficient",
+        "persisted_verified": false,
+        "error": null,
+        "evidence_sufficiency": "sufficient",
+        "candidate_evidence_ids": [
+          "aa7ce7527673e66748a7434261c7f084",
+          "f83928c5fbaa03cc738dd99fc8b4cf5f",
+          "e28a056d0e61ed8c40fcbf165f592ba0",
+          "5e18e03868ee22f542cba8a3f7c523f0",
+          "25b7df329ec0a332636718c4e37df8b0",
+          "ca9da3b48baed887862acacb50ec14a9",
+          "dd731924d2454e9c626629f0d4968e3d",
+          "b9cf5e05306292656545193cb6a33792"
+        ],
+        "assertions": [
+          {
+            "position": 0,
+            "text": "The value of d_model used for the output dimension of all sub-layers and embedding layers is 512.",
+            "evidence_ids": [
+              "aa7ce7527673e66748a7434261c7f084"
+            ],
+            "unsupported": false
+          }
+        ],
+        "citations": [
+          {
+            "evidence_id": "aa7ce7527673e66748a7434261c7f084",
+            "page_idx": 2,
+            "bbox": [
+              107.85356140136719,
+              483.743896484375,
+              505.1749572753906,
+              666.8078842163086
+            ],
+            "snippet": "3.1 Encoder and Decoder Stacks Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head self-attention mechanism, and the second ",
+            "resolved": true
+          }
+        ]
+      },
+      {
+        "id": "label_smoothing",
+        "query": "What value is used for label smoothing during training? Cite the original evidence.",
+        "ok": true,
+        "checks": {
+          "persisted_state_matches_sse": true,
+          "primary_citations_are_exactly_used_evidence": true,
+          "unverified": true,
+          "expected_number": true,
+          "state_sufficient": true,
+          "supported_structure": true,
+          "reference_pdf_page": true,
+          "original_evidence_readable": true
+        },
+        "elapsed_s": 5.753,
+        "persisted_evidence_sufficiency": "sufficient",
+        "persisted_verified": false,
+        "error": null,
+        "evidence_sufficiency": "sufficient",
+        "candidate_evidence_ids": [
+          "f83928c5fbaa03cc738dd99fc8b4cf5f",
+          "babbc213fd45a973eec09bc6d33efc67",
+          "ca9da3b48baed887862acacb50ec14a9",
+          "20323c3a5576cb2213d825788f6a9c3f",
+          "4b3cb253ffdf0c25cf3a0a430ce6ba32",
+          "b41c8338d2a78cee941680f1489ec6f8",
+          "e52767d6f1ed46b2e49e676388e18a50",
+          "e28a056d0e61ed8c40fcbf165f592ba0"
+        ],
+        "assertions": [
+          {
+            "position": 0,
+            "text": "The value used for label smoothing during training is ϵls = 0.1.",
+            "evidence_ids": [
+              "f83928c5fbaa03cc738dd99fc8b4cf5f"
+            ],
+            "unsupported": false
+          }
+        ],
+        "citations": [
+          {
+            "evidence_id": "f83928c5fbaa03cc738dd99fc8b4cf5f",
+            "page_idx": 7,
+            "bbox": [
+              108.05081176757812,
+              273.97283935546875,
+              504.50531005859375,
+              380.617431640625
+            ],
+            "snippet": "Residual Dropout We apply dropout [33] to the output of each sub-layer, before it is added to the sub-layer input and normalized. In addition, we apply dropout to the sums of the embeddings and the po",
+            "resolved": true
+          }
+        ]
+      },
+      {
+        "id": "missing_revenue",
+        "query": "What was the project's customer revenue in 2026? Use only this document and state when evidence is insufficient.",
+        "ok": true,
+        "checks": {
+          "persisted_state_matches_sse": true,
+          "primary_citations_are_exactly_used_evidence": true,
+          "unverified": true,
+          "state_insufficient": true,
+          "no_primary_citations": true,
+          "refusal_has_no_supported_claims": true,
+          "candidate_presence_does_not_mean_sufficient": true
+        },
+        "elapsed_s": 1.23,
+        "persisted_evidence_sufficiency": "insufficient",
+        "persisted_verified": false,
+        "error": null,
+        "evidence_sufficiency": "insufficient",
+        "candidate_evidence_ids": [
+          "35f33cdb91fe7ef13b3e1adb1ce54f44",
+          "ec9bb5a6c144818b8ccd67a3c4f36b5d",
+          "e564e89bc69a9a465f641b1b6eb6098f",
+          "c9c4a92d05c1ad63f3d9faa2f3fbf567",
+          "42aad5b1ce9906c73149f08c2cf794ac",
+          "f657b95ffb8589b0adf0ed80549590ef",
+          "f83928c5fbaa03cc738dd99fc8b4cf5f",
+          "204356fed46a342f2058e8ed9ebaeb05"
+        ],
+        "assertions": [
+          {
+            "position": 0,
+            "text": "文档中未找到支持该问题的证据。",
+            "evidence_ids": [],
+            "unsupported": true
+          }
+        ],
+        "citations": []
+      },
+      {
+        "id": "missing_credentials",
+        "query": "What are the named authors' personal email passwords? Use only this document and do not infer missing secrets.",
+        "ok": true,
+        "checks": {
+          "persisted_state_matches_sse": true,
+          "primary_citations_are_exactly_used_evidence": true,
+          "unverified": true,
+          "state_insufficient": true,
+          "no_primary_citations": true,
+          "refusal_has_no_supported_claims": true,
+          "candidate_presence_does_not_mean_sufficient": true
+        },
+        "elapsed_s": 1.231,
+        "persisted_evidence_sufficiency": "insufficient",
+        "persisted_verified": false,
+        "error": null,
+        "evidence_sufficiency": "insufficient",
+        "candidate_evidence_ids": [
+          "e564e89bc69a9a465f641b1b6eb6098f",
+          "6da835f024f269bf71626d5d30a042c0",
+          "35f33cdb91fe7ef13b3e1adb1ce54f44",
+          "4b358c0f81483a2e4d8282b9dc8584f6",
+          "f657b95ffb8589b0adf0ed80549590ef",
+          "ec9bb5a6c144818b8ccd67a3c4f36b5d",
+          "5e18e03868ee22f542cba8a3f7c523f0",
+          "42aad5b1ce9906c73149f08c2cf794ac"
+        ],
+        "assertions": [
+          {
+            "position": 0,
+            "text": "文档中未找到支持该问题的证据。",
+            "evidence_ids": [],
+            "unsupported": true
+          }
+        ],
+        "citations": []
+      }
+    ]
+  },
+  "wiki": {
+    "summary": {
+      "pages": 1,
+      "sentences": 3,
+      "original_dependencies": 3,
+      "semantic_review": "needs_review",
+      "all_claim_sources_readable": true,
+      "idempotent_same_revision": true,
+      "read_same_revision": true
+    },
+    "elapsed_s": 29.882,
+    "creation_attempt_http_statuses": [
+      422,
+      201
+    ],
+    "first_attempt_explanation": "验证脚本误带runtime-only字段，HTTP schema正确拒绝；仅修正请求形状，未重跑已成功六题",
+    "pages": [
+      {
+        "title": "Transformer Encoder Layers and Multi-Head Attention",
+        "page_key": "5f68451c25dbc30c1d60554a71daf18e",
+        "sentences": [
+          {
+            "text": "The Transformer encoder contains self-attention layers where all keys, values, and queries are derived from the output of the previous layer in the encoder, allowing each position to attend to all positions in the previous layer.",
+            "evidence_ids": [
+              "25b7df329ec0a332636718c4e37df8b0"
+            ],
+            "review_state": "unreviewed",
+            "unsupported": false
+          },
+          {
+            "text": "Multi-Head Attention is a mechanism that consists of several parallel attention layers, each focusing on different aspects of the input representation, enabling the model to jointly attend to information from different positions in the input sequence.",
+            "evidence_ids": [
+              "f5849da282f9ef64c81f9b79ead679c2",
+              "2937d37ac095d9b3c4d840b7d902a08f"
+            ],
+            "review_state": "unreviewed",
+            "unsupported": false
+          },
+          {
+            "text": "In the encoder-decoder attention layers, queries are derived from the previous decoder layer, while memory keys and values come from the encoder's output, enabling every decoder position to attend over all input positions.",
+            "evidence_ids": [
+              "25b7df329ec0a332636718c4e37df8b0"
+            ],
+            "review_state": "unreviewed",
+            "unsupported": false
+          }
+        ]
+      }
+    ],
+    "dependencies": [
+      {
+        "evidence_id": "f5849da282f9ef64c81f9b79ead679c2",
+        "source_version_id": "2175bacfc84540c0b4fb481b6efe1318",
+        "source_digest": "sha256:bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "parse_revision": "aa00591d9c7141f99dd7c1af8503c733",
+        "excerpt_digest": "sha256:54223174369d1e3ecfc06b7dfc78b8276ac7ba5a97d35eefffe0344ead4bc8ab",
+        "locator": {
+          "bbox": [
+            108.12194061279297,
+            275.21453857421875,
+            503.78375244140625,
+            295.08990478515625
+          ],
+          "kind": "page_block",
+          "page_size": {
+            "height": 792.0,
+            "width": 612.0
+          },
+          "physical_page_index": 3,
+          "seq": 30
+        }
+      },
+      {
+        "evidence_id": "2937d37ac095d9b3c4d840b7d902a08f",
+        "source_version_id": "2175bacfc84540c0b4fb481b6efe1318",
+        "source_digest": "sha256:bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "parse_revision": "aa00591d9c7141f99dd7c1af8503c733",
+        "excerpt_digest": "sha256:6dd9b31e8b9e3bd7e67192257654b469564c7a135761de60f416a8510e0385cc",
+        "locator": {
+          "bbox": [
+            148.20143127441406,
+            71.9505615234375,
+            450.0513916015625,
+            78.884521484375
+          ],
+          "kind": "page_block",
+          "page_size": {
+            "height": 792.0,
+            "width": 612.0
+          },
+          "physical_page_index": 3,
+          "seq": 29
+        }
+      },
+      {
+        "evidence_id": "25b7df329ec0a332636718c4e37df8b0",
+        "source_version_id": "2175bacfc84540c0b4fb481b6efe1318",
+        "source_digest": "sha256:bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "parse_revision": "aa00591d9c7141f99dd7c1af8503c733",
+        "excerpt_digest": "sha256:d479ca5b2f8525d88aa18f4b6896d0ef6ddf6ab1e3a117ce2b05185ecf217e65",
+        "locator": {
+          "bbox": [
+            107.86036682128906,
+            281.03485107421875,
+            504.6828308105469,
+            481.6509094238281
+          ],
+          "kind": "page_block",
+          "page_size": {
+            "height": 792.0,
+            "width": 612.0
+          },
+          "physical_page_index": 4,
+          "seq": 45
+        }
+      }
+    ],
+    "original_excerpts": [
+      {
+        "id": "25b7df329ec0a332636718c4e37df8b0",
+        "content": "3.2.3 Applications of Attention in our Model The Transformer uses multi-head attention in three different ways: In \"encoder-decoder attention\" layers, the queries come from the previous decoder layer, and the memory keys and values come from the output of the encoder. This allows every position in the decoder to attend over all positions in the input sequence. This mimics the typical encoder-decoder attention mechanisms in sequence-to-sequence models such as [38, 2, 9]. The encoder contains self-attention layers. In a self-attention layer all of the keys, values and queries come from the same place, in this case, the output of the previous layer in the encoder. Each position in the encoder can attend to all positions in the previous layer of the encoder. Similarly, self-attention layers",
+        "page_idx": 4
+      },
+      {
+        "id": "2937d37ac095d9b3c4d840b7d902a08f",
+        "content": "Scaled Dot-Product Attention Multi-Head Attention",
+        "page_idx": 3
+      },
+      {
+        "id": "f5849da282f9ef64c81f9b79ead679c2",
+        "content": "Figure 2: (left) Scaled Dot-Product Attention. (right) Multi-Head Attention consists of several attention layers running in parallel.",
+        "page_idx": 3
+      }
+    ],
+    "authoring_model_note_not_human_label": "第2句包含different aspects / jointly attend等引文图注未直接说明的细节；unsupported=false只表结构绑定，不能当语义已支持。完整3句与对应引文保留，需真实人工核对。"
+  },
+  "measurements": {
+    "parse_s": 0.481,
+    "memory": {
+      "model_rss_kib": 7319996,
+      "driver_rss_kib": 61212,
+      "samples": 1383,
+      "interval_s": 0.1
+    },
+    "workspace_bytes_at_18_attempts": 8027258,
+    "qa_first_repeat_s": [
+      17.106,
+      12.598,
+      18.063,
+      16.807,
+      11.9,
+      10.995
+    ],
+    "qa_later_repeats_s": [
+      4.995,
+      5.167,
+      6.887,
+      5.981,
+      1.161,
+      1.231,
+      5.191,
+      5.437,
+      6.893,
+      5.862,
+      1.248,
+      1.242
+    ],
+    "limits": "模型预加载；后轮有prompt缓存；同期有回归进程。RSS只采样18次主复验区间，不含后续HTTP Wiki。非P95、无负载性能提升、生产成本或SLA。"
+  },
+  "regressions": {
+    "local_passed": 232,
+    "core_passed": 429,
+    "corpus_passed": 1343,
+    "corpus_skipped": 28,
+    "ruff": "passed",
+    "guards": "14首次通过；T16旧用例引用修正后该项通过；物理DB边界跳过，非整套生产验收"
+  },
+  "human_review": false,
+  "limits": [
+    "同一篇Attention文字层论文；6题各3次不是18个独立问题",
+    "程序检查数值、绑定和参考页码，不是独立人工语义正确率",
+    "真实HTTP问答6题另测一次，模型/文档相同，不合并成24个独立样本",
+    "扫描OCR/公式定位/跨论文泛化未由此证明；历史定位失败保留",
+    "字段抽取仍是10-17历史中心结果，未冒充本地新实测",
+    "公网Agent/账户隔离、真实用户/购买理由和最终MP4/Office仍未验收"
+  ],
+  "raw_record_sha256": {
+    "修复后同题复验-原始记录.json": "51d324ff4f50fbf43861d18708342bca198124b58a8ccb63a5d2b9e560dae211",
+    "修复后真实HTTP复验-原始记录.json": "a62d6bafcc82d56c5af88069ccbc02c0d9b2a33d0f398f0f658b6d84c3fe4214",
+    "修复后真实HTTPWiki-原始记录.json": "86f3f34151c63e93c5b64a4199a0e78655208cac902ab26897f742f03941c3bb"
+  },
+  "qa_original_evidence": {
+    "aa7ce7527673e66748a7434261c7f084": {
+      "id": "aa7ce7527673e66748a7434261c7f084",
+      "excerpt": "3.1 Encoder and Decoder Stacks Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head self-attention mechanism, and the second is a simple, position￾ wise fully connected feed-forward network. We employ a residual connection [11] around each of the two sub-layers, followed by layer normalization [1]. That is, the output of each sub-layer is LayerNorm(x + Sublayer(x)), where Sublayer(x) is the function implemented by the sub-layer itself. To facilitate these residual connections, all sub-layers in the model, as well as the embedding layers, produce outputs of dimension dmodel = 512. Decoder: The decoder is also composed of a stack of N = 6 identical layers. In addition to the two sub-layers in each encoder layer, the",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 2,
+        "seq": 26,
+        "bbox": [
+          107.85356140136719,
+          483.743896484375,
+          505.1749572753906,
+          666.8078842163086
+        ],
+        "page_size": {
+          "width": 612.0,
+          "height": 792.0
+        }
+      },
+      "source_version_id": "2175bacfc84540c0b4fb481b6efe1318",
+      "source_digest": "sha256:bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "parse_revision": "aa00591d9c7141f99dd7c1af8503c733",
+      "excerpt_digest": "sha256:90c583cdebb89c8a19ef52b6c4109ec7d227a70c4350e62909e39cf465a3cfb6",
+      "source_type": "source"
+    },
+    "f657b95ffb8589b0adf0ed80549590ef": {
+      "id": "f657b95ffb8589b0adf0ed80549590ef",
+      "excerpt": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ h = 8 parallel attention layers, or heads. For each of these we use dk = dv = dmodel/h = 64. Due to the reduced dimension of each head, the total computational cost is similar to that of single-head attention with full dimensionality.",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 4,
+        "seq": 44,
+        "bbox": [
+          107.58081817626953,
+          206.5035400390625,
+          504.0072021484375,
+          265.90887451171875
+        ],
+        "page_size": {
+          "width": 612.0,
+          "height": 792.0
+        }
+      },
+      "source_version_id": "2175bacfc84540c0b4fb481b6efe1318",
+      "source_digest": "sha256:bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "parse_revision": "aa00591d9c7141f99dd7c1af8503c733",
+      "excerpt_digest": "sha256:08f9db2a2c65784a5f69b319d3d287eb2805fd45b8f59840260a449840a35498",
+      "source_type": "source"
+    },
+    "f83928c5fbaa03cc738dd99fc8b4cf5f": {
+      "id": "f83928c5fbaa03cc738dd99fc8b4cf5f",
+      "excerpt": "Residual Dropout We apply dropout [33] to the output of each sub-layer, before it is added to the sub-layer input and normalized. In addition, we apply dropout to the sums of the embeddings and the positional encodings in both the encoder and decoder stacks. For the base model, we use a rate of Pdrop = 0.1.\nLabel Smoothing During training, we employed label smoothing of value ϵls = 0.1 [36]. This hurts perplexity, as the model learns to be more unsure, but improves accuracy and BLEU score.\n6 Results",
+      "locator": {
+        "kind": "page_block",
+        "physical_page_index": 7,
+        "seq": 63,
+        "bbox": [
+          108.05081176757812,
+          273.97283935546875,
+          504.50531005859375,
+          380.617431640625
+        ],
+        "page_size": {
+          "width": 612.0,
+          "height": 792.0
+        }
+      },
+      "source_version_id": "2175bacfc84540c0b4fb481b6efe1318",
+      "source_digest": "sha256:bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "parse_revision": "aa00591d9c7141f99dd7c1af8503c733",
+      "excerpt_digest": "sha256:831cd7ace9015db89823a67cef91030616de3ef93616b1ccb129a0d634668c2e",
+      "source_type": "source"
+    }
+  },
+  "source": {
+    "title": "Attention Is All You Need",
+    "arxiv_version": "1706.03762v7",
+    "full_pdf_redistributed": false
+  },
+  "evidence_scope": "Limited original-paper program checks and real local HTTP; not full-app offline audit, human evaluation, public service or competition approval."
+}

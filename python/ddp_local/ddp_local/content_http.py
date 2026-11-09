@@ -666,7 +666,8 @@ def content_router(runtime):
             chunk_ids = [c["chunk_id"] for c in citations]
             yield _sse("meta", {
                 "query_decision": result["query_decision"],
-                "retrieval": {"chunk_ids": chunk_ids, "candidates": candidates}})
+                "retrieval": {"chunk_ids": chunk_ids, "candidates": candidates,
+                              "evidence_sufficiency": result["evidence_sufficiency"]}})
             # Documented single-delta emission: the local model produces the
             # whole answer at once; the frontend concatenates delta frames.
             text = "\n".join(a["text"] for a in result["assertions"])

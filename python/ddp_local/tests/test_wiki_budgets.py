@@ -29,9 +29,10 @@ def model_endpoint():
                 value = {"pages": [{"title": title, "references": [1]}
                                    for title in ("Collector", "Validator")]}
             elif stage == "write":
+                spans = json.loads(body["messages"][-1]["content"])["evidence"][0]["spans"]
                 value = {"pages": [{"page": number, "sections": [{"heading": "Facts",
                     "sentences": [{"text": "Collector forwards batches to Validator.",
-                                   "references": [1]}]}]} for number in (1, 2)]}
+                                   "support": [next(iter(spans))]}]}]} for number in (1, 2)]}
             else:
                 value = {"selected_relations": [1]}
             broken = stage == fault.get("stage")
@@ -69,7 +70,7 @@ def original_evidence():
 
 async def build(provider):
     return await generate_wiki(provider, "Pipeline", original_evidence(),
-        limits_for({"max_output_tokens": 512}), execution_policy="local_only",
+        limits_for({"max_pages": 2, "max_output_tokens": 512}), execution_policy="local_only",
         allow_remote=False, record_attempt=lambda *args: lambda **updates: None)
 
 

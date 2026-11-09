@@ -19,11 +19,15 @@ dependencies = [
     # born-digital 兜底解析引擎（无 GPU 时抽 PDF 文字层 + 坐标）。
     # 不是模型，是 PDF 库 —— 铁律 3 禁的是 import 模型代码，不是禁止解析 PDF 结构
     "pypdfium2>=4.30",
+    # borndigital-tables 引擎经 ddp-core 用 pdfplumber 做线框表格几何（MIT）。
+    # 与 pypdfium2 同一条：不是模型，是 PDF 库（铁律 3 禁的是 import 模型代码）。
+    "pdfplumber>=0.11",
 ]
 
 [project.optional-dependencies]
 # jsonschema：能力清单用例按冻结契约 schema 校验响应（本机 venv 恰好有，CI 干净装没有）。
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21", "fakeredis>=2.26", "jsonschema>=4.23"]
+# reportlab：test_borndigital_tables 现场生成线框夹具（ddp-core 侧同）。
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "respx>=0.21", "fakeredis>=2.26", "jsonschema>=4.23", "reportlab>=4"]
 
 # **这里故意没有 `ddp-core[db]`。** 网关是无状态适配层，一行 ORM 都不该 import；
 # 理由与失守后的表现见 python/ddp_core/pyproject.toml 里那段说明。

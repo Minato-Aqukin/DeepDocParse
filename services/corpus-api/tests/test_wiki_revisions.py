@@ -54,18 +54,31 @@ def body(resource, version, **kwargs):
             "source_version_id": version.id}], **kwargs}
 
 
-def model(evidence, *, title="Overview", cited=True):
+def model(evidence, *, title="Overview", retrieval_queries=None):
     def respond(request):
         prompt = json.loads(request.content)
         assert prompt["max_tokens"] > 0
         assert prompt["response_format"]["type"] == "json_schema"
         assert prompt["response_format"]["json_schema"]["strict"] is True
-        planning = "pages" in prompt["response_format"]["json_schema"]["schema"]["properties"]
-        payload = {"pages": [{"title": title, "sections": ["Facts"], "references": [1],
-                              "source_term": None}]} if planning else {
-            "sections": [{"heading": "Facts", "sentences": [{"text": evidence.content,
-                "evidence_ids": [evidence.id] if cited else ["invented-evidence"],
-                "conflict_group": None}]}]}
+        schema = prompt["response_format"]["json_schema"]["schema"]
+        if "retrieval_queries" in schema["properties"]:
+            requested = json.loads(prompt["messages"][-1]["content"])["title"]
+            payload = {"retrieval_queries": list(retrieval_queries) if retrieval_queries else [requested]}
+        elif "pages" in schema["properties"]:
+            payload = {"pages": [{"title": title, "sections": ["Facts"], "references": [1],
+                                  "source_term": None}]}
+        else:
+            supplied = json.loads(prompt["messages"][-1]["content"])["evidence"]
+            span_id = sorted(supplied[0]["spans"],
+                             key=lambda identifier: int(identifier.split(".")[1]))[0]
+            for entry in supplied:
+                if entry["evidence_id"] == evidence.id:
+                    span_id = sorted(entry["spans"],
+                                     key=lambda identifier: int(identifier.split(".")[1]))[0]
+                    break
+            payload = {"sections": [{"heading": "Facts", "sentences": [{
+                "text": evidence.content,
+                "support": [span_id], "conflict_group": None}]}]}
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
                                                     "finish_reason": "stop"}]})
     return respx.post(CHAT).mock(side_effect=respond)
@@ -85,13 +98,21 @@ async def test_fixed_manifest_human_edits_cas_rebuild_and_retry(actor_client, se
             manifest["evidence_id"], manifest["excerpt_digest"]) == (
                 resource.id, version.id, version.parse_job_id, evidence.id, evidence.content_digest)
     # 这里没有向量化服务：选证只走关键词路，必须在报告里说出来
-    assert first["revision"]["limits"]["evidence_selection"] == {
-        "total_original_evidence": 1, "selected_evidence": 1, "omitted_evidence": 0,
-        "complete": True, "ranking_degraded": "embedding_unavailable",
-        "sources": [{"resource_id": resource.id, "source_version_id": version.id,
-                     "total_original_evidence": 1, "selected_evidence": 1}]}
+    selection = first["revision"]["limits"]["evidence_selection"]
+    assert selection["total_original_evidence"] == 1
+    assert selection["selected_evidence"] == 1
+    assert selection["omitted_evidence"] == 0
+    assert selection["complete"] is True
+    assert selection["ranking_degraded"] == "embedding_unavailable"
+    assert selection["sources"] == [{"resource_id": resource.id,
+                                     "source_version_id": version.id,
+                                     "total_original_evidence": 1, "selected_evidence": 1}]
+    assert selection["query_planning"]["status"] == "unavailable"
+    assert selection["query_planning"]["reason"] == "planner_returned_title_only"
+    assert selection["query_planning"]["reserved_output_tokens"] > 0
+    assert "retrieval_queries" not in selection
     retried = await actor_client.post("/api/wikis", json=create_body, headers={"Idempotency-Key": "create"})
-    assert retried.json()["revision"]["id"] == revision_id and calls.call_count == 2
+    assert retried.json()["revision"]["id"] == revision_id and calls.call_count == 3
     conflict = await actor_client.post("/api/wikis", json={**create_body, "title": "Other"},
                                       headers={"Idempotency-Key": "create"})
     assert conflict.status_code == 409 and conflict.json()["error"]["code"] == "idempotency_conflict"
@@ -116,6 +137,48 @@ async def test_fixed_manifest_human_edits_cas_rebuild_and_retry(actor_client, se
 
 
 @respx.mock
+async def test_table_structure_cannot_bypass_wiki_input_budget(actor_client, session):
+    resource, version, evidence, _ = await source(session)
+    chunk = await session.scalar(select(Chunk).where(Chunk.evidence_id == evidence.id))
+    chunk.block_type = "table"
+    chunk.table_html = "<table><tr>" + "<td></td>" * 150 + \
+        "<td>Original fact.</td></tr></table>"
+    await session.commit()
+    model(evidence)
+    denied = await actor_client.post("/api/wikis", json=body(
+        resource, version, max_pages=1, max_input_chars=1000),
+        headers={"Idempotency-Key": "bounded-table-structure"})
+    assert denied.status_code == 409, denied.text
+    assert denied.json()["error"]["code"] == "wiki_budget_exceeded"
+    assert await session.scalar(select(func.count()).select_from(WikiRevision)) == 0
+
+
+@respx.mock
+async def test_old_wiki_keeps_table_structure_after_index_changes(actor_client, session):
+    resource, version, evidence, _ = await source(session)
+    chunk = await session.scalar(select(Chunk).where(Chunk.evidence_id == evidence.id))
+    original_html = "<table><tr><td colspan=\"2\">Original fact.</td></tr></table>"
+    chunk.block_type, chunk.table_html = "table", original_html
+    await session.commit()
+    model(evidence)
+    created = await actor_client.post("/api/wikis", json=body(resource, version),
+                                      headers={"Idempotency-Key": "fixed-table-structure"})
+    assert created.status_code == 201, created.text
+    fixed = created.json()
+    chunk.table_html = "<table><tr><td>Different later structure.</td></tr></table>"
+    await session.commit()
+    history = await actor_client.get(
+        f"/api/wikis/{fixed['wiki']['id']}/revisions/{fixed['revision']['id']}")
+    assert history.status_code == 200
+    revision = history.json()["revision"]
+    assert revision["limits"]["table_contexts"] == [{
+        "evidence_id": evidence.id, "table_html": original_html,
+        "table_html_digest": "sha256:" + hashlib.sha256(original_html.encode()).hexdigest(),
+    }]
+    assert revision["dependency_manifest"][0]["excerpt_digest"] == evidence.content_digest
+
+
+@respx.mock
 async def test_source_with_unsucceeded_parse_is_refused_before_any_model_call(actor_client, session):
     """A bound parse_job_id is not a successful parse; the server must not trust the chooser."""
     resource, version, evidence, _ = await source(session)
@@ -132,27 +195,49 @@ async def test_source_with_unsucceeded_parse_is_refused_before_any_model_call(ac
     assert await session.scalar(select(func.count()).select_from(WikiRevision)) == 0
 
 
-def scripted(plan_pages, sentences):
+def scripted(plan_pages, sentences, *, retrieval_queries=()):
     def respond(request):
-        schema = json.loads(request.content)["response_format"]["json_schema"]["schema"]
-        payload = ({"pages": plan_pages} if "pages" in schema["properties"]
-                   else {"sections": [{"heading": "Facts", "sentences": sentences}]})
+        request_body = json.loads(request.content)
+        schema = request_body["response_format"]["json_schema"]["schema"]
+        if "retrieval_queries" in schema["properties"]:
+            title = json.loads(request_body["messages"][-1]["content"])["title"]
+            payload = {"retrieval_queries": list(retrieval_queries) or [title]}
+        elif "pages" in schema["properties"]:
+            payload = {"pages": plan_pages}
+        else:
+            supplied = json.loads(request_body["messages"][-1]["content"])["evidence"]
+            spans = {entry["evidence_id"]: sorted(
+                entry["spans"], key=lambda identifier: int(identifier.split(".")[1]))
+                for entry in supplied}
+            # Select the intended fixture original without depending on retrieval
+            # order. Keep all other fields verbatim, including malformed responses.
+            rendered = []
+            for sentence in sentences:
+                item = dict(sentence)
+                if isinstance(item.get("support"), list):
+                    item["support"] = [
+                        spans[choice["_evidence_id"]][0]
+                        if isinstance(choice, dict) and "_evidence_id" in choice else choice
+                        for choice in item["support"]]
+                rendered.append(item)
+            payload = {"sections": [{"heading": "Facts", "sentences": rendered}]}
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
                                                     "finish_reason": "stop"}]})
     return respx.post(CHAT).mock(side_effect=respond)
 
 
 @respx.mock
-async def test_claims_citing_the_reference_number_bind_to_that_evidence(actor_client, session):
-    """The page prompt shows each evidence with its planner `reference` and its `evidence_id`.
-    Qwen3-4B cited references ("4") and every SRAM claim came back unsupported although it
-    named the right block (2026-09-25, §4F retest). A known reference resolves; others drop."""
+async def test_span_selection_binds_original_and_empty_selection_stays_unsupported(
+        actor_client, session):
+    """One explicit span pointer determines the original; no duplicate ID is needed."""
     resource, version, evidence, _ = await source(session)
     page = {"title": "Overview", "sections": ["Facts"], "references": [1], "source_term": None}
-    scripted([page], [{"text": evidence.content, "evidence_ids": ["1"], "conflict_group": None},
-                      {"text": "Made up.", "evidence_ids": ["7"], "conflict_group": None}])
+    scripted([page], [{"text": evidence.content, "conflict_group": None,
+                       "support": [{"_evidence_id": evidence.id}]},
+                      {"text": "The supplied evidence does not state the requested additional fact.",
+                       "conflict_group": None, "support": []}])
     created = await actor_client.post("/api/wikis", json=body(resource, version),
-                                      headers={"Idempotency-Key": "by-reference"})
+                                      headers={"Idempotency-Key": "by-selected-span"})
     assert created.status_code == 201, created.text
     claims = [claim for page in created.json()["revision"]["pages"]
               for section in page["generated_sections"] for claim in section["sentences"]]
@@ -279,7 +364,8 @@ async def test_private_context_cannot_launder_via_public_citation(actor_client, 
     assert created.status_code == 502, created.text
     assert await session.scalar(select(func.count()).select_from(Wiki)) == 0
     scripted([{"title": "Overview", "sections": ["Facts"], "references": [1, 2], "source_term": None}],
-             [{"text": e.content, "evidence_ids": [e.id], "conflict_group": None} for e in (pe, ue)])
+             [{"text": e.content, "conflict_group": None,
+               "support": [{"_evidence_id": e.id}]} for e in (pe, ue)])
     created = await actor_client.post("/api/wikis", json=request, headers={"Idempotency-Key": "mixed"})
     assert created.status_code == 201
     result = created.json()
@@ -296,8 +382,15 @@ async def test_private_context_cannot_launder_via_public_citation(actor_client, 
 async def test_revoke_between_model_calls_stops_next_request(actor_client, session):
     resource, version, _, _ = await source(session, owner="publisher", publication="published")
     async def revoke(request):
-        resource.publication = "private"
-        await session.commit()
+        schema = json.loads(request.content)["response_format"]["json_schema"]["schema"]
+        if "retrieval_queries" in schema["properties"]:
+            # Query planning runs first and sees the title alone; revocation lands
+            # here so the outline call afterwards is the one that must stop.
+            resource.publication = "private"
+            await session.commit()
+            title = json.loads(json.loads(request.content)["messages"][-1]["content"])["title"]
+            return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
+                "retrieval_queries": [title]})}, "finish_reason": "stop"}]})
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
             "pages": [{"title": "Overview", "sections": ["Facts"], "references": [1],
                        "source_term": None}]})}, "finish_reason": "stop"}]})
@@ -305,7 +398,7 @@ async def test_revoke_between_model_calls_stops_next_request(actor_client, sessi
     result = await actor_client.post("/api/wikis", json=body(resource, version),
                                      headers={"Idempotency-Key": "revocation"})
     assert result.status_code == 404
-    assert calls.call_count == 1
+    assert calls.call_count == 1  # no request after revocation during the title-only call
     assert await session.scalar(select(func.count()).select_from(Wiki)) == 0
 
 
@@ -335,9 +428,12 @@ async def long_source(session, *, count=4, topic="watchdog timer triggers contro
         for seq in range(count)])
 
 
-async def source_with(session, texts: list[str], *, kinds: list[str] | None = None):
+async def source_with(session, texts: list[str], *, kinds: list[str] | None = None,
+                       pages: list[int] | None = None):
     kinds = list(kinds) if kinds is not None else ["text"] * len(texts)
+    pages = list(pages) if pages is not None else list(range(len(texts)))
     assert len(kinds) == len(texts), "kinds must align with texts"
+    assert len(pages) == len(texts), "pages must align with texts"
     digest = hashlib.sha256("\n".join(texts).encode()).hexdigest()
     document = Document(uploaded_by=ACTOR, organization_id=ORG, doc_id=digest, filename="manual.pdf")
     session.add(document)
@@ -354,10 +450,10 @@ async def source_with(session, texts: list[str], *, kinds: list[str] | None = No
     session.add(version)
     await session.flush()
     rows = []
-    for seq, (text, kind) in enumerate(zip(texts, kinds)):
+    for seq, (text, kind, page) in enumerate(zip(texts, kinds, pages)):
         row = Evidence(document_id=document.id, parse_job_id=job.id, seq=seq, atom_key=f"text-{seq}",
                        content=text, content_digest=hashlib.sha256(text.encode()).hexdigest(),
-                       kind=kind, page_idx=seq, bbox=[0, 0, 50, 50], page_size=[100, 100])
+                       kind=kind, page_idx=page, bbox=[0, 0, 50, 50], page_size=[100, 100])
         session.add(row)
         rows.append(row)
     await session.flush()
@@ -366,12 +462,15 @@ async def source_with(session, texts: list[str], *, kinds: list[str] | None = No
     return resource, version, rows
 
 
-def topic_model(rows, *, relations=()):
+def topic_model(rows, *, relations=(), retrieval_queries=()):
     def respond(request):
         prompt = json.loads(request.content)
         assert prompt["response_format"]["json_schema"]["strict"] is True
         properties = prompt["response_format"]["json_schema"]["schema"]["properties"]
-        if "pages" in properties:
+        if "retrieval_queries" in properties:
+            title = json.loads(prompt["messages"][-1]["content"])["title"]
+            payload = {"retrieval_queries": list(retrieval_queries) or [title]}
+        elif "pages" in properties:
             context = json.loads(prompt["messages"][-1]["content"])["evidence"]
             references = [item["reference"] for item in context
                           if item["evidence_id"] in {row.id for row in rows}]
@@ -384,9 +483,14 @@ def topic_model(rows, *, relations=()):
         elif "selected_relations" in properties:
             payload = {"selected_relations": list(relations)}
         else:
+            context = json.loads(prompt["messages"][-1]["content"])["evidence"]
+            spans = {entry["evidence_id"]: sorted(
+                entry["spans"], key=lambda identifier: int(identifier.split(".")[1]))
+                for entry in context}
             payload = {"sections": [{"heading": "Facts", "sentences": [
-                {"text": rows[0].content, "evidence_ids": [rows[0].id], "conflict_group": None},
-                {"text": rows[1].content, "evidence_ids": [rows[1].id], "conflict_group": None}]}]}
+                {"text": row.content, "conflict_group": None,
+                 "support": [spans[row.id][0]]}
+                for row in rows if row.id in spans][:2]}]}
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
                                                     "finish_reason": "stop"}]})
     return respx.post(CHAT).mock(side_effect=respond)
@@ -405,7 +509,10 @@ async def test_bounded_selection_stores_source_grounded_relations(actor_client, 
         if available_tokens < 0:
             return httpx.Response(429, json={"error": {"message": "Completion allowance exhausted"}})
         properties = prompt["response_format"]["json_schema"]["schema"]["properties"]
-        if "pages" in properties:
+        if "retrieval_queries" in properties:
+            title = json.loads(prompt["messages"][-1]["content"])["title"]
+            payload = {"retrieval_queries": [title]}
+        elif "pages" in properties:
             payload = {"pages": [
                 {"title": title, "sections": ["Facts"], "references": [1], "source_term": term}
                 for title, term in [
@@ -418,8 +525,13 @@ async def test_bounded_selection_stores_source_grounded_relations(actor_client, 
             candidates = json.loads(prompt["messages"][1]["content"])["candidates"]
             payload = {"selected_relations": [candidate["id"] for candidate in candidates]}
         else:
+            supplied = json.loads(prompt["messages"][-1]["content"])["evidence"]
+            spans = {entry["evidence_id"]: sorted(
+                entry["spans"], key=lambda identifier: int(identifier.split(".")[1]))
+                for entry in supplied}
             payload = {"sections": [{"heading": "Facts", "sentences": [{
-                "text": evidence.content, "evidence_ids": [evidence.id], "conflict_group": None,
+                "text": evidence.content, "conflict_group": None,
+                "support": [spans[evidence.id][0]],
             }]}]}
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
                                                     "finish_reason": "stop"}]})
@@ -464,11 +576,18 @@ async def test_bounded_selection_reports_omitted_coverage(actor_client, session)
         headers={"Idempotency-Key": "bounded"})
     assert created.status_code == 201, created.text
     revision = created.json()["revision"]
-    assert revision["limits"]["evidence_selection"] == {
-        "total_original_evidence": 4, "selected_evidence": 2, "omitted_evidence": 2,
-        "complete": False, "ranking_degraded": "embedding_unavailable",
-        "sources": [{"resource_id": resource.id, "source_version_id": version.id,
-                     "total_original_evidence": 4, "selected_evidence": 2}]}
+    selection = revision["limits"]["evidence_selection"]
+    assert selection["total_original_evidence"] == 4
+    assert selection["selected_evidence"] == 2
+    assert selection["omitted_evidence"] == 2
+    assert selection["complete"] is False
+    assert selection["ranking_degraded"] == "embedding_unavailable"
+    assert selection["sources"] == [{"resource_id": resource.id,
+                                     "source_version_id": version.id,
+                                     "total_original_evidence": 4, "selected_evidence": 2}]
+    assert selection["query_planning"]["status"] == "unavailable"
+    assert selection["query_planning"]["reason"] == "planner_returned_title_only"
+    assert "retrieval_queries" not in selection
     assert {d["evidence_id"] for d in revision["dependency_manifest"]} == {rows[0].id, rows[1].id}
     assert {c for page in revision["pages"] for section in page["generated_sections"]
             for claim in section["sentences"] for c in claim["evidence_ids"]} == {rows[0].id, rows[1].id}
@@ -655,13 +774,25 @@ async def test_bounded_selection_cannot_launder_an_omitted_private_source(actor_
     assert await session.scalar(select(func.count()).select_from(Wiki)) == 0
     def cover_selected(request):
         prompt = json.loads(request.content)
+        properties = prompt["response_format"]["json_schema"]["schema"]["properties"]
+        if "retrieval_queries" in properties:
+            title = json.loads(prompt["messages"][-1]["content"])["title"]
+            payload = {"retrieval_queries": [title]}
+            return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
+                                                         "finish_reason": "stop"}]})
         context = json.loads(prompt["messages"][-1]["content"])["evidence"]
-        planning = "pages" in prompt["response_format"]["json_schema"]["schema"]["properties"]
-        payload = {"pages": [{"title": "Overview", "sections": ["Facts"], "references": [1, 2],
-                             "source_term": None}]} if planning else {
-            "sections": [{"heading": "Facts", "sentences": [
-                {"text": e["text"], "evidence_ids": [e["evidence_id"]], "conflict_group": None}
-                for e in context]}]}
+        planning = "pages" in properties
+        if planning:
+            payload = {"pages": [{"title": "Overview", "sections": ["Facts"], "references": [1, 2],
+                                 "source_term": None}]}
+        else:
+            payload = {"sections": [{"heading": "Facts", "sentences": [
+                {"text": entry["spans"][sorted(
+                    entry["spans"], key=lambda identifier: int(identifier.split(".")[1]))[0]],
+                 "conflict_group": None,
+                 "support": [sorted(entry["spans"],
+                                    key=lambda identifier: int(identifier.split(".")[1]))[0]]}
+                for entry in context]}]}
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
                                                      "finish_reason": "stop"}]})
     respx.post(CHAT).mock(side_effect=cover_selected)
@@ -875,10 +1006,11 @@ async def test_same_title_plans_merge_without_losing_sources_or_human_edits(acto
     second, second_version, second_evidence, _ = await source(session, text="ESP32 has 520 KB SRAM.")
     pages = [{"title": "SRAM", "sections": ["RP2040"], "references": [1], "source_term": None},
              {"title": " sram ", "sections": ["ESP32"], "references": [2], "source_term": None}]
-    claims = [{"text": evidence.content, "evidence_ids": [evidence.id], "conflict_group": None}
+    claims = [{"text": evidence.content, "conflict_group": None,
+               "support": [{"_evidence_id": evidence.id}]}
               for evidence in (first_evidence, second_evidence)]
     scripted(pages, claims)
-    request = body(first, first_version, title="SRAM comparison")
+    request = body(first, first_version, title="SRAM comparison", max_pages=2)
     request["sources"].append({"resource_id": second.id, "source_version_id": second_version.id})
     created = await actor_client.post("/api/wikis", json=request,
                                       headers={"Idempotency-Key": "merged"})
@@ -907,7 +1039,8 @@ async def test_cross_source_omission_rejects_rebuild_without_consuming_key(
     first, first_version, first_evidence, _ = await source(session, text="RP2040 has 264 kB SRAM.")
     second, second_version, second_evidence, _ = await source(session, text="ESP32 has 520 KB SRAM.")
     page = {"title": "SRAM", "sections": ["Comparison"], "references": [1, 2], "source_term": None}
-    claims = [{"text": evidence.content, "evidence_ids": [evidence.id], "conflict_group": None}
+    claims = [{"text": evidence.content, "conflict_group": None,
+               "support": [{"_evidence_id": evidence.id}]}
               for evidence in (first_evidence, second_evidence)]
     scripted([page], claims)
     request = body(first, first_version, title="SRAM comparison")
@@ -930,3 +1063,694 @@ async def test_cross_source_omission_rejects_rebuild_without_consuming_key(
                                       headers={"Idempotency-Key": "retry-after-omission"})
     assert retried.status_code == 201, retried.text
     assert retried.json()["revision"]["id"] != revision_id
+
+
+@respx.mock
+async def test_extra_citation_channel_is_rejected_without_rebinding(actor_client, session):
+    """A producer cannot add a conflicting legacy ID beside its span selection.
+
+    Reject the whole draft without consuming the key; the corrected single-pointer
+    response must then persist each span's own immutable original identity."""
+    resource, version, rows = await source_with(session, [
+        "We use the normalized hidden state of [CLS]: eq = norm(Hq[0]). "
+        "The relevance score is sdense = <ep, eq>.",
+        "Based on ensemble learning, predictions from different retrieval methods "
+        "are integrated as a teacher signal via self-knowledge distillation."])
+    formula, distillation = rows
+    page = {"title": "Retrieval", "sections": ["Formulas"], "references": [1, 2], "source_term": None}
+    scripted([page], [
+        {"text": "Dense retrieval scores with sdense = <ep, eq>.",
+         "evidence_ids": [distillation.id], "conflict_group": None,
+         "support": [{"_evidence_id": formula.id}]},
+        {"text": "Distillation integrates a teacher signal.",
+         "conflict_group": None,
+         "support": [{"_evidence_id": distillation.id}]}])
+    refused = await actor_client.post("/api/wikis", json=body(resource, version),
+                                      headers={"Idempotency-Key": "mismatched-quote"})
+    assert refused.status_code == 502, refused.text
+    assert refused.json()["error"]["code"] == "wiki_generation_failed"
+    assert await session.scalar(select(func.count()).select_from(WikiRevision)) == 0
+    assert await session.scalar(select(func.count()).select_from(WikiWriteKey)) == 0
+    scripted([page], [
+        {"text": "Dense retrieval scores with sdense = <ep, eq>.",
+         "conflict_group": None,
+         "support": [{"_evidence_id": formula.id}]},
+        {"text": "Distillation integrates a teacher signal.",
+         "conflict_group": None,
+         "support": [{"_evidence_id": distillation.id}]}])
+    created = await actor_client.post("/api/wikis", json=body(resource, version),
+                                      headers={"Idempotency-Key": "mismatched-quote"})
+    assert created.status_code == 201, created.text
+    claims = [claim for page in created.json()["revision"]["pages"]
+              for section in page["generated_sections"] for claim in section["sentences"]]
+    assert [(claim["evidence_ids"], claim["support_check"]) for claim in claims] == [
+        ([formula.id], {"mechanical": "verbatim_present", "quotes": 1}),
+        ([distillation.id], {"mechanical": "verbatim_present", "quotes": 1})]
+    observations = created.json()["revision"]["limits"]["generation_observations"]
+    assert [entry["stage"] for entry in observations] == ["plan", "page"]
+    assert observations[1]["claim_checks"][0]["verdict"] == "verbatim_present"
+
+
+@pytest.mark.parametrize("selection", [None, ["q1.99"], ["q1.1", "q1.1"]])
+@respx.mock
+async def test_invalid_support_selection_is_rejected_without_partial_revision(
+        actor_client, session, selection):
+    """Missing, unknown and duplicate selections must fail, not become an
+    apparently supported claim or an implicit insufficient-evidence verdict."""
+    resource, version, evidence, _ = await source(
+        session, text="The encoder contains self-attention layers where keys, values and queries "
+                      "come from the previous layer.")
+    page = {"title": "Encoder", "sections": ["Attention"], "references": [1], "source_term": None}
+    scripted([page], [{"text": "Self-attention captures long-range dependencies.",
+                       "conflict_group": None, "support": selection}])
+    refused = await actor_client.post("/api/wikis", json=body(resource, version),
+                                      headers={"Idempotency-Key": "invented-quote"})
+    assert refused.status_code == 502, refused.text
+    assert await session.scalar(select(func.count()).select_from(WikiRevision)) == 0
+
+
+@respx.mock
+async def test_selected_support_keeps_case_and_short_atoms(actor_client, session):
+    """Selected spans preserve the original bytes: math symbols keep their case and a
+    short atom is offered as its whole non-empty span."""
+    resource, version, rows = await source_with(session, ["Routing key K selects the shard.", "E=mc2"])
+    page = {"title": "Keys", "sections": ["Facts"], "references": [1, 2], "source_term": None}
+    scripted([page], [{"text": "Shard key is K.", "conflict_group": None,
+                       "support": [{"_evidence_id": rows[0].id}]},
+                      {"text": "Energy follows E=mc2.", "conflict_group": None,
+                       "support": [{"_evidence_id": rows[1].id}]}])
+    created = await actor_client.post("/api/wikis", json=body(resource, version),
+                                      headers={"Idempotency-Key": "case-quote"})
+    assert created.status_code == 201, created.text
+    claims = [claim for page in created.json()["revision"]["pages"]
+              for section in page["generated_sections"] for claim in section["sentences"]]
+    assert [claim["support"][0]["quote"] for claim in claims] == [
+        "Routing key K selects the shard.", "E=mc2"]
+
+
+@respx.mock
+async def test_planned_queries_cover_distinct_title_subtopics_within_budget(actor_client, session):
+    """A topical title must not collapse onto entity-name blocks: planned per-topic
+    queries retrieve through the shared facet seam, each requested subtopic keeps
+    its slot, and the planning reservation is charged against max_output_tokens."""
+    resource, version, rows = await source_with(session, [
+        "Manual supply voltage strapping boot overview manual manual.",
+        "Manual supply voltage strapping boot appendix manual manual.",
+        "Supply voltage regulation regulation regulation.",
+        "Strapping boot pin pin pin.",
+    ])
+    name_block, _, voltage, boot = rows
+    calls = topic_model([voltage, boot],
+                        retrieval_queries=["supply voltage regulation", "strapping boot pin"])
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Manual supply voltage and strapping boot",
+        max_pages=2, max_evidence=2, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "subtopic-coverage"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    selection = revision["limits"]["evidence_selection"]
+    assert selection["query_planning"]["status"] == "applied"
+    assert selection["query_planning"]["reserved_output_tokens"] == 256
+    assert selection["retrieval_queries"] == ["supply voltage regulation",
+                                              "strapping boot pin"]
+    # Without the planned queries the title's repeated entity word ranks the two
+    # name blocks first and the requested subtopics never reach the model.
+    assert {d["evidence_id"] for d in revision["dependency_manifest"]} == {
+        voltage.id, boot.id}
+    assert name_block.id not in {d["evidence_id"] for d in revision["dependency_manifest"]}
+    spent = [json.loads(call.request.content)["max_tokens"] for call in calls.calls]
+    assert spent[0] == 256
+    assert sum(spent) <= 2048
+    assert revision["limits"]["max_output_tokens"] == 2048
+
+
+@respx.mock
+async def test_broken_query_planner_falls_back_to_title_only_and_keeps_reservation(
+        actor_client, session):
+    """A planner fault never invents queries or retries: retrieval falls back to the
+    title, the failure stays visible, and the reservation is still charged."""
+    resource, version, rows = await long_source(session)
+    calls = topic_model(rows)
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Controller reset delay and watchdog settings",
+        max_pages=2, max_evidence=2, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "planner-fallback"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    selection = revision["limits"]["evidence_selection"]
+    assert selection["query_planning"]["status"] == "unavailable"
+    assert selection["query_planning"]["reserved_output_tokens"] == 256
+    assert "retrieval_queries" not in selection
+    spent = [json.loads(call.request.content)["max_tokens"] for call in calls.calls]
+    assert spent[0] == 256
+    assert sum(spent) <= 2048
+
+
+@respx.mock
+async def test_each_planned_query_keeps_its_own_ranked_slots(actor_client, session):
+    """Per-query ranking, not one recycled round-robin prefix: a subtopic whose
+    topical block ranks first under its own planned query keeps its slot even
+    when the title query ranks generic entity-name blocks ahead of it."""
+    resource, version, rows = await source_with(session, [
+        "Manual overview manual manual manual manual.",
+        "Manual appendix manual manual manual manual.",
+        "Manual index manual manual manual manual.",
+        "Supply voltage regulation regulation regulation.",
+        "Strapping boot pin pin pin.",
+    ])
+    voltage, boot = rows[3], rows[4]
+    calls = topic_model([voltage, boot],
+                        retrieval_queries=["supply voltage regulation", "strapping boot pin"])
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Manual supply voltage and strapping boot",
+        max_pages=2, max_evidence=3, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "per-query-slots"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    selected = {d["evidence_id"] for d in revision["dependency_manifest"]}
+    # The title query ranks the three name blocks first (every title term hits
+    # them); without per-query slots the single shared prefix would spend all
+    # 3 positions on them and neither topical block would reach the model.
+    assert voltage.id in selected
+    assert boot.id in selected
+    assert len(selected) == 3
+    assert revision["limits"]["evidence_selection"]["retrieval_queries"] == [
+        "supply voltage regulation", "strapping boot pin"]
+    spent = [json.loads(call.request.content)["max_tokens"] for call in calls.calls]
+    assert spent[0] == 256
+    assert sum(spent) <= 2048
+
+
+@respx.mock
+async def test_focused_facets_fill_budget_before_generic_title(actor_client, session):
+    resource, version, rows = await source_with(session, [
+        "Manual overview interface voltage start.",
+        "Output voltage regulation supplies 4 V.",
+        "Output voltage safety cutoff is 5 V.",
+        "Startup strap mode uses pin X.",
+    ])
+    overview, *facts = rows
+    topic_model(facts, retrieval_queries=[
+        "output voltage regulation safety", "startup strap mode"])
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title=overview.content,
+        max_pages=2, max_evidence=3, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "focused-before-title"})
+
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    assert {entry["evidence_id"] for entry in revision["dependency_manifest"]} == {
+        row.id for row in facts}
+    assert revision["limits"]["evidence_selection"]["selected_evidence"] == 3
+
+
+@respx.mock
+async def test_per_query_selection_respects_evidence_limit(actor_client, session):
+    """Three planned queries share two evidence slots, not two slots per query."""
+    resource, version, rows = await source_with(session, [
+        "Manual overview manual manual manual.",
+        "Manual appendix manual manual manual.",
+        "Supply voltage regulation regulation regulation.",
+        "Strapping boot pin pin pin.",
+        "Oscillator trim calibration calibration calibration.",
+    ])
+    topic_model(rows, retrieval_queries=["supply voltage regulation", "strapping boot pin",
+                                        "oscillator trim calibration"])
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Manual supply voltage and strapping boot",
+        max_pages=2, max_evidence=2, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "per-query-bounded"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    assert len({entry["evidence_id"] for entry in revision["dependency_manifest"]}) == 2
+    assert revision["limits"]["evidence_selection"]["selected_evidence"] == 2
+
+
+@respx.mock
+async def test_rerank_outage_keeps_hybrid_order_and_reports_degraded(actor_client, session,
+                                                                    monkeypatch):
+    """Rerank outage is visible, not silent: the hybrid pool order stands and
+    `ranking_degraded` reports `rerank_unavailable` (QA/extraction parity)."""
+    from ddp_corpus.config import settings
+    from tests.conftest import EMBEDDINGS
+    from tests.test_documents import _embed_response
+
+    respx.post(EMBEDDINGS).mock(side_effect=_embed_response)
+
+    resource, version, rows = await source_with(session, [
+        "Manual supply voltage strapping boot overview manual manual.",
+        "Manual supply voltage strapping boot appendix manual manual.",
+        "Supply voltage regulation regulation regulation.",
+        "Strapping boot pin pin pin.",
+    ])
+    _, _, voltage, boot = rows
+    monkeypatch.setattr(settings, "rerank_enabled", True)
+    monkeypatch.setattr(settings, "rerank_candidates", 4)
+    respx.post(settings.rerank_endpoint).mock(
+        return_value=httpx.Response(404, json={"error": "no model"}))
+    topic_model([voltage, boot],
+                retrieval_queries=["supply voltage regulation", "strapping boot pin"])
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Manual supply voltage and strapping boot",
+        max_pages=2, max_evidence=2, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "rerank-outage"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    selection = revision["limits"]["evidence_selection"]
+    assert selection["ranking_degraded"] == "rerank_unavailable"
+    assert {d["evidence_id"] for d in revision["dependency_manifest"]} == {
+        voltage.id, boot.id}
+
+
+@respx.mock
+async def test_rerank_pool_excludes_atoms_from_other_source_versions(actor_client, session,
+                                                                    monkeypatch):
+    """An out-of-scope index result must never reach the reranker or frozen plan."""
+    from ddp_corpus import wiki as wiki_service
+    from ddp_corpus.config import settings
+    from tests.conftest import EMBEDDINGS
+    from tests.test_documents import _embed_response
+
+    respx.post(EMBEDDINGS).mock(side_effect=_embed_response)
+
+    resource, version, rows = await source_with(session, [
+        "Manual supply voltage strapping boot overview manual manual.",
+        "Manual supply voltage strapping boot appendix manual manual.",
+        "Supply voltage regulation regulation regulation.",
+        "Strapping boot pin pin pin.",
+    ])
+    _, _, outside = await source_with(session, ["Other source version: confidential control value."])
+    search = wiki_service.search_query
+
+    async def search_with_foreign_result(*args, **kwargs):
+        hits, degraded = await search(*args, **kwargs)
+        return [*hits, {**hits[0], "evidence_id": outside[0].id,
+                       "text": outside[0].content, "score": 1000.0}], degraded
+
+    monkeypatch.setattr(wiki_service, "search_query", search_with_foreign_result)
+    monkeypatch.setattr(settings, "rerank_enabled", True)
+    monkeypatch.setattr(settings, "rerank_candidates", 4)
+
+    def reranked(request):
+        texts = json.loads(request.content)["texts"]
+        assert outside[0].content not in texts, "Out-of-scope text must not leave for reranking."
+        # Reverse the hybrid pool order: fusion must still only reorder pool
+        # members, never invent or import atoms from outside the pool.
+        return httpx.Response(200, json=[
+            {"index": index, "score": float(len(texts) - rank)}
+            for rank, index in enumerate(reversed(range(len(texts))))])
+
+    respx.post(settings.rerank_endpoint).mock(side_effect=reranked)
+    topic_model(rows, retrieval_queries=["supply voltage regulation", "strapping boot pin"])
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Manual supply voltage and strapping boot",
+        max_pages=2, max_evidence=2, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "rerank-bounded"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    selected = {d["evidence_id"] for d in revision["dependency_manifest"]}
+    assert selected <= {row.id for row in rows}
+    assert len(selected) == 2
+    assert revision["limits"]["evidence_selection"]["ranking_degraded"] is None
+
+
+@respx.mock
+async def test_withdrawal_during_retrieval_blocks_reranker_egress(
+        actor_client, session, monkeypatch):
+    from sqlalchemy import update
+    from ddp_corpus import wiki as wiki_service
+    from ddp_corpus.config import settings
+
+    resource, version, rows = await source_with(
+        session, ["manual voltage specification.", "manual current specification."])
+    model(rows[0], retrieval_queries=["manual"])
+    monkeypatch.setattr(settings, "rerank_enabled", True)
+    reranker = respx.post(settings.rerank_endpoint).mock(return_value=httpx.Response(
+        200, json=[{"index": 0, "score": 1.0}, {"index": 1, "score": 0.5}]))
+    search = wiki_service.search_query
+
+    async def withdraw_after_search(*args, **kwargs):
+        hits, degraded = await search(*args, **kwargs)
+        await session.execute(update(Resource).where(Resource.id == resource.id)
+                              .values(publication="withdrawn"))
+        await session.commit()
+        return hits, degraded
+
+    monkeypatch.setattr(wiki_service, "search_query", withdraw_after_search)
+    response = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="manual"), headers={"Idempotency-Key": "withdraw-before-rerank"})
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "wiki_source_unavailable"
+    assert not reranker.called, "Withdrawal must stop source text before the reranker request."
+    assert await session.scalar(select(func.count()).select_from(WikiRevision)) == 0
+
+
+@respx.mock
+async def test_generation_context_restores_source_reading_order(actor_client, session):
+    """Ranked budget selection is preserved, but the planner/writer see the
+    frozen evidence in source reading order (QA `build_messages` parity): a
+    later-ranked continuation keeps its own reference next to its subject."""
+    resource, version, rows = await source_with(session, [
+        "Zebra manual manual manual manual.",
+        "Manual supply voltage regulation regulation.",
+        "Manual strapping boot pin pin.",
+    ])
+    subject, voltage, boot = rows
+    seen: dict = {}
+
+    def respond(request):
+        prompt = json.loads(request.content)
+        properties = prompt["response_format"]["json_schema"]["schema"]["properties"]
+        if "retrieval_queries" in properties:
+            title = json.loads(prompt["messages"][-1]["content"])["title"]
+            payload = {"retrieval_queries": [title]}
+        elif "pages" in properties:
+            context = json.loads(prompt["messages"][-1]["content"])["evidence"]
+            seen["order"] = [item["evidence_id"] for item in context]
+            references = [item["reference"] for item in context]
+            payload = {"pages": [{"title": "Manual", "sections": ["Facts"],
+                                  "references": references, "source_term": None}]}
+        else:
+            context = json.loads(prompt["messages"][-1]["content"])["evidence"]
+            spans = {entry["evidence_id"]: sorted(
+                entry["spans"], key=lambda identifier: int(identifier.split(".")[1]))
+                for entry in context}
+            payload = {"sections": [{"heading": "Facts", "sentences": [
+                {"text": row.content, "conflict_group": None,
+                 "support": [spans[row.id][0]]} for row in rows]}]}
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
+                                                    "finish_reason": "stop"}]})
+
+    respx.post(CHAT).mock(side_effect=respond)
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Manual supply voltage and strapping boot",
+        max_pages=1, max_evidence=3, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "reading-order"})
+    assert created.status_code == 201, created.text
+    # source_with assigns page_idx == seq, so reading order is creation order
+    # regardless of which block the ranker preferred.
+    assert seen["order"] == [subject.id, voltage.id, boot.id]
+    assert {d["evidence_id"] for d in
+            created.json()["revision"]["dependency_manifest"]} == {row.id for row in rows}
+
+
+@respx.mock
+async def test_unauthorized_source_fails_before_any_paid_model_work(actor_client, session):
+    """Auth stays before all paid model work: an unknown source fails before
+    the planner, the ranker, and the writer — no chat, embedding, or rerank
+    call is issued."""
+    from ddp_corpus.config import settings
+    from tests.conftest import EMBEDDINGS
+
+    resource, version, _ = await source_with(session, ["Manual fact."])
+    chat = respx.post(CHAT).mock(side_effect=AssertionError("chat must not be called"))
+    embeds = respx.post(EMBEDDINGS).mock(side_effect=AssertionError("embed must not be called"))
+    rerank = respx.post(settings.rerank_endpoint).mock(
+        side_effect=AssertionError("rerank must not be called"))
+    refused = await actor_client.post("/api/wikis", json={
+        "title": "Manual", "sources": [{"resource_id": "missing-resource",
+                                        "source_version_id": version.id}],
+        "max_pages": 1, "max_evidence": 2, "max_input_chars": 12000, "max_output_tokens": 2048},
+        headers={"Idempotency-Key": "auth-before-models"})
+    assert refused.status_code == 404, refused.text
+    assert chat.call_count == 0
+    assert embeds.call_count == 0
+    assert rerank.call_count == 0
+
+
+@respx.mock
+async def test_ranked_seed_pulls_page_local_continuation_within_limits(actor_client, session):
+    """A ranked heading seed pulls its ordered +1 continuation ahead of a
+    higher-scoring filler: without region closure the writer would state the
+    seed fragment as a complete fact. Context reserves slots under the same
+    max_evidence/max_input_chars instead of appending beyond them."""
+    resource, version, rows = await source_with(session, [
+        "Manual supply voltage strapping boot overview.",
+        "Recommended operating conditions supply rail tolerance.",
+        "Manual supply boot appendix filler.",
+        "Manual supply boot index filler.",
+    ], pages=[0, 0, 1, 2])
+    seed, continuation, filler_a, filler_b = rows
+    calls = topic_model([seed, continuation],
+                        retrieval_queries=["Manual supply voltage and strapping boot"])
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Manual supply voltage and strapping boot",
+        max_pages=2, max_evidence=2, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "seed-continuation"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    selected = {d["evidence_id"] for d in revision["dependency_manifest"]}
+    # Keyword rank alone orders seed, filler_a, filler_b, continuation: the
+    # continuation shares only the crowded term "supply" while each filler
+    # also matches "manual" and "boot". The +1 page-local continuation still
+    # takes the second slot; the fillers stay out.
+    assert selected == {seed.id, continuation.id}
+    assert revision["limits"]["evidence_selection"]["selected_evidence"] == 2
+    # No new model work: planning, outline and writing calls only.
+    assert calls.call_count == 4
+
+
+@respx.mock
+async def test_each_requested_facet_keeps_its_seed_before_neighbor_context(actor_client, session):
+    resource, version, rows = await source_with(session, [
+        "Supply voltage voltage voltage: minimum 3 V.",
+        "The adjacent paragraph discusses optional packaging.",
+        "Boot pins boot pins boot pins: sample them when reset ends.",
+        "The adjacent paragraph discusses optional connectors.",
+        "Sleep current sleep current sleep current: typical 5 microamperes.",
+        "The adjacent paragraph discusses optional storage.",
+    ], pages=[0, 0, 1, 1, 2, 2])
+    facts = {
+        rows[0].id: "最低供电电压为 3 V。",
+        rows[2].id: "启动引脚在复位结束时采样。",
+        rows[4].id: "典型休眠电流为 5 微安。",
+    }
+
+    def respond(request):
+        prompt = json.loads(request.content)
+        properties = prompt["response_format"]["json_schema"]["schema"]["properties"]
+        supplied = json.loads(prompt["messages"][-1]["content"])
+        if "retrieval_queries" in properties:
+            payload = {"retrieval_queries": [
+                "minimum supply voltage", "boot pin sampling", "typical sleep current"]}
+        elif "pages" in properties:
+            payload = {"pages": [{"title": "Electrical settings", "sections": ["Specifications"],
+                                  "references": [item["reference"] for item in supplied["evidence"]],
+                                  "source_term": None}]}
+        else:
+            spans = {item["evidence_id"]: list(item["spans"]) for item in supplied["evidence"]}
+            payload = {"sections": [{"heading": "Specifications", "sentences": [
+                {"text": text if identifier in spans else "本次证据不足以回答这一参数。",
+                 "support": [spans[identifier][0]] if identifier in spans else [],
+                 "conflict_group": None}
+                for identifier, text in facts.items()]}]}
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
+                                                    "finish_reason": "stop"}]})
+
+    respx.post(CHAT).mock(side_effect=respond)
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Supply voltage, boot pin sampling and sleep current",
+        max_pages=1, max_evidence=3, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "facet-seeds-before-neighbors"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    assert {row["evidence_id"] for row in revision["dependency_manifest"]} == set(facts)
+    claims = revision["pages"][0]["generated_sections"][0]["sentences"]
+    assert {claim["text"] for claim in claims if not claim["unsupported"]} == set(facts.values())
+
+@pytest.mark.parametrize("extra_ranked_source", [False, True])
+@respx.mock
+async def test_uncorroborated_heading_neighbor_keeps_its_ranked_tail_position(
+        actor_client, session, extra_ranked_source):
+    """A page-local heading next to a facet head must not evict a ranked fact:
+    without corroboration (identical block geometry or an independent rank
+    within max_evidence + facet heads) the neighbor keeps its tail position
+    and the ranked second hit still reaches the model. Live-stack shape:
+    appendix/TOC headings consumed Wiki slots ahead of ranked facet hits."""
+    resource, version, rows = await source_with(session, [
+        "Alpha beta head block: minimum supply voltage 3 V.",
+        "List of Tables",
+        "Alpha beta second block: boot pin sampling at reset end.",
+        ("Alpha zebra third block: sleep current 5 microamperes."
+         if extra_ranked_source else "Unrelated packaging instructions."),
+    ], pages=[0, 0, 1, 2])
+    head, heading, second, _ = rows
+    heading.bbox = [0, 0, 10, 10]
+    await session.commit()
+
+    def respond(request):
+        prompt = json.loads(request.content)
+        properties = prompt["response_format"]["json_schema"]["schema"]["properties"]
+        if "retrieval_queries" in properties:
+            payload = {"retrieval_queries": ["alpha beta head"]}
+        elif "pages" in properties:
+            context = json.loads(prompt["messages"][-1]["content"])["evidence"]
+            payload = {"pages": [{"title": "Electrical settings", "sections": ["Specifications"],
+                                  "references": [item["reference"] for item in context],
+                                  "source_term": None}]}
+        else:
+            context = json.loads(prompt["messages"][-1]["content"])["evidence"]
+            spans = {entry["evidence_id"]: list(entry["spans"]) for entry in context}
+            payload = {"sections": [{"heading": "Specifications", "sentences": [
+                {"text": text, "support": [spans[identifier][0]], "conflict_group": None}
+                for identifier, text in ((head.id, "最低供电电压为 3 V。"),
+                                         (second.id, "启动引脚在复位结束时采样。"))
+                if identifier in spans]}]}
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
+                                                    "finish_reason": "stop"}]})
+
+    respx.post(CHAT).mock(side_effect=respond)
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Alpha beta head zebra",
+        max_pages=1, max_evidence=2, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "heading-keeps-tail-position"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    # Document-order fallback is not independent rank corroboration, even
+    # when a sparse real retrieval leaves its position below the nominal cap.
+    assert {row["evidence_id"] for row in revision["dependency_manifest"]} == {
+        head.id, second.id}
+
+
+@respx.mock
+async def test_rank_corroborated_neighbor_still_joins_its_head(actor_client, session):
+    """Corroboration is not demotion: a differently-laid-out neighbor that the
+    ranker independently placed within max_evidence + facet heads still joins
+    its head ahead of deeper tail filler. Live-stack shape: the encoder-stack
+    block next to a figure caption keeps its slot."""
+    resource, version, rows = await source_with(session, [
+        "Figure diagram overview",
+        "Overview encoder stack layers six identical",
+        "Diagram overview appendix filler",
+        "Unrelated index filler.",
+    ], pages=[0, 0, 1, 2])
+    caption, stack, filler, _ = rows
+    caption.bbox = [0, 0, 10, 10]
+    await session.commit()
+
+    def respond(request):
+        prompt = json.loads(request.content)
+        properties = prompt["response_format"]["json_schema"]["schema"]["properties"]
+        if "retrieval_queries" in properties:
+            payload = {"retrieval_queries": ["figure diagram overview"]}
+        elif "pages" in properties:
+            context = json.loads(prompt["messages"][-1]["content"])["evidence"]
+            payload = {"pages": [{"title": "Encoder", "sections": ["Layers"],
+                                  "references": [item["reference"] for item in context],
+                                  "source_term": None}]}
+        else:
+            context = json.loads(prompt["messages"][-1]["content"])["evidence"]
+            spans = {entry["evidence_id"]: list(entry["spans"]) for entry in context}
+            payload = {"sections": [{"heading": "Layers", "sentences": [
+                {"text": "编码器由六个相同层堆叠。", "support": [spans[stack.id][0]],
+                 "conflict_group": None}]}]}
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)},
+                                                    "finish_reason": "stop"}]})
+
+    respx.post(CHAT).mock(side_effect=respond)
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, title="Figure overview and encoder stack",
+        max_pages=1, max_evidence=2, max_input_chars=12000, max_output_tokens=2048),
+        headers={"Idempotency-Key": "corroborated-neighbor-kept"})
+    assert created.status_code == 201, created.text
+    revision = created.json()["revision"]
+    # Focused keyword rank is caption, appendix filler, stack (strict 1/df
+    # separation, no ties): the stack block sits just outside the 2-slot
+    # budget but within max_evidence + facet heads, so it still joins its
+    # caption head and the filler stays out.
+    assert {row["evidence_id"] for row in revision["dependency_manifest"]} == {
+        caption.id, stack.id}
+
+
+def _budget_probe_model(*, length_stage, length_usage="absent"):
+    """Truncate only the requested stage; optional statistics cannot mask that terminal reason."""
+    def respond(request):
+        request_body = json.loads(request.content)
+        properties = request_body["response_format"]["json_schema"]["schema"]["properties"]
+        if "retrieval_queries" in properties:
+            stage = "query_planning"
+            title = json.loads(request_body["messages"][-1]["content"])["title"]
+            payload = {"retrieval_queries": [title]}
+        elif "pages" in properties:
+            stage = "plan"
+            context = json.loads(request_body["messages"][-1]["content"])["evidence"]
+            payload = {"pages": [{"title": "Overview", "sections": ["Facts"],
+                                  "references": [item["reference"] for item in context],
+                                  "source_term": None}]}
+        elif "selected_relations" in properties:
+            stage = "relations"
+            payload = {"selected_relations": []}
+        else:
+            stage = "page"
+            context = json.loads(request_body["messages"][-1]["content"])["evidence"]
+            first = sorted(context[0]["spans"])[0]
+            payload = {"sections": [{"heading": "Facts", "sentences": [
+                {"text": "The supplied evidence states one fact.",
+                 "support": [first], "conflict_group": None}]}]}
+        response = {"choices": [{"message": {"content": json.dumps(payload)},
+                                "finish_reason": "length" if stage == length_stage else "stop"}]}
+        if stage == length_stage and length_usage != "absent":
+            response["usage"] = None if length_usage == "null" else []
+        return httpx.Response(200, json=response)
+
+    return respx.post(CHAT).mock(side_effect=respond)
+
+
+@pytest.mark.parametrize("length_usage", ["absent", "null", "non_object"])
+@pytest.mark.parametrize("length_stage", ["plan", "page"])
+@respx.mock
+async def test_token_exhaustion_names_its_stage_and_request_cap(
+        actor_client, session, length_stage, length_usage):
+    """A truncated stage still fails 409 `wiki_budget_exceeded` without a partial
+    revision, but the error now names the exhausted stage and its request cap so
+    a budget failure is attributable instead of a guess."""
+    resource, version, _, _ = await source(session)
+    _budget_probe_model(length_stage=length_stage, length_usage=length_usage)
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, max_pages=1, max_evidence=1, max_input_chars=12000,
+        max_output_tokens=2048), headers={"Idempotency-Key": f"length-at-{length_stage}"})
+    assert created.status_code == 409, created.text
+    error = created.json()["error"]
+    assert error["code"] == "wiki_budget_exceeded"
+    assert length_stage in error["message"]
+    assert "request cap" in error["message"]
+    assert await session.scalar(select(func.count()).select_from(WikiRevision)) == 0
+
+
+@pytest.mark.parametrize("case,plan_pages,message_part", [
+    ("title", [{"title": "  ", "sections": ["Facts"], "references": [1], "source_term": None}],
+     "planned page 1 title"),
+    ("section", [{"title": "Overview", "sections": [""], "references": [1], "source_term": None}],
+     "planned page 1 section 1"),
+    ("anchor", [{"title": "Trailing colon:", "sections": ["Facts"], "references": [1],
+                 "source_term": None}], "planned page 1 source anchor from title"),
+])
+@respx.mock
+async def test_rejected_planner_text_names_its_page_and_field(
+        actor_client, session, case, plan_pages, message_part):
+    """Malformed planner text still fails 502 `wiki_generation_failed` without a
+    partial revision, but the rejection names the page and field so the fault is
+    locatable in the planner output."""
+    resource, version, _, _ = await source(session)
+
+    def respond(request):
+        request_body = json.loads(request.content)
+        properties = request_body["response_format"]["json_schema"]["schema"]["properties"]
+        if "retrieval_queries" in properties:
+            title = json.loads(request_body["messages"][-1]["content"])["title"]
+            payload = {"retrieval_queries": [title]}
+        else:
+            payload = {"pages": plan_pages}
+        return httpx.Response(200, json={"choices": [
+            {"message": {"content": json.dumps(payload)}, "finish_reason": "stop"}]})
+
+    respx.post(CHAT).mock(side_effect=respond)
+    created = await actor_client.post("/api/wikis", json=body(
+        resource, version, max_pages=1, max_evidence=1, max_input_chars=12000,
+        max_output_tokens=2048), headers={"Idempotency-Key": f"planner-text-{case}"})
+    assert created.status_code == 502, created.text
+    error = created.json()["error"]
+    assert error["code"] == "wiki_generation_failed"
+    assert message_part in error["message"]
+    assert await session.scalar(select(func.count()).select_from(WikiRevision)) == 0

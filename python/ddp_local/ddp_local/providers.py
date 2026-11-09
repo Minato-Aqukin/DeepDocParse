@@ -106,7 +106,8 @@ class LocalExecutionProvider:
                     process.kill()
                     await process.wait()
 
-    async def generate(self, messages, *, execution_policy, allow_remote, max_tokens=1024):
+    async def generate(self, messages, *, execution_policy, allow_remote, max_tokens=1024,
+                       response_format=None):
         if type(max_tokens) is not int or not 1 <= max_tokens <= 8192:
             raise ApplicationError("wiki_budget_invalid", "completion token budget must be within 1..8192")
         if execution_policy not in {"local_only", "remote_allowed"}:
@@ -142,6 +143,7 @@ class LocalExecutionProvider:
                         "temperature": 0,
                         "max_tokens": max_tokens,
                         "stream": False,
+                        **({"response_format": response_format} if response_format is not None else {}),
                     },
                 ) as response:
                     body = bytearray()

@@ -31,6 +31,7 @@ class QueryDecision:
     reason: str
     inherited_evidence_ids: list[str] = field(default_factory=list)
     degraded: str | None = None
+    retrieval_queries: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # “不检索但没证据”只能走拒答，不能让调用方误认为可用模型常识回答。

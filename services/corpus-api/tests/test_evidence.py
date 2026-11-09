@@ -250,7 +250,7 @@ async def test_extraction_citations_are_stored_per_field(actor_client, session, 
     document = await _ready_document(actor_client)
     respx.post(CHAT).mock(return_value=Response(200, json={"choices": [
         {"message": {"content": json.dumps(
-            {"found": True, "value": "第二页的表格数据", "source": 1},
+            {"found": True, "value": "第二页的表格数据", "support": {"value_source": 1, "context_sources": []}},
             ensure_ascii=False)}}]}))
 
     resp = await actor_client.post("/api/extractions/runs", json={

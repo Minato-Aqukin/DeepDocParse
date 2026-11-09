@@ -62,3 +62,28 @@ async def test_truncation_counts_distinct_hits_without_changing_facet_priority(e
     assert hits == plain
     assert truncated is extra
     assert degraded is None
+
+
+async def test_translated_facets_keep_distinct_sources_within_the_original_limit():
+    question = "供电电压与无线协议分别是什么？"
+    routes = {
+        question: ["overview", "overview-copy", "old-overview"],
+        "power supply voltage": ["power", "overview"],
+        "wireless protocol": ["radio", "overview"],
+    }
+
+    class RankedIndex:
+        async def search(self, _session, *, query, limit, **_kwargs):
+            return [{"chunk_id": cid, "score": 0.03, "similarity": 0.8}
+                    for cid in routes[query][:limit]]
+
+    async def embed(texts):
+        return [[1.0] for _ in texts]
+
+    hits, degraded = await search_query(
+        None, RankedIndex(), embed=embed, query=question,
+        query_variants=["power supply voltage", "power supply voltage", "wireless protocol"],
+        document_id="authorized-document", limit=3, candidates=9, min_similarity=0.4,
+    )
+    assert [hit["chunk_id"] for hit in hits] == ["overview", "power", "radio"]
+    assert degraded is None

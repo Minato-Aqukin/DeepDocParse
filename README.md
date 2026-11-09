@@ -3,11 +3,18 @@
 面向技术手册与论文的**多模态 PDF 检索工作台**。三条系统级属性：
 **可追溯 / 可复核 / 可更新**；一句话约束：**答案必须回到证据**。
 
+启用 MinerU 引擎时，文档解析由 [MinerU](https://github.com/opendatalab/MinerU) 提供支持；
+原生 CPU 解析路径不调用 MinerU。实际引擎以部署注册表与解析任务记录为准。
+
 > 本仓库由原 `DeepDocParse`（GPU 服务层）与 `DeepDocParse-Web`（产品层）
 > 两个仓库合并而成，两段 Git 历史完整保留。合仓与企业化重构方案见
 > `MERGE-REFACTOR-PROPOSAL.md`。
 >
 > **重构做到哪一步、还欠什么，看 `docs/refactor/STATUS.md`。**
+
+## 项目介绍与竞赛材料
+
+[最终版材料](docs/competition/ai-race-908823941852692809/README.md)：20页项目介绍PPT与PDF、5分40秒待配音视频、配音稿和字幕、架构实现说明及应用案例。只维护这一版，不包含历史制作包、模型权重或部署凭据。
 
 ## 目录
 

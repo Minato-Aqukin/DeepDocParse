@@ -90,8 +90,18 @@ Keyword retrieval is available without a model; answer/Wiki reports `model_unava
 For Unicode filenames, send `X-Filename-Encoded` containing percent-encoded UTF-8 instead
 of `X-Filename`. Invalid escapes/UTF-8, duplicate filename headers, and simultaneous raw
 and encoded headers are rejected. Decoded names still obey the plain-filename boundary.
-Generation uses the common citation assertion projector; citations are structural bindings,
-with `semantic_review:needs_review`, not a claim that the model's statements are verified.
+Answers and conversations use the shared `ddp_core.answer` grounded JSON decoder and its
+per-request visible-evidence schema, not punctuation-based citation inference. The selected
+OpenAI-compatible provider must support `response_format:json_schema`. Only a fully decoded
+`answered` result can publish factual assertions; empty/foreign IDs, prose, contradictory
+refusals and truncated output fail as `unsupported_generation`, without partial publication.
+`insufficient_evidence` returns `evidence_sufficiency:insufficient`, no factual assertions
+and no primary evidence, even when keyword candidates exist. The conversation adapter adds
+only an explicitly unsupported refusal sentence, not citations to unrelated candidates.
+The SSE `meta.retrieval.evidence_sufficiency` matches persisted
+`model_meta.evidence_sufficiency`; candidate decisions remain separate from actual citations.
+All generated claims remain `semantic_review:needs_review`: structural bindings do not
+prove that the source semantically supports every statement.
 
 `generation.status=configured_unverified` reports configuration only; it is not a health
 probe or a successful model run. A request idempotency key records generation intent before
@@ -147,7 +157,7 @@ layout and pinned inputs are in `packaging/windows/README.md`; the user-facing f
 
 ```json
 {"title":"Topic","sources":[{"resource_id":"local resource id","source_version_id":"local version id"}],
- "max_pages":4,"max_evidence":40,"max_output_tokens":4096,"max_input_chars":16000,
+ "max_pages":1,"max_evidence":50,"max_output_tokens":4096,"max_input_chars":24000,
  "execution_policy":"local_only","allow_remote":false}
 ```
 

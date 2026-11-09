@@ -123,16 +123,28 @@ async def test_submit_empty_callback_base_denies_all(client, app_state, monkeypa
     ("¥1,234.00 元", 1234.0),
     (1234, 1234.0),
     ("  486,200.50 ", 486200.5),
+    # 带单位装饰的单数字回答：与字面见证共用记号写法后可取值。
+    ("3 times", 3.0),
+    ("10,000 times", 10000.0),
+    # Unicode 负号必须保留符号：−40 不能变成 +40。
+    ("−40", -40.0),
 ])
 def test_number_coercion(raw, expected):
     spec = fmt.FieldSpec(name="amount", type="number", description="金额")
     assert fmt.coerce_value(raw, spec) == expected
 
 
-def test_number_coercion_rejects_garbage():
+@pytest.mark.parametrize("raw", [
+    "待定",
+    # 非法千分位不能去逗号硬认；多个数字不能静默取第一个。
+    "1,2",
+    "−40∼105",
+    "12 and 34",
+])
+def test_number_coercion_rejects_garbage(raw):
     spec = fmt.FieldSpec(name="amount", type="number", description="金额")
     with pytest.raises(fmt.CoerceError):
-        fmt.coerce_value("待定", spec)
+        fmt.coerce_value(raw, spec)
 
 
 def test_bool_is_not_silently_a_number():
@@ -216,18 +228,25 @@ async def _seed_corpus(store: TaskStore, doc_hash: str) -> None:
 
 
 @respx.mock
-async def test_extraction_end_to_end(app_state, worker_ctx):
+@pytest.mark.parametrize("structured_output", ["json_schema", "json_object"])
+async def test_extraction_end_to_end(app_state, worker_ctx, structured_output):
     """两个字段：一个抽得到、一个文档里没有。**两者必须落到不同的 status**。"""
+    app_state.registry = Registry(vqa_models={
+        "configured": ModelEntry(
+            endpoint=CHAT, capabilities=["instruct"],
+            options={"structured_output": structured_output})})
     doc_hash = "d" * 64
     await _seed_corpus(app_state.task_store, doc_hash)
 
     def reply(request):
         body = json.loads(request.content)
+        if body.get("response_format", {}).get("type") != structured_output:
+            return Response(400, json={"error": "unsupported response_format"})
         prompt = body["messages"][-1]["content"]
         if "买方" in prompt:
-            answer = {"found": True, "value": "北极星科技有限公司", "source": 1}
+            answer = {"found": True, "value": "北极星科技有限公司", "support": {"value_source": 1, "context_sources": []}}
         else:
-            answer = {"found": False, "value": None, "source": None}
+            answer = {"found": False, "value": None, "support": None}
         return Response(200, json={"choices": [
             {"message": {"content": json.dumps(answer, ensure_ascii=False)}}]})
 
@@ -268,11 +287,12 @@ async def test_extraction_declared_template_preserves_citation_verification(app_
 
     def provider(request):
         body = json.loads(request.content)
-        if set(body) - {"model", "messages", "stream", "chat_template_kwargs"}:
+        if set(body) - {"model", "messages", "stream", "temperature",
+                        "chat_template_kwargs", "response_format"}:
             return Response(400, json={"error": "unknown provider parameter"})
         content = body["messages"][-1]["content"]
         answer = ("VERSION V5 RELEASE" if isinstance(content, list) else
-                  json.dumps({"found": True, "value": "V5", "source": 1}))
+                  json.dumps({"found": True, "value": "V5", "support": {"value_source": 1, "context_sources": []}}))
         if body.get("chat_template_kwargs", {}).get("enable_thinking") is not False:
             answer = "</think>" + answer
         return Response(200, json={"choices": [{"message": {"content": answer}}]})
@@ -398,7 +418,7 @@ async def test_one_field_blowing_up_does_not_lose_the_others(app_state):
     await _seed_corpus(app_state.task_store, doc_hash)
     respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
         200, json={"choices": [{"message": {"content": json.dumps(
-            {"found": True, "value": "北极星科技有限公司", "source": 1})}}]}))
+            {"found": True, "value": "北极星科技有限公司", "support": {"value_source": 1, "context_sources": []}})}}]}))
 
     corpus = await app_state.task_store.load_chunks(doc_hash)
     ctx = extraction.ExtractContext(
@@ -406,14 +426,14 @@ async def test_one_field_blowing_up_does_not_lose_the_others(app_state):
         doc_hash=doc_hash, corpus=corpus)
 
     # 让其中一个字段的检索炸掉
-    original = extraction.retrieve
+    original = extraction.retrieve_with_variants
 
     async def exploding(*args, **kwargs):
         if "boom" in kwargs.get("query", ""):
             raise RuntimeError("模拟：向量维度对不上")
         return await original(*args, **kwargs)
 
-    extraction.retrieve = exploding
+    extraction.retrieve_with_variants = exploding
     try:
         schema = {"type": "object", "properties": {
             "buyer": {"type": "string", "description": "买方单位全称"},
@@ -421,7 +441,7 @@ async def test_one_field_blowing_up_does_not_lose_the_others(app_state):
         }}
         result = await extraction.run(ctx, fmt.parse_schema(schema))
     finally:
-        extraction.retrieve = original
+        extraction.retrieve_with_variants = original
 
     assert result["fields"]["boom"]["status"] == "error"
     # 关键：另一个字段的结果没被连累
@@ -587,3 +607,307 @@ async def test_whole_plane_unavailable_rolls_up_to_the_top(app_state):
     assert extraction._rollup_degraded(
         [{"degraded": "upstream_error"}, {"degraded": "no_instruct_model"}]
     ) == "no_instruct_model"
+
+
+
+
+
+
+@respx.mock
+@pytest.mark.parametrize("pointer", [999, "abc", None, True, 1.9])
+async def test_bad_source_pointer_is_error_with_schema_violation(app_state, pointer):
+    """端到端：source 幻觉引用 -> error + schema_violation，无 top-1 出处。"""
+    doc_hash = "b" * 64
+    await _seed_corpus(app_state.task_store, doc_hash)
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
+        200, json={"choices": [{"message": {"content": json.dumps(
+            {"found": True, "value": "北极星科技有限公司", "support": {"value_source": pointer, "context_sources": []}})}}]}))
+
+    schema = {"type": "object", "properties": {
+        "buyer": {"type": "string", "description": "买方单位全称"}}}
+    ctx = extraction.ExtractContext(
+        store=app_state.task_store, http=app_state.http, registry=app_state.registry,
+        doc_hash=doc_hash, corpus=await app_state.task_store.load_chunks(doc_hash))
+    result = await extraction.run(ctx, fmt.parse_schema(schema))
+
+    field = result["fields"]["buyer"]
+    assert field["status"] == "error"
+    assert field["value"] is None
+    assert field["citations"] == []
+    assert field["degraded"] == "schema_violation"
+
+
+@respx.mock
+async def test_number_without_source_support_is_error_not_found(app_state):
+    """数值在所引块原文里找不到 -> error + schema_violation，不许 found。"""
+    doc_hash = "c" * 64
+    await _seed_corpus(app_state.task_store, doc_hash)
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
+        200, json={"choices": [{"message": {"content": json.dumps(
+            {"found": True, "value": 12, "support": {"value_source": 1, "context_sources": []}})}}]}))
+
+    schema = {"type": "object", "properties": {
+        "amount": {"type": "integer", "description": "合同总价，只要数字"}}}
+    ctx = extraction.ExtractContext(
+        store=app_state.task_store, http=app_state.http, registry=app_state.registry,
+        doc_hash=doc_hash, corpus=await app_state.task_store.load_chunks(doc_hash))
+    result = await extraction.run(ctx, fmt.parse_schema(schema))
+
+    field = result["fields"]["amount"]
+    assert field["status"] == "error"
+    assert field["value"] is None
+    assert field["citations"] == []
+    assert field["degraded"] == "schema_violation"
+
+
+@respx.mock
+async def test_normalized_number_in_source_still_found(app_state):
+    """原文 `486,200.50` 与值 `486200.5` 视为同一数值：核验不许误杀真命中。"""
+    doc_hash = "d" * 64
+    await _seed_corpus(app_state.task_store, doc_hash)
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
+        200, json={"choices": [{"message": {"content": json.dumps(
+            {"found": True, "value": 486200.5, "support": {"value_source": 1, "context_sources": []}})}}]}))
+
+    schema = {"type": "object", "properties": {
+        "amount": {"type": "number", "description": "合同总价，只要数字"}}}
+    ctx = extraction.ExtractContext(
+        store=app_state.task_store, http=app_state.http, registry=app_state.registry,
+        doc_hash=doc_hash, corpus=await app_state.task_store.load_chunks(doc_hash))
+    result = await extraction.run(ctx, fmt.parse_schema(schema))
+
+    field = result["fields"]["amount"]
+    assert field["status"] == "found"
+    assert field["value"] == 486200.5
+    assert field["citations"], "归一化对得上就必须有出处"
+
+
+async def _seed_mechanism_corpus(store: TaskStore, doc_hash: str) -> None:
+    """机制名与触发条件分处两个块：primary 钉机制，context 钉条件。"""
+    chunks = [
+        {"text": "Paged Optimizers use the NVIDIA unified memory feature for transfers.",
+         "page_idx": 0, "bbox": [72, 100, 500, 130], "page_size": [612, 792],
+         "block_type": "text"},
+        {"text": "This prevents memory spikes during gradient checkpointing on long sequences.",
+         "page_idx": 1, "bbox": [72, 200, 500, 230], "page_size": [612, 792],
+         "block_type": "text"},
+    ]
+    await store.save_chunks(doc_hash, chunks, [[0.0], [0.0]])
+
+
+def _ctx(app_state, doc_hash):
+    return extraction.ExtractContext(
+        store=app_state.task_store, http=app_state.http, registry=app_state.registry,
+        doc_hash=doc_hash, verify=False)
+
+
+@respx.mock
+async def test_field_support_projects_primary_then_context(app_state):
+    """机制+条件分处两块：primary 在前、context 在后，只投影显式选择。"""
+    doc_hash = "e" * 64
+    await _seed_mechanism_corpus(app_state.task_store, doc_hash)
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
+        200, json={"choices": [{"message": {"content": json.dumps(
+            {"found": True, "value": "NVIDIA unified memory; gradient checkpointing", "support": {"value_source": 1, "context_sources": [2]}})}}]}))
+
+    schema = {"type": "object", "properties": {
+        "memory_mechanism": {"type": "string", "description": "Memory mechanism name"}}}
+    result = await extraction.run(_ctx(app_state, doc_hash), fmt.parse_schema(schema))
+
+    field = result["fields"]["memory_mechanism"]
+    assert field["status"] == "found"
+    assert [c["seq"] for c in field["citations"]] == [0, 1]
+    assert len(field["citations"]) == 2, "只投影显式选择，不附带其余候选"
+
+
+@respx.mock
+@pytest.mark.parametrize("support", [
+    {"value_source": 1, "context_sources": [99]},
+    {"value_source": 1, "context_sources": [1]},
+    {"value_source": 1, "context_sources": [True]},
+    {"value_source": 1, "context_sources": [2, 3, 4]},
+    {"value_source": 1, "context_sources": "not-a-list"}, {},
+])
+async def test_bad_field_support_is_error_not_partial(app_state, support):
+    """Reject the whole selection; never salvage a valid prefix or attach top-1."""
+    doc_hash = "e" * 64
+    await _seed_mechanism_corpus(app_state.task_store, doc_hash)
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
+        200, json={"choices": [{"message": {"content": json.dumps(
+            {"found": True, "value": "NVIDIA unified memory", "support": support})}}]}))
+
+    schema = {"type": "object", "properties": {
+        "memory_mechanism": {"type": "string", "description": "Memory mechanism name"}}}
+    result = await extraction.run(_ctx(app_state, doc_hash), fmt.parse_schema(schema))
+
+    field = result["fields"]["memory_mechanism"]
+    assert field["status"] == "error"
+    assert field["value"] is None
+    assert field["citations"] == []
+    assert field["degraded"] == "schema_violation"
+
+
+@respx.mock
+async def test_absence_with_selected_support_is_error(app_state):
+    """Absence and selected supporting originals are contradictory."""
+    doc_hash = "e" * 64
+    await _seed_mechanism_corpus(app_state.task_store, doc_hash)
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
+        200, json={"choices": [{"message": {"content": json.dumps(
+            {"found": False, "value": None, "support": {"value_source": 1, "context_sources": []}})}}]}))
+
+    schema = {"type": "object", "properties": {
+        "memory_mechanism": {"type": "string", "description": "Memory mechanism name"}}}
+    result = await extraction.run(_ctx(app_state, doc_hash), fmt.parse_schema(schema))
+
+    field = result["fields"]["memory_mechanism"]
+    assert field["status"] == "error"
+    assert field["degraded"] == "schema_violation"
+
+
+@respx.mock
+async def test_context_cannot_rescue_false_primary_number(app_state):
+    """数值见证只认 primary 文本：context 里有数也救不了 primary 无数的出处。"""
+    doc_hash = "c" * 64
+    await _seed_corpus(app_state.task_store, doc_hash)
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
+        200, json={"choices": [{"message": {"content": json.dumps(
+            {"found": True, "value": 12, "support": {"value_source": 1, "context_sources": [2]}})}}]}))
+
+    schema = {"type": "object", "properties": {
+        "amount": {"type": "integer", "description": "合同总价，只要数字"}}}
+    result = await extraction.run(_ctx(app_state, doc_hash), fmt.parse_schema(schema))
+
+    field = result["fields"]["amount"]
+    assert field["status"] == "error"
+    assert field["value"] is None
+    assert field["citations"] == []
+    assert field["degraded"] == "schema_violation"
+
+
+@respx.mock
+async def test_partial_verification_cannot_be_true(app_state, monkeypatch):
+    """两条出处只核对上 primary：verified 必须 false，不许部分为 true。"""
+    doc_hash = "e" * 64
+    await _seed_mechanism_corpus(app_state.task_store, doc_hash)
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
+        200, json={"choices": [{"message": {"content": json.dumps(
+            {"found": True, "value": "NVIDIA unified memory; gradient checkpointing", "support": {"value_source": 1, "context_sources": [2]}})}}]}))
+
+    async def fake_verify(ctx, hit):
+        if hit.get("seq") == 0:
+            return "uri-primary", True
+        return "uri-context", None
+
+    monkeypatch.setattr(extraction, "_verify_citation", fake_verify)
+    ctx = extraction.ExtractContext(
+        store=app_state.task_store, http=app_state.http, registry=app_state.registry,
+        doc_hash=doc_hash, verify=True)
+    schema = {"type": "object", "properties": {
+        "memory_mechanism": {"type": "string", "description": "Memory mechanism name"}}}
+    result = await extraction.run(ctx, fmt.parse_schema(schema))
+
+    field = result["fields"]["memory_mechanism"]
+    assert field["status"] == "found"
+    assert len(field["citations"]) == 2
+    assert field["verified"] is False, "context 没测出来时整体不许标 true"
+
+
+async def _seed_table_corpus(app_state, doc_hash: str) -> None:
+    chunks = [
+        {"text": "item | quantity | source | values\n"
+                 "Industrial bearing 6204 | 1200 | row-note | boxed", "page_idx": 0,
+         "bbox": [72, 100, 500, 130], "page_size": [612, 792], "block_type": "table",
+         "table_html": "<table><tr><th>item</th><th>quantity</th><th>source</th>"
+                       "<th>values</th></tr><tr><td>Industrial bearing 6204</td>"
+                       "<td>1200</td><td>row-note</td><td>boxed</td></tr></table>"},
+    ]
+    await app_state.task_store.save_chunks(doc_hash, chunks, [[1.0]])
+    endpoint = app_state.registry.embedding_models["bge-m3"].endpoint
+    respx.post(f"{endpoint}/v1/embeddings").mock(return_value=Response(
+        200, json={"object": "list", "data": [{"index": 0, "embedding": [1.0]}]}))
+
+
+def _records_schema():
+    return {"type": "array", "items": {"type": "object", "properties": {
+        "item": {"type": "string", "description": "货品名称与型号"},
+        "quantity": {"type": "integer", "description": "订购数量"},
+    }}}
+
+
+@respx.mock
+async def test_records_row_must_select_its_read_source(app_state):
+    """多记录行必须写自己读的资料编号：缺编号的行只丢该行并打标。"""
+    doc_hash = "a" * 64
+    await _seed_table_corpus(app_state, doc_hash)
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
+        200, json={"choices": [{"message": {"content": json.dumps({"records": [
+            {"source": 1, "values": {"item": "Industrial bearing 6204",
+                                    "quantity": 1200}},
+            {"values": {"item": "Hydraulic seal kit HS-9", "quantity": 340}},
+        ]})}}]}))
+
+    ctx = extraction.ExtractContext(
+        store=app_state.task_store, http=app_state.http, registry=app_state.registry,
+        doc_hash=doc_hash, verify=False)
+    result = await extraction.run(ctx, fmt.parse_schema(_records_schema()))
+
+    assert len(result["records"]) == 1, result["records"]
+    row = result["records"][0]["fields"]
+    assert row["item"]["value"] == "Industrial bearing 6204"
+    assert row["item"]["citations"][0]["seq"] == 0
+    assert result["degraded"] == "schema_violation"
+    assert fmt.validate_result(result) == [], fmt.validate_result(result)
+
+
+@respx.mock
+async def test_records_row_with_hallucinated_source_is_dropped(app_state):
+    """行 source 指到不存在的资料：丢行、不猜、不挂别的块。"""
+    doc_hash = "b" * 64
+    await _seed_table_corpus(app_state, doc_hash)
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
+        200, json={"choices": [{"message": {"content": json.dumps({"records": [
+            {"source": 2, "values": {"item": "Industrial bearing 6204",
+                                    "quantity": 1200}},
+        ]})}}]}))
+
+    ctx = extraction.ExtractContext(
+        store=app_state.task_store, http=app_state.http, registry=app_state.registry,
+        doc_hash=doc_hash, verify=False)
+    result = await extraction.run(ctx, fmt.parse_schema(_records_schema()))
+
+    assert result["records"] == []
+    assert result["degraded"] == "schema_violation"
+    assert result["status"] == "partial"
+
+
+@respx.mock
+async def test_records_reserved_column_names_stay_business_values(app_state):
+    """用户列名 `source`/`values` 仍是业务值：封套选择器不与其碰撞。"""
+    doc_hash = "c" * 64
+    await _seed_table_corpus(app_state, doc_hash)
+    respx.post(f"{CHAT}/v1/chat/completions").mock(side_effect=lambda r: Response(
+        200, json={"choices": [{"message": {"content": json.dumps({"records": [
+            {"source": 1, "values": {"item": "Industrial bearing 6204",
+                                    "quantity": 1200, "source": "row-note",
+                                    "values": "boxed"}},
+        ]})}}]}))
+
+    ctx = extraction.ExtractContext(
+        store=app_state.task_store, http=app_state.http, registry=app_state.registry,
+        doc_hash=doc_hash, verify=False)
+    schema = {"type": "array", "items": {"type": "object", "properties": {
+        "item": {"type": "string", "description": "货品名称与型号"},
+        "quantity": {"type": "integer", "description": "订购数量"},
+        "source": {"type": "string", "description": "行备注列 source"},
+        "values": {"type": "string", "description": "行备注列 values"},
+    }}}
+    result = await extraction.run(ctx, fmt.parse_schema(schema))
+
+    assert len(result["records"]) == 1, result["records"]
+    row = result["records"][0]["fields"]
+    assert row["source"]["value"] == "row-note"
+    assert row["values"]["value"] == "boxed"
+    assert row["source"]["citations"][0]["seq"] == 0
+    assert result["degraded"] is None
+    assert fmt.validate_result(result) == [], fmt.validate_result(result)

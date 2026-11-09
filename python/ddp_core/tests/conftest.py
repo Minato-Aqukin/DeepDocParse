@@ -8,7 +8,7 @@ import pytest
 
 
 @pytest.fixture
-def sqlite_sessionmaker():
+async def sqlite_sessionmaker():
     """SQLite in-memory 的 async sessionmaker，只建这些用例要的三张表。
 
     Base 是跨包共享的 registry：ddp_core 里另有模型引用 corpus-api 才定义的
@@ -28,4 +28,7 @@ def sqlite_sessionmaker():
             await conn.run_sync(Base.metadata.create_all, tables=tables)
         return async_sessionmaker(engine, expire_on_commit=False)
 
-    return _make
+    try:
+        yield _make
+    finally:
+        await engine.dispose()

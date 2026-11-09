@@ -12,6 +12,7 @@ import { resourcesApi } from '@/api/resources'
 import type { Resource } from '@/api/resources'
 import type { ResourceContext } from '@/api/resource-context'
 import EvidencePreview from '@/components/evidence/EvidencePreview.vue'
+import ClaimSupportQuotes from '@/components/evidence/ClaimSupportQuotes.vue'
 import GraphCanvas from '@/components/knowledge/GraphCanvas.vue'
 import type { EvidenceBacklink, KnowledgeGraph } from '@/types/api'
 import { approvedPlanLabel, federationTaskNewLocation, isDesktop } from '@/platform/desktop'
@@ -80,10 +81,10 @@ const buildTitle = ref('')
 const buildWikiId = ref('')
 const buildBase = ref('')
 const buildSources = ref<string[]>([])
-const buildPages = ref<number | undefined>(2)
+const buildPages = ref<number | undefined>(1)
 const buildEvidence = ref<number | undefined>(50)
-const buildTokens = ref<number | undefined>(2048)
-const buildChars = ref<number | undefined>(12000)
+const buildTokens = ref<number | undefined>(4096)
+const buildChars = ref<number | undefined>(24000)
 const sourceResources = ref<Resource[]>([])
 const sourceLoading = ref(false)
 const sourceMore = ref({ mine: true, site_public: true })
@@ -235,6 +236,15 @@ const evidenceSelection = computed(() => {
     ? selection.ranking_degraded : null
   return { selected: selection.selected_evidence, total: selection.total_original_evidence,
     complete: selection.complete, degradedLabel: degraded && (degradedLabelOf(degraded) ?? degraded) }
+})
+const queryPlanningFailure = computed(() => {
+  const selection = revision.value?.limits.evidence_selection
+  if (!selection || typeof selection !== 'object' || !('query_planning' in selection)) return null
+  const planning = selection.query_planning
+  if (!planning || typeof planning !== 'object'
+    || !('status' in planning) || planning.status !== 'unavailable') return null
+  return 'reason' in planning && typeof planning.reason === 'string' && planning.reason
+    ? planning.reason : '原因未记录'
 })
 
 const filtered = computed(() => documents.value.filter((item) =>
@@ -462,12 +472,19 @@ onMounted(loadList)
                         :to="wikiLocation(document.wiki.id, revision.base_revision_id)">上一修订</RouterLink>
             <RouterLink v-if="oldRevision" :to="wikiLocation(document.wiki.id)">查看当前修订</RouterLink>
           </nav>
+          <p role="status">
+            <strong>引用绑定不等于语义核验。</strong>
+            模型生成内容需逐条打开原件，核对结论和范围限定，不能据引用条数判断内容已核验。
+          </p>
           <p v-if="evidenceSelection" role="status">
             本次采用 {{ evidenceSelection.selected }} / {{ evidenceSelection.total }} 条原始证据。
             <span v-if="!evidenceSelection.complete">这是预算内选取的部分证据，不代表已覆盖全部原文。</span>
           </p>
           <p v-if="evidenceSelection?.degradedLabel" class="ddp-degraded" role="status">
             选证排序降级：{{ evidenceSelection.degradedLabel }}
+          </p>
+          <p v-if="queryPlanningFailure" class="ddp-degraded" role="status">
+            查询规划降级：本次仅按标题检索，未应用查询改写（{{ queryPlanningFailure }}）。
           </p>
           <el-button v-if="auth.canUpload" :disabled="!!oldRevision || building"
                      @click="openBuilder(true)">选择来源并生成新修订</el-button>
@@ -505,6 +522,8 @@ onMounted(loadList)
               <small v-if="sentence.unsupported">unsupported · 无法指回 bbox</small>
               <small v-else>引用 {{ sentence.evidence_ids.length }} 条</small>
               <small v-if="sentence.conflict_group" class="conflict">冲突组 {{ sentence.conflict_group }} · 与同组说法并列</small>
+              <ClaimSupportQuotes :support="sentence.support"
+                                  @select="id => selectEvidence(id, sentence.text)" />
             </div>
           </section>
           <section class="section">

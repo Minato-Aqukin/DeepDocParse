@@ -85,6 +85,8 @@ async function openRun(run: ExtractionRun) {
   activeRun.value = run
   const detail = await extractionsApi.getRun(run.id)
   if (!alive) return          // 请求飞行途中组件被卸载了，后面全都别做
+  const listedRun = runs.value.find((row) => row.id === detail.run.id)
+  if (listedRun) Object.assign(listedRun, detail.run)
   activeRun.value = detail.run
   items.value = detail.items
   await loadCrops()

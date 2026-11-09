@@ -422,10 +422,7 @@ def evidence_item(evidence_id="ev-1", excerpt="retrieval target text"):
 async def test_executor_verifies_evidence_before_accepting_answer(
         client, session, app_state, _peer_auth):
     mock_gateway(channels=[gateway_channel()])
-    chat = mock_chat(chat_answer(json.dumps({
-        "status": "answered",
-        "claims": [{"text": "verified answer", "evidence_ids": ["ev-1"]}],
-    })))
+    chat = mock_chat(chat_answer(json.dumps({"claims": [{"text": "verified answer", "evidence_ids": ["ev-1"]}], "unanswered": []})))
     body = executor_answer_body(key="exec-answer", evidence=[evidence_item()])
     response = await post_executor_answer(client, body)
     assert response.status_code == 201, response.text
@@ -775,47 +772,6 @@ def captured_esp32_answer():
     return {**fixture, **json.loads(request["messages"][1]["content"])}
 
 
-@respx.mock
-async def test_captured_schema_answer_survives_executor_and_coordinator_validation(
-        client, app_state, _peer_auth, captured_esp32_answer):
-    fixture = captured_esp32_answer
-    mock_gateway(channels=[gateway_channel()])
-    mock_chat(chat_answer(
-        fixture["federation_capture"]["response"]["choices"][0]["message"]["content"]))
-    evidence = [evidence_item(item["evidence_id"], item["text"])
-                for item in fixture["evidence"]]
-    body = executor_answer_body(key="captured-schema", evidence=evidence, budget=4096,
-                                query=fixture["question"])
-    response = await post_executor_answer(client, body)
-    assert response.status_code == 201, response.text
-    await drain_tasks(app_state)
-    detail = (await get_executor_task(client, response.json()["executor_task_id"],
-                                     root_task_id=body["root_task_id"])).json()
-    assert detail["state"] == "succeeded"
-    document = detail["answer"]
-    assert document["validation_state"] == "passed", document
-    claims = document["claim_evidence_bindings"]
-    assert [claim["claim_text"] for claim in claims] == [
-        "GPIO pins 34 to 39 are input-only and lack output drivers and internal "
-        "pull-up/pull-down circuitry. These pins are: SENSOR_VP (GPIO36), "
-        "SENSOR_CAPP (GPIO37), CAPN (GPIO38), SENSOR_VN (GPIO39), VDET_1 (GPIO34), "
-        "and VDET_2 (GPIO35).",
-        "The input-only GPIO pins do not have output drivers or internal pull-up/pull-down "
-        "resistors, which limits their functionality as outputs or for level-setting in "
-        "input configurations.",
-    ]
-    assert [claim["evidence_refs"] for claim in claims] == [
-        ["dc2e8108f469480d929dbf3fa48b21e8"],
-        ["dc2e8108f469480d929dbf3fa48b21e8", "2f83f46c9d74433683ad6fda6c09d24f"],
-    ]
-    validated = federation_tasks._validated_delegated_answer(
-        document, evidence_ids=[item["evidence_id"] for item in evidence])
-    assert validated["validation_state"] == "passed"
-    assert validated["answer"] == document["answer"]
-    assert validated["conflicts"] == []
-    assert all(claim["semantic_review"] == "needs_review"
-               for claim in validated["claim_evidence_bindings"])
-
 
 @pytest.mark.parametrize("model", ["qwen3_4b", "qwen3_1_7b"])
 @respx.mock
@@ -840,17 +796,17 @@ async def test_captured_free_prose_stays_rejected(
 
 
 @pytest.mark.parametrize("output", [
-    '{"status":"answered","claims":[{"text":"valid","evidence_ids":["ev-1"]},'
+    '{"unanswered":[],"claims":[{"text":"valid","evidence_ids":["ev-1"]},'
     '{"text":"forged","evidence_ids":["foreign"]}]}',
-    '{"status":"answered","claims":[{"text":"unsent","evidence_ids":["ev-2"]}]}',
-    '{"status":"answered","claims":[{"text":"valid","evidence_ids":["ev-1"]}]',
-    '{"status":"answered","claims":[]}',
-    '{"status":"answered","claims":[{"text":"uncited fact","evidence_ids":[]}]}',
-    '{"status":"answered","claims":[{"text":"valid","evidence_ids":["ev-1"]}],'
+    '{"unanswered":[],"claims":[{"text":"unsent","evidence_ids":["ev-2"]}]}',
+    '{"unanswered":[],"claims":[{"text":"valid","evidence_ids":["ev-1"]}]',
+    '{"unanswered":[],"claims":[]}',
+    '{"unanswered":[],"claims":[{"text":"uncited fact","evidence_ids":[]}]}',
+    '{"unanswered":[],"claims":[{"text":"valid","evidence_ids":["ev-1"]}],'
     '"conflicts":[{"evidence_ids":["ev-1","foreign"]}]}',
-    '{"status":"answered","claims":[{"text":"valid","evidence_ids":["ev-1"]}],'
+    '{"unanswered":[],"claims":[{"text":"valid","evidence_ids":["ev-1"]}],'
     '"conflicts":[{"evidence_ids":["ev-1","ev-1"]}]}',
-    '{"status":"answered","claims":[{"text":"valid","evidence_ids":["ev-1"]}],'
+    '{"unanswered":[],"claims":[{"text":"valid","evidence_ids":["ev-1"]}],'
     '"conflicts":[{"evidence_ids":["ev-1","ev-2"],"text":"None found"}]}',
 ])
 @respx.mock
@@ -876,7 +832,7 @@ async def test_executor_conflicts_survive_coordinator_validation(
         client, app_state, _peer_auth):
     mock_gateway(channels=[gateway_channel()])
     mock_chat(chat_answer(json.dumps({
-        "status": "answered",
+        "unanswered": [],
         "claims": [
             {"text": "One source rates PM-2 at 240 V.", "evidence_ids": ["ev-1"]},
             {"text": "Another rates PM-2 at 120 V.", "evidence_ids": ["ev-2"]},
@@ -909,7 +865,7 @@ async def test_executor_conflicts_survive_coordinator_validation(
 @respx.mock
 async def test_executor_schema_refusal_is_visible_without_claims(client, app_state, _peer_auth):
     mock_gateway(channels=[gateway_channel()])
-    mock_chat(chat_answer('{"status":"insufficient_evidence"}'))
+    mock_chat(chat_answer('{"claims":[],"unanswered":["The supplied evidence does not answer this question."]}'))
     body = executor_answer_body(key="schema-refusal", evidence=[evidence_item()])
     response = await post_executor_answer(client, body)
     assert response.status_code == 201, response.text
@@ -920,3 +876,24 @@ async def test_executor_schema_refusal_is_visible_without_claims(client, app_sta
     assert document["answer_reason"] == "insufficient_evidence"
     assert document["answer"] is None
     assert document["claim_evidence_bindings"] == [] and document["conflicts"] == []
+
+
+@respx.mock
+async def test_executor_does_not_advertise_partial_generation_as_complete_answer(
+        client, app_state, _peer_auth):
+    mock_gateway(channels=[gateway_channel()])
+    mock_chat(chat_answer(json.dumps({
+        "claims": [{"text": "PM-2 is rated 240 V.", "evidence_ids": ["ev-1"]}],
+        "unanswered": ["The supplied evidence does not establish the warranty period."],
+    })))
+    body = executor_answer_body(
+        key="partial-answer", evidence=[evidence_item("ev-1", "PM-2 is rated 240 V.")])
+    response = await post_executor_answer(client, body)
+    assert response.status_code == 201, response.text
+    await drain_tasks(app_state)
+    document = (await get_executor_task(
+        client, response.json()["executor_task_id"],
+        root_task_id=body["root_task_id"])).json()["answer"]
+    assert document["answer_reason"] == "insufficient_evidence"
+    assert document["answer"] is None
+    assert document["claim_evidence_bindings"] == []

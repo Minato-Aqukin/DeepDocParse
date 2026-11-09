@@ -65,6 +65,23 @@ model-gateway 不签对象 URL，没有对应公共 TLS 开关。
 `infra/autodl/stack.bash` 的 nginx 已配置这些边界；不要把 corpus-api 另行暴露
 到公网。
 
+### 受控评审演示
+
+只向指定评审提供独立的非管理员账号。公开前设置
+`REGISTRATION_MODE=closed`、`GUEST_MODE=off`；关闭注册不会禁用已有账号的
+用户名密码登录。需要上传、抽取和 Wiki 生成时授予 contributor，不要公开管理员
+凭据。边缘仅放行演示所需的入口和对象桶路径，不公开内部服务或通用模型代理。
+
+`KNOWLEDGE_RATE_PER_MIN` 对 `POST /api/wikis` 和
+`POST /api/wikis/{id}/revisions` 使用同一个 actor 限额，读操作和发布不计入生成
+次数。它是请求频率限制，**不是模型金额预算**；Redis 不可用时应用限流可放行。
+公网入口仍需独立的总请求速率与并发限制，模型提供方需另设费用上限。
+
+不要在非 Cloudflare 受控入口直接信任客户端的 `CF-Connecting-IP`。
+代理应覆盖转发身份头，`TRUSTED_PROXIES` 只列实际代理来源；无法验证真实客户端
+地址时，共用隧道出口限额比接受可伪造的 IP 更安全。代理必须支持增量 SSE，
+不能以首页可打开或健康检查成功代替问答流、预签名上传与原文 Range 请求的实测。
+
 ## 游客模式（GUEST_MODE=read）
 
 `GUEST_MODE=read` 允许未登录访客经入口白名单只读浏览本站已发布内容

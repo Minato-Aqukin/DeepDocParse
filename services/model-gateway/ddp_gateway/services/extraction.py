@@ -2,9 +2,9 @@
 
 **这一层最重要的不是抽得准，是抽不到时如实说抽不到。**
 三态（found / not_found / error）必须分得干净：
-  - not_found = 文档里确实没有 —— 这是正确答案的一种
+  - not_found = 本次检索与抽取未找到值，不证明原文不存在
   - error     = 我们没能可靠地抽出来（类型转不动、模型输出不合规、上游挂了）
-合成一个的话，"这份合同没写违约金"和"我们的检索挂了"长得一模一样，
+合成一个的话，"本次未找到"和"我们的检索挂了"长得一模一样，
 而空值看起来像结论 —— 这是抽取里最危险的输出。
 
 **实现约束（写进 openapi.yaml，不是可选的工程口味）**：
@@ -21,34 +21,19 @@ import json
 import httpx
 
 from ddp_gateway.config import (
-    chat_request_defaults, request_model_id, settings, upstream_auth_headers,
+    adapt_structured_output, chat_request_defaults, request_model_id, settings, upstream_auth_headers,
 )
 from ddp_core import extract_format as fmt
 from ddp_core import crops
 from ddp_core.extract_format import CoerceError, FieldSpec, SchemaSpec, coerce_value
 from ddp_core.verification import TRANSCRIBE_PROMPT, transcript_agrees
-from ddp_gateway.services.retrieval import retrieve
+from ddp_gateway.services.retrieval import retrieve, retrieve_with_variants
 
 _SYSTEM = (
     "你是文档信息抽取器。只依据【资料】抽取，资料里没有的信息必须如实报告没有，"
     "**绝不猜测、绝不用常识补充**。只输出 JSON，不要任何解释文字。"
 )
 
-_FIELD_PROMPT = """【字段】
-名称：{name}
-含义：{description}
-类型：{type}{extra}
-
-【资料】
-{sources}
-
-从【资料】里找出该字段的值。只输出一个 JSON 对象：
-{{"found": true 或 false, "value": 值或 null, "source": 用到的资料编号（整数）}}
-
-规则：
-- 资料里没有这个字段的信息 -> {{"found": false, "value": null, "source": null}}
-- value 只放字段本身的值，不要带单位说明、不要带前后文
-- **不要为了填满而编造**。找不到就是找不到。"""
 
 _RECORDS_PROMPT = """【记录字段】
 {fields}
@@ -57,11 +42,14 @@ _RECORDS_PROMPT = """【记录字段】
 {sources}
 
 上面的资料可能包含**多条**同构记录（例如表格的多行）。把它们抽成 JSON：
-{{"records": [{{"字段名": 值或 null, ...}}, ...]}}
+{{"records": [{{"source": 资料编号, "values": {{"字段名": 值或 null, ...}}}}, ...]}}
 
 规则：
 - 资料里一条记录都没有 -> {{"records": []}}
-- 某条记录缺某个字段 -> 该字段填 null，不要跳过整条记录
+- 某条记录缺某个字段 -> values 里该字段填 null，不要跳过整条记录
+- 每条记录的 source 写它读的那份资料的编号：只读了其中一份就只写那一份；
+  不许写没读过的编号，也不许把两份编号都挂上。用户字段一律放在 values 里，
+  source 只写编号不写业务值。
 - **不要编造记录，也不要把表头当成一条记录。**"""
 
 
@@ -173,7 +161,8 @@ def _transcribe_prompt(ctx: ExtractContext) -> str:
 
 
 async def _chat(ctx: ExtractContext, messages: list[dict], *,
-                instruct: bool = True) -> str | None:
+                instruct: bool = True, temperature: float | None = None,
+                response_format: dict | None = None) -> str | None:
     """调 VQA 平面（OpenAI 协议）。不可达/非 200/无密钥返回 None -> 字段判 error。"""
     picked = _pick_chat(ctx, instruct=instruct)
     if picked is None:
@@ -184,9 +173,13 @@ async def _chat(ctx: ExtractContext, messages: list[dict], *,
         ctx.usage["chat_calls"] += 1
         resp = await ctx.http.post(
             f"{entry.endpoint}/v1/chat/completions",
-            json={**chat_request_defaults(entry.options),
-                  "model": request_model_id(name, entry),
-                  "messages": messages, "stream": False},
+            json=adapt_structured_output({
+                **chat_request_defaults(entry.options),
+                "model": request_model_id(name, entry),
+                "messages": messages, "stream": False,
+                **({"temperature": temperature} if temperature is not None else {}),
+                **({"response_format": response_format} if response_format is not None else {}),
+            }, entry.options),
             headers=headers,
         )
         if resp.status_code != 200:
@@ -203,6 +196,8 @@ def _citation(ctx: ExtractContext, hit: dict, crop_uri: str | None = None) -> di
 
     稳定定位键是 (doc_hash, seq)：chunk_id 在 service 侧压根不存在，
     而 Redis 里的分块随时会因 24h TTL 消失 —— 只有这两个值能一直指回原文。
+    service 侧命中没有派生 evidence 路：`text` 与 `table_html` 即本块自有正文，
+    引用不跨块拼凑 —— 与产品层“每份正文只由其自身引用”同一条规则。
     """
     return {
         "chunk_id": None,
@@ -244,10 +239,9 @@ def _format_sources(hits: list[dict]) -> str:
     for i, hit in enumerate(hits, start=1):
         label = "，表格" if hit.get("block_type") == "table" else ""
         # **表格块优先给 HTML**：拼出来的单元格文字已经丢了行列关系，
-        # 而"第 3 行第 2 列是多少"恰恰是抽取最常问的。
+        # 而“第 3 行第 2 列是多少”恰恰是抽取最常问的。
         # 不给 HTML 的话，块类型进契约这件事在 service 侧就没兑现
-        body = hit.get("table_html") or hit.get("text", "")
-        parts.append(f"[{i}] (第 {hit.get('page_idx', 0) + 1} 页{label}) {body}")
+        parts.append(f"[{i}] (第 {hit.get('page_idx', 0) + 1} 页{label}) {_source_text(hit)}")
     return "\n\n".join(parts)
 
 
@@ -323,15 +317,22 @@ def _field_extra(spec: FieldSpec) -> str:
     return ("\n" + "\n".join(bits)) if bits else ""
 
 
-async def extract_field(ctx: ExtractContext, spec: FieldSpec) -> dict:
+async def extract_field(ctx: ExtractContext, spec: FieldSpec, *,
+                        related_fields: list[FieldSpec] | tuple = ()) -> dict:
     ctx.usage["fields"] += 1
     ctx.usage["retrievals"] += 1
-    found = await retrieve(ctx.store, ctx.http, ctx.registry, doc_hash=ctx.doc_hash,
-                           query=spec.query, k=settings.extract_candidates,
-                           corpus=ctx.corpus)
+    variants = [spec.description] if spec.description else []
+    anchor = fmt.scope_phrase_query(spec)
+    if anchor and anchor not in variants and anchor != spec.query:
+        # 与产品层同一条第三 leg：本字段 description 里点名的位置短语，一字不改。
+        # 只是多一路有界召回，不作语义证明，不改名次规则与最终候选数。
+        variants.append(anchor)
+    found = await retrieve_with_variants(
+        ctx.store, ctx.http, ctx.registry, doc_hash=ctx.doc_hash,
+        query=spec.query, query_variants=variants or None,
+        k=settings.extract_candidates, corpus=ctx.corpus)
     if not found.hits:
-        # 检索零命中：文档里大概率确实没有。**如实标 no_hits** ——
-        # 它是信息（"我们什么都没看到"），不是掩饰
+        # No candidates in this bounded search does not prove absence from the document.
         return fmt.field_result(status="not_found",
                                 degraded=found.degraded or "no_hits")
 
@@ -340,15 +341,14 @@ async def extract_field(ctx: ExtractContext, spec: FieldSpec) -> dict:
         # 拿 OCR 模型抽值最好的结果是 schema_violation，最坏的结果是一个假的 not_found
         return fmt.field_result(status="error", degraded="no_instruct_model")
 
-    prompt = _FIELD_PROMPT.format(
-        name=spec.name, description=spec.description, type=spec.type,
-        extra=_field_extra(spec), sources=_format_sources(found.hits))
-    messages = [{"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": prompt}]
+    messages = fmt.field_messages(
+        spec, [{**hit, "text": _source_text(hit)} for hit in found.hits],
+        related_fields=related_fields)
+    response_format = fmt.field_response_format(spec, len(found.hits))
 
     answer = None
     for _ in range(settings.extract_max_retries + 1):
-        raw = await _chat(ctx, messages)
+        raw = await _chat(ctx, messages, temperature=0, response_format=response_format)
         if raw is None:
             return fmt.field_result(status="error", degraded="upstream_error")
         answer = fmt.parse_json_object(raw)
@@ -359,8 +359,11 @@ async def extract_field(ctx: ExtractContext, spec: FieldSpec) -> dict:
         # 重试用尽仍不合规。**绝不当成"文档里没有"** —— 那会让系统故障伪装成事实
         return fmt.field_result(status="error", degraded="schema_violation")
 
-    if not answer.get("found") or answer.get("value") is None:
-        # 模型看过资料、明确说没有 —— 这是最强的一种 not_found，不打降级标
+    indices = fmt.resolve_field_support(answer, len(found.hits))
+    if indices is None:
+        return fmt.field_result(status="error", degraded="schema_violation")
+    if not indices:
+        # An explicit bounded absence, not a document-wide proof.
         return fmt.field_result(status="not_found", degraded=found.degraded)
 
     try:
@@ -370,34 +373,47 @@ async def extract_field(ctx: ExtractContext, spec: FieldSpec) -> dict:
     if value is None:
         return fmt.field_result(status="not_found", degraded=found.degraded)
 
-    hit = _pick_source(found.hits, answer.get("source"))
-    crop_uri, consistent = (None, None)
+    texts = [_source_text(hit) for hit in found.hits]
+    primary_index = indices[0]
+    if spec.type in ("number", "integer") and not fmt.value_supported_by_source(
+            value, texts[primary_index]):
+        # 所引块原文里找不到这个数：模型声称“来自该块”却对不上 ——
+        # 错的是模型输出，不是文档内容。只做机械必要条件，不宣称语义验证。
+        # 上下文引用不能抢救一个虚假的 primary 数值出处。
+        return fmt.field_result(status="error", degraded="schema_violation")
+    selected = [found.hits[index] for index in indices]
+    crop_uris: list[str | None] = [None] * len(selected)
+    consistents: list[bool | None] = [None] * len(selected)
     degraded = found.degraded
     if ctx.verify:
-        crop_uri, consistent = await _verify_citation(ctx, hit)
-        if consistent is False:
-            degraded = degraded or "parse_mismatch"
-        elif consistent is None and degraded is None:
-            degraded = "crop_unsupported" if crop_uri is None else "vision_unavailable"
+        for position, selected_hit in enumerate(selected):
+            crop_uri, consistent = await _verify_citation(ctx, selected_hit)
+            crop_uris[position], consistents[position] = crop_uri, consistent
+            if consistent is False:
+                degraded = degraded or "parse_mismatch"
+            elif consistent is None and degraded is None:
+                degraded = ("crop_unsupported" if crop_uri is None
+                            else "vision_unavailable")
 
-    citations = [_citation(ctx, hit, crop_uri)]
+    citations = [_citation(ctx, selected_hit, crop_uri)
+                 for selected_hit, crop_uri in zip(selected, crop_uris)]
+    # verified=true 要求每一条选中的出处都真正核对过且一致：
+    # 任一条没测出来/对不上，都不许整体标 true。
+    verified = ctx.verify and all(c is True for c in consistents)
     return fmt.field_result(status="found", value=value, citations=citations,
-                            verified=bool(consistent), degraded=degraded,
+                            verified=verified, degraded=degraded,
                             confidence=_confidence(citations))
 
 
-def _pick_source(hits: list[dict], source: object) -> dict:
-    """模型说值来自第几条资料就用第几条。
 
-    **这是字段级出处的精度所在**：检索给了 4 个块，值只来自其中一个，
-    把 4 个都挂上去等于告诉用户"在这四块里自己找"，出处就退化成了 chunk 级。
-    模型给的编号越界/没给时退回 top-1（它是相似度最高的那条，最合理的默认）。
-    """
-    try:
-        index = int(source) - 1
-    except (TypeError, ValueError):
-        return hits[0]
-    return hits[index] if 0 <= index < len(hits) else hits[0]
+
+def _source_text(hit: dict) -> str:
+    # 数值核验只认配置给模型的同一份资料文本（含表格 HTML 路径），
+    # 不另取别的字段拼凑 —— 否则“所引块里有没有这个数”判的就不是模型看到的那份。
+    text = hit.get("table_html") or hit.get("text", "")
+    return text if isinstance(text, str) else ""
+
+
 
 
 # ---------- 多记录（表格）抽取 ----------
@@ -405,8 +421,10 @@ def _pick_source(hits: list[dict], source: object) -> dict:
 async def extract_records(ctx: ExtractContext, spec: SchemaSpec) -> tuple[list[dict], str | None]:
     """顶层 schema 是 array 时走这条：找候选块 -> 每块抽一组记录。
 
-    记录的出处是**它所在的那个块**，不是整份文档。这样每一行都指得回原文，
-    表格被拆成两页时也能看出哪一行来自哪一页。
+    每条记录在生产时选择自己读的那份资料（`source`），落库只挂它选的那一份 ——
+    不把全部输入无条件挂为支持，也不在事后按值匹配改引用。缺少/幻觉的 `source`
+    只丢掉该行，不连累同块其余行。记录的出处是**它所在的那个块**，不是整份文档。
+    这样每一行都指得回原文，表格被拆成两页时也能看出哪一行来自哪一页。
     """
     query = " ".join(f"{f.name} {f.description}" for f in spec.fields)
     ctx.usage["retrievals"] += 1
@@ -449,9 +467,14 @@ async def extract_records(ctx: ExtractContext, spec: SchemaSpec) -> tuple[list[d
         for row in parsed["records"]:
             if not isinstance(row, dict):
                 continue
+            resolved = fmt.resolve_record_source(row, 1)
+            if resolved is None:
+                degraded = degraded or "schema_violation"
+                continue
+            _, values = resolved
             fields = {}
             for f in spec.fields:
-                fields[f.name] = _record_field(row.get(f.name), f, citation,
+                fields[f.name] = _record_field(values.get(f.name), f, citation,
                                                verified=bool(consistent))
             # 整行都是 not_found 就丢掉：那多半是模型把表头或空行当成了记录
             if any(v["status"] == "found" for v in fields.values()):
@@ -504,7 +527,7 @@ async def run(ctx: ExtractContext, spec: SchemaSpec) -> dict:
         nonlocal done
         async with semaphore:
             try:
-                item = await extract_field(ctx, field)
+                item = await extract_field(ctx, field, related_fields=fields)
             except Exception:   # noqa: BLE001
                 # 一个字段的意外不能丢掉整批已抽好的字段（gather 默认在第一个
                 # 异常处抛出，其余结果作废）。如实记成 error，其余照常

@@ -430,8 +430,10 @@ async def test_duplicate_upload_reuses_content_with_independent_parse_attempts(a
 
 
 @respx.mock
-async def test_reparse_creates_new_job_and_keeps_old(actor_client, session):
+async def test_reparse_creates_new_job_and_keeps_old(actor_client, session, app_state):
     """A gateway cache must not make a new parse revision reuse old output."""
+    from tests.conftest import drain_tasks
+
     _mock_service()
     cached = {}
 
@@ -445,10 +447,15 @@ async def test_reparse_creates_new_job_and_keeps_old(actor_client, session):
     document = await _upload(actor_client)
     await _callback(actor_client)
     first_job = (await actor_client.get(f"/api/documents/{document['id']}/result")).json()["job_id"]
+    old_chunks = [(row.id, row.seq, row.text) for row in (await session.scalars(
+        select(Chunk).where(Chunk.parse_job_id == first_job).order_by(Chunk.seq))).all()]
+    assert [row[2] for row in old_chunks] == ["第一页正文", "第二页的表格数据"]
 
     respx.get(f"{SERVICE}/v1/parse/s-2").mock(
         return_value=httpx.Response(200, json={"task_id": "s-2", "status": "running"}))
-    second_result = {**RESULT, "markdown": "Changed parser output"}
+    second_layout = json.loads(json.dumps(LAYOUT))
+    second_layout["pdf_info"][0]["para_blocks"][0]["lines"][0]["spans"][0]["content"] = "Reparsed version boundary"
+    second_result = {**RESULT, "markdown": "Changed parser output", "layout_json": second_layout}
     respx.get(f"{SERVICE}/v1/parse/s-2/result").mock(return_value=httpx.Response(200, json=second_result))
 
     again = await actor_client.post(f"/api/documents/{document['id']}/reparse",
@@ -467,9 +474,21 @@ async def test_reparse_creates_new_job_and_keeps_old(actor_client, session):
     assert [j["is_current"] for j in jobs if j["id"] == first_job] == [True]
 
     await _callback(actor_client, task_id="s-2")
+    unselected = await session.get(ParseJob, second_job, populate_existing=True)
+    assert unselected.status == "succeeded"
+    assert unselected.index_status == "none", "An unbound reparse must not run paid indexing or fail authorization"
     switched = await actor_client.put(f"/api/documents/{document['id']}/current-job",
                                      json={"job_id": second_job})
     assert switched.status_code == 200 and switched.json()["current_job_id"] == second_job
+    await drain_tasks(app_state)
+    indexed = (await actor_client.get(f"/api/documents/{document['id']}")).json()
+    assert indexed["current_job_id"] == second_job and indexed["index_status"] == "ready"
+    new_chunks = (await session.scalars(
+        select(Chunk).where(Chunk.parse_job_id == second_job).order_by(Chunk.seq))).all()
+    assert [row.text for row in new_chunks] == ["Reparsed version boundary", "第二页的表格数据"]
+    preserved = [(row.id, row.seq, row.text) for row in (await session.scalars(
+        select(Chunk).where(Chunk.parse_job_id == first_job).order_by(Chunk.seq))).all()]
+    assert preserved == old_chunks
     # 旧版本仍然可读
     old = await actor_client.get(f"/api/documents/{document['id']}/result?job={first_job}")
     assert old.status_code == 200

@@ -76,6 +76,11 @@ ParseJobs: changing one resource's job or index must leave another resource's fi
 versions, chunks and index generation unchanged. Selecting a new parse appends a fixed
 ResourceVersion; it never rewrites an existing version's parse binding. ParseJob owns
 index/compile readiness and fencing state; Document fields are compatibility mirrors.
+A resource-associated reparse with no live fixed-version binding stays at
+`index_status=none` after archival; it must not enqueue model or embedding work.
+`current-job` creates that binding and schedules indexing in the same transaction.
+Already bound historical parses remain independently indexable; the compatibility
+Document pointer is not their authorization.
 A metadata copy pointing at its source's ParseJob cannot rebuild that borrowed parse:
 `reindex` returns 409 `shared_parse_write_unsupported` until it has its own parse.
 

@@ -29,6 +29,15 @@ from ddp_core.crops import _pdfium_serialized
 PARAGRAPH_GAP_RATIO = 1.6
 # 两行水平投影重叠不足这个比例视为不同栏/不同块，不合并
 MIN_HORIZONTAL_OVERLAP = 0.15
+# 孤立横线与其后同带字母数字行的最大水平间隙（PDF 点）。
+# 实测标定（ESP32-C3-WROOM-02 datasheet R9 诊断）：断开的数字负号与其
+# 后续数字的间隙是 1.07~1.08pt，而同文档的破折号式列表项（横线是
+# 项目符号、后面跟空格再跟文字）的间隙是 5.5~6.4pt —— 4pt 落在两者之间。
+# 不是语义阈值：只是"紧贴"与"隔空格"的几何分界。
+_DASH_REATTACH_MAX_GAP = 4.0
+# 会被行分组拆成孤立行的横线字形：连字符、en/em 破折号、数学减号、
+# Unicode 连字符与不断行连字符。只认字形类别，不认任何具体取值。
+_DASH_GLYPHS = frozenset({"-", "–", "—", "−", "‐", "‑"})
 
 _MONO_FONT_PARTS = (
     "courier",
@@ -157,7 +166,7 @@ def _to_display_bbox(
     return [left, h0 - top, right, h0 - bottom]
 
 
-def _lines_of_page(page) -> tuple[list[dict], list[float], Callable[[list[float]], list[float]]]:
+def _lines_of_page(page, *, exclude: set[int] | None = None) -> tuple[list[dict], list[float], Callable[[list[float]], list[float]]]:
     """抽出一页的行：[{bbox(阅读坐标系), text}]、该页的 page_size，以及
     阅读坐标系 -> 显示空间的换算函数。
 
@@ -237,8 +246,12 @@ def _lines_of_page(page) -> tuple[list[dict], list[float], Callable[[list[float]
             _emit(current["box"], current["parts"], current["fonts"])
             current = None
             pending_space = False
-
-        for run in runs:
+        for run_index, run in enumerate(runs):
+            if exclude is not None and run_index in exclude:
+                # 表格剖面（borndigital_tables）的字符级剔除：表内字符
+                # （含空格/换行占位）不在普通行流程里出现。exclude 缺省
+                # 为 None，borndigital 自身行为一字不变。
+                continue
             if run.get("break"):
                 _flush()
                 continue
@@ -294,7 +307,13 @@ def _lines_of_page(page) -> tuple[list[dict], list[float], Callable[[list[float]
             # 中心判定会把下标踢出去、把隔行吸进来。
             cbox = current["box"]
             same_row = (cbox[1] - 1.0 <= box[1] <= cbox[3]) or (cbox[1] <= box[3] <= cbox[3] + 1.0)
-            if not same_row:
+            # 孤立横线不能因纵向相交而吞掉左侧另一栏的文字。
+            far_left = (
+                len(current["parts"]) == 1
+                and current["parts"][0] in _DASH_GLYPHS
+                and box[2] < cbox[0] - max(cbox[3] - cbox[1], 4.0)
+            )
+            if not same_row or far_left:
                 _flush()
                 current = {"box": box, "parts": [run["text"]],
                            "fonts": {run["font"]} if run["font"] else set()}
@@ -329,8 +348,19 @@ def _lines_of_page(page) -> tuple[list[dict], list[float], Callable[[list[float]
             # 阅读坐标系 y 向下：prev 在上、line 在下时 dy >= 0
             dy = line["bbox"][1] - prev["bbox"][1]
             prev_h = prev["bbox"][3] - prev["bbox"][1]
-            same_band = -1.0 <= dy <= max(prev_h / 2, 2.0)
-            x_advance = line["bbox"][0] >= prev["bbox"][0]
+            # Raised accents can start above the preceding baseline fragment.
+            # Use the same half-line band in both directions; x progression and
+            # proximity still exclude a new line or a separate column.
+            band = max(prev_h / 2, 2.0)
+            same_band = -band <= dy <= band
+            # A short raised mark can overhang the first base glyph's left
+            # bearing while still lying over that glyph, not a separate column.
+            raised_overlay = (
+                dy < 0
+                and line["bbox"][3] - line["bbox"][1] <= prev_h / 2
+                and line["bbox"][0] < prev["bbox"][0] < line["bbox"][2] <= prev["bbox"][2]
+            )
+            x_advance = line["bbox"][0] >= prev["bbox"][0] or raised_overlay
             x_gap = line["bbox"][0] - prev["bbox"][2]
             near = x_gap <= max(prev_h, 4.0)
             if same_band and x_advance and near and line.get("type") == prev.get("type"):
@@ -346,12 +376,58 @@ def _lines_of_page(page) -> tuple[list[dict], list[float], Callable[[list[float]
                 ]
                 continue
             stitched.append(line)
+        # 孤立横线回贴：字形盒只有 0.6pt 高的横线（连字符/破折号/减号）与
+        # 后续字母数字的双向包容判定恒为假，于是行分组把它拆成只有横线的一行。
+        # 字母数字判据的分块会整块跳过这种行 —— 横线恰好是数字的负号时，
+        # "–40" 进索引就变成了 "40"（R9 ESP32 物理页 4 的"–40 ∼ 85 °C"句）。
+        # 只回贴同时满足四条的：横线行文本就是单个横线字形、后行首字是
+        # 字母数字、两行垂直严格重叠（同一视觉带）、水平间隙 0..4pt（紧贴，
+        # 隔空格的破折号列表项间隙 5.5pt 起，不会被贴上）。类型不同不贴，
+        # 不跨栏（后行 x 必须在横线右侧紧邻处），不认任何具体取值。
+        # 回贴只拼文本与外接 bbox：横线本就属于后行，框必须把它盖住。
+        rejoined: list[dict] = []
+        skip_next = False
+        for index, line in enumerate(stitched):
+            if skip_next:
+                skip_next = False
+                continue
+            follower = stitched[index + 1] if index + 1 < len(stitched) else None
+            follower_overlaps = (
+                follower is not None
+                and not (
+                    follower["bbox"][3] <= line["bbox"][1]
+                    or follower["bbox"][1] >= line["bbox"][3]
+                )
+            )
+            if (
+                follower is not None
+                and line.get("type") == follower.get("type")
+                and line["text"] in _DASH_GLYPHS
+                and bool(follower["text"]) and follower["text"][0].isalnum()
+                and 0 <= follower["bbox"][0] - line["bbox"][2] <= _DASH_REATTACH_MAX_GAP
+                and follower_overlaps
+            ):
+                rejoined.append(
+                    {
+                        "bbox": [
+                            min(line["bbox"][0], follower["bbox"][0]),
+                            min(line["bbox"][1], follower["bbox"][1]),
+                            max(line["bbox"][2], follower["bbox"][2]),
+                            max(line["bbox"][3], follower["bbox"][3]),
+                        ],
+                        "text": line["text"] + follower["text"],
+                        "type": line.get("type", "text"),
+                    }
+                )
+                skip_next = True
+                continue
+            rejoined.append(line)
 
         def to_display(bbox: list[float]) -> list[float]:
             x0, y0, x1, y1 = bbox
             return _to_display_bbox((x0, unrotated[1] - y1, x1, unrotated[1] - y0), unrotated, rotation)
 
-        return stitched, page_size, to_display
+        return rejoined, page_size, to_display
     finally:
         textpage.close()
 

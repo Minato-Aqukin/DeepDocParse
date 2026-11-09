@@ -298,7 +298,8 @@ class ParseJob(Base):
     # 那个名字在 service 注册表里根本不存在（三处构造点都显式传 engine）。
     # **光去掉这里的 default= 只在 SQLite 上生效**：PG 上 SQLAlchemy 会把整列从
     # INSERT 里省掉，0002 建表时写的 server_default 照样兜底 —— 迁移 0004 把它摘了
-    engine: Mapped[str] = mapped_column(String(32))
+    # 注册表标识可含提供方与版本；不能在持久化时截断或另设 32 字符上限。
+    engine: Mapped[str] = mapped_column(Text)
     options: Mapped[dict] = mapped_column(JSON, default=dict)
     options_hash: Mapped[str] = mapped_column(String(64))
     # **谁发起的这次解析**，用来记账。语料共享之后（1b）任何人都能对任一文档点

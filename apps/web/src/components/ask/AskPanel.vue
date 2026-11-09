@@ -136,8 +136,8 @@ async function loadCrops(mine?: number) {
 
 function verificationLabel(assertion: AnswerAssertion) {
   const { state, mode } = assertion.verification
-  if (state === 'passed') return mode === 'human' ? '人工核对通过' : '自动核对通过'
-  if (state === 'rejected') return mode === 'human' ? '人工核对驳回' : '自动核对不一致'
+  if (state === 'passed') return mode === 'human' ? '人工核对通过' : '出处转写近似匹配'
+  if (state === 'rejected') return mode === 'human' ? '人工核对驳回' : '出处转写不匹配'
   if (state === 'questioned') return '人工标疑'
   return '尚未核对'
 }
@@ -375,6 +375,9 @@ onBeforeUnmount(() => {
             </div>
           </section>
         </div>
+        <p v-if="message.assertions?.some(assertion => assertion.verification.mode === 'auto')" class="meta">
+          自动核对只按相似度阈值比较出处文本与裁图转写，不证明答案、数值、单位或表格行列正确，也不等于人工复核。
+        </p>
         <div v-if="unanswered.has(message.id)" class="meta">
           <StatusTag label="没有回答" type="warning" />
           <span class="unanswered-hint">回答生成时连接或服务中断，这一轮没有保存下回答，可以重新提问</span>

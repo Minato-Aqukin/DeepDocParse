@@ -263,13 +263,20 @@ async def archive_job(session: AsyncSession, storage: Storage, service: ServiceC
         ResourceVersion.created_at <= job.created_at,
     ).values(parse_job_id=job.id))
 
-    # Compatibility selection never controls whether this particular job is indexed.
+    # A reparse has no fixed source binding until selection. Starting its index
+    # now races the version switch and can publish an authorization failure.
     if document.deleted_at is None:
         if not document.current_job_id:
             document.current_job_id = job.id
             document.page_count = page_count
         await session.flush()
-        await mark_index_pending(session, job.id)
+        bound = not job.resource_id or await session.scalar(select(ResourceVersion.id).where(
+            ResourceVersion.resource_id == job.resource_id,
+            ResourceVersion.document_id == document.id,
+            ResourceVersion.parse_job_id == job.id,
+            ResourceVersion.deleted_at.is_(None)).limit(1))
+        if bound:
+            await mark_index_pending(session, job.id)
 
     # 记在发起这次解析的人头上；老 job 没这个信息时退回上传者
     from ddp_corpus.models import Resource

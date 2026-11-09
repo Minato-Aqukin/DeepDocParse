@@ -68,6 +68,25 @@ CPU profile 只承诺有文字层的 PDF。扫描件返回 `no_text_layer`；复
 
 `capabilities.generation.status=configured_unverified` 只说明用户配置了端点，不能作为服务就绪或模型测试通过的证据。Wiki 结果是带原始出处的生成草稿，`semantic_review=needs_review`；结构化引用检查不证明每条结论语义成立。本地 HTTP/CLI 已提供持久页面、关系、不可变修订、人工段落编辑与 CAS；完整桌面编辑界面和发布流程仍需对应端验收。
 
+## 本地问答契约
+
+私有 `answer` 与会话 `ask` 共用现有 `ddp_core.answer` 的结构化主张解码，
+与 Web／联邦使用同一证据绑定规则；不再从自由文本的句号或 `[1]` 推断主张。
+模型请求携带本轮可见证据 ID 的 `grounded_answer_schema`，显式连接的
+OpenAI 兼容端点须支持 `response_format: json_schema`。不提供自由文本兼容回退。
+
+- 模型输出 `claims` 与 `unanswered`：可答事实保留显式证据，缺答项只形成
+  `unsupported=true`、无主引用的展示句。两者可同时存在；只要有缺答项，
+  结果就保持 `evidence_sufficiency=insufficient`，不覆盖已有事实主张。
+- 空／越界 ID、非法或截断输出使整份结果以 `unsupported_generation` 失败；
+  不采纳失败前解出的部分主张，不机械补贴引用。
+- 检索候选与主引用分开：只有主张实际声明的原文证据形成主引用。
+  SSE `meta.retrieval.evidence_sufficiency` 与消息元数据中的同名状态一致。
+  私有 `answer` 正文的 `[n]` 从 1 开始，严格索引最终返回的有序 `evidence`，
+  不沿用被过滤掉的检索候选位置。
+- 已存历史结果和幂等重放不被静默重写；重新生成须显式新请求。
+  结构通过仍是未语义核验，不自动标记人工或视觉核验通过。
+
 ## 验证
 
 ```bash

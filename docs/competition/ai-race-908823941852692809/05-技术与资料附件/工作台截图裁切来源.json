@@ -1,0 +1,13 @@
+{
+  "source": "C7-public-qa-full.jpg",
+  "source_sha256": "73d9fb30d4f4e98be7e4fea3be7c679c1641234ff17a16490980b1228aebbbf0",
+  "crop": [
+    0,
+    130,
+    2880,
+    1180
+  ],
+  "output": "project-workbench-center.jpg",
+  "output_sha256": "911181c9e6de557c28d8a405d454f8b13efce66b08d04c4a7caa8bb2f4ca1200",
+  "operation": "crop only; no text/results replacement"
+}

@@ -36,17 +36,15 @@ def _real_pdf() -> bytes:
 PDF = _real_pdf()
 
 
-def _grounded_doc(*claims: tuple[str, list[int]], status: str = "answered") -> str:
+def _grounded_doc(*claims: tuple[str, list[int]], unanswered: tuple[str, ...] = ()) -> str:
     """按 grounded-claims 协议组装模型输出：`[n]` 是 1-based 的可见 sources 下标。"""
-    if status == "insufficient_evidence":
-        return json.dumps({"status": status}, ensure_ascii=False)
-    return json.dumps({"status": status, "claims": [
+    return json.dumps({"claims": [
         {"text": text, "evidence_ids": [f"__EVIDENCE_{n}__" for n in refs]}
-        for text, refs in claims]}, ensure_ascii=False)
+        for text, refs in claims], "unanswered": unanswered}, ensure_ascii=False)
 
 
-def _visible_evidence_ids(request: httpx.Request) -> list[str]:
-    """从回答请求的 user 消息 JSON 里读出本轮模型实际看到的 evidence id。"""
+def _visible_evidence_ids(request: httpx.Request, *, containing: str | None = None) -> list[str]:
+    """读出可见 ID；有语义要求的夹具按原文选出处，不依赖检索或呈现名次。"""
     body = json.loads(request.content)
     ids: list[str] = []
     for message in body["messages"]:
@@ -57,10 +55,12 @@ def _visible_evidence_ids(request: httpx.Request) -> list[str]:
                 if '"sources"' not in text:
                     continue
                 try:
-                    ids.extend(source["evidence_id"]
-                               for source in json.loads(text)["sources"])
+                    ids.extend(source["evidence_id"] for source in json.loads(text)["sources"]
+                               if containing is None or containing in source["text"])
                 except (ValueError, KeyError, TypeError):
                     continue
+    if containing is not None:
+        assert len(ids) == 1, f"Expected one visible source containing {containing!r}, got {ids!r}"
     return ids
 
 
@@ -80,9 +80,10 @@ def _sse_frames(text: str):
             prev = cut
 
 
-def _grounded_response(template: str, request: httpx.Request) -> httpx.Response:
-    """把 `__EVIDENCE_n__` 占位按本轮可见 id 换成真实值后做成 SSE 流。"""
-    text = _bind_ids(template, _visible_evidence_ids(request))
+def _grounded_response(template: str, request: httpx.Request,
+                       *, source_text: str | None = None) -> httpx.Response:
+    """按可见原文选出处（可选），将占位 ID 绑定后流式返回。"""
+    text = _bind_ids(template, _visible_evidence_ids(request, containing=source_text))
 
     async def frames():
         for chunk in _sse_frames(text):
@@ -92,10 +93,10 @@ def _grounded_response(template: str, request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=frames())
 
 
-def _grounded_side_effect(template: str):
-    """`respx side_effect`：按每轮请求的可见 evidence id 绑定后再流式返回。"""
+def _grounded_side_effect(template: str, *, source_text: str | None = None):
+    """按每轮请求的可见原文或 ID 绑定，不把模型引用写死为排序第一条。"""
     def handler(request: httpx.Request) -> httpx.Response:
-        return _grounded_response(template, request)
+        return _grounded_response(template, request, source_text=source_text)
     return handler
 
 
@@ -165,7 +166,7 @@ def _agent_chat(*, need_retrieval: bool, answer: str,
         if refs:
             template = _grounded_doc((text, refs))
         else:
-            template = _grounded_doc(status="insufficient_evidence")
+            template = _grounded_doc(unanswered=(text or "提供的证据不足以回答该问题。",))
         return _grounded_response(template, request)
 
     return handler, calls
@@ -176,7 +177,7 @@ async def test_ask_streams_answer_with_citations(actor_client, session):
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(side_effect=_grounded_side_effect(
-        _grounded_doc(("第二页讲的是表格数据。", [1]))))
+        _grounded_doc(("第二页讲的是表格数据。", [1])), source_text="第二页的表格数据"))
 
     events = await _ask(actor_client, cid)
     names = [name for name, _ in events]
@@ -1020,7 +1021,8 @@ async def test_confidence_is_reported_and_separates_strong_from_marginal(actor_c
     document = await _ready_document(actor_client)
     # side_effect 而不是 return_value：一个 httpx 流式响应只能被消费一次，
     # 这个用例要问两轮
-    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("答案", [1]))))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(
+        _grounded_doc(("答案", [1])), source_text="第二页的表格数据"))
 
     strong = await _conversation(actor_client, document["id"])
     done = dict(await _ask(actor_client, strong, question="表格数据"))["done"]
@@ -1057,7 +1059,8 @@ async def test_history_carries_similarity_and_confidence(actor_client):
     """历史消息也要带可信度，否则翻回去看旧回答时这个信息就丢了。"""
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
-    respx.post(CHAT).mock(side_effect=_grounded_side_effect(_grounded_doc(("答案", [1]))))
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(
+        _grounded_doc(("答案", [1])), source_text="第二页的表格数据"))
     await _ask(actor_client, cid, question="表格数据")
 
     listed = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
@@ -1068,7 +1071,8 @@ async def test_history_carries_similarity_and_confidence(actor_client):
     assert answer["citations"][0]["score"] < 0.05
 
 
-def _verify_aware_chat(transcript: str | None, answer: str = "回答"):
+def _verify_aware_chat(transcript: str | None, answer: str = "回答",
+                       *, unanswered: tuple[str, ...] = ()):
     """按请求类型分流：抄写请求返回 transcript，回答请求返回 SSE 流。
 
     transcript=None 表示视觉模型对抄写请求也失败（核对做不了）。
@@ -1082,7 +1086,8 @@ def _verify_aware_chat(transcript: str | None, answer: str = "回答"):
                 return httpx.Response(503, text="vqa down")
             return httpx.Response(200, json={
                 "choices": [{"message": {"role": "assistant", "content": transcript}}]})
-        return _grounded_response(_grounded_doc((answer, [1])), request)
+        return _grounded_response(_grounded_doc((answer, [1]), unanswered=unanswered),
+                                  request, source_text="第二页的表格数据")
 
     return handler
 
@@ -1131,6 +1136,76 @@ async def test_no_mismatch_when_image_text_matches_chunk(actor_client, session):
     assertion = (await session.execute(select(Assertion))).scalars().one()
     assert assertion.verification_state == "passed"
     assert assertion.verification_mode == "auto"
+
+
+@pytest.mark.parametrize("contradicts_source", [False, True])
+@respx.mock
+async def test_source_verification_does_not_pass_derived_only_assertion(
+        actor_client, session, contradicts_source):
+    import hashlib
+
+    from ddp_corpus.models import Evidence
+
+    document = await _ready_document(actor_client)
+    chunk = (await session.execute(select(Chunk).where(
+        Chunk.document_id == document["id"],
+        Chunk.text.contains("第二页的表格数据"),
+    ))).scalars().one()
+    chunk.text = "第二页的表格数据完整展示了本次测量的结果与单位。"
+    source = Evidence(
+        document_id=document["id"], parse_job_id=chunk.parse_job_id,
+        seq=chunk.seq, atom_key=f"verified-source:{chunk.seq}", kind=chunk.block_type,
+        content=chunk.text,
+        content_digest=hashlib.sha256(chunk.text.encode()).hexdigest(),
+        page_idx=chunk.page_idx, bbox=chunk.bbox, page_size=chunk.page_size,
+    )
+    session.add(source)
+    await session.flush()
+    chunk.evidence_id = source.id
+    derived_text = ("生成理解：这一页没有表格，也没有提供任何数据。"
+                    if contradicts_source else chunk.text + "（生成理解）")
+    generated = Evidence(
+        document_id=document["id"], parse_job_id=chunk.parse_job_id,
+        seq=chunk.seq, atom_key=f"generated:{chunk.seq}", kind=chunk.block_type,
+        content=derived_text,
+        content_digest=hashlib.sha256(derived_text.encode()).hexdigest(),
+        page_idx=chunk.page_idx, bbox=chunk.bbox, page_size=chunk.page_size,
+        derived_from=chunk.evidence_id,
+    )
+    session.add(generated)
+    await session.flush()
+    chunk.derived_text = derived_text
+    chunk.derived_evidence_id = generated.id
+    await session.commit()
+    cid = await _conversation(actor_client, document["id"])
+
+    def respond(request):
+        body = json.loads(request.content)
+        parts = [part for message in body["messages"]
+                 if isinstance(message["content"], list) for part in message["content"]]
+        if any("原样" in (part.get("text") or "") for part in parts):
+            return httpx.Response(200, json={
+                "choices": [{"message": {"role": "assistant", "content": chunk.text}}],
+            })
+        return _grounded_response(
+            _grounded_doc((derived_text, [1])), request, source_text=derived_text)
+
+    respx.post(CHAT).mock(side_effect=respond)
+    events = dict(await _ask(actor_client, cid))
+    assert events["done"]["verified"] is False
+    stored = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
+    answer = next(row for row in stored if row["role"] == "assistant")
+    assertion = answer["assertions"][0]
+    assert assertion["evidence_ids"] == [generated.id]
+    assert assertion["unsupported"] is False
+    assert assertion["verification"] == {"state": "unverified", "mode": None}
+    assert answer["verified"] is False
+    check = (await session.execute(select(EvidenceVerification).where(
+        EvidenceVerification.mode == "auto",
+    ))).scalars().one()
+    assert check.evidence_id == chunk.evidence_id
+    assert check.verdict == "pass"
+    assert check.assertion_id is None
 
 
 async def test_decision_timeout_conservatively_retrieves_and_reports_degradation(monkeypatch):
@@ -1403,9 +1478,11 @@ async def test_follow_up_refuses_when_any_inherited_evidence_is_missing(
         verification_count, "拒答不能新增一条与断言无关联的自动核对记录"
 
 
+@pytest.mark.parametrize("with_generated", [False, True])
+@pytest.mark.parametrize("structured_table", [False, True])
 @respx.mock
 async def test_context_budget_cannot_leave_hidden_citation_numbers(
-        actor_client, session, monkeypatch):
+        actor_client, session, monkeypatch, structured_table, with_generated):
     """模型没看到的候选即使猜中编号，也不能暗挂成 Citation。"""
     from ddp_corpus.config import settings as cfg
     from ddp_core.models import Citation
@@ -1414,8 +1491,60 @@ async def test_context_budget_cannot_leave_hidden_citation_numbers(
     monkeypatch.setattr(cfg, "qa_verify_parse", False)
     monkeypatch.setattr(cfg, "qa_context_chars", 5)
     document = await _ready_document(actor_client)
+    if structured_table:
+        from html import escape
+        chunks = (await session.scalars(select(Chunk).where(
+            Chunk.document_id == document["id"]))).all()
+        monkeypatch.setattr(cfg, "qa_context_chars", sum(len(c.text) for c in chunks))
+        for chunk in chunks:
+            chunk.block_type = "table"
+            chunk.table_html = ("<table><tr>" + "".join(
+                "<td>" + escape(word) + "</td>" for word in chunk.text.split()) + "</tr></table>")
+        await session.commit()
+    derived_by_source = {}
+    if with_generated:
+        import hashlib
+
+        from ddp_corpus.models import Evidence
+
+        chunks = (await session.scalars(select(Chunk).where(
+            Chunk.document_id == document["id"]))).all()
+        for chunk in chunks:
+            source = Evidence(
+                document_id=document["id"], parse_job_id=chunk.parse_job_id,
+                seq=chunk.seq, atom_key=f"budget-source:{chunk.seq}", kind=chunk.block_type,
+                content=chunk.text, content_digest=hashlib.sha256(chunk.text.encode()).hexdigest(),
+                page_idx=chunk.page_idx, bbox=chunk.bbox, page_size=chunk.page_size)
+            session.add(source)
+            await session.flush()
+            text = "这个生成视图不在回答模型的字符预算内。"
+            generated = Evidence(
+                document_id=document["id"], parse_job_id=chunk.parse_job_id,
+                seq=chunk.seq, atom_key=f"budget-generated:{chunk.seq}", kind=chunk.block_type,
+                content=text, content_digest=hashlib.sha256(text.encode()).hexdigest(),
+                page_idx=chunk.page_idx, bbox=chunk.bbox, page_size=chunk.page_size,
+                derived_from=source.id)
+            session.add(generated)
+            await session.flush()
+            chunk.evidence_id = source.id
+            chunk.derived_evidence_id = generated.id
+            chunk.derived_text = text
+            derived_by_source[source.id] = generated.id
+        await session.commit()
     cid = await _conversation(actor_client, document["id"])
-    handler, _ = _agent_chat(need_retrieval=True, answer="我猜第二条。[2]")
+    base_handler, _ = _agent_chat(need_retrieval=True, answer="我猜第二条。[2]")
+
+    def handler(request):
+        if with_generated and json.loads(request.content).get("stream"):
+            visible = _visible_evidence_ids(request)
+            hidden = derived_by_source[visible[0]]
+            assert hidden not in visible
+            return _grounded_response(json.dumps({
+                "claims": [{"text": "我引用未展示的生成理解。", "evidence_ids": [hidden]}],
+                "unanswered": [],
+            }), request)
+        return base_handler(request)
+
     respx.post(CHAT).mock(side_effect=handler)
 
     events = dict(await _ask(actor_client, cid))
@@ -1458,7 +1587,7 @@ async def test_answer_binds_only_the_subset_it_names(actor_client, session, monk
 
 @respx.mock
 async def test_insufficient_evidence_refuses_without_citations(actor_client, session, monkeypatch):
-    """模型报 insufficient_evidence：拒答 unsupported、无引用、未验证。"""
+    """无事实主张的缺答说明：unsupported、无引用、未验证，且不能变成空回答。"""
     from ddp_corpus.config import settings as cfg
     from ddp_core.models import Citation
 
@@ -1468,13 +1597,20 @@ async def test_insufficient_evidence_refuses_without_citations(actor_client, ses
     cid = await _conversation(actor_client, document["id"])
 
     def refuse(request: httpx.Request) -> httpx.Response:
-        return _grounded_response(_grounded_doc(status="insufficient_evidence"), request)
+        return _grounded_response(
+            _grounded_doc(unanswered=("提供的证据不足以确定产品价格。", "提供的证据不足以确定起订量。")),
+            request)
 
     respx.post(CHAT).mock(side_effect=refuse)
     events = dict(await _ask(actor_client, cid))
     assert "error" not in dict(events)
-    assertion = events["assertions"]["assertions"][0]
-    assert assertion["unsupported"] is True and assertion["evidence_ids"] == []
+    assert [
+        {key: item[key] for key in ("position", "text", "evidence_ids", "unsupported")}
+        for item in events["assertions"]["assertions"]
+    ] == [
+        {"position": 0, "text": "提供的证据不足以确定产品价格。", "evidence_ids": [], "unsupported": True},
+        {"position": 1, "text": "提供的证据不足以确定起订量。", "evidence_ids": [], "unsupported": True},
+    ]
     assert events["citations"]["citations"] == []
     assert events["done"]["verified"] is False
     # 判定 mock 缺席时 decision_unavailable 会如实保留：拒答本身不新增引用才是断言点
@@ -1497,10 +1633,10 @@ async def test_unknown_evidence_id_after_valid_claim_reports_and_keeps_first(
     def poisoned(request: httpx.Request) -> httpx.Response:
         visible = _visible_evidence_ids(request)
         assert visible, "前提不成立：本轮应当有可见 evidence"
-        raw = json.dumps({"status": "answered", "claims": [
+        raw = json.dumps({"claims": [
             {"text": "第一条有依据。", "evidence_ids": [visible[0]]},
             {"text": "第二条引用了不可见的证据。", "evidence_ids": ["evidence-does-not-exist"]},
-        ]}, ensure_ascii=False)
+        ], "unanswered": []}, ensure_ascii=False)
 
         async def frames():
             for chunk in _sse_frames(raw):
@@ -1752,7 +1888,8 @@ async def test_independent_ocr_success_clears_text_answer_image_fallback(actor_c
         if any(part.get("type") == "image_url" for message in body["messages"]
                if isinstance(message.get("content"), list) for part in message["content"]):
             return httpx.Response(400, json={"error": "text model does not accept images"})
-        return _grounded_response(_grounded_doc(("第二页有表格数据。", [1])), request)
+        return _grounded_response(_grounded_doc(("第二页有表格数据。", [1])), request,
+                                  source_text="第二页的表格数据")
 
     respx.post(CHAT).mock(side_effect=model)
     done = dict(await _ask(actor_client, cid))["done"]
@@ -2004,3 +2141,302 @@ async def test_persist_revalidates_actor_before_write(actor_client, client, sess
                        expected_job_id=job_id, expected_generation=0,
                        actor=stranger)
     assert info2.value.status_code == 404
+
+
+@respx.mock
+async def test_partial_answer_keeps_fact_and_missing_part_without_borrowed_citation(
+        actor_client, session, monkeypatch):
+    from ddp_corpus.config import settings as cfg
+    from ddp_core.models import Citation
+
+    monkeypatch.setattr(cfg, "qa_decision_enabled", False)
+    monkeypatch.setattr(cfg, "qa_verify_parse", False)
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+    payload = json.loads(_grounded_doc(("第二页包含表格。", [1])))
+    payload["unanswered"] = ["现有证据不足以确定部署机器的延迟。"]
+    respx.post(CHAT).mock(side_effect=_grounded_side_effect(
+        json.dumps(payload, ensure_ascii=False)))
+
+    events = dict(await _ask(actor_client, cid))
+    assert "error" not in events
+    fact, missing = events["assertions"]["assertions"]
+    assert fact["unsupported"] is False and fact["evidence_ids"]
+    assert missing["unsupported"] is True
+    assert missing["text"] == payload["unanswered"][0]
+    assert missing["evidence_ids"] == [] and missing["citations"] == []
+    assert events["citations"]["citations"] == fact["citations"]
+    assert events["done"]["verified"] is False
+    stored = (await session.execute(select(Assertion).order_by(Assertion.position))).scalars().all()
+    assert [(row.text, row.unsupported) for row in stored] == [
+        (fact["text"], False), (missing["text"], True)]
+    citations = (await session.execute(select(Citation))).scalars().all()
+    assert {row.source_id for row in citations} == {stored[0].id}
+
+
+@pytest.mark.parametrize("transcript,state,degraded", [
+    ("第二页的表格数据第二页的表格数据", "passed", None),
+    ("完全无关的另一段文字与库存报表", "questioned", "parse_mismatch"),
+    (None, "unverified", "verification_unavailable"),
+])
+@respx.mock
+async def test_partial_answer_preserves_fact_verification_without_verifying_missing_part(
+        actor_client, monkeypatch, transcript, state, degraded):
+    from ddp_corpus.config import settings as cfg
+
+    monkeypatch.setattr(cfg, "qa_decision_enabled", False)
+    monkeypatch.setattr(cfg, "qa_verify_parse", True)
+    document = await _ready_document(actor_client)
+    cid = await _conversation(actor_client, document["id"])
+    respx.post(CHAT).mock(side_effect=_verify_aware_chat(
+        transcript, "第二页包含表格。",
+        unanswered=("现有证据不足以确定部署机器的延迟。",)))
+
+    events = dict(await _ask(actor_client, cid))
+    assert "error" not in events
+    assert events["done"]["verified"] is False
+    assert events["done"]["degraded"] == degraded
+    fact, missing = events["assertions"]["assertions"]
+    assert fact["verification"] == {
+        "state": state, "mode": None if state == "unverified" else "auto"}
+    assert missing["unsupported"] is True
+    assert missing["evidence_ids"] == [] and missing["citations"] == []
+    assert missing["verification"] == {"state": "unverified", "mode": None}
+
+    history = (await actor_client.get(f"/api/conversations/{cid}/messages")).json()
+    saved = next(message for message in history if message["role"] == "assistant")
+    assert saved["verified"] is False and saved["degraded"] == degraded
+    assert [item["verification"] for item in saved["assertions"]] == [
+        fact["verification"], missing["verification"]]
+    evidence = (await actor_client.get(f"/api/evidence/{fact['evidence_ids'][0]}")).json()
+    assert [(check["verdict"], check["reason_code"]) for check in evidence["verifications"]] == (
+        [] if state == "unverified" else
+        [("pass", None)] if state == "passed" else [("question", "parse_mismatch")])
+
+
+@respx.mock
+async def test_retrieval_recovers_same_page_continuation_without_merging_evidence(
+        actor_client, session, app_state, monkeypatch):
+    from ddp_corpus.config import settings as cfg
+    from ddp_corpus.qa import retrieve
+
+    seed_text = "The training corpus includes public technical documentation and academic documents in"
+    tail_text = "217 languages, while runtime coverage is reported separately."
+    monkeypatch.setattr(cfg, "chunk_max_chars", 100)
+    layout = {"pdf_info": [
+        {"page_idx": 0, "page_size": [612, 792], "para_blocks": [
+            {"bbox": [72, 72, 540, 100], "lines": [{"spans": [
+                {"content": "A different page; do not join its evidence."}]}]}]},
+        {"page_idx": 1, "page_size": [612, 792], "para_blocks": [
+            {"bbox": [72, 72, 540, 100], "lines": [{"spans": [{"content": seed_text}]}]},
+            {"bbox": [72, 105, 540, 135], "lines": [{"spans": [{"content": tail_text}]}]}]},
+    ]}
+    _mock_service(result={"markdown": "", "layout_json": layout, "images": []})
+    document = await _upload(actor_client, PDF)
+    await _callback(actor_client)
+    chunks = (await session.execute(select(Chunk).where(
+        Chunk.document_id == document["id"]).order_by(Chunk.seq))).scalars().all()
+    foreign_page, seed, continuation = chunks
+    monkeypatch.setattr(cfg, "qa_top_k", 1)
+    monkeypatch.setattr(cfg, "rerank_enabled", False)
+    selected = await session.get(Document, document["id"])
+
+    retrieval = await retrieve(
+        session, app_state.search_index, app_state.http,
+        question=seed_text, document=selected)
+    assert [hit["evidence_id"] for hit in retrieval.hits] == [
+        seed.evidence_id, continuation.evidence_id]
+    assert [hit["text"] for hit in retrieval.hits] == [seed_text, tail_text]
+    assert foreign_page.evidence_id not in {hit["evidence_id"] for hit in retrieval.hits}
+    assert retrieval.hits[1]["similarity"] is None
+    assert retrieval.candidates[-1].reason == "adjacent_context_of:" + seed.evidence_id
+
+    monkeypatch.setattr(cfg, "qa_context_chars", len(seed_text))
+    bounded = await retrieve(
+        session, app_state.search_index, app_state.http,
+        question=seed_text, document=selected)
+    assert [hit["evidence_id"] for hit in bounded.hits] == [seed.evidence_id]
+
+
+@respx.mock
+async def test_retrieve_gives_each_focused_query_a_seed_without_changing_budgets(
+        actor_client, session, app_state, monkeypatch):
+    """共享头名与重复表达不能挤掉后半子问在固定种子预算中的席位。"""
+    from ddp_corpus.config import settings as cfg
+    from ddp_corpus.qa import retrieve
+
+    # 整题将第二子问排第三；聚焦表达共享头名，但将自己的有效正文排第二。
+    shared = "Both training and abstract language counts concern multilingual coverage."
+    first = "The training corpus covers one hundred ninety-four distinct languages worldwide."
+    second = "The abstract states uniform support for more than one hundred working languages."
+    filler = "An unrelated paragraph about optimizer states and gradient checkpoints."
+    monkeypatch.setattr(cfg, "chunk_max_chars", 200)
+    # 四块分处四页：同页相邻块会按字数合并，跨页天然各成一 chunk。
+    layout = {"pdf_info": [
+        {"page_idx": 0, "page_size": [612, 792], "para_blocks": [
+            {"bbox": [72, 72, 540, 100], "lines": [{"spans": [{"content": shared}]}]}]},
+        {"page_idx": 1, "page_size": [612, 792], "para_blocks": [
+            {"bbox": [72, 72, 540, 100], "lines": [{"spans": [{"content": first}]}]}]},
+        {"page_idx": 2, "page_size": [612, 792], "para_blocks": [
+            {"bbox": [72, 72, 540, 100], "lines": [{"spans": [{"content": second}]}]}]},
+        {"page_idx": 3, "page_size": [612, 792], "para_blocks": [
+            {"bbox": [72, 72, 540, 100], "lines": [{"spans": [{"content": filler}]}]}]},
+    ]}
+    _mock_service(result={"markdown": "", "layout_json": layout, "images": []})
+    document = await _upload(actor_client, PDF)
+    await _callback(actor_client)
+    chunks = (await session.execute(select(Chunk).where(
+        Chunk.document_id == document["id"]).order_by(Chunk.seq))).scalars().all()
+    assert [chunk.text for chunk in chunks] == [shared, first, second, filler]
+    monkeypatch.setattr(cfg, "qa_top_k", 2)
+    monkeypatch.setattr(cfg, "qa_context_chars", 6000)
+    monkeypatch.setattr(cfg, "rerank_enabled", True)
+    monkeypatch.setattr(cfg, "rerank_candidates", 24)
+    selected = await session.get(Document, document["id"])
+
+    def rerank_by_query(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        texts = payload["texts"]
+        if "differ" in payload["query"]:
+            # 整题名次：共同依赖头名，第二子问专属块排第三。
+            order = sorted(range(len(texts)),
+                           key=lambda i: (shared not in texts[i],
+                                          first not in texts[i], texts[i]))
+        else:
+            # 聚焦表达跳过已占的共享头名后，应选中第二子问正文。
+            order = sorted(range(len(texts)),
+                           key=lambda i: (shared not in texts[i],
+                                          second not in texts[i], texts[i]))
+        return httpx.Response(200, json=[
+            {"index": i, "score": float(len(texts) - rank)}
+            for rank, i in enumerate(order)])
+
+    route = respx.post(cfg.rerank_endpoint).mock(side_effect=rerank_by_query)
+    retrieval = await retrieve(
+        session, app_state.search_index, app_state.http,
+        question="How many training languages differ from abstract working languages?",
+        document=selected,
+        query_variants=[
+            "How many training languages differ from abstract working languages?",
+            "abstract working language support number of languages",
+            "  abstract working language support number of languages  "])
+
+    assert retrieval.degraded is None
+    # 两条不同表达各打一次重排：不是调用数中性的，调用数如实为 2。
+    assert route.call_count == 2
+    seeds = {hit["text"] for hit in retrieval.hits
+             if hit.get("context_of_evidence_id") is None}
+    assert seeds == {shared, second}
+
+
+@respx.mock
+async def test_retrieve_partial_rerank_failure_discards_successful_table(
+        actor_client, session, app_state, monkeypatch):
+    """整题重排成功、聚焦表达失败：成功那张表也作废，整体回池序。"""
+    from ddp_corpus.config import settings as cfg
+    from ddp_corpus.qa import retrieve
+
+    monkeypatch.setattr(cfg, "qa_top_k", 2)
+    monkeypatch.setattr(cfg, "qa_min_similarity", 0.0)
+    monkeypatch.setattr(cfg, "rerank_enabled", True)
+    monkeypatch.setattr(cfg, "rerank_candidates", 24)
+    document = await _ready_document(actor_client)
+    selected = await session.get(Document, document["id"])
+    original_pool_texts = []
+
+    def flaky_rerank(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        if "second page" in payload["query"]:
+            return httpx.Response(503, json={"error": "rerank down"})
+        original_pool_texts.extend(payload["texts"])
+        assert len(original_pool_texts) >= 2
+        return httpx.Response(200, json=[
+            {"index": i, "score": float(i + 1)}
+            for i in reversed(range(len(payload["texts"])))])
+
+    respx.post(cfg.rerank_endpoint).mock(side_effect=flaky_rerank)
+    retrieval = await retrieve(
+        session, app_state.search_index, app_state.http,
+        question="第二页的表格", document=selected,
+        query_variants=["second page table data"])
+
+    assert retrieval.degraded == "rerank_unavailable"
+    assert [hit["text"] for hit in retrieval.hits[:2]] == original_pool_texts[:2]
+    assert all("rerank_score" not in hit for hit in retrieval.hits)
+
+
+@respx.mock
+async def test_derived_chunk_exposes_source_and_generated_entries_with_own_ids(
+        actor_client, session, app_state, monkeypatch):
+    """派生块拆成原文/生成两个可引用条目，各自只带自有正文、引用自身 ID。
+
+    回归 R10 INA-Q4 的绑定错位：模型在生成的单一资料里同时读到原文段落与
+    生成摘要，把原文数值引到不含该值的 generated 证据上。拆分后，原文值
+    有自己的 source 条目可引；生成摘要不再覆盖原文，也不会消失。
+    """
+    import hashlib
+
+    from ddp_corpus.config import settings as cfg
+    from ddp_corpus.qa import attach_crops, build_messages, retrieve, trim_hits_to_context
+    from ddp_corpus.models import Evidence, ParseJob
+    from tests.test_documents import _fake_vector
+
+    monkeypatch.setattr(cfg, "qa_verify_parse", False)
+    monkeypatch.setattr(cfg, "rerank_enabled", False)
+    document = await _ready_document(actor_client)
+    selected = await session.get(Document, document["id"])
+    chunk = (await session.execute(select(Chunk).where(
+        Chunk.document_id == document["id"]).order_by(Chunk.seq))).scalars().first()
+    source_text = "Ordering codes INA219AIDCNR INA219BIDCNT for SOT-23 package"
+    derived_text = "Ordering summary for SOT-23 package without specific codes"
+    source = Evidence(document_id=document["id"], parse_job_id=chunk.parse_job_id,
+                      seq=chunk.seq, atom_key=f"src:{chunk.seq}",
+                      content=source_text,
+                      content_digest=hashlib.sha256(source_text.encode()).hexdigest(),
+                      kind="table", page_idx=chunk.page_idx, bbox=chunk.bbox,
+                      page_size=chunk.page_size)
+    session.add(source)
+    await session.flush()
+    derived = Evidence(document_id=document["id"], parse_job_id=chunk.parse_job_id,
+                       seq=chunk.seq, atom_key=f"vision:{chunk.seq}",
+                       content=derived_text,
+                       content_digest=hashlib.sha256(derived_text.encode()).hexdigest(),
+                       kind="table", page_idx=chunk.page_idx, bbox=chunk.bbox,
+                       page_size=chunk.page_size, derived_from=source.id)
+    session.add(derived)
+    await session.flush()
+    chunk.text = chunk.search_text = source_text
+    chunk.embedding = _fake_vector(source_text)
+    chunk.text_tokenized = source_text
+    chunk.derived_text = derived_text
+    chunk.evidence_id = source.id
+    chunk.derived_evidence_id = derived.id
+    await session.commit()
+
+    retrieval = await retrieve(
+        session, app_state.search_index, app_state.http,
+        question="Ordering codes SOT-23", document=selected)
+    assert retrieval.degraded is None
+    trim_hits_to_context(retrieval)
+
+    job = await session.get(ParseJob, chunk.parse_job_id)
+    await attach_crops(retrieval, app_state.storage, selected, job)
+    by_evidence = {item["evidence_id"]: item for item in retrieval.citations}
+    assert by_evidence[source.id]["source_type"] == "source"
+    assert by_evidence[derived.id]["source_type"] == "generated"
+    assert by_evidence[derived.id]["derived_from"] == source.id
+    assert "INA219AIDCNR" in by_evidence[source.id]["snippet"]
+    assert "INA219AIDCNR" not in by_evidence[derived.id]["snippet"]
+
+    messages = build_messages("Ordering codes SOT-23", retrieval, [], [])
+    body = json.loads(messages[1]["content"][-1]["text"])
+    sources = body["sources"]
+    by_id = {entry["evidence_id"]: entry for entry in sources}
+    assert by_id[source.id]["source_type"] == "source"
+    assert by_id[derived.id]["source_type"] == "generated"
+    assert by_id[derived.id]["derived_from"] == source.id
+    assert "INA219AIDCNR" in by_id[source.id]["text"]
+    assert "INA219AIDCNR" not in by_id[derived.id]["text"]
+    assert not any("without specific codes" in text and "INA219AIDCNR" in text
+                   for text in (entry["text"] for entry in sources)), \
+        "两份正文不许合并进同一个条目 ID 名下"

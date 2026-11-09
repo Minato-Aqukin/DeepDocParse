@@ -89,6 +89,14 @@ argv 在 ps 与 CI 日志里可见，而连接串里有口令，control-migrate 
 这个变量，默认容器名为 `ddp-postgres-1`，可用 `DDP_PG_CONTAINER` 指定。
 `scripts/dev.sh up` 会构建并启动完整开发栈，不支持用 `up postgres` 只启动数据库。
 
+语料侧的真实 PostgreSQL 回归由 `scripts/check_federation_pg.sh` 创建独立容器并执行，
+其中包括长注册表引擎标识的上传受理与历史保留。也可将 `CORPUS_TEST_DATABASE_URL`
+设为已通过 `database/corpus/migrate.sh` 完成迁移与授权的一次性 PostgreSQL，单独运行
+`services/corpus-api/tests/test_parse_engine_pg.py`。只跑 Alembic 不会执行配套的 `grants.sql`；
+需要服务角色的真库检查不能省略授权。SQLite 不执行 `VARCHAR(n)` 的长度约束，
+不能替代这条回归。迁移 0044 将 `parse_jobs.engine` 改为 `TEXT`；有超过 32 字符的历史标识时，
+降级会明确拒绝，不截断标识，也不重写历史 `options_hash`。
+
 真实注册、上传、解析、证据和计量链路需要先按部署指南启动开发栈：
 
 ```bash
@@ -96,8 +104,48 @@ scripts/check_db_boundary.sh
 .venv/bin/python scripts/e2e_stack.py
 ```
 
-无 GPU 路径使用 borndigital；GPU 模型解析、VQA、embedding、rerank 的真实质量与
-性能仍需模型运行时和相应硬件。单测的 mock、CPU 降级或显式 skip 不代表这些路径已验收。
+无 GPU 文字层路径使用 borndigital，或用 borndigital-tables 保留可识别的线框表格；
+这两条路径不处理扫描件。GPU 模型解析、VQA、embedding、rerank 的真实质量与性能仍需
+模型运行时和相应硬件。单测的 mock、CPU 降级或显式 skip 不代表这些路径已验收。
+
+若用 llama.cpp 提供 BGE-M3 embedding，注意上下文长度与物理批次不是同一个参数：
+本机 b10809 在 `--ctx-size 8192` 下仍会按默认的 512-token 物理批次拒绝较长输入。
+8192-token 单序列配置应同时设置 `--batch-size 8192 --ubatch-size 8192`；
+CPU 受限部署可用 `--parallel 1` 控制并发。变更后须用真实长块跑通索引，并核对
+embedding 返回的 token 用量、内存和耗时；不要靠截短原文把上游拒绝隐藏成成功。
+
+同样要检查 llama.cpp 的 BGE reranker：本机同一运行时的短句对经模型和网关均返回 200，
+但 727-token 查询/段落对因默认 `--ubatch-size 512` 返回 500；只测健康接口或短句会漏掉它。
+独立实例设置 `--ctx-size 8192 --batch-size 8192 --ubatch-size 8192 --parallel 1` 后，
+相同未截断输入返回两条完整排序结果。部署时还须测真实候选批次及调用方超时，
+不能用关闭精排、裁短候选或仅有一次短输入成功来宣称重排序链已通过。
+
+## 证据身份与自动核对边界
+
+问答上下文中的原文和生成理解分别拥有证据 ID 与自有正文。字段和多记录行
+必须显式选择实际来源；“模型同时读到了两份资料”不等于“两份都支持这个值”。
+同一块的原文与生成理解可以同时被引用，持久定位须区分
+`(parse_job_id, seq, evidence_id)`，不能只按前两项合并。
+预算裁剪必须按实际展示的证据视图收敛：原文耗尽剩余字符时，同块未展示的生成
+视图不能进入 citations、回答 schema 或解码器允许集合；原始候选审计不随之删改。
+抽取的内部选择封套与公开结果边界见
+[DDP-Extract](../packages/contracts/ddp/extract-format.md)。
+
+搜索摘要必须对应点击后解析到的同一个 `evidence_id`。验证时应使用真实
+`/api/search` 与 `/api/evidence/{id}`，保留旧生成正文，比较修复前后的身份对应；
+不能重写旧证据来制造“引用正确”的结果。
+
+自动图文核对只属于实际被检查的证据，不能沿 `derived_from` 自动传给生成子对象，
+也不能把同一裁图的另一个证据视图的缓存 verdict 拿来复用。
+表格 HTML 用于保留抽取时的行列关系；转写相似度比较原文的可见文字，不把
+`table`、`tr`、`td` 等标签名当成图上应出现的文字。
+现有“转写后比相似度”方法不保证数字、单位、表格行列或答案本身正确；
+空白图上的模型指令回声也不是可靠转写。机器核对、事实支持与人工复核须分开解释，
+不能把模型可调用、HTTP 200、文字相似或单测通过写成语义验收通过。
+问答的自动状态显示为“出处转写近似匹配／出处转写不匹配”，字段核对通过也只显示
+“出处转写近似匹配”；相关位置明确说明相似度阈值不证明答案、字段值、单位或行列正确。
+“人工核对通过／驳回”保留给人工状态，不能由自动阈值通过替代。浏览器中的状态夹具
+只能证明渲染和边界文案，不能作为模型正确率或人工验收证据。
 
 ## CI 与提交验收
 

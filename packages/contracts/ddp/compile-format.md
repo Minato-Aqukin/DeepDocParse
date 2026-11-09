@@ -55,7 +55,7 @@ derived evidence
   "layout_version": "ddp-layout/1",
   "parse_options_hash": "...",
   "compiler": "ddp-compile/1",
-  "chunker": "ddp-chunk/3",
+  "chunker": "ddp-chunk/4",
   "tokenizer": "jieba|bigram",
   "embedding_model": "BAAI/bge-m3",
   "vision_model": "Qwen3-VL-8B",
@@ -69,6 +69,13 @@ derived evidence
 `provider_unresolved`，不得把两次无法观测的默认选择称为 `current`。
 派生 evidence 在这份完整 provider 上另加 `content_role=generated`，因此它的
 `provider_fingerprint` 与源原子不同，且可机械证明内容不是原文。
+
+`ddp-chunk/4`（2026-11-08）保留 `/3` 的页内空间邻接规则，修正超长正文的切分：
+在字符上限的后半窗口先找句末，再找词间空白，无合适断点才硬切；英文句点只有在后接
+空白或到达原文结尾时才可作句末，不把小数点当成断句依据。这样可避免有完整句末可用时，
+仍在“主语＋连接词”后切掉谓语。单句本身超限时仍可能分段；这不是语义完整性的保证。
+每段继续使用原块 bbox，页码、原文次序和非空白内容不变。已有索引不自动迁移，历史解析、
+出处和固定版本不改写；新的指纹与后述重建确认规则必须一起生效。
 
 `ddp-chunk/3`（2026-09-24）只把**版面相邻**的正文块并进同一 chunk：与前一块竖直空隙
 超过 2.5 倍行高、往上跳（换栏）、左右不重叠，或一块有 bbox 一块没有，都另起一块。

@@ -10,6 +10,7 @@ center event sequence meta → delta → citations → assertions → done with 
 documented delta. Wiki revisions come back in wiki-v1 shape.
 """
 
+import json
 import httpx
 import pytest
 
@@ -47,7 +48,10 @@ def _grounded_model(runtime):
 
     async def generate(messages, **kwargs):
         calls.append((messages, kwargs))
-        return "The answer is 42 [1]", {"name": "fixture", "location": "local"}
+        evidence_id = json.loads(messages[-1]["content"])["evidence"][0]["evidence_id"]
+        return json.dumps({"claims": [
+            {"text": "The answer is 42.", "evidence_ids": [evidence_id]},
+        ], "unanswered": []}), {"name": "fixture", "location": "local"}
 
     runtime.provider.generate = generate
     return calls
@@ -312,6 +316,32 @@ async def test_local_content_conversations_and_ask_sse(client):
     assert (await handle.get(f"/api/conversations/{cid}/messages")).status_code == 404
 
 
+async def test_model_refusal_with_candidates_has_no_primary_citations(client, respx_mock):
+    handle, runtime = client
+    version_id, _ = await _ready_version(handle, runtime)
+    runtime.provider.model = ModelSelection("http://127.0.0.1:18761/v1", "fixture-protocol-only")
+    respx_mock.post("http://127.0.0.1:18761/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200, json={"choices": [{"message": {
+                "content": '{"claims":[],"unanswered":["The supplied evidence does not answer this question."]}'
+            }}]}
+        )
+    )
+    cid = (await handle.post(f"/api/documents/{version_id}/conversations")).json()["id"]
+
+    asked = await handle.post(f"/api/conversations/{cid}/ask", json={"question": "contract revenue"})
+    events = dict(_ask_events(asked.text))
+
+    assert events["meta"]["retrieval"]["candidates"]
+    assert events["citations"]["citations"] == []
+    assert events["meta"]["retrieval"]["evidence_sufficiency"] == "insufficient"
+    assertions = events["assertions"]["assertions"]
+    assert assertions and all(a["unsupported"] and not a["evidence_ids"] for a in assertions)
+    stored = (await handle.get(f"/api/conversations/{cid}/messages")).json()[-1]
+    assert stored["model_meta"]["evidence_sufficiency"] == "insufficient"
+    assert stored["citations"] == []
+
+
 async def test_local_content_evidence_detail_backlinks_no_crop(client):
     handle, runtime = client
     version_id, _ = await _ready_version(handle, runtime)
@@ -502,7 +532,9 @@ def _wiki_protocol(runtime):
             return _json.dumps({"selected_relations": []}), \
                 {"name": "fixture", "location": "local"}
         return _json.dumps({"pages": [{"page": 1, "sections": [{"heading": "事实", "sections": [],
-            "sentences": [{"text": "答案是 42。", "references": [1]}]}]}]}), \
+            "sentences": [{"text": "答案是 42。", "support": [
+                next(iter(_json.loads(messages[1]["content"])["evidence"][0]["spans"]))
+            ]}]}]}]}), \
             {"name": "fixture", "location": "local"}
 
     return generate

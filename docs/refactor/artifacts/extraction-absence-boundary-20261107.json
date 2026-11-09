@@ -1,0 +1,39 @@
+{
+  "date": "2026-11-07",
+  "kind": "real_browser_status_semantics_correction_not_retrieval_fix",
+  "observed_before": {
+    "source": "M3-Embedding arXiv:2402.03216v5, fixed PDF SHA256 eb38e53565da260dc1f3d49708f45441936447a7f3c7d7ef025ff62ea3e1e575",
+    "run_id": "8ef7861207354faebac0e2c85aaac0a0",
+    "profile": "DeepSeek V4 Pro via registry, BGE-M3 Q8_0 and PG keyword retrieval, no vision",
+    "values": {"maximum_input_length": 8192, "input_length_unit": null, "unsupervised_language_count": null},
+    "missing_status": "not_found",
+    "display": "文档中未提及",
+    "problem": "The paper contains tokens and 194 languages, but the bounded extraction returned not_found. The label overstated this as whole-document absence."
+  },
+  "change": {
+    "source_of_truth": "packages/contracts/enums.yaml field_status",
+    "display": "本次未找到",
+    "meaning": "This bounded retrieval/extraction did not find a value; it does not prove absence from the document.",
+    "generated_languages": ["TypeScript", "Go", "Python"],
+    "wire_values_unchanged": true,
+    "persisted_model_output_unchanged": true,
+    "retrieval_or_model_accuracy_fixed": false
+  },
+  "observed_after": {
+    "surface": "actual Web browser, isolated center, same persisted extraction run",
+    "missing_cells": ["本次未找到", "本次未找到"],
+    "preserved": ["8192", "部分完成", "未做视觉验证（视觉模型不可用）", "PDF 第 2 页 · 53%"],
+    "interaction": "Clicked 8192 field; citation drawer opened with value, unverified/vision-unavailable state and PDF page 2 source."
+  },
+  "verification": [
+    {"command": ".venv/bin/python packages/contracts/scripts/generate.py --check", "result": "PASS: 51 enum groups, 452 values; resolved schemas fresh; OpenAPI enum parity"},
+    {"command": ".venv/bin/python scripts/check_enum_usage.py", "result": "PASS: 316 uses within contracts"},
+    {"command": "npm run build (apps/web)", "result": "PASS; existing >500 kB chunk warning retained"}
+  ],
+  "limits": ["No new wording-only test was added.", "No full Python suite was run in this round.", "False negatives and the erroneous language-count answer remain unresolved.", "No independent human evaluation, public deployment, or production SLA is claimed."],
+  "screenshots": [
+    ".dev-logs/contest-validation-20261109/续改-20261107/R7-真实界面-M3字段-修正说明前.png",
+    ".dev-logs/contest-validation-20261109/续改-20261107/R7-真实界面-M3字段.png",
+    ".dev-logs/contest-validation-20261109/续改-20261107/R7-真实界面-M3字段出处.png"
+  ]
+}

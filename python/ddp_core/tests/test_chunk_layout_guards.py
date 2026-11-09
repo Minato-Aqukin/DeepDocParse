@@ -39,6 +39,32 @@ def test_layout_to_chunks_still_splits_long_block():
     assert all(c["char_len"] <= 10 + len("标题") for c in chunks)
 
 
+def test_oversized_prose_keeps_complete_sentences_together():
+    sentences = [
+        "The active sensors sample each incoming channel.",
+        "Only the selected buffer accepts writes during the transfer.",
+        "Other buffers retain their previous contents.",
+    ]
+    body = " ".join(sentences)
+    chunks = layout_to_chunks(_layout(text=body), max_chars=80)
+    texts = [chunk["text"] for chunk in chunks]
+    assert all(any(sentence in text for text in texts) for sentence in sentences)
+    assert " ".join(texts) == body
+    assert all(len(text) <= 80 for text in texts)
+
+
+@pytest.mark.parametrize("value,max_chars", [
+    ("3.1415926535897932384626433832795028841971", 64),
+    ("3.14159", 38),  # The period is exactly at the end of the candidate window.
+])
+def test_oversized_prose_does_not_treat_decimal_point_as_sentence_end(value, max_chars):
+    body = f"Measured output remains in the range {value} units."
+    pieces = _split_oversized(body, max_chars=max_chars)
+    assert any(value in piece for piece in pieces)
+    assert " ".join(pieces) == body
+    assert all(len(piece) <= max_chars for piece in pieces)
+
+
 @pytest.mark.parametrize("bbox", [None, [], [1, 2, 3], [1, 2, "x", 4], [1, 2, float("nan"), 4]])
 @pytest.mark.parametrize("page_size", [[612, 792], [0, 0], None])
 def test_furniture_key_skips_malformed_geometry(bbox, page_size):

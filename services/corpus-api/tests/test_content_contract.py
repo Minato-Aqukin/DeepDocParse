@@ -183,6 +183,43 @@ async def test_content_search(actor_client):
 
 
 @respx.mock
+async def test_search_snippet_belongs_to_its_resolved_generated_evidence(actor_client, session):
+    document = await _ready_document(actor_client)
+    chunk = (await session.execute(select(Chunk).where(
+        Chunk.document_id == document["id"]).order_by(Chunk.seq))).scalars().first()
+    generated_text = "该片段的生成理解：算法解释不包含原文中的具体数值。"
+    generated = Evidence(
+        document_id=document["id"], parse_job_id=chunk.parse_job_id,
+        seq=chunk.seq, atom_key=f"generated:{chunk.seq}", kind=chunk.block_type,
+        content=generated_text,
+        content_digest=hashlib.sha256(generated_text.encode()).hexdigest(),
+        page_idx=chunk.page_idx, bbox=chunk.bbox, page_size=chunk.page_size,
+        derived_from=chunk.evidence_id,
+    )
+    session.add(generated)
+    await session.flush()
+    chunk.derived_text = generated_text
+    chunk.derived_evidence_id = generated.id
+    await session.commit()
+
+    response = await actor_client.get("/api/search", params={
+        "q": chunk.text, "doc": document["id"],
+    })
+    assert response.status_code == 200, response.text
+    hit = next(hit for group in response.json()["groups"] for hit in group["hits"]
+               if hit["evidence_id"] == generated.id)
+    resolved = await actor_client.get(f"/api/evidence/{hit['evidence_id']}")
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["source_type"] == "generated"
+    assert resolved.json()["derived_from"] == chunk.evidence_id
+    assert hit["snippet"] == resolved.json()["content"] == generated_text
+    original = await actor_client.get(f"/api/evidence/{chunk.evidence_id}")
+    assert original.status_code == 200, original.text
+    assert original.json()["source_type"] == "source"
+    assert hit["snippet"] not in original.json()["content"]
+
+
+@respx.mock
 async def test_content_conversations_and_ask_sse(actor_client, session):
     """会话 CRUD + ask SSE 全事件：meta/delta/citations/assertions/done。"""
     document = await _ready_document(actor_client)
@@ -198,7 +235,7 @@ async def test_content_conversations_and_ask_sse(actor_client, session):
     _require(listed.json()[0], "id", "document_id")
 
     respx.post(CHAT).mock(side_effect=_grounded_side_effect(
-        _grounded_doc(("第二页讲的是表格数据。", [1]))))
+        _grounded_doc(("第二页讲的是表格数据。", [1])), source_text="第二页的表格数据"))
     events = await _ask(actor_client, cid)
     names = [name for name, _ in events]
     assert names[0] == "meta" and names[-1] == "done", names
@@ -232,7 +269,7 @@ async def test_content_evidence_detail_backlinks_and_crop(actor_client, session)
     document = await _ready_document(actor_client)
     cid = await _conversation(actor_client, document["id"])
     respx.post(CHAT).mock(side_effect=_grounded_side_effect(
-        _grounded_doc(("第二页讲的是表格数据。", [1]))))
+        _grounded_doc(("第二页讲的是表格数据。", [1])), source_text="第二页的表格数据"))
     events = await _ask(actor_client, cid)
     citations = dict(events)["citations"]["citations"]
     assert citations, "前提不成立：这一轮没有产出引用"

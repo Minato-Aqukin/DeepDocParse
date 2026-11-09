@@ -659,7 +659,7 @@ async def test_extraction_rechecks_permission_before_each_model_dispatch(actor_c
         source.publication = "withdrawn"
         await session.commit()
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(
-            {"found": True, "value": "secret plutonium", "source": 1})}}]})
+            {"found": True, "value": "secret plutonium", "support": {"value_source": 1, "context_sources": []}})}}]})
 
     chat = respx.post(CHAT).mock(side_effect=revoke_after_first_model)
     spec = parse_schema({"type": "object", "properties": {
@@ -726,7 +726,7 @@ async def test_same_content_private_parse_outputs_never_enter_other_asset_models
         prompt = json.loads(request.content)["messages"][-1]["content"]
         assert "secret Bob fact" in prompt and "Alice" not in prompt
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(
-            {"found": True, "value": "Bob fact", "source": 1})}}]})
+            {"found": True, "value": "Bob fact", "support": {"value_source": 1, "context_sources": []}})}}]})
     chat = respx.post(CHAT).mock(side_effect=model)
     await _extract_one(session, run.id, doc.id,
         parse_schema({"type": "object", "properties": {"secret": {"type": "string"}}}),

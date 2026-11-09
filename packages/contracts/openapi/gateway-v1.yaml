@@ -48,7 +48,7 @@ paths:
                     之外的地址仅允许公网可路由目标，私网/回环/云元数据/DNS 失败一律 400
                     fetch_not_allowed；响应声明或实际字节超过所选引擎的字节上限时
                     413 file_too_large（一字节都不下载）。上限按引擎分开配：mineru 走
-                    MINERU_MAX_BYTES，borndigital 与 vlm-ocr 走 BORNDIGITAL_MAX_BYTES。
+                    MINERU_MAX_BYTES，borndigital、borndigital-tables 与 vlm-ocr 走 BORNDIGITAL_MAX_BYTES。
                 doc_id:
                   type: string
                   description: |
@@ -325,7 +325,7 @@ paths:
         "200":
           description: |
             DDP-Extract v1。字段三态 found / not_found / error 必须区分对待：
-            not_found 表示"文档里确实没有"，是正确答案的一种；error 才是系统问题。
+            not_found 仅表示本次检索与抽取未找到值，不证明整篇文档没有；error 表示系统问题。
             完整字段清单见 packages/contracts/ddp/extract-format.md
           content:
             application/json:

@@ -297,7 +297,8 @@ class _ChatProvider:
         return {"chat_endpoint": settings.chat_endpoint,
                 "model": settings.chat_model or "registry-default"}
 
-    async def generate(self, messages, *, execution_policy, allow_remote, max_tokens=1024):
+    async def generate(self, messages, *, execution_policy, allow_remote, max_tokens=1024,
+                       response_format=None):
         if type(max_tokens) is not int or not 1 <= max_tokens <= 8192:
             raise APIError(409, "completion token budget must be within 1..8192",
                            "invalid_request_error", "wiki_budget_exceeded")
@@ -307,6 +308,8 @@ class _ChatProvider:
         except ValueError:
             _fail(502, "wiki_generation_failed", "Wiki model request could not be built")
         payload["max_tokens"] = max_tokens
+        if response_format is not None:
+            payload["response_format"] = response_format
         built = self._http.build_request("POST", request.url, json=payload,
                                          headers=request.headers,
                                          extensions=request.extensions)
@@ -441,12 +444,17 @@ def _validate_result_pages(result: dict, *, max_pages: int, known: set[str]) -> 
                     _fail(409, "wiki_generation_invalid", "federated claim must be an object")
                 text = claim.get("text")
                 refs = claim.get("evidence_ids")
+                support = claim.get("support")
                 if (not isinstance(text, str) or not text.strip() or len(text) > 10000
                         or not isinstance(refs, list) or not refs
                         or any(not isinstance(r, str) for r in refs)
                         or not set(refs) <= known):
                     _fail(409, "unsupported_generation",
                           "federated claim cites unknown or missing original evidence")
+                if (not isinstance(support, list) or not support
+                        or any(not isinstance(item, dict) for item in support)):
+                    _fail(409, "unsupported_generation",
+                          "federated claim needs verbatim support quotes from its cited originals")
         out.append(copy.deepcopy(page))
     return out
 
@@ -455,10 +463,11 @@ def _kernel_revalidate(pages: list[dict], relations, evidence: list[dict],
                        provider: dict) -> tuple[list[dict], list[dict]]:
     """Re-validate C-supplied structure through the shared Wiki kernel.
 
-    C's claims arrive as `{text, evidence_ids: [ref...]}` without kernel `id`s
-    and without kernel trust. Every ref must already be a `source_ref`
+    C's claims arrive as `{text, evidence_ids: [ref...], support: [...]}` without
+    kernel `id`s and without kernel trust. Every ref must already be a `source_ref`
     bound above; here each claim/relation is re-checked (text bounds, ref
-    membership, relation phrase-in-excerpt) and rewritten into canonical
+    membership, verbatim support quote in the exact cited excerpt,
+    relation phrase-in-excerpt) and rewritten into canonical
     kernel rows (`wiki_sentence` ids, `edge_result` edges). Anything C
     invented or misbound fails closed — nothing of C's JSON is persisted
     verbatim.
@@ -479,7 +488,22 @@ def _kernel_revalidate(pages: list[dict], relations, evidence: list[dict],
                         _fail(409, "unsupported_generation",
                               "federated claim cites unknown original evidence")
                     numbers.append(position_of[ref])
-                sentences.append({"text": claim.get("text"), "references": numbers})
+                support = []
+                for item in claim.get("support") or []:
+                    if not isinstance(item, dict):
+                        _fail(409, "wiki_generation_invalid", "federated support quote must be an object")
+                    identifier = item.get("evidence_id")
+                    reference = item.get("reference")
+                    if "evidence_id" in item:
+                        if not isinstance(identifier, str) or identifier not in by_id:
+                            _fail(409, "unsupported_generation",
+                                  "federated support quote names unknown original evidence")
+                        reference = position_of[identifier]
+                    if type(reference) is not int or not 1 <= reference <= len(indexed):
+                        _fail(409, "unsupported_generation",
+                              "federated support quote names unknown original evidence")
+                    support.append({"reference": reference, "quote": item.get("quote")})
+                sentences.append({"text": claim.get("text"), "references": numbers, "support": support})
             sections.append({"heading": section.get("heading"), "sentences": sentences})
         raw_pages.append({"page": number, "sections": sections})
     plan = [{"page_key": page["page_key"], "title": page["title"],

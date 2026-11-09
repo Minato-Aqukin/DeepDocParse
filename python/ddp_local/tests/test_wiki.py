@@ -47,8 +47,13 @@ def protocol(runtime, *, bad=False, wait=None, began=None, rename=False):
         elif stage == "relations":
             value = {"selected_relations": [1] if json.loads(messages[1]["content"]).get("candidates") else []}
         else:
+            if bad:
+                supported = ["q99.1"]
+            else:
+                spans = json.loads(messages[1]["content"])["evidence"][0]["spans"]
+                supported = [next(iter(spans))]
             value = {"pages": [{"page": n, "sections": [{"heading": "Facts", "sentences": [
-                {"text": "The answer is 42.", "references": [99] if bad else [1]}]}]} for n in (1, 2)],
+                {"text": "The answer is 42.", "support": supported}]}]} for n in (1, 2)],
                 "relations": [{"subject_page": 1, "object_page": 2, "predicate": "Answer: 42",
                                "references": [1]}]}
         return json.dumps(value), {"name": "fixture", "location": "local"}

@@ -1,0 +1,80 @@
+{
+  "edition": "DeepDocParse 视频配音版 2026-11-09",
+  "ppt": {
+    "pages": 20,
+    "aspect_ratio": "16:9",
+    "removed_text_shapes": 42,
+    "all_other_shapes_preserved": true,
+    "visible_footer_band_empty": true,
+    "pptx_sha256": "8743ebd2ce0747b97578bec4d48fc960e98dd23f9b69304c5443c32ce6e39fa8",
+    "pdf_sha256": "579e665bd7b7aed9f0db00133b91ad134b024c87e1ad3b824099a3108cc07797",
+    "source_unchanged": true
+  },
+  "movies": [
+    {
+      "file": "DeepDocParse-无字幕待配音母版.mp4",
+      "bytes": 11230155,
+      "sha256": "37e1ee0e4671aeeb2e75e77bcf8d42676fcf140d173f8997264548265b520d11",
+      "duration": 340.0,
+      "frames": 10200,
+      "size": [
+        1920,
+        1080
+      ],
+      "fps": "30/1",
+      "codec": "h264",
+      "pixel_format": "yuv420p",
+      "audio_streams": 0,
+      "chapters": 20,
+      "faststart": true,
+      "full_decode": "PASS"
+    },
+    {
+      "file": "DeepDocParse-带字幕待配音.mp4",
+      "bytes": 12605874,
+      "sha256": "7a2ea47fc854b0a0a5d19b81dff983132941f03fffb1ba7e57ba540d90cd8f48",
+      "duration": 340.0,
+      "frames": 10200,
+      "size": [
+        1920,
+        1080
+      ],
+      "fps": "30/1",
+      "codec": "h264",
+      "pixel_format": "yuv420p",
+      "audio_streams": 0,
+      "chapters": 20,
+      "faststart": true,
+      "full_decode": "PASS"
+    }
+  ],
+  "narration": {
+    "text_unchanged": true,
+    "member_voice_pending": true,
+    "planned_seconds": 340,
+    "captions": 61,
+    "guide_events": 79,
+    "retimed_pages": {
+      "2": 13,
+      "3": 20,
+      "5": 19,
+      "7": 17,
+      "12": 18,
+      "15": 18,
+      "16": 18
+    },
+    "voice_pdf_pages": 2
+  },
+  "checks": {
+    "full_decode_both_movies": "PASS",
+    "all_20_slide_boundaries": "PASS",
+    "all_61_captions_present": "PASS",
+    "captions_do_not_cover_diagrams": "PASS",
+    "voiceover_pdf_visual_review": "PASS",
+    "all_20_encoded_slide_frames_viewed": true,
+    "last_frame_viewed": true,
+    "no_audio_tracks": "PASS",
+    "under_300MB_each": "PASS",
+    "actual_human_voice_or_editing_app_not_tested": true
+  }
+}

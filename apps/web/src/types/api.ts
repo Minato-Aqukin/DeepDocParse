@@ -178,6 +178,8 @@ export interface QueryDecision {
   need_retrieval: boolean
   reason: string
   inherited_evidence_ids: string[]
+  /** Bounded query translations/facets; absent on historical turns. Never evidence. */
+  retrieval_queries?: string[]
   degraded: string | null
 }
 
@@ -494,9 +496,8 @@ export interface SchemaField {
 /**
  * 一个字段的抽取结果。
  *
- * **三态必须分开显示**：not_found 是"文档里确实没有"（一个正确答案），
- * error 是"我们没能可靠地抽出来"。混在一起的话，空值看起来都像结论 ——
- * 那是抽取里最危险的输出。
+ * **三态必须分开显示**：not_found 只表示本次检索与抽取未找到值，
+ * 不证明整篇文档没有；error 表示抽取过程出错。空值不能冒充全文结论。
  */
 export interface FieldResult {
   status: FieldStatus

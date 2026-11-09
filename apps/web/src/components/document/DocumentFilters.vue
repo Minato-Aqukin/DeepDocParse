@@ -59,7 +59,7 @@ onBeforeUnmount(() => window.clearTimeout(debounceTimer))
 <template>
   <div class="filters">
     <el-input
-      :model-value="modelValue.q"
+      :model-value="pendingQuery ?? modelValue.q"
       placeholder="按文件名筛选，回车进入全文检索"
       clearable
       class="keyword"

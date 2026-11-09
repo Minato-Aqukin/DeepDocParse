@@ -14,7 +14,7 @@ paths:
       operationId: createVersionedWiki
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Build'}}}}
-      description: 同名规划页合并有效引用及章节。跨篇规划或结论缺少选定来源引用时拒绝；来源覆盖不代表语义支持度已通过。
+      description: 同名规划页合并有效引用及章节。跨篇规划或结论缺少选定来源引用时拒绝；模型只选择服务端给定的原文片段目录ID，服务端恢复逐字support摘录；错位/虚构选择整稿拒收且不自动改绑。已存或联邦摘录仍逐字核对；来源覆盖与逐字命中均为机械判据，不代表语义支持度已通过。
       responses: {'201': {description: Fixed draft revision}, '409': {description: Idempotency or budget conflict}, '502': {description: Invalid or source-incomplete model output}}
   /api/wikis/{wiki_id}:
     parameters: [{$ref: '#/components/parameters/WikiId'}]
@@ -100,10 +100,10 @@ components:
             properties:
               resource_id: {type: string}
               source_version_id: {type: string}
-        max_pages: {type: integer, minimum: 1, maximum: 12, default: 4}
+        max_pages: {type: integer, minimum: 1, maximum: 12, default: 1}
         max_evidence: {type: integer, minimum: 1, maximum: 200, default: 50}
         max_output_tokens: {type: integer, minimum: 256, maximum: 16384, default: 4096}
-        max_input_chars: {type: integer, minimum: 1000, maximum: 200000, default: 50000}
+        max_input_chars: {type: integer, minimum: 1000, maximum: 200000, default: 24000}
     Rebuild:
       allOf:
         - {$ref: '#/components/schemas/Build'}

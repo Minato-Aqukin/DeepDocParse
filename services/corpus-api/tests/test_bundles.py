@@ -658,7 +658,7 @@ async def _import_bundle_bytes(client, payload: bytes, *, key: str):
     return response.json()
 
 
-def _vectors_bundle(*, normalization="none", chunker="ddp-chunk/3",
+def _vectors_bundle(*, normalization="none", chunker=None,
                     dtype="float32", encoding="json-list"):
     """A present-vectors bundle whose dense identity matches the running config
     except for the explicitly overridden preprocessing/chunking/format field."""
@@ -706,7 +706,7 @@ def _vectors_bundle(*, normalization="none", chunker="ddp-chunk/3",
         "chunking": {
             "max_chars": settings.chunk_max_chars,
             "tokenizer": tokenizer,
-            "chunker": chunker,
+            "chunker": CHUNKER_VERSION if chunker is None else chunker,
         },
         "format": {"dtype": dtype, "encoding": encoding},
         "source": {
@@ -723,7 +723,6 @@ def _vectors_bundle(*, normalization="none", chunker="ddp-chunk/3",
     }
     files["vectors.json"] = json_bytes(vectors)
     bundle = build_bundle(source, files, required_features=["vectors"])
-    assert vectors["chunking"]["chunker"] == CHUNKER_VERSION or chunker != CHUNKER_VERSION
     assert read_bundle(io.BytesIO(bundle)).vectors["state"] == "present"
     return bundle
 

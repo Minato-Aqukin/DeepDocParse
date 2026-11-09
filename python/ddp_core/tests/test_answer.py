@@ -1,4 +1,4 @@
-"""`GroundedAnswerStream` / `grounded_answer_schema` 的行为测试。
+"""`GroundedAnswerStream` / `grounded_answer_schema` 的行为测试（grounded-claims/2）。
 
 每条都钉着一个 plausible bug：切分相关的（增量解析最容易在这里错）、
 放宽校验的（多一条引用就多一个假出处）、以及"违反发生时已产出部分丢失"的。
@@ -14,12 +14,13 @@ from ddp_core.answer import (
 )
 
 
-def _doc(*claims: tuple[str, list[str]], status: str = "answered") -> str:
-    payload: dict = {"status": status}
-    if claims or status == "answered":
-        payload["claims"] = [
+def _doc(*claims: tuple[str, list[str]], unanswered: tuple[str, ...] = ()) -> str:
+    payload: dict = {
+        "claims": [
             {"text": text, "evidence_ids": ids} for text, ids in claims
-        ]
+        ],
+        "unanswered": list(unanswered),
+    }
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -58,7 +59,6 @@ def test_fragmentation_does_not_change_result():
 def test_escapes_and_split_surrogate_pair_decode_identically():
     doc = json.dumps(
         {
-            "status": "answered",
             "claims": [
                 {
                     "text": "引号\"反斜杠\\换行\n雪人☃é\\u全角Ａ「」",
@@ -66,12 +66,13 @@ def test_escapes_and_split_surrogate_pair_decode_identically():
                 },
                 {"text": "emoji A\U0001F600B 全角空格\u3000尾", "evidence_ids": ["ev-2"]},
             ],
+            "unanswered": [],
         },
         ensure_ascii=False,
     )
     # emoji 以 \uXXXX 代理对形式出现，且切分断在代理对与转义中间时也不许错
     raw = json.dumps(
-        {"status": "answered", "claims": [{"text": "A\U0001F600B", "evidence_ids": ["ev-1"]}]},
+        {"claims": [{"text": "A\U0001F600B", "evidence_ids": ["ev-1"]}], "unanswered": []},
         ensure_ascii=True,
     )
     assert "\\ud83d" in raw.lower()
@@ -82,8 +83,8 @@ def test_escapes_and_split_surrogate_pair_decode_identically():
     assert _run(doc, list(range(1, len(doc))), IDS) == _run(doc, [], IDS)
 
 
-def test_first_claim_streams_before_status_is_known():
-    doc = '{"claims": [{"text": "先出的结论", "evidence_ids": ["ev-1"]}, {"text": "后出的", "evidence_ids": ["ev-2"]}], "status": "answered"}'
+def test_first_claim_streams_before_document_is_complete():
+    doc = '{"claims": [{"text": "先出的结论", "evidence_ids": ["ev-1"]}, {"text": "后出的", "evidence_ids": ["ev-2"]}], "unanswered": []}'
     cut = doc.index("}, {") + 1  # 第一条 claim 的 } 刚闭合
     stream = GroundedAnswerStream(IDS)
     first = stream.feed(doc[:cut])
@@ -96,7 +97,7 @@ def test_first_claim_streams_before_status_is_known():
 
 def test_duplicate_top_level_key_is_rejected():
     # 违反点之前已有合法 claim：当次 feed 先返回它，违反留到下一次调用再抛
-    raw = _doc(("a", ["ev-1"]))[:-1] + ', "status": "answered"}'
+    raw = _doc(("a", ["ev-1"]))[:-1] + ', "unanswered": []}'
     stream = GroundedAnswerStream(IDS)
     assert [c["text"] for c in stream.feed(raw)] == ["a"]
     with pytest.raises(AnswerFormatError):
@@ -104,11 +105,11 @@ def test_duplicate_top_level_key_is_rejected():
     # 违反点之前没有合法 claim 时当次就抛
     stream = GroundedAnswerStream(IDS)
     with pytest.raises(AnswerFormatError):
-        stream.feed('{"status": "answered", "status": "answered", "claims": [{"text": "a", "evidence_ids": ["ev-1"]}]}')
+        stream.feed('{"claims": [], "claims": [], "unanswered": []}')
 
 
 def test_duplicate_claim_key_is_rejected():
-    raw = '{"status": "answered", "claims": [{"text": "a", "text": "b", "evidence_ids": ["ev-1"]}]}'
+    raw = '{"claims": [{"text": "a", "text": "b", "evidence_ids": ["ev-1"]}], "unanswered": []}'
     stream = GroundedAnswerStream(IDS)
     with pytest.raises(AnswerFormatError):
         stream.feed(raw)
@@ -116,7 +117,7 @@ def test_duplicate_claim_key_is_rejected():
 
 def test_unknown_top_level_key_is_rejected():
     # 违反点之前已有合法 claim：当次 feed 先返回它，违反留到下一次调用再抛
-    raw = '{"status": "answered", "claims": [{"text": "a", "evidence_ids": ["ev-1"]}], "note": "x"}'
+    raw = '{"claims": [{"text": "a", "evidence_ids": ["ev-1"]}], "unanswered": [], "note": "x"}'
     stream = GroundedAnswerStream(IDS)
     assert [c["text"] for c in stream.feed(raw)] == ["a"]
     with pytest.raises(AnswerFormatError):
@@ -124,11 +125,11 @@ def test_unknown_top_level_key_is_rejected():
     # 违反点之前没有合法 claim 时当次就抛
     stream = GroundedAnswerStream(IDS)
     with pytest.raises(AnswerFormatError):
-        stream.feed('{"note": "x", "status": "answered", "claims": [{"text": "a", "evidence_ids": ["ev-1"]}]}')
+        stream.feed('{"note": "x", "claims": [{"text": "a", "evidence_ids": ["ev-1"]}], "unanswered": []}')
 
 
 def test_unknown_claim_key_is_rejected():
-    raw = '{"status": "answered", "claims": [{"text": "a", "evidence_ids": ["ev-1"], "score": 0.9}]}'
+    raw = '{"claims": [{"text": "a", "evidence_ids": ["ev-1"], "score": 0.9}], "unanswered": []}'
     stream = GroundedAnswerStream(IDS)
     with pytest.raises(AnswerFormatError):
         stream.feed(raw)
@@ -147,7 +148,7 @@ def test_empty_evidence_ids_is_rejected():
 
 
 def test_non_string_evidence_id_is_rejected():
-    raw = '{"status": "answered", "claims": [{"text": "a", "evidence_ids": [1]}]}'
+    raw = '{"claims": [{"text": "a", "evidence_ids": [1]}], "unanswered": []}'
     stream = GroundedAnswerStream(IDS)
     with pytest.raises(AnswerFormatError):
         stream.feed(raw)
@@ -163,50 +164,41 @@ def test_missing_claim_member_is_rejected():
     for claim in ('{"text": "a"}', '{"evidence_ids": ["ev-1"]}'):
         stream = GroundedAnswerStream(IDS)
         with pytest.raises(AnswerFormatError):
-            stream.feed(f'{{"status": "answered", "claims": [{claim}]}}')
+            stream.feed(f'{{"claims": [{claim}], "unanswered": []}}')
 
 
-def test_answered_with_empty_claims_is_rejected():
-    for raw in ('{"status": "answered", "claims": []}', '{"status": "answered"}'):
+def test_both_arrays_empty_is_rejected_as_bare_result():
+    for raw in ('{"claims": [], "unanswered": []}', '{"unanswered": [], "claims": []}'):
         stream = GroundedAnswerStream(IDS)
         with pytest.raises(AnswerFormatError):
             stream.feed(raw)
+            stream.finish()
 
 
-def test_insufficient_evidence_with_claims_is_rejected():
-    raw = '{"status": "insufficient_evidence", "claims": [{"text": "a", "evidence_ids": ["ev-1"]}]}'
-    stream = GroundedAnswerStream(IDS)
-    with pytest.raises(AnswerFormatError):
-        stream.feed(raw)
-
-
-def test_claims_before_insufficient_status_is_rejected_but_kept():
-    raw = '{"claims": [{"text": "a", "evidence_ids": ["ev-1"]}], "status": "insufficient_evidence"}'
-    stream = GroundedAnswerStream(IDS)
-    # status 到之前 claim 已合法闭合：先返回它，违反留到 finish 再抛
-    assert [c["text"] for c in stream.feed(raw)] == ["a"]
-    with pytest.raises(AnswerFormatError):
-        stream.finish()
-
-
-def test_bare_insufficient_evidence_refuses():
-    for raw in ('{"status": "insufficient_evidence"}', '{"status": "insufficient_evidence", "claims": []}'):
+def test_missing_array_is_rejected():
+    for raw in ('{"claims": [{"text": "a", "evidence_ids": ["ev-1"]}]}',
+                '{"unanswered": ["缺依据。"]}',
+                '{"claims": []}'):
         stream = GroundedAnswerStream(IDS)
-        assert stream.feed(raw) == []
-        assert stream.finish() == []
-        assert stream.insufficient_evidence is True
+        with pytest.raises(AnswerFormatError):
+            stream.feed(raw)
+            stream.finish()
+
+
+def test_legacy_status_is_an_unknown_key_without_compat():
+    for raw in ('{"status": "answered", "claims": [{"text": "a", "evidence_ids": ["ev-1"]}], "unanswered": []}',
+                '{"status": "insufficient_evidence", "claims": [], "unanswered": ["缺依据。"]}',
+                '{"status": "maybe", "claims": [], "unanswered": ["缺依据。"]}'):
+        stream = GroundedAnswerStream(IDS)
+        with pytest.raises(AnswerFormatError):
+            stream.feed(raw)
+            stream.finish()
 
 
 def test_insufficient_is_not_set_by_feed_alone():
     stream = GroundedAnswerStream(IDS)
-    stream.feed('{"status": "insufficient_evidence"}')
+    stream.feed('{"claims": [], "unanswered": ["缺依据。"]}')
     assert stream.insufficient_evidence is False
-
-
-def test_unknown_status_is_rejected():
-    stream = GroundedAnswerStream(IDS)
-    with pytest.raises(AnswerFormatError):
-        stream.feed('{"status": "maybe"}')
 
 
 def test_trailing_garbage_and_second_object_are_rejected():
@@ -234,12 +226,6 @@ def test_top_level_array_is_rejected():
         stream.feed('[{"text": "a", "evidence_ids": ["ev-1"]}]')
 
 
-def test_truncation_at_finish_is_an_error_not_a_partial_answer():
-    doc = _doc(("a", ["ev-1"]), ("b", ["ev-2"]))
-    stream = GroundedAnswerStream(IDS)
-    assert [c["text"] for c in stream.feed(doc[: len(doc) // 2])] == []
-    with pytest.raises(AnswerFormatError):
-        stream.finish()
 
 
 def test_finish_on_empty_input_is_truncation():
@@ -256,12 +242,12 @@ def test_valid_claims_survive_a_later_violation_in_one_feed():
     with pytest.raises(AnswerFormatError):
         stream.finish()
 def test_valid_claims_survive_a_later_violation_across_feeds():
-    good_prefix = '{"status": "answered", "claims": [{"text": "好的", "evidence_ids": ["ev-1"]}, '
+    good_prefix = '{"claims": [{"text": "好的", "evidence_ids": ["ev-1"]}, '
     stream = GroundedAnswerStream(IDS)
     assert [c["text"] for c in stream.feed(good_prefix)] == ["好的"]
     # 违反在第二次 feed 才可判定：之前没有新闭合的 claim，当次就抛
     with pytest.raises(AnswerFormatError):
-        stream.feed('{"text": "坏的", "evidence_ids": ["ev-nope"]}]}')
+        stream.feed('{"text": "坏的", "evidence_ids": ["ev-nope"]}], "unanswered": []}')
     with pytest.raises(AnswerFormatError):
         stream.finish()
 
@@ -307,6 +293,11 @@ def test_too_many_claims_is_rejected():
         stream.feed(_doc(*claims))
         stream.finish()
 
+    crowded = [(f"c{i}", ["ev-1"]) for i in range(mod.MAX_CLAIMS)]
+    stream = GroundedAnswerStream(IDS)
+    with pytest.raises(AnswerFormatError):
+        stream.feed(_doc(*crowded, unanswered=("还有一处缺依据。",)))
+        stream.finish()
 
 def test_total_input_bound_is_enforced():
     from ddp_core import answer as mod
@@ -326,14 +317,19 @@ def test_bracket_marker_in_text_creates_no_binding():
 
 def test_schema_constrains_evidence_ids_to_visible_set():
     schema = grounded_answer_schema(["a", "b"])
-    answered, insufficient = schema["anyOf"]
-    claim = answered["properties"]["claims"]["items"]
+    assert schema["required"] == ["claims", "unanswered"]
+    assert schema["additionalProperties"] is False
+    claim = schema["properties"]["claims"]["items"]
     # 非法 id 不在 enum 里：guided decoding 根本写不出它，解码器是第二道门
     assert claim["properties"]["evidence_ids"]["items"] == {"type": "string", "enum": ["a", "b"]}
-    assert answered["properties"]["claims"]["minItems"] == 1
-    assert insufficient["properties"]["status"] == {"type": "string", "enum": ["insufficient_evidence"]}
-    for node in (answered, insufficient, claim):
+    assert schema["properties"]["unanswered"]["items"] == {"type": "string", "minLength": 1}
+    assert "status" not in schema["properties"]
+    assert "anyOf" not in schema
+    for node in (schema, claim):
         assert node["additionalProperties"] is False
+    conflicted = grounded_answer_schema(["a", "b"], allow_conflicts=True)
+    assert set(conflicted["properties"]) == {"claims", "unanswered", "conflicts"}
+    assert "conflicts" not in schema["properties"]
 
 
 def test_schema_has_no_string_length_bounds_the_llama_cpp_grammar_cannot_compile():
@@ -357,7 +353,7 @@ def test_conflicts_survive_fragmentation_and_are_not_claims():
     doc = json.dumps({
         "conflicts": [{"evidence_ids": ["ev-2", "ev-1", "ev-2"]}],
         "claims": [{"text": "The sources disagree on voltage.", "evidence_ids": IDS}],
-        "status": "answered",
+        "unanswered": [],
     })
     stream = GroundedAnswerStream(IDS, allow_conflicts=True)
     claims = []
@@ -379,7 +375,8 @@ def test_conflicts_survive_fragmentation_and_are_not_claims():
 ])
 def test_malformed_conflicts_invalidate_the_complete_document(conflicts):
     doc = json.dumps({
-        "status": "answered", "claims": [{"text": "A fact.", "evidence_ids": ["ev-1"]}],
+        "claims": [{"text": "A fact.", "evidence_ids": ["ev-1"]}],
+        "unanswered": [],
         "conflicts": conflicts,
     })
     stream = GroundedAnswerStream(IDS, allow_conflicts=True)
@@ -393,18 +390,19 @@ def test_single_center_decoder_does_not_accept_unrequested_conflicts():
     stream = GroundedAnswerStream(IDS)
     with pytest.raises(AnswerFormatError):
         stream.feed(json.dumps({
-            "status": "answered",
             "claims": [{"text": "The sources disagree.", "evidence_ids": IDS}],
+            "unanswered": [],
             "conflicts": [{"evidence_ids": IDS}],
         }))
         stream.finish()
 
 
-@pytest.mark.parametrize("order", ["status_first", "conflicts_first"])
+@pytest.mark.parametrize("order", ["claims_first", "conflicts_first"])
 @pytest.mark.parametrize("conflicts", [[], [{"evidence_ids": IDS}]])
-def test_insufficient_evidence_never_carries_conflicts(order, conflicts):
+def test_empty_facts_must_not_carry_conflicts_key(order, conflicts):
     items = [
-        ("status", "insufficient_evidence"), ("conflicts", conflicts),
+        ("claims", []), ("unanswered", ["现有证据不足以确定保修年限。"]),
+        ("conflicts", conflicts),
     ]
     if order == "conflicts_first":
         items.reverse()
@@ -418,7 +416,7 @@ def test_insufficient_evidence_never_carries_conflicts(order, conflicts):
 def test_conflict_sources_must_be_cited_by_answer_claims(conflicts_first):
     claims = [{"text": "One source rates PM-2 at 240 V.", "evidence_ids": ["ev-1"]}]
     conflicts = [{"evidence_ids": IDS}]
-    pairs = [("status", "answered"), ("claims", claims), ("conflicts", conflicts)]
+    pairs = [("claims", claims), ("unanswered", []), ("conflicts", conflicts)]
     if conflicts_first:
         pairs.reverse()
     stream = GroundedAnswerStream(IDS, allow_conflicts=True)
@@ -426,3 +424,55 @@ def test_conflict_sources_must_be_cited_by_answer_claims(conflicts_first):
         stream.feed(json.dumps(dict(pairs)))
         stream.finish()
     assert stream.conflicts == []
+
+
+def test_partial_answer_preserves_supported_fact_and_explicit_missing_part():
+    raw = json.dumps({
+        "claims": [{"text": "额定电压是220 V。", "evidence_ids": ["ev-1"]}],
+        "unanswered": ["现有资料不足以确定保修年限。"],
+    }, ensure_ascii=False)
+    expected = [
+        {"position": 0, "text": "额定电压是220 V。", "evidence_ids": ["ev-1"], "unsupported": False},
+        {"position": 1, "text": "现有资料不足以确定保修年限。", "evidence_ids": [], "unsupported": True},
+    ]
+    assert _run(raw, [], IDS) == expected
+    for cut in range(len(raw) + 1):
+        assert _run(raw, [cut], IDS) == expected
+
+
+@pytest.mark.parametrize("unanswered", [
+    [""], ["   "], [3], [{"text": "缺资料", "evidence_ids": ["ev-1"]}],
+    ["x" * 2001], ["missing"] * 64,
+])
+def test_invalid_missing_parts_do_not_relax_factual_claim_requirements(unanswered):
+    raw = json.dumps({
+        "claims": [{"text": "额定电压是220 V。", "evidence_ids": ["ev-1"]}],
+        "unanswered": unanswered,
+    })
+    decoder = GroundedAnswerStream(IDS)
+    with pytest.raises(AnswerFormatError):
+        decoder.feed(raw)
+        decoder.finish()
+
+
+def test_missing_part_is_not_emitted_from_truncated_document():
+    decoder = GroundedAnswerStream(IDS)
+    raw = '{"unanswered":["保修期限未知"],"claims":['
+    assert decoder.feed(raw) == []
+    with pytest.raises(AnswerFormatError):
+        decoder.finish()
+
+
+def test_missing_subquestions_are_explicit_without_fabricated_claims():
+    missing = ["现有证据不足以确定官方价格。", "现有证据不足以确定最小起订量。"]
+    raw = json.dumps({"claims": [], "unanswered": missing}, ensure_ascii=False)
+    for cut in (0, len(raw) // 2, len(raw)):
+        stream = GroundedAnswerStream(IDS)
+        assert stream.feed(raw[:cut]) == []
+        assert stream.feed(raw[cut:]) == []
+        assert stream.insufficient_evidence is False
+        assert stream.finish() == [
+            {"position": index, "text": text, "evidence_ids": [], "unsupported": True}
+            for index, text in enumerate(missing)
+        ]
+        assert stream.insufficient_evidence is True

@@ -100,24 +100,24 @@ def grounded_reply(*claims: tuple[str, tuple[int, ...]], conflicts=(), originals
         if originals:
             by_text = {source["text"]: source for source in evidence}
             if any(text not in by_text for text in originals):
-                return chat_answer(json.dumps({"status": "insufficient_evidence"}))
+                return chat_answer(json.dumps({"claims": [], "unanswered": ["The supplied evidence does not answer this question."]}))
             evidence = [by_text[text] for text in originals]
         if not claims or not evidence:
-            return chat_answer(json.dumps({"status": "insufficient_evidence"}))
+            return chat_answer(json.dumps({"claims": [], "unanswered": ["The supplied evidence does not answer this question."]}))
         grounded_claims = []
         for text, ordinals in claims:
             if not ordinals or any(
                     ordinal < 1 or ordinal > len(evidence) for ordinal in ordinals):
-                return chat_answer(json.dumps({"status": "insufficient_evidence"}))
+                return chat_answer(json.dumps({"claims": [], "unanswered": ["The supplied evidence does not answer this question."]}))
             sources = [evidence[ordinal - 1] for ordinal in ordinals]
             if any(not source["text"].strip() for source in sources) or not any(
                     text in source["text"] for source in sources):
-                return chat_answer(json.dumps({"status": "insufficient_evidence"}))
+                return chat_answer(json.dumps({"claims": [], "unanswered": ["The supplied evidence does not answer this question."]}))
             grounded_claims.append({
                 "text": text,
                 "evidence_ids": [source["evidence_id"] for source in sources],
             })
-        answer = {"status": "answered", "claims": grounded_claims}
+        answer = {"claims": grounded_claims, "unanswered": []}
         if conflicts:
             answer["conflicts"] = [
                 {"evidence_ids": [evidence[ordinal - 1]["evidence_id"]
@@ -519,7 +519,7 @@ async def test_malformed_schema_conflicts_reject_the_answer(
             "invalid-shape": [{"evidence_ids": evidence_id}],
         }[malformation]
         return chat_answer(json.dumps({
-            "status": "answered",
+            "unanswered": [],
             "claims": [{"text": "PM-2 is rated 240 V", "evidence_ids": [evidence_id]}],
             "conflicts": conflicts,
         }))

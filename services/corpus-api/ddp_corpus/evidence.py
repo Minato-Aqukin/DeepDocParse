@@ -86,20 +86,25 @@ async def record_evidence(session: AsyncSession, citations: list[dict], *,
         return 0
 
 
-def locators_of(citations: list[dict]) -> dict[tuple[str, int], dict]:
+def locators_of(citations: list[dict]) -> dict[tuple[str, int, str | None], dict]:
     """老 JSON 的出处列表 -> `{定位键: 出处}`，**保序**（顺序即检索名次）。
 
     抽出来是因为**双写与历史回填必须用同一条规则**：
     规则一旦有差异，对拍（阶段 2b 的验收标准）就会报出一堆不存在的差异，
     而真正的差异反倒被淹掉。
+
+    定位键带上 `evidence_id`：同一槽位可同时引用原文与派生两条证据，
+    两条是不同的引用事件，不能互相覆盖。键里 `evidence_id` 缺失的老出处
+    按 `None` 归一 —— 与此前按 `(parse_job_id, seq)` 去重同一条语义。
     """
-    locators: dict[tuple[str, int], dict] = {}
+    locators: dict[tuple[str, int, str | None], dict] = {}
     for citation in citations or []:
         key = _locator(citation)
         if key is not None:
-            # 同一条 message 的 citations 里出现两个相同的定位键是数据错误，
-            # 不是"引用了两次" —— 保留先出现的那条（它的名次更靠前）
-            locators.setdefault(key, citation)
+            keyed = (key[0], key[1], citation.get("evidence_id"))
+            # 同一证据被同一来源引两次是数据错误，不是"引用了两次" ——
+            # 保留先出现的那条（它的名次更靠前）
+            locators.setdefault(keyed, citation)
     return locators
 
 
@@ -120,16 +125,17 @@ async def _record(session: AsyncSession, citations: list[dict], *,
     # 照着 dict 建证据会让一半的行静默存成 page_size=NULL，
     # 而缺它遇到 CropBox 偏移/旋转页就会裁错区域。
     # content_digest 更是只能从这里来 —— dict 里只有截断过的 snippet。
-    jobs = {job for job, _ in locators}
+    jobs = {job for job, _, _ in locators}
     if allowed_parse_job_ids is not None:
         jobs &= set(allowed_parse_job_ids)
-    seqs = {seq for _, seq in locators}
+    seqs = {seq for _, seq, _ in locators}
+    slots = {(job, seq) for job, seq, _ in locators}
     chunks = {
         (c.parse_job_id, c.seq): c
         for c in (await session.execute(
             select(Chunk).where(Chunk.parse_job_id.in_(jobs), Chunk.seq.in_(seqs))
         )).scalars().all()
-        if (c.parse_job_id, c.seq) in locators
+        if (c.parse_job_id, c.seq) in slots
     }
 
     evidence_rows = (await session.execute(
@@ -145,7 +151,7 @@ async def _record(session: AsyncSession, citations: list[dict], *,
     # **enumerate 的顺序就是名次**：`citations` 传进来时是有序列表（检索名次），
     # locators 用 dict 保序，所以这里的下标与老 JSON 的下标一一对应
     for rank, (key, citation) in enumerate(locators.items()):
-        chunk = chunks.get(key)
+        chunk = chunks.get(key[:2])
         wanted = citation.get("evidence_id")
         evidence = existing_by_id.get(wanted) if wanted else None
         if chunk is None:
@@ -168,7 +174,7 @@ async def _record(session: AsyncSession, citations: list[dict], *,
         if evidence is None:
             # 0009 以前建的 chunk 没有 evidence_id。兼容期仍按旧稳定键复用；
             # 阶段 5 编译出的 chunk 一律有显式 evidence_id，不会走这条模糊路径。
-            evidence = legacy_source.get(key)
+            evidence = legacy_source.get(key[:2])
         if evidence is None:
             evidence = Evidence(
                 document_id=chunk.document_id, parse_job_id=chunk.parse_job_id,
@@ -184,7 +190,7 @@ async def _record(session: AsyncSession, citations: list[dict], *,
             session.add(evidence)
             await session.flush()
             existing_by_id[evidence.id] = evidence
-            legacy_source[key] = evidence
+            legacy_source[key[:2]] = evidence
         elif evidence.crop_key is None and citation.get("crop_key"):
             # 第一次引用时没裁图（不是 PDF、或裁剪失败），这次裁出来了 —— 补上。
             # **反过来不覆盖**：已有的裁图不因为这次没裁而被抹掉

@@ -23,10 +23,10 @@ class BuildIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=255)
     sources: list[SourceIn] = Field(min_length=1, max_length=50)
-    max_pages: int = Field(default=4, ge=1, le=12)
+    max_pages: int = Field(default=1, ge=1, le=12)
     max_evidence: int = Field(default=50, ge=1, le=200)
     max_output_tokens: int = Field(default=4096, ge=256, le=16384)
-    max_input_chars: int = Field(default=50000, ge=1000, le=200000)
+    max_input_chars: int = Field(default=24000, ge=1000, le=200000)
 
 
 class RebuildIn(BuildIn):

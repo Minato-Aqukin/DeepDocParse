@@ -19,16 +19,18 @@ mineru 升级导致这些字段变化时，tests/test_chunking.py 里的真实�
 - **没有字母/数字的正文块直接跳过**（只有 •、◦、–、标点）：borndigital 常把项目符号
   单独拆成块，落在所属段落的 bbox 里面。它既没有可检索的内容（出成 chunk 就是
   一字证据 "•"），又会当"上一块"去跟下一段比相邻性 —— 拿一个 2pt 高的小点比，
-  前后两段正文就被判成不相邻、切碎了（2026-09-24 用 pico/esp32 真版面实测）
+  前后两段正文就被判成不相邻、切碎了（2026-09-24 用 pico/esp32 真版面实测）。
+  数字的负号不在此列：它在 borndigital 行级就已回贴到所属数字行（同带 + 紧贴），
+  到这里时不再是孤立块（R9 ESP32 物理页 4 的"–40 ∼ 85 °C"句曾因此丢负号）。
 - **页眉页脚跳过**：块中心在页面上下 8% 带内、去掉数字后同一文字在同一条带里出现
   至少 3 页（页码、"Raspberry Pi Pico Datasheet"、"ESP32 Series Datasheet v5.3"）。
   /3 把它们从正文里拆了出来，结果成了独立的小块：凡是问句里带产品名，它们就被检索
   出来占掉候选名额，Wiki 里还有结论绑到了 "About Raspberry Pi Pico 3" 这种页脚上
   （2026-09-24，D 阶段浏览器实测）。版面里它们照旧在，只是不进索引、不当证据
 - **单块超过 max_chars 要切开**：不切的话它会被原样送进 embedding 运行时，
-  由后者按模型最大长度静默截断（bge-m3 是 8192 token）——块尾内容从此检索不到，
-  且全程没有任何报错。静默降级是这个项目吃过大亏的地方。切出来的每段只能带
-  整块的 bbox（版面没有行坐标），所以**切开的块之后另起一块**，尾段不再并下一段
+  由后者按模型最大长度静默截断（bge-m3 是 8192 token）——块尾内容从此检索不到。
+  ddp-chunk/4 优先保留完整句子；后半窗口无句末时才退到空白或硬切，小数点不作句末。
+  切出来的每段只能带整块的 bbox（版面没有行坐标），尾段不再并下一段。
 - 每块带 page_size：裁剪时按它换算坐标，缺它遇到 CropBox 偏移/旋转页会裁错区域
 - 空文本块跳过；缺 bbox 仍出块（只是不能裁剪）
 
@@ -78,8 +80,9 @@ from ddp_core.blocks import (
 )
 from ddp_core.tokenize import code_tokenized as _code_tokenized, tokenized as _tokenized
 
-# 优先在这些字符后断句；中日文没有空白，必须带上句读
-_BREAK_AFTER = "\n。！？；…!?;. "
+# 句末先于词间空白；英文句点后必须有空白或到达原文结尾，不能切开小数。
+_SENTENCE_END = re.compile(r"[。！？!?；;]|\.(?=\s|$)")
+_WORD_BREAKS = " \t\r\n"
 
 # 这些类型自成一块，不与邻居合并
 _STANDALONE = {"code", "table", "figure", "equation"}
@@ -165,7 +168,7 @@ def _adjacent(prev: dict, block: dict) -> bool:
 def _split_oversized(text: str, max_chars: int) -> list[str]:
     """把超过 max_chars 的整块切成若干段。
 
-    优先在句读/空白处断；断点太靠前（会切出一堆碎片）就退回硬切。
+    后半窗口优先取句末，再取空白；都没有则硬切，不把小数点当成断句依据。
     切出来的每段都 <= max_chars，因此后续合并逻辑无需再关心超限块。
     """
     if type(max_chars) is not int or max_chars < 1:
@@ -177,7 +180,12 @@ def _split_oversized(text: str, max_chars: int) -> list[str]:
     rest = text
     while len(rest) > max_chars:
         window = rest[:max_chars]
-        cut = max(window.rfind(ch) for ch in _BREAK_AFTER)
+        # 多看一个字符，避免窗口末尾的句点被误当成小数在原文中的结束位置。
+        cut = max((match.end() - 1
+                   for match in _SENTENCE_END.finditer(rest, 0, max_chars + 1)
+                   if match.end() <= max_chars), default=-1)
+        if cut < max_chars // 2:
+            cut = max(window.rfind(ch) for ch in _WORD_BREAKS)
         if cut < max_chars // 2:        # 没有像样的断点：硬切
             cut = max_chars - 1
         pieces.append(rest[:cut + 1].strip())

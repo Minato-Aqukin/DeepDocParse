@@ -25,7 +25,7 @@ from ddp_corpus.config import settings
 from ddp_core.search import MemoryIndex
 from ddp_core.tokenize import tokenized
 
-from tests.conftest import CHAT, EMBEDDINGS, usage_events
+from tests.conftest import CHAT, EMBEDDINGS, SERVICE, usage_events
 
 SCHEMA = {
     "type": "object",
@@ -117,6 +117,12 @@ async def _seed_document(session, user_id: str) -> tuple[Document, ParseJob]:
     return document, job
 
 
+def _embedding_reply(request) -> Response:
+    inputs = json.loads(request.content)["input"]
+    return Response(200, json={"data": [
+        {"index": index, "embedding": [1.0, 0.0]} for index in range(len(inputs))]})
+
+
 def _chat_reply(answer: dict) -> Response:
     return Response(200, json={"choices": [
         {"message": {"content": json.dumps(answer, ensure_ascii=False)}}]})
@@ -126,16 +132,14 @@ def _chat_reply(answer: dict) -> Response:
 async def test_found_and_not_found_are_distinguished(session, app_state):
     """一个抽得到、一个文档里没有 —— **必须落到不同的 status**。"""
     document, job = await _seed_document(session, (await _a_user(session)))
-    respx.post(EMBEDDINGS).mock(return_value=Response(200, json={
-        "data": [{"index": 0, "embedding": [1.0, 0.0]}]}))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
 
     def reply(request):
-        prompt = json.loads(request.content)["messages"][-1]["content"]
-        # **按字段名分支，不能按资料内容分支**：prompt 里嵌着检索到的资料，
-        # 而资料本身就含"买方"二字 —— 按它分支会让两个字段走同一条回答
-        if "名称：buyer" in prompt:
-            return _chat_reply({"found": True, "value": "北极星科技有限公司", "source": 1})
-        return _chat_reply({"found": False, "value": None, "source": None})
+        payload = json.loads(json.loads(request.content)["messages"][-1]["content"])
+        # Branch on the requested field, never on source text or sibling definitions.
+        if payload["field"]["name"] == "buyer":
+            return _chat_reply({"found": True, "value": "北极星科技有限公司", "support": {"value_source": 1, "context_sources": []}})
+        return _chat_reply({"found": False, "value": None, "support": None})
 
     respx.post(CHAT).mock(side_effect=reply)
 
@@ -159,8 +163,7 @@ async def test_found_and_not_found_are_distinguished(session, app_state):
 async def test_garbage_model_output_is_schema_violation_not_not_found(session, app_state):
     """**绝不能把系统故障伪装成"文档里没有"**：空值在结果表里看起来像一个结论。"""
     document, job = await _seed_document(session, (await _a_user(session)))
-    respx.post(EMBEDDINGS).mock(return_value=Response(200, json={
-        "data": [{"index": 0, "embedding": [1.0, 0.0]}]}))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
     respx.post(CHAT).mock(return_value=Response(200, json={
         "choices": [{"message": {"content": "我觉得应该是那家公司吧"}}]}))
 
@@ -179,7 +182,7 @@ async def test_embedding_down_is_visible_on_the_field(session, app_state):
     document, job = await _seed_document(session, (await _a_user(session)))
     respx.post(EMBEDDINGS).mock(return_value=Response(503))
     respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
-        {"found": True, "value": "北极星科技有限公司", "source": 1}))
+        {"found": True, "value": "北极星科技有限公司", "support": {"value_source": 1, "context_sources": []}}))
 
     ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
@@ -407,10 +410,9 @@ async def test_vision_model_down_is_visible_not_just_unverified(session, app_sta
     document, job = await _seed_document(session, (await _a_user(session)))
     document.object_key = "sources/x.pdf"
     await session.commit()
-    respx.post(EMBEDDINGS).mock(return_value=Response(200, json={
-        "data": [{"index": 0, "embedding": [1.0, 0.0]}]}))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
     respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
-        {"found": True, "value": "北极星科技有限公司", "source": 1}))
+        {"found": True, "value": "北极星科技有限公司", "support": {"value_source": 1, "context_sources": []}}))
 
     ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
@@ -431,6 +433,60 @@ async def test_vision_model_down_is_visible_not_just_unverified(session, app_sta
         "核对打了模型却没结果，必须打标 —— 否则与'预算用完'分不开"
 
 
+@pytest.mark.parametrize("kind", ["object", "array"])
+@respx.mock
+async def test_table_transcription_checks_visible_cells_not_html(session, app_state, kind):
+    from unittest.mock import patch
+
+    from sqlalchemy import delete, select
+
+    document, job = await _seed_document(session, await _a_user(session))
+    document.object_key = "sources/table.pdf"
+    chunk = await session.scalar(select(Chunk).where(
+        Chunk.parse_job_id == job.id, Chunk.seq == 0))
+    await session.execute(delete(Chunk).where(
+        Chunk.parse_job_id == job.id, Chunk.seq != 0))
+    text = " ".join(str(value) for value in range(1, 11))
+    chunk.text = text
+    chunk.text_tokenized = tokenized(text)
+    chunk.char_len = len(text)
+    chunk.block_type = "table"
+    chunk.table_html = "<table><tr>" + "".join(
+        f"<td>{value}</td>" for value in range(1, 11)) + "</tr></table>"
+    await session.commit()
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.get(f"{SERVICE}/v1/models").mock(return_value=Response(200, json={"data": [{
+        "id": "test-vision", "default": True, "capabilities": ["vision"],
+        "transcribe_prompt": "把图里的文字原样抄写出来",
+    }]}))
+
+    def reply(request):
+        messages = json.loads(request.content)["messages"]
+        if any(isinstance(message["content"], list) for message in messages):
+            return Response(200, json={"choices": [{"message": {"content": text}}]})
+        if kind == "array":
+            return _chat_reply({"records": [{"source": 1, "values": {"reading": 10}}]})
+        return _chat_reply({"found": True, "value": 10,
+                            "support": {"value_source": 1, "context_sources": []}})
+
+    respx.post(CHAT).mock(side_effect=reply)
+    schema = {"type": "object", "properties": {
+        "reading": {"type": "integer", "description": "tenth measurement reading"}}}
+    if kind == "array":
+        schema = {"type": "array", "items": schema}
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=True)
+    with patch("ddp_corpus.extraction.get_or_create_crop", return_value="results/table.png"), \
+         patch.object(app_state.storage, "get", return_value=b"png"):
+        outcome = await run_extraction(ctx, parse_schema(schema))
+    field = (outcome.records[0]["fields"]["reading"] if kind == "array"
+             else outcome.fields["reading"])
+    assert field["status"] == "found" and field["value"] == 10
+    assert field["verified"] is True, (field, outcome.degraded, ctx.usage)
+    assert field["degraded"] is None
+
+
 @respx.mock
 async def test_one_field_blowing_up_does_not_lose_the_others(session, app_state):
     """回归：单个字段的意外不能丢掉整批已抽好的字段。
@@ -440,10 +496,9 @@ async def test_one_field_blowing_up_does_not_lose_the_others(session, app_state)
     真实触发点：换 embedding 模型后 pgvector 报 different vector dimensions。
     """
     document, job = await _seed_document(session, (await _a_user(session)))
-    respx.post(EMBEDDINGS).mock(return_value=Response(200, json={
-        "data": [{"index": 0, "embedding": [1.0, 0.0]}]}))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
     respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
-        {"found": True, "value": "北极星科技有限公司", "source": 1}))
+        {"found": True, "value": "北极星科技有限公司", "support": {"value_source": 1, "context_sources": []}}))
 
     class ExplodingIndex(MemoryIndex):
         async def search(self, session, **kwargs):        # noqa: ANN001
@@ -476,10 +531,9 @@ async def test_concurrent_fields_do_not_share_the_session_at_once(session, app_s
     报错的 index 模拟真库的约束。
     """
     document, job = await _seed_document(session, (await _a_user(session)))
-    respx.post(EMBEDDINGS).mock(return_value=Response(200, json={
-        "data": [{"index": 0, "embedding": [1.0, 0.0]}]}))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
     respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
-        {"found": True, "value": "北极星科技有限公司", "source": 1}))
+        {"found": True, "value": "北极星科技有限公司", "support": {"value_source": 1, "context_sources": []}}))
 
     class OneAtATimeIndex(MemoryIndex):
         in_use = False
@@ -690,40 +744,22 @@ def test_source_hit_citation_is_unchanged_shape():
     assert "买方" in citation["snippet"]
 
 
-def test_pick_source_rejects_bad_pointers_instead_of_top1():
-    """坏 source 指针必须返回 None（调用方按幻觉引用处理），绝不退回 top-1。
-
-    此前越界/非数字/没给都退回 hits[0]：模型凭空指了一条不存在的资料，
-    值已经不可信，硬挂一条出处等于给幻觉贴"已验证"。
-    """
-    from ddp_core.hits import Hit
-    from ddp_corpus.extraction import _pick_source
-
-    hits = [Hit(chunk_id=f"c{i}", text=f"块{i}") for i in range(2)]
-    assert _pick_source(hits, 1) is hits[0]
-    assert _pick_source(hits, 2) is hits[1]
-    assert _pick_source(hits, 999) is None
-    assert _pick_source(hits, 0) is None
-    assert _pick_source(hits, "abc") is None
-    assert _pick_source(hits, None) is None
-    assert _pick_source([], 1) is None
 
 
 @respx.mock
-@pytest.mark.parametrize("pointer", [999, "abc", None])
-async def test_bad_source_pointer_is_not_found_with_schema_violation(
+@pytest.mark.parametrize("pointer", [999, "abc", None, True, 1.9])
+async def test_bad_source_pointer_is_error_with_schema_violation(
         session, app_state, pointer):
-    """端到端：source 指到不存在的资料 -> not_found + schema_violation，无 top-1 出处。
+    """端到端：source 指到不存在的资料 -> error + schema_violation，无 top-1 出处。
 
-    判 not_found 而不是 error：文档里有没有这个字段此刻已无从判断；
-    degraded 用 schema_violation：错的是模型输出的格式契约（source 必须是
-    1..N 的整数），不是文档内容。已有更严重的标时不覆盖（degraded or 语义）。
+    判 error 而不是 not_found：错的是模型输出的格式契约（source 必须是
+    1..N 的整数），不是文档内容；若判 not_found，会把生成失败伪装成
+    “文档里没有”。已有更严重的标时不覆盖（degraded or 语义）。
     """
     document, job = await _seed_document(session, (await _a_user(session)))
-    respx.post(EMBEDDINGS).mock(return_value=Response(200, json={
-        "data": [{"index": 0, "embedding": [1.0, 0.0]}]}))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
     respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
-        {"found": True, "value": "北极星科技有限公司", "source": pointer}))
+        {"found": True, "value": "北极星科技有限公司", "support": {"value_source": pointer, "context_sources": []}}))
 
     ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
                          storage=app_state.storage, document=document, job=job,
@@ -731,7 +767,7 @@ async def test_bad_source_pointer_is_not_found_with_schema_violation(
     outcome = await run_extraction(ctx, parse_schema(SCHEMA))
 
     field = outcome.fields["buyer"]
-    assert field["status"] == "not_found"
+    assert field["status"] == "error"
     assert field["value"] is None
     assert field["citations"] == [], "幻觉引用不许挂 top-1 出处"
     assert field["degraded"] == "schema_violation"
@@ -810,3 +846,884 @@ def test_degraded_priority_orders_keyword_after_embedding():
                             {"degraded": "vision_unavailable"}]) == "keyword_unavailable"
     assert rollup_degraded([{"degraded": "keyword_unavailable"},
                             {"degraded": "embedding_unavailable"}]) == "embedding_unavailable"
+
+
+
+
+@respx.mock
+async def test_number_without_source_support_is_error_not_found(session, app_state):
+    """数值在所引块原文里找不到 -> error + schema_violation，不许 found。
+
+    R7 实测的失败缝：CPU 对 unsupervised_language_count 输出 12，
+    引用的 seq142（数据源表）原文里根本没有 12 —— 带出处的错值。
+    只做机械必要条件，不宣称语义验证。
+    """
+    document, job = await _seed_document(session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
+        {"found": True, "value": 12, "support": {"value_source": 1, "context_sources": []}}))
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "object", "properties": {
+        "unsupervised_language_count": {
+            "type": "integer",
+            "description": "Number of languages represented in the unsupervised training data."}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    field = outcome.fields["unsupervised_language_count"]
+    assert field["status"] == "error"
+    assert field["value"] is None
+    assert field["citations"] == []
+    assert field["degraded"] == "schema_violation"
+
+
+@respx.mock
+async def test_normalized_number_in_source_still_found(session, app_state):
+    """原文 `8,192` 与值 `8192` 视为同一数值：归一化核验不许误杀真命中。"""
+    document, job = await _seed_document(session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+
+    def reply(request):
+        prompt = json.loads(request.content)["messages"][-1]["content"]
+        if "maximum_input_length" in prompt:
+            return _chat_reply({"found": True, "value": 8192, "support": {"value_source": 1, "context_sources": []}})
+        return _chat_reply({"found": False, "value": None, "support": None})
+
+    respx.post(CHAT).mock(side_effect=reply)
+
+    from sqlalchemy import select as sa_select
+    chunk = (await session.execute(sa_select(Chunk).where(
+        Chunk.document_id == document.id, Chunk.seq == 0))).scalar_one()
+    chunk.text = "long documents of up to 8,192 input tokens."
+    chunk.text_tokenized = tokenized(chunk.text)
+    await session.commit()
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "object", "properties": {
+        "maximum_input_length": {
+            "type": "integer",
+            "description": "Maximum supported input length stated by the paper, as a number."}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    field = outcome.fields["maximum_input_length"]
+    assert field["status"] == "found"
+    assert field["value"] == 8192
+    assert field["citations"], "归一化对得上就必须有出处"
+
+
+@respx.mock
+async def test_decorated_number_value_still_found(session, app_state):
+    """模型给带单位装饰的单数字（"3 times"）时不判死：与字面见证共用记号写法。
+
+    旧 coerce 整体 strip 后 float() 逐字解析，"3 times" 直接 CoerceError ——
+    而见证侧认得出同一个记号。两道门必须同进退，否则同一个值一前一后两个答案。
+    """
+    document, job = await _seed_document(session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
+        {"found": True, "value": "3 times", "support": {"value_source": 1, "context_sources": []}}))
+
+    from sqlalchemy import select as sa_select
+    chunk = (await session.execute(sa_select(Chunk).where(
+        Chunk.document_id == document.id, Chunk.seq == 0))).scalar_one()
+    chunk.text = "memory requirement by 3 times compared to baseline."
+    chunk.text_tokenized = tokenized(chunk.text)
+    await session.commit()
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "object", "properties": {
+        "memory_reduction_factor": {
+            "type": "integer",
+            "description": "Factor of memory requirement reduction stated in the abstract."}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    field = outcome.fields["memory_reduction_factor"]
+    assert field["status"] == "found"
+    assert field["value"] == 3
+    assert field["citations"], "单数字装饰回答对得上见证就必须有出处"
+
+
+@respx.mock
+async def test_ambiguous_number_value_is_error_not_first_number(session, app_state):
+    """模型给含多个数字的字符串（"−40∼105"）时不许静默取第一个：整体判 error。
+
+    猜出来的值没法追溯 —— 区间里取 -40 还是 105 都是编，两道门都必须拒绝。
+    """
+    document, job = await _seed_document(session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
+        {"found": True, "value": "−40∼105 °C", "support": {"value_source": 1, "context_sources": []}}))
+
+    from sqlalchemy import select as sa_select
+    chunk = (await session.execute(sa_select(Chunk).where(
+        Chunk.document_id == document.id, Chunk.seq == 0))).scalar_one()
+    chunk.text = "operating range −40∼105 °C for the module."
+    chunk.text_tokenized = tokenized(chunk.text)
+    await session.commit()
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "object", "properties": {
+        "operating_temperature": {
+            "type": "integer",
+            "description": "Operating temperature of the module."}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    field = outcome.fields["operating_temperature"]
+    assert field["status"] == "error"
+    assert field["value"] is None
+    assert field["citations"] == []
+    assert field["degraded"] == "schema_violation"
+@respx.mock
+async def test_field_retrieve_appends_adjacent_source_atom(session, app_state, monkeypatch):
+    """字段检索把截断句的下一块作为独立资料追加：不挤占命中、可被引用。
+
+    R7 实测的失败缝：seq36 在 “1.2 billion text pairs” 处截断，
+    194 在同页下一块 —— 有界检索只给种子块时模型永远看不到 194。
+    断言走真实 SQL 的 helper 边界：种子命中保留原位，邻块以独立原子身份
+    续编号并标注接续关系；引用邻块编号落到邻块自己的 (parse_job_id, seq)。
+    """
+    import hashlib
+    from ddp_corpus.models import Evidence
+
+    monkeypatch.setattr(settings, "extract_candidates", 1)
+    from ddp_corpus import extraction as extraction_mod
+
+    document = Document(uploaded_by=(await _a_user(session)), doc_id="c" * 64,
+                        filename="paper.pdf", mime="application/pdf", object_key="",
+                        index_status="ready")
+    session.add(document)
+    await session.flush()
+    job = ParseJob(document_id=document.id, engine="borndigital", options={},
+                   options_hash="h", status="succeeded", result_prefix="results/x/")
+    session.add(job)
+    await session.flush()
+    document.current_job_id = job.id
+    texts = [
+        "In total, it brings in 1.2 billion text pairs",
+        "of 194 languages and 2655 cross-lingual correspondences.",
+    ]
+    for seq, text in enumerate(texts):
+        evidence = Evidence(document_id=document.id, parse_job_id=job.id, seq=seq,
+                            atom_key=f"text-{seq}", content=text,
+                            content_digest=hashlib.sha256(text.encode()).hexdigest(),
+                            kind="text", page_idx=0, bbox=[72, 100, 500, 130],
+                            page_size=[612, 792])
+        session.add(evidence)
+        await session.flush()
+        session.add(Chunk(document_id=document.id, parse_job_id=job.id, seq=seq,
+                          page_idx=0, bbox=[72, 100, 500, 130], page_size=[612, 792],
+                          text=text, char_len=len(text), block_type="text",
+                          text_tokenized=tokenized(text),
+                          evidence_id=evidence.id,
+                          embedding=[1.0, 0.0] if seq == 0 else [0.0, 1.0]))
+    await session.commit()
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
+        {"found": True, "value": 194, "support": {"value_source": 2, "context_sources": []}}))
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "object", "properties": {
+        "unsupervised_language_count": {
+            "type": "integer",
+            "description": "Language count in the training corpus text pairs."}}}
+
+    hits, _ = await extraction_mod._retrieve(
+        ctx, "text pairs", k=1)
+    assert [h["seq"] for h in hits] == [0, 1], "种子在前、邻块续后，不挤占"
+    assert hits[1].get("context_of_evidence_id") == hits[0]["evidence_id"]
+    assert hits[1]["similarity"] is None, "邻块不冒充高相似度命中"
+
+    outcome = await run_extraction(ctx, parse_schema(schema))
+    field = outcome.fields["unsupervised_language_count"]
+    assert field["status"] == "found"
+    assert field["value"] == 194
+    assert field["citations"][0]["seq"] == 1, "引用邻块编号必须落到邻块自己身上"
+    assert field["citations"][0]["parse_job_id"] == job.id
+
+
+@respx.mock
+async def test_field_selection_keeps_hybrid_scope_when_reranker_disagrees(
+        session, app_state, monkeypatch):
+    """A relevant scope fragment must survive disagreement within the same four slots."""
+    from ddp_corpus import extraction as extraction_mod
+
+    document, job = await _seed_document(session, await _a_user(session))
+    pool = [{
+        "chunk_id": f"candidate-{index:02d}",
+        "document_id": document.id, "parse_job_id": job.id,
+        "seq": 10 * (index + 1), "page_idx": index,
+        "text": f"Source fragment {index:02d}", "similarity": 0.7,
+    } for index in range(24)]
+    # Observed rank disagreement, stripped of paper-specific text and answers.
+    order = [4, 8, 12, 7, 0, 16, 14, 2, 15, 9, 5, 10,
+             17, 22, 1, 19, 13, 20, 6, 18, 11, 23, 21, 3]
+
+    async def search_pool(*args, **kwargs):
+        return pool, None
+
+    monkeypatch.setattr(extraction_mod, "search_query", search_pool)
+    monkeypatch.setattr(settings, "rerank_enabled", True)
+    respx.post(settings.rerank_endpoint).mock(return_value=Response(
+        200, json=[{"index": index, "score": 24 - rank}
+                   for rank, index in enumerate(order)]))
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+
+    hits, degraded = await extraction_mod._retrieve(ctx, "requested scope", k=4)
+
+    seed_ids = {hit["chunk_id"] for hit in hits[:4]}
+    assert pool[1]["chunk_id"] in seed_ids  # Scope must survive in the original seed slots.
+    assert pool[4]["chunk_id"] in seed_ids  # Retain the cross-encoder's strongest candidate.
+    assert len({hit["chunk_id"] for hit in hits}) == len(hits)
+    assert degraded is None
+
+def _context_hit(index, text, **overrides):
+    return {
+        "chunk_id": f"chunk-{index}", "evidence_id": f"evidence-{index}",
+        "document_id": "doc", "parse_job_id": "parse", "page_idx": 0,
+        "seq": index, "bbox": [0, 0, 100, 100], "page_size": [612, 792],
+        "text": text, **overrides,
+    }
+
+
+def test_field_context_retains_recalled_continuation_before_lower_ranked_noise():
+    from ddp_corpus.extraction import _fill_field_context
+
+    seed = _context_hit(1, "selected")
+    preamble = _context_hit(5, "preamble")
+    subject = _context_hit(10, "quantity is")
+    value = _context_hit(11, "42")
+    noise = _context_hit(20, "miscellaneous")
+    pool = [seed, preamble, subject, noise, value]
+    budget = sum(len(hit["text"]) for hit in (seed, preamble, subject, value))
+    admitted = _fill_field_context([seed], pool, pool, max_chars=budget, max_sources=5)
+
+    assert admitted == [seed, preamble, subject, value]
+    assert sum(len(hit["text"]) for hit in admitted) == budget
+    assert len({hit["chunk_id"] for hit in admitted}) == len(admitted)
+
+
+@pytest.mark.parametrize("boundary", [
+    {"document_id": "another-doc"}, {"parse_job_id": "another-parse"},
+    {"page_idx": 1}, {"bbox": [0, 0, 100, 101]},
+    {"page_size": [595, 842]}, {"seq": 12},
+])
+def test_field_context_never_groups_across_a_source_boundary(boundary):
+    from ddp_corpus.extraction import _fill_field_context
+
+    seed = _context_hit(1, "seed")
+    first = _context_hit(10, "subject")
+    second = _context_hit(11, "value", **boundary)
+    admitted = _fill_field_context(
+        [seed], [first, second], [first, second], max_chars=100, max_sources=2)
+    assert admitted == [seed, first]
+
+
+@pytest.mark.parametrize("budget,slots", [(100, 2), (12, 4)])
+def test_field_context_skips_unfitting_whole_region_but_keeps_later_source(budget, slots):
+    from ddp_corpus.extraction import _fill_field_context
+
+    seed = _context_hit(1, "seed")
+    subject = _context_hit(10, "subject")
+    value = _context_hit(11, "value")
+    later = _context_hit(20, "other")
+    assert _fill_field_context(
+        [seed], [subject, later, value], [subject, later, value], max_chars=budget, max_sources=slots,
+    ) == [seed, later]
+
+
+def test_field_context_budgets_the_actual_table_projection():
+    from ddp_corpus.extraction import _fill_field_context
+
+    seed = _context_hit(1, "seed")
+    table = _context_hit(10, "x", table_html="<table><tr><td>12345</td></tr></table>")
+    later = _context_hit(20, "other")
+    assert _fill_field_context(
+        [seed], [table, later], [table, later], max_chars=12, max_sources=4,
+    ) == [seed, later]
+
+
+def test_field_context_prefers_higher_hybrid_complement_over_pool_order():
+    """A lower-rerank/higher-hybrid complementary component stays reachable.
+
+    The pool interleaves rerank and hybrid heads, so a component the
+    cross-encoder buries can sit behind rerank-favored noise in pool order.
+    Backfill follows the hybrid order instead of re-asking the reranker.
+    """
+    from ddp_corpus.extraction import _fill_field_context
+
+    first = _context_hit(1, "seed")
+    second = _context_hit(10, "seed")
+    noise = _context_hit(20, "unrelated")
+    complement = _context_hit(30, "conversion rule")
+    pool = [first, second, noise, complement]
+    hybrid = [first, second, complement, noise]
+    assert _fill_field_context(
+        [first, second], pool, hybrid, max_chars=100, max_sources=3,
+    ) == [first, second, complement]
+
+
+@pytest.mark.parametrize("slots, expected", [
+    (4, ["first", "second", "head", "fresh"]),
+    (5, ["first", "second", "head", "fresh", "tail"]),
+])
+def test_field_context_defers_weaker_completion_behind_fresh_regions(slots, expected):
+    """Whole-group diversity: strongest completion, fresh regions, deferred rest.
+
+    The best-hybrid seed-region completion is admitted first, then fresh
+    recalled regions in hybrid order; other seed-region completions wait for
+    leftover capacity instead of crowding out ranked depth. Groups stay atomic.
+    """
+    from ddp_corpus.extraction import _fill_field_context
+
+    first = _context_hit(1, "first")
+    head = _context_hit(2, "head")
+    second = _context_hit(10, "second")
+    tail = _context_hit(11, "tail")
+    fresh = _context_hit(20, "fresh")
+    pool = [first, second, head, tail, fresh]
+    hybrid = [first, second, fresh, head, tail]
+    by_text = {"first": first, "second": second, "head": head,
+               "tail": tail, "fresh": fresh}
+    assert _fill_field_context(
+        [first, second], pool, hybrid, max_chars=100, max_sources=slots,
+    ) == [by_text[name] for name in expected]
+
+
+
+
+async def test_adjacent_budget_prefers_original_block_continuation(session):
+    """An unrelated early neighbor must not starve a later hit's split sentence."""
+    import hashlib
+    from ddp_core.search import adjacent_context_hits
+    from ddp_corpus.models import Evidence
+
+    document = Document(uploaded_by=(await _a_user(session)), doc_id="d" * 64,
+                        filename="context.pdf", mime="application/pdf", object_key="",
+                        index_status="ready")
+    session.add(document)
+    await session.flush()
+    job = ParseJob(document_id=document.id, engine="borndigital", options={},
+                   options_hash="h", status="succeeded", result_prefix="results/context/")
+    session.add(job)
+    await session.flush()
+    document.current_job_id = job.id
+    texts = ["First ranked hit.", "Other paragraph", "of 194 languages.", "Training data scope."]
+    boxes = [[30, 30, 100, 40], [30, 100, 100, 110],
+             [30, 200, 100, 220], [30, 200, 100, 220]]
+    seeds = []
+    for seq, text in enumerate(texts):
+        evidence = Evidence(document_id=document.id, parse_job_id=job.id, seq=seq,
+                            atom_key=f"context-{seq}", content=text,
+                            content_digest=hashlib.sha256(text.encode()).hexdigest(),
+                            kind="text", page_idx=0, bbox=boxes[seq], page_size=[612, 792])
+        session.add(evidence)
+        await session.flush()
+        chunk = Chunk(document_id=document.id, parse_job_id=job.id, seq=seq,
+                      page_idx=0, bbox=boxes[seq], page_size=[612, 792],
+                      text=text, char_len=len(text), block_type="text",
+                      text_tokenized=tokenized(text), evidence_id=evidence.id)
+        session.add(chunk)
+        await session.flush()
+        if seq in (0, 3):
+            seeds.append({"chunk_id": chunk.id, "document_id": document.id,
+                          "parse_job_id": job.id, "seq": seq, "page_idx": 0,
+                          "bbox": boxes[seq], "page_size": [612, 792],
+                          "evidence_id": evidence.id, "text": text})
+    await session.commit()
+
+    admitted = await adjacent_context_hits(session, seeds, max_chars=len(texts[2]))
+
+    assert [hit["seq"] for hit in admitted] == [2]
+    assert admitted[0]["context_of_evidence_id"] == seeds[1]["evidence_id"]
+    assert admitted[0]["text"] == texts[2]
+    assert admitted[0]["similarity"] is None
+
+
+@pytest.mark.parametrize("same_region, fit_continuation", [
+    (True, True), (False, True), (True, False),
+])
+async def test_heading_context_reaches_bounded_original_continuation(
+        session, same_region, fit_continuation):
+    """A heading's first body atom is not the whole original paragraph."""
+    import hashlib
+    from ddp_core.search import adjacent_context_hits
+    from ddp_corpus.models import Evidence
+
+    document, job = await _seed_document(session, await _a_user(session))
+    texts = ["Abstract", "The method reduces memory by", "a factor of three."]
+    boxes = [[30, 30, 100, 40], [30, 100, 100, 180],
+             [30, 100, 100, 180] if same_region else [30, 200, 100, 240]]
+    seed = None
+    for offset, content in enumerate(texts):
+        seq = offset + 10
+        evidence = Evidence(
+            document_id=document.id, parse_job_id=job.id, seq=seq,
+            atom_key=f"heading-{seq}", content=content,
+            content_digest=hashlib.sha256(content.encode()).hexdigest(),
+            kind="text", page_idx=2, bbox=boxes[offset], page_size=[612, 792])
+        session.add(evidence)
+        await session.flush()
+        chunk = Chunk(
+            document_id=document.id, parse_job_id=job.id, seq=seq,
+            page_idx=2, bbox=boxes[offset], page_size=[612, 792], text=content,
+            char_len=len(content), block_type="text",
+            text_tokenized=tokenized(content), evidence_id=evidence.id)
+        session.add(chunk)
+        await session.flush()
+        if offset == 0:
+            seed = {"chunk_id": chunk.id, "document_id": document.id,
+                    "parse_job_id": job.id, "seq": seq, "page_idx": 2,
+                    "bbox": boxes[0], "page_size": [612, 792],
+                    "evidence_id": evidence.id, "text": content}
+    await session.commit()
+    budget = len(texts[1]) + (len(texts[2]) if fit_continuation else 0)
+
+    admitted = await adjacent_context_hits(session, [seed], max_chars=budget)
+
+    assert [hit["seq"] for hit in admitted] == (
+        [11, 12] if same_region and fit_continuation else [11])
+    assert sum(len(hit["text"]) for hit in admitted) <= budget
+    assert all(hit["parse_job_id"] == job.id and hit["similarity"] is None
+               for hit in admitted)
+
+
+async def _seed_mechanism_document(session, user_id: str):
+    """机制名与触发条件分处两个原子的文档：primary 钉机制，context 钉条件。"""
+    import hashlib
+    from ddp_corpus.models import Evidence
+
+    document = Document(uploaded_by=user_id, doc_id="e" * 64,
+                        filename="mechanism.pdf", mime="application/pdf",
+                        object_key="", index_status="ready")
+    session.add(document)
+    await session.flush()
+    job = ParseJob(document_id=document.id, engine="borndigital", options={},
+                   options_hash="h", status="succeeded", result_prefix="results/m/")
+    session.add(job)
+    await session.flush()
+    document.current_job_id = job.id
+    texts = [
+        "Paged Optimizers use the NVIDIA unified memory feature for transfers.",
+        "This prevents memory spikes during gradient checkpointing on long sequences.",
+        "An unrelated memory log was archived separately.",
+    ]
+    for seq, text in enumerate(texts):
+        evidence = Evidence(document_id=document.id, parse_job_id=job.id, seq=seq,
+                            atom_key=f"mech-{seq}", content=text,
+                            content_digest=hashlib.sha256(text.encode()).hexdigest(),
+                            kind="text", page_idx=seq, bbox=[72, 100, 500, 130],
+                            page_size=[612, 792])
+        session.add(evidence)
+        await session.flush()
+        session.add(Chunk(document_id=document.id, parse_job_id=job.id, seq=seq,
+                          page_idx=seq, bbox=[72, 100, 500, 130], page_size=[612, 792],
+                          text=text, char_len=len(text), block_type="text",
+                          text_tokenized=tokenized(text),
+                          evidence_id=evidence.id,
+                          embedding=[1.0, 0.0] if seq == 0 else [0.9, 0.1]))
+    await session.commit()
+    return document, job
+
+
+def _context_selection_reply(request, *, value, primary_excerpt, context_excerpt):
+    payload = json.loads(json.loads(request.content)["messages"][-1]["content"])
+    fragments = [fragment for group in payload["source_groups"] for fragment in group["fragments"]]
+    primary = next(fragment for fragment in fragments if primary_excerpt in fragment["text"])
+    context = next(fragment for fragment in fragments if context_excerpt in fragment["text"])
+    return _chat_reply({"found": True, "value": value, "support": {"value_source": primary["source_id"], "context_sources": [context["source_id"]]}})
+
+
+@respx.mock
+async def test_field_support_projects_primary_then_context(session, app_state):
+    """Only explicitly selected original identities become citations, in selected order."""
+    document, job = await _seed_mechanism_document(session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.post(CHAT).mock(side_effect=lambda request: _context_selection_reply(
+        request, value="NVIDIA unified memory; gradient checkpointing",
+        primary_excerpt="NVIDIA unified memory",
+        context_excerpt="memory spikes during gradient checkpointing"))
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "object", "properties": {
+        "memory_mechanism": {"type": "string", "description": "Memory mechanism name"}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    field = outcome.fields["memory_mechanism"]
+    assert field["status"] == "found"
+    assert [c["seq"] for c in field["citations"]] == [0, 1]
+    assert len(field["citations"]) == 2, "只投影显式选择，不附带其余候选"
+
+
+@respx.mock
+@pytest.mark.parametrize("support", [
+    {"value_source": 1, "context_sources": [99]},
+    {"value_source": 1, "context_sources": [1]},
+    {"value_source": 1, "context_sources": [True]},
+    {"value_source": 1, "context_sources": [2, 3, 4]},
+    {"value_source": 1, "context_sources": "not-a-list"}, {},
+])
+async def test_bad_field_support_is_error_not_partial(session, app_state, support):
+    """Reject the whole selection; never salvage a valid prefix or attach top-1."""
+    document, job = await _seed_mechanism_document(session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
+        {"found": True, "value": "NVIDIA unified memory", "support": support}))
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "object", "properties": {
+        "memory_mechanism": {"type": "string", "description": "Memory mechanism name"}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    field = outcome.fields["memory_mechanism"]
+    assert field["status"] == "error"
+    assert field["value"] is None
+    assert field["citations"] == []
+    assert field["degraded"] == "schema_violation"
+
+
+@respx.mock
+async def test_absence_with_selected_support_is_error(session, app_state):
+    """Absence and selected supporting originals are contradictory."""
+    document, job = await _seed_mechanism_document(session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.post(CHAT).mock(side_effect=lambda r: _chat_reply(
+        {"found": False, "value": None, "support": {"value_source": 1, "context_sources": []}}))
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "object", "properties": {
+        "memory_mechanism": {"type": "string", "description": "Memory mechanism name"}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    field = outcome.fields["memory_mechanism"]
+    assert field["status"] == "error"
+    assert field["degraded"] == "schema_violation"
+
+
+@respx.mock
+async def test_context_cannot_rescue_false_primary_number(session, app_state):
+    """数值见证只认 primary 文本：context 里有数也救不了 primary 无数的出处。"""
+    document, job = await _seed_document(session, (await _a_user(session)))
+    from sqlalchemy import select as sa_select
+    chunk0 = (await session.execute(sa_select(Chunk).where(
+        Chunk.document_id == document.id, Chunk.seq == 0))).scalar_one()
+    chunk0.text = "买方：北极星科技有限公司。"
+    chunk0.text_tokenized = tokenized(chunk0.text)
+    chunk0.char_len = len(chunk0.text)
+    chunk1 = (await session.execute(sa_select(Chunk).where(
+        Chunk.document_id == document.id, Chunk.seq == 1))).scalar_one()
+    chunk1.text = "共 48 条记录在案。"
+    chunk1.text_tokenized = tokenized(chunk1.text)
+    chunk1.char_len = len(chunk1.text)
+    chunk1.embedding = [0.9, 0.1]  # both citations must actually reach the model
+    await session.commit()
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.post(CHAT).mock(side_effect=lambda request: _context_selection_reply(
+        request, value=48, primary_excerpt="北极星科技有限公司", context_excerpt="48 条记录"))
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "object", "properties": {
+        "record_count": {"type": "integer", "description": "记录条数"}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    field = outcome.fields["record_count"]
+    assert field["status"] == "error"
+    assert field["value"] is None
+    assert field["citations"] == []
+    assert field["degraded"] == "schema_violation"
+
+
+@respx.mock
+async def test_partial_verification_cannot_be_true(session, app_state, monkeypatch):
+    """两条出处只核对上 primary：verified 必须 false，不许部分为 true。
+
+    预算只够核对一条 —— 第二条没测出来（None）不能被当成一致。
+    """
+    from ddp_corpus import extraction as extraction_mod
+
+    document, job = await _seed_mechanism_document(session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.post(CHAT).mock(side_effect=lambda request: _context_selection_reply(
+        request, value="NVIDIA unified memory; gradient checkpointing",
+        primary_excerpt="NVIDIA unified memory",
+        context_excerpt="memory spikes during gradient checkpointing"))
+
+    async def fake_crop_and_verify(ctx, hit):
+        if hit.get("seq") == 0:
+            return "crop-primary", True, True
+        return "crop-context", None, True
+
+    monkeypatch.setattr(extraction_mod, "_crop_and_verify", fake_crop_and_verify)
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=True)
+    schema = {"type": "object", "properties": {
+        "memory_mechanism": {"type": "string", "description": "Memory mechanism name"}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    field = outcome.fields["memory_mechanism"]
+    assert field["status"] == "found", field
+    assert len(field["citations"]) == 2
+    assert field["verified"] is False, "context 没测出来时整体不许标 true"
+    assert field["degraded"] == "vision_unavailable"
+
+
+@respx.mock
+async def test_generated_value_cites_its_own_derived_evidence(session, app_state):
+    """派生块展开成两个可引用视图：引用派生正文的值必须落到派生 ID 上。
+
+    回归的是“合并文本、单 ID 引用”：模型从合并文本里读到原文的正确数值，
+    引用却只能挂到与该值矛盾的 generated 体上 —— 值与被引证据自相矛盾，
+    而系统没有任何信号。展开后：原文值引原文 ID，派生值引派生 ID。
+    """
+    import hashlib
+
+    from ddp_core.hits import Hit
+    from ddp_corpus import extraction as extraction_mod
+    from ddp_corpus.models import Evidence
+
+    document = Document(uploaded_by=(await _a_user(session)), doc_id="v" * 64,
+                        filename="spec.pdf", mime="application/pdf", object_key="",
+                        index_status="ready")
+    session.add(document)
+    await session.flush()
+    job = ParseJob(document_id=document.id, engine="borndigital", options={},
+                   options_hash="h", status="succeeded", result_prefix="results/v/")
+    session.add(job)
+    await session.flush()
+    document.current_job_id = job.id
+    source_text = "Supply voltage MAX 6 V; Common-mode MIN -0.3 V MAX 26 V"
+    source = Evidence(document_id=document.id, parse_job_id=job.id, seq=0,
+                      atom_key="src-0", content=source_text,
+                      content_digest=hashlib.sha256(source_text.encode()).hexdigest(),
+                      kind="table", page_idx=0, bbox=[72, 100, 500, 130],
+                      page_size=[612, 792])
+    session.add(source)
+    await session.flush()
+    derived_text = "Supply voltage MIN 6 V; Common-mode -0.3 to 26 V"
+    derived = Evidence(document_id=document.id, parse_job_id=job.id, seq=0,
+                       atom_key="vision-0", content=derived_text,
+                       content_digest=hashlib.sha256(derived_text.encode()).hexdigest(),
+                       kind="table", page_idx=0, bbox=[72, 100, 500, 130],
+                       page_size=[612, 792], derived_from=source.id)
+    session.add(derived)
+    await session.flush()
+    session.add(Chunk(document_id=document.id, parse_job_id=job.id, seq=0,
+                      page_idx=0, bbox=[72, 100, 500, 130], page_size=[612, 792],
+                      text=source_text, char_len=len(source_text), block_type="table",
+                      text_tokenized=tokenized(source_text), evidence_id=source.id,
+                      derived_text=derived_text, derived_evidence_id=derived.id,
+                      embedding=[1.0, 0.0]))
+    await session.commit()
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+
+    seen: dict = {}
+
+    def reply(request):
+        payload = json.loads(json.loads(request.content)["messages"][-1]["content"])
+        fragments = [fragment for group in payload["source_groups"]
+                     for fragment in group["fragments"]]
+        seen["fragments"] = [fragment["text"] for fragment in fragments]
+        original = next(fragment for fragment in fragments
+                        if "MAX 6 V" in fragment["text"] and "MIN 6 V" not in fragment["text"])
+        return _chat_reply({"found": True, "value": "VS MAX 6 V",
+                            "support": {"value_source": original["source_id"],
+                                        "context_sources": []}})
+
+    respx.post(CHAT).mock(side_effect=reply)
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "object", "properties": {
+        "supply_limit": {"type": "string", "description": "Supply voltage limit"}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    field = outcome.fields["supply_limit"]
+    assert field["status"] == "found", field
+    assert len(seen["fragments"]) == 2, "原文与派生必须是两个独立可引用资料"
+    assert not any("MAX 6 V" in text and "MIN 6 V" in text for text in seen["fragments"]), \
+        "两份正文不许合并进同一个资料 ID 名下"
+    citation = field["citations"][0]
+    assert citation["source_type"] == "source"
+    assert citation["evidence_id"] == source.id
+    assert "MIN 6 V" not in citation["snippet"], "原文引用的摘要不许混入派生正文"
+
+    # 同槽位的派生引用必须能与原文引用并存：按 evidence_id 落库，不互相覆盖。
+    from ddp_corpus.evidence import load_citations, record_evidence
+
+    generated_hit = Hit(chunk_id="c1", parse_job_id=job.id, seq=0, page_idx=0,
+                        text=source_text, derived_text=derived_text,
+                        evidence_id=source.id, derived_evidence_id=derived.id,
+                        block_type="table", score=0.03, similarity=0.8)
+    generated_citation = extraction_mod._citation(
+        extraction_mod.expand_source_views([generated_hit])[1], None)
+    assert generated_citation["source_type"] == "generated"
+    assert generated_citation["evidence_id"] == derived.id
+    assert generated_citation["derived_from"] == source.id
+    await record_evidence(session, [citation, generated_citation],
+                          source_kind="extract_field", source_id="item-v:supply_limit")
+    await session.commit()
+    loaded = await load_citations(session, source_kind="extract_field",
+                                  source_ids=["item-v:supply_limit"])
+    by_evidence = {c["evidence_id"]: c for c in loaded["item-v:supply_limit"]}
+    assert set(by_evidence) == {source.id, derived.id}, "同槽原文/派生两条引用都要落库"
+    assert by_evidence[source.id]["resolved"] is True
+    assert by_evidence[derived.id]["resolved"] is True
+
+
+async def _seed_derived_table_document(session, user_id: str):
+    """同一槽位原文正确、派生矛盾的表格文档：行引用必须能区分两者。"""
+    import hashlib
+
+    from ddp_corpus.models import Evidence
+
+    document = Document(uploaded_by=user_id, doc_id="r" * 64,
+                        filename="rows.pdf", mime="application/pdf", object_key="",
+                        index_status="ready")
+    session.add(document)
+    await session.flush()
+    job = ParseJob(document_id=document.id, engine="borndigital", options={},
+                   options_hash="h", status="succeeded", result_prefix="results/r/")
+    session.add(job)
+    await session.flush()
+    document.current_job_id = job.id
+    source_text = "Supply voltage MAX 6 V; Common-mode MIN -0.3 V MAX 26 V"
+    source = Evidence(document_id=document.id, parse_job_id=job.id, seq=0,
+                      atom_key="row-src-0", content=source_text,
+                      content_digest=hashlib.sha256(source_text.encode()).hexdigest(),
+                      kind="table", page_idx=0, bbox=[72, 100, 500, 130],
+                      page_size=[612, 792])
+    session.add(source)
+    await session.flush()
+    derived_text = "Supply voltage MIN 6 V; Common-mode -0.3 to 26 V"
+    derived = Evidence(document_id=document.id, parse_job_id=job.id, seq=0,
+                       atom_key="row-vision-0", content=derived_text,
+                       content_digest=hashlib.sha256(derived_text.encode()).hexdigest(),
+                       kind="table", page_idx=0, bbox=[72, 100, 500, 130],
+                       page_size=[612, 792], derived_from=source.id)
+    session.add(derived)
+    await session.flush()
+    session.add(Chunk(document_id=document.id, parse_job_id=job.id, seq=0,
+                      page_idx=0, bbox=[72, 100, 500, 130], page_size=[612, 792],
+                      text=source_text, char_len=len(source_text), block_type="table",
+                      text_tokenized=tokenized(source_text), evidence_id=source.id,
+                      derived_text=derived_text, derived_evidence_id=derived.id,
+                      embedding=[1.0, 0.0]))
+    await session.commit()
+    return document, job, source, derived
+
+
+@respx.mock
+async def test_records_row_cites_only_its_selected_view(session, app_state):
+    """多记录行在生产时选择自己的资料：只挂选中的一份，不无条件挂两份。
+
+    回归的是“输入可见即支持”：同块原文/生成两份正文都给了模型，
+    行出处却把两份都挂上 —— 正确原文值的 citations 里混进已知矛盾的
+    派生摘要。展开后每行必须写 `source`，落库只投影该行选中的视图。
+    """
+    document, job, source, derived = await _seed_derived_table_document(
+        session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.post(CHAT).mock(side_effect=lambda r: _chat_reply({"records": [
+        {"source": 1, "values": {"supply": "VS MAX 6 V"}},
+        {"source": 2, "values": {"supply": "Supply voltage MIN 6 V"}},
+    ]}))
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "array", "items": {"type": "object", "properties": {
+        "supply": {"type": "string", "description": "Supply voltage limit"}}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    assert len(outcome.records) == 2, outcome.records
+    first = outcome.records[0]["fields"]["supply"]
+    second = outcome.records[1]["fields"]["supply"]
+    assert [c["evidence_id"] for c in first["citations"]] == [source.id]
+    assert first["citations"][0]["source_type"] == "source"
+    assert [c["evidence_id"] for c in second["citations"]] == [derived.id]
+    assert second["citations"][0]["source_type"] == "generated"
+    assert second["citations"][0]["derived_from"] == source.id
+    assert outcome.degraded is None
+
+
+@respx.mock
+async def test_records_row_without_source_is_dropped_not_rescued(session, app_state):
+    """行缺 `source`/`values`、values 非对象或指到不存在的资料：只丢该行。"""
+    document, job, source, _ = await _seed_derived_table_document(
+        session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.post(CHAT).mock(side_effect=lambda r: _chat_reply({"records": [
+        {"values": {"supply": "VS MAX 6 V"}},
+        {"source": 99, "values": {"supply": "VS MAX 6 V"}},
+        {"source": 1},
+        {"source": 1, "values": ["not-an-object"]},
+        {"source": 1, "values": {"supply": "VS MAX 6 V"}},
+    ]}))
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "array", "items": {"type": "object", "properties": {
+        "supply": {"type": "string", "description": "Supply voltage limit"}}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    assert len(outcome.records) == 1, outcome.records
+    kept = outcome.records[0]["fields"]["supply"]
+    assert kept["value"] == "VS MAX 6 V"
+    assert [c["evidence_id"] for c in kept["citations"]] == [source.id]
+    assert outcome.degraded == "schema_violation"
+
+
+@respx.mock
+async def test_records_reserved_column_names_stay_business_values(session, app_state):
+    """用户列名 `source`/`values` 仍是业务值：封套选择器不与其碰撞。
+
+    回归的是扁平行把来源元数据与用户字段混在同一对象里：schema 一旦有
+    `source` 列，行值就会被当成来源指针或反之。封套把选择器放在 values
+    之外，任意用户列名都不再需要保留字限制。
+    """
+    document, job, source, _ = await _seed_derived_table_document(
+        session, (await _a_user(session)))
+    respx.post(EMBEDDINGS).mock(side_effect=_embedding_reply)
+    respx.post(CHAT).mock(side_effect=lambda r: _chat_reply({"records": [
+        {"source": 1, "values": {"supply": "VS MAX 6 V", "source": "table-note",
+                                "values": 7}},
+    ]}))
+
+    ctx = ExtractContext(session=session, index=MemoryIndex(), http=app_state.http,
+                         storage=app_state.storage, document=document, job=job,
+                         actor_id=document.uploaded_by, verify=False)
+    schema = {"type": "array", "items": {"type": "object", "properties": {
+        "supply": {"type": "string", "description": "Supply voltage limit"},
+        "source": {"type": "string", "description": "Row note column named source"},
+        "values": {"type": "integer", "description": "Row count column named values"}}}}
+    outcome = await run_extraction(ctx, parse_schema(schema))
+
+    assert len(outcome.records) == 1, outcome.records
+    row = outcome.records[0]["fields"]
+    assert row["supply"]["value"] == "VS MAX 6 V"
+    assert row["source"]["value"] == "table-note"
+    assert row["values"]["value"] == 7
+    assert [c["evidence_id"] for c in row["source"]["citations"]] == [source.id]
+    assert [c["evidence_id"] for c in row["values"]["citations"]] == [source.id]
+    assert outcome.degraded is None

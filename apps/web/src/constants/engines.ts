@@ -70,6 +70,12 @@ export const ENGINES: EngineSchema[] = [
     fields: [],
   },
   {
+    engine: 'borndigital-tables',
+    label: '文字层与线框表格（无 GPU）',
+    description: '保留有线框表格的行列和合并格；不处理扫描件与无线框表格，受限页面会保留文字并提示',
+    fields: [],
+  },
+  {
     engine: 'vlm-ocr',
     label: '大模型 OCR',
     description:

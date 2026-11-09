@@ -36,6 +36,7 @@ BORNDIGITAL_MAX_BYTES = 200 * 1024 * 1024
 
 MINERU_RUNTIME = "mineru-api"
 BORNDIGITAL_RUNTIME = "borndigital"
+BORNDIGITAL_TABLES_RUNTIME = "borndigital-tables"
 VLM_OCR_RUNTIME = "vlm-ocr"
 
 # 进程内引擎的 endpoint 前缀。它不是一个可以打 HTTP 的地址 —— 探针、健康检查
@@ -125,6 +126,46 @@ class BornDigitalEngine:
         }
 
 
+class BornDigitalTablesEngine:
+    """进程内同步型：borndigital 文字层 + pdfplumber 线框表格恢复。
+
+    与 BornDigitalEngine 同构（submit/status 的无远端语义、下载上限、
+    空版面即失败），差别只在 fetch_result 里调的是共享核心的
+    `ddp_core.application.borndigital_tables`（直接 import，不经兼容 re-export）。
+    表格恢复失败/缺依赖/无线框时核心如实记 `engine_notes` 并保留全部文本，
+    这里不做第二套降级判断。
+    """
+
+    def __init__(self, http: httpx.AsyncClient):
+        self._http = http
+
+    async def submit(self, endpoint: str, file_url: str, options: dict) -> str:
+        return file_url
+
+    async def status(self, endpoint: str, native_id: str) -> dict:
+        return {"status": "succeeded", "error": None}
+
+    async def fetch_result(self, endpoint: str, native_id: str) -> dict | None:
+        from ddp_core.application import borndigital_tables
+
+        pdf_bytes = await _download(self._http, native_id)
+        if not pdf_bytes.lstrip()[:5].startswith(b"%PDF"):
+            raise RuntimeError(
+                "borndigital-tables 引擎只处理 PDF；这份文件不是 PDF，请改用 mineru")
+
+        pages, notes = await asyncio.to_thread(borndigital_tables.extract_pages,
+                                               pdf_bytes)
+        if not pages:
+            raise RuntimeError(
+                "borndigital-tables 引擎没有从这份 PDF 里提取到任何文字层"
+                "（多半是扫描件/纯图片）。扫描件需要 OCR，请改用 mineru 引擎")
+
+        return {
+            "markdown": borndigital_tables.to_markdown(pages),
+            "layout_json": borndigital_tables.layout_json(pages, notes),
+            "images": [],
+        }
+
 
 class VlmOcrEngine:
     """模型调用型：整页渲染成图 -> 视觉语言模型 -> DDP-Layout。
@@ -195,6 +236,8 @@ def resolve(entry, *, mineru_client: MineruClient, http: httpx.AsyncClient) -> P
     runtime = runtime_of(entry)
     if runtime == BORNDIGITAL_RUNTIME:
         return BornDigitalEngine(http)
+    if runtime == BORNDIGITAL_TABLES_RUNTIME:
+        return BornDigitalTablesEngine(http)
     if runtime == VLM_OCR_RUNTIME:
         return VlmOcrEngine(http, entry)
     if runtime == MINERU_RUNTIME:
@@ -202,5 +245,5 @@ def resolve(entry, *, mineru_client: MineruClient, http: httpx.AsyncClient) -> P
     if not runtime:
         raise LookupError(
             "parse engine 缺少 runtime 声明（models.yaml parse_engines 条目必须写 "
-            "runtime: mineru-api | borndigital | vlm-ocr）")
+            "runtime: mineru-api | borndigital | borndigital-tables | vlm-ocr）")
     raise LookupError(f"unknown parse runtime: {runtime}")

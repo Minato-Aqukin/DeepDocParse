@@ -545,6 +545,87 @@ def test_borndigital_keeps_distant_footer_in_its_own_block():
             x0, y0, x1, y1 = block["bbox"]
             assert 0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height
 
+def _winansi_pdf(streams: list[bytes]) -> bytes:
+    """手写小夹具；WinAnsi 的八进制 \\226 是 en 破折号，不复制原 PDF。"""
+    stream = b"\n".join(streams)
+    objects = {
+        1: b"<</Type/Catalog/Pages 2 0 R>>",
+        2: b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        3: (b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R"
+            b"/Resources<</Font<</F1 5 0 R>>>>>>"),
+        4: b"<</Length " + str(len(stream)).encode() + b">>stream\n" + stream + b"\nendstream",
+        5: b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>",
+    }
+    out = bytearray(b"%PDF-1.4\n")
+    offsets: dict[int, int] = {}
+    for num in sorted(objects):
+        offsets[num] = len(out)
+        out += f"{num} 0 obj\n".encode() + objects[num] + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    for num in sorted(objects):
+        out += f"{offsets[num]:010d} 00000 n \n".encode()
+    out += (f"trailer\n<</Size {len(objects) + 1}/Root 1 0 R>>\n"
+            f"startxref\n{xref}\n%%EOF").encode()
+    return bytes(out)
+
+
+def test_borndigital_reattaches_a_lone_leading_dash_to_its_number():
+    """回归（R9 ESP32 物理页 4 真实丢失）：行首数字负号不许丢。
+
+    横线字形盒只有约 0.6pt 高，行分组的双向包容判定把它与后续数字拆成两行；
+    分块的字母数字判据再把只有横线的一行整行跳过 —— "–40" 进索引变成 "40"。
+    修法是几何回贴（同带 + 紧贴 + 后行首字字母数字），不是针对该句的文本替换：
+    同形小夹具里 en 破折号与 ASCII 连字符各领一行，两行的负号都必须保留、
+    且块 bbox 的左缘必须盖住横线字形（回贴的框是两行的外接矩形）。
+    """
+    pdf = _winansi_pdf([
+        b"BT /F1 12 Tf 60 700 Td (Both units have two temperature options:) Tj ET",
+        b"BT /F1 12 Tf 60 660 Td (\\22640 to 85 C variants are available.) Tj ET",
+        b"BT /F1 12 Tf 60 620 Td (-10 to 50 C variants are available.) Tj ET",
+    ])
+    blocks = borndigital.extract_pages(pdf)[0]["blocks"]
+    texts = [block["text"] for block in blocks]
+    assert "–40 to 85 C variants are available." in texts, texts
+    assert "-10 to 50 C variants are available." in texts, texts
+    assert not any(text in ("–", "-") for text in texts), f"横线仍被拆成孤立行：{texts}"
+    for block in blocks:
+        if block["text"].startswith(("–", "-")):
+            assert block["bbox"][0] < 61.0, f"bbox 左缘没盖住横线字形：{block['bbox']}"
+
+
+@pytest.mark.parametrize("accent_x,accent_y,attached", [
+    (60.6, 704, True), (60.6, 718, False), (20, 704, False), (300, 704, False),
+])
+def test_borndigital_keeps_raised_inline_accent_with_its_formula(accent_x, accent_y, attached):
+    """Native PDF breaks around a raised accent must not truncate its formula."""
+    pdf = _winansi_pdf([
+        b"BT /F1 12 Tf 60 700 Td (L) Tj ET",
+        f"BT /F1 8 Tf {accent_x} {accent_y} Td (\\210) Tj ET".encode(),
+        b"BT /F1 12 Tf 67.2 700 Td (count x d x r) Tj ET",
+    ])
+    blocks = borndigital.extract_pages(pdf)[0]["blocks"]
+    text = "\n".join(block["text"] for block in blocks)
+    if attached:
+        assert "Lˆcount x d x r" in text, text
+    else:
+        assert "Lˆcount" not in text, text
+        assert "count x d x r" in text, text
+
+
+@pytest.mark.parametrize("dash_x,text_x,text_y", [(60, 80, 700), (300, 60, 694.2)])
+def test_borndigital_keeps_separate_dash_out_of_unrelated_text(dash_x, text_x, text_y):
+    """列表间距与另一栏错位行不能使独立横线变成正文前缀。"""
+    streams = [
+        (f"BT /F1 12 Tf {dash_x} 700 Td (\\226) Tj "
+         f"{text_x - dash_x} {text_y - 700} Td (Strapping pins here) Tj ET").encode(),
+    ]
+    blocks = borndigital.extract_pages(_winansi_pdf(streams))[0]["blocks"]
+    texts = [block["text"] for block in blocks]
+    assert "–" in texts, f"列表横线被贴掉了：{texts}"
+    assert "Strapping pins here" in texts, texts
+    assert not any(text.startswith("–Strapping") for text in texts), texts
+
 
 @respx.mock
 async def test_readyz_is_not_permanently_red_with_an_inprocess_engine(client, app_state):

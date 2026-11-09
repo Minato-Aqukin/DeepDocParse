@@ -1,0 +1,267 @@
+{
+  "scope": "本稿引用的既有实测数据摘录；本轮未重跑产品或模型。旧材料评分不纳入。",
+  "records": [
+    {
+      "source_file": "E01-E05-E06-设计约束与历史指标摘录.json",
+      "source_sha256": "1e484f0ac95f97c29be97a7be4e2d034faedb9e4eb1400ff9378b3235d301d40",
+      "selected_fields": {
+        "E05": {
+          "source": "docs/refactor/artifacts/core-compound-retrieval-20261001.json",
+          "sha256": "6347b488e456680476db3960485f0279d5f8984ba31ee2d5e80aaac135d28cbb",
+          "date": "2026-10-01",
+          "results_after": {
+            "qa/hybrid": {
+              "found": 13,
+              "expected": 13
+            },
+            "qa/keyword": {
+              "found": 9,
+              "expected": 13
+            },
+            "search_all/hybrid": {
+              "found": 13,
+              "expected": 13
+            },
+            "search_all/keyword": {
+              "found": 12,
+              "expected": 13
+            }
+          },
+          "limits": [
+            "Evidence recall only: normalized excerpt substring in returned original chunk text with the fixed source identity; not answer quality, entailment, page/bbox correctness or general semantic recall.",
+            "Positive cases and reference order are unchanged from the six frozen cases / 26 prior runs; the negative answering case is outside this artifact's original scope.",
+            "QA measurements call real qa.retrieve (including real ACL/fixed-version selection, similarity gate and disabled rerank); raw retrieval ranks are recorded separately. No generator/chat/vision requests are made.",
+            "Cross-document measurements call the real router function in-process, with its real authorized-document predicate and search_contexts constrained to the three frozen version IDs; global pre-grouping rank matches the old measurement convention. No HTTP gateway/browser/auth transport is exercised.",
+            "Keyword-only embedding failure is intentionally injected in the runner's HTTP request hook; production fallback and degraded propagation run unchanged. This does not prove natural endpoint outage recovery.",
+            "EMBEDDING_BATCH_SIZE=1 is process-local to exercise actual batched embedding across compound facets; no running service configuration is changed. Rerank is disabled, matching the original recall configuration.",
+            "QA keyword recall 9/13; search_all keyword recall 12/13; any missing reference and degraded flag remains visible in per-run results.",
+            "No services, containers, volumes or source/index data modified; DB transaction is read-only and repeatable-read. Existing frozen source digests and ordered chunk-text fingerprints recorded, not rebuilt.",
+            "No project tests/lints/contracts generation, real answer model, visual check, browser chain, paid GPU, publication or human semantic review performed by this remeasurement."
+          ]
+        },
+        "E06": {
+          "source": "eval/reports/EVAL-omnidocbench-report.md",
+          "sha256": "6bcd75fca3529f98e605b0d501148556f143b7b130675f77f8f37122029dca7e",
+          "summary_lines": [
+            "# 出处评测报表（mode=offline）",
+            "",
+            "样本 40 条。指标定义见 docs/EVAL.md。",
+            "",
+            "| 切片 | 样本 | 页码命中率 | bbox 包含率 | 拒答正确率 | 降级标记准确率 |",
+            "|---|---|---|---|---|---|",
+            "| 全部 | 40 |  65.0% (26/40) |  37.5% (15/40) | — | — |",
+            "| 中文 | 16 |  81.2% (13/16) |  56.2% (9/16) | — | — |",
+            "| 中英混排 | 1 |   0.0% (0/1) |   0.0% (0/1) | — | — |",
+            "| 信息图 | 1 |   0.0% (0/1) |   0.0% (0/1) | — | — |",
+            "| 公式密集 | 10 |  40.0% (4/10) |   0.0% (0/10) | — | — |",
+            "| 公式行内 | 1 | 100.0% (1/1) | 100.0% (1/1) | — | — |",
+            "| 几何图 | 1 | 100.0% (1/1) |   0.0% (0/1) | — | — |",
+            "| 图注 | 4 |  75.0% (3/4) |  25.0% (1/4) | — | — |",
+            "| 图表引用 | 10 |  60.0% (6/10) |  10.0% (1/10) | — | — |",
+            "| 多子图 | 1 | 100.0% (1/1) |   0.0% (0/1) | — | — |",
+            "| 扫描版老手册 | 10 |  90.0% (9/10) |  80.0% (8/10) | — | — |"
+          ],
+          "meaning": "Historical offline fixed samples; overlapping slices; not official benchmark ranking, current version quality or human semantic review."
+        }
+      }
+    },
+    {
+      "source_file": "E22-QASPER公共人类参考24题首测摘要.json",
+      "source_sha256": "819e16a542d4813f0f6643cc78cffd7954f18347bccba789cd46e1d2202ad1b3",
+      "selected_fields": {
+        "source": {
+          "dataset": "QASPER",
+          "metadata_url": "https://huggingface.co/datasets/allenai/qasper/raw/main/README.md",
+          "official_archive_url": "https://qasper-dataset.s3.us-west-2.amazonaws.com/qasper-test-and-evaluator-v0.3.tgz",
+          "license": "CC BY 4.0"
+        },
+        "sampling": {
+          "seed": "AI-RACE-908823941852692809-QASPER-20261108",
+          "papers": 8,
+          "questions_per_paper": 3,
+          "questions": 24,
+          "rule": "Papers with >=3 questions sorted by SHA256(seed|paper_id), first8; within each, questions sorted SHA256(seed|question_id), first3. All answer types retained; no result-dependent substitutions."
+        },
+        "official_scores": {
+          "Answer F1": 0.2502034941087518,
+          "Answer F1 by type": {
+            "extractive": 0.4002609657094277,
+            "abstractive": 0.2288590336866199,
+            "boolean": 0.0,
+            "none": 0.0
+          },
+          "Evidence F1": 0.16666666666666666,
+          "Missing predictions": 0
+        },
+        "adaptation": "Raw persisted assistant prose as answer; cited original PDF atom bodies as evidence. No answer rewriting, Unanswerable/boolean remapping, gold-derived excerpt matching or exclusion of conflicting references.",
+        "human_system_output_review": false
+      }
+    },
+    {
+      "source_file": "E23-公网三任务授权与运行边界摘要.json",
+      "source_sha256": "ceadd2191d648537a40b3d4c6c48c688f3eae4bdfd4f413437301446f77f5cb1",
+      "selected_fields": {
+        "licensed_sample": {
+          "title": "M3-Embedding",
+          "version": "arXiv:2402.03216v5",
+          "source": "https://arxiv.org/abs/2402.03216v5",
+          "license": "https://creativecommons.org/licenses/by/4.0/",
+          "authors": [
+            "Jianlv Chen",
+            "Shitao Xiao",
+            "Peitian Zhang",
+            "Kun Luo",
+            "Defu Lian",
+            "Zheng Liu"
+          ],
+          "original_pdf_sha256": "eb38e53565da260dc1f3d49708f45441936447a7f3c7d7ef025ff62ea3e1e575",
+          "original_pdf_modified": false,
+          "AI_derivatives_not_author_endorsement": true
+        },
+        "saved_tasks": {
+          "QA": {
+            "generated_under": "C7",
+            "question": "M3-Embedding支持哪三类检索功能？最长处理多少token？请分别给出原文出处。",
+            "saved_answer": "稠密、多向量、稀疏检索；8192 token。",
+            "own_original_source_opened": true,
+            "human_verified": false
+          },
+          "fields": {
+            "generated_under": "C8, first public rerun of unchanged three-field schema",
+            "values": {
+              "max_input_tokens": 8192,
+              "unsupervised_language_count": 194,
+              "cross_lingual_correspondences": 2655
+            },
+            "language_and_correspondence_original": "PhysicalPDFp3, original adjacent seq35/36; not abstract language support count.",
+            "length_citation_limit": "Primary is a p14 training passage; own context citations additionally include p2/p9 capacity text. Read complete citation group, not a numeric match alone.",
+            "old_failure_preserved": "C7 output language count3 from xP3 identifier, original run retained.",
+            "human_verified": false
+          },
+          "Wiki": {
+            "generated_under": "C7",
+            "selected_originals": 9,
+            "available_originals": 163,
+            "human_verified": false,
+            "attribution_edit": "AI assistant appended attribution as a new revision; original model revision retained; not human review."
+          }
+        },
+        "operations": {
+          "public_object_privacy": {
+            "owner_document": 200,
+            "anonymous_document": 401,
+            "other_contributor_document": 404,
+            "owner_resource": 200,
+            "other_contributor_resource": 404,
+            "reviewer_own_M3": 200,
+            "owned_synthetic_fixture_deleted": true
+          },
+          "budget": {
+            "local_conservative_cap_USD": 20,
+            "actual_low_cap_rejection": 402,
+            "ledger_survives_restart": true,
+            "not_provider_invoice_guarantee": true
+          },
+          "concurrency": {
+            "simultaneous_accepted_real_provider_calls": 2,
+            "third_request_status": 429,
+            "reservations_eventually_settled": true,
+            "local_estimated_two_call_cost_USD": "0.00321816",
+            "scope": "Direct authenticated loopback proxy; not application throughput/P95."
+          },
+          "accepted_task_recovery": {
+            "accepted_with_worker_stopped": 202,
+            "pending_after_API_process_restart": true,
+            "same_run_completed_after_worker_start": true,
+            "completed_documents": 1,
+            "original_quality_run_preserved": true,
+            "not_proven": [
+              "power loss",
+              "database corruption",
+              "interrupted in-flight inference",
+              "exactly-once side effects"
+            ]
+          },
+          "frontend_state": {
+            "old_bundle_stale_list_reproduced": true,
+            "new_bundle_completion_poll_synced_list_and_detail": true,
+            "controlled_initial_cache_replay_disclosed": true,
+            "unmodified_live_reload_confirmed": true
+          }
+        }
+      }
+    },
+    {
+      "source_file": "E29-C10点三重排序修复与R11已知回归摘要.json",
+      "source_sha256": "6922d5f5b30f9924a2b4059b9ab043489916bdfd35a070969bce4ab8c0c5df2f",
+      "selected_fields": {
+        "candidate": "C10.3，私有工程候选；未替换公网C8",
+        "knownness": "R11题目、金标和首次输出已揭盲；本次全部12题已知开发回归，不是新保留集、训练盲测或真人评测。",
+        "strict_rule": "完整回答固定请求；每条正面断言事实正确且有自己的充分出处；缺席判断有范围；Wiki还须完整覆盖三个预定主题。整题二元判定，部分正确不折算整题成功。",
+        "strict_results": {
+          "Pico": {
+            "qa": "4/4",
+            "fields": "0/1（叶1,0,1）",
+            "wiki": "0/1（409未生成）",
+            "all": "4/6"
+          },
+          "RoFormer": {
+            "qa": "2/4",
+            "fields": "1/1（叶3/3）",
+            "wiki": "0/1（主题不完整）",
+            "all": "3/6"
+          },
+          "combined": {
+            "qa": "6/8",
+            "fields": "1/2（叶5/6）",
+            "wiki": "0/2",
+            "all": "7/12"
+          }
+        },
+        "remaining_failures": [
+          "RoFormer Q1未给出所请求的二维具体形式及相对位置内积关系；泛d维公式不能替代。",
+          "RoFormer Q3仅给RoFormer两种长度结果，未满足冻结金标要求的四配置表。字面问题未明确说四配置，存在请求/金标范围歧义，仍保留预先冻结的保守不通过口径，不作为无歧义缺陷。",
+          "Pico复合字段给出三种模式电流，却遗漏所有三项功率值；源表和本题自有证据均已有这些数值。",
+          "Pico Wiki未产出；不能把空输出计作无错误的成功Wiki。",
+          "RoFormer Wiki三主题均只部分覆盖。14条正面句有支持、1条上下文定界缺口真实只是分项诊断，不能替代完整任务成功。另有旧的阶段配置缺口被省掉且未补事实，披露完整性倒退。"
+        ]
+      }
+    },
+    {
+      "source_file": "E30-C10点二回归与C10点三Wiki诊断摘要.json",
+      "source_sha256": "41ebb558f2ad806b44daf6665015f33e28c3d7986ff5b2b560e7ee9f0a554d72",
+      "selected_fields": {
+        "scope": "C10.2八文档全量已知题回归，以及C10.3十文档两档Wiki预算诊断。内部AI来源审计；不是新盲测、人工研究或命名竞赛复评。",
+        "strict_rule": "固定整题分母；遗漏子问、部分覆盖、错误缺口声明、事实错或自引证据不能支持均不通过。HTTP成功不代替语义通过。不能借用未引用邻块或祖先。",
+        "c10_2": {
+          "candidate": "C10.2",
+          "paired": {
+            "tasks": 45,
+            "strict_pass": 34,
+            "qa": {
+              "pass": 27,
+              "total": 30
+            },
+            "fields": {
+              "pass": 4,
+              "total": 7
+            },
+            "wiki_paired": {
+              "pass": 3,
+              "total": 8
+            },
+            "wiki_delivery_separate": {
+              "pass": 4,
+              "total": 8
+            },
+            "field_leaves": {
+              "pass": 18,
+              "total": 21
+            }
+          },
+          "no_profile_pooling": true
+        }
+      }
+    }
+  ]
+}

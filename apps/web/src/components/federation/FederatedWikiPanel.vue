@@ -10,6 +10,7 @@ import {
   type WikiRevisionDocument,
 } from '@/api/wiki'
 import EvidencePreview from '@/components/evidence/EvidencePreview.vue'
+import ClaimSupportQuotes from '@/components/evidence/ClaimSupportQuotes.vue'
 import type { FederatedWikiRef } from '@/federation/task-model'
 
 /**
@@ -180,14 +181,16 @@ watch(() => props.wiki, (ref) => {
           <h3>{{ page.title }}<span v-if="page.stale" class="error"> · 待更新</span></h3>
           <section v-for="(part, i) in page.generated_sections" :key="i">
             <h4>{{ part.heading }}</h4>
-            <p v-for="sentence in part.sentences" :key="sentence.id" class="sentence">
+            <div v-for="sentence in part.sentences" :key="sentence.id" class="sentence">
               {{ sentence.text }}
               <button v-for="id in sentence.evidence_ids" :key="id" type="button" class="cite"
                       @click="selectEvidence(id, sentence.text)">
                 固定原文
               </button>
               <small v-if="sentence.unsupported">无有效原始出处 · 待复核</small>
-            </p>
+              <ClaimSupportQuotes :support="sentence.support"
+                                  @select="id => selectEvidence(id, sentence.text)" />
+            </div>
           </section>
           <section v-if="page.human_paragraphs.length" class="human">
             <h4>人工补充 · 未核证</h4>

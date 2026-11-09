@@ -145,7 +145,7 @@ def _one_source(conn, report: BackfillReport, source_kind: str, source_id: str,
     # 有定位键的之外，剩下的就是"连定位键都没有"的
     report.skipped_no_locator += len(raw) - _counted(raw, locators)
 
-    for rank, ((job_id, seq), citation) in enumerate(locators.items()):
+    for rank, ((job_id, seq, _), citation) in enumerate(locators.items()):
         if job_id not in live_jobs:
             # evidence.parse_job_id 是非空外键，那次解析没了就建不出证据行
             report.skipped_no_job += 1

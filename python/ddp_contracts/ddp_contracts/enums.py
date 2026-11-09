@@ -315,10 +315,10 @@ def run_status_label(value: str | None) -> str | None:
     return meta["label"] if meta else f"未知取值（{value}）"
 
 
-# DDP-Extract 的字段三态。**必须分开对待**：`not_found` 是"我们看过了，
-# 文档里确实没有"，是一种正确答案；`error` 才是系统问题。
-# 界面上 not_found 绝不能显示成空白或 "—"（那让人以为是没渲染出来），
-# error 也绝不能显示成"未提及"（那是把系统故障伪装成事实）。
+# DDP-Extract 的字段三态。**必须分开对待**：`not_found` 只表示本次检索
+# 与抽取未找到值，不证明整篇文档没有；`error` 表示抽取过程出错。
+# 界面上 not_found 绝不能显示成空白或 "—"，也不能写成"文档中未提及"；
+# error 必须显示失败原因，不能伪装成未找到。
 FieldStatus = Literal["found", "not_found", "error"]
 
 FIELD_STATUS_VALUES: Final[tuple[str, ...]] = (
@@ -330,8 +330,8 @@ FIELD_STATUS_VALUES: Final[tuple[str, ...]] = (
 FIELD_STATUS_META: Final[dict[str, EnumMeta]] = {
     # 抽到了值，且有出处
     "found": {"value": "found", "label": "已抽取", "severity": "ok"},
-    # 文档里确实没有这个字段
-    "not_found": {"value": "not_found", "label": "文档中未提及", "severity": "neutral"},
+    # 本次检索与抽取未找到值，不证明原文不存在
+    "not_found": {"value": "not_found", "label": "本次未找到", "severity": "neutral"},
     # 抽取过程本身出错
     "error": {"value": "error", "label": "抽取失败", "severity": "error"},
 }

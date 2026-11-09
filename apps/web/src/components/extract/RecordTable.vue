@@ -16,8 +16,8 @@ import { formatPageLocator } from '@/utils/page-locator'
  *
  * 三态必须一眼分得开（constants/status.ts 里写了理由）：
  *   已抽取     值 + 相关度
- *   文档中未提及  一句明确的话，**不是空白**（空白让人以为是没渲染出来）
- *   抽取失败    红字 + 原因，**绝不显示成"未提及"**（那是把故障伪装成事实）
+ *   本次未找到  有界检索与抽取未找到值，不等于原文不存在；不能留白
+ *   抽取失败    红字 + 原因，不能伪装成未找到
  */
 const props = defineProps<{
   items: ExtractionItem[]
@@ -57,7 +57,7 @@ function display(cell: FieldResult | undefined): string {
 
 function open(item: ExtractionItem, name: string) {
   const cell = cellOf(item, name)
-  // 没有出处就没什么可看的（未提及 / 失败），不弹一个空抽屉
+  // 没有出处就没什么可看的（本次未找到 / 失败），不弹一个空抽屉
   if (cell?.citations?.length) active.value = { item, name }
 }
 </script>
@@ -103,7 +103,7 @@ function open(item: ExtractionItem, name: string) {
               <template v-if="similarityText(cellOf(row, name)!.confidence?.top_similarity)">
                 · {{ similarityText(cellOf(row, name)!.confidence.top_similarity) }}
               </template>
-              <template v-if="cellOf(row, name)!.verified"> · 已核对</template>
+              <template v-if="cellOf(row, name)!.verified"> · 出处转写近似匹配</template>
             </span>
           </button>
         </template>
@@ -116,10 +116,13 @@ function open(item: ExtractionItem, name: string) {
         <p class="drawer-value">{{ display(activeField) }}</p>
         <div class="drawer-tags">
           <StatusTag :meta="fieldStatusOf(activeField.status)" />
-          <StatusTag v-if="activeField.verified" label="已视觉核对" type="success" />
+          <StatusTag v-if="activeField.verified" label="出处转写近似匹配" type="success" />
           <StatusTag v-if="activeField.degraded"
                      :label="degradedLabelOf(activeField.degraded) ?? ''" type="warning" />
         </div>
+        <p v-if="activeField.verified" class="meta">
+          自动核对只按相似度阈值比较出处文本与裁图转写，不证明字段值、单位或表格行列正确，也不等于人工复核。
+        </p>
         <h4 class="drawer-sub">出处</h4>
         <CitationChip
           v-for="(citation, i) in activeField.citations"
@@ -176,7 +179,7 @@ function open(item: ExtractionItem, name: string) {
 .cell.clickable:hover .value {
   text-decoration: underline;
 }
-/* 未提及是一个**结论**，不是缺数据：用次要色而不是留白 */
+/* 明确显示本次未找到；不把检索假阴性包装成原文不存在 */
 .cell.is-not_found .value {
   color: var(--el-text-color-secondary);
   font-style: italic;

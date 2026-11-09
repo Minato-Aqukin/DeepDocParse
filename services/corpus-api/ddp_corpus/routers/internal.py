@@ -128,7 +128,8 @@ async def parse_callback(body: ParseCallback, request: Request,
             continue
         if await archive_job(session, storage, service, job.id):
             archived += 1
-            await _schedule_index(session, document.id, job_id=job.id)
+            if job.index_status == "pending":
+                await _schedule_index(session, document.id, job_id=job.id)
             await _record_remote_outcome(session, storage, job, ok=True)
             # `enqueue` never commits and archive_job committed before it: without this the
             # index task was rolled back with the request session, the worker never got one,

@@ -289,9 +289,9 @@ async def test_embeddings_proxy_missing_key_is_503(client, app_state, monkeypatc
 
 
 @respx.mock
-async def test_retrieval_embed_query_sends_auth_and_adapter(app_state, monkeypatch):
+async def test_retrieval_embedding_batch_sends_auth_and_adapter(app_state, monkeypatch):
     """抽取定位链的向量化走同一规则（默认 embedding 条目，adapter 改写 + 鉴权）。"""
-    from ddp_gateway.services.retrieval import embed_query
+    from ddp_gateway.services.retrieval import embed_queries
 
     monkeypatch.setenv(ENV, KEY)
     app_state.registry = Registry(embedding_models={
@@ -303,16 +303,16 @@ async def test_retrieval_embed_query_sends_auth_and_adapter(app_state, monkeypat
             "object": "list",
             "data": [{"object": "embedding", "index": 0, "embedding": [0.5]}]}))
 
-    assert await embed_query(app_state.http, app_state.registry, "q") == [0.5]
+    assert await embed_queries(app_state.http, app_state.registry, ["q"]) == [[0.5]]
     sent = route.calls.last.request
     assert sent.headers["Authorization"] == f"Bearer {KEY}"
     assert json.loads(sent.content)["model"] == "text-embedding-3-small"
 
 
 @respx.mock
-async def test_retrieval_embed_query_missing_key_degrades_visibly(app_state, monkeypatch):
-    """key 缺失时向量化返回 None —— 调用方据此打 embedding_unavailable，不裸调。"""
-    from ddp_gateway.services.retrieval import embed_query
+async def test_retrieval_embedding_batch_missing_key_degrades_visibly(app_state, monkeypatch):
+    """Missing credentials mark every query unavailable without an unauthenticated call."""
+    from ddp_gateway.services.retrieval import embed_queries
 
     monkeypatch.delenv(ENV, raising=False)
     app_state.registry = Registry(embedding_models={
@@ -322,8 +322,64 @@ async def test_retrieval_embed_query_missing_key_degrades_visibly(app_state, mon
     route = respx.post("https://api.openai.com/v1/embeddings").mock(
         return_value=Response(200, json={}))
 
-    assert await embed_query(app_state.http, app_state.registry, "q") is None
+    assert await embed_queries(app_state.http, app_state.registry, ["q"]) == [None]
     assert route.call_count == 0
+
+
+@respx.mock
+async def test_retrieval_variants_share_one_index_aligned_embedding_batch(app_state, monkeypatch):
+    from ddp_gateway.services.retrieval import retrieve_with_variants
+
+    app_state.registry = Registry(embedding_models={
+        "dense": ModelEntry(endpoint="https://embed.example", capabilities=["dense"])})
+    vectors = {"base": [1.0], "detail": [2.0], "abstract": [3.0]}
+
+    def embed(request):
+        texts = json.loads(request.content)["input"]
+        rows = [{"index": index, "embedding": vectors[text]}
+                for index, text in enumerate(texts)]
+        return Response(200, json={"data": rows[::-1]})
+
+    async def search(doc_hash, vector, k):
+        return [{"seq": int(vector[0]), "text": f"original {int(vector[0])}",
+                 "similarity": 0.9}]
+
+    monkeypatch.setattr(app_state.task_store, "search_chunks", search)
+    route = respx.post("https://embed.example/v1/embeddings").mock(side_effect=embed)
+    found = await retrieve_with_variants(
+        app_state.task_store, app_state.http, app_state.registry,
+        doc_hash="fixed-document", query="base",
+        query_variants=["detail", "abstract"], k=3, corpus=[])
+
+    assert route.call_count == 1
+    assert [hit["seq"] for hit in found.hits] == [1, 2, 3]
+    assert found.mode == "vector" and found.degraded is None
+
+
+@pytest.mark.parametrize("indices", [[0, 0, 2], [0, 2], [0, 1, 3], [False, 1, 2]])
+@respx.mock
+async def test_misaligned_embedding_batch_falls_back_visibly(
+        app_state, monkeypatch, indices):
+    from ddp_gateway.services.retrieval import retrieve_with_variants
+
+    app_state.registry = Registry(embedding_models={
+        "dense": ModelEntry(endpoint="https://embed.example", capabilities=["dense"])})
+    route = respx.post("https://embed.example/v1/embeddings").mock(
+        return_value=Response(200, json={
+            "data": [{"index": index, "embedding": [1.0]} for index in indices]}))
+
+    async def search(*args, **kwargs):
+        pytest.fail("An ambiguously indexed vector must not drive source selection.")
+
+    monkeypatch.setattr(app_state.task_store, "search_chunks", search)
+    found = await retrieve_with_variants(
+        app_state.task_store, app_state.http, app_state.registry,
+        doc_hash="fixed-document", query="base", query_variants=["detail", "abstract"],
+        k=3, corpus=[{"seq": 9, "text": "base detail abstract original"}])
+
+    assert route.call_count == 1
+    assert found.degraded == "embedding_unavailable" and found.mode == "keyword"
+    assert [hit["seq"] for hit in found.hits] == [9]
 
 
 @respx.mock

@@ -59,6 +59,9 @@ async def search(request: Request, q: str = "", doc: str = "", limit: int = 20,
         document = documents.get(hit["document_id"])
         if document is None or document.deleted_at is not None:
             continue
+        # A generated evidence link must not display its ancestor's source text.
+        excerpt = (hit.get("derived_text") or "") if hit.get("derived_evidence_id") else hit["text"]
+        snippet = " ".join(excerpt.split())[:200]
         for context in contexts.get(hit["parse_job_id"], []):
             key = context.version_id or document.id
             group = groups.setdefault(key, {
@@ -73,6 +76,6 @@ async def search(request: Request, q: str = "", doc: str = "", limit: int = 20,
                 "evidence_id": hit.get("derived_evidence_id") or hit.get("evidence_id"),
                 "page_size": hit.get("page_size"),
                 "score": hit.get("score"), "similarity": hit.get("similarity"),
-                "snippet": " ".join(hit["text"].split())[:200],
+                "snippet": snippet,
             })
     return {"query": q, "degraded": degraded, "groups": list(groups.values())}

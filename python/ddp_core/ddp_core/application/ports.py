@@ -44,7 +44,8 @@ class TaskStore(Protocol):
 class ExecutionProvider(Protocol):
     async def parse(self, snapshot_path: str) -> dict: ...
     async def generate(
-        self, messages: list[dict], *, execution_policy: str, allow_remote: bool, max_tokens: int = 1024
+        self, messages: list[dict], *, execution_policy: str, allow_remote: bool,
+        max_tokens: int = 1024, response_format: dict | None = None,
     ) -> tuple[str, dict]: ...
     def capabilities(self) -> dict: ...
 

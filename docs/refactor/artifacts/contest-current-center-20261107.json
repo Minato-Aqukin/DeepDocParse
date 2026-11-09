@@ -1,0 +1,1627 @@
+{
+  "scope": "现行隔离单中心真实运行脱敏摘要；保留全部三任务及缺证据边界输出，不是人工正确率、公网验收或当前全部能力质量通过",
+  "prepared_on": "2026-11-07T00:08:05.832140+08:00",
+  "human_review": false,
+  "raw_record_sha256": "c38b13935dfc6777d0255363a3ac7cd02909b57392035e3b815c7d75523c1c6a",
+  "profile": {
+    "purpose": "new current-source isolated center three-task verification",
+    "embedding": {
+      "file": "DeepDocParse/.dev-logs/v3-finish-20260923/bge-m3-Q8_0.gguf",
+      "bytes": 634553760,
+      "sha256": "950f4a8e5e19477a6d3c26d2f162233c20002c601f75e4b002e3239997821167",
+      "runtime": "same existing llama-server b10809",
+      "pooling": "cls",
+      "dimension_expected": 1024,
+      "threads": 4,
+      "source_provenance": "preexisting repository dev artifact; upstream quantization publisher not independently established from this file; no original-weight identity claim",
+      "new_download": false
+    },
+    "model_registry": {
+      "parse_engines": {
+        "borndigital": {
+          "endpoint": "inproc://borndigital",
+          "runtime": "borndigital",
+          "default": true,
+          "capabilities": [
+            "parse"
+          ]
+        }
+      },
+      "vqa_models": {
+        "qwen3-4b-instruct": {
+          "endpoint": "http://127.0.0.1:48280",
+          "default": true,
+          "runtime": "openai",
+          "capabilities": [
+            "text"
+          ],
+          "api_key_env": "DDP_CONTEST_MODEL_KEY"
+        }
+      },
+      "embedding_models": {
+        "bge-m3": {
+          "endpoint": "http://127.0.0.1:48281",
+          "default": true,
+          "runtime": "openai",
+          "capabilities": [
+            "dense"
+          ],
+          "api_key_env": "DDP_CONTEST_MODEL_KEY"
+        }
+      }
+    },
+    "wiki_prompt": "original after unsuccessful prompt-only experiment was reverted; all experiment output retained",
+    "fields_schema": {
+      "type": "object",
+      "properties": {
+        "model_name": {
+          "type": "string",
+          "description": "Name of the model architecture proposed by this paper, named Transformer in the abstract."
+        },
+        "encoder_layers": {
+          "type": "integer",
+          "description": "Number N of identical layers in the encoder stack in section 3.1 Encoder and Decoder Stacks."
+        },
+        "attention_heads": {
+          "type": "integer",
+          "description": "Number h of parallel attention layers or attention heads employed in section 3.2.2 Multi-Head Attention."
+        }
+      },
+      "required": [
+        "model_name",
+        "encoder_layers",
+        "attention_heads"
+      ]
+    },
+    "frozen_before_first_center_workflow": true,
+    "human_review": false,
+    "public_service": false,
+    "implementation_sha256": {
+      "python/ddp_core/ddp_core/application/wiki.py": "631d0646b3b922c77c6b8addb7bcda7129ec376896dd5996bfca62caf5305bed",
+      "services/corpus-api/ddp_corpus/wiki.py": "c7e6a109cea1a4a51eeb76667654316f675718c824f2e7d005b043a8cbea5532",
+      "services/corpus-api/ddp_corpus/federated_wiki.py": "33787c041ee336e3374ee9033644edbef164b6c970d7fce342720aa99fd34f9f"
+    },
+    "retrieval": "BGE-M3 dense + PostgreSQL keyword RRF; actual embedding artifact frozen separately",
+    "qa_question": "这篇论文的编码器由多少层组成？请依据原文回答并给出出处。",
+    "missing_evidence_question": "What was the project's customer revenue in 2026? Use only this document and state when evidence is insufficient.",
+    "qa_model": "qwen3-4b-instruct alias for existing Q4_K_M weights; preloaded, existing task defaults retained",
+    "field_verify": "omitted per original request; service defaults retained; no vision model registered",
+    "isolation_probe": "distinct real contributor without this private resource; not human participant",
+    "measurement": "single execution elapsed times, not latency distribution or user time saved"
+  },
+  "actual_center_dependencies": {
+    "python": "3.12.15",
+    "pypdfium2": "5.14.0",
+    "httpx": "0.28.1",
+    "fastapi": "0.142.2",
+    "pydantic": "2.13.5"
+  },
+  "embedding_artifact_provenance": {
+    "checked_on": "2026-11-06",
+    "local_file": "bge-m3-Q8_0.gguf",
+    "bytes": 634553760,
+    "sha256": "950f4a8e5e19477a6d3c26d2f162233c20002c601f75e4b002e3239997821167",
+    "matching_published_artifact": {
+      "repository": "gpustack/bge-m3-GGUF",
+      "revision": "2d48f1737679ad900d5c26c5aad5410e9c70fdca",
+      "filename": "bge-m3-Q8_0.gguf",
+      "api": "https://huggingface.co/api/models/gpustack/bge-m3-GGUF?blobs=true",
+      "card": "https://huggingface.co/gpustack/bge-m3-GGUF",
+      "model_card_license": "mit",
+      "lfs_sha256_matches_local": true,
+      "published_size_matches_local": true
+    },
+    "nonmatching_candidate_retained": {
+      "repository": "ggml-org/bge-m3-Q8_0-GGUF",
+      "filename": "bge-m3-q8_0.gguf",
+      "bytes": 634553760,
+      "sha256": "aa473d51f451a22f0fcf39ba3330c14bed38a385712b1113440f69df4047a173",
+      "same_size_not_same_artifact": true
+    },
+    "scope": "本机文件与gpustack所列制品字节摘要一致，量化模型卡声明MIT；不从文件名或相同大小推断来源，不据此声称完整训练数据或部署法律合规审计。材料包不分发模型权重。最初未建立发布者身份的冻结记录保留，本补充不改变模型文件或已经冻结的任务输入。"
+  },
+  "document": {
+    "id": "94935ff5feb74cbb9520a38daf3d1de5",
+    "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+    "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+    "source_version_no": 1,
+    "filename": "Attention-Is-All-You-Need.pdf",
+    "doc_id": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+    "origin": "web",
+    "mime": "application/pdf",
+    "size_bytes": 2215244,
+    "page_count": 15,
+    "status": "succeeded",
+    "error": null,
+    "index_status": "ready",
+    "index_error": null,
+    "compile_status": "partial",
+    "compile_degraded": [
+      "provider_unresolved"
+    ],
+    "compile_fingerprint": "dc23639a5dcfa7492f504aed72e3776ed2d84bf6e8fa5274fd7cd7afed386dec",
+    "layout_version": "ddp-layout/1",
+    "code_detection": "heuristic",
+    "current_job_id": "ae945924df4e4076937b24c3def64a36",
+    "created_at": "2026-11-06T15:39:18.995437Z",
+    "uploaders": [
+      "contest-demo"
+    ],
+    "can_delete": true
+  },
+  "records": [
+    {
+      "task": "qa",
+      "input": {
+        "question": "这篇论文的编码器由多少层组成？请依据原文回答并给出出处。"
+      },
+      "conversation_status": 201,
+      "conversation_id": "5f2d13ecf9644f5784e9a479e4a0fafa",
+      "http_status": 200,
+      "events": [
+        {
+          "event": "meta",
+          "data": {
+            "query_decision": {
+              "need_retrieval": true,
+              "reason": "问题要求依据原文回答论文编码器的层数，但目前没有提供论文内容或相关原文，无法获取所需事实。",
+              "inherited_evidence_ids": [],
+              "degraded": null
+            },
+            "retrieval": {
+              "chunk_ids": [
+                "abea55b94fa942eead8b3e22654cde7e",
+                "0c14369d5534465abc367d2f36d28f59",
+                "46b501c21b4c422d8555285777d1d8ac",
+                "ce80b2e74f7f4f1a99db453fea7940b0"
+              ],
+              "candidates": [
+                {
+                  "evidence_id": "dd80895fc805430d8a507dc79136e529",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "chunk_id": "abea55b94fa942eead8b3e22654cde7e",
+                  "rank": 0,
+                  "score": 0.016393,
+                  "similarity": 0.6332,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                },
+                {
+                  "evidence_id": "4acd13fe37514116bdbaeb3a961054bd",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "chunk_id": "0c14369d5534465abc367d2f36d28f59",
+                  "rank": 1,
+                  "score": 0.016129,
+                  "similarity": 0.5201,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                },
+                {
+                  "evidence_id": "139a7ad6937c4df7b0761483d71572f0",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "chunk_id": "46b501c21b4c422d8555285777d1d8ac",
+                  "rank": 2,
+                  "score": 0.015873,
+                  "similarity": 0.5161,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                },
+                {
+                  "evidence_id": "de5b97a25ec04f348d59f98e4689dcd7",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "chunk_id": "ce80b2e74f7f4f1a99db453fea7940b0",
+                  "rank": 3,
+                  "score": 0.015625,
+                  "similarity": 0.5137,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "event": "delta",
+          "data": {
+            "text": "这篇论文的编码器由6层组成\n"
+          }
+        },
+        {
+          "event": "citations",
+          "data": {
+            "citations": [
+              {
+                "chunk_id": "abea55b94fa942eead8b3e22654cde7e",
+                "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+                "seq": 26,
+                "page_idx": 2,
+                "bbox": [
+                  107.85356140136719,
+                  483.743896484375,
+                  505.1749572753906,
+                  666.8078842163086
+                ],
+                "page_size": [
+                  612.0,
+                  792.0
+                ],
+                "printed_page_label": null,
+                "snippet": "3.1 Encoder and Decoder Stacks Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head s…",
+                "evidence_id": "dd80895fc805430d8a507dc79136e529",
+                "source_type": "source",
+                "score": 0.016393,
+                "similarity": 0.6332,
+                "resolved": true,
+                "crop_url": "/api/documents/94935ff5feb74cbb9520a38daf3d1de5/crops/ae945924df4e4076937b24c3def64a36/2_4e96908738a7.png"
+              }
+            ]
+          }
+        },
+        {
+          "event": "assertions",
+          "data": {
+            "assertions": [
+              {
+                "id": "8c93b3b4990e49fdade56c8b04321a99",
+                "position": 0,
+                "text": "这篇论文的编码器由6层组成",
+                "evidence_ids": [
+                  "dd80895fc805430d8a507dc79136e529"
+                ],
+                "verification": {
+                  "state": "unverified",
+                  "mode": null
+                },
+                "unsupported": false,
+                "citations": [
+                  {
+                    "chunk_id": "abea55b94fa942eead8b3e22654cde7e",
+                    "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+                    "seq": 26,
+                    "page_idx": 2,
+                    "bbox": [
+                      107.85356140136719,
+                      483.743896484375,
+                      505.1749572753906,
+                      666.8078842163086
+                    ],
+                    "page_size": [
+                      612.0,
+                      792.0
+                    ],
+                    "printed_page_label": null,
+                    "snippet": "3.1 Encoder and Decoder Stacks Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head s…",
+                    "evidence_id": "dd80895fc805430d8a507dc79136e529",
+                    "source_type": "source",
+                    "score": 0.016393,
+                    "similarity": 0.6332,
+                    "resolved": true,
+                    "crop_url": "/api/documents/94935ff5feb74cbb9520a38daf3d1de5/crops/ae945924df4e4076937b24c3def64a36/2_4e96908738a7.png"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "event": "done",
+          "data": {
+            "message_id": "871c5f604046414198897c212d642caa",
+            "verified": false,
+            "degraded": "vision_unavailable",
+            "confidence": {
+              "level": "high",
+              "top_similarity": 0.6332,
+              "warn_below": 0.6
+            }
+          }
+        }
+      ],
+      "persisted_messages": {
+        "http_status": 200,
+        "body": [
+          {
+            "id": "1a8ee2c891144a2e83aef532589cc332",
+            "role": "user",
+            "content": "这篇论文的编码器由多少层组成？请依据原文回答并给出出处。",
+            "citations": [],
+            "assertions": [],
+            "verified": false,
+            "degraded": null,
+            "model_meta": {},
+            "confidence": {
+              "level": "unknown",
+              "top_similarity": null,
+              "warn_below": 0.6
+            },
+            "created_at": "2026-11-06T15:42:28.267874+00:00"
+          },
+          {
+            "id": "871c5f604046414198897c212d642caa",
+            "role": "assistant",
+            "content": "这篇论文的编码器由6层组成",
+            "citations": [
+              {
+                "chunk_id": "abea55b94fa942eead8b3e22654cde7e",
+                "evidence_id": "dd80895fc805430d8a507dc79136e529",
+                "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                "source_type": "source",
+                "derived_from": null,
+                "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+                "seq": 26,
+                "doc_hash": null,
+                "page_idx": 2,
+                "printed_page_label": null,
+                "bbox": [
+                  107.85356140136719,
+                  483.743896484375,
+                  505.1749572753906,
+                  666.8078842163086
+                ],
+                "page_size": [
+                  612.0,
+                  792.0
+                ],
+                "snippet": "3.1 Encoder and Decoder Stacks Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head s…",
+                "score": 0.016393,
+                "similarity": 0.6332,
+                "resolved": true,
+                "crop_url": "/api/documents/94935ff5feb74cbb9520a38daf3d1de5/crops/ae945924df4e4076937b24c3def64a36/2_4e96908738a7.png"
+              }
+            ],
+            "assertions": [
+              {
+                "id": "8c93b3b4990e49fdade56c8b04321a99",
+                "position": 0,
+                "text": "这篇论文的编码器由6层组成",
+                "evidence_ids": [
+                  "dd80895fc805430d8a507dc79136e529"
+                ],
+                "verification": {
+                  "state": "unverified",
+                  "mode": null
+                },
+                "unsupported": false,
+                "citations": [
+                  {
+                    "chunk_id": "abea55b94fa942eead8b3e22654cde7e",
+                    "evidence_id": "dd80895fc805430d8a507dc79136e529",
+                    "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                    "source_type": "source",
+                    "derived_from": null,
+                    "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+                    "seq": 26,
+                    "doc_hash": null,
+                    "page_idx": 2,
+                    "printed_page_label": null,
+                    "bbox": [
+                      107.85356140136719,
+                      483.743896484375,
+                      505.1749572753906,
+                      666.8078842163086
+                    ],
+                    "page_size": [
+                      612.0,
+                      792.0
+                    ],
+                    "snippet": "3.1 Encoder and Decoder Stacks Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head s…",
+                    "score": 0.016393,
+                    "similarity": 0.6332,
+                    "resolved": true,
+                    "crop_url": "/api/documents/94935ff5feb74cbb9520a38daf3d1de5/crops/ae945924df4e4076937b24c3def64a36/2_4e96908738a7.png"
+                  }
+                ]
+              }
+            ],
+            "verified": false,
+            "degraded": "vision_unavailable",
+            "model_meta": {
+              "chat_model": "",
+              "answer_format": "grounded-claims/1",
+              "chat_endpoint": "http://127.0.0.1:49182/v1/chat/completions",
+              "embedding_model": "",
+              "embedding_endpoint": "http://127.0.0.1:49182/v1/embeddings",
+              "embedding_dim": 1024,
+              "retrieval": {
+                "top_k": 4,
+                "candidates": 8,
+                "min_similarity": 0.45,
+                "context_chars": 6000,
+                "crop_count": 1,
+                "rerank_enabled": false,
+                "rerank_model": "",
+                "tokenizer": "jieba",
+                "decision_enabled": true,
+                "document_gate_min_similarity": 0.45
+              }
+            },
+            "confidence": {
+              "level": "high",
+              "top_similarity": 0.6332,
+              "warn_below": 0.6
+            },
+            "query_decision": {
+              "need_retrieval": true,
+              "reason": "问题要求依据原文回答论文编码器的层数，但目前没有提供论文内容或相关原文，无法获取所需事实。",
+              "inherited_evidence_ids": [],
+              "degraded": null
+            },
+            "retrieval": {
+              "candidates": [
+                {
+                  "evidence_id": "dd80895fc805430d8a507dc79136e529",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "rank": 0,
+                  "score": 0.016393,
+                  "similarity": 0.6332,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                },
+                {
+                  "evidence_id": "4acd13fe37514116bdbaeb3a961054bd",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "rank": 1,
+                  "score": 0.016129,
+                  "similarity": 0.5201,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                },
+                {
+                  "evidence_id": "139a7ad6937c4df7b0761483d71572f0",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "rank": 2,
+                  "score": 0.015873,
+                  "similarity": 0.5161,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                },
+                {
+                  "evidence_id": "de5b97a25ec04f348d59f98e4689dcd7",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "rank": 3,
+                  "score": 0.015625,
+                  "similarity": 0.5137,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                }
+              ]
+            },
+            "created_at": "2026-11-06T15:42:49.706379+00:00"
+          }
+        ]
+      },
+      "elapsed_s": 21.576
+    },
+    {
+      "task": "fields",
+      "template_input": {
+        "name": "论文模型参数提取",
+        "description": "提取Transformer架构名称、编码器层数与注意力头数，并保留出处。",
+        "schema_json": {
+          "type": "object",
+          "properties": {
+            "model_name": {
+              "type": "string",
+              "description": "Name of the model architecture proposed by this paper, named Transformer in the abstract."
+            },
+            "encoder_layers": {
+              "type": "integer",
+              "description": "Number N of identical layers in the encoder stack in section 3.1 Encoder and Decoder Stacks."
+            },
+            "attention_heads": {
+              "type": "integer",
+              "description": "Number h of parallel attention layers or attention heads employed in section 3.2.2 Multi-Head Attention."
+            }
+          },
+          "required": [
+            "model_name",
+            "encoder_layers",
+            "attention_heads"
+          ]
+        }
+      },
+      "template_response": {
+        "status": 201,
+        "body": {
+          "id": "9ecb1280c3d744008e7081860b392d6a",
+          "name": "论文模型参数提取",
+          "description": "提取Transformer架构名称、编码器层数与注意力头数，并保留出处。",
+          "schema_json": {
+            "type": "object",
+            "properties": {
+              "model_name": {
+                "type": "string",
+                "description": "Name of the model architecture proposed by this paper, named Transformer in the abstract."
+              },
+              "encoder_layers": {
+                "type": "integer",
+                "description": "Number N of identical layers in the encoder stack in section 3.1 Encoder and Decoder Stacks."
+              },
+              "attention_heads": {
+                "type": "integer",
+                "description": "Number h of parallel attention layers or attention heads employed in section 3.2.2 Multi-Head Attention."
+              }
+            },
+            "required": [
+              "model_name",
+              "encoder_layers",
+              "attention_heads"
+            ]
+          },
+          "field_count": 3,
+          "kind": "object",
+          "created_at": "2026-11-06T15:42:49.775148+00:00",
+          "updated_at": "2026-11-06T15:42:49.775152+00:00"
+        }
+      },
+      "input": {
+        "name": "Attention论文参数抽取",
+        "document_ids": [
+          "94935ff5feb74cbb9520a38daf3d1de5"
+        ],
+        "template_id": "9ecb1280c3d744008e7081860b392d6a"
+      },
+      "http_status": 202,
+      "created": {
+        "id": "ca708249c2ac453fad7a7498ee6af0ff",
+        "name": "Attention论文参数抽取",
+        "template_id": "9ecb1280c3d744008e7081860b392d6a",
+        "kind": "object",
+        "status": "pending",
+        "document_count": 1,
+        "done_count": 0,
+        "error": null,
+        "field_names": [
+          "model_name",
+          "encoder_layers",
+          "attention_heads"
+        ],
+        "schema_json": {
+          "type": "object",
+          "properties": {
+            "model_name": {
+              "type": "string",
+              "description": "Name of the model architecture proposed by this paper, named Transformer in the abstract."
+            },
+            "encoder_layers": {
+              "type": "integer",
+              "description": "Number N of identical layers in the encoder stack in section 3.1 Encoder and Decoder Stacks."
+            },
+            "attention_heads": {
+              "type": "integer",
+              "description": "Number h of parallel attention layers or attention heads employed in section 3.2.2 Multi-Head Attention."
+            }
+          },
+          "required": [
+            "model_name",
+            "encoder_layers",
+            "attention_heads"
+          ]
+        },
+        "model_meta": {
+          "chat_model": "",
+          "chat_endpoint": "http://127.0.0.1:49182/v1/chat/completions",
+          "embedding_model": "",
+          "embedding_endpoint": "http://127.0.0.1:49182/v1/embeddings",
+          "tokenizer": "jieba",
+          "extraction": {
+            "candidates": 4,
+            "max_retries": 2,
+            "min_similarity": 0.45,
+            "verify": true,
+            "verify_fields": 3,
+            "rerank_enabled": false,
+            "rerank_model": ""
+          }
+        },
+        "created_at": "2026-11-06T15:42:49.828641+00:00"
+      },
+      "output": {
+        "run": {
+          "id": "ca708249c2ac453fad7a7498ee6af0ff",
+          "name": "Attention论文参数抽取",
+          "template_id": "9ecb1280c3d744008e7081860b392d6a",
+          "kind": "object",
+          "status": "succeeded",
+          "document_count": 1,
+          "done_count": 1,
+          "error": null,
+          "field_names": [
+            "model_name",
+            "encoder_layers",
+            "attention_heads"
+          ],
+          "schema_json": {
+            "type": "object",
+            "properties": {
+              "model_name": {
+                "type": "string",
+                "description": "Name of the model architecture proposed by this paper, named Transformer in the abstract."
+              },
+              "encoder_layers": {
+                "type": "integer",
+                "description": "Number N of identical layers in the encoder stack in section 3.1 Encoder and Decoder Stacks."
+              },
+              "attention_heads": {
+                "type": "integer",
+                "description": "Number h of parallel attention layers or attention heads employed in section 3.2.2 Multi-Head Attention."
+              }
+            },
+            "required": [
+              "model_name",
+              "encoder_layers",
+              "attention_heads"
+            ]
+          },
+          "model_meta": {
+            "chat_model": "",
+            "chat_endpoint": "http://127.0.0.1:49182/v1/chat/completions",
+            "embedding_model": "",
+            "embedding_endpoint": "http://127.0.0.1:49182/v1/embeddings",
+            "tokenizer": "jieba",
+            "extraction": {
+              "candidates": 4,
+              "max_retries": 2,
+              "min_similarity": 0.45,
+              "verify": true,
+              "verify_fields": 3,
+              "rerank_enabled": false,
+              "rerank_model": ""
+            }
+          },
+          "created_at": "2026-11-06T15:42:49.828641+00:00"
+        },
+        "items": [
+          {
+            "id": "44a2039ab31d4fc5adb0177ac0ffaa69",
+            "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+            "filename": "Attention-Is-All-You-Need.pdf",
+            "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+            "record_index": 0,
+            "status": "ok",
+            "degraded": "vision_unavailable",
+            "error": null,
+            "fields": {
+              "model_name": {
+                "status": "found",
+                "value": "Transformer",
+                "verified": false,
+                "degraded": "vision_unavailable",
+                "confidence": {
+                  "level": "low",
+                  "top_similarity": 0.5591,
+                  "warn_below": 0.6
+                },
+                "citations": [
+                  {
+                    "chunk_id": "9e980f1cea52406c9fae055a9bc0648f",
+                    "evidence_id": "c433276b00cc44bbbde7e9581ba17097",
+                    "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                    "source_type": "source",
+                    "derived_from": null,
+                    "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+                    "seq": 18,
+                    "doc_hash": null,
+                    "page_idx": 1,
+                    "printed_page_label": null,
+                    "bbox": [
+                      107.78954315185547,
+                      99.841552734375,
+                      505.17999267578125,
+                      343.4278869628906
+                    ],
+                    "page_size": [
+                      612.0,
+                      792.0
+                    ],
+                    "snippet": "becomes critical at longer sequence lengths, as memory constraints limit batching across examples. Recent work has achieved significant improvements in computat…",
+                    "score": 0.030777,
+                    "similarity": 0.5591,
+                    "resolved": true,
+                    "crop_url": "/api/documents/94935ff5feb74cbb9520a38daf3d1de5/crops/ae945924df4e4076937b24c3def64a36/1_6e98bc415261.png"
+                  }
+                ]
+              },
+              "encoder_layers": {
+                "status": "found",
+                "value": 6,
+                "verified": false,
+                "degraded": "vision_unavailable",
+                "confidence": {
+                  "level": "high",
+                  "top_similarity": 0.7876,
+                  "warn_below": 0.6
+                },
+                "citations": [
+                  {
+                    "chunk_id": "abea55b94fa942eead8b3e22654cde7e",
+                    "evidence_id": "dd80895fc805430d8a507dc79136e529",
+                    "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                    "source_type": "source",
+                    "derived_from": null,
+                    "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+                    "seq": 26,
+                    "doc_hash": null,
+                    "page_idx": 2,
+                    "printed_page_label": null,
+                    "bbox": [
+                      107.85356140136719,
+                      483.743896484375,
+                      505.1749572753906,
+                      666.8078842163086
+                    ],
+                    "page_size": [
+                      612.0,
+                      792.0
+                    ],
+                    "snippet": "3.1 Encoder and Decoder Stacks Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head s…",
+                    "score": 0.032787,
+                    "similarity": 0.7876,
+                    "resolved": true,
+                    "crop_url": "/api/documents/94935ff5feb74cbb9520a38daf3d1de5/crops/ae945924df4e4076937b24c3def64a36/2_4e96908738a7.png"
+                  }
+                ]
+              },
+              "attention_heads": {
+                "status": "found",
+                "value": 8,
+                "verified": false,
+                "degraded": "vision_unavailable",
+                "confidence": {
+                  "level": "high",
+                  "top_similarity": 0.7207,
+                  "warn_below": 0.6
+                },
+                "citations": [
+                  {
+                    "chunk_id": "53901393ec1b4b588ced2e488db5539b",
+                    "evidence_id": "29c542d2cdab4fd990fc35fee4e38379",
+                    "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                    "source_type": "source",
+                    "derived_from": null,
+                    "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+                    "seq": 44,
+                    "doc_hash": null,
+                    "page_idx": 4,
+                    "printed_page_label": null,
+                    "bbox": [
+                      107.58081817626953,
+                      206.5035400390625,
+                      504.0072021484375,
+                      265.90887451171875
+                    ],
+                    "page_size": [
+                      612.0,
+                      792.0
+                    ],
+                    "snippet": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ h = 8 parallel attention layers, or heads. For each of these we use d…",
+                    "score": 0.032002,
+                    "similarity": 0.7207,
+                    "resolved": true,
+                    "crop_url": "/api/documents/94935ff5feb74cbb9520a38daf3d1de5/crops/ae945924df4e4076937b24c3def64a36/4_2092530ac078.png"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "elapsed_s": 22.114
+    },
+    {
+      "task": "wiki",
+      "input": {
+        "title": "Transformer encoder layers and multi-head attention",
+        "max_pages": 1,
+        "max_evidence": 6,
+        "max_output_tokens": 2048,
+        "max_input_chars": 6000,
+        "sources": [
+          {
+            "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+            "source_version_id": "a00cb025b3084be392d5b72c89a66a83"
+          }
+        ]
+      },
+      "http_status": 201,
+      "output": {
+        "wiki": {
+          "id": "92b495acaa0f4d68a86bc36f7d11a41d",
+          "title": "Transformer encoder layers and multi-head attention",
+          "current_revision_id": "f7a2db497d8245d993776f606fa1d8e2",
+          "published_revision_id": null
+        },
+        "revision": {
+          "id": "f7a2db497d8245d993776f606fa1d8e2",
+          "wiki_id": "92b495acaa0f4d68a86bc36f7d11a41d",
+          "base_revision_id": null,
+          "kind": "generated",
+          "title": "Transformer encoder layers and multi-head attention",
+          "created_by": "905897bb29dd1e2f166ff01f342dee9e",
+          "created_at": "2026-11-06T15:45:01.419972+00:00",
+          "provider": {
+            "model": "registry-default",
+            "kind": "wiki_generation",
+            "semantic_verification": "not_performed"
+          },
+          "limits": {
+            "max_pages": 1,
+            "max_evidence": 6,
+            "max_output_tokens": 2048,
+            "max_input_chars": 6000,
+            "evidence_selection": {
+              "total_original_evidence": 347,
+              "selected_evidence": 5,
+              "omitted_evidence": 342,
+              "complete": false,
+              "ranking_degraded": null,
+              "sources": [
+                {
+                  "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+                  "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+                  "total_original_evidence": 347,
+                  "selected_evidence": 5
+                }
+              ]
+            }
+          },
+          "merge_conflicts": [],
+          "relations": [],
+          "stale": false,
+          "stale_reasons": {},
+          "pages": [
+            {
+              "page_key": "5f68451c25dbc30c1d60554a71daf18e",
+              "title": "Transformer Encoder Layers and Multi-Head Attention",
+              "generated_sections": [
+                {
+                  "heading": "Transformer Encoder Layers and Multi-Head Attention",
+                  "sentences": [
+                    {
+                      "id": "06e1fd70052c48ee8c9dbc278fa92c74",
+                      "text": "The Transformer model replaces recurrent layers with multi-headed self-attention, marking a significant shift in sequence transduction models, as demonstrated in the work that introduced the Transformer as the first sequence transduction model based entirely on attention (evidence_id: 7b3380f0b51c4d58b040b7677a8c5606). This architecture achieves state-of-the-art performance on WMT 2014 English-to-German and English-to-French translation tasks, outperforming previously reported ensembles (evidence_id: 7b3380f0b51c4d58b040b7677a8c5606).",
+                      "evidence_ids": [
+                        "7b3380f0b51c4d58b040b7677a8c5606"
+                      ],
+                      "unsupported": false,
+                      "conflict_group": null
+                    },
+                    {
+                      "id": "db31b44a4a5e4a2cb75062204c62ba03",
+                      "text": "In the encoder, each of the six identical layers contains two sub-layers: a multi-head self-attention mechanism and a position-wise fully connected feed-forward network (evidence_id: dd80895fc805430d8a507dc79136e529). Residual connections and layer normalization are applied around each sub-layer, with the output of each sub-layer being LayerNorm(x + Sublayer(x)) (evidence_id: dd80895fc805430d8a507dc79136e529).",
+                      "evidence_ids": [
+                        "dd80895fc805430d8a507dc79136e529"
+                      ],
+                      "unsupported": false,
+                      "conflict_group": null
+                    },
+                    {
+                      "id": "09915e6cbb5e453abf372e27859a02da",
+                      "text": "The encoder uses self-attention layers where all keys, values, and queries come from the output of the previous layer in the encoder, allowing each position to attend to all positions in the previous layer (evidence_id: b122f4effb86442186db1aeb14a13fae). This self-attention mechanism is a core component of the encoder's design and enables the model to capture long-range dependencies in the input sequence (evidence_id: b122f4effb86442186db1aeb14a13fae).",
+                      "evidence_ids": [
+                        "b122f4effb86442186db1aeb14a13fae"
+                      ],
+                      "unsupported": false,
+                      "conflict_group": null
+                    }
+                  ]
+                }
+              ],
+              "human_paragraphs": [],
+              "stale": false
+            }
+          ],
+          "dependency_manifest": [
+            {
+              "page_key": "5f68451c25dbc30c1d60554a71daf18e",
+              "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+              "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+              "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+              "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+              "parse_revision": "ae945924df4e4076937b24c3def64a36",
+              "evidence_id": "7b3380f0b51c4d58b040b7677a8c5606",
+              "source_evidence_id": null,
+              "excerpt_digest": "ea12965b9bf6804a7b6329256e8462431c521d165c9864f35cb4524ababf5d7f",
+              "locator": {
+                "page_idx": 9,
+                "bbox": [
+                  107.58161163330078,
+                  389.8575439453125,
+                  504.93133544921875,
+                  544.8159790039062
+                ],
+                "page_size": [
+                  612.0,
+                  792.0
+                ],
+                "kind": "text"
+              },
+              "origin_node_id": null,
+              "authority_node_id": null,
+              "source_publication": null,
+              "policy_revision": null,
+              "derivative_grant": null,
+              "retrieval_receipt_ref": null
+            },
+            {
+              "page_key": "5f68451c25dbc30c1d60554a71daf18e",
+              "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+              "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+              "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+              "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+              "parse_revision": "ae945924df4e4076937b24c3def64a36",
+              "evidence_id": "82bf9b19dc18472180661461a20d1d89",
+              "source_evidence_id": null,
+              "excerpt_digest": "d21b4a64a2d8656a0fdf7ab2e89a49164ac504686cfa2a3d442e87c209286330",
+              "locator": {
+                "page_idx": 0,
+                "bbox": [
+                  283.8656005859375,
+                  386.53192138671875,
+                  328.2313232421875,
+                  394.9364318847656
+                ],
+                "page_size": [
+                  612.0,
+                  792.0
+                ],
+                "kind": "text"
+              },
+              "origin_node_id": null,
+              "authority_node_id": null,
+              "source_publication": null,
+              "policy_revision": null,
+              "derivative_grant": null,
+              "retrieval_receipt_ref": null
+            },
+            {
+              "page_key": "5f68451c25dbc30c1d60554a71daf18e",
+              "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+              "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+              "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+              "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+              "parse_revision": "ae945924df4e4076937b24c3def64a36",
+              "evidence_id": "b122f4effb86442186db1aeb14a13fae",
+              "source_evidence_id": null,
+              "excerpt_digest": "d479ca5b2f8525d88aa18f4b6896d0ef6ddf6ab1e3a117ce2b05185ecf217e65",
+              "locator": {
+                "page_idx": 4,
+                "bbox": [
+                  107.86036682128906,
+                  281.03485107421875,
+                  504.6828308105469,
+                  481.6509094238281
+                ],
+                "page_size": [
+                  612.0,
+                  792.0
+                ],
+                "kind": "text"
+              },
+              "origin_node_id": null,
+              "authority_node_id": null,
+              "source_publication": null,
+              "policy_revision": null,
+              "derivative_grant": null,
+              "retrieval_receipt_ref": null
+            },
+            {
+              "page_key": "5f68451c25dbc30c1d60554a71daf18e",
+              "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+              "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+              "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+              "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+              "parse_revision": "ae945924df4e4076937b24c3def64a36",
+              "evidence_id": "dd80895fc805430d8a507dc79136e529",
+              "source_evidence_id": null,
+              "excerpt_digest": "90c583cdebb89c8a19ef52b6c4109ec7d227a70c4350e62909e39cf465a3cfb6",
+              "locator": {
+                "page_idx": 2,
+                "bbox": [
+                  107.85356140136719,
+                  483.743896484375,
+                  505.1749572753906,
+                  666.8078842163086
+                ],
+                "page_size": [
+                  612.0,
+                  792.0
+                ],
+                "kind": "text"
+              },
+              "origin_node_id": null,
+              "authority_node_id": null,
+              "source_publication": null,
+              "policy_revision": null,
+              "derivative_grant": null,
+              "retrieval_receipt_ref": null
+            },
+            {
+              "page_key": "5f68451c25dbc30c1d60554a71daf18e",
+              "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+              "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+              "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+              "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+              "parse_revision": "ae945924df4e4076937b24c3def64a36",
+              "evidence_id": "de5b97a25ec04f348d59f98e4689dcd7",
+              "source_evidence_id": null,
+              "excerpt_digest": "95539bb0e1bcf6a98ddf18c162d7c149ba31153085e1063b2b6f348e4292aba4",
+              "locator": {
+                "page_idx": 2,
+                "bbox": [
+                  107.85356140136719,
+                  483.743896484375,
+                  505.1749572753906,
+                  666.8078842163086
+                ],
+                "page_size": [
+                  612.0,
+                  792.0
+                ],
+                "kind": "text"
+              },
+              "origin_node_id": null,
+              "authority_node_id": null,
+              "source_publication": null,
+              "policy_revision": null,
+              "derivative_grant": null,
+              "retrieval_receipt_ref": null
+            }
+          ]
+        }
+      },
+      "elapsed_s": 109.593
+    },
+    {
+      "task": "missing_evidence",
+      "input": {
+        "question": "What was the project's customer revenue in 2026? Use only this document and state when evidence is insufficient."
+      },
+      "conversation_status": 201,
+      "conversation_id": "ee463363921145dc8683b07c89ac609e",
+      "http_status": 200,
+      "events": [
+        {
+          "event": "meta",
+          "data": {
+            "query_decision": {
+              "need_retrieval": true,
+              "reason": "No existing evidence is available regarding the project's custom",
+              "inherited_evidence_ids": [],
+              "degraded": null
+            },
+            "retrieval": {
+              "chunk_ids": [
+                "2cadeb58c7f54e44b1b18e1d791f1a76",
+                "65df88a44c1b42aeac806026c255cc34",
+                "74b3158839ba412e8dff1eba546e218b",
+                "c18419fdaa064b20978c594560a68875"
+              ],
+              "candidates": [
+                {
+                  "evidence_id": "48e34aafa999414a88bc21b5155b9410",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "chunk_id": "2cadeb58c7f54e44b1b18e1d791f1a76",
+                  "rank": 0,
+                  "score": 0.016393,
+                  "similarity": 0.394,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                },
+                {
+                  "evidence_id": "22ea9a2c446549b3b724cd88e0569fb1",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "chunk_id": "65df88a44c1b42aeac806026c255cc34",
+                  "rank": 1,
+                  "score": 0.016393,
+                  "similarity": 0.4744,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                },
+                {
+                  "evidence_id": "ded5e9f62f594354a22ceec4c17f7a3a",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "chunk_id": "74b3158839ba412e8dff1eba546e218b",
+                  "rank": 2,
+                  "score": 0.016129,
+                  "similarity": 0.3482,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                },
+                {
+                  "evidence_id": "ee690aac72aa4f1da35815a3de61a2e4",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "chunk_id": "c18419fdaa064b20978c594560a68875",
+                  "rank": 3,
+                  "score": 0.016129,
+                  "similarity": 0.4227,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "event": "delta",
+          "data": {
+            "text": "已检索到相关段落，但回答模型判断它们不足以回答该问题；可展开候选自行核对。\n"
+          }
+        },
+        {
+          "event": "citations",
+          "data": {
+            "citations": []
+          }
+        },
+        {
+          "event": "assertions",
+          "data": {
+            "assertions": [
+              {
+                "id": "1a59dee2db0d42eeafc78455d4315af6",
+                "position": 0,
+                "text": "已检索到相关段落，但回答模型判断它们不足以回答该问题；可展开候选自行核对。",
+                "evidence_ids": [],
+                "verification": {
+                  "state": "unverified",
+                  "mode": null
+                },
+                "unsupported": true,
+                "citations": []
+              }
+            ]
+          }
+        },
+        {
+          "event": "done",
+          "data": {
+            "message_id": "2b9d4ae294d943b8acd45d7ec509ea59",
+            "verified": false,
+            "degraded": "vision_unavailable",
+            "confidence": {
+              "level": "unknown",
+              "top_similarity": null,
+              "warn_below": 0.6
+            }
+          }
+        }
+      ],
+      "persisted_messages": {
+        "http_status": 200,
+        "body": [
+          {
+            "id": "ad3741365b3d4d6d89b6b9b6e04d345c",
+            "role": "user",
+            "content": "What was the project's customer revenue in 2026? Use only this document and state when evidence is insufficient.",
+            "citations": [],
+            "assertions": [],
+            "verified": false,
+            "degraded": null,
+            "model_meta": {},
+            "confidence": {
+              "level": "unknown",
+              "top_similarity": null,
+              "warn_below": 0.6
+            },
+            "created_at": "2026-11-06T15:45:01.525123+00:00"
+          },
+          {
+            "id": "2b9d4ae294d943b8acd45d7ec509ea59",
+            "role": "assistant",
+            "content": "已检索到相关段落，但回答模型判断它们不足以回答该问题；可展开候选自行核对。",
+            "citations": [],
+            "assertions": [
+              {
+                "id": "1a59dee2db0d42eeafc78455d4315af6",
+                "position": 0,
+                "text": "已检索到相关段落，但回答模型判断它们不足以回答该问题；可展开候选自行核对。",
+                "evidence_ids": [],
+                "verification": {
+                  "state": "unverified",
+                  "mode": null
+                },
+                "unsupported": true,
+                "citations": []
+              }
+            ],
+            "verified": false,
+            "degraded": "vision_unavailable",
+            "model_meta": {
+              "chat_model": "",
+              "answer_format": "grounded-claims/1",
+              "chat_endpoint": "http://127.0.0.1:49182/v1/chat/completions",
+              "embedding_model": "",
+              "embedding_endpoint": "http://127.0.0.1:49182/v1/embeddings",
+              "embedding_dim": 1024,
+              "retrieval": {
+                "top_k": 4,
+                "candidates": 8,
+                "min_similarity": 0.45,
+                "context_chars": 6000,
+                "crop_count": 1,
+                "rerank_enabled": false,
+                "rerank_model": "",
+                "tokenizer": "jieba",
+                "decision_enabled": true,
+                "document_gate_min_similarity": 0.45
+              }
+            },
+            "confidence": {
+              "level": "unknown",
+              "top_similarity": null,
+              "warn_below": 0.6
+            },
+            "query_decision": {
+              "need_retrieval": true,
+              "reason": "No existing evidence is available regarding the project's custom",
+              "inherited_evidence_ids": [],
+              "degraded": null
+            },
+            "retrieval": {
+              "candidates": [
+                {
+                  "evidence_id": "48e34aafa999414a88bc21b5155b9410",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "rank": 0,
+                  "score": 0.016393,
+                  "similarity": 0.394,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                },
+                {
+                  "evidence_id": "22ea9a2c446549b3b724cd88e0569fb1",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "rank": 1,
+                  "score": 0.016393,
+                  "similarity": 0.4744,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                },
+                {
+                  "evidence_id": "ded5e9f62f594354a22ceec4c17f7a3a",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "rank": 2,
+                  "score": 0.016129,
+                  "similarity": 0.3482,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                },
+                {
+                  "evidence_id": "ee690aac72aa4f1da35815a3de61a2e4",
+                  "document_id": "94935ff5feb74cbb9520a38daf3d1de5",
+                  "rank": 3,
+                  "score": 0.016129,
+                  "similarity": 0.4227,
+                  "accepted": true,
+                  "reason": "document_gate_passed"
+                }
+              ]
+            },
+            "created_at": "2026-11-06T15:45:12.101467+00:00"
+          }
+        ]
+      },
+      "elapsed_s": 10.656
+    }
+  ],
+  "program_checks": {
+    "qa_value6": true,
+    "qa_primary_page3": true,
+    "fields_values_exact": true,
+    "fields_reference_pages": true,
+    "no_fake_visual_verification": true,
+    "missing_evidence_no_primary_citations": true,
+    "missing_evidence_only_explicit_unsupported_notice": true,
+    "all_primary_originals_http200": true,
+    "private_denials_expected": true
+  },
+  "primary_original_evidence": {
+    "29c542d2cdab4fd990fc35fee4e38379": {
+      "status": 200,
+      "body": {
+        "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+        "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+        "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "parse_revision": "ae945924df4e4076937b24c3def64a36",
+        "id": "29c542d2cdab4fd990fc35fee4e38379",
+        "document": {
+          "id": "94935ff5feb74cbb9520a38daf3d1de5",
+          "filename": "Attention-Is-All-You-Need.pdf"
+        },
+        "page_idx": 4,
+        "seq": 44,
+        "printed_page_label": null,
+        "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+        "doc_version": 1,
+        "bbox": [
+          107.58081817626953,
+          206.5035400390625,
+          504.0072021484375,
+          265.90887451171875
+        ],
+        "page_size": [
+          612.0,
+          792.0
+        ],
+        "kind": "text",
+        "content": "Where the projections are parameter matrices W and WO ∈ Rhdv×dmodel In this work we employ h = 8 parallel attention layers, or heads. For each of these we use dk = dv = dmodel/h = 64. Due to the reduced dimension of each head, the total computational cost is similar to that of single-head attention with full dimensionality.",
+        "source_type": "source",
+        "derived_from": null,
+        "crop_url": "/api/documents/94935ff5feb74cbb9520a38daf3d1de5/crops/ae945924df4e4076937b24c3def64a36/4_2092530ac078.png",
+        "review_state": "unreviewed",
+        "chunk_id": "53901393ec1b4b588ced2e488db5539b",
+        "verifications": []
+      }
+    },
+    "7b3380f0b51c4d58b040b7677a8c5606": {
+      "status": 200,
+      "body": {
+        "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+        "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+        "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "parse_revision": "ae945924df4e4076937b24c3def64a36",
+        "id": "7b3380f0b51c4d58b040b7677a8c5606",
+        "document": {
+          "id": "94935ff5feb74cbb9520a38daf3d1de5",
+          "filename": "Attention-Is-All-You-Need.pdf"
+        },
+        "page_idx": 9,
+        "seq": 80,
+        "printed_page_label": null,
+        "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+        "doc_version": 1,
+        "bbox": [
+          107.58161163330078,
+          389.8575439453125,
+          504.93133544921875,
+          544.8159790039062
+        ],
+        "page_size": [
+          612.0,
+          792.0
+        ],
+        "kind": "text",
+        "content": "In this work, we presented the Transformer, the first sequence transduction model based entirely on attention, replacing the recurrent layers most commonly used in encoder-decoder architectures with multi-headed self-attention. For translation tasks, the Transformer can be trained significantly faster than architectures based on recurrent or convolutional layers. On both WMT 2014 English-to-German and WMT 2014 English-to-French translation tasks, we achieve a new state of the art. In the former task our best model outperforms even all previously reported ensembles. We are excited about the future of attention-based models and plan to apply them to other tasks. We plan to extend the Transformer to problems involving input and output modalities other than text and to investigate local,",
+        "source_type": "source",
+        "derived_from": null,
+        "crop_url": "/api/documents/94935ff5feb74cbb9520a38daf3d1de5/crops/ae945924df4e4076937b24c3def64a36/9_b34dee0d6596.png",
+        "review_state": "unreviewed",
+        "chunk_id": "15929027f78544ee95d3d0a0e33c2b8c",
+        "verifications": []
+      }
+    },
+    "b122f4effb86442186db1aeb14a13fae": {
+      "status": 200,
+      "body": {
+        "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+        "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+        "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "parse_revision": "ae945924df4e4076937b24c3def64a36",
+        "id": "b122f4effb86442186db1aeb14a13fae",
+        "document": {
+          "id": "94935ff5feb74cbb9520a38daf3d1de5",
+          "filename": "Attention-Is-All-You-Need.pdf"
+        },
+        "page_idx": 4,
+        "seq": 45,
+        "printed_page_label": null,
+        "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+        "doc_version": 1,
+        "bbox": [
+          107.86036682128906,
+          281.03485107421875,
+          504.6828308105469,
+          481.6509094238281
+        ],
+        "page_size": [
+          612.0,
+          792.0
+        ],
+        "kind": "text",
+        "content": "3.2.3 Applications of Attention in our Model The Transformer uses multi-head attention in three different ways: In \"encoder-decoder attention\" layers, the queries come from the previous decoder layer, and the memory keys and values come from the output of the encoder. This allows every position in the decoder to attend over all positions in the input sequence. This mimics the typical encoder-decoder attention mechanisms in sequence-to-sequence models such as [38, 2, 9]. The encoder contains self-attention layers. In a self-attention layer all of the keys, values and queries come from the same place, in this case, the output of the previous layer in the encoder. Each position in the encoder can attend to all positions in the previous layer of the encoder. Similarly, self-attention layers",
+        "source_type": "source",
+        "derived_from": null,
+        "crop_url": "/api/documents/94935ff5feb74cbb9520a38daf3d1de5/crops/ae945924df4e4076937b24c3def64a36/4_111cc10a8732.png",
+        "review_state": "unreviewed",
+        "chunk_id": "f6415af7f89d4b6a822b0a2f31461e02",
+        "verifications": []
+      }
+    },
+    "c433276b00cc44bbbde7e9581ba17097": {
+      "status": 200,
+      "body": {
+        "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+        "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+        "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "parse_revision": "ae945924df4e4076937b24c3def64a36",
+        "id": "c433276b00cc44bbbde7e9581ba17097",
+        "document": {
+          "id": "94935ff5feb74cbb9520a38daf3d1de5",
+          "filename": "Attention-Is-All-You-Need.pdf"
+        },
+        "page_idx": 1,
+        "seq": 18,
+        "printed_page_label": null,
+        "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+        "doc_version": 1,
+        "bbox": [
+          107.78954315185547,
+          99.841552734375,
+          505.17999267578125,
+          343.4278869628906
+        ],
+        "page_size": [
+          612.0,
+          792.0
+        ],
+        "kind": "text",
+        "content": "becomes critical at longer sequence lengths, as memory constraints limit batching across examples. Recent work has achieved significant improvements in computational efficiency through factorization tricks [21] and conditional computation [32], while also improving model performance in case of the latter. The fundamental constraint of sequential computation, however, remains. Attention mechanisms have become an integral part of compelling sequence modeling and transduc￾ tion models in various tasks, allowing modeling of dependencies without regard to their distance in the input or output sequences [2, 19]. In all but a few cases [27], however, such attention mechanisms are used in conjunction with a recurrent network. In this work we propose the Transformer, a model architecture eschewing",
+        "source_type": "source",
+        "derived_from": null,
+        "crop_url": "/api/documents/94935ff5feb74cbb9520a38daf3d1de5/crops/ae945924df4e4076937b24c3def64a36/1_6e98bc415261.png",
+        "review_state": "unreviewed",
+        "chunk_id": "9e980f1cea52406c9fae055a9bc0648f",
+        "verifications": []
+      }
+    },
+    "dd80895fc805430d8a507dc79136e529": {
+      "status": 200,
+      "body": {
+        "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+        "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+        "source_digest": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "parse_revision": "ae945924df4e4076937b24c3def64a36",
+        "id": "dd80895fc805430d8a507dc79136e529",
+        "document": {
+          "id": "94935ff5feb74cbb9520a38daf3d1de5",
+          "filename": "Attention-Is-All-You-Need.pdf"
+        },
+        "page_idx": 2,
+        "seq": 26,
+        "printed_page_label": null,
+        "parse_job_id": "ae945924df4e4076937b24c3def64a36",
+        "doc_version": 1,
+        "bbox": [
+          107.85356140136719,
+          483.743896484375,
+          505.1749572753906,
+          666.8078842163086
+        ],
+        "page_size": [
+          612.0,
+          792.0
+        ],
+        "kind": "text",
+        "content": "3.1 Encoder and Decoder Stacks Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head self-attention mechanism, and the second is a simple, position￾ wise fully connected feed-forward network. We employ a residual connection [11] around each of the two sub-layers, followed by layer normalization [1]. That is, the output of each sub-layer is LayerNorm(x + Sublayer(x)), where Sublayer(x) is the function implemented by the sub-layer itself. To facilitate these residual connections, all sub-layers in the model, as well as the embedding layers, produce outputs of dimension dmodel = 512. Decoder: The decoder is also composed of a stack of N = 6 identical layers. In addition to the two sub-layers in each encoder layer, the",
+        "source_type": "source",
+        "derived_from": null,
+        "crop_url": "/api/documents/94935ff5feb74cbb9520a38daf3d1de5/crops/ae945924df4e4076937b24c3def64a36/2_4e96908738a7.png",
+        "review_state": "unreviewed",
+        "chunk_id": "abea55b94fa942eead8b3e22654cde7e",
+        "verifications": []
+      }
+    }
+  },
+  "read_inventory": {
+    "unique_primary_originals": 5,
+    "all_candidate_dependency_and_primary_originals_read": 13,
+    "all13_http200": true,
+    "inventory_scope": "十三条含候选、上下文依赖及主引用；不可改称十三条主引用"
+  },
+  "security_observations": {
+    "nonadmin_audit_status": 403,
+    "anonymous_private_resource_status": 401,
+    "other_contributor_private_resource_status": 404,
+    "other_contributor_private_wiki_status": 404,
+    "other_contributor_private_evidence_status": 404
+  },
+  "wiki_bounds": {
+    "selected_context": {
+      "total_original_evidence": 347,
+      "selected_evidence": 5,
+      "omitted_evidence": 342,
+      "complete": false,
+      "ranking_degraded": null,
+      "sources": [
+        {
+          "resource_id": "bddfec448fb24907a28daa527bf0ae99",
+          "source_version_id": "a00cb025b3084be392d5b72c89a66a83",
+          "total_original_evidence": 347,
+          "selected_evidence": 5
+        }
+      ]
+    },
+    "claim_records": 3,
+    "natural_sentences_per_record": 2,
+    "unique_claim_originals": 3,
+    "fixed_dependencies": 5,
+    "no_human_semantic_labels": true
+  },
+  "ai_observations_not_human_labels": [
+    {
+      "record": 1,
+      "risk": "The generated ensemble comparison follows both translation tasks, while its cited original limits outperforming all ensembles to the former task. Needs scope review."
+    },
+    {
+      "record": 3,
+      "risk": "The added long-range-dependency explanation is not explicitly stated in its bound section3.2.3 excerpt; inferential support needs human review."
+    }
+  ],
+  "ui_observations": {
+    "qa_original_page3_box_and_unverified_notice_visible": true,
+    "field_model_name_low_similarity_visible": true,
+    "wiki_binding_not_semantic_message_visible": true,
+    "wiki_message_changed_no_revision_or_text": true,
+    "compile_degraded_provider_unresolved_retained": true
+  },
+  "screenshots": [
+    {
+      "file": "R6-真实界面-问答与出处.png",
+      "sha256": "a5688fa176f8dc9269909bbf03cc97e819caf5e5120ac645db1b727f3b83db7d",
+      "size_px": [
+        1800,
+        1125
+      ],
+      "mtime": "2026-11-06T23:55:49.083706+08:00",
+      "operation": "actual_browser_screenshot_no_result_edit"
+    },
+    {
+      "file": "R6-真实界面-三字段.png",
+      "sha256": "fc76f36b3d7ebe9ce0cf191cd56745c6d37ca5093c85b11878ff1ca6ebc60842",
+      "size_px": [
+        1800,
+        1125
+      ],
+      "mtime": "2026-11-06T23:58:03.386800+08:00",
+      "operation": "actual_browser_screenshot_no_result_edit"
+    },
+    {
+      "file": "R6-真实界面-缺证据.png",
+      "sha256": "15547791829b5b1109c249df3b3b0b5524a8ccb6296d934fc1adfa6506762b70",
+      "size_px": [
+        1800,
+        1125
+      ],
+      "mtime": "2026-11-06T23:51:33.322279+08:00",
+      "operation": "actual_browser_screenshot_no_result_edit"
+    },
+    {
+      "file": "R6-真实界面-Wiki-绑定与核验分开.png",
+      "sha256": "9ad4cc33fe66a3970ed14627b75bc84759bd8f99902b798d511b66cdb95c67c9",
+      "size_px": [
+        1365,
+        681
+      ],
+      "mtime": "2026-11-07T00:01:55.548385+08:00",
+      "operation": "actual_browser_screenshot_no_result_edit"
+    }
+  ],
+  "limits": [
+    "One paper and one execution per original center task; not independent generalization or classroom evidence.",
+    "Native center API does not expose E14 local evidence_sufficiency field; its refusal is an unsupported notice without primary citations. Do not merge response contracts.",
+    "Wiki has three claim records, each containing two grammatical sentences; reference validity is not complete semantic support.",
+    "Single elapsed times are not P95, SLA, concurrency capacity, user time saved or service cost. Qwen-only E14 RSS does not cover this center with BGE and containers.",
+    "No public endpoint, final participant video, actual human labels or buyer evidence."
+  ],
+  "source_document": {
+    "title": "Attention Is All You Need",
+    "arxiv": "1706.03762v7",
+    "url": "https://arxiv.org/abs/1706.03762v7",
+    "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697"
+  },
+  "additional_physical_database_check": {
+    "observed_on": "2026-11-07T00:44:43.352727+08:00",
+    "command": "env DDP_PG_CONTAINER=ddp-contest-r6-20261106-postgres-1 bash scripts/check_db_boundary.sh",
+    "target": "fresh isolated ddp-contest-r6 database only",
+    "reported_result": "边界检查全部通过",
+    "all_reported_assertions_passed": true,
+    "scope": "Real database role permissions/default grants/legacy FK/superuser checks; not a public security certification. Earlier E14 database skip is retained, not rewritten."
+  },
+  "ui_source_sha256": "9350040e127cb6eebca06561ff938b8b6142391da61bd3cbda3dd3b21577a692",
+  "frontend_build": {
+    "command": "npm run build",
+    "observed_result": "passed",
+    "warning_retained": "Some minified chunks exceed500kB; no warning-limit suppression or unrelated chunking change."
+  }
+}

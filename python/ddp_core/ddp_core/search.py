@@ -178,13 +178,15 @@ async def search_query(
     query: str, document_id: str | None, limit: int, candidates: int,
     min_similarity: float, authorized_document_ids: list[str] | None = None,
     authorized_parse_job_ids: list[str] | None = None,
+    query_variants: list[str] | None = None,
 ) -> tuple[list[Hit], str | None]:
     """Bounded facet retrieval shared by search and QA, with one visible fallback."""
     hits, degraded, _ = await _search_query(
         session, index, embed=embed, query=query, document_id=document_id,
         limit=limit, candidates=candidates, min_similarity=min_similarity,
         authorized_document_ids=authorized_document_ids,
-        authorized_parse_job_ids=authorized_parse_job_ids, detect_truncation=False)
+        authorized_parse_job_ids=authorized_parse_job_ids, detect_truncation=False,
+        query_variants=query_variants)
     return hits, degraded
 
 
@@ -210,11 +212,14 @@ async def _search_query(
     min_similarity: float, authorized_document_ids: list[str] | None = None,
     authorized_parse_job_ids: list[str] | None = None,
     detect_truncation: bool,
+    query_variants: list[str] | None = None,
 ) -> tuple[list[Hit], str | None, bool]:
     """One selection implementation; over-fetch never changes slot allocation."""
     fetch_limit = limit + int(detect_truncation)
-    facets = _query_facets(query)
-    queries = [query, *facets] if len(facets) > 1 else [query]
+    if query_variants is not None and len(query_variants) > 3:
+        raise ValueError("at most three explicit query variants are allowed")
+    facets = query_variants or _query_facets(query)
+    queries = list(dict.fromkeys([query, *facets]))
     try:
         vectors = await embed(queries)
         if len(vectors) != len(queries):
@@ -261,7 +266,8 @@ async def _search_query(
     return selected, degraded, False
 
 
-def _rrf(ranked_lists: list[list[str]]) -> dict[str, float]:
+def rrf_scores(ranked_lists: list[list[str]]) -> dict[str, float]:
+    """Fuse ordered identities by rank, without mixing incomparable model scores."""
     scores: dict[str, float] = {}
     for ranked in ranked_lists:
         for rank, cid in enumerate(ranked):
@@ -403,7 +409,7 @@ class PgVectorIndex:
         # “精确词面比 dense/通用关键词更强”，但不把不可比较的关键词覆盖分与
         # 余弦分数硬相加。权重 2 是同集合改造前后评测定下的：改大改小都会让标识符
         # 查询的召回名次回退（见该评测的 code 路用例）。
-        scores = _rrf([vec_ids, kw_ids, *([code_ids] * EXACT_CODE_WEIGHT)])
+        scores = rrf_scores([vec_ids, kw_ids, *([code_ids] * EXACT_CODE_WEIGHT)])
         if not scores:
             return SearchHits(degraded=degraded)
         # RRF 分只由名次决定，并列常见（两路都排第一恒为 0.0328）：并列保 id，
@@ -510,7 +516,7 @@ class MemoryIndex:
         by_id = {c.id: c for c, _ in rows}
         code_ids = exact_code_ids(
             [(cid, by_id[cid].block_type, by_id[cid].text) for cid in kw_ids], query)
-        scores = _rrf([vec_ids, kw_ids, *([code_ids] * EXACT_CODE_WEIGHT)])
+        scores = rrf_scores([vec_ids, kw_ids, *([code_ids] * EXACT_CODE_WEIGHT)])
         if not scores:
             return SearchHits()
         top_ids = sorted(scores, key=lambda cid: (-scores[cid], cid))[:limit]
@@ -536,3 +542,84 @@ def _cosine(a: list[float], b: list[float]) -> float:
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     return dot / (na * nb) if na and nb else 0.0
+
+
+async def adjacent_context_hits(
+    session: AsyncSession, seeds: list[Hit], *, max_chars: int,
+) -> list[Hit]:
+    """Load page-local source atoms around already-authorized hits, never new ranked hits.
+
+    Original hit order and evidence identities are untouched. A page-local neighbor may
+    carry one further atom from its identical original geometry, so a heading can reach
+    the continuation of its first body fragment. Keep the existing two-atoms-per-seed
+    ceiling and character budget; never cross a missing atom, page, document or version.
+    """
+    if max_chars <= 0:
+        return []
+    eligible = [hit for hit in seeds if hit.get("evidence_id") and hit.get("parse_job_id")]
+    if not eligible:
+        return []
+    clauses, params = [], {}
+    for position, hit in enumerate(eligible):
+        clauses.append(
+            f"(document_id=:d{position} AND parse_job_id=:j{position} "
+            f"AND page_idx=:p{position} AND seq BETWEEN :before{position} AND :after{position})")
+        params.update({
+            f"d{position}": hit["document_id"], f"j{position}": hit["parse_job_id"],
+            f"p{position}": hit["page_idx"],
+            f"before{position}": hit["seq"] - 2, f"after{position}": hit["seq"] + 2,
+        })
+    rows = (await session.execute(
+        text("SELECT id FROM chunks WHERE " + " OR ".join(clauses)), params)).scalars().all()
+    seen = {hit["chunk_id"] for hit in seeds}
+    ids = [cid for cid in rows if cid not in seen]
+    if not ids:
+        return []
+    loaded = await _load_hits(session, ids, {cid: 0.0 for cid in ids})
+    by_position = {
+        (hit["document_id"], hit["parse_job_id"], hit["page_idx"], hit["seq"]): hit
+        for hit in [*eligible, *loaded]
+    }
+    choices = []
+    for rank, seed in enumerate(eligible):
+        around = []
+        for offset in (1, -1):
+            hit = by_position.get((
+                seed["document_id"], seed["parse_job_id"], seed["page_idx"], seed["seq"] + offset))
+            if hit is None or not hit.get("evidence_id") or not hit["text"].strip():
+                continue
+            same_block = bool(seed.get("bbox") and hit.get("bbox") == seed["bbox"]
+                              and hit.get("page_size") == seed.get("page_size"))
+            around.append((not same_block, offset != 1, offset, hit))
+        around.sort(key=lambda item: item[:2])
+        wave = 0
+        for different_block, _, offset, hit in around:
+            if hit["chunk_id"] not in seen:
+                choices.append((wave, different_block, rank, seed, hit))
+                wave += 1
+            continuation = by_position.get((
+                seed["document_id"], seed["parse_job_id"], seed["page_idx"],
+                seed["seq"] + 2 * offset))
+            if (continuation is not None and continuation["chunk_id"] not in seen
+                    and continuation.get("evidence_id") and continuation["text"].strip()
+                    and hit.get("bbox") and continuation.get("bbox") == hit["bbox"]
+                    and continuation.get("page_size") == hit.get("page_size")):
+                choices.append((wave, False, rank, hit, continuation))
+                wave += 1
+    choices.sort(key=lambda item: item[:3])
+    extra: list[Hit] = []
+    for _, _, _, seed, hit in choices:
+        if len(extra) >= 2 * len(eligible):
+            break
+        if seed["chunk_id"] not in seen:
+            continue
+        if hit["chunk_id"] in seen or len(hit["text"]) > max_chars:
+            continue
+        # Adjacency supplies original source context, not inferred/generated text.
+        hit["derived_text"] = None
+        hit["derived_evidence_id"] = None
+        hit["context_of_evidence_id"] = seed.get("derived_evidence_id") or seed["evidence_id"]
+        seen.add(hit["chunk_id"])
+        extra.append(hit)
+        max_chars -= len(hit["text"])
+    return extra

@@ -50,6 +50,12 @@ export interface WikiRevisionDocument {
   }
 }
 
+export interface WikiClaimSupport {
+  reference: number
+  evidence_id: string
+  quote: string
+}
+
 export interface WikiVersionedPage {
   page_key: string
   title: string
@@ -61,6 +67,8 @@ export interface WikiVersionedPage {
       evidence_ids: string[]
       unsupported: boolean
       conflict_group?: string | null
+      /** New generated revisions only; literal location is not semantic verification. */
+      support?: WikiClaimSupport[]
     }[]
   }[]
   /** 服务端存储时加上 `kind: 'human'`、`unsupported: true`；写回（PATCH）只收 `{id, text}` */

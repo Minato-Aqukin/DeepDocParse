@@ -48,6 +48,7 @@
 - reparse / reindex（若本机运行时无此概念）。
 - `GET /api/parse-engines`（本机只有进程内 borndigital 一种解析，没有引擎可选；
   Web 拿到 404 时不显示引擎选择，按服务端缺省解析）。
+  `borndigital-tables` 是中心网关可选引擎，本机无引擎选择面、不提供该剖面。
 - 其余 Web 可能调用的 `/api/*`：一律 404 `not_supported_locally`。
 
 ## 本机语义差异
@@ -67,6 +68,11 @@
 - 问答不伪装流式：本地模型一次产出答案，`ask` 以**一个 `delta`** 发出全文
   （事件序列仍是 meta → delta → citations → assertions → done），前端照常拼接显示。
 - 生成 stays `execution_policy=local_only, allow_remote=false`：本机问答绝不外发。
+- 本机私有回答与会话统一消费DDP-Agent结构化主张，不再从自由文本的标点猜引用。
+  `grounded-claims/2` 的空事实主张与非空缺答说明只形成无主引用、`unsupported=true` 的拒答展示；
+  即使关键词候选非空，也不能标成证据充分。SSE `meta.retrieval.evidence_sufficiency`
+  与消息 `model_meta.evidence_sufficiency` 保持一致。引用为空/越界或输出不完整时返回
+  `unsupported_generation`，不保存部分成功；检索候选不自动成为主引用。
 - 无裁图：`citation.crop_url` 为 null，`crop_url` 指向的 crops 路径回 404
   `not_supported_locally`；EvidencePreview 显示原文与定位，不显示"截图失败"。
 - 问答不跨轮继承本机不支持时：按中心同一规则降级（`no_evidence_in_turn` /

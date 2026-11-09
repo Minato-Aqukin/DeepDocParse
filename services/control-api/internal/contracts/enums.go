@@ -371,16 +371,16 @@ func (s RunStatus) Valid() bool {
 	return ok
 }
 
-// DDP-Extract 的字段三态。**必须分开对待**：`not_found` 是"我们看过了，
-// 文档里确实没有"，是一种正确答案；`error` 才是系统问题。
-// 界面上 not_found 绝不能显示成空白或 "—"（那让人以为是没渲染出来），
-// error 也绝不能显示成"未提及"（那是把系统故障伪装成事实）。
+// DDP-Extract 的字段三态。**必须分开对待**：`not_found` 只表示本次检索
+// 与抽取未找到值，不证明整篇文档没有；`error` 表示抽取过程出错。
+// 界面上 not_found 绝不能显示成空白或 "—"，也不能写成"文档中未提及"；
+// error 必须显示失败原因，不能伪装成未找到。
 type FieldStatus string
 
 const (
 	// 抽到了值，且有出处
 	FieldStatusFound FieldStatus = "found"
-	// 文档里确实没有这个字段
+	// 本次检索与抽取未找到值，不证明原文不存在
 	FieldStatusNotFound FieldStatus = "not_found"
 	// 抽取过程本身出错
 	FieldStatusError FieldStatus = "error"
@@ -395,7 +395,7 @@ var FieldStatusValues = []FieldStatus{
 
 var FieldStatusMeta = map[FieldStatus]EnumMeta{
 	FieldStatusFound:    {Value: "found", Label: "已抽取", Severity: SeverityOk},
-	FieldStatusNotFound: {Value: "not_found", Label: "文档中未提及", Severity: SeverityNeutral},
+	FieldStatusNotFound: {Value: "not_found", Label: "本次未找到", Severity: SeverityNeutral},
 	FieldStatusError:    {Value: "error", Label: "抽取失败", Severity: SeverityError},
 }
 

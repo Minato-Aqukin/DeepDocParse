@@ -44,9 +44,9 @@ def cite_everything(request):
     """A grounded model: one claim per excerpt it was actually given."""
     evidence = json.loads(json.loads(request.content)["messages"][1]["content"])["evidence"]
     if not evidence:
-        return chat_answer(json.dumps({"status": "insufficient_evidence"}))
-    return chat_answer(json.dumps({"status": "answered", "claims": [
-        {"text": item["text"], "evidence_ids": [item["evidence_id"]]} for item in evidence]}))
+        return chat_answer(json.dumps({"claims": [], "unanswered": ["The supplied evidence does not answer this question."]}))
+    return chat_answer(json.dumps({"claims": [
+        {"text": item["text"], "evidence_ids": [item["evidence_id"]]} for item in evidence], "unanswered": []}))
 
 
 def evidence_item(evidence_id, excerpt):

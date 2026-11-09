@@ -184,13 +184,13 @@ function guestLogin() {
         MinerU 归属声明。**不要删。**
         MinerU 在 Apache-2.0 之上有附加条款：§2 要求基于它提供在线服务的产品，
         必须在产品界面或公开文档里清晰显著地标明使用了 MinerU；§3 规定违反即
-        自动终止许可，无需通知。本项目正是 §2 说的那种在线服务。
-        另一处在 README 顶部，法律文本在 NOTICE。
+        自动终止许可，无需通知。启用 MinerU 的部署适用这一要求；
+        原生 CPU 路径不调用 MinerU，因此声明须保留引擎范围。另一处在 README 与 NOTICE。
       -->
       <el-footer class="attribution" height="auto">
-        文档解析由
+        文档解析支持：
         <a href="https://github.com/opendatalab/MinerU" target="_blank" rel="noopener">MinerU</a>
-        提供支持
+        （启用时）；实际引擎以任务记录为准。
       </el-footer>
     </el-container>
   </el-container>

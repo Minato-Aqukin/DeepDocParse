@@ -184,7 +184,7 @@ components:
       required: [id, status]
       properties:
         id: { type: string }
-        engine: { type: string }
+        engine: { type: string, description: 完整注册表条目名；原样持久化，不截断为固定长度别名。 }
         options: { type: object }
         status:
           type: string
@@ -359,6 +359,11 @@ components:
         inherited_evidence_ids:
           type: array
           items: { type: string }
+        retrieval_queries:
+          type: array
+          maxItems: 3
+          items: { type: string, minLength: 1, maxLength: 512 }
+          description: 本轮实际产生的有界检索翻译/分面；不是证据。随消息持久化，历史未记录的轮次省略，不事后重建。
         degraded:
           type: string
           nullable: true

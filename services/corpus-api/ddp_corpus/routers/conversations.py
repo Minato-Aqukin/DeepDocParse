@@ -62,11 +62,6 @@ class AskRequest(BaseModel):
 REFUSAL_NO_EVIDENCE = "本轮没有可继承的文档证据，无法在不检索的情况下回答。"
 REFUSAL_INCOMPLETE_EVIDENCE = "上一轮证据已部分失效，无法在不重新检索的情况下可靠回答。"
 REFUSAL_INSUFFICIENT_EVIDENCE = "文档中未找到支持该问题的证据。"
-# 模型拿到了通过门控的段落、却报 insufficient_evidence。不能沿用上一句："文档中未找到"
-# 是对文档的断言，而模型也会错拒 —— 真栈 ESP32 问 CPU 时正确段落就在上下文里（相似度 0.73），
-# 1.7B 模型三次都拒答，界面却告诉用户"文档里没有"（2026-09-24，C）
-REFUSAL_MODEL_INSUFFICIENT = ("已检索到相关段落，但回答模型判断它们不足以回答该问题；"
-                              "可展开候选自行核对。")
 
 
 class HumanVerificationRequest(BaseModel):
@@ -179,7 +174,14 @@ async def _assertion_payloads(session: AsyncSession, *, document_id: str,
 
 
 async def _turn_payloads(session: AsyncSession,
-                         message_ids: list[str]) -> dict[str, dict]:
+                         messages: list[Message]) -> dict[str, dict]:
+    message_ids = [message.id for message in messages]
+    query_meta = {
+        message.id: {"retrieval_queries": message.model_meta["retrieval_queries"]}
+        for message in messages
+        if isinstance(message.model_meta, dict)
+        and isinstance(message.model_meta.get("retrieval_queries"), list)
+    }
     if not message_ids:
         return {}
     turns = (await session.execute(
@@ -202,6 +204,7 @@ async def _turn_payloads(session: AsyncSession,
             "need_retrieval": turn.need_retrieval, "reason": turn.decision_reason,
             "inherited_evidence_ids": turn.inherited_evidence_ids,
             "degraded": turn.degraded,
+            **query_meta.get(turn.message_id, {}),
         },
         "retrieval": {"candidates": by_turn.get(turn.id, [])},
     } for turn in turns}
@@ -260,7 +263,7 @@ async def list_messages(cid: str, actor: Actor = Depends(current_actor),
     )).scalars().all()
     assertion_map = await _assertion_payloads(
         session, document_id=conversation.document_id, messages=rows)
-    turn_map = await _turn_payloads(session, [m.id for m in rows])
+    turn_map = await _turn_payloads(session, rows)
     result = []
     for message in rows:
         assertions = assertion_map.get(message.id, [])
@@ -576,10 +579,11 @@ async def ask(cid: str, req: AskRequest, request: Request, actor: Actor = Depend
     await require_document(session, actor, document.id)
     decision = await decide_retrieval(
         http, question=req.question, history=history_payload,
-        inherited_evidence_ids=inherited_ids)
+        inherited_evidence_ids=inherited_ids, document_title=context.filename)
     if decision.need_retrieval:
         retrieval = await retrieve(session, index, http, question=req.question,
-                                   document=document, actor=actor)
+                                   document=document, actor=actor,
+                                   query_variants=decision.retrieval_queries)
         retrieval.degraded = _resolve_degraded(retrieval.degraded, decision.degraded)
     else:
         retrieval = await inherited_retrieval(session, decision.inherited_evidence_ids, actor=actor)
@@ -665,6 +669,7 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
             "need_retrieval": decision.need_retrieval, "reason": decision.reason,
             "inherited_evidence_ids": decision.inherited_evidence_ids,
             "degraded": decision.degraded,
+            "retrieval_queries": decision.retrieval_queries,
         },
         "retrieval": {
             "chunk_ids": [h["chunk_id"] for h in retrieval.hits],
@@ -733,7 +738,7 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
                 degraded = _resolve_degraded(degraded, "upstream_error")
             verified = False
             yield _sse("error", error)
-        elif verify_task is not None and not refusing:
+        elif verify_task is not None and any(not claim["unsupported"] for claim in assertions):
             verify_verdict = await _verdict(verify_task)
             if verify_verdict is True:
                 verified = True
@@ -766,9 +771,11 @@ async def _stream_answer(http: httpx.AsyncClient, messages: list[dict], retrieva
         # shield：客户端断开时这个作用域可能已被取消，
         # 不屏蔽的话第一个 await 就被打断，client_aborted 的回答根本落不了库
         if refusing:
-            # 防御直接调用 `_stream_answer` 的路径：拒答没有受支持断言，绝不能
-            # 继承核对结果或生成一条与断言无关联的自动核对记录。
-            verified, verify_verdict = False, None
+            # 缺答项使整条消息保持未核验，但不能抹掉事实断言的独立核对结果。
+            # 纯拒答没有受支持断言，不创建与断言无关联的自动核对记录。
+            verified = False
+            if not any(not claim["unsupported"] for claim in assertions):
+                verify_verdict = None
         try:
             (message_id, verified, degraded, index_changed,
              assertion_payload) = await asyncio.shield(_persist(
@@ -895,7 +902,9 @@ async def _persist(*, conversation_id: str, actor_id: str, organization_id: str,
         projected_content = "\n".join(item["text"] for item in assertions)
         message = Message(conversation_id=conversation_id, role="assistant",
                           content=projected_content,
-                          verified=verified, degraded=degraded, model_meta=model_meta or {})
+                          verified=verified, degraded=degraded,
+                          model_meta={**(model_meta or {}),
+                                      "retrieval_queries": decision.retrieval_queries})
         db.add(message)
         await db.flush()
         turn = AgentTurn(
@@ -917,11 +926,8 @@ async def _persist(*, conversation_id: str, actor_id: str, organization_id: str,
         citation_by_evidence = {
             citation.get("evidence_id"): citation for citation in citations
             if citation.get("evidence_id")}
+        # A source transcript check says nothing about a generated descendant's text.
         verified_evidence = {verify_evidence_id} if verify_evidence_id else set()
-        if verify_evidence_id:
-            verified_evidence.update((await db.execute(
-                select(Evidence.id).where(Evidence.derived_from == verify_evidence_id)
-            )).scalars().all())
 
         payloads: list[dict] = []
         assertion_rows: list[Assertion] = []
@@ -1043,9 +1049,6 @@ async def _relay_chat(http: httpx.AsyncClient, messages: list[dict], *, evidence
                     yield claim
         for claim in decoder.finish():
             yield claim
-        if decoder.insufficient_evidence:
-            yield {"position": 0, "text": REFUSAL_MODEL_INSUFFICIENT,
-                   "evidence_ids": [], "unsupported": True}
     finally:
         await response.aclose()
 

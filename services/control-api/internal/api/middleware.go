@@ -214,13 +214,15 @@ type domainLimit struct {
 	suffix string // 非空时还要求路径以它结尾（区分 /ask 这种子资源）
 	bucket string
 	limit  int
+	exact  bool // collection creation must not charge unrelated subresources
 }
 
 func (s *Server) domainLimits() []domainLimit {
 	return []domainLimit{
-		{http.MethodPost, "/api/conversations/", "/ask", "qa", s.cfg.QARatePerMin},
-		{http.MethodPost, "/api/knowledge/build", "", "knowledge", s.cfg.KnowledgeRatePerMin},
-		{http.MethodPost, "/api/extractions/runs", "", "extract", s.cfg.ExtractRatePerMin},
+		{http.MethodPost, "/api/conversations/", "/ask", "qa", s.cfg.QARatePerMin, false},
+		{http.MethodPost, "/api/wikis", "", "knowledge", s.cfg.KnowledgeRatePerMin, true},
+		{http.MethodPost, "/api/wikis/", "/revisions", "knowledge", s.cfg.KnowledgeRatePerMin, false},
+		{http.MethodPost, "/api/extractions/runs", "", "extract", s.cfg.ExtractRatePerMin, false},
 	}
 }
 
@@ -234,6 +236,9 @@ func (s *Server) domainThrottle(next http.Handler) http.Handler {
 		}
 		for _, l := range limits {
 			if r.Method != l.method || !strings.HasPrefix(r.URL.Path, l.prefix) {
+				continue
+			}
+			if l.exact && r.URL.Path != l.prefix {
 				continue
 			}
 			if l.suffix != "" && !strings.HasSuffix(r.URL.Path, l.suffix) {

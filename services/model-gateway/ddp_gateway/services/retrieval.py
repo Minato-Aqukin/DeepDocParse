@@ -10,6 +10,7 @@
 """
 import math
 from dataclasses import dataclass, field as dc_field
+from itertools import zip_longest
 
 import httpx
 
@@ -53,20 +54,56 @@ def keyword_rank(chunks: list[dict], query: str, k: int) -> list[dict]:
     return [c for _, c in scored[:k]]
 
 
-async def embed_query(http: httpx.AsyncClient, registry, query: str) -> list[float] | None:
-    """把 query 向量化。任何一环不可用返回 None —— 调用方据此打 embedding_unavailable。"""
-    if not registry.embedding_models:
-        return None
+def _merge_variant_hits(ranked_lists: list[list[dict]], limit: int) -> list[dict]:
+    """多路召回按轮次交错合并：原问题每轮先占一位，各路内部名次不动。
+
+    与 corpus 侧 `search_query` 同一条交错规则（见 ddp_core/search.py），
+    只是这里没有跨路 RRF 融合分 —— gateway 侧本来就没有融合分，
+    每路各自的 similarity 下限在进合并前已经生效，合并只做去重与轮转。
+    """
+    merged: list[dict] = []
+    seen: set = set()
+    for row in zip_longest(*ranked_lists):
+        for hit in row:
+            if hit is None:
+                continue
+            key = hit.get("seq")
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(hit)
+            if len(merged) >= limit:
+                return merged
+    return merged
+
+
+async def embed_queries(http: httpx.AsyncClient, registry,
+                        queries: list[str]) -> list[list[float] | None]:
+    """Embed one query batch, preserving input identity through response indices."""
+    if not queries or not registry.embedding_models:
+        return [None] * len(queries)
     try:
         name, entry = registry.default_of(registry.embedding_models)
         resp = await http.post(f"{entry.endpoint}/v1/embeddings",
                                json={"model": request_model_id(name, entry),
-                                     "input": [query]},
+                                     "input": queries},
                                headers=upstream_auth_headers(entry))
         resp.raise_for_status()
-        return resp.json()["data"][0]["embedding"]
+        rows = resp.json()["data"]
+        if not isinstance(rows, list) or len(rows) != len(queries):
+            raise ValueError("embedding batch size mismatch")
+        vectors: list[list[float] | None] = [None] * len(queries)
+        for row in rows:
+            index, vector = row["index"], row["embedding"]
+            if (type(index) is not int or not 0 <= index < len(queries)
+                    or vectors[index] is not None
+                    or not isinstance(vector, list) or not vector):
+                raise ValueError("embedding batch identity mismatch")
+            vectors[index] = vector
+        return vectors
     except Exception:
-        return None
+        # A partial/ambiguous batch must not bind another query's vector.
+        return [None] * len(queries)
 
 
 async def retrieve(store: TaskStore, http: httpx.AsyncClient, registry, *,
@@ -82,7 +119,16 @@ async def retrieve(store: TaskStore, http: httpx.AsyncClient, registry, *,
     没有它的话，"无 GPU 快速开始"在抽取平面上会重演 M7 那次
     「路径做了但缺省请求必然失败」的坑。
     """
-    vector = await embed_query(http, registry, query)
+    vector = (await embed_queries(http, registry, [query]))[0]
+    return await _retrieve_vector(
+        store, doc_hash=doc_hash, query=query, vector=vector, k=k,
+        corpus=corpus, prefer_types=prefer_types)
+
+
+async def _retrieve_vector(store: TaskStore, *, doc_hash: str, query: str,
+                           vector: list[float] | None, k: int,
+                           corpus: list[dict] | None = None,
+                           prefer_types: tuple[str, ...] = ()) -> Retrieved:
     degraded = None if vector else "embedding_unavailable"
 
     hits = None
@@ -108,3 +154,34 @@ async def retrieve(store: TaskStore, http: httpx.AsyncClient, registry, *,
     if prefer_types:
         hits.sort(key=lambda h: 0 if h.get("block_type") in prefer_types else 1)
     return Retrieved(hits=hits[:k], degraded=degraded, mode=mode)
+
+
+async def retrieve_with_variants(store: TaskStore, http: httpx.AsyncClient, registry, *,
+                                 doc_hash: str, query: str,
+                                 query_variants: list[str] | None = None, k: int = 4,
+                                 corpus: list[dict] | None = None,
+                                 prefer_types: tuple[str, ...] = ()) -> Retrieved:
+    """多路有界召回：原 query 逐条加独立变体，各交错合并后截断到 k。
+
+    与 corpus 侧 `search_query(query_variants=...)` 同一条语义：
+    所有检索词一次批量向量化；每路独立走向量/关键词与相似度下限，
+    路内名次不动，轮转去重后取前 k。最终候选数不变，不引入第二套打分。
+    """
+    legs = [query, *(query_variants or [])]
+    legs = list(dict.fromkeys(leg for leg in legs if leg and leg.strip()))
+    if len(legs) <= 1:
+        return await retrieve(store, http, registry, doc_hash=doc_hash,
+                              query=query, k=k, corpus=corpus,
+                              prefer_types=prefer_types)
+    per_leg = max(k * 3, k)
+    vectors = await embed_queries(http, registry, legs)
+    found = [await _retrieve_vector(
+        store, doc_hash=doc_hash, query=leg, vector=vector, k=per_leg, corpus=corpus)
+        for leg, vector in zip(legs, vectors, strict=True)]
+    merged = _merge_variant_hits([r.hits for r in found], k)
+    if prefer_types:
+        merged = sorted(merged,
+                        key=lambda h: 0 if h.get("block_type") in prefer_types else 1)
+    degraded = None if any(r.degraded is None for r in found) else found[0].degraded
+    mode = next((r.mode for r in found if r.hits), found[0].mode)
+    return Retrieved(hits=merged, degraded=degraded, mode=mode)

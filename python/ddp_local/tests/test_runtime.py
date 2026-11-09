@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import time
 import zipfile
 from pathlib import Path
@@ -27,6 +28,13 @@ async def parsed(runtime, filename="sample.pdf"):
     finished = await runtime.work_once()
     assert finished["id"] == task["id"] and finished["status"] == "succeeded", finished
     return task
+
+
+def grounded_completion(runtime):
+    evidence_id = runtime.search("contract")["hits"][0]["evidence_id"]
+    return json.dumps({"claims": [
+        {"text": "The answer is 42.", "evidence_ids": [evidence_id]},
+    ], "unanswered": []})
 
 
 @pytest.mark.asyncio
@@ -193,37 +201,100 @@ async def test_provider_protocol_failure_and_oom_are_explicit(respx_mock):
     with pytest.raises(ApplicationError) as exc:
         await selected.generate([], execution_policy="local_only", allow_remote=False)
     assert exc.value.code == "out_of_memory"
-    route.mock(
-        return_value=httpx.Response(
-            200, json={"choices": [{"message": {"content": "A statement [1]"}}]}
-        )
+
+
+@pytest.mark.parametrize(
+    "invalid", ["free_text", "foreign_evidence", "truncated_after_claim"]
+)
+@pytest.mark.asyncio
+async def test_invalid_generation_cannot_publish_partial_or_foreign_claims(
+    runtime, respx_mock, invalid
+):
+    await parsed(runtime)
+    evidence_id = runtime.search("contract")["hits"][0]["evidence_id"]
+    claim = {"text": "The answer is 42.", "evidence_ids": [evidence_id]}
+    if invalid == "free_text":
+        output = "The answer is 42 [1]"
+    elif invalid == "foreign_evidence":
+        foreign = ("0" if evidence_id[0] != "0" else "1") + evidence_id[1:]
+        output = json.dumps({"claims": [
+            {**claim, "evidence_ids": [foreign]},
+        ], "unanswered": []})
+    else:
+        output = '{"claims":[' + json.dumps(claim) + ',{"text":"unfinished'
+    runtime.provider.model = ModelSelection("http://127.0.0.1:18761/v1", "fixture-protocol-only")
+    respx_mock.post("http://127.0.0.1:18761/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": [{"message": {"content": output}}]})
     )
-    text, provider = await selected.generate([], execution_policy="local_only", allow_remote=False)
-    assert text == "A statement [1]" and provider["location"] == "local"
+
+    with pytest.raises(ApplicationError) as rejected:
+        await runtime.answer("contract")
+
+    assert rejected.value.code == "unsupported_generation"
 
 
 @pytest.mark.asyncio
-async def test_generated_answer_is_citation_bound_and_marked_unreviewed(runtime, respx_mock):
+async def test_model_reports_insufficient_despite_nonempty_retrieval(runtime, respx_mock):
     await parsed(runtime)
+    assert runtime.search("contract revenue")["hits"]
     runtime.provider.model = ModelSelection("http://127.0.0.1:18761/v1", "fixture-protocol-only")
-    route = respx_mock.post("http://127.0.0.1:18761/v1/chat/completions")
-    route.mock(
+    missing = ["The supplied evidence does not establish contract revenue."]
+    respx_mock.post("http://127.0.0.1:18761/v1/chat/completions").mock(
         return_value=httpx.Response(
-            200, json={"choices": [{"message": {"content": "The answer is 42 [1]"}}]}
+            200, json={"choices": [{"message": {
+                "content": json.dumps({"claims": [], "unanswered": missing})
+            }}]}
         )
     )
-    result = await runtime.answer("contract")
-    assert result["source_type"] == "generated" and result["semantic_review"] == "needs_review"
-    assert result["assertions"][0]["evidence_ids"]
-    route.mock(
-        return_value=httpx.Response(
-            200, json={"choices": [{"message": {"content": "Unsupported statement"}}]}
-        )
-    )
-    with pytest.raises(ApplicationError) as exc:
-        await runtime.answer("contract")
-    assert exc.value.code == "unsupported_generation"
 
+    result = await runtime.answer("contract revenue")
+
+    assert result["evidence_sufficiency"] == "insufficient"
+    assert result["answer"].strip() == missing[0]
+    assert result["assertions"] == [
+        {"position": 0, "text": missing[0], "evidence_ids": [], "unsupported": True}
+    ]
+    assert result["evidence"] == []
+
+
+@pytest.mark.parametrize("selected", [(2,), (2, 0)])
+@pytest.mark.asyncio
+async def test_answer_citation_numbers_index_only_returned_evidence(
+        runtime, respx_mock, tmp_path, selected):
+    from reportlab.pdfgen import canvas
+
+    source = tmp_path / "citation-order.pdf"
+    pdf = canvas.Canvas(str(source))
+    for text in (
+        "Contract alpha quota is 11.",
+        "Contract beta quota is 22.",
+        "Contract gamma quota is 33.",
+    ):
+        pdf.drawString(72, 720, text)
+        pdf.showPage()
+    pdf.save()
+    runtime.upload_file(str(source), operation_key="citation-order-source")
+    parsed_task = await runtime.work_once()
+    assert parsed_task["status"] == "succeeded"
+    hits = runtime.search("contract")["hits"]
+    assert len(hits) == 3
+    output = json.dumps({"claims": [
+        {"text": hits[index]["text"], "evidence_ids": [hits[index]["evidence_id"]]}
+        for index in selected
+    ], "unanswered": []})
+    runtime.provider.model = ModelSelection("http://127.0.0.1:18761/v1", "fixture-protocol-only")
+    respx_mock.post("http://127.0.0.1:18761/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": [{"message": {"content": output}}]}))
+
+    result = await runtime.answer("contract")
+
+    if selected == (2,):
+        assert result["answer"] == hits[2]["text"] + " [1]"
+        assert [item["id"] for item in result["evidence"]] == [hits[2]["evidence_id"]]
+    else:
+        assert result["answer"] == hits[2]["text"] + " [2]\n" + hits[0]["text"] + " [1]"
+        assert [item["id"] for item in result["evidence"]] == [
+            hits[0]["evidence_id"], hits[2]["evidence_id"]]
 
 @pytest.mark.asyncio
 async def test_http_boundary_and_full_upload_path(runtime):
@@ -318,7 +389,7 @@ async def test_generation_task_durable_idempotency_and_cancel(runtime, respx_moc
     route = respx_mock.post("http://127.0.0.1:18761/v1/chat/completions")
     route.mock(
         return_value=httpx.Response(
-            200, json={"choices": [{"message": {"content": "Answer 42 [1]"}}]}
+            200, json={"choices": [{"message": {"content": grounded_completion(runtime)}}]}
         )
     )
     first = await runtime.answer("contract", operation_key="answer1")
@@ -370,7 +441,7 @@ async def test_remote_generation_requires_explicit_policy_and_discloses_payload(
     )
     route = respx_mock.post("https://selected.example/v1/chat/completions").mock(
         return_value=httpx.Response(
-            200, json={"choices": [{"message": {"content": "Answer 42 [1]"}}]}
+            200, json={"choices": [{"message": {"content": grounded_completion(runtime)}}]}
         )
     )
     result = await runtime.answer("contract", execution_policy="remote_allowed", allow_remote=True)
@@ -735,3 +806,29 @@ async def test_version_source_refuses_corrupt_blob(runtime):
         corrupt = await client.get(f"/api/v1/versions/{task['version_id']}/source")
         assert corrupt.status_code != 200, corrupt.content[:64]
         assert corrupt.json()["error"]["code"] == "blob_corrupt"
+
+
+@pytest.mark.asyncio
+async def test_conversation_preserves_known_answer_when_another_part_lacks_evidence(runtime, respx_mock):
+    task = await parsed(runtime)
+    evidence_id = runtime.search("contract")["hits"][0]["evidence_id"]
+    fact = "The contract answer is 42."
+    missing = "The supplied contract evidence does not establish deployment latency."
+    runtime.provider.model = ModelSelection("http://127.0.0.1:18761/v1", "fixture-protocol-only")
+    output = json.dumps({
+        "claims": [{"text": fact, "evidence_ids": [evidence_id]}],
+        "unanswered": [missing],
+    })
+    respx_mock.post("http://127.0.0.1:18761/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": [{"message": {"content": output}}]}))
+    conversation = runtime.store.create_conversation(task["version_id"])
+
+    result = await runtime.ask(conversation["id"], "contract answer and deployment latency")
+
+    assert result["evidence_sufficiency"] == "insufficient"
+    assert result["assertions"] == [
+        {"position": 0, "text": fact, "evidence_ids": [evidence_id], "unsupported": False},
+        {"position": 1, "text": missing, "evidence_ids": [], "unsupported": True},
+    ]
+    assert result["assistant_message"]["content"] == fact + "\n" + missing
+    assert {citation["evidence_id"] for citation in result["citations"]} == {evidence_id}

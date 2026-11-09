@@ -475,7 +475,7 @@ async def grounded_answer(http, *, query: str, evidence_ids: list[str],
         parsed.extend(decoder.finish())
     except AnswerFormatError:
         return {**unavailable_answer("unsupported_generation"), "validation_state": "failed"}
-    if decoder.insufficient_evidence:
+    if decoder.insufficient_evidence or any(item["unsupported"] for item in parsed):
         return unavailable_answer("insufficient_evidence")
     references = {evidence_id: position for position, evidence_id
                   in enumerate(evidence_ids, start=1)}
@@ -1738,7 +1738,8 @@ class _WikiExcerptProvider:
     def capabilities(self) -> dict:
         return {"chat_endpoint": settings.chat_endpoint,
                 "model": settings.chat_model or "registry-default"}
-    async def generate(self, messages, *, execution_policy, allow_remote, max_tokens=1024):
+    async def generate(self, messages, *, execution_policy, allow_remote, max_tokens=1024,
+                       response_format=None):
         if type(max_tokens) is not int or not 1 <= max_tokens <= 8192:
             raise APIError(409, "completion token budget must be within 1..8192",
                            "invalid_request_error", "wiki_budget_exceeded")
@@ -1749,6 +1750,8 @@ class _WikiExcerptProvider:
             raise APIError(502, "Wiki model request could not be built",
                            "invalid_request_error", "wiki_generation_failed") from None
         payload["max_tokens"] = max_tokens
+        if response_format is not None:
+            payload["response_format"] = response_format
         built = self._http.build_request("POST", request.url, json=payload,
                                          headers=request.headers,
                                          extensions=request.extensions)

@@ -216,9 +216,9 @@ class Settings(BaseSettings):
 
     index_lease_seconds: int = 300          # worker 无 heartbeat 后多久允许接管
     index_heartbeat_seconds: int = 30       # 活 worker 的续租周期
-    qa_top_k: int = 4                   # 进 prompt 的 chunk 数
+    qa_top_k: int = 8                   # 主召回种子数；相邻续块另受总字符预算限制
     qa_candidates: int = 8              # 每路检索的候选数（融合前）
-    qa_context_chars: int = 6000        # 资料段总字符上限
+    qa_context_chars: int = 12000       # 种子与相邻续块共享的资料段总字符上限
     # 余弦相似度下限。没有它的话 top-k 永远返回东西：问一个与文档无关的问题
     # 也会拿到几条不相干的"出处"，还带着"已做视觉验证"的标记——出处就成了假证据。
     #
