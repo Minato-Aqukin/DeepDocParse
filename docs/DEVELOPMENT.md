@@ -63,6 +63,12 @@ env PY=.venv/bin/python ./scripts/check.sh guards python
 解释器会在切换到包目录前解析为绝对路径。显式空值、不可执行文件或不存在的
 `PY` 都会立即失败，不会换成系统解释器。`--help` 无需可用的 Python 环境。
 
+异步测试夹具用 `async with` 管理自己创建的 HTTP 客户端；`app.state` 只是可被测试
+替换的依赖入口，不是资源所有权记录。清理时不能重新读取 `app.state.http`，否则
+monkeypatch 撤销后属性缺失会导致 teardown 报错，或关闭替身而泄漏原客户端。
+CI 的收尾错误应按日志中的依赖版本、使用同样的裸 `pytest` 入口验证，不以本机
+`python -m pytest` 通过代替远端结果。
+
 ## 浏览器与真实服务验证
 
 浏览器只需首次安装，随后用单独目标运行。关闭占用测试端口的旧 dev/preview

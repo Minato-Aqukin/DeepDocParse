@@ -124,15 +124,16 @@ async def engine():
 
 @pytest.fixture
 async def app_state(engine):
-    app.state.http = httpx.AsyncClient(timeout=5.0, trust_env=False)
-    app.state.service_client = ServiceClient(app.state.http)
-    app.state.storage = MemoryStorage()
-    app.state.search_index = MemoryIndex()
-    app.state.redis = None                          # 单实例模式（多副本路径由 e2e 覆盖）
-    # 显示名缓存跨用例泄漏会让"改了名字没生效"这类断言飘
-    directory.reset_cache()
-    yield app.state
-    await app.state.http.aclose()
+    # Tests may replace/remove app.state.http; close the client this fixture owns.
+    async with httpx.AsyncClient(timeout=5.0, trust_env=False) as http:
+        app.state.http = http
+        app.state.service_client = ServiceClient(http)
+        app.state.storage = MemoryStorage()
+        app.state.search_index = MemoryIndex()
+        app.state.redis = None                      # 单实例模式（多副本路径由 e2e 覆盖）
+        # 显示名缓存跨用例泄漏会让"改了名字没生效"这类断言飘
+        directory.reset_cache()
+        yield app.state
 
 
 @pytest.fixture

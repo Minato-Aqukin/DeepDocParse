@@ -48,3 +48,6 @@ ed25519.seed
 .ed25519-*.tmp
 **/state/control-node/
 **/node-identity/
+
+# Competition deliverables stay outside the source repository.
+/docs/competition/
